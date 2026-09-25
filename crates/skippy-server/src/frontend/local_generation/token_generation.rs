@@ -406,8 +406,18 @@ impl StageOpenAiBackend {
             receipt_request_id,
             receipt_session_id,
         );
+        let paid_input_tokens = request.prompt_token_ids.len();
+        let paid_max_output_tokens = request.max_tokens;
+        let mut authorization_started = false;
         let mut emit_token = |token_id| {
             if let Some(gate) = payment_gate.as_ref() {
+                // The first canonical token proves the native step that
+                // consumed the final prompt token succeeded, so the whole
+                // prompt is processed before authorization starts.
+                if !authorization_started {
+                    gate.after_prefill(paid_input_tokens, paid_max_output_tokens)?;
+                    authorization_started = true;
+                }
                 gate.before_token()?;
             }
             if let Some(observation) = receipt_observation.as_ref()
@@ -452,9 +462,6 @@ impl StageOpenAiBackend {
                 &session_id,
                 prefill.chat_sampling_configured,
             )?;
-            if let Some(gate) = payment_gate.as_ref() {
-                gate.after_prefill(request.prompt_token_ids.len(), request.max_tokens)?;
-            }
             let model_generation_elapsed = self.run_scheduler_feature_loop(
                 &mut request,
                 &session_id,
@@ -633,9 +640,7 @@ impl StageOpenAiBackend {
         session_id: &str,
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<PromptPrefillResult> {
-        if crate::frontend::generation_gate::find(request.ids.frontend_request_id)?.is_some()
-            || self.can_sample_whole_prompt_in_prefill(request, session_id)?
-        {
+        if self.can_sample_whole_prompt_in_prefill(request, session_id)? {
             let chat_sampling_configured = if let Some(metadata) = request.chat_sampling_metadata {
                 self.configure_chat_sampling(
                     session_id,

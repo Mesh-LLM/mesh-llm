@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use openai_frontend::{OpenAiError, OpenAiResult};
 
 pub trait GenerationGate: Send + Sync {
-    /// Called after full prompt prefill, outside the native runtime lock.
+    /// Called once, at the first canonical output token (after the full prompt
+    /// has been processed), outside the native runtime lock.
     fn after_prefill(&self, input_tokens: usize, max_output_tokens: u32) -> OpenAiResult<()>;
     /// Called only for canonical output accepted by the output callback.
     fn before_token(&self) -> OpenAiResult<()> {

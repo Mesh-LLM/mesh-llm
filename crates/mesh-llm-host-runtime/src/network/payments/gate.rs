@@ -109,14 +109,16 @@ impl InvoiceGate {
 
     fn prepare_authorization(&self, input: usize, output: u32) -> Result<Authorization> {
         ensure!(
-            !self.started.swap(true, Ordering::AcqRel),
-            "payment authorization already started"
-        );
-        ensure!(
             output > 0 && output <= self.max_tokens.unwrap_or(u32::MAX),
             "backend exceeded output allowance"
         );
         ensure!(input > 0 && input <= 131_072, "paid input limit exceeded");
+        // Set only once authorization is valid: `started` tells the transport
+        // that an invoice is on its way, so backend EOF before it is a failure.
+        ensure!(
+            !self.started.swap(true, Ordering::AcqRel),
+            "payment authorization already started"
+        );
         // The output allowance is fixed durably by the engine when it issues
         // the input invoice; a refusal there fails authorization.
         Ok(Authorization {
@@ -496,5 +498,18 @@ mod tests {
             60
         );
         assert_eq!(INPUT_ARRIVAL_WAIT, Duration::from_secs(60));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rejected_authorization_does_not_mark_the_gate_started() {
+        // The transport treats `started` as "an invoice is coming": a request
+        // refused by validation must leave it clear so backend EOF fails fast.
+        let gate = gate().await;
+        assert!(gate.prepare_authorization(0, 8).is_err());
+        assert!(gate.prepare_authorization(40, 0).is_err());
+        assert!(!gate.started.load(Ordering::Acquire));
+        assert!(gate.prepare_authorization(40, 8).is_ok());
+        assert!(gate.started.load(Ordering::Acquire));
+        assert!(gate.prepare_authorization(40, 8).is_err());
     }
 }

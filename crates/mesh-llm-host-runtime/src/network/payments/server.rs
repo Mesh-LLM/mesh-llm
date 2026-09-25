@@ -265,6 +265,13 @@ async fn stream_output(
             read = backend.read(&mut buffer[..read_capacity]), if !backend_eof && read_capacity > 0 => {
                 let count = read?;
                 if count == 0 {
+                    // No authorization means the backend never produced a
+                    // first token (e.g. prefill was rejected); nothing will be
+                    // invoiced, so fail now instead of waiting for the invoice.
+                    ensure!(
+                        gate.started.load(Ordering::Acquire),
+                        "backend ended before payment authorization started"
+                    );
                     backend_eof = true;
                 } else if gate_open {
                     if !deliver_output(writer, gate, &mut delivery, buffer[..count].to_vec()).await? {

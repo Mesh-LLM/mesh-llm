@@ -26,6 +26,7 @@ mod admission;
 mod expiry;
 mod forwarding;
 mod handoff;
+mod pre_authorization;
 mod review_regressions;
 
 #[derive(Default)]
@@ -39,6 +40,7 @@ struct Network {
     payment_release: tokio::sync::Notify,
     decoded_before_payment: AtomicBool,
     backend_output_before_payment: AtomicBool,
+    invoice_delay_ms: AtomicUsize,
 }
 
 struct TestWallet {
@@ -57,6 +59,10 @@ impl WalletProvider for TestWallet {
         Ok(Vec::new())
     }
     async fn create_invoice(&self, amount: Option<u64>, expiry_secs: u32) -> Result<Invoice> {
+        let delay = self.network.invoice_delay_ms.load(Ordering::SeqCst);
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay as u64)).await;
+        }
         let number = self.network.next.fetch_add(1, Ordering::SeqCst) + 1;
         let key = SecretKey::from_slice(&[7; 32])?;
         // The simulated wallet honours the host's expiry unless a test forces
@@ -264,7 +270,40 @@ async fn payments_explicit_large_limit_can_be_clamped_to_context() -> Result<()>
     Ok(())
 }
 
+// Backend generation (and EOF) completes while the input invoice is still
+// being created: the transport must keep waiting for it, not fail the request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn payments_backend_eof_during_slow_invoice_creation_still_settles() -> Result<()> {
+    let network = Arc::new(Network::default());
+    network.invoice_delay_ms.store(1_500, Ordering::SeqCst);
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        paid_exchange_on(network.clone(), false, false, Some(8), 8),
+    )
+    .await??;
+    // The backend closed its response before any payment: the race was real.
+    assert!(network.backend_output_before_payment.load(Ordering::SeqCst));
+    Ok(())
+}
+
 async fn paid_exchange(
+    cancel_after_output: bool,
+    hold_input_payment: bool,
+    requested: Option<u32>,
+    output_allowance: u32,
+) -> Result<()> {
+    paid_exchange_on(
+        Arc::new(Network::default()),
+        cancel_after_output,
+        hold_input_payment,
+        requested,
+        output_allowance,
+    )
+    .await
+}
+
+async fn paid_exchange_on(
+    network: Arc<Network>,
     cancel_after_output: bool,
     hold_input_payment: bool,
     requested: Option<u32>,
@@ -272,7 +311,6 @@ async fn paid_exchange(
 ) -> Result<()> {
     let provider_dir = tempfile::tempdir()?;
     let payer_dir = tempfile::tempdir()?;
-    let network = Arc::new(Network::default());
     network
         .hold_payments
         .store(hold_input_payment, Ordering::SeqCst);
