@@ -226,7 +226,29 @@ def _validate_registry(raw: Any) -> dict[str, Any]:
             elif "evidence" in certification:
                 raise RegistryError(f"{field}.certification.evidence requires workload-oracle")
             _object(certification.get("execution"), f"{field}.certification.execution")
-            _object(certification.get("resources"), f"{field}.certification.resources")
+            resources = _object(
+                certification.get("resources"), f"{field}.certification.resources"
+            )
+            _exact_keys(
+                resources,
+                {
+                    "runner_role",
+                    "cache_policy",
+                    "estimated_model_bytes",
+                    "minimum_runner_memory_gib",
+                    "startup_timeout_secs",
+                },
+                f"{field}.certification.resources",
+            )
+            minimum_runner_memory_gib = resources.get("minimum_runner_memory_gib")
+            if minimum_runner_memory_gib is not None and (
+                type(minimum_runner_memory_gib) is not int
+                or minimum_runner_memory_gib not in (128, 256)
+            ):
+                raise RegistryError(
+                    f"{field}.certification.resources.minimum_runner_memory_gib "
+                    "must be 128 or 256"
+                )
             _string(certification.get("notes"), f"{field}.certification.notes")
             for optional in ("draft_artifact", "mmproj_artifact"):
                 if optional in certification:

@@ -72,7 +72,20 @@ def tier_for(peak):
 def placement(model):
     estimate = memory_estimate(model)
     try:
-        return {**estimate, "memory_tier": tier_for(estimate["estimated_peak_bytes"])}
+        estimated_tier = tier_for(estimate["estimated_peak_bytes"])
+        minimum = model["resources"].get("minimum_runner_memory_gib")
+        if minimum is not None and (type(minimum) is not int or minimum not in TIERS):
+            raise ValueError("missing or invalid minimum runner memory")
+        estimated_gib = next(
+            tier for tier in TIERS
+            if estimated_tier == f"accelerator-memory-{tier}plus"
+        )
+        selected_gib = max(estimated_gib, minimum or estimated_gib)
+        return {
+            **estimate,
+            **({"minimum_runner_memory_gib": minimum} if minimum is not None else {}),
+            "memory_tier": f"accelerator-memory-{selected_gib}plus",
+        }
     except ValueError as error:
         raise ValueError(f"{model['family']}: {error}") from error
 
