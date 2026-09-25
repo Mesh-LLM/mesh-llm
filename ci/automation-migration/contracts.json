@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "purpose": "Observed workflow/action artifact, process, readiness, bootstrap and coverage contracts for xtask automation migration task 4.",
+  "sources": [
+    ".github/actions/prepare-host-input/action.yml",
+    ".github/actions/prepare-windows-host-input/action.yml",
+    ".github/actions/prepare-native-runtime-input/action.yml",
+    ".github/actions/prepare-static-abi-input/action.yml",
+    ".github/actions/prepare-native-sdk-input/action.yml",
+    ".github/actions/compose-product-input/action.yml",
+    ".github/actions/restore-smoke-inputs/action.yml",
+    ".github/actions/restore-test-model/action.yml",
+    ".github/actions/restore-release-ui/action.yml",
+    ".github/actions/plan-ci/action.yml",
+    ".github/actions/compute-changes/action.yml",
+    ".github/actions/capture-sccache-stats/action.yml",
+    ".github/actions/resolve-native-toolchain-epoch/action.yml",
+    ".github/workflows/ci-{linux,macos,windows}-lane.yml",
+    ".github/workflows/ci-{linux,macos,windows}-{host,runtime,product}-slice.yml",
+    ".github/workflows/ci-{linux,macos}-product-smoke-slice.yml",
+    ".github/workflows/ci-{linux,macos}-sdk-slice.yml",
+    ".github/workflows/ci-ui-artifact-slice.yml",
+    ".github/workflows/static-abi-artifact.yml",
+    ".github/workflows/ci-rust-tests-slice.yml",
+    ".github/workflows/{smoke,scripted-binary-smoke,sdk-smoke,hf-download-smoke}.yml",
+    ".github/workflows/release.yml",
+    ".github/workflows/{llama-upstream-canary,llama-canary-family-pass}.yml",
+    ".github/workflows/{depot-canary,depot-registry-canary}.yml",
+    ".github/workflows/{nightly-kv-coverage,nightly-stability-run,agentic-replay-nightly,pr_cleanup,website-pages}.yml",
+    ".github/actions/restore-release-ui/action.yml",
+    ".github/actions/capture-sccache-stats/action.yml",
+    "scripts/ci-two-node-split-smoke.sh",
+    "scripts/ci-compose-product-input.sh",
+    "scripts/ci-client-readiness-smoke.sh",
+    "scripts/safe-extract-tar.py",
+    "scripts/ui-distribution.py",
+    "scripts/build-host.sh",
+    "scripts/build-ui.sh",
+    ".cargo/config.toml",
+    "crates/mesh-llm-ui/package.json",
+    "crates/mesh-llm-ui/vite.config.ts"
+  ],
+  "action_outputs": {
+    "./.github/actions/prepare-host-input": {
+      "outputs": {
+        "binary_path": "absolute prepared executable; always emitted on success",
+        "imports_path": "absolute host-imports.json policy report; always emitted on success",
+        "checksum_path": "absolute <binary_name>.sha256 sidecar; always emitted on success",
+        "attestation_verifier_path": "absolute verifier executable when signing and public-key inputs are both supplied; emitted as empty string when attestation is disabled"
+      },
+      "payload": ["<binary_name>", "host-imports.json", "<binary_name>.sha256", "optional release-attestation-verifier and its checksum"],
+      "failed_or_absent": "Action exits nonzero when build, import policy, checksum, or paired attestation-key checks fail. No successful outputs are promised after failure."
+    },
+    "./.github/actions/prepare-windows-host-input": {
+      "outputs": {
+        "binary_path": "absolute mesh-llm.exe path",
+        "imports_path": "absolute host-imports.json path",
+        "checksum_path": "absolute mesh-llm.exe.sha256 path",
+        "attestation_verifier_path": "absolute release-attestation-verifier.exe when enabled; empty string otherwise"
+      },
+      "payload": ["mesh-llm.exe", "host-imports.json", "mesh-llm.exe.sha256", "optional release-attestation-verifier.exe and its checksum"],
+      "failed_or_absent": "Nonzero on invalid profile, incomplete attestation key pair, host build/import verification failure, or checksum failure."
+    },
+    "./.github/actions/prepare-native-runtime-input": {
+      "outputs": {
+        "runtime_dir": "absolute verified runtime directory",
+        "archive_path": "absolute <runtime_dir>.tar.gz path",
+        "checksum_path": "absolute archive .sha256 sidecar"
+      },
+      "payload": ["runtime manifest directory", "runtime archive", "archive checksum sidecar"],
+      "failed_or_absent": "Requires exactly one runtime manifest directory and nonempty archive and checksum."
+    },
+    "./.github/actions/prepare-static-abi-input": {
+      "outputs": {
+        "archive_path": "absolute static ABI tar.gz path",
+        "checksum_path": "absolute archive checksum sidecar",
+        "upload_path": "absolute flat glob for exact upload payload"
+      },
+      "payload": ["mesh-llm-static-abi.tar.gz", "mesh-llm-static-abi.tar.gz.sha256"],
+      "manifest": "Embedded .mesh-llm-static-abi-input.json schema_version 3, contract mesh-llm-static-abi-v3; target_triple, backend, build_directory, toolchain_epoch and build_stamp_sha256.",
+      "failed_or_absent": "Nonzero unless backend/target/runner architecture, toolchain epoch, build stamp, patched source SHA, required static archives, portable metadata, and checksum verify."
+    },
+    "./.github/actions/prepare-native-sdk-input": {
+      "outputs": {
+        "archive_path": "absolute verified archive path",
+        "checksum_path": "absolute archive checksum path",
+        "artifact_dir": "absolute verified extracted SDK package directory",
+        "upload_path": "absolute flat glob of archive/checksum and optional runtime crate"
+      },
+      "payload": ["one native SDK archive", "matching checksum", "manifested meshllm-native-* directory", "optional runtime .crate when include_runtime_crate=true"],
+      "failed_or_absent": "Nonzero unless exactly one archive, checksum and manifest directory match requested OS, architecture, target, backend and profile."
+    },
+    "./.github/actions/compose-product-input": {
+      "outputs": {
+        "product_dir": "absolute product-v2 directory",
+        "binary_path": "absolute composed host executable",
+        "runtime_root": "absolute native-runtimes directory",
+        "runtime_dir": "absolute selected runtime directory",
+        "archive_path": "tar.gz containing exact composed product tree"
+      },
+      "composition": "Consumes verified host and runtime inputs; does not compile, link, restamp, or substitute either input. Runs --log-format json --version, --log-format json runtime list, and ci-client-readiness-smoke.sh by default. Linux CPU additionally tests runtime JSON with scripts/ci-prepare-native-runtime.sh and fallback disabled.",
+      "failed_or_absent": "Missing input, missing/empty checksum/import report, checksum or manifest mismatch, wrong backend/version, unsafe composition, failed no-driver runtime discovery/readiness, archive or manifest failure exits nonzero."
+    },
+    "./.github/actions/restore-smoke-inputs": {
+      "outputs": {
+        "model_url": "resolved immutable URL; empty if no model requested",
+        "model_file": "resolved filename; empty if no model requested",
+        "model_sha256": "expected digest when present in manifest; empty for legacy direct URL inputs or no model",
+        "model_size_bytes": "expected size when present; empty when unavailable",
+        "model_path": "absolute model path; empty when no model requested"
+      },
+      "behavior": "Downloads named GitHub artifact, requires exactly one product archive, safe-extracts and validates product-manifest.json, stages the binary and runtime, then delegates model restore to restore-test-model."
+    },
+    "./.github/actions/restore-test-model": {
+      "outputs": {
+        "model_url": "resolved URL; empty when neither direct pair nor manifest is supplied",
+        "model_file": "resolved file; empty when no model requested",
+        "model_sha256": "resolved digest or empty when absent",
+        "model_size_bytes": "resolved size or empty when absent",
+        "model_path": "absolute $HOME/.models/<file>; empty when no model requested"
+      },
+      "semantics": "Direct model_url and model_file must be both set or both empty. Manifest mode requires cadence. Digest verification is run when manifest digest exists; manifest-based downloads are resolved by immutable registry metadata."
+    },
+    "./.github/actions/restore-release-ui": {
+      "outputs": {},
+      "behavior": "Downloads the named artifact into crates/mesh-llm-ui/dist and verifies source SHA, release tag and complete file digest manifest with scripts/ui-distribution.py."
+    },
+    "./.github/actions/plan-ci": {
+      "outputs": "plan_path, compact plan_json, plan_digest, profile, required_slices, domains, affected_crates, matrices (clippy, rust_tests, hosts, runtime_products, platform_checks, smoke, sdk and platform-specific host/runtime projections), signals, per-platform/total worker budgets, and five lane_plan projections.",
+      "digest_serialization": "Compact JSON is jq -c output from ci-plan.json; SHA-256 is computed over its exact UTF-8 bytes without a trailing newline via printf '%s' | sha256sum. No added digest fields or serialization are implied.",
+      "upload": "Optional ci-plan.json artifact, only when upload_artifact=true, caller-supplied artifact_name nonempty, retention 1 day; normal PR/main lanes pass plan over native outputs, not an artifact."
+    },
+    "./.github/actions/compute-changes": {
+      "outputs": "changed_files newline list, affected_crates/test_crates JSON arrays, plus derived Rust/UI/website/docs/backend/platform/SDK/runner signals and Linux test groups.",
+      "absence": "Unknown event fails; malformed/missing push diff identity forces __force_all__; PR uses base...head; dispatch sets __force_all__."
+    },
+    "./.github/actions/capture-sccache-stats": {
+      "outputs": "stats_file, compile_requests, requests_executed, cache_hits, cache_misses, cache_writes, read/write errors, hit_rate, cache_classification and cache_passed.",
+      "artifact": "Unique caller-provided artifact_name, JSON evidence, retention 14 days; non-green if a configured warm threshold is unmet."
+    },
+    "./.github/actions/resolve-native-toolchain-epoch": {
+      "outputs": {"epoch": "validated exact pinned epoch or derived runner OS/architecture plus hash of native tool versions"},
+      "absence": "Missing GitHub image identity without tool version fingerprinting, unsupported OS, missing commands or unsafe epoch fails nonzero."
+    }
+  },
+  "artifact_edges": [
+    {"producer": ".github/workflows/ci-ui-artifact-slice.yml:ui_artifact", "artifact": "caller-provided artifact_name (CI: ci-ui-dist-linux-${run_id}, ci-ui-dist-macos-${run_id}, ci-ui-dist-windows-${run_id})", "consumer": ["ci-{linux,macos,windows}-host-slice.yml", "ci-linux-sdk-slice.yml or ci-macos-sdk-slice.yml via sdk-smoke.yml"], "needs": ["platform lane ui_artifact -> hosts", "platform lane ui_artifact -> sdk (transitive via lane dependency where present)"], "retention_days": "1 for CI calls; workflow input allows caller-specific release retention", "payload": "crates/mesh-llm-ui/dist, include-hidden-files=true, no symlink guarantee except release UI stamp verifier"},
+    {"producer": ".github/workflows/static-abi-artifact.yml:static_abi_artifact", "artifact": "caller-provided; Linux lane ci-static-abi-${run_id}", "consumer": ["ci-rust-tests-slice.yml rust_tests and safetensors_runtime_smoke", "native-sdk-artifact.yml Kotlin native input"], "needs": ["Linux lane static_abi -> rust_tests", "Linux lane static_abi -> kotlin_sdk_input"], "retention_days": "1 in Linux lane", "payload": "static-ABI tar.gz and SHA-256 sidecar; toolchain_epoch passes via reusable workflow output"},
+    {"producer": "ci-{linux,macos,windows}-host-slice.yml", "artifact": "ci-host-<platform>-<architecture>", "consumer": "matching ci-<platform>-product-slice.yml", "needs": "platform lane hosts and native_runtimes -> runtime_product; consumers download named host artifact", "retention_days": 1, "payload": "host-input directory: executable, host-imports.json, checksum, optional attestation verifier"},
+    {"producer": "ci-{linux,macos,windows}-runtime-slice.yml", "artifact": "ci-runtime-<platform>-<architecture>-<backend>", "consumer": "matching ci-<platform>-product-slice.yml", "needs": "platform lane native_runtimes and hosts -> runtime_product", "retention_days": 1, "payload": "runtime tar.gz and .sha256; Linux runtime-event evidence separately retains 7 days"},
+    {"producer": "ci-{linux,macos,windows}-product-slice.yml", "artifact": "ci-product-<platform>-<architecture>-<backend>", "consumer": ["ci-linux-product-smoke-slice.yml", "ci-macos-product-smoke-slice.yml", "sdk-smoke.yml"], "needs": "platform lane runtime_product -> product_smoke and sdk; Linux SDK also waits for Kotlin input when selected", "retention_days": 1, "payload": "compose-product-input archive_path; exact product bytes and product-manifest.json"},
+    {"producer": "native-sdk-artifact.yml", "artifact": "caller-provided; Linux Kotlin uses ci-sdk-kotlin-native", "consumer": "sdk-smoke.yml Kotlin row", "needs": "Linux lane kotlin_sdk_input -> sdk", "retention_days": "1 in CI call", "payload": "native SDK artifact archive/manifest; Kotlin smoke also requires product and UI artifacts"},
+    {"producer": "swift-sdk-artifact.yml", "artifact": "caller-provided ci-sdk-swift plus generated-swift-binding-ci-sdk-swift", "consumer": "sdk-smoke.yml Swift row", "needs": "macOS lane swift_sdk_input -> sdk", "retention_days": "1 in CI call", "payload": "host-only on PR; full assembly on main/manual; SDK archive and binding"},
+    {"producer": "ci-linux-runtime-slice.yml Linux CPU row", "artifact": "runtime-events-native-evidence-linux-<architecture>", "consumer": "operator/evidence only; lane does not download it", "needs": "producer job is within native_runtimes; no workflow consumer edge", "retention_days": 7, "payload": "runtime-event evidence text"},
+    {"producer": ".github/workflows/scripted-binary-smoke.yml:scripted_binary_smoke", "artifact": "two-node-split-dense-recurrent-evidence", "consumer": "operator evidence only; no checked-in download consumer", "needs": "ci-linux-lane.product_smoke -> ci-linux-product-smoke-slice.two_node_split -> scripted_binary_smoke", "retention_days": "not set; effective retention externally unverified", "payload": "runner.temp evidence directory; if-no-files-found=error; upload on success/failure, not cancellation"},
+    {"producer": "release.yml:release_ui via ci-ui-artifact-slice.yml", "artifact": "prepared-release-ui-<tag>-<source_sha>", "consumer": ["build", "build_swift_sdk_artifact", "build_linux_arm64", "windows_host_input", "publish"], "needs": "each declares release_ui", "retention_days": 90, "payload": "source/tag-bound console distribution and complete checksums"},
+    {"producer": "release.yml:build/build_linux_arm64/windows_host_input", "artifact": "host-input-<target>", "consumer": "matching release compose jobs", "needs": "matching host and runtime producer jobs declared by compose needs", "retention_days": "not set; effective retention externally unverified", "payload": "host executable, imports report, checksum, optional attestation verifier"},
+    {"producer": "release.yml:build_native_runtime*", "artifact": "release-native-runtime-<platform-architecture-backend>", "consumer": "matching release compose jobs and publish", "needs": "producer jobs declared by compose and publish", "retention_days": "not set; effective retention externally unverified", "payload": "runtime tar.gz and checksum"},
+    {"producer": "release.yml:compose_cpu_products", "artifact": ["release-macos", "release-linux", "ci-release-linux-inference-product"], "consumer": ["inference_smoke_tests downloads smoke-only artifact", "publish downloads release-*; smoke artifact excluded by pattern"], "needs": "inference_smoke_tests needs compose_cpu_products; publish needs compose_cpu_products", "retention_days": "not set; effective retention externally unverified", "payload": "release products and exact composed Linux smoke product"},
+    {"producer": "release.yml:compose_*", "artifact": "release-* product artifacts", "consumer": "publish wildcard; smoke_linux_arm64_artifact downloads release-linux-arm64", "needs": "publish needs product producers; ARM64 smoke needs compose_linux_arm64_cpu", "retention_days": "not set; effective retention externally unverified", "payload": "release bundle archives"},
+    {"producer": "release.yml SDK producers", "artifact": "release-native-sdk-*, release-node-sdk-addon-*, release-swift-sdk", "consumer": "publish wildcard release-* download", "needs": "publish declares producer jobs", "retention_days": "90 at release call inputs", "payload": "native SDK, Node addon and Swift XCFramework"},
+    {"producer": "swift-sdk-artifact.yml called by release.yml", "artifact": ["swift-package-manifest", "generated-swift-binding-release-swift-sdk"], "consumer": "publish exact download on workflow_dispatch", "needs": "publish needs build_swift_sdk_artifact", "retention_days": "not set; effective retention externally unverified", "payload": "generated manifest/binding"},
+    {"producer": "release.yml:release_notes", "artifact": "release-notes-<tag>", "consumer": "operator evidence", "needs": "needs metadata and publish", "retention_days": 90, "payload": "release notes work products"},
+    {"producer": "llama-canary-family-pass.yml:build", "artifact": "llama-family-input-<run>-<attempt>-<pass>", "consumer": "family matrix and aggregate; later passes", "needs": "family needs build; aggregate needs build+family; controller chains pass jobs", "retention_days": 7, "payload": "digest-bound executable/source/plan handoff"},
+    {"producer": "llama-canary-family-pass.yml:build/family", "artifact": ["llama-build-<run>-<attempt>-<pass>", "llama-family-<run>-<identity>-<attempt>-<pass>-<shard>"], "consumer": "repair feedback and aggregate", "needs": "aggregate needs build+family; later controller pass needs prior pass", "retention_days": 14, "payload": "diagnostics and certification receipts"},
+    {"producer": "depot-canary.yml:runtime_seed", "artifact": "runtime-seed-evidence-<pair>-<arm>-<attempt>", "consumer": "runtime_seed_summary", "needs": "summary needs runtime_seed", "retention_days": 14, "payload": "runtime seed evidence"},
+    {"producer": "depot-canary.yml:runtime_seed_summary", "artifact": "runtime-seed-summary-<attempt>", "consumer": "operator evidence", "needs": "summary needs runtime_seed", "retention_days": 14, "payload": "aggregate report"},
+    {"producer": "depot-registry-canary.yml:pull", "artifact": "depot-registry-pull-<source>-<sample>", "consumer": "summary", "needs": "summary needs policy+pull", "retention_days": 14, "payload": "registry observations"},
+    {"producer": "nightly-kv-coverage.yml:ownership-state-machines", "artifact": "nightly-kv-ownership-<run>-<attempt>", "consumer": "operator evidence", "needs": "single producer", "retention_days": 30, "payload": "seed/step/source evidence"},
+    {"producer": "nightly-stability-run.yml:stability", "artifact": "nightly-stability-<run>-<sha>", "consumer": "operator evidence", "needs": "single producer via nightly-stability caller", "retention_days": 30, "payload": "stability and KV evidence"},
+    {"producer": "agentic-replay-nightly.yml:replay", "artifact": "replay-artifacts", "consumer": "publish-repair", "needs": "publish-repair needs replay", "retention_days": 30, "payload": "evidence and conditional repair payload"},
+    {"producer": "pr_cleanup.yml:plan_cache_cleanup", "artifact": "pr-cache-cleanup-plan-<pr>", "consumer": "delete_pr_caches", "needs": "delete_pr_caches needs plan_cache_cleanup", "retention_days": 1, "payload": "cleanup plan"},
+    {"producer": "pr_cleanup.yml:delete_pr_caches", "artifact": "pr-cache-cleanup-result-<pr>-<shard>", "consumer": "summarize_cleanup", "needs": "summary needs cleanup plan, cache delete and artifact delete", "retention_days": 1, "payload": "per-shard cleanup result"},
+    {"producer": "website-pages.yml:build", "artifact": "Pages deployment artifact (implicit name)", "consumer": "deploy", "needs": "deploy needs build", "retention_days": "not set; service behavior external", "payload": "static site deployment files"}
+  ],
+  "artifact_and_archive_rules": {
+    "identity": "GitHub artifact names are explicit and encode platform, architecture, backend, or run ID as shown above. Downloads consume the named artifact in the same workflow run. Workflow lane `needs` gates prevent product and smoke consumers from running after failed producers; consumers do not rebuild missing producers.",
+    "retention": "Routine CI product/UI/host/runtime/static-ABI/SDK artifacts request 1 day. Linux native runtime-event evidence is 7 days. sccache evidence is 14 days. Unspecified upload retention is unknown here and inherits GitHub repository configuration; do not infer a value. Release artifacts use workflow inputs and release policy, not this CI default.",
+    "serialization": "SHA-256 sidecars are lowercase digest, two spaces, basename, newline except Windows PowerShell host sidecar uses Set-Content -NoNewline. Product/runtime/static ABI tar.gz files are payloads, not proof of the artifact-service container. upload-artifact v6.0.0 SHA b7c566a772e6b6bfb58ed0dc250532a479d7789f and download-artifact v8.0.1 SHA 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c are the common pins; isolated v7.0.0/v4.3.0 call sites also exist. Source manifests expose defaults including include-hidden-files=false, compression-level=6 and skip-decompress=false, but do not prove GitHub service archive encoding, executable mode restoration or symlink behavior. Those transport semantics remain externally unverified.",
+    "safe_extraction": "scripts/safe-extract-tar.py rejects absolute/drive/traversal paths, duplicate paths, unsupported members, escaping links and overwrites. It creates directories, regular files and symlinks/hardlinks after validating paths; on non-Windows it restores member permission bits masked with 0777. Windows does not chmod. Host is chmod +x during composition/staging. Product smoke rejects symlink manifest paths and top-level links. Release UI distribution stamp/verify rejects all symlinks.",
+    "archive_byte_identity": "Composition verifies input checksum and runtime manifest, then archives composed directory. Exact producer bytes are copied; tar container byte reproducibility, mtime normalization, uid/gid normalization, compression determinism, and Actions artifact transport preservation of mode/symlink metadata are not asserted by the checked-in producer workflows. Mark those aspects unknown rather than relying on an assumed tar implementation guarantee."
+  },
+  "process_contracts": {
+    "product_readiness": {
+      "entrypoint": "scripts/ci-client-readiness-smoke.sh <binary> <native-runtime-root>",
+      "cwd": "inherits job working directory; CI composer calls from workspace root",
+      "isolated_env": ["MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR", "MESH_LLM_CONFIG", "MESH_LLM_RUNTIME_ROOT", "HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"],
+      "ports": "Reserves a free 127.0.0.1 TCP port, passes --port and --no-console; mdns discovery is selected. No fixed service port is needed.",
+      "deadline_seconds": {"readiness_default": 60, "shutdown_default": 15},
+      "ready_condition": "JSON line with event=passive_mode, status=ready, role=client, or legacy message containing client ready.",
+      "cleanup": "EXIT trap sends SIGTERM on Unix, CTRL_BREAK_EVENT on Windows, waits bounded time then force-kills, removes private state directory and log. A shutdown timeout/nonzero exit or cleanup deletion failure returns nonzero."
+    },
+    "two_node_split": {
+      "entrypoint": "scripts/ci-two-node-split-smoke.sh, invoked via scripted-binary-smoke.yml",
+      "cwd": "workspace checkout; evidence work directory may be runner.temp",
+      "ports": {"seed_api": 9367, "seed_console": 3161, "seed_bind": 53647, "worker_api": 9368, "worker_console": 3162, "worker_bind": 53648, "client_api": 9369, "client_console": 3163},
+      "deadlines_seconds": {"readiness_max": 300, "snapshot_request_default": 2},
+      "coverage": "Dense leg followed by optional recurrent leg in the same job. The CI caller supplies strict recurrent exact payload kind kv-recurrent and context 4096. Evidence is uploaded on success or failure when named.",
+      "cleanup": "Script registers EXIT cleanup, kills tracked client/worker/seed process trees (TERM, one-second wait, KILL), prints log tails and removes default-created work/process dirs. Explicit WORK_DIR/PROCESS_ROOT overrides are retained. CI sets WORK_DIR under runner.temp for evidence preservation and leaves PROCESS_ROOT default. No explicit INT/TERM/HUP traps; SIGKILL or runner loss can bypass cleanup. Upload runs on success/failure but not cancellation and if-no-files-found=error. Cleanup is best effort."
+    },
+    "workflow_timeouts_minutes": {
+      "ui_artifact": 20,
+      "linux_host": 45,
+      "macos_host": 45,
+      "windows_host": 50,
+      "linux_runtime": 75,
+      "macos_runtime": 75,
+      "windows_runtime": 90,
+      "linux_product": 15,
+      "rust_test_batch": 60,
+      "static_abi": "caller default 45; Linux lane explicitly passes 60",
+      "product_smoke": "lane passes 30; lower-level workflow default 25",
+      "sdk_smoke": "lower-level default 30; macOS Swift lane passes 35"
+    },
+    "bootstrap": {
+      "native": "Repository .cargo/config.toml mandates rustc-wrapper=sccache and target linker scripts. Linux runner image preflight is verify-runner-image public cpu; macOS host/runtime runs setup-macos-lld (brew lld and sccache, then scripts/cargo-linker --mesh-probe); Windows host/runtime uses setup-windows-short-paths and Windows Rust/MSVC prerequisites. External live runner availability is not probed by this task.",
+      "linkers": {"linux": "scripts/cargo-linker-linux-x86_64 or -aarch64, mold preferred with compatible lld/platform fallback per checked-in CI docs", "macos": "scripts/cargo-linker; Homebrew ld64.lld probe with Apple ld fallback for SDK incompatibility", "windows": "scripts/cargo-linker.cmd resolves rust-lld/lld-link"},
+      "native_runtime_toolchains": "Linux runtime rows use prebuilt backend-specific image and verify-runner-image. macOS uses Xcode/clang/CMake/Ninja and lld setup. Windows installs selected CUDA/Vulkan/ROCm SDK and MSVC as needed. Actual external machine linker state: unverified.",
+      "ui": "Independent UI artifact job runs in crates/mesh-llm-ui. package.json pins pnpm@10.34.5, Node >=24, pnpm >=10; pnpm i --frozen-lockfile then pnpm run build (tsc -b && vite build). CI UI job uses image-baked pnpm store; no shared pnpm Actions cache. UI stamp inputs in scripts/build-ui.sh are package.json, pnpm-lock.yaml, vite.config.ts, tsconfig files, biome.json, index.html, src and public; env stamp includes profile, debug-ui and Vite base/router/storage namespace values.",
+      "lean_ui_split": "ci-ui-artifact-slice produces one immutable dist artifact per selected platform lane. Host jobs download it, assert dist/index.html exists, and call prepare-host-input with skip_ui=true, preventing host rebuild from rerunning pnpm/tests. Rust tests use an explicit tiny index.html placeholder. UI behavioral tests remain owned by Website lane."
+    },
+    "cleanup_failure_outcome": "Non-green: client readiness cleanup explicitly returns failure on failed deletion/shutdown; self-hosted workflow cleanup contract requires bounded cleanup and failure is not green. Two-node process kill operations ignore kill errors; directory removal failure can fail cleanup. Runner loss/force termination can prevent cleanup and evidence upload."
+  },
+  "coverage": {
+    "platform_products": ["Linux CPU", "Linux CUDA", "Linux ROCm", "Linux Vulkan", "macOS Metal", "Windows CPU", "Windows CUDA", "Windows ROCm", "Windows Vulkan"],
+    "required_readiness": ["no-driver --version", "runtime discovery via runtime list", "noninteractive client readiness", "Linux CPU shared SDK runtime-reader check with fallback disabled"],
+    "smoke_evidence": ["dense inference", "recurrent Granite KV semantics", "two-node dense and recurrent split/cache coverage", "CUDA packaged dependency closure and device probes", "Metal model load", "HF model download", "SDK Rust/Kotlin/Swift consumers"],
+    "sdk_protocol": "Linux Rust and Kotlin smoke; macOS Swift smoke. Product smoke exercises OpenAI client/API path. Explicit protocol test-family coverage is selected by planner/Rust batches; this contract does not establish every protocol crate-to-artifact edge.",
+    "constrained_stack": "Linux CPU core smoke runs both dense and recurrent constrained-Tokio restarts with MESH_TOKIO_STACK_SIZE=2097152 bytes (2 MiB), overriding the documented 8 MiB runtime default.",
+    "dense_recurrent": "Linux CPU two-node row uses SmolLM2 Q8 dense and IBM Granite 4.0 H Q4 recurrent fixtures; recurrent expected exact payload kind is kv-recurrent, context 4096. Distinct model-server and topology snapshots are reconciled before success.",
+    "windows_readiness": "Windows host/product composed readiness uses same composer contract and cross-platform client readiness helper, including native process helper for CTRL_BREAK_EVENT; no live Windows runner execution was performed."
+  },
+  "negative_scenarios": [
+    {"case": "disconnected producer", "condition": "Any planned consumer downloads a named artifact whose producer is absent from the plan/static needs graph or did not succeed.", "outcome": "Non-green: do not rebuild/fallback; required consumer cannot start or lane result validator fails planned skip/failed dependency."},
+    {"case": "stale digest or altered bytes", "condition": "Host/runtime/UI/model/product bytes disagree with sidecar, manifest source/backend/version/identity, or plan digest identity.", "outcome": "Non-green: checksum/manifest/attestation validation exits nonzero; stale artifact cannot satisfy readiness."},
+    {"case": "expired artifact", "condition": "Named artifact is expired/unavailable at download (routine producer retention is 1 day).", "outcome": "Non-green: artifact download/extraction fails; no consumer fallback build and no green skip for a planned row."},
+    {"case": "cleanup failure", "condition": "Readiness process fails bounded graceful shutdown or private temp cleanup fails; self-hosted job cleanup reports failure.", "outcome": "Non-green; preserve failure logs/evidence when upload is possible. A runner lost before cleanup is an unresolved infrastructure failure, never a successful cleanup claim."}
+  ],
+  "reachability": {
+    "method": "Manual source trace of required PR/main/manual lane artifact edges and checked-in release, smoke, canary, nightly, cleanup and Pages upload/download actions; reconciled names, called workflows, action inputs and consumer job needs. No external dispatch or live GitHub mutation.",
+    "reached_chain": "Required Linux/macOS/Windows chain is UI -> host; independent runtime; host+runtime -> product; product -> smoke. Linux static ABI -> Rust tests and Kotlin producer. SDK smoke downloads product and UI. Linux sdk needs runtime_product+kotlin_sdk_input and macOS sdk needs validate_plan+runtime_product+swift_sdk_input, but neither declares ui_artifact directly despite nested sdk-smoke downloading that artifact. These are missing direct needs edges, not compliant edges. Products declare host/runtime needs; summaries need top-level calls. Consumers do not rebuild missing producer inputs.",
+    "result": "Producer/consumer needs reconciliation is complete for required product, SDK and smoke flows and checked-in release/auxiliary artifact flows. Two missing direct SDK UI needs edges are recorded as discrepancies; current workflows are not claimed to satisfy the dependency contract. Archive transport, effective default retention, live runner state and Windows QA remain externally unverified.",
+    "unresolved_edges": ["Exact GitHub artifact-service transport container and executable mode, permissions, symlink and hidden-file preservation/materialization are externally unverified; pinned action inputs alone do not prove service semantics.", "Uploads without retention-days have effective retention determined by live GitHub repository/org settings, not inspected here; no value asserted.", "Missing direct UI needs: ci-linux-lane.yml sdk and ci-macos-lane.yml sdk consume UI through nested sdk-smoke download without ui_artifact in direct needs; recorded but not changed per task scope.", "scripted-binary-smoke evidence upload runs after success/failure but not cancellation; cancellation/runner loss may prevent it. Two-node EXIT cleanup cannot handle SIGKILL/runner loss; no live cleanup execution.", "External Linux/macOS/Windows runner availability and linker/toolchain state are unverified; no runner contacted.", "Windows composed readiness/process behavior is source-derived only; no Windows QA executed.", "PR cleanup deletion target set, current artifact contents, effective retention, Pages implicit artifact contract and live repository settings were not queried."]
+  },
+  "acceptance": {
+    "task_4_contract_written": true,
+    "exact_existing_action_paths_only": true,
+      "core_product_graph_reachability_justified": true,
+      "required_ci_and_in_scope_release_smoke_source_census_complete": true,
+      "sdk_ui_direct_needs_contract_passes": false,
+      "repository_wide_external_transport_semantics_verified": false,
+      "repository_wide_reachability_complete": true,
+    "unresolved_edges_recorded": true,
+      "task_4_done": true,
+      "reason": "Task-4 source census/evidence is frozen; absent direct SDK UI needs edges are explicitly recorded as known workflow discrepancies, not compliant. External artifact-service transport/default retention and runner state remain unverified, as required, and do not block freezing the source contract."
+  }
+}
