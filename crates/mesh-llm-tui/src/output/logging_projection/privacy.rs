@@ -183,9 +183,17 @@ fn is_private_absolute_path(word: &str) -> bool {
     word.starts_with('/')
         || word.to_ascii_lowercase().starts_with("file://")
         || is_windows_absolute_path(word)
-        || std::env::var("HOME")
-            .ok()
-            .is_some_and(|home| !home.is_empty() && word.contains(&home))
+        || operator_home().is_some_and(|home| word.contains(&home))
+}
+
+/// The operator's home directory: `HOME`, or `USERPROFILE` on Windows, where
+/// `HOME` is usually unset. Only an absolute path counts, so a Git Bash
+/// `HOME` such as `/c/Users/name` falls through to `USERPROFILE`.
+fn operator_home() -> Option<String> {
+    ["HOME", "USERPROFILE"].into_iter().find_map(|variable| {
+        let home = std::env::var(variable).ok()?;
+        (!home.is_empty() && std::path::Path::new(&home).is_absolute()).then_some(home)
+    })
 }
 
 fn is_windows_absolute_path(value: &str) -> bool {
@@ -316,14 +324,26 @@ fn is_credential_value(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{safe_native_params, sanitize_text};
+    use super::{operator_home, safe_native_params, sanitize_text};
     use serde_json::json;
 
-    fn operator_home() -> Option<String> {
-        ["HOME", "USERPROFILE"].into_iter().find_map(|variable| {
-            let home = std::env::var(variable).ok()?;
-            (!home.is_empty() && std::path::Path::new(&home).is_absolute()).then_some(home)
-        })
+    #[test]
+    fn redacts_the_operator_home_inside_a_word() {
+        // A home path at the start of a word is caught as an absolute path;
+        // after `key=` or `key:` only the home check sees it. On Windows that
+        // check has to read USERPROFILE, since HOME is usually unset there.
+        let home = operator_home().expect("HOME or USERPROFILE should be set");
+        let separator = std::path::MAIN_SEPARATOR;
+        for input in [
+            format!("path={home}{separator}models{separator}model.gguf"),
+            format!("cache dir:{home}{separator}cache"),
+        ] {
+            let sanitized = sanitize_text(&input);
+            assert!(
+                !sanitized.contains(&home),
+                "sanitized output leaked the home directory: {sanitized:?}"
+            );
+        }
     }
 
     #[test]
