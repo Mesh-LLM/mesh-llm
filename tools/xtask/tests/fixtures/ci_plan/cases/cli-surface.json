@@ -1,0 +1,21 @@
+{
+  "manifest": "default",
+  "input": {
+    "profile": "pr-ready",
+    "event_name": "pull_request",
+    "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "changed_files": [
+      "crates/mesh-llm-cli/src/parser/commands.rs"
+    ],
+    "affected_crates": [
+      "mesh-llm-cli"
+    ],
+    "workspace_packages": [
+      {
+        "name": "mesh-llm-cli",
+        "path": "crates/mesh-llm-cli"
+      }
+    ]
+  }
+}
