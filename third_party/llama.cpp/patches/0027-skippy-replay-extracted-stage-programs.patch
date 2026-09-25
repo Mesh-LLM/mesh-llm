@@ -10208,18 +10208,30 @@ index 92b0271ce..7124b3a1a 100644
      return !expect_recurrent && check_kv_buffers(dynamic_cast<llama_kv_cache *>(memory));
  }
  
-@@ -532,6 +590,36 @@ bool check_compute_buffers(llama_context * context) {
+@@ -532,6 +590,48 @@ bool check_compute_buffers(llama_context * context) {
      return true;
  }
  
 +bool has_flash_attention_program(const skippy_model * model) {
 +    const auto * installation = model->ctx->get_stage_program_installation();
-+    return installation != nullptr && std::any_of(
-+            installation->program.operations.begin(),
-+            installation->program.operations.end(),
-+            [](const skippy_stage_program::operation & operation) {
-+                return operation.op == GGML_OP_FLASH_ATTN_EXT;
-+            });
++    if (installation == nullptr) {
++        return false;
++    }
++    const auto captures_flash_attention = [](const skippy_stage_program & program) {
++        return std::any_of(
++                program.operations.begin(),
++                program.operations.end(),
++                [](const skippy_stage_program::operation & operation) {
++                    return operation.op == GGML_OP_FLASH_ATTN_EXT;
++                });
++    };
++    // MiniMax-M3 installs a prompt program plus a decode alternative, and flash
++    // attention is exercised in the decode domain: inspecting only the installed
++    // program would let a decode program that dropped GGML_OP_FLASH_ATTN_EXT
++    // pass this proof.
++    return captures_flash_attention(installation->program) ||
++            std::any_of(installation->alternatives.begin(), installation->alternatives.end(),
++                    captures_flash_attention);
 +}
 +
 +bool has_minimax_control_flow_programs(const skippy_model * model, bool require_arange) {
@@ -10245,7 +10257,7 @@ index 92b0271ce..7124b3a1a 100644
  bool build_profile(
          llama_model * model,
          const std::vector<skippy_parameter_binding> & bindings,
-@@ -549,7 +637,9 @@ bool build_profile(
+@@ -549,7 +649,9 @@ bool build_profile(
      params.n_ubatch = 8;
      params.n_seq_max = n_sequences;
      params.n_rs_seq = n_rs_seq;
@@ -10256,7 +10268,7 @@ index 92b0271ce..7124b3a1a 100644
      std::unique_ptr<llama_context, decltype(&llama_free)> context(
              llama_init_from_model(model, params),
              llama_free);
-@@ -567,11 +657,22 @@ bool build_profile(
+@@ -567,11 +669,22 @@ bool build_profile(
              n_outputs,
              memory_context.get(),
              true);
@@ -10284,7 +10296,7 @@ index 92b0271ce..7124b3a1a 100644
          return false;
      }
      const llm_graph_result * result = context->get_gf_res_reserve();
-@@ -793,6 +894,7 @@ struct runtime_stage_plan {
+@@ -793,6 +906,7 @@ struct runtime_stage_plan {
      std::string full_execution_contract;
      int32_t layer_start = 0;
      int32_t layer_end = 0;
@@ -10292,7 +10304,7 @@ index 92b0271ce..7124b3a1a 100644
      std::vector<std::string> resident_names;
      std::vector<std::string> import_identities;
      std::vector<std::string> import_bindings;
-@@ -948,6 +1050,24 @@ bool check_public_stage_plan_abi(
+@@ -948,6 +1062,24 @@ bool check_public_stage_plan_abi(
          runtime_stage->full_execution_contract = plan_string(full, full_descriptor.execution_contract);
          runtime_stage->layer_start = 1;
          runtime_stage->layer_end = layer_count;
@@ -10317,7 +10329,7 @@ index 92b0271ce..7124b3a1a 100644
          for (size_t index = 0; index < descriptor.resident_tensor_count; ++index) {
              skippy_stage_plan_value_desc_v1 resident_value{};
              if (skippy_stage_plan_resident_tensor_at_v1(source, index, &resident_value, &error) !=
-@@ -1255,16 +1375,8 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+@@ -1255,16 +1387,8 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
          return 10;
      }
  
@@ -10335,7 +10347,7 @@ index 92b0271ce..7124b3a1a 100644
          resident_name_ptrs.push_back(name.c_str());
      }
      std::vector<std::string> carrier_parts = {carrier_path};
-@@ -1283,6 +1395,9 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+@@ -1283,6 +1407,9 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
      runtime_config.n_threads = 1;
      runtime_config.n_threads_batch = 1;
      runtime_config.n_gpu_layers = 0;
@@ -10345,7 +10357,7 @@ index 92b0271ce..7124b3a1a 100644
      runtime_config.load_mode = SKIPPY_LOAD_MODE_RUNTIME_SLICE;
      runtime_config.execution_contract = terminal_stage.full_execution_contract.c_str();
      runtime_config.resident_tensor_names = resident_name_ptrs.data();
-@@ -1352,18 +1467,22 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+@@ -1352,18 +1479,22 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
          skippy_error_free(runtime_error);
          return 14;
      }
@@ -10379,7 +10391,7 @@ index 92b0271ce..7124b3a1a 100644
      skippy_session * terminal_session = nullptr;
      if (skippy_session_create(terminal_model, &terminal_session, &runtime_error) != SKIPPY_STATUS_OK ||
              terminal_session == nullptr) {
-@@ -1419,6 +1538,22 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+@@ -1419,6 +1550,22 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
      if (!check_synthetic_embedding_input(carrier_model)) {
          return 40;
      }
@@ -10402,7 +10414,7 @@ index 92b0271ce..7124b3a1a 100644
      skippy_session * session = nullptr;
      if (skippy_session_create(carrier_model, &session, &runtime_error) != SKIPPY_STATUS_OK || session == nullptr) {
          std::fprintf(stderr, "source stage session create failed: %s\n",
-@@ -1427,6 +1562,7 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+@@ -1427,6 +1574,7 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
          return 18;
      }
      const llama_token tokens[] = {1, 2};
@@ -10410,7 +10422,7 @@ index 92b0271ce..7124b3a1a 100644
      std::vector<uint8_t> output_payload(1024 * 1024);
      skippy_activation_desc output_desc{};
      size_t output_bytes = 0;
-@@ -1461,6 +1597,11 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+@@ -1461,6 +1609,11 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
          return 22;
      }
  
@@ -10422,7 +10434,7 @@ index 92b0271ce..7124b3a1a 100644
      skippy_sampling_config sampling{};
      sampling.version = 1;
      sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
-@@ -1492,8 +1633,18 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+@@ -1492,8 +1645,18 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
              skippy_error_free(runtime_error);
              return 24;
          }
