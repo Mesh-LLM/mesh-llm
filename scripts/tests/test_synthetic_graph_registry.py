@@ -78,6 +78,16 @@ class SyntheticGraphRegistryTests(unittest.TestCase):
         self.assertNotIn('DISABLED TRUE', patch)
         self.assertNotIn('WILL_FAIL', patch)
 
+    def test_fixture_generator_forwards_mtp_depth(self):
+        patch = PATCH.read_text()
+        self.assertIn('strcmp(argv[i], "--contract-mtp") == 0', patch)
+        self.assertIn('contract_mtp_layers = std::stoul(argv[++i])', patch)
+        self.assertIn('contract_width, contract_mtp_layers)', patch)
+
+    def test_stateless_contract_rejects_mutable_state(self):
+        patch = PATCH.read_text()
+        self.assertIn('mode == "stateless" && !all_states.empty()', patch)
+
 
 if __name__ == "__main__":
     unittest.main()

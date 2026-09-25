@@ -1,4 +1,4 @@
-From d95f454889db2fc3ee59f6d617992222a07d1177 Mon Sep 17 00:00:00 2001
+From 44487a972062aba7563f4d82e56205dabfe6a22b Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:28 +1000
 Subject: [PATCH] llama: integrate explicit stage planning and loading
@@ -7,7 +7,7 @@ Subject: [PATCH] llama: integrate explicit stage planning and loading
  include/llama.h                |    7 +
  src/llama-arch.cpp             |   22 +
  src/llama-arch.h               |    2 +
- src/llama-context.cpp          |  515 +++++++++++----
+ src/llama-context.cpp          |  519 +++++++++++----
  src/llama-context.h            |   73 ++-
  src/llama-ext.h                |    6 +
  src/llama-graph.cpp            |  687 ++++++++++++++++++--
@@ -28,7 +28,7 @@ Subject: [PATCH] llama: integrate explicit stage planning and loading
  src/llama-model.h              |   17 +-
  src/llama-quant.cpp            |   12 +-
  src/llama.cpp                  |   91 ++-
- 24 files changed, 3280 insertions(+), 350 deletions(-)
+ 24 files changed, 3281 insertions(+), 353 deletions(-)
 
 diff --git a/include/llama.h b/include/llama.h
 index 1805ed055..837293eb4 100644
@@ -119,7 +119,7 @@ index af64f4ec5..e6732e854 100644
      LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,
      LLM_KV_ATTENTION_INDEXER_TYPES,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index da9c558d2..ccfe6133e 100644
+index da9c558d2..e1e8dd7ad 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -12,6 +12,8 @@
@@ -1033,10 +1033,19 @@ index da9c558d2..ccfe6133e 100644
  }
  
  // llama adapter API
-@@ -4322,6 +4595,20 @@ int llama_context::decode(const llama_batch & batch_inp) {
-     return decode(*compat.batch_ext);
+@@ -4313,13 +4586,25 @@ size_t llama_state_seq_load_file(llama_context * ctx, const char * filepath, lla
+ // compat: llama_batch -> llama_batch_ext -> encode/decode
+ 
+ int llama_context::encode(const llama_batch & batch_inp) {
+-    llama_batch_compat compat(this, batch_inp, model.hparams.n_embd_inp_enc());
+-    return encode(*compat.batch_ext);
++    return encode(batch_inp, graph_build_inputs);
  }
  
+ int llama_context::decode(const llama_batch & batch_inp) {
++    return decode(batch_inp, graph_build_inputs);
++}
++
 +int llama_context::encode(
 +        const llama_batch & batch_inp,
 +        const skippy_graph_build_inputs & graph_build_inputs) {
@@ -1047,14 +1056,13 @@ index da9c558d2..ccfe6133e 100644
 +int llama_context::decode(
 +        const llama_batch & batch_inp,
 +        const skippy_graph_build_inputs & graph_build_inputs) {
-+    llama_batch_compat compat(this, batch_inp);
+     llama_batch_compat compat(this, batch_inp);
+-    return decode(*compat.batch_ext);
 +    return decode(*compat.batch_ext, graph_build_inputs);
-+}
-+
- ///
+ }
  
- int32_t llama_encode(
-@@ -4338,7 +4625,11 @@ int32_t llama_encode(
+ ///
+@@ -4338,7 +4623,11 @@ int32_t llama_encode(
  int32_t llama_decode(
          llama_context * ctx,
            llama_batch   batch) {

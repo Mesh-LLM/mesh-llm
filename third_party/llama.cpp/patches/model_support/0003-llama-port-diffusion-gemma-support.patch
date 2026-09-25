@@ -1,4 +1,4 @@
-From a4c6a33e5d85f6643eafcca23720d550a0e41b97 Mon Sep 17 00:00:00 2001
+From 7c8315f7c0b99a5441477ed2a2c974b904b7a83e Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Sun, 20 Sep 2026 11:16:21 +1000
 Subject: [PATCH] llama: port DiffusionGemma support
@@ -17,7 +17,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  examples/diffusion-gemma-eval/CMakeLists.txt  |   5 +
  .../diffusion-gemma-eval.cpp                  | 196 ++++
  .../diffusion-gemma-server/CMakeLists.txt     |  13 +
- .../diffusion-gemma-server.cpp                | 183 ++++
+ .../diffusion-gemma-server.cpp                | 189 ++++
  .../diffusion-gemma-visual-server.cpp         | 388 ++++++++
  examples/diffusion/diffusion-cli.cpp          | 584 +++++++++---
  examples/diffusion/diffusion.cpp              | 283 ++++++
@@ -38,7 +38,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  src/models/gemma4-common.h                    | 126 +++
  src/models/models.h                           |  60 ++
  tests/test-llama-archs.cpp                    |  23 +-
- 29 files changed, 3252 insertions(+), 125 deletions(-)
+ 29 files changed, 3258 insertions(+), 125 deletions(-)
  create mode 100644 conversion/diffusion_gemma.py
  create mode 100644 examples/diffusion-gemma-eval/CMakeLists.txt
  create mode 100644 examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp
@@ -592,10 +592,10 @@ index 000000000..768ce5895
 +target_compile_features(${TARGET} PRIVATE cxx_std_17)
 diff --git a/examples/diffusion-gemma-server/diffusion-gemma-server.cpp b/examples/diffusion-gemma-server/diffusion-gemma-server.cpp
 new file mode 100644
-index 000000000..3a1c122f1
+index 000000000..8a430b504
 --- /dev/null
 +++ b/examples/diffusion-gemma-server/diffusion-gemma-server.cpp
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,189 @@
 +// Persistent forward "logits server" for DiffusionGemma: load the GGUF once, then service many
 +// [prompt | canvas] forward requests over stdin/stdout so a Python driver can run the block-diffusion
 +// loop without reloading the model each step.
@@ -615,6 +615,7 @@ index 000000000..3a1c122f1
 +#include <cstdint>
 +#include <cstdlib>
 +#include <cstring>
++#include <limits>
 +#include <string>
 +#include <vector>
 +
@@ -678,24 +679,29 @@ index 000000000..3a1c122f1
 +        if (req.size() < 2) { printf("ERR badreq\n"); fflush(stdout); continue; }
 +        const int P = req[0];
 +        const int C = req[1];
-+        const int N = P + C;
++        const int64_t N64 = (int64_t) P + C;
++        if (P < 0 || C <= 0 || N64 <= 0 || N64 > MAXTOK) {
++            printf("ERR badcounts %d %d\n", P, C); fflush(stdout); continue;
++        }
++        const size_t N = (size_t) N64;
 +        // header is either [P,C] (zero-SC) or [P,C,use_sc,temp] (self-conditioning)
 +        int   use_sc = 0;
 +        float temp   = 1.0f;
 +        int   hdr    = 2;
-+        if ((int) req.size() == 4 + N) {
++        if (req.size() == 4 + N) {
 +            hdr = 4;
 +            use_sc = req[2];
 +            memcpy(&temp, &req[3], sizeof(float));
-+        } else if ((int) req.size() != 2 + N) {
-+            printf("ERR badsize %d %d\n", N, (int) req.size()); fflush(stdout); continue;
++        } else if (req.size() != 2 + N) {
++            printf("ERR badsize %zu %zu\n", N, req.size()); fflush(stdout); continue;
 +        }
-+        if (N <= 0 || N > MAXTOK) {
-+            printf("ERR badN %d\n", N); fflush(stdout); continue;
++        if ((size_t) C > std::numeric_limits<size_t>::max() / (size_t) n_vocab) {
++            printf("ERR canvas-too-large\n"); fflush(stdout); continue;
 +        }
 +
-+        if ((int) sc_cache.size() != C * n_vocab) {
-+            sc_cache.assign((size_t) C * n_vocab, 0.0f);
++        const size_t sc_size = (size_t) C * (size_t) n_vocab;
++        if (sc_cache.size() != sc_size) {
++            sc_cache.assign(sc_size, 0.0f);
 +        }
 +
 +        // row_base = batch index of the first canvas logit row: P in UNIFIED, 0 in cached DECODE
@@ -706,8 +712,8 @@ index 000000000..3a1c122f1
 +
 +        if (!use_kv) {
 +            // UNIFIED forward over [prompt | canvas] (default, recomputes the prompt every step)
-+            batch.n_tokens = N;
-+            for (int i = 0; i < N; ++i) {
++            batch.n_tokens = (int32_t) N;
++            for (int32_t i = 0; i < (int32_t) N; ++i) {
 +                batch.token[i]     = req[hdr + i];
 +                batch.pos[i]       = i;
 +                batch.n_seq_id[i]  = 1;
@@ -1875,7 +1881,7 @@ index d58d22eff..70487d728 100644
  
      llama_free(ctx);
 diff --git a/examples/diffusion/diffusion.cpp b/examples/diffusion/diffusion.cpp
-index 97d6b6944..cd5015ff3 100644
+index 97d6b6944..0b7bcc0f3 100644
 --- a/examples/diffusion/diffusion.cpp
 +++ b/examples/diffusion/diffusion.cpp
 @@ -6,7 +6,9 @@
@@ -1888,8 +1894,21 @@ index 97d6b6944..cd5015ff3 100644
  #include <utility>
  #include <vector>
  
-@@ -147,6 +149,15 @@ void diffusion_generate(llama_context *          ctx,
+@@ -145,8 +147,28 @@ void diffusion_generate(llama_context *          ctx,
+     struct llama_sampler * dist_sampler = llama_sampler_init_dist(params.seed);
+ 
      llama_batch batch = llama_batch_init(params.max_length, 0, 1);
++
++    auto finish = [&]() {
++        llama_diffusion_set_sc(model, nullptr, 0.0f, 1.0f, false);
++        if (params.kv_cache) {
++            llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);
++        }
++        if (dev_sc) {
++            llama_diffusion_set_device_sc(model, false);
++        }
++        llama_batch_free(batch);
++    };
      batch.n_tokens    = params.max_length;
  
 +    // Self-conditioning (DiffusionGemma): cache each step's canvas-row logits and feed them into the next
@@ -1904,7 +1923,7 @@ index 97d6b6944..cd5015ff3 100644
      // Pre-allocate buffers for CFG if needed
      int32_t                  logits_size = n_vocab * params.max_length;
      std::vector<float>       cond_logits_buffer;
-@@ -210,6 +221,11 @@ void diffusion_generate(llama_context *          ctx,
+@@ -210,6 +232,11 @@ void diffusion_generate(llama_context *          ctx,
                  batch.logits[i]    = 1;
              }
  
@@ -1916,7 +1935,7 @@ index 97d6b6944..cd5015ff3 100644
              float * logits = nullptr;
  
              if (params.cfg_scale > 0.0f) {
-@@ -257,6 +273,11 @@ void diffusion_generate(llama_context *          ctx,
+@@ -257,6 +284,11 @@ void diffusion_generate(llama_context *          ctx,
                  break;
              }
  
@@ -1928,7 +1947,7 @@ index 97d6b6944..cd5015ff3 100644
              auto get_logits_for_pos = [&](int32_t pos) -> const float * {
                  if (params.shift_logits) {
                      return pos == 0 ? logits : logits + (pos - 1) * n_vocab;
-@@ -297,6 +318,9 @@ void diffusion_generate(llama_context *          ctx,
+@@ -297,6 +329,9 @@ void diffusion_generate(llama_context *          ctx,
                              candidates[token_id].logit = pos_logits[token_id];
                              candidates[token_id].p     = 0.0f;
                          }
@@ -1938,7 +1957,7 @@ index 97d6b6944..cd5015ff3 100644
  
                          llama_token_data_array cur_p = {
                              candidates.data(),
-@@ -322,6 +346,9 @@ void diffusion_generate(llama_context *          ctx,
+@@ -322,6 +357,9 @@ void diffusion_generate(llama_context *          ctx,
                          candidates[token_id].p     = 0.0f;
                          candidates[token_id].id    = token_id;
                      }
@@ -1948,7 +1967,7 @@ index 97d6b6944..cd5015ff3 100644
  
                      llama_token_data_array cur_p = {
                          candidates.data(),
-@@ -406,3 +433,259 @@ void diffusion_generate(llama_context *          ctx,
+@@ -406,3 +444,248 @@ void diffusion_generate(llama_context *          ctx,
  
      n_generated = params.max_length;
  }
@@ -2006,17 +2025,6 @@ index 97d6b6944..cd5015ff3 100644
 +    const unsigned nth = std::max(1u, std::min(hw ? hw : 1u, 32u));
 +
 +    llama_batch batch = llama_batch_init(params.max_length, 0, 1);
-+
-+    auto finish = [&]() {
-+        llama_diffusion_set_sc(model, nullptr, 0.0f, 1.0f, false);
-+        if (params.kv_cache) {
-+            llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);
-+        }
-+        if (dev_sc) {
-+            llama_diffusion_set_device_sc(model, false);
-+        }
-+        llama_batch_free(batch);
-+    };
 +
 +    // Cached path: PREFILL the prompt once (writing the prefix K/V store), then each step DECODE only the
 +    // canvas, reading the cached prefix - instead of re-decoding [prompt|canvas] every step. The packed
@@ -2771,7 +2779,7 @@ index c48613aca..4c271709f 100644
      LLM_TENSOR_POST_MLP_NORM,
      LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index ab5f5730b..8fb88a04a 100644
+index 66d484684..4826bfb19 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1563,8 +1563,14 @@ int llama_context::encode(
@@ -3965,7 +3973,7 @@ index 527ea4ba6..e567d0b71 100644
      llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 2d9b4e5b3..b6bea00d8 100644
+index a8150b9ff..3a588b682 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -296,8 +296,11 @@ static gguf_context_ptr get_gguf_ctx(

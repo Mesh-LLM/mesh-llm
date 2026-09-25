@@ -1,4 +1,4 @@
-From 34d776bfc5ba5447a46ced71512817b342d9513b Mon Sep 17 00:00:00 2001
+From 08c2198cd40b70abb947484d8ccc2fb2d1a01480 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 18:30:01 +1000
 Subject: [PATCH] models: add inkling family support
@@ -10,7 +10,7 @@ Subject: [PATCH] models: add inkling family support
  common/parsers/sources.cmake        |   1 +
  conversion/__init__.py              |   2 +
  conversion/base.py                  |  14 +
- conversion/inkling.py               | 422 +++++++++++++++++
+ conversion/inkling.py               | 423 +++++++++++++++++
  gguf-py/gguf/constants.py           |  50 ++
  gguf-py/gguf/tensor_mapping.py      |  49 ++
  models/templates/Inkling.jinja      | 514 +++++++++++++++++++++
@@ -44,7 +44,7 @@ Subject: [PATCH] models: add inkling family support
  tools/mtmd/mtmd-image.cpp           |  72 +++
  tools/mtmd/mtmd-image.h             |  20 +
  tools/mtmd/mtmd.cpp                 |  37 +-
- 40 files changed, 2607 insertions(+), 22 deletions(-)
+ 40 files changed, 2608 insertions(+), 22 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
  create mode 100644 conversion/inkling.py
  create mode 100644 models/templates/Inkling.jinja
@@ -239,7 +239,7 @@ index 85db1d643..a8c7172b0 100644
      "JanusForConditionalGeneration": "januspro",
      "KimiK25ForConditionalGeneration": "kimivl",
 diff --git a/conversion/base.py b/conversion/base.py
-index a1da64bc5..186f7fcee 100644
+index 280ab5e50..4a1a7dd35 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
 @@ -562,6 +562,20 @@ class ModelBase:
@@ -265,10 +265,10 @@ index a1da64bc5..186f7fcee 100644
                  # are dequantized here. k/v scale tensors are unused.
 diff --git a/conversion/inkling.py b/conversion/inkling.py
 new file mode 100644
-index 000000000..079842903
+index 000000000..3ba4418ed
 --- /dev/null
 +++ b/conversion/inkling.py
-@@ -0,0 +1,422 @@
+@@ -0,0 +1,423 @@
 +from __future__ import annotations
 +
 +import re
@@ -453,7 +453,8 @@ index 000000000..079842903
 +        self.gguf_writer.add_float32(f"{arch}.logit_scale_denom", hp["logits_mup_width_multiplier"])
 +        self.gguf_writer.add_uint32(f"{arch}.log_scaling_n_floor", int(hp.get("log_scaling_n_floor") or 0))
 +        self.gguf_writer.add_float32(f"{arch}.log_scaling_alpha", hp.get("log_scaling_alpha", 0.0))
-+        self.gguf_writer.add_uint32(f"{arch}.unpadded_vocab_size", hp["unpadded_vocab_size"])
++        n_unpadded = hp.get("unpadded_vocab_size") or hp["vocab_size"]
++        self.gguf_writer.add_uint32(f"{arch}.unpadded_vocab_size", n_unpadded)
 +
 +        logger.info(f"gguf: (inkling) swa pattern (true=local) = {self._local_layer_flags}")
 +        if self._n_nextn > 0:
@@ -462,7 +463,7 @@ index 000000000..079842903
 +                self._n_nextn,
 +                self._mtp_local_layer_flags,
 +            )
-+        logger.info(f"gguf: (inkling) unpadded_vocab_size = {hp['unpadded_vocab_size']}")
++        logger.info(f"gguf: (inkling) unpadded_vocab_size = {n_unpadded}")
 +
 +    @classmethod
 +    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -1485,7 +1486,7 @@ index e6732e854..c48613aca 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index d24d1ef36..ab5f5730b 100644
+index 43b424361..66d484684 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -181,6 +181,12 @@ llama_context::llama_context(
@@ -2745,7 +2746,7 @@ index e125786fa..32a55d405 100644
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index e60a3aa17..2d9b4e5b3 100644
+index 32d8c6af3..a8150b9ff 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -747,6 +747,10 @@ static bool arch_supported(const llm_arch arch) {
