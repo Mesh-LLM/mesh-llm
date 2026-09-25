@@ -1,8 +1,8 @@
-From cf52cf215f39d7b881121174b09be55077a8a233 Mon Sep 17 00:00:00 2001
+From 16eda1e6439b202f08684c358908eb8557001378 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 24 Sep 2026 13:26:12 +1000
-Subject: [PATCH 1/2] skippy: memoise stage slice selection with exact
- dependency keys
+Subject: [PATCH] skippy: memoise stage slice selection with exact dependency
+ keys
 
 ---
  src/CMakeLists.txt                           |   3 +-
@@ -18,7 +18,7 @@ Subject: [PATCH 1/2] skippy: memoise stage slice selection with exact
  create mode 100644 src/skippy/tests/selection_memo_regression.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 0e9e0011c..b7e0a38d9 100644
+index c98a11390..59f010e55 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -68,7 +68,8 @@ add_library(llama

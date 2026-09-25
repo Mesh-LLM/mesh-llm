@@ -1,4 +1,4 @@
-From 0fbe3f3f48baad1d61557f9f284341ea0ae7b4d7 Mon Sep 17 00:00:00 2001
+From a12599921d9fc4279c38c161bde7c5f999d5d68f Mon Sep 17 00:00:00 2001
 From: Daniel Winter-Wijntjes <danielwinterw@gmail.com>
 Date: Mon, 21 Sep 2026 18:11:39 +1000
 Subject: [PATCH] skippy: batch activation exports by request offset, never by
@@ -33,10 +33,10 @@ Nothing in the batched path signals "unsupported" any more.
  4 files changed, 77 insertions(+), 38 deletions(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 996c21972..a6783a5aa 100644
+index 29979b063..3703cdcb2 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -834,6 +834,10 @@ uint32_t llama_context::n_ubatch() const {
+@@ -882,6 +882,10 @@ uint32_t llama_context::n_ubatch() const {
      return cparams.n_ubatch;
  }
  
@@ -48,7 +48,7 @@ index 996c21972..a6783a5aa 100644
      return cparams.n_seq_max;
  }
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 4b4128f22..f9896cbd4 100644
+index fe26b966b..88457f390 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -92,6 +92,7 @@ struct llama_context {

@@ -234,7 +234,7 @@ cache layout, and progress UX stay in one implementation.
 ## Consumer Shape
 
 A crates.io SDK consumer that wants dynamic local serving should use
-`mesh_llm::sdk::native_runtime` instead of depending on a platform-specific
+`mesh_llm_sdk::native_runtime` instead of depending on a platform-specific
 source build:
 
 ```rust

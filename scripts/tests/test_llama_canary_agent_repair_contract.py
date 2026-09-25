@@ -322,6 +322,9 @@ run_candidate_gates() {
         loader = self.wrapper[
             self.wrapper.index("load_candidate_bundle() {") : self.wrapper.index("cleanup_verification_worktree() {")
         ]
+        self.assertIn('candidate_branch="${CANARY_CANDIDATE_BRANCH:', loader)
+        self.assertIn('"refs/heads/${candidate_branch}"', loader)
+        self.assertNotIn('"refs/heads/${BRANCH}"', loader)
         self.assertIn('CERTIFIED_SHA="$expected_head"', loader)
         self.assertIn('VERIFICATION_TREE="$(git rev-parse "${CERTIFIED_SHA}^{tree}")"', loader)
         self.assertLess(loader.index('CERTIFIED_SHA="$expected_head"'), loader.index("VERIFICATION_TREE="))

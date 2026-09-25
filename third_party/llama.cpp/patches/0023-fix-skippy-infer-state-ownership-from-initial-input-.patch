@@ -1,4 +1,4 @@
-From e006a9817a6a45949091eb2e26fc8f92ed96fa5e Mon Sep 17 00:00:00 2001
+From cc3a4ee470a2023cc9901c425e11169f73b73277 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 09:06:44 +1000
 Subject: [PATCH] fix(skippy): infer state ownership from initial input leaves

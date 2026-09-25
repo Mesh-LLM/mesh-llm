@@ -331,20 +331,26 @@ write_candidate_bundle() {
 }
 
 load_candidate_bundle() {
-  local input_bundle expected_head bundle_head
+  local input_bundle expected_head candidate_branch bundle_head
   input_bundle="${CANARY_INPUT_BUNDLE:?CANARY_INPUT_BUNDLE is required in verify mode}"
   expected_head="${CANARY_CANDIDATE_SHA:?CANARY_CANDIDATE_SHA is required in verify mode}"
+  candidate_branch="${CANARY_CANDIDATE_BRANCH:?CANARY_CANDIDATE_BRANCH is required in verify mode}"
   if [[ ! "$expected_head" =~ ^[0-9a-f]{40}$ || ! -s "$input_bundle" ]]; then
     echo "verification requires a non-empty candidate bundle and 40-hex head" >&2
     return 1
   fi
+  if [[ "$candidate_branch" != llama-canary/repair-* ]] ||
+      ! git check-ref-format "refs/heads/${candidate_branch}"; then
+    echo "verification requires a valid identity-bound candidate branch" >&2
+    return 1
+  fi
   git bundle verify "$input_bundle" >/dev/null
-  bundle_head="$(git bundle list-heads "$input_bundle" "refs/heads/${BRANCH}" | awk '{print $1}')"
+  bundle_head="$(git bundle list-heads "$input_bundle" "refs/heads/${candidate_branch}" | awk '{print $1}')"
   if [[ "$bundle_head" != "$expected_head" ]]; then
     echo "candidate bundle head does not match the repair job output" >&2
     return 1
   fi
-  git fetch "$input_bundle" "refs/heads/${BRANCH}"
+  git fetch "$input_bundle" "refs/heads/${candidate_branch}"
   CERTIFIED_SHA="$expected_head"
   CANDIDATE_BASE_HEAD="$(git rev-parse "${CERTIFIED_SHA}^")"
   VERIFICATION_TREE="$(git rev-parse "${CERTIFIED_SHA}^{tree}")"

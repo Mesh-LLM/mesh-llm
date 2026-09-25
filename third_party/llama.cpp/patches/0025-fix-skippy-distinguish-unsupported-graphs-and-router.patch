@@ -1,9 +1,12 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 2e7739ec3cea6b348c7aaa976066501dcd3d03b1 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 09:51:50 +1000
 Subject: [PATCH] fix(skippy): distinguish unsupported graphs and router slots
 
 ---
+ src/skippy/stage_plan.cpp | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
 diff --git a/src/skippy/stage_plan.cpp b/src/skippy/stage_plan.cpp
 index 26995bcfd..f0cd2726c 100644
 --- a/src/skippy/stage_plan.cpp
@@ -30,3 +33,6 @@ index 26995bcfd..f0cd2726c 100644
      try {
          auto plan = std::make_unique<skippy_stage_plan>();
          plan->package_id = planner->package_id;
+-- 
+2.54.0 (Apple Git-157)
+
