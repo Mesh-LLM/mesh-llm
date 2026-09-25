@@ -76,33 +76,98 @@ WINDOWS_UNVERIFIED_CRATES = {
     "xtask",
 }
 
-CFG_OPEN = re.compile(r"\bcfg(?:!|_attr)?\s*\(")
-# `windows`, `unix`, and the quoted `target_os = "windows"` / `target_family`
-# values all match on word boundaries.
-CFG_PLATFORM_PREDICATE = re.compile(r"\b(?:windows|unix)\b")
+CFG_OPEN = re.compile(r"\b(cfg!?|cfg_attr)\s*\(")
+BARE_PLATFORM = re.compile(r"\b(?:windows|unix)\b")
+PLATFORM_KEY = re.compile(r"\btarget_(?:os|family)\s*=\s*\"(\d+)\"")
+RAW_STRING = re.compile(r"b?r(#*)\"")
+CHAR_LITERAL = re.compile(r"'(?:\\(?:u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'")
 
 
-def _cfg_expressions(source: str) -> list[str]:
-    """The balanced argument of every `cfg(...)`, `cfg!(...)` and `cfg_attr(...)`.
+def _mask_rust_source(source: str) -> tuple[str, list[str]]:
+    """Drop comments and replace each string literal with `"<index>"`.
+
+    A cfg is then only found in code, never in a comment or a quoted example,
+    and a `target_os` value stays readable through the returned literals.
+    """
+    code: list[str] = []
+    literals: list[str] = []
+    index, length = 0, len(source)
+    while index < length:
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            index = length if end == -1 else end
+        elif source.startswith("/*", index):
+            depth, index = 1, index + 2
+            while index < length and depth:
+                if source.startswith("/*", index):
+                    depth, index = depth + 1, index + 2
+                elif source.startswith("*/", index):
+                    depth, index = depth - 1, index + 2
+                else:
+                    index += 1
+            code.append(" ")
+        elif (raw := RAW_STRING.match(source, index)) and (
+            index == 0 or not (source[index - 1].isalnum() or source[index - 1] == "_")
+        ):
+            closing = '"' + raw.group(1)
+            end = source.find(closing, raw.end())
+            end = length if end == -1 else end
+            literals.append(source[raw.end() : end])
+            code.append(f'"{len(literals) - 1}"')
+            index = end + len(closing)
+        elif source[index] == '"':
+            end = index + 1
+            while end < length and source[end] != '"':
+                end += 2 if source[end] == "\\" else 1
+            literals.append(source[index + 1 : end])
+            code.append(f'"{len(literals) - 1}"')
+            index = end + 1
+        elif (char := CHAR_LITERAL.match(source, index)) is not None:
+            code.append("' '")
+            index = char.end()
+        else:
+            code.append(source[index])
+            index += 1
+    return "".join(code), literals
+
+
+def _cfg_predicates(code: str) -> list[str]:
+    """The predicate of every `cfg(...)`, `cfg!(...)` and `cfg_attr(...)`.
 
     Balanced, not up to the first `)`: in `cfg(all(not(test), windows))` the
-    platform predicate comes after a nested clause.
+    platform predicate comes after a nested clause. For `cfg_attr` only the
+    part before the first top-level comma is a predicate; the rest is an
+    attribute such as `windows_subsystem = "windows"`.
     """
-    expressions = []
-    for match in CFG_OPEN.finditer(source):
-        depth, index = 1, match.end()
-        while index < len(source) and depth:
-            if source[index] == "(":
+    predicates = []
+    for match in CFG_OPEN.finditer(code):
+        depth, index, cut = 1, match.end(), None
+        while index < len(code) and depth:
+            if code[index] == "(":
                 depth += 1
-            elif source[index] == ")":
+            elif code[index] == ")":
                 depth -= 1
+            elif code[index] == "," and depth == 1 and cut is None:
+                cut = index
             index += 1
-        expressions.append(source[match.end() : index - 1])
-    return expressions
+        end = index - 1
+        if match.group(1) == "cfg_attr" and cut is not None:
+            end = cut
+        predicates.append(code[match.end() : end])
+    return predicates
 
 
 def _selects_platform_code(source: str) -> bool:
-    return any(CFG_PLATFORM_PREDICATE.search(expr) for expr in _cfg_expressions(source))
+    """Whether a cfg predicate names `windows` or `unix`, directly or as the
+    value of `target_os` / `target_family`. A `feature = "windows"` is not a
+    platform, and a cfg inside a comment or a string is not code."""
+    code, literals = _mask_rust_source(source)
+    for predicate in _cfg_predicates(code):
+        if BARE_PLATFORM.search(predicate):
+            return True
+        if any(literals[int(i)] in ("windows", "unix") for i in PLATFORM_KEY.findall(predicate)):
+            return True
+    return False
 
 
 def _workspace_crates(root: Path) -> dict[str, Path]:
@@ -511,10 +576,19 @@ class CiWindowsCompositionTests(unittest.TestCase):
             "target-family": "#[cfg(target_family = \"unix\")]\nfn platform() {}\n",
         }
         portable = {
-            "portable": (
+            "test-and-features": (
                 "#[cfg(test)]\nmod tests {}\n"
                 "#[cfg(all(test, not(feature = \"slow\")))]\nmod slow {}\n"
                 "fn windows_path() {}\n"
+            ),
+            "feature-named-windows": "#[cfg(feature = \"windows\")]\nfn platform() {}\n",
+            "quoted-example": (
+                "const SAMPLE: &str = r#\"#[cfg(windows)]\"#;\n"
+                "const TARGET: &str = \"cfg(unix)\";\n"
+            ),
+            "commented": "// #[cfg(windows)]\n/* cfg!(unix) */\nfn platform() {}\n",
+            "cfg-attr-value": (
+                "#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")]\n"
             ),
         }
 
