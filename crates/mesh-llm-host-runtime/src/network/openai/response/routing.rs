@@ -27,6 +27,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let RouteAttemptLoggingContext {
+        exchange_id: _,
         request_id,
         retry_policy,
         response_adapter,
@@ -34,6 +35,38 @@ pub(in crate::network::openai) async fn route_local_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
+    #[cfg(feature = "payments")]
+    {
+        if !super::paid::is_local_origin(tcp_stream) {
+            let model = super::super::request_parse::parse_json_body_from_http_request(prefetched)
+                .and_then(|body| {
+                    body.get("model")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                });
+            match node.advertised_payment_offers().await {
+                Ok(prices)
+                    if model
+                        .as_ref()
+                        .is_some_and(|model| prices.contains_key(model)) =>
+                {
+                    return super::paid::payment_error(
+                        tcp_stream,
+                        "this provider requires the Lightning payment protocol",
+                    )
+                    .await;
+                }
+                Err(_) => {
+                    return super::paid::payment_error(
+                        tcp_stream,
+                        "seller payment state unavailable",
+                    )
+                    .await;
+                }
+                _ => {}
+            }
+        }
+    }
     let Ok((_instance_request, mut upstream)) = acquire_local_attempt_upstream(node, port).await
     else {
         return RouteAttemptResult::RetryableUnavailable;
@@ -79,7 +112,7 @@ async fn acquire_local_attempt_upstream(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + CancelUpstream>(
+pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + CancelUpstream>(
     tcp_stream: &mut ClientStream,
     upstream: &mut U,
     port: u16,
@@ -203,6 +236,7 @@ pub(in crate::network::openai) async fn route_remote_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let RouteAttemptLoggingContext {
+        exchange_id: _,
         request_id,
         retry_policy,
         response_adapter,
@@ -210,6 +244,24 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
+    #[cfg(feature = "payments")]
+    {
+        if let Ok(request) = crate::network::payments::request::PaidRequest::parse(prefetched)
+            && let Some(price) = node.peer_payment_offer(host_id, &request.model).await
+        {
+            return super::paid::route(node, tcp_stream, host_id, prefetched, price, logging).await;
+        }
+    }
+    #[cfg(feature = "payments")]
+    let sanitized = match crate::network::payments::request::strip_intent(prefetched) {
+        Ok(raw) => raw,
+        Err(_) => {
+            return super::paid::payment_error(tcp_stream, "invalid request payment intent").await;
+        }
+    };
+    #[cfg(not(feature = "payments"))]
+    let sanitized = prefetched.to_vec();
+    let prefetched = sanitized.as_slice();
     let (mut quic_send, mut quic_recv) = match node.open_http_tunnel(host_id).await {
         Ok(tunnel) => tunnel,
         Err(err) => {
@@ -274,7 +326,12 @@ async fn forward_buffered_request<W: AsyncWrite + Unpin>(
     upstream: &mut W,
     prefetched: &[u8],
 ) -> std::io::Result<()> {
-    upstream.write_all(prefetched).await
+    #[cfg(feature = "payments")]
+    let sanitized = crate::network::payments::request::strip_intent(prefetched)
+        .map_err(std::io::Error::other)?;
+    #[cfg(not(feature = "payments"))]
+    let sanitized = prefetched.to_vec();
+    upstream.write_all(&sanitized).await
 }
 
 /// Peek the just-probed, untouched response headers for a peer's

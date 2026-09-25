@@ -1056,7 +1056,7 @@ pub fn rewrite_public_model_alias(
     rewrite_model_field(request, &internal);
 }
 
-fn internal_model_for_public_id(
+pub(crate) fn internal_model_for_public_id(
     requested: &str,
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],

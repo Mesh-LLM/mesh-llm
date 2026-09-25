@@ -145,6 +145,8 @@ pub struct PeerAnnouncement {
     /// verify independently.
     #[prost(message, optional, tag = "51")]
     pub claimed_log_head: ::core::option::Option<ClaimedLogHead>,
+    #[prost(message, repeated, tag = "52")]
+    pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
 }
 /// A minimal, self-contained claim about the current head of a peer's
 /// append-only log. `claimed_signature` is claimed by the announcing peer to
@@ -1623,4 +1625,16 @@ impl InferenceAdmissionState {
             _ => None,
         }
     }
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LightningOffer {
+    #[prost(string, tag = "1")]
+    pub model: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub input_msat_per_million: u64,
+    #[prost(uint64, tag = "3")]
+    pub output_msat_per_million: u64,
+    #[prost(uint64, tag = "4")]
+    pub minimum_invoice_msat: u64,
 }

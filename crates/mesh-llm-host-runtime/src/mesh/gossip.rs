@@ -543,6 +543,10 @@ impl Node {
         existing.stage_status_list_supported = ann.stage_status_list_supported;
         existing.local_gguf_content_id_supported = ann.local_gguf_content_id_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+        #[cfg(feature = "payments")]
+        {
+            existing.lightning_offers = ann.lightning_offers.clone();
+        }
         cache_affinity_gossip::merge_advertisement(
             &mut existing.cache_affinity,
             ann.cache_affinity.as_ref(),

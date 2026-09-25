@@ -145,6 +145,8 @@ pub(crate) struct LocalAnnouncementData {
     owner_attestation: Option<SignedNodeOwnership>,
     artifact_transfer_supported: bool,
     advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
+    #[cfg(feature = "payments")]
+    lightning_offers: std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
     cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     gpu_mem_bandwidth_gbps: Option<String>,
     gpu_compute_tflops_fp32: Option<String>,
@@ -173,6 +175,16 @@ pub fn backfill_legacy_descriptors(ann: &mut PeerAnnouncement) {
     }
 }
 
+#[cfg(feature = "payments")]
+fn lightning_offers_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
+    old.lightning_offers != new.lightning_offers
+}
+
+#[cfg(not(feature = "payments"))]
+fn lightning_offers_changed(_old: &PeerInfo, _new: &PeerInfo) -> bool {
+    false
+}
+
 pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
     old.addr != new.addr
         || old.mesh_id != new.mesh_id
@@ -196,6 +208,7 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.stage_protocol_generation_supported != new.stage_protocol_generation_supported
         || old.stage_status_list_supported != new.stage_status_list_supported
         || old.local_gguf_content_id_supported != new.local_gguf_content_id_supported
+        || lightning_offers_changed(old, new)
         || cache_affinity_gossip::advertised_state_changed(&old.cache_affinity, &new.cache_affinity)
         || old.version != new.version
         || old.owner_summary != new.owner_summary
@@ -293,6 +306,10 @@ pub(super) fn apply_transitive_ann(
     // in `add_peer` update both fields authoritatively.
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+    #[cfg(feature = "payments")]
+    {
+        existing.lightning_offers = ann.lightning_offers.clone();
+    }
     cache_affinity_gossip::merge_advertisement(
         &mut existing.cache_affinity,
         ann.cache_affinity.as_ref(),
@@ -436,6 +453,8 @@ impl Node {
             artifact_transfer_supported:
                 crate::models::artifact_transfer::artifact_transfer_advertised(&owner_summary),
             advertised_model_throughput,
+            #[cfg(feature = "payments")]
+            lightning_offers: self.advertised_payment_offers().await.unwrap_or_default(),
             cache_affinity: Some(cache_affinity),
             gpu_mem_bandwidth_gbps: Self::format_optional_locked_f32_list(
                 &self.gpu_mem_bandwidth_gbps,
@@ -510,6 +529,8 @@ impl Node {
             stage_status_list_supported: peer.stage_status_list_supported,
             local_gguf_content_id_supported: peer.local_gguf_content_id_supported,
             advertised_model_throughput: peer.advertised_model_throughput.clone(),
+            #[cfg(feature = "payments")]
+            lightning_offers: peer.lightning_offers.clone(),
             cache_affinity: peer.cache_affinity.clone(),
             latency_ms: latency.latency_ms,
             latency_source: Some(match latency.source {
@@ -584,6 +605,8 @@ impl Node {
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
+            #[cfg(feature = "payments")]
+            lightning_offers: data.lightning_offers,
             cache_affinity: data.cache_affinity,
             latency_ms: None,
             latency_source: None,

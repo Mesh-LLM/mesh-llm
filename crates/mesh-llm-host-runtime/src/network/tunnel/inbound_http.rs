@@ -42,6 +42,20 @@ pub(super) async fn handle_inbound_http_stream(
     // private assertion. Direct API requests have it stripped before they can
     // reach this tunnel, so they retain normal target frontend ownership.
     let prefix = read_tunneled_http_header_prefix(&mut quic_recv).await?;
+    #[cfg(feature = "payments")]
+    let (prefix, quic_recv, quic_send) = match crate::network::payments::intercept_inbound(
+        &node,
+        remote,
+        ingress.as_ref().map(|ingress| &ingress.targets),
+        prefix,
+        quic_recv,
+        quic_send,
+    )
+    .await?
+    {
+        crate::network::payments::Inbound::Handled => return Ok(()),
+        crate::network::payments::Inbound::Continue(prefix, recv, send) => (prefix, recv, send),
+    };
     let (prefix, _) =
         crate::network::openai::request_parse::ensure_canonical_request_id_in_header_prefix(prefix);
     let caller_metadata =
@@ -73,6 +87,7 @@ pub(super) async fn handle_inbound_http_stream(
 
     // Compatibility for embedders/tests that only configure the legacy port.
     let mut tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
+    let _remote_origin = super::remote_origin::RemoteBridge::register(tcp_stream.local_addr()?)?;
     tcp_stream.set_nodelay(true)?;
     tcp_stream.write_all(&prefix).await?;
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);

@@ -466,8 +466,14 @@ async fn handle_models_list_request(
     let runtimes = node.all_model_runtime_descriptors().await;
     response_outcome(
         200,
-        proxy::send_models_list_with_descriptors(tcp_stream, &models, &descriptors, &runtimes)
-            .await,
+        proxy::send_models_list_with_descriptors(
+            tcp_stream,
+            &models,
+            &descriptors,
+            &runtimes,
+            Some(node),
+        )
+        .await,
     )
 }
 
@@ -939,6 +945,7 @@ async fn route_missing_local_model(
                 model_name,
                 request,
                 proxy::RouteModelRequestContext {
+                    exchange_id: Some(&exchange_id),
                     required_tokens,
                     affinity: ctx.affinity,
                     route_observer,
@@ -1498,6 +1505,7 @@ async fn route_request(
             model_name,
             request,
             proxy::RouteModelRequestContext {
+                exchange_id: announce.as_ref().map(|(_, id)| id.as_str()),
                 required_tokens,
                 affinity: ctx.affinity,
                 route_observer,
@@ -1663,6 +1671,25 @@ async fn send_auto_route_rejection(
 /// Build the sorted list of model names visible to the `/v1/models` endpoint:
 /// the remote-mesh callable set from `targets` merged with `local_models`
 /// (plugin-served and locally-launched models) with duplicates removed.
+/// The locally registered model name for a public model ID, as the free
+/// path's alias rewrite resolves it. A model served from a catalog or Hugging
+/// Face ref is registered under an internal ID (for example
+/// `local-gguf/sha256-…`) but advertised and priced under its public ID.
+#[cfg(feature = "payments")]
+pub(crate) async fn served_model_for_public_id(
+    node: &mesh::Node,
+    targets: &election::ModelTargets,
+    requested: &str,
+) -> String {
+    let callable = callable_models_with_local_served(targets, node.models_being_served().await);
+    if callable.iter().any(|model| model == requested) {
+        return requested.to_owned();
+    }
+    let descriptors = node.all_served_model_descriptors().await;
+    super::request_parse::internal_model_for_public_id(requested, &callable, &descriptors)
+        .unwrap_or_else(|| requested.to_owned())
+}
+
 fn callable_models_with_local_served(
     targets: &election::ModelTargets,
     local_models: Vec<String>,

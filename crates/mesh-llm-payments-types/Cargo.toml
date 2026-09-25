@@ -1,0 +1,24 @@
+[package]
+name = "mesh-llm-payments-types"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Pure payment data types (pricing, request terms, wire frames) shared by mesh core and mesh-llm-payments"
+readme = "README.md"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The host/engine seam traits. Pulls in the plugin stream type.
+engine = ["dep:mesh-llm-plugin"]
+
+[dependencies]
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.1", optional = true }
+anyhow.workspace = true
+mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.76.1" }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["io-util"] }

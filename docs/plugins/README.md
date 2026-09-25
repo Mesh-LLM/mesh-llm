@@ -8,6 +8,8 @@ As implementation lands, this document should be updated to match the intended e
 
 Plugin-specific documentation:
 
+- [Wallet engineering notes](wallet/README.md) - wallet boundaries, evidence provenance, and fixture expectations
+
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift

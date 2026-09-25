@@ -19,11 +19,14 @@ SPEC.loader.exec_module(E)
 M = E.MEMORY
 
 
-def model(size=1, kind='causal_generation', projector=0):
+def model(size=1, kind='causal_generation', projector=0, minimum=None):
     def artifact(value):
         return {'files': ['model.gguf'], 'file_integrity': {'model.gguf': {'size_bytes': value}}}
+    resources = {'estimated_model_bytes': size}
+    if minimum is not None:
+        resources['minimum_runner_memory_gib'] = minimum
     return {'family': 'fixture', 'class': kind, 'artifact': artifact(size),
-            'resources': {'estimated_model_bytes': size},
+            'resources': resources,
             'mmproj_artifact': artifact(projector) if projector else None}
 
 
@@ -52,6 +55,16 @@ class MemoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'fixture.*exceeds'):
             M.placement(model(200*M.GIB))
 
+    def test_policy_minimum_can_promote_but_not_demote_estimated_tier(self):
+        promoted = M.placement(model(1*M.GIB, minimum=256))
+        self.assertEqual(promoted['memory_tier'], 'accelerator-memory-256plus')
+        self.assertEqual(promoted['minimum_runner_memory_gib'], 256)
+        self.assertEqual(M.placement(model(100*M.GIB, minimum=128))['memory_tier'],
+                         'accelerator-memory-256plus')
+        for invalid in (64, 192, 512, True, '256'):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, 'fixture.*minimum'):
+                M.placement(model(minimum=invalid))
+
     def test_missing_or_understated_artifact_bytes_fail_safe(self):
         value = model(100*M.GIB)
         value['resources']['estimated_model_bytes'] = 1
@@ -65,7 +78,7 @@ class MemoryTests(unittest.TestCase):
         original = copy.deepcopy(plan)
         rows = {r['families']: r for r in E.scheduling_matrix(plan)['include']}
         self.assertEqual(plan, original)
-        for family in ('minimax-m3', 'inkling'):
+        for family in ('minimax-m3', 'inkling', 'glm45-air', 'qwen4exp', 'llama4'):
             self.assertEqual(rows[family]['memory_tier'], 'accelerator-memory-256plus')
         self.assertEqual(rows['lfm2-vl']['memory_tier'], 'accelerator-memory-128plus')
 

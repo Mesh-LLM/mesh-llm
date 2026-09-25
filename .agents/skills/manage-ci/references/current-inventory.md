@@ -4,6 +4,12 @@ This file records checked-in CI facts and selected controlled probe evidence.
 It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
+The affected-crate fallback roster in `scripts/affected-crates.sh` includes
+`mesh-llm-wallet` and `mesh-wallet-lexe` alongside `mesh-llm-payments`;
+`just ci-crate-lists` checks it against workspace membership. The publish
+chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
+`mesh-wallet-lexe` and `mesh-llm-payments`, including optional dependencies.
+
 The protected catalogs include `platform-windows-cfg`: ownership of
 `mesh-llm-plugin` selects `platform-checks` and its existing `windows-unit`
 row. It does not select host/native product builds by itself.
@@ -1096,6 +1102,10 @@ The controller projects each immutable source plan onto `family-certify` plus
 (230.4 GiB), reserving 10% of physical RAM. The source plan and its digest are
 unchanged, including historical `mesh_ref` certification. Missing artifact sizes
 and peaks beyond the larger tier fail planning. No family is silently skipped.
+An optional source-owned `minimum_runner_memory_gib` value of 128 or 256 may
+promote an estimate-selected row but cannot demote it; plans without the field
+remain estimate-only. GLM-4.5-Air, Qwen4exp and Llama4 currently require the
+256-plus tier through this policy.
 
 `scripts/lib/canary_family_memory.py` uses the greater of pinned file sizes and
 the model estimate, including projector/draft artifacts. Causal parity releases
