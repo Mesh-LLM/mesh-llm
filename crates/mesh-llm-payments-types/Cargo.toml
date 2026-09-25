@@ -4,6 +4,7 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 description = "Pure payment data types (pricing, request terms, wire frames) shared by mesh core and mesh-llm-payments"
+readme = "README.md"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 
 [lints]
