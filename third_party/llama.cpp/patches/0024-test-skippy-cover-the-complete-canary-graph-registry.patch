@@ -1,0 +1,82 @@
+From 7b757efe0af3673ff032f9ad5bedb87dcd6ab965 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Wed, 23 Sep 2026 09:51:50 +1000
+Subject: [PATCH] test(skippy): cover the complete canary graph registry
+
+---
+ tests/test-llama-archs.cpp | 25 ++++++++++++++++---------
+ 1 file changed, 16 insertions(+), 9 deletions(-)
+
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index 90cf83e08..e60a3aa17 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -130,7 +130,8 @@ static gguf_context_ptr get_gguf_ctx(
+         const glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT,
+         const uint32_t context_length = 256,
+         const uint32_t glm_dsa_indexer_top_k = 8,
+-        const bool deepseek4_mtp = false) {
++        const bool deepseek4_mtp = false,
++        const uint32_t contract_layers = 0, const uint32_t contract_width = 0) {
+     (void) glm_dsa_indexshare;
+     gguf_context_ptr ret(gguf_init_empty());
+     llama_model_saver ms(arch, ret.get());
+@@ -186,6 +187,8 @@ static gguf_context_ptr get_gguf_ctx(
+         n_layer = 8; // 1 layer per stack x 2 h-cycles x (3 l-cycles + 1) cache slots
+     }
+ 
++    if (contract_layers) { n_layer = contract_layers; n_embd = contract_width; }
++
+     uint32_t n_head_kv = n_head;
+     if (arch == LLM_ARCH_QWEN3) {
+         n_head_kv = 1; // MQA coverage
+@@ -1043,6 +1046,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+ }
+ 
+ #include "test-deepseek4-mtp.h"
++#include "test-graph-contract-fixture.h"
+ 
+ int main(int argc, char ** argv) {
+     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
+@@ -1059,20 +1063,20 @@ int main(int argc, char ** argv) {
+     bool deepseek4_mtp = false;
+     bool text_only = false;
+     std::string mtp_model;
++    uint32_t contract_layers = 0, contract_width = 0;
+     int verbosity = LOG_LEVEL_ERROR;
+ 
+     for (int i = 1; i < argc; i++) {
+-        if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
++        if (strcmp(argv[i], "--graph-contract") == 0 && i + 2 < argc) {
++            contract_layers = std::stoul(argv[++i]);
++            contract_width = std::stoul(argv[++i]);
++        } else if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
+             text_only = true;
+-        }
+-        if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
++        } else if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
+             deepseek4_mtp = true;
+-        }
+-        if (strcmp(argv[i], "--test-mtp-model") == 0 && i + 1 < argc) {
++        } else if (strcmp(argv[i], "--test-mtp-model") == 0 && i + 1 < argc) {
+             mtp_model = argv[++i];
+-        }
+-
+-        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
++        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+             usage(argv);
+             return 0;
+         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
+@@ -1148,6 +1152,9 @@ int main(int argc, char ** argv) {
+     LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
+ 
+     try {
++        if (contract_layers) {
++            return save_graph_contract_fixture(arch_from_filter(arch_filter), out, contract_layers, contract_width);
++        }
+         if (!mtp_model.empty()) {
+             return test_deepseek4_mtp(mtp_model);
+         }
+-- 
+2.54.0 (Apple Git-157)
+

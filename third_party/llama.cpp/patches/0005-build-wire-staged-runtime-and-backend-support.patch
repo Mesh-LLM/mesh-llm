@@ -1,7 +1,7 @@
-From 68e4765b934756ac260832bdf7d516d451b6d624 Mon Sep 17 00:00:00 2001
+From 183448eec25bd236184c64eec7b67b1f8420c3bd Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:50 +1000
-Subject: [PATCH 05/14] build: wire staged runtime and backend support
+Subject: [PATCH] build: wire staged runtime and backend support
 
 ---
  CMakeLists.txt                          |  17 +
@@ -13,7 +13,7 @@ Subject: [PATCH 05/14] build: wire staged runtime and backend support
  6 files changed, 656 insertions(+), 24 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 4feaf083e..c8f7047ef 100644
+index 8a874c96e..beb8af2a7 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit
@@ -34,7 +34,7 @@ index 4feaf083e..c8f7047ef 100644
 +
  ### llama.cpp version
  set(LLAMA_VERSION_MAJOR 0)
- set(LLAMA_VERSION_MINOR 4)
+ set(LLAMA_VERSION_MINOR 5)
 @@ -281,6 +293,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
  
  set(LLAMA_PUBLIC_HEADERS
@@ -75,10 +75,10 @@ index 25eff7a5e..29e71898b 100644
          foreach (TYPE_K IN LISTS FA_TYPES)
              if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index a9038f1f4..6998c30fd 100644
+index 9dd34c866..b7855d016 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5648,7 +5648,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -5727,7 +5727,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
@@ -104,7 +104,7 @@ index 81ea7f9d7..5f02543f2 100644
  
  #ifndef TARGET_OS_VISION
  #define TARGET_OS_VISION 0
-@@ -164,6 +165,11 @@ struct ggml_metal_library {
+@@ -164,6 +165,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -901,5 +901,5 @@ index afdaddc79..0cc6123c7 100644
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

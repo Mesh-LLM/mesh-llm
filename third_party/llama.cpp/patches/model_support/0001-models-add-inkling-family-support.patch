@@ -1,7 +1,7 @@
-From dab302cdb723320377fbe12f1f2aa912d0fa0586 Mon Sep 17 00:00:00 2001
+From 34d776bfc5ba5447a46ced71512817b342d9513b Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 18:30:01 +1000
-Subject: [PATCH 1/2] models: add inkling family support
+Subject: [PATCH] models: add inkling family support
 
 ---
  common/chat.cpp                     |   8 +
@@ -52,7 +52,7 @@ Subject: [PATCH 1/2] models: add inkling family support
  create mode 100644 tools/mtmd/models/inkling.cpp
 
 diff --git a/common/chat.cpp b/common/chat.cpp
-index d385bcd25..d4b743b81 100644
+index 49e1f53a0..50c91a638 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
 @@ -1264,6 +1264,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
@@ -219,10 +219,10 @@ index 70af84e25..bfae5460b 100644
      ${CMAKE_CURRENT_LIST_DIR}/minicpm5.cpp
      ${CMAKE_CURRENT_LIST_DIR}/minimax-m3.cpp
 diff --git a/conversion/__init__.py b/conversion/__init__.py
-index d48861e46..d09c7c0b3 100644
+index 85db1d643..a8c7172b0 100644
 --- a/conversion/__init__.py
 +++ b/conversion/__init__.py
-@@ -127,6 +127,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+@@ -129,6 +129,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
      "HYV3ForCausalLM": "hunyuan",
      "HYV4ForCausalLM": "hy_v4",
      "IQuestCoderForCausalLM": "llama",
@@ -230,7 +230,7 @@ index d48861e46..d09c7c0b3 100644
      "InternLM2ForCausalLM": "internlm",
      "InternLM3ForCausalLM": "internlm",
      "JAISLMHeadModel": "jais",
-@@ -310,6 +311,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
+@@ -313,6 +314,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
      "GraniteSpeechPlusForConditionalGeneration": "granite",
      "HunYuanVLForConditionalGeneration": "hunyuan",
      "Idefics3ForConditionalGeneration": "smolvlm",
@@ -239,7 +239,7 @@ index d48861e46..d09c7c0b3 100644
      "JanusForConditionalGeneration": "januspro",
      "KimiK25ForConditionalGeneration": "kimivl",
 diff --git a/conversion/base.py b/conversion/base.py
-index 4771671e0..826716990 100644
+index a1da64bc5..186f7fcee 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
 @@ -562,6 +562,20 @@ class ModelBase:
@@ -692,7 +692,7 @@ index 000000000..079842903
 +
 +        raise ValueError(f"unexpected Inkling vision tensor {name!r}")
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index 80eb60b40..5b9b58de6 100644
+index f585adcee..bffd089ff 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
 @@ -638,6 +638,7 @@ class MODEL_ARCH(IntEnum):
@@ -703,7 +703,7 @@ index 80eb60b40..5b9b58de6 100644
  
  
  class VISION_PROJECTOR_TYPE(IntEnum):
-@@ -887,6 +888,14 @@ class MODEL_TENSOR(IntEnum):
+@@ -888,6 +889,14 @@ class MODEL_TENSOR(IntEnum):
      SHORTCONV_CONV       = auto()
      SHORTCONV_INPROJ     = auto()
      SHORTCONV_OUTPROJ    = auto()
@@ -718,7 +718,7 @@ index 80eb60b40..5b9b58de6 100644
      VISEXP_ATTN_QKV      = auto()
      VISEXP_ATTN_OUT      = auto()
      VISEXP_GATE          = auto()
-@@ -1396,6 +1405,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+@@ -1397,6 +1406,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
      MODEL_ARCH.NANBEIGE:         "nanbeige",
      MODEL_ARCH.QWEN3TTS:         "qwen3tts",
      MODEL_ARCH.POCKETTTS:        "pockettts",
@@ -726,7 +726,7 @@ index 80eb60b40..5b9b58de6 100644
  }
  
  VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
-@@ -1643,6 +1653,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+@@ -1645,6 +1655,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
      MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
      MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
      MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
@@ -740,7 +740,7 @@ index 80eb60b40..5b9b58de6 100644
      MODEL_TENSOR.VISEXP_ATTN_QKV:           "blk.{bid}.vis_attn_qkv",
      MODEL_TENSOR.VISEXP_ATTN_OUT:           "blk.{bid}.vis_attn_output",
      MODEL_TENSOR.VISEXP_GATE:               "blk.{bid}.vis_gate",
-@@ -4974,6 +4991,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -4976,6 +4993,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.FFN_UP_EXP,
          MODEL_TENSOR.FFN_EXP_PROBS_B,
      ],
@@ -779,7 +779,7 @@ index 80eb60b40..5b9b58de6 100644
      MODEL_ARCH.SMALLTHINKER: [
          MODEL_TENSOR.TOKEN_EMBD,
          MODEL_TENSOR.OUTPUT_NORM,
-@@ -5810,6 +5859,7 @@ class GGUFValueType(IntEnum):
+@@ -5816,6 +5865,7 @@ class GGUFValueType(IntEnum):
  
  
  class VisionProjectorType:
@@ -1485,10 +1485,10 @@ index e6732e854..c48613aca 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 1ac8ef1cf..57cacad5a 100644
+index d24d1ef36..ab5f5730b 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -180,6 +180,12 @@ llama_context::llama_context(
+@@ -181,6 +181,12 @@ llama_context::llama_context(
          }
      }
  
@@ -1502,10 +1502,10 @@ index 1ac8ef1cf..57cacad5a 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index a39cc0214..a1ff07f47 100644
+index 53b287d48..b5025dd26 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3102,9 +3102,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3122,9 +3122,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -1535,7 +1535,7 @@ index a39cc0214..a1ff07f47 100644
          if (v_trans) {
              v = ggml_transpose(ctx0, v);
 diff --git a/src/llama-hparams.cpp b/src/llama-hparams.cpp
-index 5df8bfd4c..c8f5d3490 100644
+index e53a51cd8..057123fd6 100644
 --- a/src/llama-hparams.cpp
 +++ b/src/llama-hparams.cpp
 @@ -217,7 +217,7 @@ uint32_t llama_hparams::n_embd_k_idx(uint32_t il) const {
@@ -1606,7 +1606,7 @@ index 39160a417..e466919d5 100644
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index f2bb90ab6..69ac10bf0 100644
+index 8bbb935ef..887adad5f 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -343,6 +343,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -1729,7 +1729,7 @@ index 3fb061f0e..e7d5f5dfb 100644
  struct LLM_KV;
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
 new file mode 100644
-index 000000000..0310612ef
+index 000000000..79c9f9286
 --- /dev/null
 +++ b/src/models/inkling.cpp
 @@ -0,0 +1,687 @@
@@ -2605,7 +2605,7 @@ index 59b311dd2..18f39a7d9 100644
          draft_limit = std::min<size_t>(draft_limit, mtp_depth_scope.depth_count);
      }
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index bbbf6b40d..9a3d3c780 100644
+index e125786fa..32a55d405 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -2991,6 +2991,97 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
@@ -2706,7 +2706,7 @@ index bbbf6b40d..9a3d3c780 100644
      {
          // Google Gemma 2 2B - does not support tool calling
          auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja");
-@@ -7314,6 +7405,28 @@ static void test_template_generation_prompt() {
+@@ -7322,6 +7413,28 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
  
@@ -2735,7 +2735,7 @@ index bbbf6b40d..9a3d3c780 100644
      {
          // The stage alias hardening must win when thinking is explicitly disabled.
          auto render_disabled = [](const char * template_path) {
-@@ -7347,6 +7460,8 @@ static void test_template_generation_prompt() {
+@@ -7355,6 +7468,8 @@ static void test_template_generation_prompt() {
          assert_contains(qwen, "<think>\n\n</think>\n\n");
          const auto gpt_oss = render_disabled("models/templates/openai-gpt-oss-120b.jinja");
          assert_contains(gpt_oss, "Reasoning: 0");
@@ -2745,10 +2745,10 @@ index bbbf6b40d..9a3d3c780 100644
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 5a3202ce8..97e44eb30 100644
+index e60a3aa17..2d9b4e5b3 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -691,6 +691,10 @@ static bool arch_supported(const llm_arch arch) {
+@@ -747,6 +747,10 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -2760,7 +2760,7 @@ index 5a3202ce8..97e44eb30 100644
  #ifdef GGML_USE_WEBGPU
      if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
-index 907468e87..392ffe068 100644
+index 91db32c40..2e8225a8b 100644
 --- a/tools/mtmd/CMakeLists.txt
 +++ b/tools/mtmd/CMakeLists.txt
 @@ -43,6 +43,7 @@ add_library(mtmd
@@ -2772,7 +2772,7 @@ index 907468e87..392ffe068 100644
              models/kimik25.cpp
              models/nemotron-v2-vl.cpp
 diff --git a/tools/mtmd/clip-impl.h b/tools/mtmd/clip-impl.h
-index 72148a4d9..6adfddaaa 100644
+index d18c76bf8..760735967 100644
 --- a/tools/mtmd/clip-impl.h
 +++ b/tools/mtmd/clip-impl.h
 @@ -374,6 +374,13 @@
@@ -2797,7 +2797,7 @@ index 72148a4d9..6adfddaaa 100644
      PROJECTOR_TYPE_MLP,
      PROJECTOR_TYPE_MLP_NORM,
      PROJECTOR_TYPE_LDP,
-@@ -508,6 +516,7 @@ enum projector_type {
+@@ -509,6 +517,7 @@ enum projector_type {
  };
  
  static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
@@ -2836,7 +2836,7 @@ index f737ccc24..f47a30054 100644
      ggml_tensor * patch_norm_1_w = nullptr;
      ggml_tensor * patch_norm_1_b = nullptr;
 diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index 1783c7ddf..115993c82 100644
+index 62d146e1d..b404bb767 100644
 --- a/tools/mtmd/clip.cpp
 +++ b/tools/mtmd/clip.cpp
 @@ -933,6 +933,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
@@ -2850,7 +2850,7 @@ index 1783c7ddf..115993c82 100644
          case PROJECTOR_TYPE_GEMMA3:
          case PROJECTOR_TYPE_IDEFICS3:
          case PROJECTOR_TYPE_LFM2:
-@@ -1414,6 +1418,21 @@ struct clip_model_loader {
+@@ -1423,6 +1427,21 @@ struct clip_model_loader {
  
              // model-specific params
              switch (model.proj_type) {
@@ -2872,7 +2872,7 @@ index 1783c7ddf..115993c82 100644
                  case PROJECTOR_TYPE_MLP:
                  case PROJECTOR_TYPE_MLP_NORM:
                  case PROJECTOR_TYPE_LDP:
-@@ -2239,7 +2258,8 @@ struct clip_model_loader {
+@@ -2254,7 +2273,8 @@ struct clip_model_loader {
          const bool has_standard_layers = (
              model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
              model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
@@ -2882,7 +2882,7 @@ index 1783c7ddf..115993c82 100644
  
          // layers
          const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
-@@ -2333,6 +2353,23 @@ struct clip_model_loader {
+@@ -2348,6 +2368,23 @@ struct clip_model_loader {
  
  
          switch (model.proj_type) {
@@ -2906,7 +2906,7 @@ index 1783c7ddf..115993c82 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
                  {
-@@ -3675,6 +3712,11 @@ struct clip_model_loader {
+@@ -3700,6 +3737,11 @@ struct clip_model_loader {
              LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
          }
          batch.entries.push_back(img);
@@ -2918,7 +2918,7 @@ index 1783c7ddf..115993c82 100644
          return batch;
      }
  
-@@ -4090,6 +4132,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
+@@ -4117,6 +4159,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
      projector_type proj = ctx->proj_type();
  
      switch (proj) {
@@ -2935,7 +2935,7 @@ index 1783c7ddf..115993c82 100644
          case PROJECTOR_TYPE_MLP:
          case PROJECTOR_TYPE_MLP_NORM:
          case PROJECTOR_TYPE_JANUS_PRO:
-@@ -4582,6 +4634,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -4610,6 +4662,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
      // set input per projector
      switch (ctx->model.proj_type) {
@@ -2946,7 +2946,7 @@ index 1783c7ddf..115993c82 100644
          case PROJECTOR_TYPE_MUSE_GLIMMER:
              {
                  const int grid_w = pos_w;            // image_size_width  / patch_size
-@@ -5913,6 +5969,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -5944,6 +6000,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
  int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
      switch (ctx->model.proj_type) {
@@ -2959,7 +2959,7 @@ index 1783c7ddf..115993c82 100644
          case PROJECTOR_TYPE_LDPV2:
 diff --git a/tools/mtmd/models/inkling.cpp b/tools/mtmd/models/inkling.cpp
 new file mode 100644
-index 000000000..5f9b4bd16
+index 000000000..c04a8c989
 --- /dev/null
 +++ b/tools/mtmd/models/inkling.cpp
 @@ -0,0 +1,105 @@
@@ -3069,7 +3069,7 @@ index 000000000..5f9b4bd16
 +    return gf;
 +}
 diff --git a/tools/mtmd/models/models.h b/tools/mtmd/models/models.h
-index 5945c6d92..67d591790 100644
+index adb5ede30..ee0f351d6 100644
 --- a/tools/mtmd/models/models.h
 +++ b/tools/mtmd/models/models.h
 @@ -17,6 +17,17 @@ struct clip_graph_siglip : clip_graph {
@@ -3192,10 +3192,10 @@ index 4a15fe6d4..984b475d8 100644
      mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
      void initialize() override;
 diff --git a/tools/mtmd/mtmd-image.cpp b/tools/mtmd/mtmd-image.cpp
-index c11d35c87..7705f8e44 100644
+index 9b2e98862..c17392fc9 100644
 --- a/tools/mtmd/mtmd-image.cpp
 +++ b/tools/mtmd/mtmd-image.cpp
-@@ -481,6 +481,78 @@ private:
+@@ -487,6 +487,78 @@ private:
  };
  
  
@@ -3313,7 +3313,7 @@ index e2cf69872..39ec62b19 100644
  // if image_resize_pad is true, the resized image will be padded, otherwise it will be either stretched or center-cropped depending on image_resize_pad
  // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
 diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
-index 00ecadcf4..c1dfced1b 100644
+index 2efa4d65d..f70fe3f16 100644
 --- a/tools/mtmd/mtmd.cpp
 +++ b/tools/mtmd/mtmd.cpp
 @@ -631,6 +631,12 @@ struct mtmd_context {
@@ -3329,7 +3329,7 @@ index 00ecadcf4..c1dfced1b 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
              case PROJECTOR_TYPE_LDP:
-@@ -928,6 +934,13 @@ struct mtmd_context {
+@@ -929,6 +935,13 @@ struct mtmd_context {
  
          // set preprocessor
          switch (proj) {
@@ -3343,7 +3343,7 @@ index 00ecadcf4..c1dfced1b 100644
              case PROJECTOR_TYPE_QWEN2A:
              case PROJECTOR_TYPE_QWEN25O:
                  {
-@@ -1491,23 +1504,35 @@ struct mtmd_tokenizer {
+@@ -1492,23 +1505,35 @@ struct mtmd_tokenizer {
                  }
  
                  size_t n_tokens = 0;
@@ -3386,5 +3386,5 @@ index 00ecadcf4..c1dfced1b 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

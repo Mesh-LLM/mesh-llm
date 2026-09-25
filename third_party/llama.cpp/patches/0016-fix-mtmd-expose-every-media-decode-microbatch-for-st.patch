@@ -1,4 +1,4 @@
-From 9bb6ef7bd60623e67dd43f353550ba2d0ce53e43 Mon Sep 17 00:00:00 2001
+From c6c88733461bd0fb9ac727f478b614416f1086b7 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Tue, 22 Sep 2026 16:46:12 +1000
 Subject: [PATCH] fix(mtmd): expose every media decode microbatch for stage

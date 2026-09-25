@@ -1,8 +1,7 @@
-From b4b040d4fcc7f501bc571982f7a9f11fd5c5bf50 Mon Sep 17 00:00:00 2001
+From 6c9eefdee76400c6a4d1f0f569a6aab18670e854 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 18:24:13 -0700
-Subject: [PATCH 14/14] skippy: validate sampling across all execution
- boundaries
+Subject: [PATCH] skippy: validate sampling across all execution boundaries
 
 ---
  src/skippy/execution-batch.cpp          | 13 ++++++---
@@ -291,5 +290,5 @@ index 4cf702bef..3f797cbe8 100644
      if (merged.size() != caller_biases.size()) {
          std::fprintf(stderr, "models without suppress tokens lost caller logit biases\n");
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

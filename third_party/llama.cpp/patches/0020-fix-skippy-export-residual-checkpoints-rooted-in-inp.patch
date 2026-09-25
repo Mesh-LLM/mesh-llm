@@ -1,4 +1,4 @@
-From bf0c2ba5cad598f467260573136930c2769606fe Mon Sep 17 00:00:00 2001
+From 68bef0b6e0598cfe96ebae8db652948af9b9650f Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 07:31:48 +1000
 Subject: [PATCH] fix(skippy): export residual checkpoints rooted in input

@@ -1,8 +1,8 @@
-From 8ed190126244bb46b0483f384ec4599d40d55a48 Mon Sep 17 00:00:00 2001
+From d87a19dceabb9807e4285662f6a1ef863fdff284 Mon Sep 17 00:00:00 2001
 From: sat <sat@local>
 Date: Thu, 24 Sep 2026 13:26:46 +1000
-Subject: [PATCH 2/2] skippy: borrow the remembered stage slice instead of
- copying it
+Subject: [PATCH] skippy: borrow the remembered stage slice instead of copying
+ it
 
 ---
  src/skippy/stage_realization.cpp             |  8 +++---

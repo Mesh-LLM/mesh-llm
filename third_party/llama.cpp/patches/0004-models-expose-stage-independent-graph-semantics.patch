@@ -1,7 +1,7 @@
-From 059ebc9cefe6cf14d57480cd43ed9e7e4a995972 Mon Sep 17 00:00:00 2001
+From 37a592d3dd6c79a61bc301c97b9e23f1d112bb8a Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:37 +1000
-Subject: [PATCH 04/14] models: expose stage-independent graph semantics
+Subject: [PATCH] models: expose stage-independent graph semantics
 
 ---
  common/CMakeLists.txt                 |   2 +
@@ -276,7 +276,7 @@ index 114fa049f..7723d4e35 100644
      common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
  
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 6c8099cf2..d385bcd25 100644
+index ed1942e15..49e1f53a0 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
 @@ -227,6 +227,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
@@ -1041,7 +1041,7 @@ index 000000000..180c0a884
 +    return skippy_common_success(out_error);
 +}
 diff --git a/conversion/base.py b/conversion/base.py
-index 6aca7f1d3..4771671e0 100644
+index 9fba5a86b..a1da64bc5 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
 @@ -284,8 +284,17 @@ class ModelBase:
@@ -1062,7 +1062,7 @@ index 6aca7f1d3..4771671e0 100644
                          tensors[tname] = tgen
  
          # verify tensor name presence and identify potentially missing files
-@@ -1160,6 +1169,14 @@ class ModelBase:
+@@ -1190,6 +1199,14 @@ class ModelBase:
  
      def write(self):
          self.prepare_tensors()
@@ -1078,10 +1078,10 @@ index 6aca7f1d3..4771671e0 100644
          self.gguf_writer.write_header_to_file(path=self.fname_out)
          self.gguf_writer.write_kv_data_to_file()
 diff --git a/src/models/bailingmoe3.cpp b/src/models/bailingmoe3.cpp
-index e208c7d5a..d375502dd 100644
+index 907b25c67..b3ac119d0 100644
 --- a/src/models/bailingmoe3.cpp
 +++ b/src/models/bailingmoe3.cpp
-@@ -257,7 +257,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
+@@ -262,7 +262,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
              const auto cache_head = mctx_cur->get_head();
              const auto mem_size = mctx_cur->get_size();
              ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
@@ -1090,7 +1090,7 @@ index e208c7d5a..d375502dd 100644
  
              ggml_tensor * q = bailingmoe3_causal_conv1d(
                      gf, ctx0, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv,
-@@ -284,7 +284,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
+@@ -289,7 +289,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
              k = build_gdn_l2_norm(ctx0, k, hparams.f_norm_rms_eps);
  
              ggml_tensor * states_all = mctx_cur->get_s_l(il);
@@ -1801,10 +1801,10 @@ index 9fa2e8fc0..3067029ed 100644
              qkv = ggml_cont(ctx0, ggml_permute(ctx0, qkv, 0, 2, 1, 3));
              cb(qkv, "qkv_permuted", il);
 diff --git a/src/models/minimax-m3.cpp b/src/models/minimax-m3.cpp
-index f3b64b210..5e8758132 100644
+index 53caca1a5..fd0f1d22d 100644
 --- a/src/models/minimax-m3.cpp
 +++ b/src/models/minimax-m3.cpp
-@@ -18,14 +18,27 @@ void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
+@@ -18,11 +18,13 @@ void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
      ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
      ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
      ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
@@ -1820,7 +1820,12 @@ index f3b64b210..5e8758132 100644
 +    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,         hparams.indexer_top_k,     false);
 +    ml.get_key(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,    hparams.indexer_block_size, false);
 +    ml.get_key(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,  hparams.indexer_local_blocks, false);
-     msa_p = { (int) hparams.indexer_block_size, (int) hparams.indexer_top_k, (int) hparams.indexer_local_blocks };
+ 
+     msa_p = {
+         /*.blk          =*/ (int) hparams.indexer_block_size,
+@@ -30,7 +32,18 @@ void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
+         /*.local        =*/ (int) hparams.indexer_local_blocks,
+     };
  
 -    GGML_ASSERT(hparams.indexer_block_size > 0); // avoid div by zero
 +    const bool indexer_present = hparams.indexer_n_head > 0 && hparams.indexer_head_size > 0 &&
@@ -1838,7 +1843,7 @@ index f3b64b210..5e8758132 100644
  
      switch (hparams.n_layer()) {
          case 60: type = LLM_TYPE_428B_A23B; break;
-@@ -76,10 +89,10 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
+@@ -81,10 +94,10 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
              layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
  
              // indexer
@@ -1853,7 +1858,7 @@ index f3b64b210..5e8758132 100644
          }
      }
  }
-@@ -225,9 +238,10 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
+@@ -230,9 +243,10 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
      // caches either a single sequence, or multiple sequences with kv_unified == false (each
      // stream then has its own slot space). A unified cache with multiple sequences
      // interleaves slots and would silently break block anchoring so it falls back to dense.
@@ -1867,7 +1872,7 @@ index f3b64b210..5e8758132 100644
  
      auto * inp_attn = build_attn_inp_kv_msa(msa_enabled);
  
-@@ -273,19 +287,24 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
+@@ -278,19 +292,24 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
  
          inp->bias = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nblk, n_tokens);  // stream-grouped tokens
          ggml_set_input(inp->bias);
@@ -2216,5 +2221,5 @@ index c25bf4ec8..6f017519f 100644
          }
  
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

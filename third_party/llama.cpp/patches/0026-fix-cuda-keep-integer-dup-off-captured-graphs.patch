@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 05f093fe62a92b1c17ffd62431c6eaf348b3ae31 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 24 Sep 2026 12:25:00 +1000
 Subject: [PATCH] fix(cuda): keep integer dup off captured graphs
@@ -9,16 +9,15 @@ the captured graph, aborting the third request in the CUDA smoke test.
 
 Retain the previous backend placement for integer DUP nodes while leaving the
 new CUDA copy kernels available to explicit copy operations.
-
 ---
- ggml/src/ggml-cuda/ggml-cuda.cu | 9 +++++++--
- 1 file changed, 7 insertions(+), 2 deletions(-)
+ ggml/src/ggml-cuda/ggml-cuda.cu | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 83cf710d1..56eb07f59 100644
+index b7855d016..69decaa3e 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5299,7 +5299,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+@@ -5373,7 +5373,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                  return false;
              } break;
          case GGML_OP_DUP:
@@ -33,5 +32,5 @@ index 83cf710d1..56eb07f59 100644
          case GGML_OP_COUNT_EQUAL:
              {
 -- 
-2.51.0
+2.54.0 (Apple Git-157)
 
