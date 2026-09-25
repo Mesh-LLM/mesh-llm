@@ -15,14 +15,17 @@
 //! nobody: the process stops being interruptible instead of being terminated.
 //! A runtime that is dropped while the process lives on would leave that state
 //! behind, so the forwarder runs on its own detached thread rather than on the
-//! runtime that installs it.
+//! runtime that installs it. Installing therefore publishes the shared delivery
+//! only once the forwarder reports its streams registered, because a delivery
+//! published before that advertises an observer that does not exist yet and
+//! reaches the same delivered-to-nothing state.
 //!
 //! Call [`install_shutdown_signals`] as early as possible from a runtime
 //! entrypoint. A signal delivered before the handlers exist is handled by the
 //! platform default, which terminates the process without a graceful shutdown.
 
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock, PoisonError};
 use tokio::sync::watch;
 
@@ -75,14 +78,6 @@ const FORWARDER_THREAD_NAME: &str = "mesh-llm-shutdown-forwarder";
 static DELIVERY: OnceLock<ShutdownDelivery> = OnceLock::new();
 static INSTALL: Mutex<()> = Mutex::new(());
 
-/// Set once the forwarder thread's own signal streams are registered, which is
-/// strictly later than the delivery being published.
-///
-/// The delivery has to be published synchronously so no waiter can fall through
-/// to the ctrl-c fallback while the thread starts, but that makes the delivery
-/// an unreliable witness of a live observer. This flag is the honest one.
-static FORWARDER_READY: AtomicBool = AtomicBool::new(false);
-
 /// Register the process termination-signal handlers once.
 ///
 /// Idempotent, and safe to call from any async context in the process. Failures
@@ -94,34 +89,62 @@ pub(crate) fn install_shutdown_signals() {
     if DELIVERY.get().is_some() {
         return;
     }
-    // The forwarder registers its own streams so their wakers belong to a
-    // runtime that outlives this one. Probing here still decides whether the
-    // platform can deliver these signals at all, which keeps the ctrl-c
-    // fallback in `wait_for_shutdown_signal` in place when it cannot; the
-    // probe's streams are dropped unused.
-    if let Err(error) = TerminationSignals::register() {
-        tracing::warn!(
-            %error,
-            "could not register termination-signal handlers; the platform default disposition applies"
-        );
-        return;
-    }
     let delivery = ShutdownDelivery::new();
     let sender = delivery.sender.clone();
-    match std::thread::Builder::new()
+    // Waiting on the forwarder here costs a thread spawn plus a runtime build,
+    // once per process, before any serving work, on a path that already spawns
+    // that thread synchronously.
+    let (started_tx, started_rx) = mpsc::channel();
+    let forwarder = std::thread::Builder::new()
         .name(FORWARDER_THREAD_NAME.to_owned())
-        .spawn(move || run_shutdown_forwarder(sender))
-    {
-        // Detached on purpose: the forwarder observes signals for the life of
-        // the process, and an unjoined thread does not hold the process open.
-        Ok(_forwarder) => {
-            let _ = DELIVERY.set(delivery);
-        }
+        .spawn(move || run_shutdown_forwarder(sender, started_tx));
+    publish_delivery_after_forwarder_starts(delivery, forwarder, started_rx);
+}
+
+/// Publish the delivery once the forwarder reports its signal streams exist.
+///
+/// Any other outcome leaves the delivery unpublished, which keeps every waiter
+/// on the ctrl-c fallback rather than on a channel nobody will ever signal.
+fn publish_delivery_after_forwarder_starts(
+    delivery: ShutdownDelivery,
+    forwarder: io::Result<std::thread::JoinHandle<()>>,
+    started: mpsc::Receiver<Result<(), String>>,
+) {
+    // Detached on purpose: the forwarder observes signals for the life of the
+    // process, and an unjoined thread does not hold the process open.
+    let _forwarder = match forwarder {
+        Ok(forwarder) => forwarder,
         Err(error) => {
             tracing::warn!(
                 %error,
                 "could not start the termination-signal forwarder; the platform default disposition applies"
             );
+            return;
+        }
+    };
+    if forwarder_registered_its_streams(&started) {
+        let _ = DELIVERY.set(delivery);
+    }
+}
+
+/// Whether the forwarder got as far as registering its signal streams, logging
+/// the reason when it did not.
+fn forwarder_registered_its_streams(started: &mpsc::Receiver<Result<(), String>>) -> bool {
+    match started.recv() {
+        Ok(Ok(())) => true,
+        Ok(Err(cause)) => {
+            tracing::warn!(
+                %cause,
+                "the termination-signal forwarder could not start; the platform default disposition applies"
+            );
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                "the termination-signal forwarder exited before registering its signal streams; \
+                 the platform default disposition applies"
+            );
+            false
         }
     }
 }
@@ -163,17 +186,17 @@ async fn resolve_fallback_registration(result: io::Result<()>) -> &'static str {
 /// signal driver, so a stream carried across would never be woken again. This
 /// thread therefore registers its own, and the platform's process-wide handler
 /// makes that registration equivalent to the first one.
-fn run_shutdown_forwarder(sender: watch::Sender<Option<&'static str>>) {
+fn run_shutdown_forwarder(
+    sender: watch::Sender<Option<&'static str>>,
+    started: mpsc::Sender<Result<(), String>>,
+) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            tracing::warn!(
-                %error,
-                "the termination-signal forwarder has no runtime to observe signals with"
-            );
+            let _ = started.send(Err(format!("no runtime to observe signals with: {error}")));
             return;
         }
     };
@@ -181,14 +204,14 @@ fn run_shutdown_forwarder(sender: watch::Sender<Option<&'static str>>) {
         let signals = match TerminationSignals::register() {
             Ok(signals) => signals,
             Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "the termination-signal forwarder could not observe termination signals"
-                );
+                let _ = started.send(Err(format!("could not register signal streams: {error}")));
                 return;
             }
         };
-        FORWARDER_READY.store(true, Ordering::Release);
+        // Reported only now, so a published delivery always has a live observer
+        // behind it and installation can leave the ctrl-c fallback in place when
+        // there is none.
+        let _ = started.send(Ok(()));
         forward_shutdown_signals(signals, &sender).await;
     });
 }
@@ -359,18 +382,11 @@ mod tests {
         });
         drop(installing);
 
-        // The published delivery only proves the forwarder was started, so wait
-        // for its own registration before raising: that is the observer this
-        // test is about, and it is what makes the raise observable.
-        let ready = std::time::Instant::now() + Duration::from_secs(10);
-        while !super::FORWARDER_READY.load(Ordering::Acquire) {
-            assert!(
-                std::time::Instant::now() < ready,
-                "the process-lifetime forwarder must register its signal streams"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-
+        // Raised as soon as installation returns, with nothing waited on in
+        // between: installation only publishes once the forwarder has registered
+        // its streams, so this is the earliest a signal can be observed and it
+        // covers the publish/observe window rather than starting past it.
+        //
         // SAFETY: `raise` sends SIGTERM to this process only, and the
         // process-lifetime handler for it is now registered.
         unsafe { libc::raise(libc::SIGTERM) };
