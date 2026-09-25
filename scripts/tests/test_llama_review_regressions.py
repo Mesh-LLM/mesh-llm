@@ -54,6 +54,19 @@ class LlamaReviewRegressionTests(unittest.TestCase):
         self.assertIn("system-one label ranges must not overlap", patch)
         self.assertIn("must cover the flattened label-token array exactly", patch)
 
+    def test_pooled_session_detaches_backend_sampler_before_next_prefill(self):
+        patch = patch_text("0029-fix-skippy-detach-backend-sampler-before-pooled-pre.patch")
+        self.assertIn(
+            "session->sampling_backend_enabled || !skippy_reset_reusable_sampling(session)",
+            patch,
+        )
+        self.assertIn("CHECK(session->sampling_backend_enabled);", patch)
+        self.assertIn("CHECK(!session->sampling_backend_enabled);", patch)
+        self.assertIn("CHECK(session->sampling_chain == nullptr);", patch)
+        self.assertEqual(patch.count("skippy_prefill_chunk("), 2)
+        self.assertIn("CHECK(session->n_past == 0);", patch)
+        self.assertEqual(patch.count("CHECK(session->n_past == 2);"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
