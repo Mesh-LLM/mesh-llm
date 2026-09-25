@@ -76,10 +76,33 @@ WINDOWS_UNVERIFIED_CRATES = {
     "xtask",
 }
 
-CFG_PLATFORM_PATTERN = re.compile(
-    r"\bcfg(?:!|_attr)?\s*\([^)]*\b"
-    r"(?:windows|unix|target_os\s*=\s*\"windows\")"
-)
+CFG_OPEN = re.compile(r"\bcfg(?:!|_attr)?\s*\(")
+# `windows`, `unix`, and the quoted `target_os = "windows"` / `target_family`
+# values all match on word boundaries.
+CFG_PLATFORM_PREDICATE = re.compile(r"\b(?:windows|unix)\b")
+
+
+def _cfg_expressions(source: str) -> list[str]:
+    """The balanced argument of every `cfg(...)`, `cfg!(...)` and `cfg_attr(...)`.
+
+    Balanced, not up to the first `)`: in `cfg(all(not(test), windows))` the
+    platform predicate comes after a nested clause.
+    """
+    expressions = []
+    for match in CFG_OPEN.finditer(source):
+        depth, index = 1, match.end()
+        while index < len(source) and depth:
+            if source[index] == "(":
+                depth += 1
+            elif source[index] == ")":
+                depth -= 1
+            index += 1
+        expressions.append(source[match.end() : index - 1])
+    return expressions
+
+
+def _selects_platform_code(source: str) -> bool:
+    return any(CFG_PLATFORM_PREDICATE.search(expr) for expr in _cfg_expressions(source))
 
 
 def _workspace_crates(root: Path) -> dict[str, Path]:
@@ -106,7 +129,7 @@ def _cfg_divergent_crates(root: Path) -> set[str]:
         if not source_root.is_dir():
             continue
         if any(
-            CFG_PLATFORM_PATTERN.search(source.read_text(encoding="utf-8", errors="ignore"))
+            _selects_platform_code(source.read_text(encoding="utf-8", errors="ignore"))
             for source in source_root.rglob("*.rs")
         ):
             divergent.add(name)
@@ -483,9 +506,16 @@ class CiWindowsCompositionTests(unittest.TestCase):
             "cfg-macro": "const WINDOWS: bool = cfg!(windows);\n",
             "cfg-attr": "#[cfg_attr(unix, derive(Debug))]\nstruct Platform;\n",
             "compound": "#[cfg(any(windows, unix))]\nfn platform() {}\n",
+            "nested-first": "#[cfg(all(not(test), windows))]\nfn platform() {}\n",
+            "nested-macro": "const UNIX: bool = cfg!(all(not(test), unix));\n",
+            "target-family": "#[cfg(target_family = \"unix\")]\nfn platform() {}\n",
         }
         portable = {
-            "portable": "#[cfg(test)]\nmod tests {}\nfn windows_path() {}\n",
+            "portable": (
+                "#[cfg(test)]\nmod tests {}\n"
+                "#[cfg(all(test, not(feature = \"slow\")))]\nmod slow {}\n"
+                "fn windows_path() {}\n"
+            ),
         }
 
         with tempfile.TemporaryDirectory() as directory:
