@@ -1,8 +1,8 @@
-From 61bd6abc51d23e27847c67db4f0e92d4ef2bd3bf Mon Sep 17 00:00:00 2001
+From 90fc873c2ce236943ef42493174a84c0bebac5f1 Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Sun, 13 Sep 2026 10:45:49 +1000
-Subject: [PATCH 13/14] fix(skippy): reject exhausted vocab sampling
+Subject: [PATCH] fix(skippy): reject exhausted vocab sampling
 
 ---
  src/skippy/execution-single.cpp     | 6 ++++++
@@ -86,5 +86,5 @@ index 3ccd2f6a4..99bd36f66 100644
                  // Later rows are conditioned on a rejected token and are not
                  // authoritative predictions. Stop advancing the sampler and
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

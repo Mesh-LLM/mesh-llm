@@ -186,6 +186,39 @@ class BashRepoPathTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("inside the repository or on a drive-letter path", result.stderr + result.stdout)
 
+    def llama_dir(self, repo_root, override, cwd):
+        script = SCRIPT.read_text()
+        match = re.search(r"^\$llamaDir = .*$", script, re.MULTILINE)
+        self.assertIsNotNone(match, "$llamaDir assignment not found")
+        env = {**__import__("os").environ, "MESH_LLM_LLAMA_DIR": override}
+        command = f"$repoRoot = '{repo_root}'; {match.group(0)}; $llamaDir"
+        result = subprocess.run(
+            ["pwsh", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=cwd,
+            check=True,
+        )
+        return result.stdout.strip()
+
+    def test_a_relative_llama_dir_is_relative_to_the_repository_root(self):
+        # Run from another directory: the prepare step resolves the workdir
+        # with .NET, cmake and the stamp read it from the repository location.
+        with tempfile.TemporaryDirectory() as elsewhere:
+            self.assertEqual(
+                self.llama_dir(r"D:\work\mesh-llm", r".deps\other", elsewhere),
+                r"D:\work\mesh-llm\.deps\other",
+            )
+            self.assertEqual(
+                self.llama_dir(r"D:\work\mesh-llm", "custom/llama.cpp", elsewhere),
+                r"D:\work\mesh-llm\custom\llama.cpp",
+            )
+            self.assertEqual(
+                self.llama_dir(r"D:\work\mesh-llm", r"E:\cache\llama.cpp", elsewhere),
+                r"E:\cache\llama.cpp",
+            )
+
     def test_the_default_workdir_is_left_to_prepare_llama(self):
         script = SCRIPT.read_text()
         self.assertIn("Remove-Item Env:LLAMA_WORKDIR -ErrorAction SilentlyContinue", script)

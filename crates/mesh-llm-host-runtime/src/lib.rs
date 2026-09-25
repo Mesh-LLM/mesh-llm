@@ -26,6 +26,10 @@ mod system;
 
 pub mod sdk;
 
+/// Install the payments engine (the shipped binary links `mesh-llm-payments`).
+#[cfg(feature = "payments")]
+pub use network::payments::engine::{PaymentsEngineProvider, install_payments_engine};
+
 pub mod proto {
     pub use mesh_llm_protocol::proto::*;
 }

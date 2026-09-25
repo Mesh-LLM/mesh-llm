@@ -47,7 +47,7 @@
 //! and `/api/models` per-model `routing_metrics.targets` are measured on the
 //! current node only; not mesh-wide aggregates.
 
-mod access;
+pub(crate) mod access;
 mod assets;
 mod http;
 mod management_lifecycle;

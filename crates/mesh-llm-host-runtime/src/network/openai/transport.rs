@@ -264,6 +264,7 @@ struct MeshRequestPlan {
 }
 
 enum MeshRequestFailure {
+    PaymentRequired(&'static str),
     UnsupportedMedia,
     UnsupportedWorkload,
     ModelUnavailable(String),
@@ -342,7 +343,14 @@ async fn handle_mesh_control_request(
         let runtimes = node.all_model_runtime_descriptors().await;
         let outcome = response_outcome(
             200,
-            send_models_list_with_descriptors(tcp_stream, &served, &descriptors, &runtimes).await,
+            send_models_list_with_descriptors(
+                tcp_stream,
+                &served,
+                &descriptors,
+                &runtimes,
+                Some(node),
+            )
+            .await,
         );
         lifecycle.terminal(outcome.terminal_outcome());
         return None;
@@ -632,7 +640,7 @@ async fn build_mesh_request_plan(
         &resolved_hosts,
         affinity,
     );
-    let (target_hosts, equivalent_hosts) = order_mesh_target_hosts(
+    let (mut target_hosts, mut equivalent_hosts) = order_mesh_target_hosts(
         node,
         effective_model.as_deref(),
         required_tokens,
@@ -640,6 +648,38 @@ async fn build_mesh_request_plan(
         affinity,
     )
     .await;
+    if let Some(model) = effective_model.as_deref() {
+        let mut ranked = super::routing_rank::RankedCandidates {
+            ordered: target_hosts
+                .iter()
+                .copied()
+                .map(election::InferenceTarget::Remote)
+                .collect(),
+            equivalent_prefix: equivalent_hosts,
+        };
+        if super::payment_routing::rank(
+            node,
+            model,
+            (request.body_len_bytes as u64).div_ceil(4),
+            u64::from(request.completion_tokens.unwrap_or(256)),
+            &mut ranked,
+            request.body_json.as_ref(),
+        )
+        .await
+        .map_err(MeshRequestFailure::PaymentRequired)?
+        {
+            target_hosts = ranked
+                .ordered
+                .into_iter()
+                .filter_map(|target| match target {
+                    election::InferenceTarget::Remote(peer) => Some(peer),
+                    _ => None,
+                })
+                .collect();
+            equivalent_hosts = ranked.equivalent_prefix;
+            prepared.affinity_applied = true;
+        }
+    }
     Ok(MeshRequestPlan {
         effective_model,
         auto_session_key,
@@ -752,6 +792,10 @@ async fn handle_mesh_request_failure(
 ) {
     let mut tcp_stream = Some(tcp_stream);
     match failure {
+        MeshRequestFailure::PaymentRequired(reason) => {
+            let _ =
+                send_error_observed(tcp_stream.take().unwrap(), 402, reason, route_observer).await;
+        }
         MeshRequestFailure::UnsupportedWorkload => {
             let _ = send_error_observed(
                 tcp_stream.take().unwrap(),
@@ -834,6 +878,7 @@ async fn route_mesh_request_attempts(
             &request.raw,
             ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
             RouteAttemptLoggingContext {
+                exchange_id: None,
                 request_id: request.request_id,
                 retry_policy: ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
                 response_adapter: request.response_adapter,
@@ -1137,6 +1182,9 @@ fn terminal_outcome_for_mesh_request_failure(
     failure: &MeshRequestFailure,
 ) -> crate::logging::TerminalOutcome {
     match failure {
+        MeshRequestFailure::PaymentRequired(_) => {
+            crate::logging::TerminalOutcome::Rejected(Some("payment_required".into()))
+        }
         MeshRequestFailure::UnsupportedWorkload => {
             crate::logging::TerminalOutcome::Rejected(Some("unsupported_workload".into()))
         }
@@ -1638,6 +1686,7 @@ pub async fn route_to_target(
         prefetched,
         retry_policy,
         RouteAttemptLoggingContext {
+            exchange_id: None,
             request_id,
             retry_policy,
             response_adapter,
@@ -1732,6 +1781,7 @@ pub async fn route_http_endpoint_request(
         &request.raw,
         &request.path,
         RouteAttemptLoggingContext {
+            exchange_id: None,
             request_id: request.request_id,
             retry_policy: ResponseRetryPolicy::next_target_available(false),
             response_adapter: request.response_adapter,
@@ -1810,3 +1860,87 @@ pub async fn route_http_endpoint_request(
 #[cfg(test)]
 #[path = "transport_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "payments"))]
+pub(crate) async fn test_paid_target_attempt(
+    node: &mesh::Node,
+    client: &mut ClientStream,
+    peer: iroh::EndpointId,
+    raw: &[u8],
+    exchange_id: &str,
+) -> bool {
+    let result = route_attempt_for_target(
+        node,
+        client,
+        &election::InferenceTarget::Remote(peer),
+        raw,
+        ResponseRetryPolicy::next_target_available(true),
+        RouteAttemptLoggingContext {
+            exchange_id: Some(exchange_id),
+            request_id: Default::default(),
+            retry_policy: ResponseRetryPolicy::next_target_available(true),
+            response_adapter: ResponseAdapter::None,
+            route_observer: OpenAiRouteObserver::default(),
+            served_by: None,
+            peer_capsule_id: None,
+        },
+    )
+    .await;
+    should_retry_uncommitted_remote_attempt(result)
+}
+
+#[cfg(all(test, feature = "payments"))]
+pub(crate) async fn test_paid_multi_target(
+    node: mesh::Node,
+    client: ClientStream,
+    peers: Vec<iroh::EndpointId>,
+) -> RouteDispatchOutcome {
+    let body = serde_json::json!({"model":"test","prompt":"hi","max_tokens":8});
+    let bytes = serde_json::to_vec(&body).unwrap();
+    let request = BufferedHttpRequest {
+        raw: format!(
+            "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{}",
+            bytes.len(),
+            body
+        )
+        .into_bytes(),
+        method: "POST".into(),
+        path: "/v1/completions".into(),
+        client_path: "/v1/completions".into(),
+        request_id: Default::default(),
+        body_json: Some(body),
+        body_json_attempted: true,
+        body_len_bytes: bytes.len(),
+        body_bytes: Some(bytes),
+        completion_tokens: Some(8),
+        stream: None,
+        model_name: Some("test".into()),
+        request_object_request_ids: vec![],
+        response_adapter: ResponseAdapter::None,
+        correlation_id: None,
+    };
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        "test".into(),
+        peers
+            .into_iter()
+            .map(election::InferenceTarget::Remote)
+            .collect(),
+    );
+    route_model_request(
+        node,
+        client,
+        &targets,
+        "test",
+        &request,
+        RouteModelRequestContext {
+            exchange_id: Some("multi-provider-exchange"),
+            required_tokens: None,
+            affinity: &AffinityRouter::new(),
+            route_observer: OpenAiRouteObserver::default(),
+            served_by_header: None,
+            peer_capsule_id: None,
+        },
+    )
+    .await
+}

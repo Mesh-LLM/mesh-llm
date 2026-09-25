@@ -1,8 +1,8 @@
-From 2e8062e783752993f4ffc65db5e10e364888b277 Mon Sep 17 00:00:00 2001
+From 94bb76cf1ef1fc1b4e4815264ab1835555dd0c9b Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 20 Sep 2026 10:04:24 +1000
-Subject: [PATCH 08/14] fix(skippy): validate execution profiles separately
- from shared residency
+Subject: [PATCH] fix(skippy): validate execution profiles separately from
+ shared residency
 
 ---
  src/CMakeLists.txt                            |  11 +-
@@ -63,7 +63,7 @@ index 0cc6123c7..8726265a6 100644
  
      add_test(
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 2864b2469..a39cc0214 100644
+index 607f8e9a2..b17e99e9a 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -30,7 +30,8 @@ bool skippy_graph_build_inputs::topology_equal(const skippy_graph_build_inputs &
@@ -732,5 +732,5 @@ index a4a7117f6..bcafb8e6b 100644
      runtime_config.resident_tensor_name_count = source_resident_ptrs.size();
      runtime_config.activation_import_identities = nullptr;
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

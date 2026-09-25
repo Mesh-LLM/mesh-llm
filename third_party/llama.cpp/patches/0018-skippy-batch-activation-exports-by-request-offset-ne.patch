@@ -1,0 +1,275 @@
+From a12599921d9fc4279c38c161bde7c5f999d5d68f Mon Sep 17 00:00:00 2001
+From: Daniel Winter-Wijntjes <danielwinterw@gmail.com>
+Date: Mon, 21 Sep 2026 18:11:39 +1000
+Subject: [PATCH] skippy: batch activation exports by request offset, never by
+ lane order
+
+Batched exports are sliced by request offset. That is the microbatch row
+order whenever llama decodes the batch with split_simple, which is what a
+unified KV cache does. The old admission additionally demanded consecutive
+lane ids in request order, a condition the scheduler's FIFO batches almost
+never meet, so an exporting stage silently executed every lane as its own
+graph.
+
+Drop the ordering rule, and state the guarantee it stood in for: a batched
+iteration that exports activations is one native microbatch.
+
+- A per-stream cache splits by sequence, so an exporting stage with more than
+  one lane needs a unified KV cache. Load rejects the combination once instead
+  of failing every batched iteration, and the batched path still refuses it.
+- Recurrent and hybrid memory splits an all-output batch by sequence
+  (split_seq), where only the last microbatch's exports stay live. The runtime
+  routes those stages one request at a time; the batched path rejects them.
+- An exporting iteration that exceeds n_ubatch stays a scheduler bug.
+- The export tensor's token axis must cover the whole iteration, so a stale or
+  partial microbatch fails instead of slicing another request's rows.
+
+Nothing in the batched path signals "unsupported" any more.
+---
+ src/llama-context.cpp          |  4 ++
+ src/llama-context.h            |  1 +
+ src/skippy/execution-batch.cpp | 89 +++++++++++++++++++++-------------
+ src/skippy/model_loading.cpp   | 21 ++++++--
+ 4 files changed, 77 insertions(+), 38 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 29979b063..3703cdcb2 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -882,6 +882,10 @@ uint32_t llama_context::n_ubatch() const {
+     return cparams.n_ubatch;
+ }
+ 
++bool llama_context::kv_unified() const {
++    return cparams.kv_unified;
++}
++
+ uint32_t llama_context::n_seq_max() const {
+     return cparams.n_seq_max;
+ }
+diff --git a/src/llama-context.h b/src/llama-context.h
+index fe26b966b..88457f390 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -92,6 +92,7 @@ struct llama_context {
+     uint32_t n_ctx_seq() const;
+     uint32_t n_batch()   const;
+     uint32_t n_ubatch()  const;
++    bool     kv_unified() const;
+     uint32_t n_seq_max() const;
+ 
+     uint32_t n_threads()       const;
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index aacfc628f..72de1db18 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -6,6 +6,7 @@
+ #include "skippy/runtime_types.h"
+ #include "skippy/sampling_internal.h"
+ 
++#include "llama-arch.h"
+ #include "llama-context.h"
+ #include "llama-graph.h"
+ #include "llama-model.h"
+@@ -41,9 +42,9 @@ static enum skippy_status skippy_build_batched_frontier(
+     if (requests[0].input_desc == nullptr) return SKIPPY_STATUS_OK;
+     const auto & boundary = requests[0].session->stage_model->input_activation_boundary;
+     if (requests[0].input_desc->part_count != boundary.part_count) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
+-                "iteration batching defers optional activation ports to serial execution");
+-        return SKIPPY_STATUS_UNSUPPORTED;
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "iteration batching accepts planned frontier parts only");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+     storage.reserve(boundary.part_count);
+     graph_inputs.activation_frontier.reserve(boundary.part_count);
+@@ -72,17 +73,17 @@ static enum skippy_status skippy_build_batched_frontier(
+         for (size_t request_index = 0; request_index < request_count; ++request_index) {
+             const auto * desc = requests[request_index].input_desc;
+             if (desc == nullptr || desc->part_count != boundary.part_count) {
+-                skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
++                skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
+                         "iteration batching requires the same planned frontier for every request");
+-                return SKIPPY_STATUS_UNSUPPORTED;
++                return SKIPPY_STATUS_INVALID_ARGUMENT;
+             }
+             const auto * part = skippy_activation_find_part(desc, first->identity);
+             const size_t request_plane_bytes = inner_bytes*requests[request_index].token_count;
+             if (part == nullptr || !skippy_batch_part_compatible(*first, *part) ||
+                     part->payload_bytes != request_plane_bytes*outer_count) {
+-                skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
++                skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
+                         "iteration activation shapes differ outside the token axis");
+-                return SKIPPY_STATUS_UNSUPPORTED;
++                return SKIPPY_STATUS_INVALID_ARGUMENT;
+             }
+             const auto * source = static_cast<const uint8_t *>(
+                     skippy_activation_part_payload(desc, requests[request_index].input_payload, part));
+@@ -126,9 +127,9 @@ static enum skippy_status skippy_copy_batched_exports(
+     if (!skippy_emits_activation_frame(session)) return SKIPPY_STATUS_OK;
+     const auto & boundary = session->stage_model->output_activation_boundary;
+     if (desc == nullptr || desc->part_count != boundary.part_count) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
+-                "iteration batching defers optional activation ports to serial execution");
+-        return SKIPPY_STATUS_UNSUPPORTED;
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "iteration batching accepts planned frontier parts only");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+     llm_graph_result * result = session->ctx->get_gf_res_prev_active();
+     const auto * ports = result == nullptr ? nullptr : &result->get_skippy_activation_exports();
+@@ -157,6 +158,13 @@ static enum skippy_status skippy_copy_batched_exports(
+                     "batched graph export does not match its activation descriptor");
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
++        // Exports come from the last microbatch, so slicing them by request
++        // offset is only defined while that microbatch covers the whole batch.
++        if (tensor->ne[token_axis] != static_cast<int64_t>(offsets.back())) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                    "exported activation token axis does not cover the batched iteration");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
+         const size_t outer_count = static_cast<size_t>(part.payload_bytes)/destination_plane_bytes;
+         auto * destination = static_cast<uint8_t *>(payload) + part.payload_offset;
+         for (size_t outer = 0; outer < outer_count; ++outer) {
+@@ -204,15 +212,13 @@ enum skippy_status skippy_iteration_batch_sampled(
+     const bool request_logits = skippy_runtime_is_terminal_stage(&first->stage_model->config);
+     const bool request_exports = skippy_emits_activation_frame(first);
+     if (n_pos_per_embd <= 0) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "stage input dimensions cannot be batched");
+-        return SKIPPY_STATUS_UNSUPPORTED;
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "stage input dimensions cannot be batched");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+ 
+     std::unordered_set<skippy_session *> unique_sessions;
+     std::vector<size_t> offsets(request_count + 1, 0);
+     size_t sampled_count = 0;
+-    bool uniform_token_counts = true;
+-    bool consecutive_sequence_ids = true;
+     for (size_t index = 0; index < request_count; ++index) {
+         const auto & request = requests[index];
+         if (request.session == nullptr || request.session->ctx != first->ctx ||
+@@ -227,15 +233,6 @@ enum skippy_status skippy_iteration_batch_sampled(
+                     "iteration token count exceeds int32 range");
+             return SKIPPY_STATUS_INVALID_ARGUMENT;
+         }
+-        if (index > 0) {
+-            uniform_token_counts =
+-                    uniform_token_counts && request.token_count == requests[0].token_count;
+-            const llama_seq_id previous = requests[index - 1].session->seq_id;
+-            consecutive_sequence_ids =
+-                    consecutive_sequence_ids &&
+-                    previous != std::numeric_limits<llama_seq_id>::max() &&
+-                    request.session->seq_id == previous + 1;
+-        }
+         const size_t expected_positions = request.token_count*static_cast<size_t>(n_pos_per_embd);
+         if ((request.positions == nullptr && request.position_count != 0) ||
+                 (request.positions != nullptr && request.position_count != expected_positions)) {
+@@ -249,9 +246,9 @@ enum skippy_status skippy_iteration_batch_sampled(
+         if (status != SKIPPY_STATUS_OK) return status;
+         if (request.input_desc != nullptr &&
+                 request.input_desc->part_count != request.session->stage_model->input_activation_boundary.part_count) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
+-                    "iteration batching defers optional activation ports to serial execution");
+-            return SKIPPY_STATUS_UNSUPPORTED;
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "iteration batching accepts planned frontier parts only");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
+         }
+         status = skippy_prepare_output_activation_frame(
+                 request.session, request.token_count,
+@@ -263,19 +260,41 @@ enum skippy_status skippy_iteration_batch_sampled(
+         if (status != SKIPPY_STATUS_OK) return status;
+         if (output_descs != nullptr && request_exports &&
+                 output_descs[index].part_count != request.session->stage_model->output_activation_boundary.part_count) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
+-                    "iteration batching defers optional activation ports to serial execution");
+-            return SKIPPY_STATUS_UNSUPPORTED;
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "iteration batching accepts planned frontier parts only");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
+         }
+         offsets[index + 1] = offsets[index] + request.token_count;
+         if (request.sample_last && request_logits) ++sampled_count;
+     }
+-    if (request_exports &&
+-            (!uniform_token_counts || !consecutive_sequence_ids ||
+-             offsets.back() > static_cast<size_t>(first->ctx->n_ubatch()))) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
+-                "activation export batch would span more than one native microbatch");
+-        return SKIPPY_STATUS_UNSUPPORTED;
++    // Batched exports are sliced by request offset, which is the microbatch row
++    // order only when llama decodes the batch with split_simple, so a stage that
++    // exports activations needs a unified KV cache. Multi-lane exporting stages
++    // cannot turn that off (model_loading.cpp rejects the combination), and a
++    // terminal stage never reads exports.
++    if (request_exports && request_count > 1 && !first->ctx->kv_unified()) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "batched activation exports require a unified KV cache");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    // Recurrent and hybrid memory splits an all-output batch by sequence
++    // (split_seq), so the last microbatch only carries one request's rows and
++    // its exports cannot be sliced by request offset. The runtime routes those
++    // stages one request at a time; reaching this means that routing is wrong.
++    if (request_exports && request_count > 1 &&
++            (llm_arch_is_recurrent(first->stage_model->model->arch) ||
++             llm_arch_is_hybrid(first->stage_model->model->arch))) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "recurrent and hybrid stages cannot batch activation exports");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    // Exports are read from the last microbatch's graph, so an exporting stage
++    // must see the whole batch in one microbatch. The scheduler caps batched
++    // tokens at n_ubatch; exceeding it here is a scheduler bug.
++    if (request_exports && offsets.back() > static_cast<size_t>(first->ctx->n_ubatch())) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "iteration batch exceeds the native microbatch on an exporting stage");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+     if (sampled_count > sampled_output_capacity ||
+             (sampled_count > 0 &&
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 15b29abfa..66e485666 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -727,9 +727,9 @@ enum skippy_status skippy_finish_model_open(
+     if (classifier_workload) {
+         params.pooling_type = LLAMA_POOLING_TYPE_RANK;
+     }
+-    params.embeddings = embedding_workload ||
+-            (skippy_runtime_has_stage_plan(config) &&
+-             !skippy_runtime_is_terminal_stage(config));
++    const bool activation_export_stage =
++            skippy_runtime_has_stage_plan(config) && !skippy_runtime_is_terminal_stage(config);
++    params.embeddings = embedding_workload || activation_export_stage;
+     if (embedding_workload) {
+         // Non-causal embedding graphs must fit their logical batch in one
+         // physical batch, matching llama-embedding's runtime contract.
+@@ -760,6 +760,21 @@ enum skippy_status skippy_finish_model_open(
+         params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
+         params.kv_unified = true;
+     }
++    // Batched activation exports are sliced by request offset, which is the
++    // microbatch row order only while llama splits with split_simple. A
++    // per-stream cache splits by sequence instead, so an exporting stage with
++    // more than one lane cannot run without a unified cache. Reject the
++    // configuration here, once, instead of failing every batched iteration.
++    if (activation_export_stage && stage_model->lane_count > 1 && !params.kv_unified) {
++        const char * message = "an exporting stage with multiple lanes requires a unified KV cache";
++        if (event_scope != nullptr) {
++            event_scope->emit_failure(SKIPPY_STATUS_INVALID_ARGUMENT, message);
++        }
++        llama_model_free(model);
++        delete stage_model;
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message);
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
+ 
+     const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(config);
+     stage_model->ctx = llama_init_from_model_with_graph_inputs(model, params, graph_build_inputs);
+-- 
+2.54.0 (Apple Git-157)
+

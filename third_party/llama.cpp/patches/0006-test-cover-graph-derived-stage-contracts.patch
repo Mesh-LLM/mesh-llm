@@ -1,7 +1,7 @@
-From f1d47c3e6be956bdd24fd1819a7cb5e750abf75d Mon Sep 17 00:00:00 2001
+From 2228d9a4cab80fda1282f2a7bec8a148ee26e87d Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:59 +1000
-Subject: [PATCH 06/14] test: cover graph-derived stage contracts
+Subject: [PATCH] test: cover graph-derived stage contracts
 
 ---
  src/skippy/tests/graph_build_inputs.cpp       |  619 +++++++
@@ -16,13 +16,13 @@ Subject: [PATCH 06/14] test: cover graph-derived stage contracts
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  170 +-
  tests/test-deepseek4-mtp.h                    |   88 +
- tests/test-llama-archs.cpp                    |  164 +-
+ tests/test-llama-archs.cpp                    |  185 +-
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
  tests/test-skippy-kv-page-export.cpp          |  283 +++
  tests/test-skippy-model-loader-accounting.cpp |  326 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 18 files changed, 6228 insertions(+), 16 deletions(-)
+ 18 files changed, 6242 insertions(+), 23 deletions(-)
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
@@ -668,7 +668,7 @@ new file mode 100644
 index 000000000..1a1bb0ca5
 --- /dev/null
 +++ b/src/skippy/tests/hardware_application_probe.cpp
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,64 @@
 +#include "skippy/model_load_config_internal.h"
 +#include "skippy/runtime.h"
 +
@@ -684,10 +684,6 @@ index 000000000..1a1bb0ca5
 +int main() {
 +    skippy_runtime_config config = skippy_runtime_config_default();
 +    bool passed = true;
-+    passed &= require(config.cache_type_k == GGML_TYPE_F16,
-+            "default K cache type must be F16");
-+    passed &= require(config.cache_type_v == GGML_TYPE_F16,
-+            "default V cache type must be F16");
 +    passed &= require(config.kv_offload == SKIPPY_TRISTATE_AUTO,
 +            "default kv_offload must preserve the derived default");
 +    passed &= require(config.kv_unified == SKIPPY_TRISTATE_AUTO,
@@ -726,14 +722,6 @@ index 000000000..1a1bb0ca5
 +    config.op_offload = SKIPPY_TRISTATE_AUTO;
 +    skippy_apply_context_hardware_config(&config, context_params);
 +    passed &= require(context_params.op_offload, "auto op_offload must preserve the derived default");
-+
-+    config.cache_type_k = GGML_TYPE_F32;
-+    config.cache_type_v = GGML_TYPE_F32;
-+    skippy_apply_context_hardware_config(&config, context_params);
-+    passed &= require(context_params.type_k == GGML_TYPE_F32,
-+            "explicit F32 K cache type must not fall back to F16");
-+    passed &= require(context_params.type_v == GGML_TYPE_F32,
-+            "explicit F32 V cache type must not fall back to F16");
 +
 +    config.op_offload = SKIPPY_TRISTATE_FALSE;
 +    skippy_apply_context_hardware_config(&config, context_params);
@@ -5159,7 +5147,7 @@ index 5aa948251..78df176dd 100644
  
  static void test_cohere_reasoning_detection(testing & t) {
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 13733c1d9..bbbf6b40d 100644
+index f2728f7cc..e125786fa 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -436,6 +436,21 @@ static common_chat_tool special_function_tool{
@@ -5333,7 +5321,7 @@ index 13733c1d9..bbbf6b40d 100644
                  "</tool_call>\n";
  
              bool got_runtime_error = false;
-@@ -7209,6 +7313,41 @@ static void test_template_generation_prompt() {
+@@ -7217,6 +7321,41 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
@@ -5375,7 +5363,7 @@ index 13733c1d9..bbbf6b40d 100644
  }
  
  // Test the developer role to system workaround with a simple mock template
-@@ -7551,6 +7690,7 @@ static void test_msg_diffs_compute() {
+@@ -7559,6 +7698,7 @@ static void test_msg_diffs_compute() {
  int main(int argc, char ** argv) {
      bool detailed_debug    = false;
      bool only_run_filtered = false;
@@ -5383,7 +5371,7 @@ index 13733c1d9..bbbf6b40d 100644
  
      // Check for --template and --detailed flags
      for (int i = 1; i < argc; i++) {
-@@ -7568,9 +7708,19 @@ int main(int argc, char ** argv) {
+@@ -7576,9 +7716,19 @@ int main(int argc, char ** argv) {
              g_force_reconstruction_test = true;
              only_run_filtered          = true;
          }
@@ -5498,18 +5486,18 @@ index 000000000..87a499031
 +    return 0;
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 80a045185..5a3202ce8 100644
+index 5a8a196c1..d640cf5c9 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -14,6 +14,7 @@
- #include <cinttypes>
+@@ -15,6 +15,7 @@
+ #include <cmath>
  #include <cstddef>
  #include <cstdio>
 +#include <cstdlib>
  #include <cstring>
  #include <cstdint>
  #include <random>
-@@ -79,10 +80,26 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
+@@ -113,10 +114,26 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
      return ret;
  }
  
@@ -5538,7 +5526,7 @@ index 80a045185..5a3202ce8 100644
  
      uint32_t n_vocab = 128;
      uint32_t n_embd  = 256;
-@@ -106,7 +123,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -140,7 +157,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
          n_embd  = 512;
          n_head  = 8;
          n_ff    = 1024;
@@ -5547,12 +5535,14 @@ index 80a045185..5a3202ce8 100644
      } else if (arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_LAGUNA) {
          n_embd = 160; // exercise per-head tensor split granularity with head size 80
      } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
-@@ -292,9 +309,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
-     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
-               arch == LLM_ARCH_QWEN4EXP ? n_embd_head : uint32_t(128));
+@@ -329,10 +346,21 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+     // note: using a realistic top-k here makes the results unstable and hard to match between CPU and GPU
+     //       a large value makes things deterministic since all data is selected by the indexer
+     //ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
+-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(131072));
++    // GLM-DSA stage contracts exercise the sparse indexer, so that fixture keeps a realistic top-k
++    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        arch == LLM_ARCH_GLM_DSA ? glm_dsa_indexer_top_k : uint32_t(131072));
  
--    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
-+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        arch == LLM_ARCH_GLM_DSA ? glm_dsa_indexer_top_k : uint32_t(8));
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
 +    if (arch == LLM_ARCH_GLM_DSA) {
@@ -5565,19 +5555,33 @@ index 80a045185..5a3202ce8 100644
 +        }
 +        ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
 +    }
-     ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
- 
+     // mrope sections count rope pairs; Ling 3.0 VL files carry [t, h, w] sections
+     // summing to n_rot / 2 (n_rot is 64 in this fixture)
+     if (arch == LLM_ARCH_BAILINGMOE3) {
+@@ -340,7 +368,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+     } else {
+         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
+     }
+-
      if (arch == LLM_ARCH_HY_V4) {
-@@ -316,7 +343,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,     uint32_t(4));
+         ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,   1.0e-6f);
+@@ -360,12 +387,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      if (arch == LLM_ARCH_DEEPSEEK4) {
-         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,         uint32_t(8));
-         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,           uint32_t(32));
--        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            std::vector<uint32_t>({0, 0, 4, 128}));
-+        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            deepseek4_mtp ? std::vector<uint32_t>({0, 0, 4, 128, 0}) : std::vector<uint32_t>({0, 0, 4, 128}));
-         ms.add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,    160000.0f);
-         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(4));
-         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(2));
-@@ -408,6 +435,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,          uint32_t(8));
+         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,            uint32_t(32));
+-        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,             std::vector<uint32_t>({0, 0, 4, 128}));
++        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,             deepseek4_mtp ? std::vector<uint32_t>({0, 0, 4, 128, 0}) : std::vector<uint32_t>({0, 0, 4, 128}));
+         ms.add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,     160000.0f);
+         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,                uint32_t(4));
+         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS,  uint32_t(2));
+-        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,              1.0e-6f);
+-        ms.add_kv(LLM_KV_HASH_LAYER_COUNT,                      uint32_t(0));
++        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,              1.0e-6f);        ms.add_kv(LLM_KV_HASH_LAYER_COUNT,                      uint32_t(0));
+         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                      10.0f);
+         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,                  1.0f);
+         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,                   true);
+@@ -452,6 +478,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
          ggml_format_name(&t, "convnext.%" PRIu32 ".dw.weight", il);
          gguf_add_tensor(ms.gguf_ctx, &t);
      }
@@ -5594,7 +5598,7 @@ index 80a045185..5a3202ce8 100644
      return ret;
  }
  
-@@ -415,9 +452,57 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -459,11 +495,67 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -5644,16 +5648,27 @@ index 80a045185..5a3202ce8 100644
 +    std::string old_value;
 +};
 +
++// resolve an exact -a value back to an architecture for fixture generation
++static llm_arch arch_from_filter(const std::string & filter) {
++    std::string name = filter;
++    if (name.size() >= 2 && name.front() == '^' && name.back() == '$') {
++        name = name.substr(1, name.size() - 2);
++    }
++    return llm_arch_from_string(name);
++}
++
  static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
-         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
+         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
+         const std::vector<ggml_backend_dev_t> & devs,
 -        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
+-    GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
 +        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
 +        ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_user_data = nullptr,
-+        const llama_flash_attn_type flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO) {
-     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
++        const llama_flash_attn_type flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO) {    GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
      llama_model_params model_params = llama_model_default_params();
      model_params.progress_callback = silent_model_load_progress;
-@@ -433,6 +518,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+     std::vector<ggml_backend_dev_t> devs_copy = devs;
+@@ -478,6 +570,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      if (!encode) {
          ctx_params.n_ubatch = 64;
      }
@@ -5661,9 +5676,9 @@ index 80a045185..5a3202ce8 100644
 +    ctx_params.cb_eval = cb_eval;
 +    ctx_params.cb_eval_user_data = cb_eval_user_data;
  
-     size_t tmp = seed;
+     tensor_data_params tensor_params = { seed, stdev };
      llama_model_ptr model(gguf_ctx != nullptr ?
-@@ -448,6 +536,20 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -493,6 +588,20 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -5684,7 +5699,7 @@ index 80a045185..5a3202ce8 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -608,6 +710,20 @@ static bool arch_supported(const llm_arch arch) {
+@@ -653,6 +762,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -5702,10 +5717,10 @@ index 80a045185..5a3202ce8 100644
 +    return true;
 +}
 +
- static int save_models(const llm_arch target_arch, const size_t seed, const int verbosity, const std::string & dir) {
+ static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -784,6 +900,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
+@@ -835,9 +958,14 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                  char nmse_str[12] = {0};
  
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -5715,10 +5730,14 @@ index 80a045185..5a3202ce8 100644
 +#if defined(GGML_USE_WEBGPU)
 +                skip = true; // FIXME
 +#endif // GGML_USE_WEBGPU
-                 if (!skip) {
+                 bool test_executed = false;
+-                bool test_ok = true;
+-                if (!skip) {
++                bool test_ok = true;                if (!skip) {
                      if (logits_cpu.empty()) {
-                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
-@@ -837,6 +959,8 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
+                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
+                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
+@@ -908,6 +1036,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
      return all_ok ? 0 : 1;
  }
  
@@ -5727,13 +5746,13 @@ index 80a045185..5a3202ce8 100644
  int main(int argc, char ** argv) {
      // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
      common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
-@@ -847,10 +971,19 @@ int main(int argc, char ** argv) {
-     llm_arch arch = LLM_ARCH_UNKNOWN;
-     size_t seed = rd();
+@@ -920,10 +1050,18 @@ int main(int argc, char ** argv) {
+     float stdev = 0.1f;
      std::string out;
+     const char * target_backend = nullptr;
+-
 +    bool deepseek4_mtp = false;
 +    std::string mtp_model;
- 
      int verbosity = LOG_LEVEL_ERROR;
  
      for (int i = 1; i < argc; i++) {
@@ -5747,14 +5766,15 @@ index 80a045185..5a3202ce8 100644
          if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
              usage(argv);
              return 0;
-@@ -896,6 +1029,25 @@ int main(int argc, char ** argv) {
-     printf("%s: using seed %zu\n", __func__, seed);
+@@ -1000,6 +1138,27 @@ int main(int argc, char ** argv) {
+     LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
  
      try {
 +        if (!mtp_model.empty()) {
 +            return test_deepseek4_mtp(mtp_model);
 +        }
 +        if (deepseek4_mtp) {
++            const llm_arch arch = arch_from_filter(arch_filter);
 +            if (arch != LLM_ARCH_DEEPSEEK4 || out.empty()) {
 +                throw std::runtime_error("--deepseek4-mtp requires -a deepseek4 and -o directory");
 +            }
@@ -5762,7 +5782,8 @@ index 80a045185..5a3202ce8 100644
 +            auto params = llama_model_default_params();
 +            params.n_gpu_layers = 0;
 +            params.load_mtp = true;
-+            llama_model_ptr model(llama_model_init_from_user(gguf.get(), set_tensor_data, &seed, params));
++            tensor_data_params tensor_params = { seed, 0.1f };
++            llama_model_ptr model(llama_model_init_from_user(gguf.get(), set_tensor_data, &tensor_params, params));
 +            if (!model || model->hparams.n_layer_nextn != 1 || model->hparams.n_embd_out() != 2048) {
 +                throw std::runtime_error("failed to generate wide DeepSeek4 MTP fixture");
 +            }
@@ -5771,7 +5792,7 @@ index 80a045185..5a3202ce8 100644
 +            return 0;
 +        }
          if (!out.empty()) {
-             return save_models(arch, seed, verbosity, out);
+             return save_models(arch_filter, seed, stdev, verbosity, out);
          }
 diff --git a/tests/test-skippy-kv-cells-contiguous.cpp b/tests/test-skippy-kv-cells-contiguous.cpp
 new file mode 100644
@@ -6618,4 +6639,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
+

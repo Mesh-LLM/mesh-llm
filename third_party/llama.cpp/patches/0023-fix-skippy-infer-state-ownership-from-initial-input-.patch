@@ -1,0 +1,140 @@
+From cc3a4ee470a2023cc9901c425e11169f73b73277 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Wed, 23 Sep 2026 09:06:44 +1000
+Subject: [PATCH] fix(skippy): infer state ownership from initial input leaves
+
+---
+ src/CMakeLists.txt                            |  8 +++
+ src/skippy/state_effects.cpp                  | 12 ++++-
+ .../tests/input_leaf_state_regression.h       | 49 +++++++++++++++++++
+ src/skippy/tests/stage_slice_plan.cpp         |  4 +-
+ 4 files changed, 70 insertions(+), 3 deletions(-)
+ create mode 100644 src/skippy/tests/input_leaf_state_regression.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 3038e6d71..c98a11390 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -303,6 +303,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     add_test(NAME skippy_graph_contract_gemma3n COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf" 18)
+     set_tests_properties(skippy_graph_contract_gemma3n PROPERTIES FIXTURES_REQUIRED contract-gemma3n)
+ 
++    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-deepseek32")
++    file(MAKE_DIRECTORY "${contract_dir}")
++    add_test(NAME skippy_generate_contract_deepseek32 COMMAND skippy-model-fixture-generator
++        --arch deepseek32 --graph-contract 4 7168 --out "${contract_dir}")
++    set_tests_properties(skippy_generate_contract_deepseek32 PROPERTIES FIXTURES_SETUP contract-deepseek32)
++    add_test(NAME skippy_graph_contract_deepseek32 COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
++    set_tests_properties(skippy_graph_contract_deepseek32 PROPERTIES FIXTURES_REQUIRED contract-deepseek32)
++
+     add_executable(skippy-input-capabilities skippy/tests/input_capabilities.cpp)
+     target_compile_features(skippy-input-capabilities PRIVATE cxx_std_17)
+     target_link_libraries(skippy-input-capabilities PRIVATE llama)
+diff --git a/src/skippy/state_effects.cpp b/src/skippy/state_effects.cpp
+index b0224819c..4b5100dee 100644
+--- a/src/skippy/state_effects.cpp
++++ b/src/skippy/state_effects.cpp
+@@ -304,6 +304,12 @@ bool skippy_infer_state_effects(
+         positions.emplace(ggml_graph_node(const_cast<ggml_cgraph *>(graph), index), index);
+     }
+ 
++    // A raw-embedding entry is a graph leaf, before every executable node.
++    bool initial_entry_is_leaf = false;
++    for (int32_t index = 0; index < graph->n_leafs; ++index) {
++        initial_entry_is_leaf = initial_entry_is_leaf || graph->leafs[index] == boundaries.front().tensor;
++    }
++
+     struct explicit_owner {
+         skippy_state_kind kind = skippy_state_kind::derived_persistent;
+         int32_t layer = -1;
+@@ -381,11 +387,13 @@ bool skippy_infer_state_effects(
+         for (size_t layer = 0; layer < boundaries.size() / 2; ++layer) {
+             const auto entry = positions.find(boundaries[2 * layer].tensor);
+             const auto exit = positions.find(boundaries[2 * layer + 1].tensor);
+-            if (entry == positions.end() || exit == positions.end()) {
++            const bool initial_leaf = layer == 0 && initial_entry_is_leaf && entry == positions.end();
++            if ((!initial_leaf && entry == positions.end()) || exit == positions.end()) {
+                 error = "state inference could not locate a block boundary in the exact graph";
+                 return false;
+             }
+-            if (index >= entry->second && index <= exit->second) {
++            const int32_t entry_position = initial_leaf ? -1 : entry->second;
++            if (index >= entry_position && index <= exit->second) {
+                 owner_layer = static_cast<int32_t>(layer);
+                 break;
+             }
+diff --git a/src/skippy/tests/input_leaf_state_regression.h b/src/skippy/tests/input_leaf_state_regression.h
+new file mode 100644
+index 000000000..33d3faca9
+--- /dev/null
++++ b/src/skippy/tests/input_leaf_state_regression.h
+@@ -0,0 +1,49 @@
++#pragma once
++
++static int check_input_leaf_state_inference() {
++    ggml_init_params params = {ggml_tensor_overhead() * 32 + ggml_graph_overhead_custom(32, false), nullptr, true};
++    ggml_context_ptr ctx(ggml_init(params));
++    auto * input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    auto * absent = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    auto * state = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    ggml_set_input(input);
++    ggml_set_input(absent);
++    std::unique_ptr<ggml_backend_buffer, decltype(&ggml_backend_buffer_free)> buffer(
++            ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), ggml_nbytes(state)), ggml_backend_buffer_free);
++    if (!buffer) { return 92; }
++    state->buffer = buffer.get();
++    auto * first = ggml_scale(ctx.get(), input, 2.0f);
++    auto * write = ggml_cpy(ctx.get(), first, state);
++    auto * output = ggml_add(ctx.get(), first, state);
++    auto * graph = ggml_new_graph_custom(ctx.get(), 32, false);
++    ggml_build_forward_expand(graph, write);
++    ggml_build_forward_expand(graph, output);
++    std::vector<skippy_block_boundary> boundaries = {
++        {skippy_block_boundary_kind::entry, 0, input},
++        {skippy_block_boundary_kind::exit, 0, output},
++    };
++    std::vector<skippy_state_effect> effects;
++    std::string error;
++    if (!skippy_infer_state_effects({}, graph, boundaries, effects, error) || effects.size() != 2 ||
++        effects[0].access != skippy_state_access::read || effects[1].access != skippy_state_access::write ||
++        effects[1].layer != 0 || effects[1].storage != state || effects[1].effect_node != write ||
++        effects[1].write_ordinal != 0 || effects[1].kind != skippy_state_kind::derived_persistent) {
++        std::fprintf(stderr, "input-leaf state inference failed: %s\n", error.c_str());
++        return 93;
++    }
++    // A leaf outside this graph and a missing exit remain invalid boundaries.
++    boundaries[0].tensor = absent;
++    if (skippy_infer_state_effects({}, graph, boundaries, effects, error)) { return 94; }
++    boundaries[0].tensor = input;
++    boundaries[1].tensor = absent;
++    if (skippy_infer_state_effects({}, graph, boundaries, effects, error)) { return 95; }
++    // Only the initial block can start before executable graph nodes.
++    boundaries = {
++        {skippy_block_boundary_kind::entry, 0, input},
++        {skippy_block_boundary_kind::exit, 0, first},
++        {skippy_block_boundary_kind::entry, 1, input},
++        {skippy_block_boundary_kind::exit, 1, output},
++    };
++    if (skippy_infer_state_effects({}, graph, boundaries, effects, error)) { return 96; }
++    return 0;
++}
+diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
+index 69370e576..35de1e36c 100644
+--- a/src/skippy/tests/stage_slice_plan.cpp
++++ b/src/skippy/tests/stage_slice_plan.cpp
+@@ -1128,9 +1128,11 @@ static int check_auxiliary_graph_parameter_closure() {
+ }
+ 
+ #include "residual_checkpoint_regression.h"
++#include "input_leaf_state_regression.h"
+ 
+ int main() {
+-    int result = check_raw_embedding_checkpoint();
++    int result = check_input_leaf_state_inference();
++    if (!result) { result = check_raw_embedding_checkpoint(); }
+     if (!result) { result = check_semantic_identities(); }
+     if (!result) { result = check_tied_parameter_identity(); }
+     if (!result) { result = check_middle_stage_selection(); }
+-- 
+2.54.0 (Apple Git-157)
+

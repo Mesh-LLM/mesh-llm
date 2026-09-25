@@ -1,8 +1,7 @@
-From 375442466e0fd164e45ddc6b05a0b992c490b10a Mon Sep 17 00:00:00 2001
+From 788a2d5585b53573899dcaa7835efe705faf5dd4 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:16 +1000
-Subject: [PATCH 02/14] skippy: implement graph planning realization and
- runtime
+Subject: [PATCH] skippy: implement graph planning realization and runtime
 
 ---
  src/skippy-verify-checkpoint.h          |   24 +
@@ -15122,5 +15121,5 @@ index 000000000..3ccd2f6a4
 +
 +} // extern "C"
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

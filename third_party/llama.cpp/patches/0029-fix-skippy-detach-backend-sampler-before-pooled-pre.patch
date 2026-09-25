@@ -1,0 +1,74 @@
+From c4e2eb80a4860c2c2eb4957e13959701733fdb84 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 14:08:00 +1000
+Subject: [PATCH] fix(skippy): detach backend sampler before pooled prefill
+
+Backend sampling permits only one output row for a sequence. Detach a
+terminal session's sampler at the request boundary so a pooled session can
+accept the next request's multi-token prefill, then let generation attach a
+fresh chain.
+
+Cover the lifecycle with the native runtime-event fixture.
+---
+ src/skippy/session.cpp              | 5 ++++-
+ src/skippy/tests/runtime_events.cpp | 21 +++++++++++++++++++++
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 29024ed0c..c2c2e5450 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -351,7 +351,10 @@ enum skippy_status skippy_session_reset(
+         session->token_history.clear();
+     }
+     session->signal_history.clear();
+-    if (!skippy_reset_reusable_sampling(session)) {
++    // Backend sampling allows only one output row per sequence. A pooled
++    // session must therefore detach its sampler before the next request's
++    // multi-token prefill; generation will attach a fresh chain afterwards.
++    if (session->sampling_backend_enabled || !skippy_reset_reusable_sampling(session)) {
+         skippy_clear_chat_sampling(session);
+     }
+     skippy_mtp_clear_session_state(session);
+diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
+index 1f0dfbeb9..60357184a 100644
+--- a/src/skippy/tests/runtime_events.cpp
++++ b/src/skippy/tests/runtime_events.cpp
+@@ -1,6 +1,7 @@
+ #include "skippy.h"
+ 
+ #include "../events_internal.h"
++#include "../runtime_types.h"
+ 
+ #include <atomic>
+ #include <cstdio>
+@@ -330,7 +331,27 @@ int test_native_model_load_production(const char * fixture_path) {
+     CHECK(skippy_session_create(model, &session, &error) == SKIPPY_STATUS_OK);
+     CHECK(session != nullptr);
+     CHECK(global.kv_initialized_events.load() > 0);
++    const llama_token prompt[] = {0, 1};
++    size_t output_bytes = 0;
++    CHECK(skippy_prefill_chunk(
++            session, prompt, 2, nullptr, 0, nullptr, 0,
++            &output_bytes, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->n_past == 2);
++    skippy_sampling_config sampling{};
++    sampling.version = 1;
++    sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    sampling.repeat_penalty = 1.0f;
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &sampling, "{}", 0, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
+     CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
++    CHECK(!session->sampling_backend_enabled);
++    CHECK(session->sampling_chain == nullptr);
++    CHECK(session->n_past == 0);
++    CHECK(skippy_prefill_chunk(
++            session, prompt, 2, nullptr, 0, nullptr, 0,
++            &output_bytes, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->n_past == 2);
+     CHECK(global.kv_cleared_events.load() > 0);
+     CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
+     CHECK(skippy_model_free(model, &error) == SKIPPY_STATUS_OK);
+-- 
+2.51.0

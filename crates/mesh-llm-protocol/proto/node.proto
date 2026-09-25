@@ -73,6 +73,7 @@ message PeerAnnouncement {
   // Never verified by mesh-llm itself — carried opaquely so a receiver MAY
   // verify independently.
   optional ClaimedLogHead claimed_log_head = 51;
+  repeated LightningOffer lightning_offers = 52;
 }
 
 // A minimal, self-contained claim about the current head of a peer's
@@ -135,6 +136,14 @@ message ClaimedLogHead {
   uint64 timestamp_unix_ms = 4;
   bytes claimed_signature = 5;
   string signature_algorithm = 6;
+}
+
+// Presence means payment is required for this exact model, protocol v1.
+message LightningOffer {
+  string model = 1;
+  uint64 input_msat_per_million = 2;
+  uint64 output_msat_per_million = 3;
+  uint64 minimum_invoice_msat = 4;
 }
 
 enum InferenceAdmissionState {

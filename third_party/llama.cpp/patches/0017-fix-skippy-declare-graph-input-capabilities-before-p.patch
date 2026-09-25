@@ -1,4 +1,4 @@
-From 8b42fa62460b8d3db7bf4f4794204570f28ad885 Mon Sep 17 00:00:00 2001
+From d31940dfb1e58720fc35b076254cb3a33c8064a1 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Tue, 22 Sep 2026 18:12:59 +1000
 Subject: [PATCH] fix(skippy): declare graph input capabilities before profile
@@ -11,8 +11,8 @@ Subject: [PATCH] fix(skippy): declare graph input capabilities before profile
  src/models/glm4-moe.cpp                 |  9 +--
  src/models/glm4.cpp                     |  9 +--
  src/skippy/tests/input_capabilities.cpp | 78 +++++++++++++++++++++++++
- tests/test-llama-archs.cpp              | 15 ++++-
- 7 files changed, 142 insertions(+), 23 deletions(-)
+ tests/test-llama-archs.cpp              | 14 ++++-
+ 7 files changed, 142 insertions(+), 22 deletions(-)
  create mode 100644 src/skippy/tests/input_capabilities.cpp
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
@@ -58,7 +58,7 @@ index 69e05396a..815fce61b 100644
          skippy/tests/stage_plan_header.c)
      target_compile_features(skippy-stage-plan-header-c PRIVATE c_std_11)
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index a1ff07f47..dbc1bc16a 100644
+index b17e99e9a..53b287d48 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -1771,7 +1771,9 @@ llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
@@ -72,7 +72,7 @@ index a1ff07f47..dbc1bc16a 100644
      }
      if (auto * mtp = dynamic_cast<llm_graph_input_embd_h *>(input.get())) {
          request_input(mtp->tokens, "tokens");
-@@ -2840,13 +2842,16 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2844,13 +2846,16 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
  }
  
  // input embeddings with optional lora
@@ -91,7 +91,7 @@ index a1ff07f47..dbc1bc16a 100644
  
      inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
      cb(inp->tokens, "inp_tokens", -1);
-@@ -2857,7 +2862,11 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+@@ -2861,7 +2866,11 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
      inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
      cb(inp->embd, "inp_embd", -1);
      ggml_set_input(inp->embd);
@@ -129,7 +129,7 @@ index 732af4c7b..5caccd48f 100644
      ggml_tensor * build_inp_attn_scale() const;
      ggml_tensor * build_inp_out_ids() const;
 diff --git a/src/models/glm4-moe.cpp b/src/models/glm4-moe.cpp
-index caf87cf43..f8b0ed578 100644
+index d6ae5783c..d5372e160 100644
 --- a/src/models/glm4-moe.cpp
 +++ b/src/models/glm4-moe.cpp
 @@ -299,13 +299,8 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
@@ -149,7 +149,7 @@ index caf87cf43..f8b0ed578 100644
      // inp_pos - contains the positions
      ggml_tensor * inp_pos = build_inp_pos();
 diff --git a/src/models/glm4.cpp b/src/models/glm4.cpp
-index 0e50c90e4..816c06db8 100644
+index 463be809d..1fac79766 100644
 --- a/src/models/glm4.cpp
 +++ b/src/models/glm4.cpp
 @@ -76,13 +76,8 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
@@ -253,28 +253,27 @@ index 000000000..a87425e96
 +    return 0;
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 97e44eb30..f43a2df79 100644
+index d640cf5c9..90cf83e08 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -66,7 +66,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
- }
- 
- static void usage(char ** argv) {
--    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
-+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [--text-only] [-h/--help]\n", argv[0]);
- }
- 
- static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
-@@ -728,7 +728,7 @@ static bool glm_dsa_backend_config_supported(const std::vector<ggml_backend_dev_
+@@ -95,6 +95,7 @@ static void usage(char ** argv) {
+     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
+     LOG("  -v <N>                   Set log verbosity level\n");
+     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
++    LOG("  -t, --text-only          Save models with empty rope dimension sections (text-only fixtures)\n");
+     LOG("  -h, --help               Show this help message\n\n");
+     LOG("Examples:\n");
+     LOG("  %s\n", argv[0]);
+@@ -776,7 +777,7 @@ static bool glm_dsa_backend_config_supported(const std::vector<ggml_backend_dev_
      return true;
  }
  
--static int save_models(const llm_arch target_arch, const size_t seed, const int verbosity, const std::string & dir) {
-+static int save_models(const llm_arch target_arch, const size_t seed, const int verbosity, const std::string & dir, bool text_only = false) {
+-static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir) {
++static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir, bool text_only = false) {
      struct user_data_t {
          struct {
              ggml_log_callback callback;
-@@ -776,6 +776,11 @@ static int save_models(const llm_arch target_arch, const size_t seed, const int
+@@ -824,6 +825,11 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                  continue;
              }
              gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
@@ -283,33 +282,32 @@ index 97e44eb30..f43a2df79 100644
 +                const std::string key = std::string(llm_arch_name(arch)) + ".rope.dimension_sections";
 +                gguf_set_arr_data(gguf_ctx.get(), key.c_str(), GGUF_TYPE_UINT32, sections, 4);
 +            }
-             auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+             auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
              const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
              LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
-@@ -976,11 +981,15 @@ int main(int argc, char ** argv) {
-     size_t seed = rd();
+@@ -1051,10 +1057,14 @@ int main(int argc, char ** argv) {
      std::string out;
+     const char * target_backend = nullptr;
      bool deepseek4_mtp = false;
 +    bool text_only = false;
      std::string mtp_model;
- 
      int verbosity = LOG_LEVEL_ERROR;
  
      for (int i = 1; i < argc; i++) {
-+        if (strcmp(argv[i], "--text-only") == 0) {
++        if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
 +            text_only = true;
 +        }
          if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
              deepseek4_mtp = true;
          }
-@@ -1053,7 +1062,7 @@ int main(int argc, char ** argv) {
+@@ -1160,7 +1170,7 @@ int main(int argc, char ** argv) {
              return 0;
          }
          if (!out.empty()) {
--            return save_models(arch, seed, verbosity, out);
-+            return save_models(arch, seed, verbosity, out, text_only);
+-            return save_models(arch_filter, seed, stdev, verbosity, out);
++            return save_models(arch_filter, seed, stdev, verbosity, out, text_only);
          }
-         return test_backends(arch, seed, verbosity);
+         return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
      } catch (const std::exception & err) {
 -- 
 2.54.0 (Apple Git-157)

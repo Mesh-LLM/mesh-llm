@@ -1821,6 +1821,7 @@ impl StageOpenAiBackend {
         let token_budget_stats = permit.token_budget_stats();
         let backend = self.clone();
         let chat_parse_metadata = prompt.chat_parse_metadata.clone();
+        let generation_gate = crate::frontend::generation_gate::find(ids.frontend_request_id)?;
         let (tx, rx) = mpsc::channel(16);
         let hook_runtime = Some(tokio::runtime::Handle::current());
         let sender = StreamEventSender::new(
@@ -1878,7 +1879,14 @@ impl StageOpenAiBackend {
                     } else {
                         vec![GenerationStreamEvent::Delta(chunk.to_string())]
                     };
+                    let emitted_output = !events.is_empty();
                     for event in events {
+                        sender.send(Ok(event), &context)?;
+                    }
+                    if emitted_output
+                        && let Some(event) =
+                            crate::frontend::generation_gate::usage_event(generation_gate.as_ref())
+                    {
                         sender.send(Ok(event), &context)?;
                     }
                     Ok(())

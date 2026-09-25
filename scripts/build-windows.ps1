@@ -11,7 +11,10 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
-$llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { $env:MESH_LLM_LLAMA_DIR } else { Join-Path $repoRoot ".deps\llama.cpp" }
+# A relative MESH_LLM_LLAMA_DIR is relative to the repository root, as in the
+# Justfile, wherever the script runs from. Resolve it once: .NET path calls
+# resolve against the process directory, cmdlets against the current location.
+$llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:MESH_LLM_LLAMA_DIR)) } else { Join-Path $repoRoot ".deps\llama.cpp" }
 $llamaBuildRoot = if ($env:MESH_LLM_LLAMA_BUILD_ROOT) { $env:MESH_LLM_LLAMA_BUILD_ROOT } else { Join-Path $repoRoot ".deps\llama-build" }
 $buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi" }
 # Git never activates a committed hook on clone, so enable the repository hooks
@@ -1030,7 +1033,7 @@ if ($HostOnly) {
             $hostArgs += "--release"
             $hostOutputProfile = "release"
         }
-        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime")
+        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments,wallet-lexe")
         Invoke-NativeCommand "cargo" $hostArgs
         Write-Host "Mesh backend-neutral host: target\\$hostOutputProfile\\mesh-llm.exe"
     }
@@ -1217,7 +1220,7 @@ Invoke-InRepo {
 
     Write-Host "Building mesh-llm..."
     $env:LLAMA_STAGE_BUILD_DIR = $buildDir
-    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime")
+    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments,wallet-lexe")
     Set-BuildVersionStamp
     switch ($buildProfile) {
         "dev" {

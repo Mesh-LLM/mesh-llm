@@ -1,7 +1,7 @@
-From 0c1d1a17d68173b85419d83229ab417e210372f1 Mon Sep 17 00:00:00 2001
+From 0600365fa79a9e24e3975a80103dca3fa66fdfd3 Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
-Subject: [PATCH] skippy: add DiffusionGemma system-one reads
+Subject: [PATCH 2/2] skippy: add DiffusionGemma system-one reads
 
 Expose a narrow native operation that prefills a DiffusionGemma prompt, performs one zero-self-conditioning canvas read, and returns normalized probabilities over caller-declared label tokens.
 
@@ -10,12 +10,12 @@ Co-authored-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 ---
  include/skippy.h            |   1 +
- include/skippy/common.h     |   4 +-
- include/skippy/system_one.h |  60 ++++++++++
+ include/skippy/common.h     |   1 +
+ include/skippy/system_one.h |  60 +++++++++
  src/CMakeLists.txt          |   1 +
  src/skippy/abi.cpp          |   1 +
- src/skippy/system_one.cpp   | 232 ++++++++++++++++++++++++++++++++++++
- 6 files changed, 297 insertions(+), 2 deletions(-)
+ src/skippy/system_one.cpp   | 243 ++++++++++++++++++++++++++++++++++++
+ 6 files changed, 307 insertions(+)
  create mode 100644 include/skippy/system_one.h
  create mode 100644 src/skippy/system_one.cpp
 
@@ -31,27 +31,17 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index f2628a7da..5c4cbc73d 100644
+index f2628a7da..649b98951 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 63
-+#define SKIPPY_ABI_VERSION_PATCH 64
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -105,7 +105,7 @@ enum skippy_feature {
+@@ -105,6 +105,7 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_UNLOAD_EVENTS          ((uint64_t)1 << 36)
  /** @brief Full-model embedding, reranking, and encoder-decoder execution. */
  #define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)
--
 +#define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
+ 
  #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
  
- enum skippy_status {
 diff --git a/include/skippy/system_one.h b/include/skippy/system_one.h
 new file mode 100644
 index 000000000..4faf057ba
@@ -144,10 +134,10 @@ index ceed6e5d3..1e1d2d7c8 100644
  
 diff --git a/src/skippy/system_one.cpp b/src/skippy/system_one.cpp
 new file mode 100644
-index 000000000..d60467a46
+index 000000000..5044b13df
 --- /dev/null
 +++ b/src/skippy/system_one.cpp
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,243 @@
 +#include "skippy/system_one.h"
 +
 +#include "skippy/errors.h"
@@ -265,6 +255,7 @@ index 000000000..d60467a46
 +
 +    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model->model));
 +    std::vector<uint8_t> seen_canvas_positions(canvas_token_count, 0);
++    std::vector<uint8_t> seen_label_positions(label_token_count, 0);
 +    for (size_t slot_index = 0; slot_index < slot_count; ++slot_index) {
 +        const skippy_system_one_slot & slot = slots[slot_index];
 +        if (slot.canvas_position >= canvas_token_count ||
@@ -280,12 +271,22 @@ index 000000000..d60467a46
 +        }
 +        seen_canvas_positions[slot.canvas_position] = 1;
 +        for (size_t label_index = 0; label_index < slot.label_token_count; ++label_index) {
-+            const llama_token token = label_token_ids[slot.label_token_offset + label_index];
++            const size_t flattened_index = slot.label_token_offset + label_index;
++            if (seen_label_positions[flattened_index] != 0) {
++                return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                        "system-one label ranges must not overlap");
++            }
++            seen_label_positions[flattened_index] = 1;
++            const llama_token token = label_token_ids[flattened_index];
 +            if (token < 0 || token >= n_vocab) {
 +                return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
 +                        "system-one label token is outside the model vocabulary");
 +            }
 +        }
++    }
++    if (std::find(seen_label_positions.begin(), seen_label_positions.end(), 0) != seen_label_positions.end()) {
++        return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "system-one label ranges must cover the flattened label-token array exactly");
 +    }
 +
 +    const int32_t lane = skippy_claim_execution_lane(model);

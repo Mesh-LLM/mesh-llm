@@ -364,7 +364,16 @@ fn canonical_terminal_events_render_once_and_use_existing_event_controls() {
 
 #[test]
 fn canonical_projection_keeps_local_correlation_but_redacts_payloads_and_native_ids() {
-    let home = std::env::var("HOME").expect("HOME should be set");
+    // HOME is usually unset on Windows, where the home is USERPROFILE. Same
+    // choice as the redaction: the first non-empty absolute value.
+    let home = ["HOME", "USERPROFILE"]
+        .into_iter()
+        .find_map(|variable| {
+            std::env::var(variable)
+                .ok()
+                .filter(|home| !home.is_empty() && std::path::Path::new(home).is_absolute())
+        })
+        .expect("HOME or USERPROFILE should be an absolute path");
     let request_id = RequestId::new();
     let request_id_text = request_id.as_uuid().to_string();
     let canonical = canonical_output(

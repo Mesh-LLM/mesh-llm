@@ -18,3 +18,4 @@ mod terminal;
 pub mod uninstall;
 pub mod update;
 pub mod usage_reporting;
+pub mod wallet;

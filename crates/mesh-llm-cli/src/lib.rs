@@ -24,3 +24,5 @@ pub use parser::{
     TrustCommand, TrustPolicy, legacy_runtime_surface_warning, normalize_runtime_surface_args,
     raw_args_invoke_analytics, validate_discovery_mode_args,
 };
+
+pub mod wallet;

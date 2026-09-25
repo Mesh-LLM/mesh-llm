@@ -1,0 +1,422 @@
+From 16eda1e6439b202f08684c358908eb8557001378 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Thu, 24 Sep 2026 13:26:12 +1000
+Subject: [PATCH] skippy: memoise stage slice selection with exact dependency
+ keys
+
+---
+ src/CMakeLists.txt                           |   3 +-
+ src/skippy/selection_memo.cpp                | 145 +++++++++++++++++++
+ src/skippy/selection_memo.h                  |  17 +++
+ src/skippy/stage_slice_plan.cpp              |  14 +-
+ src/skippy/state_effects.cpp                 |   7 +-
+ src/skippy/tests/selection_memo_regression.h | 123 ++++++++++++++++
+ src/skippy/tests/stage_slice_plan.cpp        |   7 +
+ 7 files changed, 313 insertions(+), 3 deletions(-)
+ create mode 100644 src/skippy/selection_memo.cpp
+ create mode 100644 src/skippy/selection_memo.h
+ create mode 100644 src/skippy/tests/selection_memo_regression.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index c98a11390..59f010e55 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -68,7 +68,8 @@ add_library(llama
+             skippy/package_tensor_binding.cpp
+             skippy/sampling.cpp
+             skippy/sampling_vocab.cpp
+-            skippy/stage_slice_plan.cpp
++            skippy/selection_memo.cpp
++    skippy/stage_slice_plan.cpp
+             skippy/stage_plan.cpp
+             skippy/stage_realization.cpp
+             skippy/stage_execution_contract.cpp
+diff --git a/src/skippy/selection_memo.cpp b/src/skippy/selection_memo.cpp
+new file mode 100644
+index 000000000..1b9051e3e
+--- /dev/null
++++ b/src/skippy/selection_memo.cpp
+@@ -0,0 +1,145 @@
++#include "selection_memo.h"
++
++#include "../../ggml/src/ggml-impl.h"
++
++#include <unordered_set>
++#include <utility>
++
++namespace {
++
++class metadata_key {
++public:
++    template <typename T> void value(const T & value) {
++        bytes.append(reinterpret_cast<const char *>(&value), sizeof(value));
++    }
++
++    void text(const std::string & text) {
++        value(text.size());
++        bytes.append(text);
++    }
++
++    void tensor(const ggml_tensor * tensor) {
++        value(tensor);
++        if (tensor != nullptr && seen.insert(tensor).second) {
++            pending.push_back(tensor);
++        }
++    }
++
++    void finish_tensors() {
++        // Traverse every reachable external alias and leaf as well as graph nodes.
++        // The visited set terminates cycles; fresh validation still rejects them.
++        for (size_t index = 0; index < pending.size(); ++index) {
++            const ggml_tensor * current = pending[index];
++            value(current);
++            value(current->type);
++            value(current->op);
++            value(current->flags);
++            value(current->view_offs);
++            value(current->ne);
++            value(current->nb);
++            value(current->op_params);
++            value(current->buffer);
++            text(ggml_get_name(current));
++            tensor(current->view_src);
++            for (const ggml_tensor * source : current->src) {
++                tensor(source);
++            }
++        }
++    }
++
++    std::string bytes;
++
++private:
++    std::unordered_set<const ggml_tensor *> seen;
++    std::vector<const ggml_tensor *> pending;
++};
++
++struct remembered_selection {
++    std::string key;
++    skippy_stage_slice_selection selection;
++};
++
++// Bounded per-thread FIFO. Exact key comparison is required: a hash match alone
++// must never authorize reuse of semantic identities or bypass validation.
++constexpr size_t remembered_selections = 8;
++thread_local remembered_selection entries[remembered_selections];
++thread_local size_t next_entry = 0;
++
++}
++
++std::string skippy_stage_slice_memo_key(
++        const ggml_cgraph * graph,
++        const std::vector<skippy_block_boundary> & boundaries,
++        const std::vector<skippy_state_effect> & state_effects,
++        const std::vector<skippy_parameter_binding> & parameters,
++        const std::vector<skippy_request_input_binding> & request_inputs,
++        int32_t layer_count, int32_t layer_start, int32_t layer_end,
++        const ggml_tensor * explicit_output) {
++    if (graph == nullptr || graph->n_nodes <= 0 || graph->n_leafs < 0) {
++        return {};
++    }
++    metadata_key key;
++    key.value(graph);
++    key.value(graph->order);
++    key.value(layer_count);
++    key.value(layer_start);
++    key.value(layer_end);
++    key.tensor(explicit_output);
++    key.value(graph->n_nodes);
++    for (int32_t index = 0; index < graph->n_nodes; ++index) {
++        if (graph->nodes[index] == nullptr) { return {}; }
++        key.tensor(graph->nodes[index]);
++    }
++    key.value(graph->n_leafs);
++    for (int32_t index = 0; index < graph->n_leafs; ++index) {
++        key.tensor(graph->leafs[index]);
++    }
++    key.value(boundaries.size());
++    for (const auto & boundary : boundaries) {
++        key.value(boundary.kind);
++        key.value(boundary.layer);
++        key.tensor(boundary.tensor);
++    }
++    key.value(state_effects.size());
++    for (const auto & effect : state_effects) {
++        key.value(effect.kind);
++        key.value(effect.access);
++        key.value(effect.layer);
++        key.value(effect.residency);
++        key.value(effect.write_ordinal);
++        key.tensor(effect.storage);
++        key.tensor(effect.effect_node);
++    }
++    key.value(parameters.size());
++    for (const auto & parameter : parameters) {
++        key.tensor(parameter.tensor);
++        key.text(parameter.identity);
++    }
++    key.value(request_inputs.size());
++    for (const auto & request : request_inputs) {
++        key.tensor(request.tensor);
++        key.text(request.identity);
++    }
++    key.finish_tensors();
++    return std::move(key.bytes);
++}
++
++const skippy_stage_slice_selection * skippy_recall_stage_slice(const std::string & key) {
++    if (!key.empty()) {
++        for (const auto & entry : entries) {
++            if (entry.key == key) {
++                return &entry.selection;
++            }
++        }
++    }
++    return nullptr;
++}
++
++void skippy_remember_stage_slice(std::string key, const skippy_stage_slice_selection & selection) {
++    if (key.empty()) { return; }
++    auto & entry = entries[next_entry];
++    entry.key.clear();
++    entry.selection = selection;
++    entry.key = std::move(key);
++    next_entry = (next_entry + 1) % remembered_selections;
++}
+diff --git a/src/skippy/selection_memo.h b/src/skippy/selection_memo.h
+new file mode 100644
+index 000000000..6af96e759
+--- /dev/null
++++ b/src/skippy/selection_memo.h
+@@ -0,0 +1,17 @@
++#pragma once
++
++#include "stage_slice_plan.h"
++
++// Process-local exact metadata key. Tensor contents are deliberately excluded:
++// selection depends on graph structure, bindings and metadata, not input values.
++std::string skippy_stage_slice_memo_key(
++        const ggml_cgraph * graph,
++        const std::vector<skippy_block_boundary> & boundaries,
++        const std::vector<skippy_state_effect> & state_effects,
++        const std::vector<skippy_parameter_binding> & parameters,
++        const std::vector<skippy_request_input_binding> & request_inputs,
++        int32_t layer_count, int32_t layer_start, int32_t layer_end,
++        const ggml_tensor * explicit_output);
++
++const skippy_stage_slice_selection * skippy_recall_stage_slice(const std::string & key);
++void skippy_remember_stage_slice(std::string key, const skippy_stage_slice_selection & selection);
+diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
+index 75a4da24c..d4fd70a39 100644
+--- a/src/skippy/stage_slice_plan.cpp
++++ b/src/skippy/stage_slice_plan.cpp
+@@ -1,3 +1,4 @@
++#include "selection_memo.h"
+ #include "stage_slice_plan.h"
+ 
+ #include "ggml.h"
+@@ -608,6 +609,13 @@ bool skippy_select_stage_slice(
+         const ggml_tensor * explicit_output) {
+     selection = {};
+     error.clear();
++    std::string memo_key = skippy_stage_slice_memo_key(
++            graph, boundaries, state_effects, parameters, request_inputs,
++            layer_count, layer_start, layer_end, explicit_output);
++    if (const auto * remembered = skippy_recall_stage_slice(memo_key)) {
++        selection = *remembered;
++        return true;
++    }
+     std::vector<skippy_state_effect> effective_state_effects;
+     if (!skippy_infer_state_effects(
+                 state_effects, graph, boundaries, effective_state_effects, error)) {
+@@ -634,7 +642,11 @@ bool skippy_select_stage_slice(
+     for (const auto & request : request_inputs) {
+         state.request_names.emplace(canonical_storage(request.tensor), request.identity);
+     }
+-    return state.select() && skippy_finalize_stage_slice_identity(semantics, selection, error);
++    if (!state.select() || !skippy_finalize_stage_slice_identity(semantics, selection, error)) {
++        return false;
++    }
++    skippy_remember_stage_slice(std::move(memo_key), selection);
++    return true;
+ }
+ 
+ bool skippy_build_guarded_stage_slice_plan(
+diff --git a/src/skippy/state_effects.cpp b/src/skippy/state_effects.cpp
+index 4b5100dee..5c15164f1 100644
+--- a/src/skippy/state_effects.cpp
++++ b/src/skippy/state_effects.cpp
+@@ -301,7 +301,12 @@ bool skippy_infer_state_effects(
+ 
+     std::unordered_map<const ggml_tensor *, int32_t> positions;
+     for (int32_t index = 0; index < ggml_graph_n_nodes(const_cast<ggml_cgraph *>(graph)); ++index) {
+-        positions.emplace(ggml_graph_node(const_cast<ggml_cgraph *>(graph), index), index);
++        const ggml_tensor * node = ggml_graph_node(const_cast<ggml_cgraph *>(graph), index);
++        if (node == nullptr) {
++            error = "state inference graph contains a null node";
++            return false;
++        }
++        positions.emplace(node, index);
+     }
+ 
+     // A raw-embedding entry is a graph leaf, before every executable node.
+diff --git a/src/skippy/tests/selection_memo_regression.h b/src/skippy/tests/selection_memo_regression.h
+new file mode 100644
+index 000000000..49e5ca442
+--- /dev/null
++++ b/src/skippy/tests/selection_memo_regression.h
+@@ -0,0 +1,123 @@
++#pragma once
++
++// Included after semantic_fixture by stage_slice_plan.cpp.
++static bool same_selection(const skippy_stage_slice_selection & a, const skippy_stage_slice_selection & b) {
++    if (std::tie(a.layer_start, a.layer_end, a.source_graph, a.node_indices,
++                a.activation_imports, a.activation_exports, a.request_inputs,
++                a.parameter_identities, a.graph_identity, a.slice_identity, a.node_identities,
++                a.activation_import_identities, a.activation_export_identities,
++                a.request_input_identities, a.state_effect_identities,
++                a.source_snapshot_identity, a.source_value_identities,
++                a.source_value_metadata_identities, a.source_value_references) !=
++            std::tie(b.layer_start, b.layer_end, b.source_graph, b.node_indices,
++                b.activation_imports, b.activation_exports, b.request_inputs,
++                b.parameter_identities, b.graph_identity, b.slice_identity, b.node_identities,
++                b.activation_import_identities, b.activation_export_identities,
++                b.request_input_identities, b.state_effect_identities,
++                b.source_snapshot_identity, b.source_value_identities,
++                b.source_value_metadata_identities, b.source_value_references) ||
++            a.state_effects.size() != b.state_effects.size()) {
++        return false;
++    }
++    for (size_t index = 0; index < a.state_effects.size(); ++index) {
++        const auto & x = a.state_effects[index];
++        const auto & y = b.state_effects[index];
++        if (std::tie(x.kind, x.access, x.layer, x.storage, x.effect_node, x.write_ordinal, x.residency) !=
++                std::tie(y.kind, y.access, y.layer, y.storage, y.effect_node, y.write_ordinal, y.residency)) {
++            return false;
++        }
++    }
++    return true;
++}
++
++static int check_selection_memo_regressions() {
++    using edit = std::function<void(semantic_fixture &)>;
++    struct regression { const char * name; edit prepare; edit mutate; };
++    const edit unchanged = [](semantic_fixture &) {};
++    const edit unused_parameter = [](semantic_fixture & f) {
++        auto * unused = ggml_new_tensor_1d(f.context.get(), GGML_TYPE_F32, 4);
++        f.parameters.push_back({unused, "unused"});
++    };
++    const edit alias_parameter = [](semantic_fixture & f) {
++        f.parameters[0].tensor = ggml_view_1d(f.context.get(), f.parameter, 4, 0);
++    };
++    const edit constant_leaf = [](semantic_fixture & f) {
++        auto * constant = ggml_new_tensor_1d(f.context.get(), GGML_TYPE_F32, 4);
++        f.side->src[0] = constant;
++        f.graph->leafs[f.graph->n_leafs++] = constant;
++    };
++    const regression cases[] = {
++        {"unchanged cache hit", unchanged, unchanged},
++        {"role swap", unchanged, [](semantic_fixture & f) {
++            f.parameters.push_back({f.request, "tokens"}); f.requests.clear();
++        }},
++        {"external parameter flags", unchanged, [](semantic_fixture & f) { f.parameter->flags |= GGML_TENSOR_FLAG_INPUT; }},
++        {"request flags", unchanged, [](semantic_fixture & f) { f.request->flags &= ~GGML_TENSOR_FLAG_INPUT; }},
++        {"unused binding flags", unused_parameter, [](semantic_fixture & f) {
++            const_cast<ggml_tensor *>(f.parameters.back().tensor)->flags |= GGML_TENSOR_FLAG_INPUT;
++        }},
++        {"canonical binding flags", alias_parameter, [](semantic_fixture & f) { f.parameter->flags |= GGML_TENSOR_FLAG_INPUT; }},
++        {"bound alias flags", alias_parameter, [](semantic_fixture & f) {
++            const_cast<ggml_tensor *>(f.parameters[0].tensor)->flags |= GGML_TENSOR_FLAG_INPUT;
++        }},
++        {"external leaf dimensions", unchanged, [](semantic_fixture & f) { f.parameter->ne[0] = 8; }},
++        {"external leaf strides", unchanged, [](semantic_fixture & f) { f.parameter->nb[1] *= 2; }},
++        {"state storage metadata", unchanged, [](semantic_fixture & f) { f.state->flags |= GGML_TENSOR_FLAG_OUTPUT; }},
++        {"external alias view", alias_parameter, [](semantic_fixture & f) {
++            const_cast<ggml_tensor *>(f.parameters[0].tensor)->view_offs = sizeof(float);
++        }},
++        {"graph order", unchanged, [](semantic_fixture & f) { f.graph->order = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT; }},
++        {"constant leaf membership", constant_leaf, [](semantic_fixture & f) { --f.graph->n_leafs; }},
++        {"constant leaf flags", constant_leaf, [](semantic_fixture & f) { f.side->src[0]->flags |= GGML_TENSOR_FLAG_INPUT; }},
++        {"constant leaf buffer", constant_leaf, [](semantic_fixture & f) {
++            // A non-null marker is sufficient for classification; no buffer API is called.
++            f.side->src[0]->buffer = reinterpret_cast<ggml_backend_buffer_t>(f.state);
++        }},
++        {"null node", unchanged, [](semantic_fixture & f) { f.graph->nodes[0] = nullptr; }},
++        {"duplicate node", unchanged, [](semantic_fixture & f) { f.graph->nodes[1] = f.graph->nodes[0]; }},
++        {"forward dependency", unchanged, [](semantic_fixture & f) { f.entry->src[0] = f.exit_1; }},
++        {"cyclic external view", alias_parameter, [](semantic_fixture & f) {
++            auto * alias = const_cast<ggml_tensor *>(f.parameters[0].tensor); alias->view_src = alias;
++        }},
++        {"boundary dependency", unchanged, [](semantic_fixture & f) { f.boundaries[0].tensor = f.parameter; }},
++        {"binding identity bytes", unused_parameter, [](semantic_fixture & f) {
++            f.parameters[0].identity = std::string("weight.shared\0unused", 20);
++            f.parameters[1].identity = "different";
++        }},
++    };
++    for (const auto & test : cases) {
++        semantic_fixture fixture(test.name);
++        test.prepare(fixture);
++        auto select = [&](skippy_stage_slice_selection & selection, std::string & error) {
++            return skippy_select_stage_slice(fixture.graph, fixture.boundaries, fixture.effects,
++                    fixture.parameters, fixture.requests, 2, 0, 1, selection, error, fixture.exit_1);
++        };
++        skippy_stage_slice_selection warm, cached, fresh;
++        std::string error, cached_error, fresh_error;
++        if (!select(warm, error)) {
++            std::fprintf(stderr, "memo %s warmup failed: %s\n", test.name, error.c_str());
++            return 92;
++        }
++        const auto key = skippy_stage_slice_memo_key(fixture.graph, fixture.boundaries,
++                fixture.effects, fixture.parameters, fixture.requests, 2, 0, 1, fixture.exit_1);
++        const auto * recalled = skippy_recall_stage_slice(key);
++        if (key.empty() || recalled == nullptr || !same_selection(warm, *recalled)) {
++            std::fprintf(stderr, "memo %s did not retain the warmed selection\n", test.name);
++            return 94;
++        }
++        test.mutate(fixture);
++        const bool cached_ok = select(cached, cached_error);
++        bool fresh_ok = false;
++        // A new thread has an empty thread-local memo while retaining exactly the
++        // same graph/tensor addresses and metadata as the warmed caller.
++        std::thread cold([&]() { fresh_ok = select(fresh, fresh_error); });
++        cold.join();
++        if (cached_ok != fresh_ok || (cached_ok && !same_selection(cached, fresh))) {
++            std::fprintf(stderr, "memo %s differs: cached=%d fresh=%d cached_error=%s fresh_error=%s\n",
++                    test.name, cached_ok, fresh_ok, cached_error.c_str(), fresh_error.c_str());
++            return 93;
++        }
++        std::fprintf(stderr, "PASS memo %s: cached=fresh=%d\n", test.name, cached_ok);
++    }
++    return 0;
++}
+diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
+index 35de1e36c..591d00d96 100644
+--- a/src/skippy/tests/stage_slice_plan.cpp
++++ b/src/skippy/tests/stage_slice_plan.cpp
+@@ -1,3 +1,7 @@
++#include "skippy/selection_memo.h"
++#include <tuple>
++#include <thread>
++#include <functional>
+ #include "ggml.h"
+ #include "ggml-backend.h"
+ #include "ggml-cpu.h"
+@@ -1098,6 +1102,8 @@ static int check_mtp_stage_layer_count() {
+     return 0;
+ }
+ 
++#include "selection_memo_regression.h"
++
+ static int check_auxiliary_graph_parameter_closure() {
+     ggml_init_params params = {
+         ggml_tensor_overhead() * 32 + ggml_graph_overhead_custom(32, false), nullptr, true,
+@@ -1136,6 +1142,7 @@ int main() {
+     if (!result) { result = check_semantic_identities(); }
+     if (!result) { result = check_tied_parameter_identity(); }
+     if (!result) { result = check_middle_stage_selection(); }
++    if (!result) { result = check_selection_memo_regressions(); }
+     if (!result) { result = check_inferred_registered_state_write(); }
+     if (!result) { result = check_explicit_final_output(); }
+     if (!result) { result = check_state_preparation_execution(false, false); }
+-- 
+2.54.0 (Apple Git-157)
+
