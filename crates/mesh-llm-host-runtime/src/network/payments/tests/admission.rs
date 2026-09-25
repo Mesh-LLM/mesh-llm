@@ -43,8 +43,7 @@ async fn sequential_admission_waits_for_terminal_output_payment() -> Result<()> 
             .is_err()
     );
     assert!(!service.ledger.has_outstanding_payment("other")?);
-    let wait =
-        super::super::server::await_prior_settlement(&service, "peer", Duration::from_secs(2));
+    let wait = service.await_prior_settlement("peer", Duration::from_secs(2));
     tokio::pin!(wait);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), &mut wait)
@@ -102,7 +101,8 @@ async fn admission_deadline_preserves_unpaid_debt() -> Result<()> {
         paid: false,
     })?;
     assert!(
-        super::super::server::await_prior_settlement(&service, "peer", Duration::from_millis(20))
+        service
+            .await_prior_settlement("peer", Duration::from_millis(20))
             .await
             .is_err()
     );
@@ -120,13 +120,15 @@ async fn admission_deadline_preserves_unpaid_debt() -> Result<()> {
 async fn recovery_reports_pending_until_input_settles() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let network = Arc::new(Network::default());
-    let service = PaymentService::with_provider(
+    let service = Arc::new(PaymentService::with_provider(
         directory.path(),
         Arc::new(TestWallet {
             owner: 1,
             network: network.clone(),
         }),
-    )?;
+    )?);
+    let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+    let payments = super::super::client::Payments::attach_for_tests(&node, service.clone()).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let price = Pricing {
         input_msat_per_million: 1,
@@ -157,7 +159,7 @@ async fn recovery_reports_pending_until_input_settles() -> Result<()> {
             payment.claiming = true;
         }
         let (mut writer, mut reader) = tokio::io::duplex(8192);
-        super::super::server::recover(&service, &id, &mut writer).await?;
+        super::super::server::recover(&payments, &id, &mut writer).await?;
         assert!(matches!(wire::read(&mut reader).await?, Frame::Pending));
         assert_eq!(service.ledger.receivables(Some(&id))?.len(), 1);
     }
@@ -171,7 +173,7 @@ async fn recovery_reports_pending_until_input_settles() -> Result<()> {
         .status = PaymentStatus::Succeeded;
     for _ in 0..2 {
         let (mut writer, mut reader) = tokio::io::duplex(8192);
-        super::super::server::recover(&service, &id, &mut writer).await?;
+        super::super::server::recover(&payments, &id, &mut writer).await?;
         assert!(matches!(
             wire::read(&mut reader).await?,
             Frame::OutputInvoice { tokens: 3, .. }

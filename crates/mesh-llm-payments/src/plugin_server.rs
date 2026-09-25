@@ -9,8 +9,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use mesh_llm_payments_types::contract::{
-    AuthorizeRequest, CancelRequest, Empty, FinishRequest, IdRequest, OpError, PayInputRequest,
-    RoutingBudgetRequest, SettleOutputRequest,
+    ArrivalResponse, AuthorizeRequest, CancelRequest, Empty, FinishRequest, IdRequest,
+    InvoiceRequest, OpError, OutputReceivableResponse, PayInputRequest, RecordDeliveredRequest,
+    RoutingBudgetRequest, ServeBeginRequest, ServeInputInvoiceRequest, SettleOutputRequest,
 };
 use mesh_llm_plugin::{
     InternalRpcPlugin, InternalRpcPluginBuilder, OperationRouter, PluginMetadata, PluginResult,
@@ -141,7 +142,94 @@ fn operation_router(source: ServiceSource) -> OperationRouter {
             tokio::spawn(async move { service.pay_input(request).await }).await?
         },
     );
+    add_serving_ops(&mut router, &source);
     router
+}
+
+fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
+    add_op(
+        router,
+        source,
+        ops::SERVE_BEGIN,
+        "Check prices, wait out prior debt and open serving.",
+        |service, request: ServeBeginRequest| async move {
+            service.serve_begin(request).await.map(|()| Empty {})
+        },
+    );
+    add_op(
+        router,
+        source,
+        ops::SERVE_INPUT_INVOICE,
+        "Fix the output allowance and issue the input invoice.",
+        |service, request: ServeInputInvoiceRequest| async move {
+            service.serve_input_invoice(request).await
+        },
+    );
+    add_op(
+        router,
+        source,
+        ops::AWAIT_ARRIVAL,
+        "Wait for receiver-side evidence of an input payment.",
+        |service, request: InvoiceRequest| async move {
+            let claiming = service
+                .arrival(&request.invoice, crate::lifetimes::INPUT_ARRIVAL_WAIT)
+                .await?;
+            Ok(ArrivalResponse { claiming })
+        },
+    );
+    add_op(
+        router,
+        source,
+        ops::SETTLE_RECEIVED,
+        "Wait for an invoice to settle and record it received.",
+        |service, request: InvoiceRequest| async move {
+            // Durable settlement continues even if the caller goes away.
+            tokio::spawn(async move { service.settle_received(&request.invoice).await }).await??;
+            Ok(Empty {})
+        },
+    );
+    add_op(
+        router,
+        source,
+        ops::RECORD_DELIVERED,
+        "Raise the delivered-token watermark.",
+        |service, request: RecordDeliveredRequest| async move {
+            service
+                .ledger
+                .record_delivered_tokens(&request.id, request.tokens)
+                .map(|()| Empty {})
+        },
+    );
+    add_op(
+        router,
+        source,
+        ops::SERVE_FINISH,
+        "Close serving accounting.",
+        |service, request: IdRequest| async move {
+            service
+                .ledger
+                .finish_serving(&request.id)
+                .map(|()| Empty {})
+        },
+    );
+    add_op(
+        router,
+        source,
+        ops::OUTPUT_RECEIVABLE,
+        "Issue or return the output invoice.",
+        |service, request: IdRequest| async move {
+            Ok(OutputReceivableResponse {
+                output: service.output_invoice(&request.id).await?,
+            })
+        },
+    );
+    add_op(
+        router,
+        source,
+        ops::SERVE_RECOVER,
+        "Answer a payer's recovery probe.",
+        |service, request: IdRequest| async move { service.serve_recover(&request.id).await },
+    );
 }
 
 /// Registers one operation: decode `Req`, open the engine, run `handler`.

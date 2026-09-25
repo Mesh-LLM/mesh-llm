@@ -33,6 +33,24 @@ pub mod ops {
     pub const CANCEL: &str = "cancel";
     /// Pay the seller's input invoice for an authorized request.
     pub const PAY_INPUT: &str = "pay_input";
+
+    // Seller (serving) side.
+    /// Check prices, wait out the peer's prior debt, and open serving.
+    pub const SERVE_BEGIN: &str = "serve_begin";
+    /// Fix the output allowance and issue the input invoice.
+    pub const SERVE_INPUT_INVOICE: &str = "serve_input_invoice";
+    /// Wait for the earliest receiver-side evidence of an invoice payment.
+    pub const AWAIT_ARRIVAL: &str = "await_arrival";
+    /// Wait for an invoice to settle and record it received.
+    pub const SETTLE_RECEIVED: &str = "settle_received";
+    /// Raise the delivered-token watermark of a serving request.
+    pub const RECORD_DELIVERED: &str = "record_delivered";
+    /// Close a serving request's accounting.
+    pub const SERVE_FINISH: &str = "serve_finish";
+    /// Issue (or return) the output invoice of a finished serving request.
+    pub const OUTPUT_RECEIVABLE: &str = "output_receivable";
+    /// Answer a payer's recovery probe for a serving request.
+    pub const SERVE_RECOVER: &str = "serve_recover";
 }
 
 /// Error body of a failed operation.
@@ -104,6 +122,69 @@ pub struct CancelRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PayInputRequest {
+    pub terms: RequestTerms,
+    pub invoice: mesh_llm_wallet::invoice::Invoice,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServeBeginRequest {
+    pub id: String,
+    pub peer: String,
+    pub model: String,
+    pub pricing: crate::pricing::Pricing,
+    pub max_output: u64,
+    /// How long to wait for the peer's prior debt before refusing.
+    pub prior_settlement_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServeInputInvoiceRequest {
+    pub id: String,
+    pub peer: String,
+    pub model: String,
+    pub pricing: crate::pricing::Pricing,
+    pub input_tokens: u64,
+    pub max_output_tokens: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvoiceRequest {
+    pub invoice: mesh_llm_wallet::invoice::Invoice,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ArrivalResponse {
+    /// True when a transient claiming state was seen; false when the wait
+    /// ended on a terminal status. Diagnostic only.
+    pub claiming: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecordDeliveredRequest {
+    pub id: String,
+    pub tokens: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OutputInvoice {
+    pub tokens: u64,
+    pub invoice: mesh_llm_wallet::invoice::Invoice,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct OutputReceivableResponse {
+    pub output: Option<OutputInvoice>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ServeRecoverResponse {
+    Pending,
+    Complete { output: Option<OutputInvoice> },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InputInvoiceResponse {
     pub terms: RequestTerms,
     pub invoice: mesh_llm_wallet::invoice::Invoice,
 }

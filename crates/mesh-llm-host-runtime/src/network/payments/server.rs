@@ -4,15 +4,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
-use mesh_llm_payments::{
-    service::PaymentService,
-    wire::{self, Frame},
+use mesh_llm_payments_types::contract::{
+    Empty, IdRequest, InvoiceRequest, OutputReceivableResponse, ServeBeginRequest,
+    ServeRecoverResponse, ops,
 };
+use mesh_llm_payments_types::wire::{self, Frame};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 use super::{
+    client::Payments,
     gate::{GateEvent, InvoiceGate},
     request::PaidRequest,
 };
@@ -50,9 +52,9 @@ async fn serve_inner(
     targets: &ModelTargets,
 ) -> Result<()> {
     let frame = tokio::time::timeout(Duration::from_secs(10), wire::read(reader)).await??;
-    let service = node.payment_service().await?;
+    let payments = Payments::for_node(node).await?;
     if let Frame::Recover { id } = frame {
-        return recover(&service, &id, writer).await;
+        return recover(&payments, &id, writer).await;
     }
     let Frame::Request {
         id,
@@ -66,10 +68,6 @@ async fn serve_inner(
     uuid::Uuid::parse_str(&id).context("invalid request ID")?;
     let mut request = PaidRequest::parse(&http)?;
     ensure!(request.model == model, "model mismatch");
-    ensure!(
-        service.ledger.pricing()?.get(&model) == Some(&pricing),
-        "seller prices changed"
-    );
     // Prices and offers use the public model ID; the local backend is
     // registered, and must be addressed, under its internal name.
     let backend_model =
@@ -83,21 +81,26 @@ async fn serve_inner(
             _ => None,
         })
         .context("paid model must be served locally")?;
-    // Wake the receiving wallet during prefill so the input invoice doesn't
-    // wait on a cold start.
-    drop(service.prefetch_balance());
+    // Checks the seller's current price, wakes the receiving wallet during
+    // prefill, and waits out this peer's prior debt before opening serving.
     let peer = peer.to_string();
-    await_prior_settlement(&service, &peer, Duration::from_secs(30)).await?;
-    service.ledger.begin_serving(
-        &id,
-        &peer,
-        &pricing,
-        u64::from(request.max_tokens.unwrap_or(u32::MAX)),
-    )?;
+    let _: Empty = payments
+        .call(
+            ops::SERVE_BEGIN,
+            &ServeBeginRequest {
+                id: id.clone(),
+                peer: peer.clone(),
+                model: model.clone(),
+                pricing: pricing.clone(),
+                max_output: u64::from(request.max_tokens.unwrap_or(u32::MAX)),
+                prior_settlement_ms: PRIOR_SETTLEMENT_WAIT.as_millis() as u64,
+            },
+        )
+        .await?;
     let _instance = node.begin_runtime_instance_request(port).await?;
     let (events, mut receiver) = mpsc::unbounded_channel();
     let gate = Arc::new(InvoiceGate {
-        service: service.clone(),
+        payments: payments.clone(),
         request_id: id.clone(),
         peer: peer.clone(),
         model,
@@ -109,33 +112,38 @@ async fn serve_inner(
         cancelled: Arc::new(AtomicBool::new(false)),
         started: AtomicBool::new(false),
         output_tokens: AtomicU64::new(0),
+        delivered_tokens: AtomicU64::new(0),
+        flushed_tokens: AtomicU64::new(0),
         invoice_expires_at_ms: Arc::new(AtomicU64::new(0)),
         input_settlement: Arc::new(tokio::sync::Mutex::new(None)),
     });
     let _serving_guard = ServingGuard { gate: gate.clone() };
-    let backend_id = uuid::Uuid::new_v4();
-    let _registration =
-        skippy_server::frontend::generation_gate::register(*backend_id.as_bytes(), gate.clone())
-            .map_err(|_| anyhow::anyhow!("could not install payment gate"))?;
-    let mut backend = TcpStream::connect(("127.0.0.1", port)).await?;
-    backend
-        .write_all(&request.backend_http(&backend_id.to_string())?)
-        .await?;
-    let transport_alive = stream_output(reader, writer, &mut backend, &gate, &mut receiver).await?;
-    drop(backend);
-    service.ledger.finish_serving(&id)?;
-    // Generation is over. Release the runtime's in-flight slot and the gate
-    // registration before waiting on the payer's wallet: those waits can last
+    let generated = generate(reader, writer, port, &request, &gate, &mut receiver).await;
+    // Close serving on every path, before anything else can observe this
+    // peer, so an interrupted request's delivered output counts as debt.
+    let closed = gate.close_serving().await;
+    let transport_alive = generated?;
+    closed?;
+    // Generation is over. Release the runtime's in-flight slot (the gate
+    // registration ended with generation) before waiting on the payer's wallet: those waits can last
     // up to the output invoice lifetime, and the debt they settle is already
     // durable, so recovery finishes it if this task ends first.
-    drop(_registration);
     drop(_instance);
     // Delivery opened on receiver-side HTLC arrival; the input payment must
     // still be recorded as settled before this request is complete.
     gate.await_input_settlement().await?;
-    if gate.authorized.load(Ordering::Acquire)
-        && let Some(receipt) = service.output_receivable(&id).await?
-    {
+    let output = if gate.authorized.load(Ordering::Acquire) {
+        payments
+            .call::<_, OutputReceivableResponse>(
+                ops::OUTPUT_RECEIVABLE,
+                &IdRequest { id: id.clone() },
+            )
+            .await?
+            .output
+    } else {
+        None
+    };
+    if let Some(receipt) = output {
         if transport_alive {
             wire::write(
                 writer,
@@ -147,15 +155,40 @@ async fn serve_inner(
             )
             .await?;
         }
-        service.wait_received(&receipt.invoice).await?;
-        service
-            .ledger
-            .mark_received(&receipt.invoice.payment_hash)?;
+        let _: Empty = payments
+            .call(
+                ops::SETTLE_RECEIVED,
+                &InvoiceRequest {
+                    invoice: receipt.invoice,
+                },
+            )
+            .await?;
     }
     if transport_alive {
         wire::write(writer, &Frame::Complete).await?;
     }
     Ok(())
+}
+
+/// Runs the backend under the registered payment gate until its output is
+/// delivered or the payer goes away; the registration ends with generation.
+async fn generate(
+    reader: &mut (impl AsyncRead + Unpin),
+    writer: &mut (impl AsyncWrite + Unpin),
+    port: u16,
+    request: &PaidRequest,
+    gate: &Arc<InvoiceGate>,
+    receiver: &mut mpsc::UnboundedReceiver<GateEvent>,
+) -> Result<bool> {
+    let backend_id = uuid::Uuid::new_v4();
+    let _registration =
+        skippy_server::frontend::generation_gate::register(*backend_id.as_bytes(), gate.clone())
+            .map_err(|_| anyhow::anyhow!("could not install payment gate"))?;
+    let mut backend = TcpStream::connect(("127.0.0.1", port)).await?;
+    backend
+        .write_all(&request.backend_http(&backend_id.to_string())?)
+        .await?;
+    stream_output(reader, writer, &mut backend, gate, receiver).await
 }
 
 async fn stream_output(
@@ -271,79 +304,37 @@ async fn deliver_output(
         unreachable!("output frame changed before delivery accounting");
     };
     let delivered_tokens = delivery.observe(&bytes)?;
-    gate.service
-        .ledger
-        .record_delivered_tokens(&gate.request_id, delivered_tokens)?;
+    gate.delivered_tokens
+        .fetch_max(delivered_tokens, Ordering::AcqRel);
+    if delivered_tokens.saturating_sub(gate.flushed_tokens.load(Ordering::Acquire))
+        >= DELIVERED_FLUSH_TOKENS
+    {
+        gate.flush_delivered().await?;
+    }
     Ok(true)
 }
 
-// A completed HTTP body can precede its trailing output payment. Wait before
-// starting another backend, without forgiving debt or granting additional credit.
-pub(super) async fn await_prior_settlement(
-    service: &PaymentService,
-    peer: &str,
-    deadline: Duration,
-) -> Result<()> {
-    tokio::time::timeout(deadline, async {
-        loop {
-            if !service.ledger.has_outstanding_payment(peer)? {
-                return Ok(());
-            }
-            refresh_receivables(service, peer).await?;
-            if !service.ledger.has_outstanding_payment(peer)? {
-                return Ok(());
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    })
-    .await
-    .context("prior payment settlement deadline exceeded")?
-}
+/// How long a new request waits for the same peer's prior debt to settle.
+const PRIOR_SETTLEMENT_WAIT: Duration = Duration::from_secs(30);
 
-async fn refresh_receivables(service: &PaymentService, peer: &str) -> Result<()> {
-    // Records paid input, or lapses abandoned zero-delivery input, so a
-    // slow or interrupted payment does not keep this peer blocked.
-    for id in service.ledger.unpaid_input_requests(peer)? {
-        service.input_received(&id).await?;
-    }
-    let unpaid = service.ledger.unpaid_invoices(peer)?;
-    if unpaid.is_empty() {
-        return Ok(());
-    }
-    let wallet = service.wallet().await?;
-    for invoice in unpaid {
-        if wallet
-            .lookup(&invoice.payment_hash)
-            .await?
-            .is_some_and(|p| {
-                p.inbound
-                    && p.payment_hash.as_deref() == Some(invoice.payment_hash.as_str())
-                    && p.status == mesh_llm_payments::wallet::PaymentStatus::Succeeded
-            })
-        {
-            service.ledger.mark_received(&invoice.payment_hash)?;
-        }
-    }
-    Ok(())
-}
+/// Delivered-token watermark writes are batched: the ledger is raised at
+/// least every this many tokens and always before serving closes, so a crash
+/// can under-record (never over-record) at most this many delivered tokens.
+const DELIVERED_FLUSH_TOKENS: u64 = 32;
 
 pub(super) async fn recover(
-    service: &PaymentService,
+    payments: &Payments,
     id: &str,
     writer: &mut (impl AsyncWrite + Unpin),
 ) -> Result<()> {
     uuid::Uuid::parse_str(id)?;
-    // The random request ID is a bearer recovery capability, allowing recovery
-    // when the client's ephemeral mesh identity changes after restart.
-    let (_, _, _, finished) = service.ledger.serving_account(id)?;
-    if !finished {
+    let response: ServeRecoverResponse = payments
+        .call(ops::SERVE_RECOVER, &IdRequest { id: id.into() })
+        .await?;
+    let ServeRecoverResponse::Complete { output } = response else {
         return wire::write(writer, &Frame::Pending).await;
-    }
-    let receipts = service.ledger.receivables(Some(id))?;
-    if receipts.iter().any(|r| r.segment == 0) && !service.input_received(id).await? {
-        return wire::write(writer, &Frame::Pending).await;
-    }
-    if let Some(receipt) = service.output_receivable(id).await? {
+    };
+    if let Some(receipt) = output {
         wire::write(
             writer,
             &Frame::OutputInvoice {
@@ -363,10 +354,11 @@ struct ServingGuard {
 impl Drop for ServingGuard {
     fn drop(&mut self) {
         self.gate.cancelled.store(true, Ordering::Release);
-        let _ = self
-            .gate
-            .service
-            .ledger
-            .finish_serving(&self.gate.request_id);
+        // Backstop for a cancelled serving task, which never reaches the
+        // awaited close; every other path has already closed serving.
+        let gate = self.gate.clone();
+        self.gate.runtime.spawn(async move {
+            let _ = gate.close_serving().await;
+        });
     }
 }

@@ -59,6 +59,7 @@ async fn expired_exchange() -> Result<()> {
         .payments
         .set(service.clone())
         .map_err(|_| anyhow::anyhow!("already initialized"))?;
+    crate::network::payments::node_ext::attach_payments_plugin(&provider).await?;
     let caller = Node::new_for_tests(NodeRole::Client).await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let mut targets = ModelTargets::default();

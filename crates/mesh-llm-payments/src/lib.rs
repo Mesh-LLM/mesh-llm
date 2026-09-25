@@ -14,6 +14,7 @@ pub mod operations;
 pub mod plugin_server;
 pub mod provisioning;
 pub mod service;
+pub mod serving;
 
 // Pure data types live in `mesh-llm-payments-types` so mesh core can depend on
 // them without linking the ledger; re-exported here under their old paths.

@@ -306,6 +306,7 @@ async fn paid_exchange(
         .payments
         .set(provider_service.clone())
         .map_err(|_| anyhow::anyhow!("service already initialized"))?;
+    crate::network::payments::node_ext::attach_payments_plugin(&provider).await?;
     let payer = Node::new_for_tests(NodeRole::Client).await?;
     let payer_payments =
         super::client::Payments::attach_for_tests(&payer, payer_service.clone()).await?;

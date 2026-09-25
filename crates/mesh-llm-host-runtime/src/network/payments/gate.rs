@@ -2,13 +2,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use anyhow::{Context, Result, ensure};
-use mesh_llm_payments::{
-    ledger::{RequestTerms, receivables::Receivable},
-    lifetimes::{INPUT_ARRIVAL_WAIT, INPUT_INVOICE_EXPIRY_SECS, PRE_PAYMENT_OUTPUT_TOKENS},
+use mesh_llm_payments_types::{
+    contract::{
+        ArrivalResponse, Empty, IdRequest, InputInvoiceResponse, InvoiceRequest,
+        RecordDeliveredRequest, ServeInputInvoiceRequest, ops,
+    },
+    lifetimes::{INPUT_ARRIVAL_WAIT, PRE_PAYMENT_OUTPUT_TOKENS},
     pricing::Pricing,
-    service::{Arrival, PaymentService},
     wire::Frame,
 };
+
+use super::client::Payments;
 use skippy_server::frontend::generation_gate::GenerationGate;
 use tokio::sync::mpsc;
 
@@ -19,7 +23,7 @@ pub(super) enum GateEvent {
 }
 
 pub(super) struct InvoiceGate {
-    pub service: Arc<PaymentService>,
+    pub payments: Payments,
     pub request_id: String,
     pub peer: String,
     pub model: String,
@@ -31,6 +35,10 @@ pub(super) struct InvoiceGate {
     pub cancelled: Arc<AtomicBool>,
     pub started: AtomicBool,
     pub output_tokens: AtomicU64,
+    /// Delivered-token watermark observed by the host, and the part of it
+    /// already written to the ledger. Writes are batched by the server.
+    pub delivered_tokens: AtomicU64,
+    pub flushed_tokens: AtomicU64,
     /// Expiry of the input invoice once created (0 before). The decode pause
     /// is bounded by this, not by when the pause began.
     pub invoice_expires_at_ms: Arc<AtomicU64>,
@@ -43,6 +51,41 @@ pub(super) struct InvoiceGate {
 impl InvoiceGate {
     /// Wait for the input payment the delivery gate opened on to settle.
     /// Between `claiming` and this point the provider carries the risk.
+    /// Write the delivered-token watermark to the ledger if it moved.
+    pub(super) async fn flush_delivered(&self) -> Result<()> {
+        let tokens = self.delivered_tokens.load(Ordering::Acquire);
+        if tokens <= self.flushed_tokens.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let _: Empty = self
+            .payments
+            .call(
+                ops::RECORD_DELIVERED,
+                &RecordDeliveredRequest {
+                    id: self.request_id.clone(),
+                    tokens,
+                },
+            )
+            .await?;
+        self.flushed_tokens.fetch_max(tokens, Ordering::AcqRel);
+        Ok(())
+    }
+
+    /// Flush the watermark, then close serving accounting. Idempotent.
+    pub(super) async fn close_serving(&self) -> Result<()> {
+        let flushed = self.flush_delivered().await;
+        let _: Empty = self
+            .payments
+            .call(
+                ops::SERVE_FINISH,
+                &IdRequest {
+                    id: self.request_id.clone(),
+                },
+            )
+            .await?;
+        flushed
+    }
+
     pub(super) async fn await_input_settlement(&self) -> Result<()> {
         let Some(handle) = self.input_settlement.lock().await.take() else {
             return Ok(());
@@ -60,21 +103,16 @@ impl InvoiceGate {
             "backend exceeded output allowance"
         );
         ensure!(input > 0 && input <= 131_072, "paid input limit exceeded");
-        self.service
-            .ledger
-            .resolve_serving_output_allowance(&self.request_id, u64::from(output))?;
-        let amount = self.pricing.input_charge(input as u64)?;
-        let max_total_msat = self.pricing.request_cap_msat(amount, u64::from(output))?;
+        // The output allowance is fixed durably by the engine when it issues
+        // the input invoice; a refusal there fails authorization.
         Ok(Authorization {
-            service: self.service.clone(),
+            payments: self.payments.clone(),
             request_id: self.request_id.clone(),
             peer: self.peer.clone(),
             model: self.model.clone(),
             pricing: self.pricing.clone(),
             input: input as u64,
             output,
-            amount,
-            max_total_msat,
             events: self.events.clone(),
             authorized: self.authorized.clone(),
             cancelled: self.cancelled.clone(),
@@ -90,10 +128,13 @@ impl InvoiceGate {
             // span is the payment-added delay before buffered output may be
             // released, not a decode stall.
             let result = authorization.authorize().await;
-            let opened_on = result
-                .as_ref()
-                .ok()
-                .map(|arrival: &Arrival| arrival.as_str());
+            let opened_on = result.as_ref().ok().map(|arrival: &ArrivalResponse| {
+                if arrival.claiming {
+                    "claiming"
+                } else {
+                    "terminal"
+                }
+            });
             let opened = result.is_ok();
             tracing::debug!(
                 target: "mesh_llm::payments::timing",
@@ -116,15 +157,13 @@ impl InvoiceGate {
 }
 
 struct Authorization {
-    service: Arc<PaymentService>,
+    payments: Payments,
     request_id: String,
     peer: String,
     model: String,
     pricing: Pricing,
     input: u64,
     output: u32,
-    amount: u64,
-    max_total_msat: u64,
     events: mpsc::UnboundedSender<GateEvent>,
     authorized: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
@@ -134,12 +173,20 @@ struct Authorization {
 }
 
 impl Authorization {
-    async fn authorize(&self) -> Result<Arrival> {
-        let invoice = self
-            .service
-            .wallet()
-            .await?
-            .create_invoice(Some(self.amount), INPUT_INVOICE_EXPIRY_SECS)
+    async fn authorize(&self) -> Result<ArrivalResponse> {
+        let InputInvoiceResponse { terms, invoice } = self
+            .payments
+            .call(
+                ops::SERVE_INPUT_INVOICE,
+                &ServeInputInvoiceRequest {
+                    id: self.request_id.clone(),
+                    peer: self.peer.clone(),
+                    model: self.model.clone(),
+                    pricing: self.pricing.clone(),
+                    input_tokens: self.input,
+                    max_output_tokens: u64::from(self.output),
+                },
+            )
             .await?;
         self.invoice_expires_at_ms
             .store(invoice.expires_at_ms, Ordering::Release);
@@ -149,28 +196,9 @@ impl Authorization {
             ms = self.stalled.elapsed().as_millis() as u64,
             "receiver invoice"
         );
-        self.service.ledger.record_receivable(&Receivable {
-            request_id: self.request_id.clone(),
-            peer: self.peer.clone(),
-            segment: 0,
-            invoice: invoice.clone(),
-            tokens: self.input,
-            paid: false,
-        })?;
         self.events
             .send(GateEvent::InputInvoice(Box::new(Frame::InputInvoice {
-                terms: RequestTerms {
-                    exchange_id: None,
-                    id: self.request_id.clone(),
-                    peer: self.peer.clone(),
-                    payee: Some(invoice.payee.clone()),
-                    model: self.model.clone(),
-                    pricing: self.pricing.clone(),
-                    input_tokens: self.input,
-                    max_output_tokens: u64::from(self.output),
-                    max_total_msat: self.max_total_msat,
-                    expires_at_ms: invoice.expires_at_ms,
-                },
+                terms,
                 invoice: invoice.clone(),
             })))
             .context("payment transport closed")?;
@@ -180,21 +208,22 @@ impl Authorization {
         // finishes. The wait lasts exactly as long as the invoice is payable:
         // giving up any earlier would leave a window where this node still
         // claims a late HTLC after the buffered output has been discarded.
+        let wait = InvoiceRequest {
+            invoice: invoice.clone(),
+        };
         let arrival = tokio::select! {
-            claiming = self.service.wait_arrival(&invoice, INPUT_ARRIVAL_WAIT) => match claiming {
-                Ok(arrival) => arrival,
-                Err(error) => return Err(error),
-            },
+            arrival = self.payments.call::<_, ArrivalResponse>(ops::AWAIT_ARRIVAL, &wait) => arrival?,
             _ = async {
                 while !self.cancelled.load(Ordering::Acquire) {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             } => anyhow::bail!("request cancelled"),
         };
-        let service = self.service.clone();
+        let payments = self.payments.clone();
         let settlement = tokio::spawn(async move {
-            service.wait_received(&invoice).await?;
-            service.ledger.mark_received(&invoice.payment_hash)?;
+            let _: Empty = payments
+                .call(ops::SETTLE_RECEIVED, &InvoiceRequest { invoice })
+                .await?;
             anyhow::Ok(())
         });
         *self.input_settlement.lock().await = Some(settlement);
@@ -294,10 +323,10 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    fn gate(dir: &std::path::Path) -> Arc<InvoiceGate> {
+    async fn gate() -> Arc<InvoiceGate> {
         let (events, _receiver) = mpsc::unbounded_channel();
         Arc::new(InvoiceGate {
-            service: Arc::new(PaymentService::open(dir).unwrap()),
+            payments: Payments::unavailable_for_tests().await.unwrap(),
             request_id: uuid::Uuid::new_v4().to_string(),
             peer: "peer".into(),
             model: "test".into(),
@@ -313,6 +342,8 @@ mod tests {
             cancelled: Arc::new(AtomicBool::new(false)),
             started: AtomicBool::new(false),
             output_tokens: AtomicU64::new(0),
+            delivered_tokens: AtomicU64::new(0),
+            flushed_tokens: AtomicU64::new(0),
             invoice_expires_at_ms: Arc::new(AtomicU64::new(0)),
             input_settlement: Arc::new(tokio::sync::Mutex::new(None)),
         })
@@ -333,8 +364,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn decode_runs_ahead_to_the_cap_then_pauses_until_paid() {
-        let dir = tempfile::tempdir().unwrap();
-        let gate = gate(dir.path());
+        let gate = gate().await;
         let decoding = gate.clone();
         let task =
             tokio::task::spawn_blocking(move || decode(&decoding, 20, 8, Duration::from_secs(30)));
@@ -357,8 +387,7 @@ mod tests {
     async fn cancellation_ends_a_paused_decode() {
         // Authorization failure and invoice expiry reach the generation
         // thread this way: the serving task's guard sets `cancelled`.
-        let dir = tempfile::tempdir().unwrap();
-        let gate = gate(dir.path());
+        let gate = gate().await;
         let decoding = gate.clone();
         let task =
             tokio::task::spawn_blocking(move || decode(&decoding, 20, 4, Duration::from_secs(30)));
@@ -374,8 +403,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_unresolved_pause_gives_up_and_cancels() {
-        let dir = tempfile::tempdir().unwrap();
-        let gate = gate(dir.path());
+        let gate = gate().await;
         let decoding = gate.clone();
         let started = Instant::now();
         let outcome = tokio::task::spawn_blocking(move || {
@@ -392,8 +420,7 @@ mod tests {
     async fn slow_invoice_creation_does_not_shorten_the_payment_window() {
         // Invoice created after the pause began, still payable for a while:
         // the pause must outlive the pre-invoice bound, then resume on payment.
-        let dir = tempfile::tempdir().unwrap();
-        let gate = gate(dir.path());
+        let gate = gate().await;
         let decoding = gate.clone();
         let task = tokio::task::spawn_blocking(move || {
             decode(&decoding, 20, 3, Duration::from_millis(100))
@@ -415,8 +442,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn pause_gives_up_after_the_invoice_deadline() {
-        let dir = tempfile::tempdir().unwrap();
-        let gate = gate(dir.path());
+        let gate = gate().await;
         let slack = PRE_PAYMENT_PAUSE_SLACK.as_millis() as u64;
         gate.invoice_expires_at_ms.store(
             mesh_llm_payments::now_ms().saturating_sub(slack) + 150,
@@ -437,8 +463,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn paid_before_the_cap_never_pauses() {
-        let dir = tempfile::tempdir().unwrap();
-        let gate = gate(dir.path());
+        let gate = gate().await;
         gate.authorized.store(true, Ordering::Release);
         let decoding = gate.clone();
         let started = Instant::now();
@@ -452,7 +477,10 @@ mod tests {
 
     #[test]
     fn production_gate_pauses_well_inside_the_buffer_and_invoice_lifetime() {
-        assert_eq!(INPUT_INVOICE_EXPIRY_SECS, 60);
+        assert_eq!(
+            mesh_llm_payments_types::lifetimes::INPUT_INVOICE_EXPIRY_SECS,
+            60
+        );
         assert_eq!(INPUT_ARRIVAL_WAIT, Duration::from_secs(60));
     }
 }
