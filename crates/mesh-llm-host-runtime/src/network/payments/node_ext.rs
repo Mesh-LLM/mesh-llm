@@ -64,3 +64,78 @@ impl Node {
         })
     }
 }
+
+/// In-process builtins this node supplies to its plugin manager: the payments
+/// engine as `payments.v1`, opened lazily through this node's slot.
+pub(crate) fn in_process_plugins(node: &Node) -> crate::plugin::InProcessPlugins {
+    let node = node.clone();
+    let source: mesh_llm_payments::plugin_server::ServiceSource = Arc::new(move || {
+        let node = node.clone();
+        Box::pin(async move { node.payment_service().await })
+    });
+    let runner: crate::plugin::InProcessPluginRunner = Arc::new(move |stream| {
+        let plugin = mesh_llm_payments::plugin_server::payments_plugin(
+            crate::plugin::PAYMENTS_PLUGIN_ID,
+            crate::VERSION,
+            Arc::clone(&source),
+        );
+        Box::pin(mesh_llm_plugin::PluginRuntime::run_with_stream(
+            plugin, stream,
+        ))
+    });
+    crate::plugin::InProcessPlugins::default().with(crate::plugin::PAYMENTS_PLUGIN_ID, runner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mesh_llm_payments::plugin_server::{CAPABILITY, ops};
+
+    #[tokio::test]
+    async fn payments_engine_is_served_in_process_by_capability() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        node.payments
+            .set(Arc::new(PaymentService::open(directory.path())?))
+            .map_err(|_| anyhow::anyhow!("already set"))?;
+        let specs = crate::plugin::ResolvedPlugins {
+            externals: vec![crate::plugin::in_process_builtin_spec(
+                crate::plugin::PAYMENTS_PLUGIN_ID,
+            )],
+            inactive: Vec::new(),
+        };
+        let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(8);
+        let manager = crate::plugin::PluginManager::start_with_in_process(
+            &specs,
+            crate::plugin::PluginHostMode {
+                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+            },
+            mesh_tx,
+            in_process_plugins(&node),
+        )
+        .await?;
+
+        let set = r#"{"command":"set_pricing","model":"m","value":{"input_msat_per_million":1,"output_msat_per_million":2,"minimum_invoice_msat":3}}"#;
+        let result = manager
+            .invoke_operation_by_capability(CAPABILITY, ops::CONTROL, set)
+            .await?;
+        assert!(!result.is_error, "{}", result.content_json);
+        let pricing: serde_json::Value = serde_json::from_str(&result.content_json)?;
+        assert_eq!(pricing["m"]["output_msat_per_million"], 2);
+        // Same engine the host holds: the plugin wraps the node's service.
+        assert!(
+            node.payment_service()
+                .await?
+                .ledger
+                .pricing()?
+                .contains_key("m")
+        );
+
+        let bad = manager
+            .invoke_operation_by_capability(CAPABILITY, ops::CONTROL, r#"{"command":"nope"}"#)
+            .await?;
+        assert!(bad.is_error);
+        manager.shutdown().await;
+        Ok(())
+    }
+}

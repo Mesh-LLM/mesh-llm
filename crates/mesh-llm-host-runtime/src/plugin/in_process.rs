@@ -9,7 +9,7 @@ use anyhow::Result;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
 
 /// Serves one plugin connection. Called with the plugin's end of the pipe each
 /// time the host (re)starts the plugin; typically
@@ -22,26 +22,23 @@ pub type InProcessPluginRunner = Arc<
 
 const PIPE_BUFFER_BYTES: usize = 256 * 1024;
 
-fn registry() -> &'static RwLock<BTreeMap<String, InProcessPluginRunner>> {
-    static REGISTRY: OnceLock<RwLock<BTreeMap<String, InProcessPluginRunner>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| RwLock::new(BTreeMap::new()))
-}
+/// In-process builtins available to one [`super::PluginManager`], by plugin
+/// name. Scoped to the manager (not process-global) so several nodes in one
+/// process can each supply their own runner.
+#[derive(Clone, Default)]
+pub struct InProcessPlugins(Arc<BTreeMap<String, InProcessPluginRunner>>);
 
-/// Registers `name` as an in-process builtin. A plugin spec with this name and
-/// an empty command is started from `runner` instead of spawning a process.
-pub fn register_in_process_plugin(name: impl Into<String>, runner: InProcessPluginRunner) {
-    registry()
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(name.into(), runner);
-}
+impl InProcessPlugins {
+    /// Serves the plugin spec named `name` from `runner` when that spec has an
+    /// empty command, instead of spawning a process.
+    pub fn with(mut self, name: impl Into<String>, runner: InProcessPluginRunner) -> Self {
+        Arc::make_mut(&mut self.0).insert(name.into(), runner);
+        self
+    }
 
-pub(crate) fn in_process_runner(name: &str) -> Option<InProcessPluginRunner> {
-    registry()
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(name)
-        .cloned()
+    pub(crate) fn get(&self, name: &str) -> Option<InProcessPluginRunner> {
+        self.0.get(name).cloned()
+    }
 }
 
 /// Starts `runner` on a task and returns the host's end of the pipe.
@@ -90,13 +87,10 @@ mod tests {
     #[tokio::test]
     async fn in_process_builtin_serves_operations_without_a_child_process() {
         let name = "in-process-echo";
-        register_in_process_plugin(
-            name,
-            Arc::new(move |stream| {
-                Box::pin(PluginRuntime::run_with_stream(echo_plugin(name), stream))
-            }),
-        );
-        let plugin = super::super::runtime::tests::in_process_plugin(name);
+        let runner: InProcessPluginRunner = Arc::new(move |stream| {
+            Box::pin(PluginRuntime::run_with_stream(echo_plugin(name), stream))
+        });
+        let plugin = super::super::runtime::tests::in_process_plugin(name, runner);
         let result = plugin
             .call_tool("echo", r#"{"n":7}"#)
             .await

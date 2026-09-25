@@ -10,8 +10,16 @@ readme = "README.md"
 [lints]
 workspace = true
 
+[features]
+default = []
+# Serve this engine as the in-process `payments.v1` builtin plugin. Enabled by
+# the shipped binary that registers it; the engine itself does not need it.
+plugin-server = ["dep:mesh-llm-plugin", "dep:rmcp"]
+
 [dependencies]
 anyhow.workspace = true
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.1", optional = true }
+rmcp = { version = "3", features = ["server"], optional = true }
 async-trait = "0.1"
 fs2 = "0.4"
 mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.76.1" }

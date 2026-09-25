@@ -8,7 +8,7 @@ pub(crate) mod request;
 mod server;
 pub(crate) mod wallet_plugin;
 
-pub(crate) use node_ext::PaymentsSlot;
+pub(crate) use node_ext::{PaymentsSlot, in_process_plugins};
 pub(crate) use server::serve;
 
 pub(crate) fn is_payment_upgrade(prefix: &[u8]) -> bool {

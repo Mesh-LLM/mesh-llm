@@ -68,7 +68,7 @@ pub use self::config::{
     ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginHostMode,
     PluginStartupConfig, PluginWebUiPreference, ResolvedPlugins, SpeculativeConfig,
     TelemetryConfig, TelemetryMetricsConfig, bundled_cli_plugin_spec, config_path, config_to_toml,
-    load_config, parse_config_toml, resolve_plugins, validate_config_file,
+    in_process_builtin_spec, load_config, parse_config_toml, resolve_plugins, validate_config_file,
 };
 #[cfg(test)]
 pub(crate) use self::config::{
@@ -83,7 +83,7 @@ pub(crate) use self::config::{
 use self::health::EndpointHealthState;
 #[cfg(test)]
 use self::health::{endpoint_declared_capabilities, endpoint_record_from_plugin_status};
-pub use self::in_process::{InProcessPluginRunner, register_in_process_plugin};
+pub use self::in_process::{InProcessPluginRunner, InProcessPlugins};
 use self::runtime::ExternalPlugin;
 pub use self::startup::{PluginStartupOptions, PluginStartupSummary};
 pub(crate) use self::support::parse_optional_json;
@@ -105,6 +105,9 @@ pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
 /// `mesh-llm --plugin wallet-lexe`. Compiled in only with the `wallet-lexe`
 /// feature; the name stays defined so config validation is feature-independent.
 pub const WALLET_LEXE_PLUGIN_ID: &str = "wallet-lexe";
+/// Built-in payments engine, served in-process as the `payments.v1`
+/// capability. Registered only with the `payments` feature.
+pub const PAYMENTS_PLUGIN_ID: &str = "payments";
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 #[cfg(test)]
@@ -142,6 +145,17 @@ impl PluginManager {
         host_mode: PluginHostMode,
         mesh_tx: mpsc::Sender<PluginMeshEvent>,
     ) -> Result<Self> {
+        Self::start_with_in_process(specs, host_mode, mesh_tx, InProcessPlugins::default()).await
+    }
+
+    /// Like [`Self::start`], serving command-less specs named in `in_process`
+    /// as tasks in this process.
+    pub async fn start_with_in_process(
+        specs: &ResolvedPlugins,
+        host_mode: PluginHostMode,
+        mesh_tx: mpsc::Sender<PluginMeshEvent>,
+        in_process: InProcessPlugins,
+    ) -> Result<Self> {
         Self::log_startup_plan(specs);
 
         let rpc_bridge = Arc::new(Mutex::new(None));
@@ -154,6 +168,7 @@ impl PluginManager {
             instance_id,
             rpc_bridge.clone(),
             &runtime_data,
+            &in_process,
         )
         .await?;
         let manager = Self {
@@ -241,6 +256,7 @@ impl PluginManager {
         instance_id: String,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
         runtime_data: &RuntimeDataCollector,
+        in_process: &InProcessPlugins,
     ) -> Result<(BTreeMap<String, ExternalPlugin>, Vec<PluginSummary>)> {
         let mut plugins = BTreeMap::new();
         let mut failed = Vec::new();
@@ -252,6 +268,7 @@ impl PluginManager {
                 instance_id.clone(),
                 rpc_bridge.clone(),
                 runtime_data,
+                in_process.get(&spec.name),
             )
             .await
             {
@@ -282,6 +299,7 @@ impl PluginManager {
         instance_id: String,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
         runtime_data: &RuntimeDataCollector,
+        in_process: Option<InProcessPluginRunner>,
     ) -> Result<ExternalPlugin> {
         tracing::info!(
             plugin = %spec.name,
@@ -296,6 +314,7 @@ impl PluginManager {
             mesh_tx,
             rpc_bridge,
             runtime_data.producer(Self::summary_runtime_source(spec.name.clone())),
+            in_process,
         )
         .await
         .map_err(|err| {
@@ -1634,6 +1653,37 @@ mod tests {
             settings: Default::default(),
             startup: Default::default(),
         }
+    }
+
+    #[test]
+    fn builtin_payments_is_served_in_process_and_can_be_switched_off() {
+        super::config::TEST_PAYMENTS_COMPILED_IN.with(|slot| *slot.borrow_mut() = Some(true));
+        let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
+        let payments = resolved
+            .externals
+            .iter()
+            .find(|spec| spec.name == PAYMENTS_PLUGIN_ID)
+            .expect("payments builtin registered");
+        assert!(
+            payments.command.is_empty(),
+            "served in-process, not re-exec'd"
+        );
+        assert!(payments.startup.optional);
+
+        let mut entry = wallet_entry(Some(false));
+        entry.name = PAYMENTS_PLUGIN_ID.into();
+        let config = MeshConfig {
+            plugins: vec![entry],
+            ..MeshConfig::default()
+        };
+        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+        super::config::TEST_PAYMENTS_COMPILED_IN.with(|slot| *slot.borrow_mut() = None);
+        assert!(
+            resolved
+                .externals
+                .iter()
+                .all(|spec| spec.name != PAYMENTS_PLUGIN_ID)
+        );
     }
 
     #[test]

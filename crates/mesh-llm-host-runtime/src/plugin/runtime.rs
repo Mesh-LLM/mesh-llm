@@ -36,6 +36,8 @@ pub(crate) struct ExternalPlugin {
     restart_lock: Arc<Mutex<()>>,
     next_request_id: AtomicU64,
     next_generation: AtomicU64,
+    /// Serves this plugin as a task in this process instead of a child.
+    in_process: Option<super::InProcessPluginRunner>,
 }
 
 pub(crate) struct PluginRuntime {
@@ -65,7 +67,9 @@ impl ExternalPlugin {
         mesh_tx: mpsc::Sender<PluginMeshEvent>,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
         runtime_data_producer: RuntimeDataProducer,
+        in_process: Option<super::InProcessPluginRunner>,
     ) -> Result<Self> {
+        let in_process = in_process.filter(|_| spec.command.is_empty());
         let plugin = Self {
             spec: spec.clone(),
             web_ui_enabled: Arc::new(Mutex::new(spec.web_ui_enabled)),
@@ -96,6 +100,7 @@ impl ExternalPlugin {
             restart_lock: Arc::new(Mutex::new(())),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
+            in_process,
         };
         if spec.startup.lazy_start {
             plugin.mark_deferred().await;
@@ -420,10 +425,8 @@ impl ExternalPlugin {
             return self.finish_startup(generation, outbound_tx, pending).await;
         }
 
-        if self.spec.command.is_empty()
-            && let Some(runner) = super::in_process::in_process_runner(&self.spec.name)
-        {
-            let stream = super::in_process::start_in_process(&self.spec.name, &runner);
+        if let Some(runner) = &self.in_process {
+            let stream = super::in_process::start_in_process(&self.spec.name, runner);
             let (generation, outbound_tx, pending) = self.install_runtime(None, stream).await;
             return self.finish_startup(generation, outbound_tx, pending).await;
         }
@@ -1113,8 +1116,11 @@ pub(crate) mod tests {
     }
 
     /// A builtin spec with no command, as resolved for an in-process plugin.
-    pub(crate) fn in_process_plugin(name: &str) -> ExternalPlugin {
-        plugin_for_spec(ExternalPluginSpec {
+    pub(crate) fn in_process_plugin(
+        name: &str,
+        runner: crate::plugin::InProcessPluginRunner,
+    ) -> ExternalPlugin {
+        let mut plugin = plugin_for_spec(ExternalPluginSpec {
             name: name.into(),
             command: String::new(),
             args: Vec::new(),
@@ -1123,7 +1129,9 @@ pub(crate) mod tests {
             startup: Default::default(),
             web_ui_enabled: None,
             installed_metadata: None,
-        })
+        });
+        plugin.in_process = Some(runner);
+        plugin
     }
 
     fn plugin_for_spec(spec: ExternalPluginSpec) -> ExternalPlugin {
@@ -1174,6 +1182,7 @@ pub(crate) mod tests {
             restart_lock: Arc::new(Mutex::new(())),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
+            in_process: None,
         };
         (plugin, runtime_data)
     }

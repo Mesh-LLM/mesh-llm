@@ -9,6 +9,8 @@
 pub mod control;
 pub mod intent;
 pub mod ledger;
+#[cfg(feature = "plugin-server")]
+pub mod plugin_server;
 pub mod provisioning;
 pub mod service;
 

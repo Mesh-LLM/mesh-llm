@@ -3,7 +3,10 @@ use super::installed::{
     configured_disabled_installed_plugin_summary, configured_external_plugin_spec,
 };
 use super::schema_validation::strict_plugin_schema_availability;
-use super::{BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary, WALLET_LEXE_PLUGIN_ID};
+use super::{
+    BLOBSTORE_PLUGIN_ID, PAYMENTS_PLUGIN_ID, PluginStartupOptions, PluginSummary,
+    WALLET_LEXE_PLUGIN_ID,
+};
 use crate::{
     MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
     ReleaseAttestationRequirement,
@@ -291,6 +294,7 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
     let mut wallet_lexe_enabled = true;
+    let mut payments_enabled = true;
     for entry in &config.plugins {
         if names.insert(entry.name.clone(), ()).is_some() {
             bail!("Duplicate plugin entry '{}'", entry.name);
@@ -304,6 +308,11 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         if entry.name == WALLET_LEXE_PLUGIN_ID {
             ensure_builtin_entry_only_toggles_enabled(entry)?;
             wallet_lexe_enabled = enabled;
+            continue;
+        }
+        if entry.name == PAYMENTS_PLUGIN_ID {
+            ensure_builtin_entry_only_toggles_enabled(entry)?;
+            payments_enabled = enabled;
             continue;
         }
         if !enabled {
@@ -325,6 +334,9 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     }
     if wallet_lexe_enabled && wallet_lexe_compiled_in() {
         externals.push(builtin_plugin_spec(WALLET_LEXE_PLUGIN_ID)?);
+    }
+    if payments_enabled && payments_compiled_in() {
+        externals.push(in_process_builtin_spec(PAYMENTS_PLUGIN_ID));
     }
 
     Ok(ResolvedPlugins {
@@ -365,6 +377,42 @@ fn wallet_lexe_compiled_in() -> bool {
 #[cfg(test)]
 fn wallet_lexe_compiled_in() -> bool {
     TEST_WALLET_LEXE_COMPILED_IN.with(|slot| slot.borrow().unwrap_or(false))
+}
+
+/// Whether this build carries the payments engine. Forced per thread under
+/// test for the same reason as [`wallet_lexe_compiled_in`].
+#[cfg(not(test))]
+fn payments_compiled_in() -> bool {
+    cfg!(feature = "payments")
+}
+
+#[cfg(test)]
+fn payments_compiled_in() -> bool {
+    TEST_PAYMENTS_COMPILED_IN.with(|slot| slot.borrow().unwrap_or(false))
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static TEST_PAYMENTS_COMPILED_IN: std::cell::RefCell<Option<bool>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Spec for a builtin served as a task in this process: no command, so the
+/// plugin manager starts it from the runner supplied for its name.
+pub fn in_process_builtin_spec(name: &str) -> ExternalPluginSpec {
+    ExternalPluginSpec {
+        name: name.to_string(),
+        command: String::new(),
+        args: Vec::new(),
+        url: None,
+        env: BTreeMap::new(),
+        startup: PluginStartupOptions {
+            optional: true,
+            ..PluginStartupOptions::default()
+        },
+        web_ui_enabled: None,
+        installed_metadata: None,
+    }
 }
 
 #[cfg(test)]
