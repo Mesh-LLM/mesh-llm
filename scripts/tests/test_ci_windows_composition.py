@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import tempfile
 import tomllib
 import unittest
 
@@ -47,6 +48,81 @@ def _unit_row_crates(platform: str) -> set[str]:
 def _windows_unit_row_crates() -> set[str]:
     """Crates the windows-unit row runs, across its shared and Windows inputs."""
     return _unit_row_crates("windows")
+
+
+# Crates whose `src/` selects Windows- or Unix-specific code that no Windows
+# job compiles yet. Their suites have never run on the Windows runner, so
+# switching them on together would risk a red main for reasons unrelated to the
+# change under test. A crate leaves this list, for a platform-windows* crate
+# rule and the windows-unit row, once its suite is confirmed green there.
+WINDOWS_UNVERIFIED_CRATES = {
+    "mesh-llm-analytics",
+    "mesh-llm-commands",
+    "mesh-llm-config",
+    "mesh-llm-events",
+    "mesh-llm-hardware-profile",
+    "mesh-llm-identity",
+    "mesh-llm-native-runtime",
+    "mesh-llm-plugin-manager",
+    "mesh-llm-system",
+    "mesh-llm-tui",
+    "mesh-llm-ui",
+    "model-hf",
+    "skippy-bench",
+    "skippy-model-package",
+    "skippy-quantize",
+    "skippy-runtime",
+    "skippy-server",
+    "xtask",
+}
+
+CFG_PLATFORM_PATTERN = re.compile(
+    r"\bcfg(?:!|_attr)?\s*\([^)]*\b"
+    r"(?:windows|unix|target_os\s*=\s*\"windows\")"
+)
+
+
+def _workspace_crates(root: Path) -> dict[str, Path]:
+    """Package name to crate directory for every workspace member.
+
+    Reads the members from the root manifest rather than a fixed `crates/*`
+    layout, and the name from each crate's manifest, since a directory need
+    not match its package name.
+    """
+    workspace = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+    crates: dict[str, Path] = {}
+    for member in workspace["workspace"]["members"]:
+        for crate_dir in sorted(root.glob(member)):
+            manifest = tomllib.loads((crate_dir / "Cargo.toml").read_text(encoding="utf-8"))
+            crates[manifest["package"]["name"]] = crate_dir
+    return crates
+
+
+def _cfg_divergent_crates(root: Path) -> set[str]:
+    """Workspace crates whose `src/` selects Windows- or Unix-specific code."""
+    divergent = set()
+    for name, crate_dir in _workspace_crates(root).items():
+        source_root = crate_dir / "src"
+        if not source_root.is_dir():
+            continue
+        if any(
+            CFG_PLATFORM_PATTERN.search(source.read_text(encoding="utf-8", errors="ignore"))
+            for source in source_root.rglob("*.rs")
+        ):
+            divergent.add(name)
+    return divergent
+
+
+def _windows_routed_crates() -> set[str]:
+    """Crates a Windows job compiles: platform-windows* rules plus the unit row."""
+    ownership = json.loads((ROOT / "ci" / "ownership.yml").read_text(encoding="utf-8"))
+    routed = {
+        crate
+        for rule in ownership["crate_rules"]
+        if rule["domain"].startswith("platform-windows")
+        for crate in rule["crates"]
+    }
+    return routed | _windows_unit_row_crates()
 
 
 class CiWindowsCompositionTests(unittest.TestCase):
@@ -379,6 +455,63 @@ class CiWindowsCompositionTests(unittest.TestCase):
         source = PLATFORM_CHECKS_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("steps.windows_packages.outputs.crates", source)
         self.assertNotIn("foreach ($crate in 'model-artifact'", source)
+
+    def test_every_cfg_divergent_crate_is_routed_or_explicitly_unverified(self) -> None:
+        """Platform-divergent code must be compiled on Windows or declared not to be.
+
+        A crate whose `src/` holds `cfg(windows)` / `cfg(unix)` code can break
+        on Windows while every Linux job stays green; that is how #1978 shipped
+        a lib-test target that had never compiled there.
+        """
+        unaccounted = sorted(
+            _cfg_divergent_crates(ROOT) - _windows_routed_crates() - WINDOWS_UNVERIFIED_CRATES
+        )
+        self.assertEqual(
+            [],
+            unaccounted,
+            "these crates carry platform-divergent code but no Windows job "
+            "compiles them; route them to a Windows row or add them to "
+            "WINDOWS_UNVERIFIED_CRATES",
+        )
+
+    def test_cfg_detector_marks_every_platform_form_and_nothing_else(self) -> None:
+        sources = {
+            "direct-windows": "#[cfg(windows)]\nfn platform() {}\n",
+            "direct-unix": "#[cfg(unix)]\nfn platform() {}\n",
+            "negated": "#[cfg(not(windows))]\nfn platform() {}\n",
+            "target-os-windows": "#[cfg(target_os = \"windows\")]\nfn platform() {}\n",
+            "cfg-macro": "const WINDOWS: bool = cfg!(windows);\n",
+            "cfg-attr": "#[cfg_attr(unix, derive(Debug))]\nstruct Platform;\n",
+            "compound": "#[cfg(any(windows, unix))]\nfn platform() {}\n",
+        }
+        portable = {
+            "portable": "#[cfg(test)]\nmod tests {}\nfn windows_path() {}\n",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            members = []
+            for crate, source in {**sources, **portable}.items():
+                crate_dir = root / "crates" / crate
+                (crate_dir / "src").mkdir(parents=True)
+                (crate_dir / "Cargo.toml").write_text(
+                    f'[package]\nname = "{crate}"\nversion = "0.1.0"\n',
+                    encoding="utf-8",
+                )
+                (crate_dir / "src" / "lib.rs").write_text(source, encoding="utf-8")
+                members.append(f'"crates/{crate}"')
+            (root / "Cargo.toml").write_text(
+                f"[workspace]\nmembers = [{', '.join(members)}]\n", encoding="utf-8"
+            )
+
+            self.assertEqual(set(sources), _cfg_divergent_crates(root))
+
+    def test_windows_unverified_list_has_no_stale_entries(self) -> None:
+        # An entry must still name a workspace crate that carries divergent
+        # code and that no Windows job compiles yet.
+        self.assertEqual(set(), WINDOWS_UNVERIFIED_CRATES - set(_workspace_crates(ROOT)))
+        self.assertEqual(set(), WINDOWS_UNVERIFIED_CRATES - _cfg_divergent_crates(ROOT))
+        self.assertEqual(set(), WINDOWS_UNVERIFIED_CRATES & _windows_routed_crates())
 
 
 if __name__ == "__main__":
