@@ -1,6 +1,9 @@
 [build]
 rustc-wrapper = "sccache"
 
+[alias]
+xtool = "run --locked -p xtask --"
+
 [target.aarch64-apple-darwin]
 linker = "scripts/cargo-linker"
 

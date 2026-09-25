@@ -7,6 +7,13 @@ metadata:
 
 # HF BF16 GGUF Conversion Jobs
 
+New repository-side job planning and orchestration follows
+`../manage-ci/SKILL.md`: no new Python tooling; use typed `tools/xtask`
+commands behind thin Just recipes. From the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is a working alias example, not
+a conversion command. Existing Hugging Face Jobs examples remain transitional
+ecosystem invocations, not approval for new Python automation.
+
 Use this skill when the source artifact is a Hugging Face checkpoint repo and
 the target artifact is a split BF16 GGUF model repo. The operational tool is
 `skippy-quantize`; do not use `convert_hf_to_gguf.py`, `hf_to_gguf.py`, or a

@@ -7,6 +7,13 @@ metadata:
 
 # skippy-bench
 
+New repository benchmark automation follows `../manage-ci/SKILL.md`: do not
+add Python tooling. Use typed `tools/xtask` commands behind thin Just recipes;
+`cargo xtool repo-consistency ci-crate-lists` works from the repository root
+as an alias example, not a benchmark command. Existing upstream Python
+benchmark environments below remain explicit external tooling, not a model
+for new repository automation.
+
 Use this skill for performance, orchestration, and report-oriented checks.
 Use `skippy-correctness` when the question is pass/fail exactness.
 All reportable benchmark runs need metrics-server. `run`, `focused-runtime`,

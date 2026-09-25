@@ -7,6 +7,12 @@ metadata:
 
 # llama-stage-patch-changes
 
+New documentation generation automation follows `../manage-ci/SKILL.md`:
+do not add Python tooling; use typed `tools/xtask` commands through thin Just
+recipes. From the repository root, `cargo xtool repo-consistency ci-crate-lists`
+is a working alias example, not a replacement for the transitional Python API
+documentation commands below. Keep them until the Rust port passes parity.
+
 Use this skill when changing the Skippy staged-runtime ABI carried in
 `third_party/llama.cpp/patches`.
 

@@ -518,6 +518,17 @@ so an unlisted target's `warn!` is dropped before the writer sees it.
 
 Read `docs/design/TESTING.md` before running tests. It has all test scenarios, remote deploy instructions, and cleanup commands.
 
+For new repository automation, follow the Rust ownership rule in
+`.agents/skills/manage-ci/SKILL.md` and spec section 7.5: do not write new
+Python tooling, including temporary, inline, or skill-local helpers. Reuse or
+extend typed `tools/xtask` commands and call them from thin Just recipes;
+`cargo xtool repo-consistency ci-crate-lists` is an existing command from the
+repository root. Do not move generic policy into shell, PowerShell, or
+JavaScript. Existing Python validation and workflow entrypoints below remain
+transitional until their replacements have behavioral parity. The SDK Python
+ecosystem candidates in `ci/automation-migration/python-exceptions.json` are
+conditional, not approved, until task 22 proves their isolation.
+
 Testing matters more than usual in this project because:
 
 - Nodes run on different machines with different hardware and OS versions. Bugs that don't reproduce locally can appear in real deployments.

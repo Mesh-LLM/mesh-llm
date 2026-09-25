@@ -10,6 +10,14 @@ When the stage ABI changes, also read
 `.agents/skills/llama-stage-patch-changes/SKILL.md`. Their patch ownership,
 queue reconstruction, ABI, and validation rules are requirements.
 
+Do not write new Python tooling during repair, including temporary or inline
+helpers. Follow `.agents/skills/manage-ci/SKILL.md` for new repository
+automation in typed `tools/xtask` commands; from the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is an existing alias example.
+The existing patch generator below is transitional and stays in use until an
+equivalent Rust command has passed parity checks. This does not grant permission
+to edit the trusted scripts or CI boundary listed below.
+
 Own the repair end to end:
 
 1. Run `scripts/prepare-llama.sh pinned` and inspect the first real failure. If

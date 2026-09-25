@@ -7,6 +7,13 @@ metadata:
 
 # Release Notes
 
+New release-note automation follows the Rust ownership rule in
+`../manage-ci/SKILL.md`: no new Python tooling. Reuse or extend typed
+`tools/xtask` commands through thin Just recipes. From the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is an existing alias example,
+not a release-note replacement. Python commands below remain transitional
+until the matching Rust command passes behavioral parity.
+
 The release workflow publishes with GitHub-generated release notes, so every
 MeshLLM release starts life as one flat `## What's Changed` list. A normal minor
 release carries a few hundred entries in merge order, which buries the handful
