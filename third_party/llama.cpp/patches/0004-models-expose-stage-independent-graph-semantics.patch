@@ -1,4 +1,4 @@
-From 37a592d3dd6c79a61bc301c97b9e23f1d112bb8a Mon Sep 17 00:00:00 2001
+From f7e3829a1c4ef8b4147814e4ab2d9859e39b88f1 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:37 +1000
 Subject: [PATCH] models: expose stage-independent graph semantics
@@ -13,7 +13,7 @@ Subject: [PATCH] models: expose stage-independent graph semantics
  common/chat.h                         |   5 +-
  common/ngram-cache.cpp                | 153 ++++++++++-
  common/stage-chat.cpp                 | 362 ++++++++++++++++++++++++++
- conversion/base.py                    |  17 ++
+ conversion/base.py                    |  22 ++
  src/models/bailingmoe3.cpp            |   4 +-
  src/models/bitnet.cpp                 |   4 +-
  src/models/chameleon.cpp              |  25 +-
@@ -43,7 +43,7 @@ Subject: [PATCH] models: expose stage-independent graph semantics
  src/models/rwkv6.cpp                  |   2 +-
  src/models/rwkv7-base.cpp             |   9 +-
  tools/mtmd/mtmd-audio.cpp             |   2 +
- 39 files changed, 1043 insertions(+), 172 deletions(-)
+ 39 files changed, 1048 insertions(+), 172 deletions(-)
  create mode 100644 common/stage-chat.cpp
 
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
@@ -1041,10 +1041,36 @@ index 000000000..180c0a884
 +    return skippy_common_success(out_error);
 +}
 diff --git a/conversion/base.py b/conversion/base.py
-index 9fba5a86b..a1da64bc5 100644
+index 9fba5a86b..c70183fad 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
-@@ -284,8 +284,17 @@ class ModelBase:
+@@ -94,6 +94,7 @@ class ModelBase:
+     dry_run: bool
+     hparams: dict[str, Any]
+     model_tensors: dict[str, Callable[[], Tensor]]
++    has_model_weight_shards: bool
+     gguf_writer: gguf.GGUFWriter
+     model_name: str | None
+     metadata_override: Path | None
+@@ -121,6 +122,9 @@ class ModelBase:
+     mtp_only: bool = False
+     no_mtp: bool = False
+ 
++    # Converters that build every tensor without indexed model weights may opt in.
++    allow_no_weight_shards: bool = False
++
+     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
+                  use_temp_file: bool = False, eager: bool = False,
+                  metadata_override: Path | None = None, model_name: str | None = None,
+@@ -165,6 +169,7 @@ class ModelBase:
+         self._fusable_qkv_bias_layers: set[int] = set()
+         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
+         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
++        self.has_model_weight_shards = bool(self.model_tensors)
+         self.metadata_override = metadata_override
+         self.model_name = model_name
+         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
+@@ -284,8 +289,17 @@ class ModelBase:
                              data_gen = lambda data=data_torch: LazyTorchTensor.from_eager(data)  # noqa: E731
                          else:
                              data_gen = lambda data=data_torch: data  # noqa: E731
@@ -1062,18 +1088,19 @@ index 9fba5a86b..a1da64bc5 100644
                          tensors[tname] = tgen
  
          # verify tensor name presence and identify potentially missing files
-@@ -1190,6 +1199,14 @@ class ModelBase:
+@@ -1189,7 +1203,15 @@ class ModelBase:
+         raise NotImplementedError("write_vocab() must be implemented in subclasses")
  
      def write(self):
++        if not self.has_model_weight_shards and not self.allow_no_weight_shards:
++            raise ValueError(
++                "no model weight tensors were found. Check that the safetensors filenames "
++                "are discoverable (they must start with 'model') or that model.safetensors exists."
++            )
          self.prepare_tensors()
-+        # zero tensors means the shards were never discovered, yet a metadata-only GGUF logs success
 +        n_written = sum(len(shard) for shard in self.gguf_writer.tensors)
 +        if n_written == 0:
-+            raise ValueError(
-+                "no tensors were written: the model shards could not be found. "
-+                "Check that the safetensors filenames are discoverable (they must "
-+                "start with 'model') or that model.safetensors exists."
-+            )
++            raise ValueError("no tensors were written")
          self.prepare_metadata(vocab_only=False)
          self.gguf_writer.write_header_to_file(path=self.fname_out)
          self.gguf_writer.write_kv_data_to_file()

@@ -1,4 +1,4 @@
-From 36ac4b20647be59f6c59f61cb3fbee20762e489b Mon Sep 17 00:00:00 2001
+From a4c6a33e5d85f6643eafcca23720d550a0e41b97 Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Sun, 20 Sep 2026 11:16:21 +1000
 Subject: [PATCH] llama: port DiffusionGemma support
@@ -20,7 +20,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  .../diffusion-gemma-server.cpp                | 183 ++++
  .../diffusion-gemma-visual-server.cpp         | 388 ++++++++
  examples/diffusion/diffusion-cli.cpp          | 584 +++++++++---
- examples/diffusion/diffusion.cpp              | 275 ++++++
+ examples/diffusion/diffusion.cpp              | 283 ++++++
  examples/diffusion/diffusion.h                |  38 +
  ggml/src/ggml-cuda/diffusion-sampling.cu      | 178 ++++
  ggml/src/ggml-cuda/diffusion-sampling.cuh     |  19 +
@@ -38,7 +38,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  src/models/gemma4-common.h                    | 126 +++
  src/models/models.h                           |  60 ++
  tests/test-llama-archs.cpp                    |  23 +-
- 29 files changed, 3244 insertions(+), 125 deletions(-)
+ 29 files changed, 3252 insertions(+), 125 deletions(-)
  create mode 100644 conversion/diffusion_gemma.py
  create mode 100644 examples/diffusion-gemma-eval/CMakeLists.txt
  create mode 100644 examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp
@@ -1875,7 +1875,7 @@ index d58d22eff..70487d728 100644
  
      llama_free(ctx);
 diff --git a/examples/diffusion/diffusion.cpp b/examples/diffusion/diffusion.cpp
-index 97d6b6944..73649473f 100644
+index 97d6b6944..cd5015ff3 100644
 --- a/examples/diffusion/diffusion.cpp
 +++ b/examples/diffusion/diffusion.cpp
 @@ -6,7 +6,9 @@
@@ -1948,7 +1948,7 @@ index 97d6b6944..73649473f 100644
  
                      llama_token_data_array cur_p = {
                          candidates.data(),
-@@ -406,3 +433,251 @@ void diffusion_generate(llama_context *          ctx,
+@@ -406,3 +433,259 @@ void diffusion_generate(llama_context *          ctx,
  
      n_generated = params.max_length;
  }
@@ -2007,6 +2007,17 @@ index 97d6b6944..73649473f 100644
 +
 +    llama_batch batch = llama_batch_init(params.max_length, 0, 1);
 +
++    auto finish = [&]() {
++        llama_diffusion_set_sc(model, nullptr, 0.0f, 1.0f, false);
++        if (params.kv_cache) {
++            llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);
++        }
++        if (dev_sc) {
++            llama_diffusion_set_device_sc(model, false);
++        }
++        llama_batch_free(batch);
++    };
++
 +    // Cached path: PREFILL the prompt once (writing the prefix K/V store), then each step DECODE only the
 +    // canvas, reading the cached prefix - instead of re-decoding [prompt|canvas] every step. The packed
 +    // canvas logits then start at row 0 (cached) instead of row n_input (unified).
@@ -2035,8 +2046,7 @@ index 97d6b6944..73649473f 100644
 +            }
 +        }
 +        if (!prefill_ok) {
-+            llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);
-+            llama_batch_free(batch);
++            finish();
 +            return;
 +        }
 +    }
@@ -2045,6 +2055,7 @@ index 97d6b6944..73649473f 100644
 +    int     held          = 0;
 +    bool    finished      = false;
 +    bool    device_sample_ok = gpu_sample_reduce;   // latched off if a backend (e.g. Metal) can't device-sample
++    bool    decode_failed = false;
 +
 +    for (int32_t cur_step = S; cur_step >= 1 && !finished; --cur_step) {
 +        const int32_t step_idx = S - cur_step;                    // 0-based
@@ -2079,6 +2090,7 @@ index 97d6b6944..73649473f 100644
 +
 +        if (llama_decode(ctx, batch) != 0) {
 +            LOG_ERR("%s: failed to decode at step %d\n", __func__, step_idx);
++            decode_failed = true;
 +            break;
 +        }
 +
@@ -2191,14 +2203,10 @@ index 97d6b6944..73649473f 100644
 +        }
 +    }
 +
-+    if (params.kv_cache) {
-+        llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);  // restore default for later turns / masked path
++    finish();
++    if (!decode_failed) {
++        n_generated = params.max_length;
 +    }
-+    if (dev_sc) {
-+        llama_diffusion_set_device_sc(model, false);             // restore host SC path for later turns
-+    }
-+    llama_batch_free(batch);
-+    n_generated = params.max_length;
 +}
 diff --git a/examples/diffusion/diffusion.h b/examples/diffusion/diffusion.h
 index 783144522..a7f305e29 100644
