@@ -11405,6 +11405,7 @@ name = "xtask"
 version = "0.78.0"
 dependencies = [
  "ed25519-dalek",
+ "flate2",
  "getrandom 0.3.4",
  "hex",
  "mesh-llm-release-footer",

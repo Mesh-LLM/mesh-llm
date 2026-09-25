@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
+flate2 = "1"
 getrandom = "0.3"
 hex = "0.4"
 mesh-llm-release-footer.workspace = true
