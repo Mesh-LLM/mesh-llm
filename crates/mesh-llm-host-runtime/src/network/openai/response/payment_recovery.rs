@@ -6,8 +6,7 @@ use mesh_llm_payments_types::{
 };
 
 use crate::mesh::Node;
-use crate::network::payments::client;
-use crate::plugin::PluginManager;
+use crate::network::payments::client::Payments;
 
 /// Recover financial state only. Never regenerate or replay application output
 /// after a restart, and never infer failure just from invoice expiry.
@@ -15,9 +14,13 @@ pub(crate) async fn recover(node: &Node) -> Result<()> {
     let Some(plugins) = node.plugin_manager().await else {
         return Ok(());
     };
+    // Pin one provider for the whole pass, reconcile included: a request's
+    // trailing settlement must stay on the ledger that reported it, so a
+    // provider replaced mid-pass cannot split one request across two ledgers.
+    let payments = Payments::for_plugins(plugins).await;
     // The provider ignores individual uncertain charges so one cannot block
     // other debts; it returns the requests still owed by their sellers.
-    let pending: ReconcileResponse = client::call(&plugins, ops::RECONCILE, &Empty {}).await?;
+    let pending: ReconcileResponse = payments.call(ops::RECONCILE, &Empty {}).await?;
     for terms in pending.approved {
         // Bound each peer independently so one unavailable provider cannot stop
         // reconciliation of other requests.
@@ -28,7 +31,7 @@ pub(crate) async fn recover(node: &Node) -> Result<()> {
         // that identity while retaining the wallet/database is not supported.
         let _ = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            recover_request(node, &plugins, &terms, original_peer),
+            recover_request(node, &payments, &terms, original_peer),
         )
         .await;
     }
@@ -37,7 +40,7 @@ pub(crate) async fn recover(node: &Node) -> Result<()> {
 
 async fn recover_request(
     node: &Node,
-    plugins: &PluginManager,
+    payments: &Payments,
     terms: &RequestTerms,
     peer: iroh::EndpointId,
 ) -> Result<()> {
@@ -63,14 +66,13 @@ async fn recover_request(
                     tokens,
                     invoice,
                 };
-                let _: serde_json::Value =
-                    client::call(plugins, ops::SETTLE_OUTPUT, &request).await?;
+                let _: serde_json::Value = payments.call(ops::SETTLE_OUTPUT, &request).await?;
             }
             Frame::Complete => {
                 let finish = FinishRequest {
                     id: terms.id.clone(),
                 };
-                let _: serde_json::Value = client::call(plugins, ops::FINISH, &finish).await?;
+                let _: serde_json::Value = payments.call(ops::FINISH, &finish).await?;
                 return Ok(());
             }
             Frame::Pending => return Ok(()),
