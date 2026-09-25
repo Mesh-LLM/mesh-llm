@@ -103,10 +103,15 @@ through coarse per-request `payments.v1` operations. The engine
 `payments` feature) owns budgets, the ledger, settlement bookkeeping, recovery,
 invoice lifetimes and fee policy; host-runtime links only
 `mesh-llm-payments-types`. With no engine installed the node is free-only.
-Only the builtin engine is supported as the `payments.v1` provider: seller
-price advertisement, the remote-HTTP payment check and the recovery loop still
-read the builtin engine directly, so replacing it by capability is a protocol
-goal, not yet a supported configuration. What the wallet plugin does: turn
+The provider is resolved by capability, never by name, for every host-side
+payment read: the advertised seller prices used by gossip, `GET /v1/models`
+and the paid remote-HTTP check all project through `payments.v1`, the
+periodic recovery pass runs against whichever provider serves the
+capability, and reading prices never provisions a ledger — the builtin
+answers from the ledger file when one exists and reports that it has no
+payments state otherwise, so the recovery pass is skipped on a node that
+never configured payments. An external `payments.v1` provider is therefore a
+supported configuration for the operation surface the builtin serves. What the wallet plugin does: turn
 wallet intents into wallet facts. Response bytes never cross
 the plugin boundary, and no per-token IPC exists.
 

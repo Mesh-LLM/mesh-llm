@@ -1,7 +1,12 @@
 //! The payments engine slot on [`Node`]. Lives here, not in `mesh/`, so mesh
 //! core only sees the pure types crate and never names the engine.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
+
+use mesh_llm_payments_types::contract::{AdvertisedPricing, Empty, ops};
+use mesh_llm_payments_types::engine::AdvertisedPrices;
+use mesh_llm_payments_types::pricing::Pricing;
 
 use super::engine::PaymentsEngine;
 use crate::mesh::Node;
@@ -13,16 +18,44 @@ type EngineFuture<'a> = std::pin::Pin<
 
 pub(crate) type PaymentsSlot = Arc<tokio::sync::OnceCell<Arc<dyn PaymentsEngine>>>;
 
+/// How often the host reconciles durable payment state with the provider.
+const RECOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
 impl Node {
+    /// Prices this node advertises to the mesh, projected through the
+    /// `payments.v1` capability rather than read from the engine.
     pub(crate) async fn advertised_payment_offers(
         &self,
-    ) -> anyhow::Result<std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>>
-    {
-        let directory = self.config_state.lock().await.payment_directory();
-        if self.payments.get().is_none() && !directory.join("payments.sqlite3").exists() {
-            return Ok(Default::default());
+    ) -> anyhow::Result<BTreeMap<String, Pricing>> {
+        Ok(self.advertised_pricing().await?.prices)
+    }
+
+    /// Advertised prices, and whether this node's payments provider has any
+    /// state at all. The capability answers both, so an external provider is
+    /// authoritative for them; a node with no provider advertises nothing.
+    pub(crate) async fn advertised_pricing(&self) -> anyhow::Result<AdvertisedPricing> {
+        if self.plugin_manager().await.is_none() {
+            return Ok(AdvertisedPricing::default());
         }
-        self.payment_engine().await?.pricing()
+        super::client::call_node(self, ops::PRICING, &Empty {}).await
+    }
+
+    /// The builtin engine's advertised prices, read without opening a ledger
+    /// this node does not have. Supplied to the in-process engine plugin, so
+    /// the host never has to name the builtin; an external provider answers
+    /// `payments.v1` pricing for itself.
+    fn advertised_prices_source(&self) -> AdvertisedPrices {
+        let node = self.clone();
+        Arc::new(move || {
+            let node = node.clone();
+            Box::pin(async move {
+                let directory = node.config_state.lock().await.payment_directory();
+                if node.payments.get().is_none() && !directory.join("payments.sqlite3").exists() {
+                    return Ok(None);
+                }
+                Ok(Some(node.payment_engine().await?.pricing()?))
+            })
+        })
     }
 
     pub(crate) fn payment_engine(&self) -> EngineFuture<'_> {
@@ -40,24 +73,39 @@ impl Node {
                     );
                     let provider = super::engine::provider()
                         .ok_or_else(|| anyhow::anyhow!("no payments engine installed"))?;
-                    let service = provider.open(&directory, Arc::new(factory))?;
-                    let recovery_service = Arc::downgrade(&service);
-                    let node = self.clone();
-                    tokio::spawn(async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                            if node.endpoint.is_closed() || recovery_service.strong_count() == 0 {
-                                break;
-                            }
-                            let _ = crate::network::openai::payment_recovery::recover(&node).await;
-                        }
-                    });
-                    Ok::<_, anyhow::Error>(service)
+                    provider.open(&directory, Arc::new(factory))
                 })
                 .await?;
             Ok(Arc::clone(service))
         })
     }
+}
+
+/// Runs the periodic payment recovery loop.
+///
+/// The runtime starts this once the plugin manager is installed, so it
+/// reconciles whichever `payments.v1` provider serves this node — the builtin
+/// or an external one — instead of only the builtin's engine slot. The loop
+/// asks the provider whether it has payments state before reconciling, so a
+/// node that never configured payments does not create a ledger to find
+/// nothing.
+pub(crate) fn spawn_payment_recovery(node: &Node) {
+    let node = node.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(RECOVERY_INTERVAL).await;
+            if node.endpoint.is_closed() {
+                break;
+            }
+            let Ok(advertised) = node.advertised_pricing().await else {
+                continue;
+            };
+            if !advertised.configured {
+                continue;
+            }
+            let _ = crate::network::openai::payment_recovery::recover(&node).await;
+        }
+    });
 }
 
 /// In-process builtins this node supplies to its plugin manager: the payments
@@ -67,6 +115,7 @@ pub(crate) fn in_process_plugins(node: &Node) -> crate::plugin::InProcessPlugins
         return crate::plugin::InProcessPlugins::default();
     };
     let node = node.clone();
+    let prices = node.advertised_prices_source();
     let source: super::engine::EngineSource = Arc::new(move || {
         let node = node.clone();
         Box::pin(async move { node.payment_engine().await })
@@ -76,6 +125,7 @@ pub(crate) fn in_process_plugins(node: &Node) -> crate::plugin::InProcessPlugins
             crate::plugin::PAYMENTS_PLUGIN_ID,
             crate::VERSION,
             Arc::clone(&source),
+            Arc::clone(&prices),
             stream,
         )
     });
@@ -144,6 +194,9 @@ mod tests {
         // Same engine the host holds: the plugin wraps the node's service.
         assert!(service.ledger.pricing()?.contains_key("m"));
         assert!(node.payment_engine().await?.pricing()?.contains_key("m"));
+        // Advertised prices now come from the capability, and agree.
+        let advertised = node.advertised_payment_offers().await?;
+        assert!(advertised.contains_key("m"));
 
         let bad = manager
             .invoke_operation_by_capability(CAPABILITY, ops::CONTROL, r#"{"command":"nope"}"#)

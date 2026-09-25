@@ -157,7 +157,10 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
-    use mesh_llm_payments_types::contract::{ArrivalResponse, Empty, InvoiceRequest, ops};
+    use mesh_llm_payments_types::contract::{
+        AdvertisedPricing, ArrivalResponse, Empty, InvoiceRequest, ops,
+    };
+    use mesh_llm_payments_types::pricing::Pricing;
     use rmcp::model::CallToolResult;
     use serde_json::json;
 
@@ -170,6 +173,7 @@ mod tests {
     struct FakePayments {
         calls: Mutex<Vec<(String, String)>>,
         hang: Mutex<Vec<String>>,
+        pricing: Mutex<AdvertisedPricing>,
     }
 
     impl FakePayments {
@@ -201,8 +205,14 @@ mod tests {
                     // A provider that accepts the operation and never answers.
                     return std::future::pending().await;
                 }
+                let body = match request.name.as_str() {
+                    ops::PRICING => serde_json::to_value(this.pricing.lock().unwrap().clone())
+                        .map_err(transport_error)?,
+                    ops::RECONCILE => json!({"approved": []}),
+                    _ => json!({}),
+                };
                 Ok(plugin::RpcResult {
-                    result_json: serde_json::to_string(&CallToolResult::structured(json!({})))
+                    result_json: serde_json::to_string(&CallToolResult::structured(body))
                         .map_err(transport_error)?,
                 })
             })
@@ -360,5 +370,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fake.calls().last().unwrap().0, "b-payments");
+    }
+
+    /// The substitution boundary: a provider that is not the builtin answers
+    /// the host's advertised prices and drives recovery.
+    #[tokio::test]
+    async fn an_external_payments_provider_answers_its_own_pricing_and_recovery() {
+        let fake = Arc::new(FakePayments::default());
+        *fake.pricing.lock().unwrap() = AdvertisedPricing {
+            configured: true,
+            prices: BTreeMap::from([(
+                "external-model".to_owned(),
+                Pricing {
+                    input_msat_per_million: 7,
+                    output_msat_per_million: 9,
+                    minimum_invoice_msat: 1,
+                },
+            )]),
+        };
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client)
+            .await
+            .unwrap();
+        node.set_plugin_manager(
+            manager(
+                &[("external-payments", &[CAPABILITY])],
+                Arc::new(Arc::clone(&fake)),
+            )
+            .await,
+        )
+        .await;
+
+        let advertised = node.advertised_payment_offers().await.unwrap();
+        assert_eq!(advertised["external-model"].output_msat_per_million, 9);
+
+        crate::network::openai::payment_recovery::recover(&node)
+            .await
+            .unwrap();
+        assert!(
+            fake.calls().iter().any(|(plugin, operation)| {
+                plugin == "external-payments" && operation == ops::RECONCILE
+            }),
+            "{:?}",
+            fake.calls()
+        );
+        node.endpoint.close().await;
     }
 }

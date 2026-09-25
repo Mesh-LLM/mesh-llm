@@ -946,6 +946,8 @@ pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
     )
     .await?;
     node.set_plugin_manager(plugin_manager.clone()).await;
+    #[cfg(feature = "payments")]
+    crate::network::payments::spawn_payment_recovery(&node);
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
 
     if plugin_manager.list().await.is_empty() {
