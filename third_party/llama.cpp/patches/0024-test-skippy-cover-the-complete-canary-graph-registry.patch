@@ -1,12 +1,579 @@
-From 7b757efe0af3673ff032f9ad5bedb87dcd6ab965 Mon Sep 17 00:00:00 2001
+From 45a1f03f376a87a89c2c584138bcb2e796c88860 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 09:51:50 +1000
 Subject: [PATCH] test(skippy): cover the complete canary graph registry
 
 ---
- tests/test-llama-archs.cpp | 25 ++++++++++++++++---------
- 1 file changed, 16 insertions(+), 9 deletions(-)
+ src/CMakeLists.txt                          | 103 +-------------------
+ src/skippy/tests/graph_contract_cases.cmake | 101 +++++++++++++++++++
+ src/skippy/tests/graph_contract_checks.h    |  84 +++++++++++++++-
+ src/skippy/tests/graph_contract_models.cpp  |  49 ++++++++--
+ tests/test-graph-contract-fixture.h         |  74 +++++++++++++-
+ tests/test-llama-archs.cpp                  |  25 +++--
+ 6 files changed, 312 insertions(+), 124 deletions(-)
+ create mode 100644 src/skippy/tests/graph_contract_cases.cmake
 
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index c98a11390..b4f9bb467 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -208,108 +208,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     target_compile_features(skippy-graph-contract-models PRIVATE cxx_std_17)
+     target_link_libraries(skippy-graph-contract-models PRIVATE llama)
+     add_dependencies(skippy-noalloc-graph-planning skippy-graph-contract-models)
+-    # Layer counts and activation widths from ci/llama-canary/family-certified.json.
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-kimi-k3")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_kimi-k3 COMMAND skippy-model-fixture-generator
+-        --arch kimi-k3 --graph-contract 8 1024 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_kimi-k3 PROPERTIES FIXTURES_SETUP contract-kimi-k3)
+-    add_test(NAME skippy_graph_contract_kimi-k3 COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_kimi-k3 PROPERTIES FIXTURES_REQUIRED contract-kimi-k3)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-arwkv7")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_arwkv7 COMMAND skippy-model-fixture-generator
+-        --arch arwkv7 --graph-contract 28 3584 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_arwkv7 PROPERTIES FIXTURES_SETUP contract-arwkv7)
+-    add_test(NAME skippy_graph_contract_arwkv7 COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_arwkv7 PROPERTIES FIXTURES_REQUIRED contract-arwkv7)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-rwkv7")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_rwkv7 COMMAND skippy-model-fixture-generator
+-        --arch rwkv7 --graph-contract 32 2560 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_rwkv7 PROPERTIES FIXTURES_SETUP contract-rwkv7)
+-    add_test(NAME skippy_graph_contract_rwkv7 COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_rwkv7 PROPERTIES FIXTURES_REQUIRED contract-rwkv7)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-llama")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_llama COMMAND skippy-model-fixture-generator
+-        --arch llama --graph-contract 16 2048 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_llama PROPERTIES FIXTURES_SETUP contract-llama)
+-    add_test(NAME skippy_graph_contract_llama COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_llama PROPERTIES FIXTURES_REQUIRED contract-llama)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen3")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_qwen3 COMMAND skippy-model-fixture-generator
+-        --arch qwen3 --graph-contract 28 1024 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_qwen3 PROPERTIES FIXTURES_SETUP contract-qwen3)
+-    add_test(NAME skippy_graph_contract_qwen3 COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_qwen3 PROPERTIES FIXTURES_REQUIRED contract-qwen3)
+-
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-deepseek2")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_deepseek2 COMMAND skippy-model-fixture-generator
+-        --arch deepseek2 --graph-contract 27 2048 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_deepseek2 PROPERTIES FIXTURES_SETUP contract-deepseek2)
+-    add_test(NAME skippy_graph_contract_deepseek2 COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_deepseek2 PROPERTIES FIXTURES_REQUIRED contract-deepseek2)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen3moe")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_qwen3moe COMMAND skippy-model-fixture-generator
+-        --arch qwen3moe --graph-contract 48 2048 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_qwen3moe PROPERTIES FIXTURES_SETUP contract-qwen3moe)
+-    add_test(NAME skippy_graph_contract_qwen3moe COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_qwen3moe PROPERTIES FIXTURES_REQUIRED contract-qwen3moe)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen2moe")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_qwen2moe COMMAND skippy-model-fixture-generator
+-        --arch qwen2moe --graph-contract 24 2048 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_qwen2moe PROPERTIES FIXTURES_SETUP contract-qwen2moe)
+-    add_test(NAME skippy_graph_contract_qwen2moe COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_qwen2moe PROPERTIES FIXTURES_REQUIRED contract-qwen2moe)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-jamba")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_jamba COMMAND skippy-model-fixture-generator
+-        --arch jamba --graph-contract 28 2560 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_jamba PROPERTIES FIXTURES_SETUP contract-jamba)
+-    add_test(NAME skippy_graph_contract_jamba COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_jamba PROPERTIES FIXTURES_REQUIRED contract-jamba)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-granitehybrid")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_granitehybrid COMMAND skippy-model-fixture-generator
+-        --arch granitehybrid --graph-contract 32 768 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_granitehybrid PROPERTIES FIXTURES_SETUP contract-granitehybrid)
+-    add_test(NAME skippy_graph_contract_granitehybrid COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_granitehybrid PROPERTIES FIXTURES_REQUIRED contract-granitehybrid)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen35")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_qwen35 COMMAND skippy-model-fixture-generator
+-        --arch qwen35 --graph-contract 24 1024 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_qwen35 PROPERTIES FIXTURES_SETUP contract-qwen35)
+-    add_test(NAME skippy_graph_contract_qwen35 COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_qwen35 PROPERTIES FIXTURES_REQUIRED contract-qwen35)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-lfm2")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_lfm2 COMMAND skippy-model-fixture-generator
+-        --arch lfm2 --graph-contract 16 1024 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_lfm2 PROPERTIES FIXTURES_SETUP contract-lfm2)
+-    add_test(NAME skippy_graph_contract_lfm2 COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_lfm2 PROPERTIES FIXTURES_REQUIRED contract-lfm2)
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-gemma3n")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_gemma3n COMMAND skippy-model-fixture-generator
+-        --arch gemma3n --graph-contract 35 2048 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_gemma3n PROPERTIES FIXTURES_SETUP contract-gemma3n)
+-    # Same protected producer/consumer tail as family_split_constraints in family-certify.sh.
+-    add_test(NAME skippy_graph_contract_gemma3n COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf" 18)
+-    set_tests_properties(skippy_graph_contract_gemma3n PROPERTIES FIXTURES_REQUIRED contract-gemma3n)
+-
+-    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-deepseek32")
+-    file(MAKE_DIRECTORY "${contract_dir}")
+-    add_test(NAME skippy_generate_contract_deepseek32 COMMAND skippy-model-fixture-generator
+-        --arch deepseek32 --graph-contract 4 7168 --out "${contract_dir}")
+-    set_tests_properties(skippy_generate_contract_deepseek32 PROPERTIES FIXTURES_SETUP contract-deepseek32)
+-    add_test(NAME skippy_graph_contract_deepseek32 COMMAND skippy-graph-contract-models "${contract_dir}/graph-contract.gguf")
+-    set_tests_properties(skippy_graph_contract_deepseek32 PROPERTIES FIXTURES_REQUIRED contract-deepseek32)
++    include(skippy/tests/graph_contract_cases.cmake)
+ 
+     add_executable(skippy-input-capabilities skippy/tests/input_capabilities.cpp)
+     target_compile_features(skippy-input-capabilities PRIVATE cxx_std_17)
+diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
+new file mode 100644
+index 000000000..d490a559f
+--- /dev/null
++++ b/src/skippy/tests/graph_contract_cases.cmake
+@@ -0,0 +1,101 @@
++# Registry dimensions are checked by scripts/tests/test_synthetic_graph_registry.py.
++function(skippy_contract_case family arch layers width mtp mode)
++    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-${family}")
++    file(MAKE_DIRECTORY "${contract_dir}")
++    add_test(NAME skippy_generate_contract_${family} COMMAND skippy-model-fixture-generator
++        --arch ${arch} --graph-contract ${layers} ${width} --contract-mtp ${mtp} --out "${contract_dir}")
++    set_tests_properties(skippy_generate_contract_${family} PROPERTIES FIXTURES_SETUP contract-${family})
++    add_test(NAME skippy_graph_contract_${family} COMMAND skippy-graph-contract-models
++        "${contract_dir}/graph-contract.gguf" ${mode})
++    set_tests_properties(skippy_graph_contract_${family} PROPERTIES FIXTURES_REQUIRED contract-${family} TIMEOUT 900)
++endfunction()
++
++skippy_contract_case(qwen3-dense qwen3 28 1024 0 causal)
++skippy_contract_case(llama llama 16 2048 0 causal)
++skippy_contract_case(glm47-flash deepseek2 47 2048 0 causal)
++skippy_contract_case(glm4 chatglm 40 4096 0 causal)
++skippy_contract_case(glm45-air glm4moe 46 4096 1 causal)
++skippy_contract_case(deepseek2 deepseek2 27 2048 0 causal)
++skippy_contract_case(gpt-oss gpt-oss 24 2880 0 causal)
++skippy_contract_case(qwen3-moe qwen3moe 48 2048 0 causal)
++skippy_contract_case(qwen2-moe qwen2moe 24 2048 0 causal)
++skippy_contract_case(falcon-h1 falcon-h1 24 2048 0 causal)
++skippy_contract_case(jamba2 jamba 28 2560 0 causal)
++skippy_contract_case(kimi-linear kimi-linear 27 2304 0 causal)
++skippy_contract_case(qwen3-next qwen3next 48 2048 0 causal)
++skippy_contract_case(qwen4exp qwen4exp 48 10240 0 causal)
++skippy_contract_case(nemotron nemotron_h_moe 52 2688 1 causal)
++skippy_contract_case(mamba mamba 24 768 0 causal)
++skippy_contract_case(mamba2 mamba 64 4096 0 causal)
++skippy_contract_case(rwkv6 rwkv6 24 2048 0 causal)
++skippy_contract_case(rwkv7 rwkv7 32 2560 0 causal)
++skippy_contract_case(granite-hybrid granitehybrid 32 768 0 causal)
++skippy_contract_case(qwen35 qwen35 24 1024 0 causal)
++skippy_contract_case(granite-dense granite 40 2048 0 causal)
++skippy_contract_case(lfm2 lfm2 16 1024 0 causal)
++skippy_contract_case(lfm2-vl lfm2 16 1024 0 causal)
++skippy_contract_case(laguna laguna 40 2048 0 causal)
++skippy_contract_case(qwen2-vl qwen2vl 28 1536 0 causal)
++skippy_contract_case(qwen3-vl qwen3vl 36 4096 0 causal)
++skippy_contract_case(gemma2 gemma2 26 2304 0 causal)
++skippy_contract_case(phi3 phi3 32 3072 0 causal)
++skippy_contract_case(phi4 llama 40 5120 0 causal)
++skippy_contract_case(falcon-dense falcon 32 4544 0 causal)
++skippy_contract_case(internlm2 internlm2 24 2048 0 causal)
++skippy_contract_case(mistral-small llama 40 5120 0 causal)
++skippy_contract_case(cohere2 cohere2 32 4096 0 causal)
++skippy_contract_case(smollm3 smollm3 36 2048 0 causal)
++skippy_contract_case(qwen2 qwen2 24 896 0 causal)
++skippy_contract_case(bloom bloom 24 1024 0 causal)
++skippy_contract_case(gemma gemma 18 2048 0 causal)
++skippy_contract_case(gemma3 gemma3 26 1152 0 causal)
++skippy_contract_case(phi2 phi2 32 2560 0 causal)
++skippy_contract_case(starcoder2 starcoder2 30 3072 0 causal)
++skippy_contract_case(stablelm stablelm 24 2048 0 causal)
++skippy_contract_case(olmo2 olmo2 16 2048 0 causal)
++skippy_contract_case(exaone4 exaone4 30 2048 0 causal)
++skippy_contract_case(minicpm3 minicpm3 62 2560 0 causal)
++skippy_contract_case(nemotron-expansion nemotron 32 3072 0 causal)
++skippy_contract_case(arcee arcee 36 2560 0 causal)
++skippy_contract_case(mpt mpt 32 4096 0 causal)
++skippy_contract_case(apertus apertus 32 4096 0 causal)
++skippy_contract_case(glm4-expansion glm4 40 4096 0 causal)
++skippy_contract_case(afmoe afmoe 32 2048 0 causal)
++skippy_contract_case(arwkv7 arwkv7 28 3584 0 causal)
++skippy_contract_case(bailingmoe3 bailingmoe3 24 1536 0 causal)
++skippy_contract_case(chameleon chameleon 32 4096 0 causal)
++skippy_contract_case(deepseek32 deepseek32 4 7168 0 causal)
++skippy_contract_case(dots1 dots1 27 2048 0 causal)
++skippy_contract_case(ernie4-5 ernie4_5 18 1024 0 causal)
++skippy_contract_case(ernie4-5-moe ernie4_5-moe 28 2560 0 causal)
++skippy_contract_case(gemma3n gemma3n 35 2048 0 shared-kv-18)
++skippy_contract_case(gemma4 gemma4 42 2560 0 shared-kv-22)
++skippy_contract_case(gptneox gptneox 44 6144 0 causal)
++skippy_contract_case(granite-swa granite_swa 28 1280 0 causal)
++skippy_contract_case(granite-moe granitemoe 24 1024 0 causal)
++skippy_contract_case(granite-switch graniteswitch 40 2560 0 causal-tokens)
++skippy_contract_case(grovemoe grovemoe 48 2048 0 causal)
++skippy_contract_case(hunyuan-dense hunyuan-dense 32 2048 0 causal)
++skippy_contract_case(hy-v3 hy_v3 48 2048 0 causal)
++skippy_contract_case(jais jais 40 5120 0 causal)
++skippy_contract_case(jais2 jais2 32 3328 0 causal)
++skippy_contract_case(kimi-k3 kimi-k3 8 1024 0 causal)
++skippy_contract_case(lfm2-moe lfm2moe 24 2048 0 causal)
++skippy_contract_case(maincoder maincoder 32 1536 0 causal)
++skippy_contract_case(mellum mellum 28 2304 0 causal)
++skippy_contract_case(minicpm minicpm 32 4096 0 causal)
++skippy_contract_case(qwen35moe qwen35moe 40 2048 0 causal)
++skippy_contract_case(qwen3vlmoe qwen3vlmoe 48 2048 0 causal)
++skippy_contract_case(mistral4 mistral4 36 4096 0 causal)
++skippy_contract_case(step35 step35 45 4096 0 causal)
++skippy_contract_case(mimo2 mimo2 48 4096 3 causal)
++skippy_contract_case(minimax-m3 minimax-m3 60 6144 0 causal)
++skippy_contract_case(spark2-5 spark2_5 36 2560 0 causal)
++skippy_contract_case(nomic-bert-embedding nomic-bert 12 768 0 stateless)
++skippy_contract_case(jina-bert-v2-rerank jina-bert-v2 6 384 0 stateless)
++skippy_contract_case(t5-encoder-decoder t5 8 512 0 encoder-decoder-rejection)
++skippy_contract_case(paddleocr paddleocr 18 1024 0 causal)
++skippy_contract_case(qwen3tts qwen3tts 28 2048 0 causal)
++skippy_contract_case(ultravox llama 16 2048 0 causal)
++skippy_contract_case(inkling inkling 42 4096 0 causal)
++skippy_contract_case(llama4 llama4 48 5120 0 causal)
+diff --git a/src/skippy/tests/graph_contract_checks.h b/src/skippy/tests/graph_contract_checks.h
+index 3e4c1c15f..69844b1f8 100644
+--- a/src/skippy/tests/graph_contract_checks.h
++++ b/src/skippy/tests/graph_contract_checks.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #include <set>
+ #include <stdexcept>
++#include "../../vendor/nlohmann/json.hpp"
+ 
+ static std::string contract_string(const skippy_stage_plan * plan, skippy_stage_plan_string_ref_v1 ref) {
+     const char * data = nullptr;
+@@ -30,7 +31,7 @@ static std::set<std::string> contract_parameters(const skippy_stage_plan * plan)
+     return result;
+ }
+ 
+-static void check_state_ownership(const skippy_stage_plan * plan) {
++static void check_state_ownership(const skippy_stage_plan * plan, bool causal = true) {
+     skippy_stage_plan_desc_v1 desc{};
+     if (skippy_stage_plan_describe_v1(plan, &desc, nullptr) != SKIPPY_STATUS_OK) {
+         throw std::runtime_error("invalid state plan descriptor");
+@@ -40,7 +41,7 @@ static void check_state_ownership(const skippy_stage_plan * plan) {
+         if (skippy_stage_plan_profile_at_v1(plan, p, &profile, nullptr) != SKIPPY_STATUS_OK) {
+             throw std::runtime_error("invalid state profile descriptor");
+         }
+-        if (profile.state_effect_count == 0) { throw std::runtime_error("causal profile lost all state effects"); }
++        if (causal && profile.state_effect_count == 0) { throw std::runtime_error("causal profile lost all state effects"); }
+         std::set<std::string> reads, writes;
+         for (size_t i = 0; i < profile.state_effect_count; ++i) {
+             skippy_stage_plan_state_desc_v1 state{};
+@@ -55,6 +56,83 @@ static void check_state_ownership(const skippy_stage_plan * plan) {
+             if (identity.empty()) { throw std::runtime_error("state identity is empty"); }
+             (state.access == SKIPPY_STAGE_PLAN_STATE_READ ? reads : writes).insert(identity);
+         }
+-        if (reads.empty() || writes.empty()) { throw std::runtime_error("causal profile lost state reads or writes"); }
++        if (causal && (reads.empty() || writes.empty())) { throw std::runtime_error("causal profile lost state reads or writes"); }
+     }
+ }
++
++static void check_mtp_contract(const skippy_stage_plan * plan, int32_t expected_heads) {
++    skippy_stage_plan_desc_v1 desc{};
++    if (skippy_stage_plan_describe_v1(plan, &desc, nullptr) != SKIPPY_STATUS_OK) {
++        throw std::runtime_error("invalid MTP plan descriptor");
++    }
++    const auto contract = nlohmann::json::parse(contract_string(plan, desc.execution_contract));
++    const auto & heads = contract.at("mtp");
++    if (heads.size() != size_t(expected_heads)) {
++        throw std::runtime_error("execution contract omitted or misplaced MTP heads");
++    }
++    std::set<std::string> residents;
++    for (size_t i = 0; i < desc.resident_tensor_count; ++i) {
++        skippy_stage_plan_value_desc_v1 value{};
++        if (skippy_stage_plan_resident_tensor_at_v1(plan, i, &value, nullptr) != SKIPPY_STATUS_OK) {
++            throw std::runtime_error("invalid MTP resident descriptor");
++        }
++        residents.insert(contract_string(plan, value.identity));
++    }
++    for (int32_t i = 0; i < expected_heads; ++i) {
++        if (heads.at(i).at("offset") != i || heads.at(i).at("parameters").empty()) {
++            throw std::runtime_error("MTP head lacks offset or parameters");
++        }
++        for (const auto & parameter : heads.at(i).at("parameters")) {
++            if (!residents.count(parameter.get<std::string>())) {
++                throw std::runtime_error("MTP parameter missing from terminal stage");
++            }
++        }
++    }
++}
++
++static std::set<std::string> contract_states(const skippy_stage_plan * plan) {
++    skippy_stage_plan_desc_v1 desc{};
++    if (skippy_stage_plan_describe_v1(plan, &desc, nullptr) != SKIPPY_STATUS_OK) {
++        throw std::runtime_error("invalid state plan descriptor");
++    }
++    std::set<std::string> result;
++    for (size_t p = 0; p < desc.profile_count; ++p) {
++        skippy_stage_plan_profile_desc_v1 profile{};
++        if (skippy_stage_plan_profile_at_v1(plan, p, &profile, nullptr) != SKIPPY_STATUS_OK) {
++            throw std::runtime_error("invalid state profile");
++        }
++        for (size_t i = 0; i < profile.state_effect_count; ++i) {
++            skippy_stage_plan_state_desc_v1 state{};
++            if (skippy_stage_plan_state_at_v1(plan, p, i, &state, nullptr) != SKIPPY_STATUS_OK) {
++                throw std::runtime_error("invalid state effect");
++            }
++            result.insert(contract_string(plan, profile.profile_id) + ":" +
++                    contract_string(plan, state.identity) + ":" + std::to_string(state.access));
++        }
++    }
++    return result;
++}
++
++static void check_invalid_contract_requests(skippy_stage_planner * planner,
++        skippy_stage_planner_config_v1 config, int32_t layers) {
++    const int32_t ranges[][2] = {{-1, layers}, {0, layers + 1}, {1, 1}, {2, 1}};
++    for (const auto & range : ranges) {
++        skippy_stage_plan * invalid = nullptr;
++        skippy_error * error = nullptr;
++        const auto status = skippy_stage_planner_realize_v1(planner, range[0], range[1], &invalid, &error);
++        const bool rejected = status == SKIPPY_STATUS_INVALID_ARGUMENT && invalid == nullptr;
++        skippy_stage_plan_free(invalid);
++        skippy_error_free(error);
++        if (!rejected) { throw std::runtime_error("invalid stage range was admitted"); }
++    }
++    skippy_stage_planner_profile_v1 invalid_profile{1, sizeof(invalid_profile), "invalid", 1, 1, 2, 0};
++    config.profiles = &invalid_profile;
++    config.profile_count = 1;
++    skippy_stage_planner * invalid = nullptr;
++    skippy_error * error = nullptr;
++    const auto status = skippy_stage_planner_create_v1(&config, &invalid, &error);
++    const bool rejected = status == SKIPPY_STATUS_INVALID_ARGUMENT && invalid == nullptr;
++    skippy_stage_planner_free(invalid);
++    skippy_error_free(error);
++    if (!rejected) { throw std::runtime_error("impossible output profile was admitted"); }
++}
+diff --git a/src/skippy/tests/graph_contract_models.cpp b/src/skippy/tests/graph_contract_models.cpp
+index bf5472dae..36444a95e 100644
+--- a/src/skippy/tests/graph_contract_models.cpp
++++ b/src/skippy/tests/graph_contract_models.cpp
+@@ -10,11 +10,12 @@
+ #include <vector>
+ 
+ #include "graph_contract_checks.h"
++#include "../../vendor/nlohmann/json.hpp"
+ 
+ // Validate real architecture graphs using sparse synthetic GGUFs, without inference.
+ static int run_contract(int argc, char ** argv) {
+     if (argc != 2 && argc != 3) {
+-        std::fprintf(stderr, "usage: %s model.gguf [shared-kv-tail-start]\n", argv[0]);
++        std::fprintf(stderr, "usage: %s model.gguf [causal|stateless|shared-kv-18|encoder-decoder-rejection]\n", argv[0]);
+         return 1;
+     }
+     ggml_context * raw_context = nullptr;
+@@ -27,8 +28,12 @@ static int run_contract(int argc, char ** argv) {
+     }
+     const auto * arch = gguf_get_val_str(metadata.get(), gguf_find_key(metadata.get(), "general.architecture"));
+     const std::string layers_key = std::string(arch) + ".block_count";
+-    const int32_t layers = gguf_get_val_u32(metadata.get(), gguf_find_key(metadata.get(), layers_key.c_str()));
+-    const int32_t shared_tail = argc == 3 ? std::stoi(argv[2]) : layers;
++    const std::string mtp_key = std::string(arch) + ".nextn_predict_layers";
++    const int64_t mtp_index = gguf_find_key(metadata.get(), mtp_key.c_str());
++    const int32_t mtp_layers = mtp_index < 0 ? 0 : gguf_get_val_u32(metadata.get(), mtp_index);
++    const int32_t layers = gguf_get_val_u32(metadata.get(), gguf_find_key(metadata.get(), layers_key.c_str())) - mtp_layers;
++    const std::string mode = argc == 3 ? argv[2] : "causal";
++    const int32_t shared_tail = mode == "shared-kv-18" ? 18 : mode == "shared-kv-22" ? 22 : layers;
+     std::vector<skippy_stage_planner_tensor_v1> tensors;
+     for (int64_t index = 0; index < gguf_get_n_tensors(metadata.get()); ++index) {
+         const char * name = gguf_get_tensor_name(metadata.get(), index);
+@@ -67,6 +72,22 @@ static int run_contract(int argc, char ** argv) {
+         skippy_error_free(error);
+         return 1;
+     }
++    check_invalid_contract_requests(planner, config, layers);
++    if (mode == "encoder-decoder-rejection") {
++        for (int32_t start = 0; start < layers; ++start) {
++            skippy_stage_plan * rejected = nullptr;
++            status = skippy_stage_planner_realize_v1(planner, start, layers, &rejected, &error);
++            if (status != SKIPPY_STATUS_UNSUPPORTED || rejected != nullptr || error == nullptr ||
++                    std::string(error->message) != "stage planner does not support encoder-decoder cross-attention") {
++                skippy_stage_plan_free(rejected);
++                skippy_error_free(error);
++                throw std::runtime_error("encoder-decoder staging must reject before graph construction");
++            }
++            skippy_error_free(error);
++            error = nullptr;
++        }
++        return 0;
++    }
+     skippy_stage_plan * whole_raw = nullptr;
+     if (skippy_stage_planner_realize_v1(planner, 0, layers, &whole_raw, &error) != SKIPPY_STATUS_OK) {
+         std::fprintf(stderr, "whole-model plan failed: %s\n", error ? error->message : "unknown");
+@@ -75,6 +96,9 @@ static int run_contract(int argc, char ** argv) {
+     }
+     std::unique_ptr<skippy_stage_plan, decltype(&skippy_stage_plan_free)> whole(whole_raw, skippy_stage_plan_free);
+     const auto all_parameters = contract_parameters(whole.get());
++    const auto all_states = contract_states(whole.get());
++    check_state_ownership(whole.get(), mode != "stateless");
++    check_mtp_contract(whole.get(), mtp_layers);
+     // Balanced canary cuts, edge cuts, and a multi-stage chain exercise forwarding.
+     std::vector<std::vector<int32_t>> chains = {
+         {0, 1, layers}, {0, layers / 2, layers}, {0, layers - 1, layers},
+@@ -86,7 +110,7 @@ static int run_contract(int argc, char ** argv) {
+                 [shared_tail](int32_t cut) { return cut > shared_tail; });
+         std::vector<std::unique_ptr<skippy_stage_plan, decltype(&skippy_stage_plan_free)>> owned;
+         std::vector<const skippy_stage_plan *> chain;
+-        std::set<std::string> resident_union;
++        std::set<std::string> resident_union, state_union;
+         for (size_t i = 1; i < cuts.size(); ++i) {
+             skippy_stage_plan * plan = nullptr;
+             status = skippy_stage_planner_realize_v1(planner, cuts[i-1], cuts[i], &plan, &error);
+@@ -95,7 +119,7 @@ static int run_contract(int argc, char ** argv) {
+             skippy_stage_plan_desc_v1 descriptor{};
+             status = skippy_stage_plan_describe_v1(plan, &descriptor, &error);
+             if (status != SKIPPY_STATUS_OK) { break; }
+-            if (descriptor.profile_count != 8) {
++            if (descriptor.profile_count != (mode == "causal-tokens" ? 4u : 8u)) {
+                 std::fprintf(stderr, "expected token and embedding decode/prefill profiles, got %zu\n", size_t(descriptor.profile_count));
+                 return 1;
+             }
+@@ -113,13 +137,21 @@ static int run_contract(int argc, char ** argv) {
+                 names.emplace_back(name, length);
+             }
+             std::sort(names.begin(), names.end());
+-            if (names != std::vector<std::string>{"batched-decode", "decode", "embeddings:batched-decode", "embeddings:decode", "embeddings:prefill", "embeddings:prefill-last", "prefill", "prefill-last"}) {
++            std::vector<std::string> expected_names{"batched-decode", "decode", "prefill", "prefill-last"};
++            if (mode != "causal-tokens") {
++                expected_names.insert(expected_names.end(), {"embeddings:batched-decode", "embeddings:decode", "embeddings:prefill", "embeddings:prefill-last"});
++                std::sort(expected_names.begin(), expected_names.end());
++            }
++            if (names != expected_names) {
+                 std::fprintf(stderr, "planned profile identities differ from requested input modes\n");
+                 return 1;
+             }
+             auto resident = contract_parameters(plan);
+             resident_union.insert(resident.begin(), resident.end());
+-            check_state_ownership(plan);
++            check_state_ownership(plan, false);
++            const auto states = contract_states(plan);
++            state_union.insert(states.begin(), states.end());
++            check_mtp_contract(plan, cuts[i] == layers ? mtp_layers : 0);
+             chain.push_back(plan);
+         }
+         if (forbidden_cut) {
+@@ -141,6 +173,9 @@ static int run_contract(int argc, char ** argv) {
+             skippy_error_free(error);
+             return 1;
+         }
++        if (state_union != all_states) {
++            throw std::runtime_error("split state effects differ from whole-model plan");
++        }
+         if (resident_union != all_parameters) {
+             std::fprintf(stderr, "split parameter closure differs from whole-model plan\n");
+             return 1;
+diff --git a/tests/test-graph-contract-fixture.h b/tests/test-graph-contract-fixture.h
+index 61f936bbe..32ceaf95b 100644
+--- a/tests/test-graph-contract-fixture.h
++++ b/tests/test-graph-contract-fixture.h
+@@ -1,14 +1,58 @@
+ #pragma once
+ #include <filesystem>
++#include <set>
+ #include "../src/llama-model.h"
+ 
+ // Sparse GGUFs carry synthetic tensor shapes only; they must never run inference.
+-static int save_graph_contract_fixture(llm_arch arch, const std::string & out, uint32_t layers, uint32_t width) {
++static int save_graph_contract_fixture(llm_arch arch, const std::string & out, uint32_t layers, uint32_t width, uint32_t mtp_layers) {
+     if (out.empty() || arch == LLM_ARCH_UNKNOWN || layers < 2 || width == 0) {
+         throw std::runtime_error("graph contract fixture requires architecture, output, layers and width");
+     }
+-    auto metadata = get_gguf_ctx(arch, moe_mandatory(arch), glm_dsa_indexshare_fixture::DEFAULT,
+-            256, 8, false, layers, width);
++    auto metadata = get_gguf_ctx(arch, moe_mandatory(arch) || arch == LLM_ARCH_NEMOTRON_H_MOE || arch == LLM_ARCH_INKLING || arch == LLM_ARCH_GRANITE_MOE, glm_dsa_indexshare_fixture::DEFAULT,
++            256, 8, false, layers + mtp_layers, arch == LLM_ARCH_QWEN4EXP ? width / 4 : width);
++    llama_model_saver kv(arch, metadata.get());
++    if (arch == LLM_ARCH_BAILINGMOE3) {
++        kv.add_kv(LLM_KV_SWIGLU_CLAMP_EXP, std::vector<float>(layers, 4.0f));
++        kv.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>(layers, 5.0f));
++    }
++    if (arch == LLM_ARCH_GEMMA4) {
++        std::vector<uint32_t> pattern(layers);
++        for (uint32_t i = 0; i < layers; ++i) { pattern[i] = i % 2 == 0; }
++        kv.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
++        kv.add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS, layers - 24);
++    }
++    if (arch == LLM_ARCH_GRANITE_SWITCH) {
++        kv.add_kv(LLM_KV_ADAPTER_COUNT, uint32_t(2));
++        kv.add_kv(LLM_KV_ADAPTER_LORA_RANK, uint32_t(8));
++        kv.add_kv(LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE, std::vector<uint32_t>{10, 11});
++        kv.add_kv(LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE, std::vector<uint32_t>{12, 13});
++    }
++    if (arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_JINA_BERT_V2) {
++        kv.add_kv(LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT, uint32_t(2));
++        kv.add_kv(LLM_KV_CLASSIFIER_OUTPUT_LABELS, std::vector<std::string>{"score"});
++    }
++    if (arch == LLM_ARCH_QWEN3VL || arch == LLM_ARCH_QWEN3VLMOE) {
++        kv.add_kv(LLM_KV_NUM_DEEPSTACK_LAYERS, uint32_t(3));
++    }
++    if (arch == LLM_ARCH_INKLING) {
++        kv.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE, 1.0f);
++        kv.add_kv(LLM_KV_INKLING_D_REL, uint32_t(16));
++        kv.add_kv(LLM_KV_INKLING_REL_EXTENT, uint32_t(32));
++        kv.add_kv(LLM_KV_INKLING_REL_EXTENT_SWA, uint32_t(16));
++        kv.add_kv(LLM_KV_INKLING_SHORTCONV_KERNEL, uint32_t(3));
++        kv.add_kv(LLM_KV_INKLING_DENSE_BLOCK_COUNT, uint32_t(1));
++        kv.add_kv(LLM_KV_INKLING_LOGIT_SCALE_DENOM, 1.0f);
++    }
++    if (mtp_layers) {
++        kv.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, mtp_layers);
++        ggml_tensor probe{};
++        probe.type = GGML_TYPE_F16;
++        probe.ne[0] = 2 * width;
++        probe.ne[1] = width;
++        probe.ne[2] = probe.ne[3] = 1;
++        ggml_format_name(&probe, "blk.%u.nextn.eh_proj.weight", layers);
++        gguf_add_tensor(metadata.get(), &probe);
++    }
+     if (arch == LLM_ARCH_ARWKV7 || arch == LLM_ARCH_RWKV7) {
+         llama_model_saver kv(arch, metadata.get());
+         kv.add_kv(LLM_KV_ATTENTION_DECAY_LORA_RANK, uint32_t(32));
+@@ -22,16 +66,40 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
+     }
+     auto params = llama_model_default_params();
+     params.no_alloc = true;
++    params.load_mtp = true;
+     params.n_gpu_layers = 0;
+     llama_model_ptr model(llama_model_init_from_user(metadata.get(), [](ggml_tensor *, void *) {}, nullptr, params));
+     if (!model) { throw std::runtime_error("cannot construct synthetic graph contract model"); }
++    if (model->hparams.n_layer() != layers || (model->hparams.router_layer >= 0 ? 0 : model->hparams.n_layer_nextn) != mtp_layers ||
++            model->hparams.n_embd_out() != width) {
++        throw std::runtime_error("synthetic runtime dimensions differ from canary registry");
++    }
+     gguf_context_ptr output(gguf_init_empty());
+     gguf_set_kv(output.get(), metadata.get());
++    std::set<std::string> replaced_qkv;
++    if (arch == LLM_ARCH_MIMO2) {
++        for (uint32_t head = 0; head < mtp_layers; ++head) {
++            for (const char * projection : {"q", "k", "v"}) {
++                for (const char * suffix : {"weight", "scale", "input_scale"}) {
++                    replaced_qkv.insert("blk." + std::to_string(layers + head) + ".attn_" + projection + "." + suffix);
++                }
++            }
++        }
++    }
+     for (const auto & item : llama_internal_get_tensor_map(model.get())) {
++        if (replaced_qkv.count(item.second->name)) { continue; }
+         if (gguf_find_tensor(output.get(), item.second->name) < 0) {
+             gguf_add_tensor(output.get(), item.second);
+         }
+     }
++    if (arch == LLM_ARCH_MIMO2 && mtp_layers) {
++        ggml_context_ptr fused(ggml_init({ggml_tensor_overhead() * mtp_layers, nullptr, true}));
++        for (uint32_t head = 0; head < mtp_layers; ++head) {
++            auto * qkv = ggml_new_tensor_2d(fused.get(), GGML_TYPE_F32, width, 3 * width);
++            ggml_format_name(qkv, "blk.%u.attn_qkv.weight", layers + head);
++            gguf_add_tensor(output.get(), qkv);
++        }
++    }
+     const std::string path = out + "/graph-contract.gguf";
+     if (!gguf_write_to_file(output.get(), path.c_str(), true)) {
+         throw std::runtime_error("cannot write graph contract fixture");
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
 index 90cf83e08..e60a3aa17 100644
 --- a/tests/test-llama-archs.cpp
