@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "ERROR: active Cargo/Rust compiler processes detected; refusing cleanup\n",
+  "stdout": ""
+}

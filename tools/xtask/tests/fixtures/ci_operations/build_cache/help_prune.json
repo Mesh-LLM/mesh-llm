@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "usage: manage-build-cache.py prune [-h] [--workspace WORKSPACE]\n                                   [--target-dir TARGET_DIR]\n                                   [--max-size MAX_SIZE] [--max-age MAX_AGE]\n                                   [--json] [--execute]\n\noptions:\n  -h, --help            show this help message and exit\n  --workspace WORKSPACE\n  --target-dir TARGET_DIR\n  --max-size MAX_SIZE\n  --max-age MAX_AGE\n  --json\n  --execute\n"
+}

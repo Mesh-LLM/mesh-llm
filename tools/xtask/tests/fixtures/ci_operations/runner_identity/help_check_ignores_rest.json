@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "usage: runner-image-identity.py check [-h]\n\noptions:\n  -h, --help  show this help message and exit\n"
+}

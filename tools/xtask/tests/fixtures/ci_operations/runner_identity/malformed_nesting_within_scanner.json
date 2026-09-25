@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: runner evidence: JSON nesting exceeds 64 levels\n",
+  "stdout": ""
+}

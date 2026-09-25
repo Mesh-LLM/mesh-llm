@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "{\n  \"actions\": [],\n  \"after_bytes\": 16424,\n  \"before_bytes\": 16424,\n  \"mode\": \"dry-run\",\n  \"reclaimed_bytes\": 0,\n  \"schema\": \"mesh-llm.local-build-cache-prune\",\n  \"schema_version\": 1\n}\n"
+}

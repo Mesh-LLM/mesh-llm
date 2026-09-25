@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: 'utf-8' codec can't decode byte 0xff in position 7: invalid start byte\n",
+  "stdout": ""
+}

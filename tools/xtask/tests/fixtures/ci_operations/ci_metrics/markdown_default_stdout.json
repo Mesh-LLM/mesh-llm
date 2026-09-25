@@ -1,0 +1,11 @@
+{
+  "args": [
+    "--input",
+    "sample_runs.json"
+  ],
+  "code": 0,
+  "output": null,
+  "raw_output": null,
+  "stderr": "",
+  "stdout": "# CI timing summary\n\nAnalyzed **2** completed run(s) from `sample_runs.json`.\n\n## Workflow timing\n\n| Timing | Samples | p50 | p90 | p95 | Max |\n| --- | ---: | ---: | ---: | ---: | ---: |\n| Wall time | 2 | 15m 0s | 19m 0s | 19m 30s | 20m 0s |\n| Queue | 2 | 10s | 14s | 14s | 15s |\n| Dependency wait | 0 | n/a | n/a | n/a | n/a |\n| Execution | 4 | 5m 30s | 13m 36s | 14m 48s | 16m 0s |\n\n## Runner dimensions\n\n| Provider | OS | Architecture | Role | Depot size | Jobs | Execution p50 | Execution p95 | Runner queue p95 |\n| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |\n| github-hosted | linux | amd64 | n/a | n/a | 4 | 5m 30s | 14m 48s | 27s |\n\n## Capacity and rollout heuristics\n\nRunner-minutes: **28.417**; cancelled runner-minutes: **0.0**; peak workers: **1**.\nQueue p95: **27s**; terminal queue p95: **5s**; capacity contaminated: **False**; state: **eligible**.\n\n## Step timing\n\nNo job step timestamps were available; cache, context-upload, and export/import phases are not inferred from logs.\n\n## Slow job families\n\n| Job | Samples | Duration p50 | Duration p95 | Runner queue p50 | Runner queue p95 |\n| --- | ---: | ---: | ---: | ---: | ---: |\n| build | 2 | 12m 0s | 15m 36s | 20s | 29s |\n| summary | 1 | 3m 0s | 3m 0s | 2s | 2s |\n| smoke | 1 | 1m 25s | 1m 25s | 5s | 5s |\n\n## Terminal jobs (critical-path candidates)\n\n| Job | Runs finishing last | Share |\n| --- | ---: | ---: |\n| smoke | 1 | 50.0% |\n| summary | 1 | 50.0% |\n\n## Slowest observations\n\n| Run | Job | Duration | Queue |\n| --- | --- | ---: | ---: |\n| [102](https://example.test/runs/102) | build | 16m 0s | 30s |\n| [101](https://example.test/runs/101) | build | 8m 0s | 10s |\n| [102](https://example.test/runs/102) | summary | 3m 0s | 2s |\n| [101](https://example.test/runs/101) | smoke | 1m 25s | 5s |\n\n_Job queue uses GitHub's job creation-to-start interval. Offline `gh run view` data may omit creation times; those samples are n/a. Workflow and start-delay timing excludes rerun attempts because their run timestamps belong to the original attempt. Terminal jobs are candidates only; the DAG is not reconstructed._\n"
+}

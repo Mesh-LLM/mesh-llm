@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: runner evidence: invalid fields: schema type image environment backend mesh_revision runner_images_revision digest children\n",
+  "stdout": ""
+}

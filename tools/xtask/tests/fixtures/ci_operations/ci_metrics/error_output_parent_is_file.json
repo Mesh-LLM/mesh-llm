@@ -1,0 +1,15 @@
+{
+  "args": [
+    "--input",
+    "sample_runs.json",
+    "--json-out",
+    "out/nested/metrics.json",
+    "--json-out",
+    "sample_runs.json/x.json"
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: [Errno 17] File exists: 'sample_runs.json'\n",
+  "stdout": ""
+}

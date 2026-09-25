@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "{\n  \"actions\": [\n    {\n      \"bytes\": 700,\n      \"kind\": \"incremental\",\n      \"path\": \"{root}/ws/target/aarch64-apple-darwin/release/incremental/cross-3\"\n    },\n    {\n      \"bytes\": 24,\n      \"kind\": \"incremental\",\n      \"path\": \"{root}/ws/target/debug/incremental/escape\"\n    },\n    {\n      \"bytes\": 3000,\n      \"kind\": \"incremental\",\n      \"path\": \"{root}/ws/target/debug/incremental/stale-1\"\n    },\n    {\n      \"bytes\": 5000,\n      \"kind\": \"incremental\",\n      \"path\": \"{root}/ws/target/debug/incremental/live-2\"\n    },\n    {\n      \"estimated_bytes\": 5200,\n      \"kind\": \"cargo-package\",\n      \"package\": \"demo-pkg\"\n    },\n    {\n      \"estimated_bytes\": 2500,\n      \"kind\": \"cargo-package\",\n      \"package\": \"fresh-pkg\"\n    }\n  ],\n  \"after_bytes\": 0,\n  \"before_bytes\": 16424,\n  \"mode\": \"dry-run\",\n  \"reclaimed_bytes\": 16424,\n  \"schema\": \"mesh-llm.local-build-cache-prune\",\n  \"schema_version\": 1\n}\n"
+}

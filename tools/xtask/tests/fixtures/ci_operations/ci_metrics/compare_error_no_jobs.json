@@ -1,0 +1,17 @@
+{
+  "args": [
+    "--input",
+    "sample_runs.json",
+    "--compare-input",
+    "no_jobs.json",
+    "--json-out",
+    "out/nested/metrics.json",
+    "--markdown-out",
+    "md/nested/summary.md"
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: run 101 has no jobs array; use --raw-out or save 'gh run view --json ...,jobs' output\n",
+  "stdout": ""
+}

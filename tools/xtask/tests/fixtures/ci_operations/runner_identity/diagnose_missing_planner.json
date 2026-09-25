@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: [Errno 2] No such file or directory: '{root}/scripts/plan-ci.py'\n",
+  "stdout": ""
+}

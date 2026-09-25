@@ -1,0 +1,11 @@
+{
+  "args": [
+    "--input",
+    ""
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "usage: collect-ci-metrics.py [-h] [--repo REPO] [--workflow WORKFLOW]\n                             [--run-id RUN_ID] [--input INPUT]\n                             [--compare-input COMPARE_INPUT] [--limit LIMIT]\n                             [--status STATUS] [--branch BRANCH]\n                             [--event EVENT] [--created CREATED] [--top TOP]\n                             [--label KEY=VALUE] [--json-out JSON_OUT]\n                             [--markdown-out MARKDOWN_OUT] [--raw-out RAW_OUT]\ncollect-ci-metrics.py: error: one of --input, --workflow, or --run-id is required\n",
+  "stdout": ""
+}

@@ -1,0 +1,5 @@
+{
+  "code": 2,
+  "stderr": "usage: runner-image-identity.py seed-key [-h] --recipe-hash RECIPE_HASH\nrunner-image-identity.py seed-key: error: argument --recipe-hash: expected one argument\n",
+  "stdout": ""
+}

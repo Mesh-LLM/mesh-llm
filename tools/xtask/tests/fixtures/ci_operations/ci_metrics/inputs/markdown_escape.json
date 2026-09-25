@@ -1,0 +1,52 @@
+[
+  {
+    "databaseId": 201,
+    "attempt": 1,
+    "workflowName": "PR | Builds",
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-07-01T00:00:00Z",
+    "startedAt": "2026-07-01T00:00:05Z",
+    "updatedAt": "2026-07-01T02:10:00Z",
+    "url": "",
+    "jobs": [
+      {"id": 2011, "name": "build | linux\nx64", "status": "completed", "conclusion": "success",
+       "created_at": "2026-07-01T00:00:10Z", "started_at": "2026-07-01T00:00:20Z",
+       "completed_at": "2026-07-01T02:05:20.5Z",
+       "labels": ["ubuntu-24.04"],
+       "steps": [
+         {"name": "Compile | all\ncrates", "number": 1, "conclusion": "success",
+          "started_at": "2026-07-01T00:00:21Z", "completed_at": "2026-07-01T01:30:21Z"}
+       ]},
+      {"id": 2012, "name": "smoke", "status": "completed", "conclusion": "success",
+       "created_at": "2026-07-01T02:05:21Z", "started_at": "2026-07-01T02:05:22.5Z",
+       "completed_at": "2026-07-01T02:05:24.5Z",
+       "labels": ["self-hosted", "gpu|nvidia"], "steps": []}
+    ]
+  },
+  {
+    "databaseId": 202,
+    "attempt": 1,
+    "workflowName": "PR | Builds",
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-07-02T00:00:00Z",
+    "startedAt": "2026-07-02T00:00:01Z",
+    "updatedAt": "2026-07-02T00:00:59Z",
+    "url": "https://example.test/runs/202",
+    "jobs": [
+      {"id": 2021, "name": "smoke", "status": "completed", "conclusion": "success",
+       "created_at": "2026-07-02T00:00:02Z", "started_at": "2026-07-02T00:00:03Z",
+       "completed_at": "2026-07-02T00:00:33Z",
+       "labels": ["ubuntu-24.04"], "steps": []},
+      {"id": 2022, "name": "lint", "status": "completed", "conclusion": "success",
+       "created_at": "2026-07-02T00:00:02Z", "started_at": "2026-07-02T00:00:04Z",
+       "completed_at": "2026-07-02T00:00:34Z",
+       "labels": ["ubuntu-24.04"], "steps": []},
+      {"id": 2023, "name": "docs", "status": "completed", "conclusion": "success",
+       "created_at": "2026-07-02T00:00:02Z", "started_at": "2026-07-02T00:00:04Z",
+       "completed_at": "2026-07-02T00:00:34Z",
+       "labels": ["ubuntu-24.04"], "steps": []}
+    ]
+  }
+]

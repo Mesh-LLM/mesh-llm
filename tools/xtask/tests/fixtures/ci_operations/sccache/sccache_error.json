@@ -1,0 +1,7 @@
+{
+  "code": 1,
+  "github_output": null,
+  "stats": null,
+  "stderr": "ERROR: sccache --show-stats --stats-format json failed with exit code 23\n",
+  "stdout": ""
+}

@@ -1,0 +1,5 @@
+{
+  "code": 2,
+  "stderr": "usage: runner-image-identity.py bind [-h] --image-id IMAGE_ID --cohort COHORT\n                                     --anchor ANCHOR --output OUTPUT\nrunner-image-identity.py bind: error: the following arguments are required: --cohort, --anchor, --output\n",
+  "stdout": ""
+}

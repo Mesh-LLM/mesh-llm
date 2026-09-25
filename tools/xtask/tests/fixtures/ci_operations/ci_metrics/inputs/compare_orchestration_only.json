@@ -1,0 +1,20 @@
+[
+  {
+    "databaseId": 301,
+    "attempt": 1,
+    "workflowName": "PR Builds",
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-07-03T00:00:00Z",
+    "startedAt": "2026-07-03T00:00:05Z",
+    "updatedAt": "2026-07-03T00:05:00Z",
+    "jobs": [
+      {"id": 3011, "name": "summary", "status": "completed", "conclusion": "success",
+       "created_at": "2026-07-03T00:00:10Z", "started_at": "2026-07-03T00:00:20Z",
+       "completed_at": "2026-07-03T00:01:20Z", "labels": ["ubuntu-24.04"], "steps": []},
+      {"id": 3012, "name": "Linux smoke", "status": "completed", "conclusion": "success",
+       "created_at": "2026-07-03T00:01:20Z", "started_at": "2026-07-03T00:01:25Z",
+       "completed_at": "2026-07-03T00:04:50Z", "labels": ["macos-15"], "steps": []}
+    ]
+  }
+]

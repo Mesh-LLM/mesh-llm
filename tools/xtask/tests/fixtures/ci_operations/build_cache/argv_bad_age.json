@@ -1,0 +1,5 @@
+{
+  "code": 2,
+  "stderr": "usage: manage-build-cache.py prune [-h] [--workspace WORKSPACE]\n                                   [--target-dir TARGET_DIR]\n                                   [--max-size MAX_SIZE] [--max-age MAX_AGE]\n                                   [--json] [--execute]\nmanage-build-cache.py prune: error: argument --max-age: invalid age in days: 1.5\n",
+  "stdout": ""
+}

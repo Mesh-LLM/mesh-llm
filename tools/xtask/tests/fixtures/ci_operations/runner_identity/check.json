@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "{\n  \"images\": 9,\n  \"roles\": 35,\n  \"runtime_rows\": 4,\n  \"seed_consumers\": 6,\n  \"workflow_bindings\": 35\n}\n"
+}

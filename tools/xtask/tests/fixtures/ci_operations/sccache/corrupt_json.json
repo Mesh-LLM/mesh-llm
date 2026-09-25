@@ -1,0 +1,7 @@
+{
+  "code": 1,
+  "github_output": null,
+  "stats": null,
+  "stderr": "ERROR: sccache returned invalid JSON: Expecting property name enclosed in double quotes: line 2 column 3 (char 36)\n",
+  "stdout": ""
+}

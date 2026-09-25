@@ -1,0 +1,15 @@
+{
+  "args": [
+    "--input",
+    "sample_runs.json",
+    "--json-out",
+    "out/nested/metrics.json",
+    "--label",
+    "no-separator"
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: benchmark label must be KEY=VALUE, got 'no-separator'\n",
+  "stdout": ""
+}

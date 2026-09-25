@@ -85,3 +85,26 @@ fn argparse_report(report: CheckReport) -> CheckReport {
 fn usage_error(message: &str) -> DynResult<()> {
     argparse_report(GRAMMAR.error(message)).emit()
 }
+
+/// `_select_rows(slices, profile="main", domains=[], selected=set(),
+/// force_all_rows=True)["runtime_products"]` after `_validate_manifests`,
+/// for callers that audit planner rows against another catalog. Errors are
+/// the `PlanError` text.
+pub(crate) fn exhaustive_runtime_rows(
+    ownership: &document::Json,
+    slices: &document::Json,
+) -> Result<Vec<serde_json::Value>, String> {
+    let owners = catalog::validate_ownership(ownership).map_err(|error| error.0)?;
+    let catalog = slice_catalog::validate(slices, &owners).map_err(|error| error.0)?;
+    let request = matrices::RowRequest {
+        profile: request::Profile::Main,
+        domains: &[],
+        required: &[],
+        force_all_rows: true,
+    };
+    let mut rows = matrices::select_rows(&catalog.rows, &request).map_err(|error| error.0)?;
+    match rows.remove("runtime_products") {
+        Some(serde_json::Value::Array(items)) => Ok(items),
+        _ => Ok(Vec::new()),
+    }
+}

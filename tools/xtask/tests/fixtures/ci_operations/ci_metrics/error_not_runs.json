@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--input",
+    "not_runs.json",
+    "--json-out",
+    "out/nested/metrics.json"
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: input must be a run object, run array, or object.runs\n",
+  "stdout": ""
+}

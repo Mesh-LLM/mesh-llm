@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--input",
+    "infinite_attempt.json",
+    "--json-out",
+    "out/nested/metrics.json"
+  ],
+  "code": 1,
+  "output": null,
+  "raw_output": null,
+  "stderr_last_line": "OverflowError: cannot convert float infinity to integer",
+  "stdout": ""
+}

@@ -1,0 +1,16 @@
+{
+  "args": [
+    "--input",
+    "runner_steps.json",
+    "--markdown-out",
+    "md/nested/summary.md",
+    "--top",
+    "1"
+  ],
+  "code": 0,
+  "markdown_output": "# CI timing summary\n\nAnalyzed **1** completed run(s) from `runner_steps.json`.\n\n## Workflow timing\n\n| Timing | Samples | p50 | p90 | p95 | Max |\n| --- | ---: | ---: | ---: | ---: | ---: |\n| Wall time | 1 | 3m 0s | 3m 0s | 3m 0s | 3m 0s |\n| Queue | 1 | 1s | 1s | 1s | 1s |\n| Dependency wait | 0 | n/a | n/a | n/a | n/a |\n| Execution | 2 | 2m 10s | 2m 21s | 2m 23s | 2m 24s |\n\n## Runner dimensions\n\n| Provider | OS | Architecture | Role | Depot size | Jobs | Execution p50 | Execution p95 | Runner queue p95 |\n| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |\n| depot | linux | arm64 | n/a | 8 | 1 | 2m 24s | 2m 24s | 1s |\n\n## Capacity and rollout heuristics\n\nRunner-minutes: **4.35**; cancelled runner-minutes: **0.0**; peak workers: **2**.\nQueue p95: **1s**; terminal queue p95: **1s**; capacity contaminated: **False**; state: **insufficient_sample**.\n\n## Step timing\n\n| Provider | OS | Architecture | Role | Runner size | Job | Step | Samples | Duration p50 | Duration p95 |\n| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: |\n| depot | linux | arm64 | n/a | 8 | Linux CPU runtime | Build runtime | 1 | 2m 0s | 2m 0s |\n\n## Slow job families\n\n| Job | Samples | Duration p50 | Duration p95 | Runner queue p50 | Runner queue p95 |\n| --- | ---: | ---: | ---: | ---: | ---: |\n| Linux CPU runtime | 2 | 2m 10s | 2m 23s | 1s | 1s |\n\n## Terminal jobs (critical-path candidates)\n\n| Job | Runs finishing last | Share |\n| --- | ---: | ---: |\n| Linux CPU runtime | 1 | 100.0% |\n\n## Slowest observations\n\n| Run | Job | Duration | Queue |\n| --- | --- | ---: | ---: |\n| [104](https://example.test/runs/104) | Linux CPU runtime | 2m 24s | 1s |\n\n_Job queue uses GitHub's job creation-to-start interval. Offline `gh run view` data may omit creation times; those samples are n/a. Workflow and start-delay timing excludes rerun attempts because their run timestamps belong to the original attempt. Terminal jobs are candidates only; the DAG is not reconstructed._\n",
+  "output": null,
+  "raw_output": null,
+  "stderr": "",
+  "stdout": ""
+}

@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "[\n  \"runtime seed restore is deliberately disabled: run 34272984200/1 observed zero reuse in all three verified warm samples\",\n  \"compiler seed workload coverage is unqualified; image identity alone does not establish warm-cache coverage\"\n]\n"
+}

@@ -1,0 +1,17 @@
+[
+  {
+    "databaseId": 101,
+    "attempt": 1,
+    "workflowName": "PR Builds",
+    "displayTitle": "run 101",
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-07-01T00:00:00Z",
+    "startedAt": "2026-07-01T00:00:05Z",
+    "updatedAt": "2026-07-01T00:10:00Z",
+    "url": "https://example.test/runs/101",
+    "headSha": "sha-101",
+    "headBranch": "feature"
+  }
+]

@@ -1,0 +1,53 @@
+[
+  {
+    "databaseId": 105,
+    "attempt": "1",
+    "workflowName": "PR Builds",
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-07-04T00:00:00Z",
+    "startedAt": "2026-07-04T00:00:01Z",
+    "updatedAt": "2026-07-04T00:03:00Z",
+    "jobs": [
+      {
+        "id": 1051,
+        "name": "runtime",
+        "conclusion": "success",
+        "created_at": "2026-07-04T00:00:10Z",
+        "started_at": "2026-07-04T00:00:20Z",
+        "completed_at": "2026-07-04T00:02:20Z",
+        "labels": [
+          "depot-ubuntu-24.04-8"
+        ],
+        "dependency_ready_at": "2026-07-04T00:00:18Z",
+        "runner_role": "linux-native-16",
+        "operating_system": "Linux"
+      },
+      {
+        "id": 1052,
+        "name": "explicit wait",
+        "conclusion": "success",
+        "created_at": "2026-07-04T00:00:10.25+00:00",
+        "started_at": "2026-07-04T05:30:20.5+05:30",
+        "completed_at": "2026-07-04T00:01:20.125",
+        "labels": [
+          "Self-Hosted",
+          "role:gpu"
+        ],
+        "needs_wait_seconds": "4.5",
+        "runner_os": "macOS-14"
+      },
+      {
+        "id": 1053,
+        "name": "negative wait",
+        "conclusion": "success",
+        "created_at": "2026-07-04T00:00:30Z",
+        "started_at": "2026-07-04T00:00:20Z",
+        "completed_at": "2026-07-04T00:00:10Z",
+        "labels": "not-a-list",
+        "dependency_wait_seconds": -3,
+        "os": "win"
+      }
+    ]
+  }
+]

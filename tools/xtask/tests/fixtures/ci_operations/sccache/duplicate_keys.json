@@ -1,0 +1,7 @@
+{
+  "code": 0,
+  "github_output": "stats_file={root}/evidence/sccache-stats.json\ncompile_requests=5\nrequests_executed=1\ncache_hits=7\ncache_misses=2\ncache_writes=1\ncache_read_errors=0\ncache_write_errors=0\nhit_rate=0.7777777777777778\ncache_classification=opportunistic\ncache_passed=true\n",
+  "stats": "{\n  \"assessment\": {\n    \"cache_requests\": 9,\n    \"classification\": \"opportunistic\",\n    \"expectation\": \"opportunistic\",\n    \"hit_rate\": 0.7777777777777778,\n    \"minimum_hit_rate\": 0.0,\n    \"passed\": true\n  },\n  \"schema\": \"mesh-llm.sccache-stats\",\n  \"schema_version\": 2,\n  \"stats\": {\n    \"cache_errors\": {\n      \"counts\": {\n        \"total\": 0\n      }\n    },\n    \"cache_hits\": {\n      \"counts\": {\n        \"total\": 7\n      }\n    },\n    \"cache_misses\": {\n      \"counts\": {\n        \"total\": 2\n      }\n    },\n    \"cache_read_errors\": 0,\n    \"cache_write_errors\": 0,\n    \"cache_writes\": 1,\n    \"compilations\": 1,\n    \"compile_requests\": 5,\n    \"requests_executed\": 1\n  }\n}\n",
+  "stderr": "",
+  "stdout": "sccache evidence: requests=5 executed=1 hits=7 misses=2 writes=1\nsccache assessment: expectation=opportunistic classification=opportunistic hit_rate=0.7777777777777778\n"
+}
