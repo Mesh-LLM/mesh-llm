@@ -286,12 +286,12 @@ pub(super) fn apply_transitive_ann(
     existing.served_model_descriptors = ann.served_model_descriptors.clone();
     existing.served_model_runtime = ann.served_model_runtime.clone();
     existing.artifact_transfer_supported = ann.artifact_transfer_supported;
-    existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
-    existing.stage_status_list_supported = ann.stage_status_list_supported;
-    // Strict local-source admission requires capability provenance from the
+    // `stage_protocol_generation_supported` and
+    // `local_gguf_content_id_supported` require capability provenance from the
     // peer itself. A transitive announcer is not authoritative in either
-    // direction, so it may neither promote nor clear this support bit. Direct
-    // announcements in `add_peer` update it authoritatively.
+    // direction, so it may neither promote nor clear them. Direct announcements
+    // in `add_peer` update both fields authoritatively.
+    existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
     cache_affinity_gossip::merge_advertisement(
         &mut existing.cache_affinity,
