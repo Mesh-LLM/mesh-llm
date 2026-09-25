@@ -9,9 +9,10 @@ pub async fn send_models_list_with_descriptors(
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
     runtimes: &[mesh::ModelRuntimeDescriptor],
+    virtual_models: &[crate::plugin::VirtualModelRoute],
     node: Option<&mesh::Node>,
 ) -> std::io::Result<()> {
-    let body = models_list_json(models, descriptors, runtimes);
+    let body = models_list_json_with_virtual(models, descriptors, runtimes, virtual_models);
     #[cfg(feature = "payments")]
     let body = {
         let mut body = body;
@@ -33,15 +34,64 @@ pub async fn send_models_list_with_descriptors(
     Ok(())
 }
 
+#[cfg(test)]
 fn models_list_json(
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
     runtimes: &[mesh::ModelRuntimeDescriptor],
 ) -> serde_json::Value {
+    models_list_json_with_virtual(models, descriptors, runtimes, &[])
+}
+
+fn models_list_json_with_virtual(
+    models: &[String],
+    descriptors: &[mesh::ServedModelDescriptor],
+    runtimes: &[mesh::ModelRuntimeDescriptor],
+    virtual_models: &[crate::plugin::VirtualModelRoute],
+) -> serde_json::Value {
     let mut seen = std::collections::HashSet::new();
-    let mut data: Vec<serde_json::Value> = models
+    let data: Vec<serde_json::Value> = models
         .iter()
         .filter_map(|m| {
+            if let Some(route) = virtual_models.iter().find(|route| route.model_id == *m) {
+                if !seen.insert(route.model_id.clone()) {
+                    return None;
+                }
+                let mut capabilities = route
+                    .input_modalities
+                    .iter()
+                    .map(|modality| match modality.as_str() {
+                        "image" => "vision".to_string(),
+                        other => other.to_string(),
+                    })
+                    .collect::<Vec<_>>();
+                if route
+                    .input_modalities
+                    .iter()
+                    .any(|modality| modality != "text")
+                {
+                    capabilities.push("multimodal".into());
+                }
+                if route.supports_tools {
+                    capabilities.push("tools".into());
+                }
+                capabilities.sort();
+                capabilities.dedup();
+                return Some(serde_json::json!({
+                    "id": route.model_id,
+                    "display_name": route.model_id,
+                    "object": "model",
+                    "owned_by": format!("plugin:{}", route.plugin_name),
+                    "capabilities": capabilities,
+                    "virtual_model": {
+                        "plugin": route.plugin_name,
+                        "input_modalities": route.input_modalities,
+                        "output_modalities": route.output_modalities,
+                        "supports_tools": route.supports_tools,
+                        "supports_streaming": route.supports_streaming,
+                    }
+                }));
+            }
             let (base_model, profile) =
                 crate::network::openai::ingress::parse_model_with_profile(m);
             let descriptor = descriptor_for_model(descriptors, base_model);
@@ -92,57 +142,6 @@ fn models_list_json(
             Some(model)
         })
         .collect();
-
-    if crate::network::openai::moa_gateway::context_selection::should_advertise_virtual_mesh(models)
-        && seen.insert(mesh_mixture_of_agents::VIRTUAL_MODEL_NAME.to_string())
-    {
-        // The directive's capabilities are the union of what the mesh can
-        // serve, not the committee's own limits. A media request routes to a
-        // modality-capable model rather than being aggregated, so advertising
-        // `unsupported` here would tell a vision client the mesh cannot take
-        // its request when it can.
-        let directive_capabilities =
-            crate::network::openai::moa_gateway::context_selection::virtual_mesh_capabilities(
-                models,
-                descriptors,
-            );
-        let mut caps = vec!["text"];
-        if directive_capabilities.supports_multimodal_runtime() {
-            caps.push("multimodal");
-        }
-        if directive_capabilities.supports_vision_runtime() {
-            caps.push("vision");
-        }
-        if directive_capabilities.supports_audio_runtime() {
-            caps.push("audio");
-        }
-        if directive_capabilities.reasoning_label().is_some() {
-            caps.push("reasoning");
-        }
-        let mut model = serde_json::json!({
-            "id": mesh_mixture_of_agents::VIRTUAL_MODEL_NAME,
-            "display_name": "Mesh (MoA)",
-            "object": "model",
-            "owned_by": "mesh-llm",
-            "capabilities": caps,
-            "multimodal_status": directive_capabilities.multimodal_status(),
-            "vision_status": directive_capabilities.vision_status(),
-            "audio_status": directive_capabilities.audio_status(),
-            "reasoning_status": directive_capabilities.reasoning_status(),
-        });
-        if let Some(context_length) =
-            crate::network::openai::moa_gateway::context_selection::virtual_mesh_context_length(
-                models, runtimes,
-            )
-            && let Some(object) = model.as_object_mut()
-        {
-            object.insert(
-                "metadata".to_string(),
-                serde_json::json!({ "context_length": context_length }),
-            );
-        }
-        data.push(model);
-    }
 
     serde_json::json!({ "object": "list", "data": data })
 }
@@ -492,6 +491,7 @@ mod tests {
             std::slice::from_ref(&alias),
             &[local_gguf_descriptor(&alias)],
             &[],
+            &[],
             None,
         )
         .await
@@ -574,8 +574,12 @@ mod tests {
     }
 
     #[test]
-    fn models_list_advertises_virtual_mesh_when_moa_has_two_models() {
-        let models = vec!["fast-8b".to_string(), "strong-32b".to_string()];
+    fn models_list_advertises_explicit_virtual_model() {
+        let models = vec![
+            "fast-8b".to_string(),
+            "mesh".to_string(),
+            "strong-32b".to_string(),
+        ];
         let runtimes = vec![
             mesh::ModelRuntimeDescriptor {
                 model_name: "fast-8b".to_string(),
@@ -591,28 +595,58 @@ mod tests {
             },
         ];
 
-        let body = models_list_json(&models, &[], &runtimes);
+        let virtual_models = vec![crate::plugin::VirtualModelRoute {
+            plugin_name: "mesh-moa".into(),
+            model_id: "mesh".into(),
+            handler: "chat".into(),
+            input_modalities: vec!["text".into(), "image".into(), "audio".into()],
+            output_modalities: vec!["text".into()],
+            supports_tools: true,
+            supports_streaming: true,
+            requires_candidates: true,
+        }];
+        let body = models_list_json_with_virtual(&models, &[], &runtimes, &virtual_models);
         let mesh = body["data"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|model| model["id"] == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME)
+            .find(|model| model["id"] == "mesh")
             .expect("virtual mesh model should be listed");
 
-        assert_eq!(mesh["display_name"], "Mesh (MoA)");
-        assert_eq!(mesh["metadata"]["context_length"], 16_384);
+        assert_eq!(mesh["display_name"], "mesh");
+        assert_eq!(mesh["owned_by"], "plugin:mesh-moa");
+        assert_eq!(
+            mesh["capabilities"],
+            serde_json::json!(["audio", "multimodal", "text", "tools", "vision"])
+        );
+        assert_eq!(
+            mesh["virtual_model"]["input_modalities"],
+            serde_json::json!(["text", "image", "audio"])
+        );
+        assert_eq!(mesh["virtual_model"]["supports_tools"], true);
+        assert_eq!(mesh["virtual_model"]["supports_streaming"], true);
     }
 
     #[test]
-    fn models_list_does_not_invent_virtual_mesh_context() {
-        let models = vec!["unknown-a".to_string(), "unknown-b".to_string()];
+    fn models_list_does_not_invent_virtual_model_context() {
+        let models = vec!["mesh".to_string(), "unknown-a".to_string()];
+        let virtual_models = vec![crate::plugin::VirtualModelRoute {
+            plugin_name: "mesh-moa".into(),
+            model_id: "mesh".into(),
+            handler: "chat".into(),
+            input_modalities: vec!["text".into()],
+            output_modalities: vec!["text".into()],
+            supports_tools: false,
+            supports_streaming: false,
+            requires_candidates: true,
+        }];
 
-        let body = models_list_json(&models, &[], &[]);
+        let body = models_list_json_with_virtual(&models, &[], &[], &virtual_models);
         let mesh = body["data"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|model| model["id"] == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME)
+            .find(|model| model["id"] == "mesh")
             .expect("virtual mesh model should be listed");
 
         assert!(mesh.get("metadata").is_none());

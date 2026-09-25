@@ -1,0 +1,19 @@
+[package]
+name = "mesh-llm-moa-plugin"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+description = "Built-in virtual-model plugin for mesh mixture-of-agents"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.1" }
+mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.76.1" }
+serde_json = "1"

@@ -18,6 +18,7 @@ use crate::{
     error::{PluginError, PluginResult},
     helpers::{
         CompletionRouter, PromptRouter, ResourceRouter, TaskRouter, ToolCallRequest, ToolRouter,
+        VirtualModelRouter,
     },
     proto,
     runtime::{
@@ -34,6 +35,7 @@ use crate::{
 pub struct SimplePlugin {
     metadata: PluginMetadata,
     operation_router: Option<ToolRouter>,
+    virtual_model_router: Option<VirtualModelRouter>,
     prompt_router: Option<PromptRouter>,
     resource_router: Option<ResourceRouter>,
     completion_router: Option<CompletionRouter>,
@@ -58,6 +60,7 @@ impl SimplePlugin {
         Self {
             metadata,
             operation_router: None,
+            virtual_model_router: None,
             prompt_router: None,
             resource_router: None,
             completion_router: None,
@@ -95,6 +98,11 @@ impl SimplePlugin {
 
     pub fn with_operation_router(mut self, router: ToolRouter) -> Self {
         self.operation_router = Some(router);
+        self
+    }
+
+    pub fn with_virtual_model_router(mut self, router: VirtualModelRouter) -> Self {
+        self.virtual_model_router = Some(router);
         self
     }
 
@@ -374,6 +382,17 @@ impl Plugin for SimplePlugin {
         context: &mut PluginContext<'_>,
     ) -> PluginResult<Option<CallToolResult>> {
         match &self.operation_router {
+            Some(router) => Ok(Some(router.call(request, context).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn invoke_virtual_model(
+        &mut self,
+        request: ToolCallRequest,
+        context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<CallToolResult>> {
+        match &self.virtual_model_router {
             Some(router) => Ok(Some(router.call(request, context).await?)),
             None => Ok(None),
         }

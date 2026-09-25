@@ -68,6 +68,7 @@ members = [
     "crates/skippy-bench",
     "crates/skippy-prompt",
     "crates/mesh-mixture-of-agents",
+    "crates/mesh-llm-moa-plugin",
     "crates/llama-quant-ffi",
     "tools/xtask",
 ]

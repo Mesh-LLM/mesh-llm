@@ -27,11 +27,11 @@ pub use super::request_parse::{
 };
 pub(crate) use super::response::{
     PeerCapsuleIdSink, PipelineCapsuleNonce, PipelineProxyResult, append_safe_header,
-    pipeline_proxy_local, send_400_observed, send_409_observed, send_503_observed,
-    send_error_observed, send_json_ok_with_headers, send_json_with_status_and_headers_observed,
+    is_valid_header_name, pipeline_proxy_local, send_400_observed, send_409_observed,
+    send_503_observed, send_error_observed, send_json_with_status_and_headers_observed,
     send_models_list_with_descriptors,
 };
-pub(crate) use super::routing_rank::{capabilities_for_model, request_budget_tokens_from_parts};
+pub(crate) use super::routing_rank::request_budget_tokens_from_parts;
 
 use super::response::{
     CacheCostObservation, ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
@@ -113,8 +113,9 @@ pub(super) fn delivered_outcome(
     }
 }
 
-pub(super) fn record_moa_stream_lifecycle(
+pub(super) fn record_virtual_model_stream_lifecycle(
     observer: OpenAiRouteObserver<'_>,
+    model_id: &str,
     adapter: ResponseAdapter,
     outcome: RouteDispatchOutcome,
 ) {
@@ -124,7 +125,7 @@ pub(super) fn record_moa_stream_lifecycle(
     ) {
         return;
     }
-    observer.stream_started(Some(mesh_mixture_of_agents::VIRTUAL_MODEL_NAME));
+    observer.stream_started(Some(model_id));
     match outcome {
         RouteDispatchOutcome::RespondedWithUsage {
             status_code: 200..=299,
@@ -141,7 +142,7 @@ pub(super) fn record_moa_stream_lifecycle(
         | RouteDispatchOutcome::Responded(_)
         | RouteDispatchOutcome::RespondedWithDigests { .. }
         | RouteDispatchOutcome::RespondedWithUsage { .. }
-        | RouteDispatchOutcome::Dropped(_) => observer.stream_error("moa_stream_failed"),
+        | RouteDispatchOutcome::Dropped(_) => observer.stream_error("virtual_model_stream_failed"),
     }
 }
 
@@ -338,7 +339,20 @@ async fn handle_mesh_control_request(
     }
 
     if is_models_list_request(&request.method, &request.path) {
-        let served = node.models_being_served().await;
+        let mut served = node.models_being_served().await;
+        let virtual_models = match node.plugin_manager().await {
+            Some(manager) => {
+                if let Ok(mut inference_models) = manager.inference_models().await {
+                    served.append(&mut inference_models);
+                }
+                manager.virtual_models().await.unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
+        let virtual_models = super::virtual_model::advertisable_routes(virtual_models, &served);
+        served.extend(virtual_models.iter().map(|route| route.model_id.clone()));
+        served.sort();
+        served.dedup();
         let descriptors = node.all_served_model_descriptors().await;
         let runtimes = node.all_model_runtime_descriptors().await;
         let outcome = response_outcome(
@@ -348,6 +362,7 @@ async fn handle_mesh_control_request(
                 &served,
                 &descriptors,
                 &runtimes,
+                &virtual_models,
                 Some(node),
             )
             .await,
@@ -410,27 +425,28 @@ pub async fn handle_mesh_request(
         return;
     };
 
-    // MoA routing directive: `model: "mesh"` triggers mixture-of-agents
-    // fan-out. Orchestration happens here, regardless of whether this node
-    // is serving models locally — the worker pool is built from gossip.
-    // On a pure --client node every backend is remote (QUIC tunnels to
-    // peers serving each model); on a host node the locally-served model
-    // is wired directly to its skippy port via the targets table.
-    //
-    // Tokenization is a direct capability RPC, never an MoA generation. Other
-    // requests retain the normal self-gating MoA path.
-    let tcp_stream = match route_mesh_moa_or_passthrough(
+    // Manifest-declared virtual models run through their owning plugin.
+    // Tokenization remains a direct capability RPC.
+    let tcp_stream = match super::virtual_model::route_virtual_model_or_passthrough(
         &node,
         tcp_stream,
         &mut request,
-        &affinity,
         lifecycle.route_observer(),
     )
     .await
     {
         Ok(stream) => stream,
         Err(outcome) => {
-            // MoA handled the request and consumed the stream.
+            // A virtual-model plugin handled the request and consumed the
+            // stream. A streamed virtual model owes the same stream lifecycle
+            // the active ingress records, so its events are not invisible to a
+            // passive (mesh transport) caller.
+            record_virtual_model_stream_lifecycle(
+                lifecycle.route_observer(),
+                request.model_name.as_deref().unwrap_or("virtual-model"),
+                request.response_adapter,
+                outcome,
+            );
             lifecycle.terminal(outcome.terminal_outcome());
             release_request_objects(&node, &request.request_object_request_ids).await;
             return;
@@ -485,70 +501,6 @@ pub async fn handle_mesh_request(
     release_request_objects(&node, &request.request_object_request_ids).await;
 }
 
-// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
-// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
-#[allow(clippy::result_large_err)]
-async fn route_mesh_moa_or_passthrough(
-    node: &mesh::Node,
-    tcp_stream: ClientStream,
-    request: &mut BufferedHttpRequest,
-    affinity: &AffinityRouter,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> Result<ClientStream, RouteDispatchOutcome> {
-    if request.is_tokenize_request() {
-        return Ok(tcp_stream);
-    }
-    let moa_model_name = request.model_name.clone();
-    let moa_required_tokens = request_context_budget(request);
-    let adapter = request.response_adapter;
-    let mesh_routing_requested =
-        crate::network::openai::ingress::mesh_routing_headers_requested(request);
-    let result = match crate::network::openai::moa_gateway::try_handle_moa(
-        node,
-        tcp_stream,
-        request,
-        moa_model_name.as_deref(),
-        crate::network::openai::moa_gateway::MoaRoutingContext {
-            targets: None, // passive path has no local targets table
-            required_tokens: moa_required_tokens,
-            affinity,
-            mesh_routing_requested,
-        },
-        route_observer,
-    )
-    .await
-    {
-        crate::network::openai::moa_gateway::MoaDispatchResult::Passthrough(stream) => Ok(stream),
-        crate::network::openai::moa_gateway::MoaDispatchResult::Responded(status) => {
-            Err(RouteDispatchOutcome::Responded(status))
-        }
-        crate::network::openai::moa_gateway::MoaDispatchResult::RespondedWithUsage {
-            status_code,
-            usage,
-        } => Err(RouteDispatchOutcome::RespondedWithUsage {
-            status_code,
-            usage,
-            // The MoA gateway aggregates across sub-calls; no single buffered
-            // response body is captured here to digest.
-            output_digests: Default::default(),
-        }),
-        crate::network::openai::moa_gateway::MoaDispatchResult::FailedWithStatus {
-            status_code,
-            reason,
-        } => Err(RouteDispatchOutcome::FailedWithStatus {
-            status_code,
-            reason,
-        }),
-        crate::network::openai::moa_gateway::MoaDispatchResult::Dropped(reason) => {
-            Err(RouteDispatchOutcome::Dropped(reason))
-        }
-    };
-    if let Err(outcome) = &result {
-        record_moa_stream_lifecycle(route_observer, adapter, *outcome);
-    }
-    result
-}
-
 async fn build_mesh_request_plan(
     node: &mesh::Node,
     request: &mut BufferedHttpRequest,
@@ -562,9 +514,9 @@ async fn build_mesh_request_plan(
     let tokenize_request = request.is_tokenize_request();
     // The automatic directive (either spelling) and a model-less request both
     // resolve through the auto selector, so they get the media-capability
-    // filter, readiness, affinity and context-budget fit. A `mesh` request
-    // reaches here only in single-model mode — the MoA gateway has already
-    // taken any request it is serving as a committee.
+    // filter, readiness, affinity and context-budget fit. A directive reaches
+    // here only in single-model mode; committee-eligible requests have already
+    // been dispatched through the manifest-declared virtual model.
     let is_auto_request = !tokenize_request
         && request
             .model_name

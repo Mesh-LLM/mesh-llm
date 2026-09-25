@@ -75,9 +75,22 @@ async fn spawn_api_proxy_test_harness_with_plugin_manager(
     targets: election::ModelTargets,
     plugin_manager: plugin::PluginManager,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_api_proxy_test_harness_with_plugin_manager_and_contexts(targets, plugin_manager, &[])
+        .await
+}
+
+async fn spawn_api_proxy_test_harness_with_plugin_manager_and_contexts(
+    targets: election::ModelTargets,
+    plugin_manager: plugin::PluginManager,
+    contexts: &[(&str, u32)],
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
         .await
         .unwrap();
+    for (model, context_length) in contexts {
+        node.set_model_runtime_context_length(model, Some(*context_length))
+            .await;
+    }
     node.set_plugin_manager(plugin_manager).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -322,6 +335,61 @@ async fn start_inference_endpoint_plugin_manager(
         }])
         .await;
     plugin_manager
+}
+
+async fn start_moa_plugin_manager() -> plugin::PluginManager {
+    let mut spec = plugin::in_process_builtin_spec(plugin::MOA_PLUGIN_ID);
+    spec.startup.optional = false;
+    let specs = plugin::ResolvedPlugins {
+        externals: vec![spec],
+        inactive: Vec::new(),
+    };
+    let (mesh_tx, mut mesh_rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move { while mesh_rx.recv().await.is_some() {} });
+    let runner: plugin::InProcessPluginRunner =
+        Arc::new(|stream| Box::pin(mesh_llm_moa_plugin::run(stream)));
+    plugin::PluginManager::start_with_in_process(
+        &specs,
+        plugin::PluginHostMode {
+            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+        },
+        mesh_tx,
+        plugin::InProcessPlugins::default().with(plugin::MOA_PLUGIN_ID, runner),
+    )
+    .await
+    .expect("start built-in MoA plugin")
+}
+
+async fn spawn_repeating_upstream(
+    response_body: &str,
+) -> (
+    u16,
+    Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let response = response_body.to_string();
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let request_count = Arc::clone(&requests);
+    let handle = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let response = response.clone();
+            let request_count = Arc::clone(&request_count);
+            tokio::spawn(async move {
+                let _ = read_raw_http_request(&mut stream).await;
+                request_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                );
+                let _ = stream.write_all(reply.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    (port, requests, handle)
 }
 
 async fn spawn_capturing_upstream(
@@ -591,6 +659,117 @@ async fn send_request_and_read_response(addr: SocketAddr, parts: Vec<Vec<u8>>) -
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
     String::from_utf8(response).unwrap()
+}
+
+/// Parse the `/v1/responses` SSE events out of a raw response body. The body
+/// arrives with chunked framing, but each event is written as its own chunk, so
+/// every `data:` line carries one whole event.
+fn responses_sse_events(response: &str) -> Vec<serde_json::Value> {
+    response
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter(|data| *data != "[DONE]")
+        .filter_map(|data| serde_json::from_str(data).ok())
+        .collect()
+}
+
+/// A manifest-declared virtual model that answers with a canned chat
+/// completion. It lets a streamed virtual-model request run end to end without
+/// a worker, a candidate snapshot, or the built-in MoA plugin — and without the
+/// automatic directive, which resolves to single-model routing when a client
+/// asks for `stream: true`.
+pub(crate) fn standalone_virtual_model_plugin(
+    model_id: &'static str,
+    response: serde_json::Value,
+) -> mesh_llm_plugin::SimplePlugin {
+    use mesh_llm_plugin as sdk;
+
+    let manifest = sdk::plugin_manifest![
+        sdk::virtual_model(model_id, "chat")
+            .supports_tools(true)
+            .supports_streaming(true)
+    ];
+    let mut router = sdk::VirtualModelRouter::new();
+    router.add_raw(
+        sdk::operation_with_schema(
+            "chat",
+            "Answer with a canned chat completion",
+            serde_json::Map::new(),
+        ),
+        move |_request, _context| {
+            let response = response.clone();
+            Box::pin(async move {
+                sdk::structured_tool_result(sdk::VirtualModelResponse {
+                    status_code: 200,
+                    body: response,
+                    headers: Vec::new(),
+                    event_stream: false,
+                })
+            })
+        },
+    );
+    let plugin_id = STANDALONE_VIRTUAL_MODEL_PLUGIN_ID;
+    sdk::SimplePlugin::new(sdk::PluginMetadata::new(
+        plugin_id,
+        env!("CARGO_PKG_VERSION"),
+        sdk::plugin_server_info(
+            plugin_id,
+            env!("CARGO_PKG_VERSION"),
+            "Standalone virtual model",
+            "Test double for the virtual-model streaming adapters",
+            None::<String>,
+        ),
+    ))
+    .with_manifest(manifest)
+    .with_virtual_model_router(router)
+}
+
+pub(crate) const STANDALONE_VIRTUAL_MODEL_PLUGIN_ID: &str = "test-standalone-virtual-model";
+
+/// Start an in-process plugin manager whose only plugin is
+/// [`standalone_virtual_model_plugin`].
+pub(crate) async fn start_standalone_virtual_model_plugin_manager(
+    model_id: &'static str,
+    response: serde_json::Value,
+) -> plugin::PluginManager {
+    start_in_process_plugin_manager(
+        standalone_virtual_model_plugin(model_id, response),
+        mesh_llm_plugin::MeshVisibility::Private,
+    )
+    .await
+}
+
+/// Start an in-process plugin manager for one SDK plugin, with an explicit
+/// host mesh visibility so a test can exercise the initialize handshake.
+pub(crate) async fn start_in_process_plugin_manager(
+    built_plugin: mesh_llm_plugin::SimplePlugin,
+    mesh_visibility: mesh_llm_plugin::MeshVisibility,
+) -> plugin::PluginManager {
+    use mesh_llm_plugin::Plugin;
+
+    let plugin_id = built_plugin.plugin_id().to_string();
+    let mut spec = plugin::in_process_builtin_spec(&plugin_id);
+    spec.startup.optional = false;
+    let specs = plugin::ResolvedPlugins {
+        externals: vec![spec],
+        inactive: Vec::new(),
+    };
+    let (mesh_tx, mut mesh_rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move { while mesh_rx.recv().await.is_some() {} });
+    let runner: plugin::InProcessPluginRunner = Arc::new(move |stream| {
+        let built_plugin = built_plugin.clone();
+        Box::pin(async move {
+            mesh_llm_plugin::PluginRuntime::run_with_stream(built_plugin, stream).await
+        })
+    });
+    plugin::PluginManager::start_with_in_process(
+        &specs,
+        plugin::PluginHostMode { mesh_visibility },
+        mesh_tx,
+        plugin::InProcessPlugins::default().with(plugin_id, runner),
+    )
+    .await
+    .expect("start in-process plugin")
 }
 
 include!("basic.rs");

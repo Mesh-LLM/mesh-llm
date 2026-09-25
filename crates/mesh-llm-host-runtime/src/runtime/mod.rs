@@ -22,7 +22,7 @@ mod node_lifecycle_events;
 mod operational_logging;
 mod options;
 mod plugin_host_role;
-mod proxy;
+pub(crate) mod proxy;
 mod publication;
 mod release_attestation;
 mod run_auto;

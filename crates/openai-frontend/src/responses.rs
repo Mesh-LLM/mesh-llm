@@ -947,6 +947,140 @@ pub fn responses_stream_completed_event_with_sequence(
     event
 }
 
+/// Expand a complete `/v1/responses` body into the SSE events that stream it.
+///
+/// This is the buffered→stream adapter for producers that answer with a
+/// finished response body instead of a live upstream stream (a virtual model
+/// served by a plugin). Walking `output` keeps every item the buffered
+/// translation produced — in particular the `function_call` items it derives
+/// from `message.tool_calls`, which projecting `choices[0].message.content`
+/// alone would drop.
+pub fn responses_stream_events_for_response(response: &Value) -> Vec<Value> {
+    let output = response
+        .get("output")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut sequence_number = 0_i32;
+    let mut next_sequence_number = || {
+        let current = sequence_number;
+        sequence_number += 1;
+        current
+    };
+
+    // `response.created` carries the envelope with no output produced yet.
+    let mut created = response.clone();
+    if let Some(object) = created.as_object_mut() {
+        object.insert("status".into(), Value::String("in_progress".into()));
+        object.insert("output".into(), Value::Array(Vec::new()));
+        object.insert("output_text".into(), Value::String(String::new()));
+    }
+    let mut events = vec![serde_json::json!({
+        "type": "response.created",
+        "sequence_number": next_sequence_number(),
+        "response": created,
+    })];
+
+    for (output_index, item) in output.iter().enumerate() {
+        let output_index = output_index as i32;
+        let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+        let mut in_progress = item.clone();
+        if let Some(object) = in_progress.as_object_mut() {
+            object.insert("status".into(), Value::String("in_progress".into()));
+        }
+        events.push(serde_json::json!({
+            "type": "response.output_item.added",
+            "sequence_number": next_sequence_number(),
+            "output_index": output_index,
+            "item": in_progress,
+        }));
+        if item.get("type").and_then(Value::as_str) == Some("function_call") {
+            let arguments = item
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            events.push(serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "delta": arguments,
+            }));
+            events.push(serde_json::json!({
+                "type": "response.function_call_arguments.done",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "arguments": arguments,
+            }));
+        } else {
+            let text = response_item_text(item);
+            events.push(serde_json::json!({
+                "type": "response.content_part.added",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []},
+            }));
+            if !text.is_empty() {
+                events.push(serde_json::json!({
+                    "type": "response.output_text.delta",
+                    "sequence_number": next_sequence_number(),
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "content_index": 0,
+                    "delta": text,
+                }));
+            }
+            events.push(serde_json::json!({
+                "type": "response.output_text.done",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "text": text,
+            }));
+            events.push(serde_json::json!({
+                "type": "response.content_part.done",
+                "sequence_number": next_sequence_number(),
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": text, "annotations": []},
+            }));
+        }
+        events.push(serde_json::json!({
+            "type": "response.output_item.done",
+            "sequence_number": next_sequence_number(),
+            "output_index": output_index,
+            "item": item,
+        }));
+    }
+
+    events.push(serde_json::json!({
+        "type": "response.completed",
+        "sequence_number": next_sequence_number(),
+        "response": response,
+    }));
+    events
+}
+
+/// The first text part of a Responses output item, empty when it has none.
+fn response_item_text(item: &Value) -> String {
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
+
 pub fn chat_usage_to_responses_usage(usage: &Value) -> Value {
     let cached_tokens = usage
         .get("prompt_tokens_details")
@@ -1354,6 +1488,104 @@ mod tests {
         assert_eq!(parsed["usage"]["output_tokens"], 2);
         assert_eq!(parsed["usage"]["total_tokens"], 3);
         assert_eq!(parsed["usage"]["input_tokens_details"]["cached_tokens"], 1);
+    }
+
+    #[test]
+    fn responses_stream_events_keep_function_call_items() {
+        let translated = translate_chat_completion_to_responses(
+            json!({
+                "id": "chatcmpl_tools",
+                "created": 1_700_000_000,
+                "model": "worker-a",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call_lookup",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{\"q\":\"hi\"}"}
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+        let translated: Value = serde_json::from_slice(&translated).unwrap();
+
+        let events = responses_stream_events_for_response(&translated);
+        let types: Vec<&str> = events
+            .iter()
+            .filter_map(|event| event["type"].as_str())
+            .collect();
+        assert!(types.contains(&"response.function_call_arguments.done"));
+        assert!(
+            !types.contains(&"response.content_part.added"),
+            "a tool-only response has no message item: {types:?}"
+        );
+
+        let arguments_done = events
+            .iter()
+            .find(|event| event["type"] == "response.function_call_arguments.done")
+            .expect("function-call arguments done event");
+        assert_eq!(arguments_done["item_id"], "fc_1700000000_0");
+        assert_eq!(arguments_done["output_index"], 0);
+        assert_eq!(arguments_done["arguments"], "{\"q\":\"hi\"}");
+
+        let completed = events.last().expect("response.completed event");
+        assert_eq!(completed["type"], "response.completed");
+        let call = &completed["response"]["output"][0];
+        assert_eq!(call["type"], "function_call");
+        assert_eq!(call["call_id"], "call_lookup");
+        assert_eq!(call["name"], "lookup");
+        assert_eq!(call["arguments"], "{\"q\":\"hi\"}");
+
+        let sequence_numbers: Vec<i64> = events
+            .iter()
+            .filter_map(|event| event["sequence_number"].as_i64())
+            .collect();
+        assert_eq!(sequence_numbers.len(), events.len());
+        assert!(
+            sequence_numbers.windows(2).all(|pair| pair[0] < pair[1]),
+            "sequence numbers must strictly increase: {sequence_numbers:?}"
+        );
+    }
+
+    #[test]
+    fn responses_stream_events_stream_message_text() {
+        let translated = translate_chat_completion_to_responses(
+            json!({
+                "id": "chatcmpl_text",
+                "created": 1_700_000_000,
+                "model": "worker-a",
+                "choices": [{
+                    "message": {"role": "assistant", "content": "hello there"},
+                    "finish_reason": "stop"
+                }]
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+        let translated: Value = serde_json::from_slice(&translated).unwrap();
+
+        let events = responses_stream_events_for_response(&translated);
+        assert_eq!(events[0]["type"], "response.created");
+        assert_eq!(events[0]["response"]["status"], "in_progress");
+        assert_eq!(events[0]["response"]["output"], json!([]));
+        let delta = events
+            .iter()
+            .find(|event| event["type"] == "response.output_text.delta")
+            .expect("text delta event");
+        assert_eq!(delta["delta"], "hello there");
+        assert_eq!(
+            events.last().unwrap()["response"]["output_text"],
+            "hello there"
+        );
     }
 
     #[test]

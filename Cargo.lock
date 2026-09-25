@@ -4485,6 +4485,7 @@ dependencies = [
  "mesh-llm-hf-hub",
  "mesh-llm-identity",
  "mesh-llm-log-store",
+ "mesh-llm-moa-plugin",
  "mesh-llm-native-runtime",
  "mesh-llm-node",
  "mesh-llm-payments",
@@ -4499,7 +4500,6 @@ dependencies = [
  "mesh-llm-types",
  "mesh-llm-ui",
  "mesh-llm-wallet",
- "mesh-mixture-of-agents",
  "mesh-native-serving-plugin-host",
  "mesh-wallet-lexe",
  "model-artifact",
@@ -4587,6 +4587,17 @@ dependencies = [
  "tempfile",
  "uuid",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mesh-llm-moa-plugin"
+version = "0.76.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "mesh-llm-plugin",
+ "mesh-mixture-of-agents",
+ "serde_json",
 ]
 
 [[package]]

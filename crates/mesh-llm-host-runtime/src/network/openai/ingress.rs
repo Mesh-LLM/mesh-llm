@@ -17,7 +17,6 @@ use crate::plugin::openai_exchange::{
 };
 use mesh_llm_events::audit::{audit_events, emit_audit};
 use mesh_llm_events::{OutputEvent, emit_event};
-use mesh_mixture_of_agents as moa;
 
 /// The status code an out-of-process plugin sees for path 2's terminal
 /// event, best-effort from [`proxy::RouteDispatchOutcome`] — `None` when the
@@ -460,6 +459,12 @@ async fn handle_models_list_request(
     {
         models.append(&mut external_models);
     }
+    let virtual_models = match plugin_manager {
+        Some(plugin_manager) => plugin_manager.virtual_models().await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let virtual_models = super::virtual_model::advertisable_routes(virtual_models, &models);
+    models.extend(virtual_models.iter().map(|route| route.model_id.clone()));
     models.sort();
     models.dedup();
     let descriptors = node.all_served_model_descriptors().await;
@@ -471,6 +476,7 @@ async fn handle_models_list_request(
             &models,
             &descriptors,
             &runtimes,
+            &virtual_models,
             Some(node),
         )
         .await,
@@ -501,11 +507,13 @@ async fn collect_available_models_for_auto_route(
 }
 
 /// Admit explicit workloads or select a compatible automatic route, preserving committee mode.
+#[allow(clippy::too_many_arguments)]
 async fn resolve_auto_routed_model(
     node: &mesh::Node,
     request: &mut proxy::BufferedHttpRequest,
     targets: &election::ModelTargets,
     plugin_manager: Option<&crate::plugin::PluginManager>,
+    committee_available: bool,
     descriptors: &[crate::mesh::ServedModelDescriptor],
     required_tokens: Option<u32>,
     affinity: &affinity::AffinityRouter,
@@ -554,14 +562,20 @@ async fn resolve_auto_routed_model(
         },
     );
     match mode {
-        // Committee mode keeps the directive as the effective model so the MoA
-        // gateway picks the request up.
-        automatic::ServingMode::Committee => {
+        // Committee mode keeps the directive as the effective model only when
+        // the built-in MoA plugin is registered. Bare hosts and focused test
+        // harnesses may intentionally omit built-ins; in that case, preserve
+        // the directive's historical single-model fallback instead of trying
+        // to route the virtual id as though it were concrete.
+        automatic::ServingMode::Committee if committee_available => {
             return AutoRouteResolution::Continue {
                 effective_model: Some(automatic::DIRECTIVE.to_string()),
                 classification: None,
             };
         }
+        automatic::ServingMode::Committee => tracing::debug!(
+            "automatic routing: MoA virtual model is unavailable; serving from a single model"
+        ),
         // Single-model mode falls through to the capability-, readiness- and
         // affinity-aware selection below.
         automatic::ServingMode::SingleModel(reason) => tracing::debug!(
@@ -1237,7 +1251,7 @@ fn parse_mesh_routing_headers(
 /// ask. Malformed headers are already rejected with 400 wherever this
 /// request is validated before reaching MoA, so a parse failure here (which
 /// should not happen at this point) is treated as "no ask" rather than
-/// re-rejecting. Shared by both MoA call sites (`try_handle_moa_intercept`
+/// re-rejecting. Shared by virtual-model and ordinary routing call sites
 /// and the passive mesh-request path in `transport.rs`) so "does this
 /// request want routing headers honored" is answered the same way in both
 /// places.
@@ -1578,11 +1592,29 @@ async fn prepare_auto_route_decision(
     descriptors: &[crate::mesh::ServedModelDescriptor],
 ) -> Result<AutoRouteDecision, AutoRouteRejection> {
     let required_tokens = proxy::request_context_budget(request);
+    let committee_available = if request
+        .model_name
+        .as_deref()
+        .is_some_and(automatic::is_directive)
+    {
+        match ctx.plugin_manager {
+            Some(manager) => manager
+                .virtual_model_for_model(automatic::DIRECTIVE)
+                .await
+                .ok()
+                .flatten()
+                .is_some(),
+            None => false,
+        }
+    } else {
+        false
+    };
     match resolve_auto_routed_model(
         ctx.node,
         request,
         ctx.targets,
         ctx.plugin_manager,
+        committee_available,
         descriptors,
         required_tokens,
         ctx.affinity,
@@ -1751,15 +1783,8 @@ fn pipeline_route_model<'a>(
 /// candidates. Mirrors the same checks `try_pipeline_route` makes, evaluated
 /// one step earlier and side-effect free.
 ///
-/// `model: "mesh"` is deliberately NOT covered here: whether MoA can honor
-/// these headers depends on whether committee routing actually convenes for
-/// this request, which is not known until `try_handle_moa_intercept` calls
-/// into `moa_gateway::try_handle_moa` -- that function degrades `model:
-/// "mesh"` to a single concrete model when no committee can be formed, and a
-/// degraded request can and should honor the headers downstream. Rejecting
-/// here, before MoA ever runs, would reject requests MoA was about to make
-/// routable. See `moa_gateway::try_handle_moa`'s `mesh_routing_requested`
-/// parameter for where that rejection now lives.
+/// Virtual models are deliberately not covered here. Their manifest-backed
+/// dispatch stage rejects routing headers before invoking the owning plugin.
 fn mesh_routing_unsupported_dispatch_kind(
     request: &proxy::BufferedHttpRequest,
     decision: &AutoRouteDecision,
@@ -1791,7 +1816,7 @@ fn mesh_routing_unsupported_dispatch_kind(
 ///
 /// Malformed-header validation (400, via `parse_mesh_routing_headers` below)
 /// still runs unconditionally here, ahead of MoA -- only the *unsupported
-/// dispatch kind* rejection (409) excludes `model: "mesh"`; see
+/// dispatch-kind rejection (409) excludes manifest-backed virtual models; see
 /// `mesh_routing_unsupported_dispatch_kind`.
 // `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
 // (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
@@ -1863,115 +1888,93 @@ async fn try_pipeline_route(
     try_pipeline_proxy(ctx.node, tcp_stream, request, ctx.targets, strong_name).await
 }
 
-enum MoaInterceptResult {
-    /// MoA handled the request; the response has been written and the stream
-    /// is consumed.
+enum VirtualModelInterceptResult {
     Handled(proxy::RouteDispatchOutcome),
-    /// Not an MoA request — caller should continue with normal routing,
-    /// reusing the returned stream.
-    NotMoa(ClientStream),
-    /// MoA could not form a committee but degraded `model=mesh` to a real
-    /// single model (already rewritten on the request). Caller routes it
-    /// normally, but must use this model rather than the stale
-    /// `decision.effective_model` (still "mesh").
-    Degraded {
-        stream: ClientStream,
-        model: Option<String>,
-    },
+    NotVirtual(ClientStream),
 }
 
-/// Dispatch to the MoA gateway when `model == "mesh"`. Self-gates on the
-/// effective model so the call site is unconditional.
-async fn try_handle_moa_intercept(
+/// Dispatch any manifest-declared virtual model through its owning plugin.
+async fn try_handle_virtual_model_intercept(
     tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &ProxyConnectionContext<'_>,
     decision: &AutoRouteDecision,
     route_observer: OpenAiRouteObserver<'_>,
-) -> MoaInterceptResult {
-    if decision.effective_model.as_deref() != Some(moa::VIRTUAL_MODEL_NAME) {
-        return MoaInterceptResult::NotMoa(tcp_stream);
+) -> VirtualModelInterceptResult {
+    let Some(model_id) = decision.effective_model.as_deref() else {
+        return VirtualModelInterceptResult::NotVirtual(tcp_stream);
+    };
+    let Some(plugin_manager) = ctx.route.plugin_manager else {
+        return VirtualModelInterceptResult::NotVirtual(tcp_stream);
+    };
+    let is_virtual = plugin_manager
+        .virtual_model_for_model(model_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    if !is_virtual {
+        return VirtualModelInterceptResult::NotVirtual(tcp_stream);
     }
-    // Whether the caller asked `x-mesh-target`/`x-mesh-exclude` to be
-    // honored. `try_handle_moa` rejects with 409 only if it decides to
-    // actually convene a committee -- a degrade to a single concrete model
-    // continues and the headers are honored downstream by `route_request`.
-    let mesh_routing_requested = mesh_routing_headers_requested(request);
-    // `try_handle_moa` self-gates on the model name and consumes the
-    // stream when it accepts. The outer gate above guarantees the gate
-    // matches, so the inner call always returns `None` here — the stream
-    // is gone, either with the MoA response, a 503, or a 400. Discard
-    // the return value explicitly. The previous shape kept an
-    // `if let Some(_) = … { tracing::error!(...) }` branch that could
-    // never fire and made the control flow confusing to read.
-    let result = crate::network::openai::moa_gateway::try_handle_moa(
+    if mesh_routing_headers_requested(request) {
+        let outcome = response_outcome(
+            409,
+            proxy::send_error_observed(
+                tcp_stream,
+                409,
+                "x-mesh-target/x-mesh-exclude are not supported for virtual models",
+                route_observer,
+            )
+            .await,
+        );
+        return VirtualModelInterceptResult::Handled(outcome);
+    }
+    request.ensure_body_json();
+    let Some(body) = request.body_json.clone() else {
+        let outcome = response_outcome(
+            400,
+            proxy::send_400_observed(
+                tcp_stream,
+                "virtual models require a JSON body",
+                route_observer,
+            )
+            .await,
+        );
+        return VirtualModelInterceptResult::Handled(outcome);
+    };
+    let mut candidate_models = callable_models(ctx.route.targets);
+    candidate_models.extend(ctx.route.node.models_being_served().await);
+    candidate_models.extend(ctx.route.node.serving_models().await);
+    if let Ok(inference_models) = plugin_manager.inference_models().await {
+        candidate_models.extend(inference_models);
+    }
+    match crate::network::openai::virtual_model::try_handle_virtual_model(
+        plugin_manager,
         ctx.route.node,
         tcp_stream,
-        request,
-        decision.effective_model.as_deref(),
-        crate::network::openai::moa_gateway::MoaRoutingContext {
-            targets: Some(ctx.route.targets),
-            required_tokens: decision.required_tokens,
-            affinity: ctx.route.affinity,
-            mesh_routing_requested,
-        },
+        &request.path,
+        model_id,
+        body,
+        candidate_models,
+        request.response_adapter,
         route_observer,
     )
-    .await;
-    match result {
-        crate::network::openai::moa_gateway::MoaDispatchResult::Passthrough(stream) => {
-            // The gateway hands the stream back in two cases: the request was
-            // never MoA-shaped, or MoA degraded `model=mesh` to a real single
-            // model by rewriting the request in place. The outer gate above
-            // guarantees we got here with `effective_model == "mesh"`, so this
-            // is the degrade case: routing must use the rewritten model, not
-            // the stale decision.
-            MoaInterceptResult::Degraded {
-                stream,
-                model: request.model_name.clone(),
-            }
+    .await
+    {
+        crate::network::openai::virtual_model::VirtualModelDispatchResult::NotVirtual(stream) => {
+            VirtualModelInterceptResult::NotVirtual(stream)
         }
-        crate::network::openai::moa_gateway::MoaDispatchResult::Responded(status) => {
+        crate::network::openai::virtual_model::VirtualModelDispatchResult::Responded(outcome) => {
             proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids)
                 .await;
-            MoaInterceptResult::Handled(proxy::RouteDispatchOutcome::Responded(status))
-        }
-        crate::network::openai::moa_gateway::MoaDispatchResult::RespondedWithUsage {
-            status_code,
-            usage,
-        } => {
-            proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids)
-                .await;
-            MoaInterceptResult::Handled(proxy::RouteDispatchOutcome::RespondedWithUsage {
-                status_code,
-                usage,
-                // The MoA gateway aggregation path: no single buffered
-                // response body is captured here to digest.
-                output_digests: Default::default(),
-            })
-        }
-        crate::network::openai::moa_gateway::MoaDispatchResult::FailedWithStatus {
-            status_code,
-            reason,
-        } => {
-            proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids)
-                .await;
-            MoaInterceptResult::Handled(proxy::RouteDispatchOutcome::FailedWithStatus {
-                status_code,
-                reason,
-            })
-        }
-        crate::network::openai::moa_gateway::MoaDispatchResult::Dropped(reason) => {
-            proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids)
-                .await;
-            MoaInterceptResult::Handled(proxy::RouteDispatchOutcome::Dropped(reason))
+            VirtualModelInterceptResult::Handled(outcome)
         }
     }
 }
 
 /// Drive one buffered OpenAI-shaped request through every ingress stage in
 /// order: control-plane/admission gates, auto-route resolution, mesh routing
-/// header enforcement, MoA, pipeline, and finally `route_request`'s ordinary
+/// header enforcement, virtual-model dispatch, pipeline, and finally `route_request`'s ordinary
 /// dispatch. Each stage either hands the stream to the next one or writes a
 /// terminal response and returns -- this function owns the single terminal
 /// lifecycle event for the request no matter which stage ends it.
@@ -2054,7 +2057,7 @@ async fn handle_buffered_api_request(
         }
     };
 
-    let mut routing_model = decision.effective_model.clone();
+    let routing_model = decision.effective_model.clone();
 
     let tcp_stream = match enforce_mesh_routing_headers_before_dispatch(
         tcp_stream,
@@ -2072,7 +2075,7 @@ async fn handle_buffered_api_request(
         }
     };
 
-    let tcp_stream = match try_handle_moa_intercept(
+    let tcp_stream = match try_handle_virtual_model_intercept(
         tcp_stream,
         &mut request,
         &ctx,
@@ -2081,20 +2084,17 @@ async fn handle_buffered_api_request(
     )
     .await
     {
-        MoaInterceptResult::Handled(outcome) => {
-            proxy::record_moa_stream_lifecycle(
+        VirtualModelInterceptResult::Handled(outcome) => {
+            proxy::record_virtual_model_stream_lifecycle(
                 lifecycle.route_observer(),
+                routing_model.as_deref().unwrap_or("virtual-model"),
                 request.response_adapter,
                 outcome,
             );
             lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
             return;
         }
-        MoaInterceptResult::NotMoa(stream) => stream,
-        MoaInterceptResult::Degraded { stream, model } => {
-            routing_model = model;
-            stream
-        }
+        VirtualModelInterceptResult::NotVirtual(stream) => stream,
     };
 
     let mut tcp_stream = tcp_stream;

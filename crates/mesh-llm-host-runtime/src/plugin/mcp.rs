@@ -35,6 +35,38 @@ struct ActiveBridge {
     peer: Arc<Mutex<Option<Peer<RoleServer>>>>,
 }
 
+#[derive(Clone)]
+struct RoutedBridge {
+    mcp: ActiveBridge,
+    host: Option<Arc<dyn PluginRpcBridge>>,
+}
+
+impl PluginRpcBridge for RoutedBridge {
+    fn handle_request(
+        &self,
+        plugin_name: String,
+        method: String,
+        params_json: String,
+    ) -> crate::plugin::BridgeFuture<Result<RpcResult, plugin::proto::ErrorResponse>> {
+        if method.starts_with("inference/")
+            && let Some(host) = &self.host
+        {
+            return host.handle_request(plugin_name, method, params_json);
+        }
+        self.mcp.handle_request(plugin_name, method, params_json)
+    }
+
+    fn handle_notification(
+        &self,
+        plugin_name: String,
+        method: String,
+        params_json: String,
+    ) -> crate::plugin::BridgeFuture<()> {
+        self.mcp
+            .handle_notification(plugin_name, method, params_json)
+    }
+}
+
 impl ActiveBridge {
     async fn set_peer(&self, peer: Peer<RoleServer>) {
         *self.peer.lock().await = Some(peer);
@@ -250,6 +282,7 @@ impl PluginMcpServer {
 pub(crate) struct PluginMcpHttpEndpoint {
     plugin_manager: PluginManager,
     bridge: ActiveBridge,
+    bridge_installed: Arc<Mutex<bool>>,
     session_manager: Arc<LocalSessionManager>,
 }
 
@@ -258,6 +291,7 @@ impl PluginMcpHttpEndpoint {
         Self {
             plugin_manager,
             bridge: ActiveBridge::default(),
+            bridge_installed: Arc::new(Mutex::new(false)),
             session_manager: Arc::new(LocalSessionManager::default()),
         }
     }
@@ -267,9 +301,18 @@ impl PluginMcpHttpEndpoint {
         request: http::Request<http_body_util::Full<bytes::Bytes>>,
     ) -> http::Response<http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>>
     {
-        self.plugin_manager
-            .set_rpc_bridge(Some(Arc::new(self.bridge.clone())))
-            .await;
+        let mut bridge_installed = self.bridge_installed.lock().await;
+        if !*bridge_installed {
+            let host = self.plugin_manager.current_rpc_bridge().await;
+            self.plugin_manager
+                .set_rpc_bridge(Some(Arc::new(RoutedBridge {
+                    mcp: self.bridge.clone(),
+                    host,
+                })))
+                .await;
+            *bridge_installed = true;
+        }
+        drop(bridge_installed);
 
         let plugin_manager = self.plugin_manager.clone();
         let bridge = self.bridge.clone();
@@ -400,4 +443,67 @@ pub(crate) async fn run_mcp_server(plugin_manager: PluginManager) -> Result<()> 
     axum::serve(listener, router)
         .await
         .context("MCP server exited")
+}
+
+#[cfg(test)]
+mod routed_bridge_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct HostBridge {
+        requests: AtomicUsize,
+    }
+
+    impl PluginRpcBridge for HostBridge {
+        fn handle_request(
+            &self,
+            _plugin_name: String,
+            method: String,
+            _params_json: String,
+        ) -> crate::plugin::BridgeFuture<Result<RpcResult, plugin::proto::ErrorResponse>> {
+            self.requests.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async move {
+                Ok(RpcResult {
+                    result_json: serde_json::json!({"method": method}).to_string(),
+                })
+            })
+        }
+
+        fn handle_notification(
+            &self,
+            _plugin_name: String,
+            _method: String,
+            _params_json: String,
+        ) -> crate::plugin::BridgeFuture<()> {
+            Box::pin(async {})
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_bridge_preserves_host_inference_rpc() {
+        let host = Arc::new(HostBridge::default());
+        let bridge = RoutedBridge {
+            mcp: ActiveBridge::default(),
+            host: Some(host.clone()),
+        };
+
+        let response = bridge
+            .handle_request(
+                "mesh-moa".into(),
+                "inference/chat_completions".into(),
+                "{}".into(),
+            )
+            .await
+            .expect("inference request reaches host bridge");
+        assert!(response.result_json.contains("inference/chat_completions"));
+        assert_eq!(host.requests.load(Ordering::Relaxed), 1);
+
+        let error = bridge
+            .handle_request("example".into(), "roots/list".into(), "{}".into())
+            .await
+            .expect_err("non-inference methods remain MCP-owned without a session");
+        assert!(error.message.contains("No active MCP client session"));
+        assert_eq!(host.requests.load(Ordering::Relaxed), 1);
+    }
 }

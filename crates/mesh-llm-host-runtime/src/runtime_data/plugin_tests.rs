@@ -56,6 +56,7 @@ fn plugin_manifest_with_endpoint(capability: &str) -> PluginManifestOverview {
         completions: 0,
         http_bindings: 0,
         endpoints: 1,
+        virtual_models: 0,
         mesh_channels: 0,
         mesh_event_subscriptions: 0,
         capabilities: vec![capability.into()],

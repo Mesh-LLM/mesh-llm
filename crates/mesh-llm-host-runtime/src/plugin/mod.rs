@@ -20,7 +20,7 @@ pub(crate) use self::types::BridgeFuture;
 pub use self::types::{
     InferenceEndpointRoute, PluginCapabilityProvider, PluginEndpointSummary,
     PluginManifestOverview, PluginMeshEvent, PluginRpcBridge, PluginSummary, RpcResult,
-    ToolCallResult, ToolSummary,
+    ToolCallResult, ToolSummary, VirtualModelRoute,
 };
 pub use self::web_ui::{
     PluginWebUiConfigSectionOverview, PluginWebUiManifestOverview, PluginWebUiPageOverview,
@@ -45,9 +45,7 @@ use rmcp::model::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::future::Future;
 #[cfg(test)]
@@ -108,6 +106,7 @@ pub const WALLET_LEXE_PLUGIN_ID: &str = "wallet-lexe";
 /// Built-in payments engine, served in-process as the `payments.v1`
 /// capability. Registered only with the `payments` feature.
 pub const PAYMENTS_PLUGIN_ID: &str = "payments";
+pub const MOA_PLUGIN_ID: &str = mesh_llm_moa_plugin::PLUGIN_ID;
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 #[cfg(test)]
@@ -137,6 +136,44 @@ pub(in crate::plugin) struct PluginManagerInner {
     pub(in crate::plugin) test_manifests: Arc<Mutex<BTreeMap<String, proto::PluginManifest>>>,
     #[cfg(test)]
     pub(in crate::plugin) test_stream_handlers: Arc<Mutex<BTreeMap<String, TestStreamHandler>>>,
+}
+
+#[derive(Clone, Copy)]
+enum VirtualModelCollisionPolicy {
+    Reject,
+    Omit,
+}
+
+fn apply_virtual_model_collision_policy(
+    mut routes: Vec<VirtualModelRoute>,
+    concrete_models: &BTreeSet<String>,
+    collision_policy: VirtualModelCollisionPolicy,
+) -> Result<Vec<VirtualModelRoute>> {
+    if matches!(collision_policy, VirtualModelCollisionPolicy::Reject) {
+        if let Some(route) = routes
+            .iter()
+            .find(|route| concrete_models.contains(&route.model_id))
+        {
+            bail!(
+                "Virtual model '{}' declared by '{}' collides with a concrete plugin model",
+                route.model_id,
+                route.plugin_name
+            );
+        }
+    } else {
+        routes.retain(|route| {
+            let collides = concrete_models.contains(&route.model_id);
+            if collides {
+                tracing::warn!(
+                    model = %route.model_id,
+                    plugin = %route.plugin_name,
+                    "virtual model collides with a concrete plugin model; route disabled"
+                );
+            }
+            !collides
+        });
+    }
+    Ok(routes)
 }
 
 impl PluginManager {
@@ -200,6 +237,9 @@ impl PluginManager {
         for plugin_name in plugin_names {
             manager.refresh_plugin_endpoints(&plugin_name).await?;
         }
+        manager
+            .virtual_models_with_collision_policy(VirtualModelCollisionPolicy::Reject)
+            .await?;
         manager.start_supervisor();
         Ok(manager)
     }
@@ -862,6 +902,110 @@ impl PluginManager {
             .await
     }
 
+    pub async fn invoke_virtual_model(
+        &self,
+        route: &VirtualModelRoute,
+        input_json: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<mesh_llm_plugin::VirtualModelResponse> {
+        let plugin = self
+            .inner
+            .plugins
+            .get(&route.plugin_name)
+            .with_context(|| format!("Unknown plugin '{}'", route.plugin_name))?;
+        let response = plugin
+            .invoke_service(
+                proto::ServiceKind::VirtualModel,
+                &route.handler,
+                input_json,
+                timeout,
+            )
+            .await?;
+        if response.is_error {
+            bail!(
+                "Virtual model '{}' failed: {}",
+                route.model_id,
+                response.output_json
+            );
+        }
+        serde_json::from_str(&response.output_json).with_context(|| {
+            format!(
+                "Plugin '{}' returned an invalid virtual-model response",
+                route.plugin_name
+            )
+        })
+    }
+
+    pub async fn virtual_models(&self) -> Result<Vec<VirtualModelRoute>> {
+        self.virtual_models_with_collision_policy(VirtualModelCollisionPolicy::Omit)
+            .await
+    }
+
+    async fn virtual_models_with_collision_policy(
+        &self,
+        collision_policy: VirtualModelCollisionPolicy,
+    ) -> Result<Vec<VirtualModelRoute>> {
+        let mut routes = Vec::new();
+        for (plugin_name, plugin) in &self.inner.plugins {
+            let Some(manifest) = plugin.manifest_snapshot().await else {
+                continue;
+            };
+            for model in manifest.virtual_models {
+                let model_id = model.model_id.trim();
+                let handler = model.handler.trim();
+                if model_id.is_empty() {
+                    bail!("Plugin '{plugin_name}' declares a virtual model with an empty model id");
+                }
+                if handler.is_empty() {
+                    bail!("Plugin '{plugin_name}' virtual model '{model_id}' has an empty handler");
+                }
+                routes.push(VirtualModelRoute {
+                    plugin_name: plugin_name.clone(),
+                    model_id: model_id.to_string(),
+                    handler: handler.to_string(),
+                    input_modalities: model.input_modalities,
+                    output_modalities: model.output_modalities,
+                    supports_tools: model.supports_tools,
+                    supports_streaming: model.supports_streaming,
+                    requires_candidates: model.requires_candidates,
+                });
+            }
+        }
+        routes.sort_by(|left, right| {
+            left.model_id
+                .cmp(&right.model_id)
+                .then_with(|| left.plugin_name.cmp(&right.plugin_name))
+        });
+        for pair in routes.windows(2) {
+            if pair[0].model_id == pair[1].model_id {
+                bail!(
+                    "Virtual model '{}' is declared by both '{}' and '{}'",
+                    pair[0].model_id,
+                    pair[0].plugin_name,
+                    pair[1].plugin_name
+                );
+            }
+        }
+        let concrete_models = self
+            .inference_endpoints()
+            .await?
+            .into_iter()
+            .flat_map(|endpoint| endpoint.models)
+            .collect::<BTreeSet<_>>();
+        apply_virtual_model_collision_policy(routes, &concrete_models, collision_policy)
+    }
+
+    pub async fn virtual_model_for_model(
+        &self,
+        model_id: &str,
+    ) -> Result<Option<VirtualModelRoute>> {
+        Ok(self
+            .virtual_models()
+            .await?
+            .into_iter()
+            .find(|route| route.model_id == model_id))
+    }
+
     pub async fn inference_models(&self) -> Result<Vec<String>> {
         let mut models = Vec::new();
         for endpoint in self.inference_endpoints().await? {
@@ -1072,6 +1216,7 @@ impl PluginManager {
                 proto::ServiceKind::Prompt => "prompts/get",
                 proto::ServiceKind::Resource => "resources/read",
                 proto::ServiceKind::Completion => "completion/complete",
+                proto::ServiceKind::VirtualModel => "virtual_model/invoke",
                 proto::ServiceKind::Unspecified => {
                     bail!("Service kind is required for test plugin '{plugin_name}'")
                 }
@@ -1200,6 +1345,10 @@ impl PluginManager {
 
     pub async fn set_rpc_bridge(&self, bridge: Option<Arc<dyn PluginRpcBridge>>) {
         *self.inner.rpc_bridge.lock().await = bridge;
+    }
+
+    pub(crate) async fn current_rpc_bridge(&self) -> Option<Arc<dyn PluginRpcBridge>> {
+        self.inner.rpc_bridge.lock().await.clone()
     }
 
     #[cfg(unix)]
@@ -1398,6 +1547,7 @@ pub(crate) fn plugin_manifest_overview(manifest: &proto::PluginManifest) -> Plug
         completions: manifest.completions.len(),
         http_bindings: manifest.http_bindings.len(),
         endpoints: manifest.endpoints.len(),
+        virtual_models: manifest.virtual_models.len(),
         mesh_channels: manifest.mesh_channels.len(),
         mesh_event_subscriptions: manifest.mesh_event_subscriptions.len(),
         capabilities: manifest.capabilities.clone(),
@@ -1467,6 +1617,17 @@ pub(crate) fn plugin_manifest_to_json(manifest: &proto::PluginManifest) -> Value
                 "namespace": endpoint.namespace,
                 "supports_streaming": endpoint.supports_streaming,
                 "managed_by_plugin": endpoint.managed_by_plugin,
+            })
+        }).collect::<Vec<_>>(),
+        "virtual_models": manifest.virtual_models.iter().map(|model| {
+            json!({
+                "model_id": model.model_id,
+                "handler": model.handler,
+                "input_modalities": model.input_modalities,
+                "output_modalities": model.output_modalities,
+                "supports_tools": model.supports_tools,
+                "supports_streaming": model.supports_streaming,
+                "requires_candidates": model.requires_candidates,
             })
         }).collect::<Vec<_>>(),
         "mesh_channels": manifest.mesh_channels.iter().map(|channel| {
