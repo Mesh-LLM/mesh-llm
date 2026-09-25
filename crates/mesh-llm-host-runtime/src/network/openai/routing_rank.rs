@@ -362,6 +362,15 @@ pub(super) fn descriptor_for_model<'a>(
     descriptors
         .iter()
         .find(|descriptor| descriptor.identity.model_name == model_name)
+        .or_else(|| {
+            descriptors.iter().find(|descriptor| {
+                super::model_names::public_model_id(
+                    &descriptor.identity.model_name,
+                    Some(descriptor),
+                    "",
+                ) == model_name
+            })
+        })
 }
 
 pub(super) fn cached_auto_model_satisfies_media_requirements(
@@ -381,13 +390,6 @@ pub(crate) fn capabilities_for_model(
         .filter(|descriptor| descriptor.capabilities_known)
         .map(|descriptor| descriptor.capabilities)
         .unwrap_or_else(|| crate::models::installed_model_capabilities(model))
-}
-
-pub(crate) fn descriptor_metadata_for_model<'a>(
-    model: &str,
-    descriptors: &'a [mesh::ServedModelDescriptor],
-) -> Option<&'a mesh::ServedModelMetadata> {
-    descriptor_for_model(descriptors, model).and_then(|descriptor| descriptor.metadata.as_ref())
 }
 
 #[cfg(test)]
@@ -416,6 +418,7 @@ mod tests {
             ..local_gguf_descriptor(model_name)
         }
     }
+
     #[test]
     fn test_cached_auto_model_rejects_text_model_for_image_request() {
         let body = serde_json::json!({

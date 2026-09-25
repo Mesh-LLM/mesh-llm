@@ -50,6 +50,7 @@ pub(in crate::frontend) struct GenerationSessionLockEntry {
 #[derive(Clone)]
 pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) runtime: Arc<Mutex<RuntimeState>>,
+    pub(in crate::frontend) workload: Arc<super::workload::CachedModelWorkload>,
     pub(in crate::frontend) config: StageConfig,
     pub(in crate::frontend) telemetry: Telemetry,
     pub(in crate::frontend) model_id: String,

@@ -24,7 +24,9 @@ mod session;
 mod stage_planning;
 mod types;
 
-pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest};
+pub use activation::{
+    DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest, PartialBatchExecution,
+};
 pub use capability_probe::{CapabilityReport, probe_capabilities};
 pub use checkpoint::{CheckpointQuantization, is_safetensors_checkpoint};
 pub use config::{
@@ -35,7 +37,7 @@ pub use config::{
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub(crate) use error::ensure_ok;
 pub use gguf_writer::{
-    ModelInfo, SlicePlan, write_gguf_from_parts, write_gguf_from_parts_consuming,
+    ModelInfo, write_gguf_from_parts, write_gguf_from_parts_consuming,
     write_gguf_metadata_from_parts,
 };
 pub use kv_pages::{decode_cachegen_kv_page, encode_cachegen_kv_page};
@@ -46,7 +48,10 @@ pub use logging::{
     register_filtered_native_logs, restore_native_logs, set_filtered_native_logs_enabled,
     suppress_native_logs, unregister_filtered_native_logs, write_native_log_note,
 };
-pub use native::{StageModel, StageModelReader};
+pub use media::{SpeechAudio, SpeechOutputFormat, SpeechSynthesisConfig};
+pub use native::{
+    ModelWorkload, PoolingType, StageModel, StageModelReader, SystemOneReadSlot, WorkloadInfo,
+};
 pub use native_mtp::NativeMtpDraft;
 pub use native_test_evidence::write_evidence_marker;
 pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};

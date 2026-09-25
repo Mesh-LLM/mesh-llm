@@ -45,6 +45,17 @@ async fn select_aliased_clones(
 ) -> Vec<(InferenceTarget, String, Option<RoutingReservation>)> {
     use crate::proto::node::InferenceAdmissionState;
 
+    let mut eligible = Vec::with_capacity(candidates.len());
+    for (target, alias) in candidates {
+        if !super::workload_admission::eligible_targets(node, &alias, std::slice::from_ref(&target))
+            .await
+            .is_empty()
+        {
+            eligible.push((target, alias));
+        }
+    }
+    let candidates = eligible;
+
     let deprioritized: std::collections::HashSet<_> = node
         .peers()
         .await

@@ -94,7 +94,7 @@ Roles and live serving state are different concepts. A node can be connected whi
 
 ### Discovery, admission, and gossip
 
-Public meshes are discovered through published listings. Private meshes are joined with invite tokens; LAN deployments can use the configured local discovery mode. After transport negotiation, nodes exchange additive gossip containing peer identity, capabilities, model visibility, serving state, demand signals, and mesh metadata.
+Published meshes are discovered through listings. Join tokens can connect to published or unpublished meshes and do not themselves grant admission; LAN deployments can use the configured local discovery mode. After transport negotiation, nodes exchange additive gossip containing peer identity, capabilities, model visibility, serving state, demand signals, and mesh metadata.
 
 Discovery finds a candidate mesh. Admission decides whether the node is allowed to participate. Gossip tells admitted peers what the topology currently looks like. These are separate stages and should not be treated as one trust decision.
 
@@ -160,7 +160,7 @@ The Skippy ABI is carried by a verified native runtime artifact selected for the
 | Shape | Use it when | Main path |
 | --- | --- | --- |
 | Single node | The model fits locally and you want the shortest path. | API → local Skippy stage |
-| Private mesh | You control the machines and want invite-token membership. | API → QUIC peer routing → host or stage |
+| Operator-managed mesh | Connect your own machines; configure owner/trust policy when membership must be restricted. | API → QUIC peer routing → host or stage |
 | Public mesh | You want discovery and shared public capacity. | API → public discovery → selected mesh target |
 | Client-only | The app should consume inference without serving a model. | SDK client → direct mesh transport or local proxy |
 | Split serving | No single node can fit the model. | API → stage 0 → stage pipeline → response |
@@ -186,7 +186,7 @@ Start with [Mesh workflows](/docs/pages/private-meshes/) for operators, [Running
 ## Deep dives
 
 - [Mesh design](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/design/DESIGN.md) — host architecture, node roles, transport streams, routing, and management APIs.
-- [Mesh workflows](/docs/pages/private-meshes/) — public, private, published, and client-only deployment shapes.
+- [Mesh workflows](/docs/pages/private-meshes/) — discovery, join tokens, admission policy, and client-only deployment shapes.
 - [Skippy split serving](/docs/pages/running-large-models/) — package refs, stage planning, readiness, caches, and diagnostics.
 - [Model package specification](/docs/pages/model-package-spec/) — `model-package.json` schema, artifact integrity, stage selection, and compatibility rules.
 - [Skippy integration notes](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/SKIPPY.md) — execution/runtime ownership and migration boundaries.

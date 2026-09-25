@@ -70,6 +70,7 @@ pub(crate) fn remote_stage_load_request(
         model_path: Some(context.package.package_ref.clone()),
         source_model_bytes: context.package.source_model_bytes,
         source_model_sha256: Some(context.package.source_model_sha256.clone()),
+        split_certification: None,
         local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,
@@ -167,8 +168,8 @@ pub(crate) fn stage0_config(
         kv_unified: context.runtime_settings.kv_unified,
         swa_full: context.runtime_settings.swa_full,
         cache_idle_slots: context.runtime_settings.cache_idle_slots,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        execution_contract: context.admission.execution_contract.clone(),
         activation_import_identities: frontier_profile.activation_imports.clone(),
         activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
         activation_export_identities: frontier_profile.activation_exports.clone(),
@@ -289,7 +290,7 @@ mod tests {
     #[test]
     fn remote_load_request_uses_package_identity_and_layer_mode() {
         let package = package();
-        let context = StageDeploymentContext {
+        let mut context = StageDeploymentContext {
             topology_id: "topology-a",
             run_id: "run-a",
             model_id: "model-a",
@@ -329,6 +330,7 @@ mod tests {
                 activation_codec_policy: Default::default(),
             },
         };
+        context.admission.execution_contract = "admitted-dependency-contract".into();
         let request = remote_stage_load_request(
             &context,
             &MeshStagePlan {
@@ -381,6 +383,10 @@ mod tests {
             Some("/models/mmproj.gguf")
         );
         assert!(!stage0.native_mtp_enabled);
+        assert_eq!(
+            stage0.execution_contract,
+            context.admission.execution_contract
+        );
         assert_eq!(stage0.kv_offload, context.runtime_settings.kv_offload);
         assert_eq!(stage0.kv_unified, context.runtime_settings.kv_unified);
         assert_eq!(stage0.swa_full, context.runtime_settings.swa_full);

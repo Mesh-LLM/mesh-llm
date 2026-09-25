@@ -328,11 +328,19 @@ fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
     }
 }
 
+/// How many lanes' worth of context to size the shared pool for.
+///
+/// Always the profile's single-lane target, never the lane override. Under
+/// `kv_unified = true` the pool is one allocation that every lane shares, so
+/// the context that fits the budget is the same whether 1 or 128 lanes run
+/// over it — and an operator who asks for more lanes needs a *bigger* share of
+/// that pool per request in flight, not a smaller pool. Dividing the budget by
+/// the override was the per-lane accounting the lane planner already dropped;
+/// it survived here and produced an 8,192-cell pool for `parallel = 128` on a
+/// 122 GB node whose auto plan holds 131,072, which admission then filled with
+/// ~26 requests while the other 100 lanes sat idle.
 fn context_slot_target(input: &RuntimeResourcePlanInput<'_>) -> u64 {
-    input
-        .parallel_override
-        .map(|slots| slots.max(1) as u64)
-        .unwrap_or_else(|| input.planning_profile.context_slot_target())
+    input.planning_profile.context_slot_target()
 }
 
 /// Plan the number of concurrent lanes to run at the chosen context depth.
@@ -809,6 +817,38 @@ mod tests {
             "auto-planner should not exceed llama-server's 4-lane unified-KV ceiling; got {}",
             plan.slots
         );
+    }
+
+    /// The shared pool is sized by the budget, not divided by the lane override.
+    /// Regression for the DGX Spark measurement: `parallel = 128` planned an
+    /// 8,192-cell pool where the auto plan held 131,072, so admission capped at
+    /// ~26 in-flight requests and throughput stalled at the same ceiling as 32
+    /// lanes. Under unified KV the lanes share one allocation; asking for more
+    /// of them must not shrink it.
+    #[test]
+    fn explicit_parallel_does_not_shrink_the_shared_pool() {
+        let metadata = gqa_metadata(131_072);
+        let input = |parallel_override| RuntimeResourcePlanInput {
+            ctx_size_override: None,
+            parallel_override,
+            model_bytes: 32_000_000_000,
+            vram_bytes: 122_000_000_000,
+            metadata: Some(&metadata),
+            kv_cache_quant: GgufKvCacheQuant::Q8_0,
+            local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+            measured_buffers: None,
+        };
+        let auto = plan_runtime_resources(input(None));
+        let wide = plan_runtime_resources(input(Some(128)));
+        assert_eq!(
+            wide.context_length,
+            auto.context_length,
+            "128 lanes planned a {}K pool where auto holds {}K",
+            wide.context_length / 1024,
+            auto.context_length / 1024
+        );
+        assert_eq!(wide.slots, 128);
     }
 
     #[test]

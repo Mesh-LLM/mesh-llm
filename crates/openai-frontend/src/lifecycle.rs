@@ -73,9 +73,15 @@ pub enum OpenAiFrontendRoute {
     Healthz,
     Readyz,
     Models,
+    Embeddings,
+    Rerank,
+    AudioSpeech,
+    AudioTranscriptions,
+    AudioTranslations,
     ChatCompletions,
     Completions,
     Responses,
+    SystemOne,
     Unknown,
 }
 
@@ -83,12 +89,18 @@ pub enum OpenAiFrontendRoute {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OpenAiBackendOperation {
     Models,
+    Embeddings,
+    Rerank,
+    AudioSpeech,
+    AudioTranscription,
+    AudioTranslation,
     ChatCompletion,
     ChatCompletionStream,
     Completion,
     CompletionStream,
     Responses,
     ResponsesStream,
+    SystemOne,
 }
 
 /// A bounded classification for a request rejected before backend execution.

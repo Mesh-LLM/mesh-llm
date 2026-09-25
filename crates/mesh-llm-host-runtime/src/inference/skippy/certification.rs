@@ -162,8 +162,8 @@ fn materialize_certification_stages(
                 stage_id: stage_id.clone(),
                 layer_start: range.layer_start,
                 layer_end: range.layer_end,
-                include_embeddings: range.include_embeddings,
-                include_output: range.include_output,
+                source_stage: range.include_embeddings,
+                terminal_stage: range.include_output,
             };
             let integrity_options =
                 PackageIntegrityOptions::verify_with_cache(package_integrity_cache_dir());

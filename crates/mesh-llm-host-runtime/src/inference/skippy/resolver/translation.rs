@@ -193,9 +193,6 @@ impl ResolvedSkippyConfig {
         }
         let mut stage_config = single_stage_config(&load_options)?;
         stage_config.load_mode = load_mode;
-        stage_config.filter_tensors_on_load =
-            !matches!(stage_config.load_mode, LoadMode::RuntimeSlice)
-                || stage_config.layer_start > 0;
         if matches!(stage_config.load_mode, LoadMode::LayerPackage)
             && load_options.package_identity.is_none()
         {

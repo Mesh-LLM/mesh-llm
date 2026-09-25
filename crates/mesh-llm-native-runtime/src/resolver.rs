@@ -25,6 +25,7 @@ pub enum CandidateRejection {
     OsMismatch { expected: String, actual: String },
     ArchMismatch { expected: String, actual: String },
     TargetTripleMismatch { expected: String, actual: String },
+    GlibcVersionTooOld { required: String, available: String },
     BackendNotSupported { backend: NativeRuntimeBackendKind },
     CudaProfileMissing,
     CudaToolkitMajorMismatch { required: u32, installed: Vec<u32> },
@@ -68,6 +69,13 @@ impl std::fmt::Display for CandidateRejection {
                     "target triple mismatch: expected {expected}, host is {actual}"
                 )
             }
+            Self::GlibcVersionTooOld {
+                required,
+                available,
+            } => write!(
+                f,
+                "glibc too old: runtime requires glibc {required}, host has glibc {available}; use a runtime built for this Linux distribution or upgrade glibc"
+            ),
             Self::BackendNotSupported { backend } => {
                 write!(f, "backend {backend} is not supported on this host")
             }
@@ -377,6 +385,31 @@ pub fn select_native_runtime_from_artifacts(
     best_candidate(&evaluated).cloned()
 }
 
+/// Evaluates one native-runtime artifact against the host and requested
+/// startup selection using the same compatibility rules as catalog selection.
+pub fn evaluate_native_runtime_artifact(
+    artifact: &NativeRuntimeArtifact,
+    profile: &HostRuntimeProfile,
+    mesh_version: &str,
+    skippy_abi: Option<&str>,
+    selection: &RuntimeSelection,
+) -> CandidateEvaluation {
+    evaluate_artifact(artifact, profile, mesh_version, skippy_abi, selection)
+}
+
+/// Returns whether a locally installed artifact has the metadata required by
+/// automatic startup before the resolver attempts to load or execute it.
+/// Legacy catalog entries may omit this field, but that omission is not proof
+/// that a Linux artifact is compatible with the host's glibc.
+pub fn has_startup_compatibility_metadata(
+    artifact: &NativeRuntimeArtifact,
+    profile: &HostRuntimeProfile,
+) -> bool {
+    !(profile.os == "linux"
+        && artifact.platform.os == "linux"
+        && artifact.platform.min_glibc.is_none())
+}
+
 fn evaluate_candidates(
     artifacts: &[NativeRuntimeArtifact],
     profile: &HostRuntimeProfile,
@@ -447,6 +480,23 @@ fn evaluate_artifact(
             });
         }
         _ => {}
+    }
+    if artifact.platform.os == "linux"
+        && profile.os == "linux"
+        && let (Some(required_text), Some(available_text)) = (
+            artifact.platform.min_glibc.as_deref(),
+            profile.glibc_version.as_deref(),
+        )
+        && let (Ok(required), Ok(available)) = (
+            crate::manifest::parse_glibc_version(required_text),
+            crate::manifest::parse_glibc_version(available_text),
+        )
+        && available < required
+    {
+        reasons.push(CandidateRejection::GlibcVersionTooOld {
+            required: required_text.to_string(),
+            available: available_text.to_string(),
+        });
     }
     if !profile.supports_flavor(&artifact.backend.kind) {
         reasons.push(CandidateRejection::BackendNotSupported {
@@ -684,6 +734,7 @@ mod tests {
                 os: "linux".to_string(),
                 arch: "x86_64".to_string(),
                 target: None,
+                min_glibc: None,
             },
             backend,
             rank: 0,
@@ -709,6 +760,7 @@ mod tests {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),
             target_triple: None,
+            glibc_version: None,
             available_flavors: BTreeSet::from([
                 NativeRuntimeBackendKind::Cpu,
                 NativeRuntimeBackendKind::Cuda,
@@ -808,6 +860,91 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn runtime_requiring_newer_glibc_is_rejected() {
+        let mut runtime = artifact(
+            "meshllm-runtime-linux-x86_64-cpu",
+            NativeRuntimeBackend::cpu(),
+        );
+        runtime.platform.min_glibc = Some("2.38".to_string());
+        let mut host = profile();
+        host.glibc_version = Some("2.35".to_string());
+
+        let evaluation = evaluate_artifact(
+            &runtime,
+            &host,
+            "0.68.0",
+            Some("0.1.25"),
+            &RuntimeSelection::Recommended,
+        );
+
+        assert_eq!(
+            evaluation.rejection_reasons,
+            vec![CandidateRejection::GlibcVersionTooOld {
+                required: "2.38".to_string(),
+                available: "2.35".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn runtime_is_compatible_when_host_glibc_is_new_enough_or_unknown() {
+        let mut runtime = artifact(
+            "meshllm-runtime-linux-x86_64-cpu",
+            NativeRuntimeBackend::cpu(),
+        );
+        runtime.platform.min_glibc = Some("2.35".to_string());
+        let mut host = profile();
+        host.glibc_version = Some("2.38".to_string());
+
+        assert!(
+            evaluate_artifact(
+                &runtime,
+                &host,
+                "0.68.0",
+                Some("0.1.25"),
+                &RuntimeSelection::Recommended,
+            )
+            .compatible
+        );
+
+        host.glibc_version = None;
+        assert!(
+            evaluate_artifact(
+                &runtime,
+                &host,
+                "0.68.0",
+                Some("0.1.25"),
+                &RuntimeSelection::Recommended,
+            )
+            .compatible
+        );
+    }
+
+    #[test]
+    fn startup_requires_glibc_metadata_only_for_local_linux_artifacts() {
+        let runtime = artifact(
+            "meshllm-runtime-linux-x86_64-cpu",
+            NativeRuntimeBackend::cpu(),
+        );
+        let linux_host = profile();
+        assert!(!has_startup_compatibility_metadata(&runtime, &linux_host));
+
+        let mut runtime_with_metadata = runtime.clone();
+        runtime_with_metadata.platform.min_glibc = Some("2.35".to_string());
+        assert!(has_startup_compatibility_metadata(
+            &runtime_with_metadata,
+            &linux_host
+        ));
+
+        let mut non_linux_host = linux_host;
+        non_linux_host.os = "macos".to_string();
+        assert!(has_startup_compatibility_metadata(
+            &runtime,
+            &non_linux_host
+        ));
     }
 
     /// A CUDA 13 driver with only a CUDA 12 toolkit installed must still select

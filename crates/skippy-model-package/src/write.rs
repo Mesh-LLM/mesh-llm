@@ -6,201 +6,11 @@ use anyhow::{Context, Result, bail};
 use model_artifact::ModelArtifactFile;
 use model_ref::split_gguf_shard_info;
 use serde::Serialize;
-use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_from_parts_consuming};
-
-use crate::hash::file_sha256;
-use crate::plan::{
-    StagePlan, build_plan_from_tensors, layer_count, parse_layer_range, stage_plan_from_tensors,
-};
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SliceManifest {
-    pub(crate) schema_version: u32,
-    pub(crate) source_model: String,
-    pub(crate) source_sha256: String,
-    pub(crate) stage_count: usize,
-    pub(crate) layer_count: u32,
-    pub(crate) stages: Vec<SliceManifestStage>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SliceManifestStage {
-    stage_index: usize,
-    layer_start: u32,
-    layer_end: u32,
-    includes_embeddings: bool,
-    includes_output: bool,
-    path: String,
-    tensor_count: usize,
-    tensor_bytes: u64,
-    artifact_bytes: u64,
-    sha256: String,
-}
+use skippy_runtime::{ModelInfo, TensorInfo};
 
 pub(crate) struct ModelSource {
     pub(crate) paths: Vec<PathBuf>,
-    pub(crate) infos: Vec<ModelInfo>,
     pub(crate) tensors: Vec<TensorInfo>,
-}
-
-pub(crate) fn write_one(
-    model: PathBuf,
-    layers: String,
-    out: PathBuf,
-    stage_index: Option<u32>,
-    include_embeddings: bool,
-    include_output: bool,
-    manifest: Option<PathBuf>,
-) -> Result<()> {
-    let source = ModelSource::open(&model)?;
-    let tensors = &source.tensors;
-    let layer_count = layer_count(tensors)?;
-    let (layer_start, layer_end) = parse_layer_range(&layers)?;
-    if layer_end > layer_count {
-        bail!("layer range end exceeds model layer count {layer_count}");
-    }
-
-    let stage_index = stage_index.unwrap_or(0);
-    let includes_embeddings = include_embeddings || layer_start == 0;
-    let includes_output = include_output || layer_end == layer_count;
-    let stage = stage_plan_from_tensors(
-        stage_index as usize,
-        layer_start,
-        layer_end,
-        includes_embeddings,
-        includes_output,
-        tensors,
-    );
-
-    write_stage_artifact(&source, &stage, &out)?;
-
-    if let Some(path) = manifest {
-        let manifest = build_manifest(&model, layer_count, vec![(stage, out)])?;
-        write_json_file(&path, &manifest)?;
-    }
-    Ok(())
-}
-
-pub(crate) fn write_stages(model: PathBuf, stages: usize, out_dir: PathBuf) -> Result<()> {
-    if stages == 0 {
-        bail!("--stages must be greater than zero");
-    }
-    fs::create_dir_all(&out_dir)
-        .with_context(|| format!("create output directory {}", out_dir.display()))?;
-
-    let source = ModelSource::open(&model)?;
-    let tensors = &source.tensors;
-    let plan = build_plan_from_tensors(stages, tensors)?;
-    let mut written = Vec::new();
-    for stage in plan.stages {
-        let path = out_dir.join(format!("stage-{:03}.gguf", stage.stage_index));
-        write_stage_artifact(&source, &stage, &path)?;
-        written.push((stage, path));
-    }
-
-    let manifest = build_manifest(&model, plan.layer_count, written)?;
-    let manifest_path = out_dir.join("slice-manifest.json");
-    write_json_file(&manifest_path, &manifest)?;
-    println!("{}", serde_json::to_string_pretty(&manifest)?);
-    Ok(())
-}
-
-pub(crate) fn write_stage_artifact(
-    source: &ModelSource,
-    stage: &StagePlan,
-    out: &Path,
-) -> Result<()> {
-    create_parent_dir(out)?;
-
-    if source.infos.len() == 1 {
-        write_single_source_stage_artifact(&source.infos[0], stage, out)
-    } else {
-        write_sharded_stage_artifact(source, stage, out)
-    }
-}
-
-pub(crate) fn check_manifest_matches_artifact(
-    stage_index: usize,
-    planned: (usize, u64),
-    written: (usize, u64),
-    path: &Path,
-) -> Result<()> {
-    if planned != written {
-        bail!(
-            "stage {stage_index} plan selected {} tensors / {} bytes but the written artifact {} \
-             contains {} tensors / {} bytes; the packaging plan and the native slice writer \
-             disagree on tensor selection",
-            planned.0,
-            planned.1,
-            path.display(),
-            written.0,
-            written.1,
-        );
-    }
-    Ok(())
-}
-
-/// Read back what the slice writer actually put in the artifact, rather than
-/// trusting the plan's prediction of it.
-fn written_artifact_tensor_totals(path: &Path) -> Result<(usize, u64)> {
-    let info = ModelInfo::open(path)
-        .with_context(|| format!("open written stage artifact {}", path.display()))?;
-    let tensors = info.tensors().with_context(|| {
-        format!(
-            "read tensors from written stage artifact {}",
-            path.display()
-        )
-    })?;
-    let tensor_bytes = tensors
-        .iter()
-        .try_fold(0u64, |total, tensor| total.checked_add(tensor.byte_size))
-        .with_context(|| format!("tensor byte total overflows u64 in {}", path.display()))?;
-    Ok((tensors.len(), tensor_bytes))
-}
-
-fn build_manifest(
-    model: &Path,
-    layer_count: u32,
-    written: Vec<(StagePlan, PathBuf)>,
-) -> Result<SliceManifest> {
-    let mut stages = Vec::new();
-    for (stage, path) in written {
-        let metadata = fs::metadata(&path)
-            .with_context(|| format!("read artifact metadata {}", path.display()))?;
-        let (tensor_count, tensor_bytes) = written_artifact_tensor_totals(&path)?;
-        // The plan predicate and the native slice writer select tensors
-        // independently, in different languages. If they ever disagree the
-        // manifest silently misdescribes the artifact, and `tensor_bytes` is
-        // what split planning divides to estimate per-layer stage cost. Report
-        // what the artifact actually contains and fail loudly on a mismatch.
-        check_manifest_matches_artifact(
-            stage.stage_index,
-            (stage.tensor_count, stage.tensor_bytes),
-            (tensor_count, tensor_bytes),
-            &path,
-        )?;
-        stages.push(SliceManifestStage {
-            stage_index: stage.stage_index,
-            layer_start: stage.layer_start,
-            layer_end: stage.layer_end,
-            includes_embeddings: stage.includes_embeddings,
-            includes_output: stage.includes_output,
-            path: path.display().to_string(),
-            tensor_count,
-            tensor_bytes,
-            artifact_bytes: metadata.len(),
-            sha256: file_sha256(&path)?,
-        });
-    }
-
-    Ok(SliceManifest {
-        schema_version: 1,
-        source_model: model.display().to_string(),
-        source_sha256: file_sha256(model)?,
-        stage_count: stages.len(),
-        layer_count,
-        stages,
-    })
 }
 
 pub(crate) fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -227,7 +37,6 @@ pub(crate) fn create_parent_dir(path: &Path) -> Result<()> {
 impl ModelSource {
     pub(crate) fn open(path: &Path) -> Result<Self> {
         let paths = resolve_gguf_shard_paths(path)?;
-        let mut infos = Vec::with_capacity(paths.len());
         let mut tensors = Vec::new();
         for path in &paths {
             let info = ModelInfo::open(path)
@@ -236,13 +45,8 @@ impl ModelSource {
                 info.tensors()
                     .with_context(|| format!("read GGUF tensors {}", path.display()))?,
             );
-            infos.push(info);
         }
-        Ok(Self {
-            paths,
-            infos,
-            tensors,
-        })
+        Ok(Self { paths, tensors })
     }
 }
 
@@ -287,9 +91,8 @@ pub(crate) fn local_artifact_files(
         return Ok(vec![ModelArtifactFile::new(primary_file.to_string())]);
     }
 
-    let primary_path = Path::new(primary_file);
-    let primary_parent = primary_path.parent();
-    let files = shard_paths
+    let primary_parent = Path::new(primary_file).parent();
+    shard_paths
         .into_iter()
         .map(|path| {
             let file_name = path
@@ -303,60 +106,5 @@ pub(crate) fn local_artifact_files(
                 relative.to_string_lossy().replace('\\', "/"),
             ))
         })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(files)
-}
-
-fn write_single_source_stage_artifact(
-    info: &ModelInfo,
-    stage: &StagePlan,
-    out: &Path,
-) -> Result<()> {
-    let mut plan = info.create_slice_plan()?;
-    plan.add_layer_range(
-        stage.stage_index as u32,
-        stage.layer_start,
-        stage.layer_end,
-        stage.includes_embeddings,
-        stage.includes_output,
-        stage.includes_per_layer_token_embd,
-    )?;
-    info.write_slice_gguf(&plan, stage.stage_index as u32, out)
-        .with_context(|| format!("write GGUF slice {}", out.display()))
-}
-
-fn write_sharded_stage_artifact(source: &ModelSource, stage: &StagePlan, out: &Path) -> Result<()> {
-    let parent = out.parent().unwrap_or_else(|| Path::new("."));
-    let stem = out
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("stage");
-    let pid = std::process::id();
-    let scratch = parent.join(format!(".{stem}.shard-parts-{pid}"));
-    if scratch.exists() {
-        fs::remove_dir_all(&scratch)
-            .with_context(|| format!("remove stale shard scratch {}", scratch.display()))?;
-    }
-    fs::create_dir_all(&scratch)
-        .with_context(|| format!("create shard scratch {}", scratch.display()))?;
-
-    let result = (|| {
-        let mut parts = Vec::with_capacity(source.infos.len());
-        for (index, info) in source.infos.iter().enumerate() {
-            let part_path = scratch.join(format!("part-{index:05}.gguf"));
-            write_single_source_stage_artifact(info, stage, &part_path).with_context(|| {
-                format!(
-                    "write shard-local GGUF slice from {}",
-                    source.paths[index].display()
-                )
-            })?;
-            parts.push(part_path);
-        }
-        write_gguf_from_parts_consuming(&parts, out)
-            .with_context(|| format!("merge split-GGUF shard slices into {}", out.display()))
-    })();
-
-    let cleanup = fs::remove_dir_all(&scratch)
-        .with_context(|| format!("remove shard scratch {}", scratch.display()));
-    result.and(cleanup)
+        .collect()
 }

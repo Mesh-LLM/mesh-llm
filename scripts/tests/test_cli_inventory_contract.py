@@ -73,7 +73,7 @@ class CliInventoryContractTests(unittest.TestCase):
 
     def test_nested_cli_paths_select_inventory_validation(self) -> None:
         derive_outputs = (ROOT / ".github/actions/compute-changes/derive-outputs.sh").read_text(encoding="utf-8")
-        self.assertIn("^crates/mesh-llm-cli/", derive_outputs)
+        self.assertIn("^(mesh/|skippy/)?crates/mesh-llm-cli/", derive_outputs)
 
         affected = subprocess.run(
             ["bash", str(ROOT / "scripts/affected-crates.sh"), "crates/mesh-llm-cli/src/parser/commands.rs"],

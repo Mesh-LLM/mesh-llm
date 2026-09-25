@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
-use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig};
+use skippy_protocol::{FlashAttentionType, PeerConfig, StageConfig};
 use skippy_server::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -30,6 +30,7 @@ pub(crate) use types::*;
 struct RunningStage {
     load: StageLoadRequest,
     server: EmbeddedServerHandle,
+    compute_meter: Arc<skippy_server::compute_meter::StageComputeMeter>,
     package: Option<super::materialization::ResolvedStagePackage>,
 }
 
@@ -315,6 +316,7 @@ impl StageControlState {
             resolved_package = Some(package);
         }
         let config = stage_config(&effective_load, resolved_package.as_ref())?;
+        let compute_meter = Arc::new(skippy_server::compute_meter::StageComputeMeter::default());
         let server = skippy_server::start_binary_stage(BinaryStageOptions {
             config,
             topology: None,
@@ -331,12 +333,14 @@ impl StageControlState {
             continuous_batching: effective_load.continuous_batching,
             openai: None,
             l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
+            compute_meter: Some(compute_meter.clone()),
         });
         self.stages.insert(
             key.clone(),
             RunningStage {
                 load: effective_load.clone(),
                 server,
+                compute_meter,
                 package: resolved_package,
             },
         );
@@ -724,11 +728,8 @@ fn stage_config(
         kv_unified: load.runtime_settings.kv_unified,
         swa_full: load.runtime_settings.swa_full,
         cache_idle_slots: load.runtime_settings.cache_idle_slots,
-        filter_tensors_on_load: matches!(
-            load.load_mode,
-            LoadMode::RuntimeSlice | LoadMode::LayerPackage
-        ),
         resident_tensor_names,
+        execution_contract: load.admission.execution_contract.clone(),
         activation_import_identities: frontier_profile.activation_imports.clone(),
         activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
         activation_export_identities: frontier_profile.activation_exports.clone(),
@@ -858,6 +859,7 @@ fn empty_to_default(value: &str, default: &str) -> String {
 
 fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
     let server = stage.server.status();
+    let compute = stage.compute_meter.snapshot();
     let state = match server.state {
         skippy_server::EmbeddedState::Starting => StageRuntimeState::Starting,
         skippy_server::EmbeddedState::Ready => StageRuntimeState::Ready,
@@ -888,6 +890,7 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
             .as_ref()
             .map(|package| package.source_model_sha256.clone())
             .or_else(|| stage.load.source_model_sha256.clone()),
+        split_certification: stage.load.split_certification.clone(),
         source_model_bytes: stage
             .package
             .as_ref()
@@ -920,6 +923,8 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         coordinator_term: stage.load.coordinator_term,
         coordinator_id: stage.load.coordinator_id,
         lease_until_unix_ms: stage.load.lease_until_unix_ms,
+        compute_busy_nanos: compute.busy_nanos,
+        compute_operations: compute.operations,
     }
 }
 
@@ -933,6 +938,7 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         manifest_sha256: None,
         source_model_path: None,
         source_model_sha256: None,
+        split_certification: None,
         source_model_bytes: None,
         materialized_path: None,
         materialized_pinned: false,
@@ -959,6 +965,8 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         coordinator_term: stop.coordinator_term,
         coordinator_id: None,
         lease_until_unix_ms: 0,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -976,6 +984,7 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
             .then(|| load.model_path.clone())
             .flatten(),
         source_model_sha256: load.source_model_sha256.clone(),
+        split_certification: load.split_certification.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
@@ -1004,5 +1013,7 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }

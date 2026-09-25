@@ -207,9 +207,13 @@ impl StageOpenAiBackend {
                 .generation_service_estimator
                 .estimated_prefill_ms(prefill_tokens.len());
             let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
-            if let Ok(Some(record)) =
-                kv.record_exact_state_with_cost(runtime, session_id, &exact_identity, l3_cost)
-            {
+            if let Ok(Some(record)) = kv.record_exact_state_with_cost(
+                runtime,
+                session_id,
+                &exact_identity,
+                crate::kv_integration::CaptureAdmission::BestEffort,
+                l3_cost,
+            ) {
                 resident_recorded_pages = resident_recorded_pages.saturating_add(1);
                 let mut attrs = self.openai_attrs(ids);
                 attrs.insert(

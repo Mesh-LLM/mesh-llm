@@ -78,7 +78,7 @@ class UiDistributionTests(unittest.TestCase):
 
     def test_restore_action_verifies_with_python3_or_python(self):
         action = yaml.safe_load((ROOT / ".github/actions/restore-release-ui/action.yml").read_text())
-        verify_script = action["runs"]["steps"][1]["run"]
+        verify_script = next(step["run"] for step in action["runs"]["steps"] if step.get("name") == "Verify release UI identity and contents")
         bash = shutil.which("bash")
         self.assertIsNotNone(bash)
         UI.stamp(self.dist, SOURCE, TAG)
@@ -102,6 +102,7 @@ class UiDistributionTests(unittest.TestCase):
                 env = {
                     **os.environ,
                     "PATH": str(binaries),
+                    "UI_DIR": "crates/mesh-llm-ui",
                     "UI_SOURCE_SHA": SOURCE,
                     "UI_RELEASE_TAG": TAG,
                     "UI_PYTHON_MARKER": str(marker),

@@ -106,6 +106,9 @@ outputs:
   website_docs_changed:
     description: Planner-owned website docs change signal
     value: ${{ steps.plan.outputs.website_docs_changed }}
+  plugin_exemplars_changed:
+    description: Planner-owned plugin exemplar change signal
+    value: ${{ steps.plan.outputs.plugin_exemplars_changed }}
   cli_surface_changed:
     description: Planner-owned CLI surface change signal
     value: ${{ steps.plan.outputs.cli_surface_changed }}
@@ -263,7 +266,7 @@ runs:
           echo "linux_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "linux")]' ci-plan.json)"
           echo "macos_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "macos")]' ci-plan.json)"
           echo "windows_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "windows")]' ci-plan.json)"
-          for signal in rust_changed ui_changed website_changed website_docs_changed cli_surface_changed docs_only backend_changed runner_contract_required; do
+          for signal in rust_changed ui_changed website_changed website_docs_changed plugin_exemplars_changed cli_surface_changed docs_only backend_changed runner_contract_required; do
             echo "${signal}=$(jq -r --arg signal "$signal" '.signals[$signal]' ci-plan.json)"
           done
           echo "linux_max_parallel=$(jq -r '.budgets.linux_max_parallel' ci-plan.json)"
@@ -284,7 +287,7 @@ runs:
                 rust_tests: .matrices.rust_tests,
                 hosts: [.matrices.hosts[] | select(.platform == "linux")],
                 runtime_products: [.matrices.runtime_products[] | select(.platform == "linux")],
-                smoke: [.matrices.smoke[] | select(.id != "metal-model-load" and .id != "product-integration-metal" and .id != "product-integration-windows-cpu")],
+                smoke: [.matrices.smoke[] | select(.id != "metal-model-load")],
                 sdk: [.matrices.sdk[] | select(.platform == "linux")]
               }
             }
@@ -309,7 +312,7 @@ runs:
                 hosts: [.matrices.hosts[] | select(.platform == "macos")],
                 runtime_products: [.matrices.runtime_products[] | select(.platform == "macos")],
                 platform_checks: [.matrices.platform_checks[] | select(.platform == "macos")],
-                smoke: [.matrices.smoke[] | select(.id == "metal-model-load" or .id == "product-integration-metal")],
+                smoke: [.matrices.smoke[] | select(.id == "metal-model-load")],
                 sdk: [.matrices.sdk[] | select(.platform == "macos")]
               }
             }
@@ -326,8 +329,7 @@ runs:
               matrices: {
                 hosts: [.matrices.hosts[] | select(.platform == "windows")],
                 runtime_products: [.matrices.runtime_products[] | select(.platform == "windows")],
-                platform_checks: [.matrices.platform_checks[] | select(.platform == "windows")],
-                smoke: [.matrices.smoke[] | select(.id == "product-integration-windows-cpu")]
+                platform_checks: [.matrices.platform_checks[] | select(.platform == "windows")]
               }
             }
             | .required = ([.matrices[] | length] | add) > 0

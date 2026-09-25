@@ -23,7 +23,7 @@ use skippy_cache::{
 };
 use skippy_runtime::{
     GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, StageModel,
-    StageSession,
+    StageSession, plan_gguf_stage_runtime_plan_for_range,
 };
 
 use super::{
@@ -108,7 +108,14 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
     let required_ctx = u32::try_from(total_tokens).context("token budget exceeds u32")?;
     let ctx_size = args.runtime.ctx_size.max(required_ctx);
 
-    let config = RuntimeConfig {
+    let plan = plan_gguf_stage_runtime_plan_for_range(
+        &args.runtime.model,
+        (0, args.runtime.layer_end),
+        ctx_size,
+        1,
+    )
+    .context("failed to derive growth probe stage plan")?;
+    let mut config = RuntimeConfig {
         stage_index: 0,
         layer_start: 0,
         layer_end: args.runtime.layer_end,
@@ -140,11 +147,9 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: false,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
         activation_export_identities: Vec::new(),
@@ -156,6 +161,7 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         kv_unified: None,
         swa_full: None,
     };
+    plan.apply_to(&mut config);
     let model = StageModel::open(&args.runtime.model, &config)
         .context("failed to open stage model for KV page growth probe")?;
     let tokens = state_handoff_tokens(&model, &args.runtime.prompt, Some(total_tokens))

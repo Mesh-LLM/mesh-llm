@@ -9,6 +9,9 @@ pub(crate) struct NodeHardwareSnapshot {
     pub(crate) vram_bytes: u64,
     /// Broader local fit budget, which may include CPU offload memory.
     pub(crate) local_runtime_capacity_bytes: u64,
+    /// What `gpu.host_ram_offload = true` would add to that budget; zero when
+    /// it is already on or cannot change anything on this host.
+    pub(crate) host_ram_offload_gain_bytes: u64,
     pub(crate) gpu_name: Option<String>,
     pub(crate) hostname: Option<String>,
     pub(crate) is_soc: Option<bool>,
@@ -702,6 +705,7 @@ impl Node {
     ) -> (bool, bool) {
         let mut state = self.state.lock().await;
         let was_dead = state.dead_peers.remove(&remote).is_some();
+        state.departed_peers.remove(&remote);
         let admitted = state.peers.contains_key(&remote);
         if was_dead {
             emit_mesh_info(format!(
@@ -1157,6 +1161,9 @@ impl Node {
         state
             .dead_peers
             .insert(leaving_id, std::time::Instant::now());
+        state
+            .departed_peers
+            .insert(leaving_id, std::time::Instant::now());
         state.connections.remove(&leaving_id);
         drop(state);
         self.remove_peer(leaving_id, MeshPeerRemovalReason::CleanShutdown)
@@ -1488,6 +1495,7 @@ impl Node {
         {
             let mut state = self.state.lock().await;
             state.dead_peers.remove(&peer_id);
+            state.departed_peers.remove(&peer_id);
             state.connections.insert(peer_id, conn.clone());
         }
 

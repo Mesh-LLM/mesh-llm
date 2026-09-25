@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
@@ -6,147 +5,8 @@ use anyhow::{Context, Result, bail};
 use model_artifact::{ModelArtifactFile, ResolvedModelArtifact};
 use model_hf::HfModelRepository;
 use model_ref::{format_canonical_ref, normalize_gguf_distribution_id, parse_model_ref};
-use serde::{Deserialize, Serialize};
 
 use crate::write::local_artifact_files;
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageManifest {
-    pub(crate) schema_version: u32,
-    pub(crate) model_id: String,
-    pub(crate) source_model: PackageSourceModel,
-    pub(crate) format: String,
-    pub(crate) layer_count: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) generation: Option<PackageGeneration>,
-    pub(crate) shared: PackageShared,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) projectors: Vec<PackageProjector>,
-    pub(crate) layers: Vec<PackageLayer>,
-    pub(crate) skippy_abi_version: String,
-    pub(crate) created_at_unix_secs: u64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageSourceModel {
-    pub(crate) path: String,
-    pub(crate) sha256: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) repo: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) revision: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) primary_file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) canonical_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) distribution_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) files: Vec<ModelArtifactFile>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageShared {
-    pub(crate) metadata: PackageArtifact,
-    pub(crate) embeddings: PackageArtifact,
-    pub(crate) output: PackageArtifact,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageGeneration {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) speculative_decoding: Option<PackageSpeculativeDecoding>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageSpeculativeDecoding {
-    pub(crate) default: String,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) proposers: BTreeMap<String, PackageSpeculativeProposer>,
-    pub(crate) strategies: BTreeMap<String, PackageSpeculativeStrategy>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageSpeculativeProposer {
-    #[serde(rename = "type")]
-    pub(crate) proposer_type: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) prediction_depth: Option<u32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) layer_indices: Vec<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) ngram_min: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) ngram_max: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) max_proposal_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) history_scope: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageSpeculativeStrategy {
-    #[serde(rename = "type")]
-    pub(crate) strategy_type: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) prediction_depth: Option<u32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) layer_indices: Vec<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) window_policy: Option<PackageWindowPolicy>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) proposer: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) primary: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) extender: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) extension_policy: Option<PackageExtensionPolicy>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageExtensionPolicy {
-    pub(crate) max_tokens: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageWindowPolicy {
-    pub(crate) default: String,
-    pub(crate) initial_window: u32,
-    pub(crate) min_window: u32,
-    pub(crate) max_window: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) pipeline_depth: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageLayer {
-    pub(crate) layer_index: u32,
-    pub(crate) path: String,
-    pub(crate) tensor_count: usize,
-    pub(crate) tensor_bytes: u64,
-    pub(crate) artifact_bytes: u64,
-    pub(crate) sha256: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageArtifact {
-    pub(crate) path: String,
-    pub(crate) tensor_count: usize,
-    pub(crate) tensor_bytes: u64,
-    pub(crate) artifact_bytes: u64,
-    pub(crate) sha256: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct PackageProjector {
-    pub(crate) kind: String,
-    pub(crate) path: String,
-    pub(crate) tensor_count: usize,
-    pub(crate) tensor_bytes: u64,
-    pub(crate) artifact_bytes: u64,
-    pub(crate) sha256: String,
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ArtifactHook {
@@ -292,19 +152,6 @@ fn package_input_from_resolved_artifact(
             files: artifact.files,
         },
     }
-}
-
-#[cfg(test)]
-pub(crate) fn model_distribution_id(model: &Path) -> Option<String> {
-    model
-        .to_str()
-        .and_then(normalize_gguf_distribution_id)
-        .or_else(|| {
-            model
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(normalize_gguf_distribution_id)
-        })
 }
 
 pub(crate) fn run_artifact_hook(

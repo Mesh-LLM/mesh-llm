@@ -1,6 +1,7 @@
+pub(super) use super::model_names::public_model_id;
 use crate::mesh;
 use crate::plugin;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use mesh_llm_events::logging::identifiers::RequestId;
 use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -10,6 +11,13 @@ use super::request_normalize::{
 };
 use super::routing_rank::descriptor_for_model;
 
+mod audio_multipart;
+use audio_multipart::multipart_model_field;
+mod body_rewrite;
+mod chunked;
+pub use body_rewrite::{inject_mesh_hooks_flag, rewrite_model_field};
+use chunked::{ChunkedDecoder, try_decode_chunked_body};
+
 pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Private lifecycle ownership assertion used only on trusted mesh forwarding.
 ///
@@ -18,10 +26,18 @@ pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// lifecycle parent, so ordinary API clients cannot opt into target-owner
 /// suppression by sending it themselves.
 pub(crate) const RAW_LIFECYCLE_OWNER_HEADER: &str = "x-mesh-llm-raw-lifecycle";
+/// Force remote-mesh dispatch to exactly one peer (fail closed if it doesn't
+/// serve the requested model). See `ingress.rs`'s remote-mesh routing.
+pub(crate) const MESH_TARGET_HEADER: &str = "x-mesh-target";
+/// Remove one or more peers from the remote-mesh candidate set before
+/// selection. Comma-separated within one header value.
+pub(crate) const MESH_EXCLUDE_HEADER: &str = "x-mesh-exclude";
 pub(super) const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_AUDIO_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
 const MAX_CHUNKED_WIRE_BYTES: usize = MAX_BODY_BYTES * 6 + 64 * 1024;
 const MAX_OBJECT_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_OBJECT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
+const MAX_AUDIO_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_AUDIO_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 pub(super) const MAX_HEADERS: usize = 64;
 const CRLF: &[u8] = b"\r\n";
 const LF: &[u8] = b"\n";
@@ -48,6 +64,7 @@ struct ParsedHeaders {
     path: String,
     request_id: RequestId,
     content_length: Option<usize>,
+    content_type: Option<String>,
     is_chunked: bool,
     expects_continue: bool,
     correlation_id: Option<String>,
@@ -138,6 +155,12 @@ impl BufferedHttpRequest {
         is_tokenize_request(&self.method, &self.path)
     }
 
+    /// Multipart audio bytes are encoded media, not prompt text. The proxy
+    /// cannot infer their eventual model context size from the wire length.
+    pub fn is_audio_upload_request(&self) -> bool {
+        self.method == "POST" && is_audio_upload_path(&self.client_path)
+    }
+
     pub fn ensure_body_json(&mut self) {
         if self.body_json.is_none() && !self.body_json_attempted {
             self.body_json = self
@@ -161,6 +184,23 @@ impl BufferedHttpRequest {
     /// nonce every downstream reader expects, rather than dropping it.
     pub fn capsule_nonce_headers(&self) -> (Option<String>, Option<String>) {
         capsule_nonce_headers_from_raw(&self.raw)
+    }
+
+    /// Raw (unparsed) values of the `x-mesh-target` / `x-mesh-exclude` mesh
+    /// routing headers, read back off the already-buffered raw request.
+    ///
+    /// Every occurrence of each header name is returned verbatim, including
+    /// duplicates — the router (not this parser) decides whether more than
+    /// one `x-mesh-target` value is an error. These headers are opaque to
+    /// this layer: no endpoint-id parsing happens here. A header value with
+    /// non-UTF-8 bytes is rejected outright rather than silently dropped, so
+    /// an attacker can't smuggle a routing decision past invalid bytes.
+    pub fn mesh_routing_header_values(&self) -> Result<(Vec<String>, Vec<String>), String> {
+        let target = header_values_from_raw(&self.raw, MESH_TARGET_HEADER)
+            .map_err(|()| format!("{MESH_TARGET_HEADER} header contains invalid UTF-8"))?;
+        let exclude = header_values_from_raw(&self.raw, MESH_EXCLUDE_HEADER)
+            .map_err(|()| format!("{MESH_EXCLUDE_HEADER} header contains invalid UTF-8"))?;
+        Ok((target, exclude))
     }
 
     /// The only semantic request media kind trusted by artifact capture.
@@ -354,6 +394,12 @@ where
                 .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?
                 .to_owned(),
         )
+    } else if is_audio_upload_path(&parsed.path) {
+        match parsed.content_type.as_deref() {
+            Some(content_type) => multipart_model_field(content_type, &body)
+                .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?,
+            None => None,
+        }
     } else {
         metadata.as_ref().and_then(|value| value.model.clone())
     };
@@ -434,12 +480,11 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut sent_continue = false;
+    let mut decoder = ChunkedDecoder::new(body_limits.max_body_bytes);
     loop {
-        if let Some((consumed, decoded)) =
-            try_decode_chunked_body(&raw[header_end..], body_limits.max_body_bytes)?
-        {
+        if let Some(consumed) = decoder.decode(&raw[header_end..])? {
             raw.truncate(header_end + consumed);
-            return Ok(decoded);
+            return Ok(decoder.into_body());
         }
         if !sent_continue && parsed.expects_continue {
             stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
@@ -536,9 +581,23 @@ fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {
             max_body_bytes: MAX_OBJECT_UPLOAD_BODY_BYTES,
             max_chunked_wire_bytes: MAX_OBJECT_UPLOAD_CHUNKED_WIRE_BYTES,
         }
+    } else if is_audio_upload_path(path_only) {
+        HttpReadLimits {
+            max_header_bytes: default.max_header_bytes,
+            max_body_bytes: MAX_AUDIO_UPLOAD_BODY_BYTES,
+            max_chunked_wire_bytes: MAX_AUDIO_UPLOAD_CHUNKED_WIRE_BYTES,
+        }
     } else {
         default
     }
+}
+
+/// Identify multipart audio endpoints before attempting JSON parsing.
+fn is_audio_upload_path(path: &str) -> bool {
+    matches!(
+        path.split('?').next().unwrap_or(path),
+        "/v1/audio/transcriptions" | "/v1/audio/translations"
+    )
 }
 
 fn finalize_forwarded_request(
@@ -651,6 +710,7 @@ where
                 let mut is_chunked = false;
                 let mut expects_continue = false;
                 let mut correlation_id = None;
+                let mut content_type = None;
 
                 for header in req.headers.iter() {
                     if header.name.eq_ignore_ascii_case("content-length") {
@@ -671,6 +731,15 @@ where
                         expects_continue = val
                             .split(',')
                             .any(|part| part.trim().eq_ignore_ascii_case("100-continue"));
+                    } else if header.name.eq_ignore_ascii_case("content-type") {
+                        if content_type.is_some() {
+                            bail!("duplicate Content-Type header");
+                        }
+                        content_type = Some(
+                            std::str::from_utf8(header.value)
+                                .context("invalid Content-Type header")?
+                                .to_string(),
+                        );
                     } else if header.name.eq_ignore_ascii_case("x-correlation-id")
                         || header.name.eq_ignore_ascii_case("x-request-id")
                         || header.name.eq_ignore_ascii_case("correlation-id")
@@ -692,6 +761,7 @@ where
                     path,
                     request_id: request_id_from_headers(req.headers),
                     content_length,
+                    content_type,
                     is_chunked,
                     expects_continue,
                     correlation_id,
@@ -855,6 +925,35 @@ fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>
     (find(nonce_header), find(origin_header))
 }
 
+/// Every value of a given header name, read back off an already-rebuilt raw
+/// HTTP request. Only the request-header block is scanned. Order matches the
+/// wire order; duplicates are returned as separate entries. `Err(())` means
+/// at least one occurrence of `name` had non-UTF-8 bytes -- the caller must
+/// reject the request rather than silently drop that occurrence.
+fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap_or(raw.len());
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut req = httparse::Request::new(&mut headers_buf);
+    if req
+        .parse(&raw[..header_end.saturating_add(4).min(raw.len())])
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    req.headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case(name))
+        .map(|header| {
+            std::str::from_utf8(header.value)
+                .map(|value| value.trim().to_string())
+                .map_err(|_| ())
+        })
+        .collect()
+}
+
 fn client_nonce_from_headers(headers: &[httparse::Header<'_>]) -> (String, Option<&'static str>) {
     let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
     let inbound = headers
@@ -889,54 +988,6 @@ async fn read_more<S: AsyncRead + Unpin>(stream: &mut S, buf: &mut Vec<u8>) -> R
     Ok(())
 }
 
-fn try_decode_chunked_body(buf: &[u8], max_body_bytes: usize) -> Result<Option<(usize, Vec<u8>)>> {
-    let mut pos = 0usize;
-    let mut decoded = Vec::new();
-
-    loop {
-        let Some(line_end_rel) = buf[pos..].windows(2).position(|window| window == b"\r\n") else {
-            return Ok(None);
-        };
-        let line_end = pos + line_end_rel;
-        let size_line = std::str::from_utf8(&buf[pos..line_end]).context("invalid chunk header")?;
-        let size_text = size_line.split(';').next().unwrap_or("").trim();
-        let size = usize::from_str_radix(size_text, 16)
-            .with_context(|| format!("invalid chunk size: {size_text}"))?;
-        pos = line_end + 2;
-
-        if size == 0 {
-            if buf.len() < pos + 2 {
-                return Ok(None);
-            }
-            if &buf[pos..pos + 2] == b"\r\n" {
-                return Ok(Some((pos + 2, decoded)));
-            }
-            let Some(trailer_end_rel) = buf[pos..]
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-            else {
-                return Ok(None);
-            };
-            return Ok(Some((pos + trailer_end_rel + 4, decoded)));
-        }
-
-        if buf.len() < pos + size + 2 {
-            return Ok(None);
-        }
-        decoded.extend_from_slice(&buf[pos..pos + size]);
-        pos += size;
-
-        if &buf[pos..pos + 2] != b"\r\n" {
-            return Err(anyhow!("invalid chunk terminator"));
-        }
-        pos += 2;
-
-        if decoded.len() > max_body_bytes {
-            bail!("HTTP chunked body exceeds {max_body_bytes} bytes");
-        }
-    }
-}
-
 fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_present: bool) -> bool {
     openai_frontend::request_body_requires_json_normalization(path, body)
         || (plugin_manager_present
@@ -953,98 +1004,6 @@ fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_prese
 pub(super) fn parse_json_body_from_http_request(raw: &[u8]) -> Option<serde_json::Value> {
     let header_end = raw.windows(4).position(|window| window == b"\r\n\r\n")? + 4;
     serde_json::from_slice(&raw[header_end..]).ok()
-}
-
-/// Inject `"mesh_hooks": true/false` into the JSON body of an HTTP request.
-///
-/// Inserts the field right after the opening `{` in the body, then rebuilds
-/// the Content-Length header to match.
-pub fn inject_mesh_hooks_flag(raw: &mut Vec<u8>, enabled: bool) {
-    let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4) else {
-        return;
-    };
-    let body = &raw[header_end..];
-    let Some(brace) = body.iter().position(|&b| b == b'{') else {
-        return;
-    };
-
-    // Build new body with mesh_hooks injected after opening brace
-    let fragment = if enabled {
-        &b"\"mesh_hooks\":true,"[..]
-    } else {
-        &b"\"mesh_hooks\":false,"[..]
-    };
-    let mut new_body = Vec::with_capacity(body.len() + fragment.len());
-    new_body.extend_from_slice(&body[..brace + 1]);
-    new_body.extend_from_slice(fragment);
-    new_body.extend_from_slice(&body[brace + 1..]);
-
-    // Rebuild headers with correct Content-Length
-    let headers = std::str::from_utf8(&raw[..header_end - 4]).unwrap_or("");
-    let mut rebuilt = String::new();
-    for line in headers.split("\r\n") {
-        if line.to_ascii_lowercase().starts_with("content-length:") {
-            rebuilt.push_str(&format!("Content-Length: {}", new_body.len()));
-        } else {
-            rebuilt.push_str(line);
-        }
-        rebuilt.push_str("\r\n");
-    }
-    rebuilt.push_str("\r\n");
-
-    let mut result = rebuilt.into_bytes();
-    result.extend_from_slice(&new_body);
-    *raw = result;
-}
-
-/// Rewrite the JSON body `model` field and rebuild Content-Length.
-pub fn rewrite_model_field(request: &mut BufferedHttpRequest, model: &str) {
-    let Some(header_end) = request
-        .raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|i| i + 4)
-    else {
-        return;
-    };
-
-    let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&request.raw[header_end..])
-    else {
-        return;
-    };
-    let Some(object) = body.as_object_mut() else {
-        return;
-    };
-
-    object.insert(
-        "model".to_string(),
-        serde_json::Value::String(model.to_string()),
-    );
-    let Ok(new_body) = serde_json::to_vec(&body) else {
-        return;
-    };
-
-    let headers = std::str::from_utf8(&request.raw[..header_end - 4]).unwrap_or("");
-    let mut rebuilt = String::new();
-    for line in headers.split("\r\n") {
-        if line.to_ascii_lowercase().starts_with("content-length:") {
-            rebuilt.push_str(&format!("Content-Length: {}", new_body.len()));
-        } else {
-            rebuilt.push_str(line);
-        }
-        rebuilt.push_str("\r\n");
-    }
-    rebuilt.push_str("\r\n");
-
-    let mut raw = rebuilt.into_bytes();
-    raw.extend_from_slice(&new_body);
-
-    request.raw = raw;
-    request.body_len_bytes = new_body.len();
-    request.body_bytes = Some(new_body);
-    request.body_json = Some(body);
-    request.body_json_attempted = true;
-    request.model_name = Some(model.to_string());
 }
 
 pub fn is_models_list_request(method: &str, path: &str) -> bool {
@@ -1120,105 +1079,6 @@ fn internal_model_for_public_id(
         }
         None
     })
-}
-
-pub(super) fn public_model_id(
-    model_name: &str,
-    descriptor: Option<&mesh::ServedModelDescriptor>,
-    profile: &str,
-) -> String {
-    // A descriptor with an `artifact` field has enough information to
-    // produce a public ID that round-trips to the same model. Without
-    // it, the HuggingFace path collapses to just the repo name and
-    // silently drops the quant-tag suffix the resolver needs (PR #566
-    // review feedback — "some IDs in /v1/models dropped quant
-    // suffixes"). Only use the descriptor-derived id when it can be
-    // lossless; otherwise prefer the on-disk file (authoritative for
-    // local models), and finally the internal model_name (which
-    // always carries the quant suffix our resolver knows how to
-    // route).
-    let base_id = if let Some(descriptor) = descriptor
-        && descriptor_can_produce_lossless_id(&descriptor.identity)
-        && let Some(id) = public_model_id_from_identity(&descriptor.identity)
-    {
-        id
-    } else if let Some(id) = public_model_id_from_local_path(model_name) {
-        id
-    } else {
-        model_name.to_string()
-    };
-
-    // Append profile suffix for non-default profiles
-    if profile.is_empty() {
-        base_id
-    } else {
-        format!("{}#{}", base_id, profile)
-    }
-}
-
-/// A descriptor identity carries enough information for
-/// `public_model_id_from_identity` to produce an ID that round-trips
-/// to the same model. For HuggingFace that means the `artifact` field
-/// (the GGUF file name) is present so the quant selector can be
-/// derived. Catalog identities always carry a `canonical_ref` with the
-/// selector baked in.
-fn descriptor_can_produce_lossless_id(identity: &mesh::ServedModelIdentity) -> bool {
-    match identity.source_kind {
-        mesh::ModelSourceKind::HuggingFace => identity.artifact.is_some(),
-        mesh::ModelSourceKind::Catalog => identity.canonical_ref.is_some(),
-        mesh::ModelSourceKind::LocalGguf
-        | mesh::ModelSourceKind::DirectUrl
-        | mesh::ModelSourceKind::Unknown => false,
-    }
-}
-
-fn public_model_id_from_identity(identity: &mesh::ServedModelIdentity) -> Option<String> {
-    match identity.source_kind {
-        mesh::ModelSourceKind::HuggingFace => identity
-            .repository
-            .as_deref()
-            .and_then(|repo| public_huggingface_model_ref(repo, identity.artifact.as_deref()))
-            .or_else(|| {
-                identity
-                    .canonical_ref
-                    .as_deref()
-                    .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-                    .map(|model_ref| model_ref.display_id())
-            }),
-        mesh::ModelSourceKind::Catalog => identity
-            .canonical_ref
-            .as_deref()
-            .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-            .map(|model_ref| model_ref.display_id()),
-        mesh::ModelSourceKind::LocalGguf
-        | mesh::ModelSourceKind::DirectUrl
-        | mesh::ModelSourceKind::Unknown => None,
-    }
-}
-
-fn public_model_id_from_local_path(model_name: &str) -> Option<String> {
-    let path = crate::models::find_model_path(model_name);
-    if !path.is_file() {
-        return None;
-    }
-    if path.extension().and_then(|extension| extension.to_str()) != Some("gguf") {
-        return None;
-    }
-    Some(crate::models::model_ref_for_path(&path))
-}
-
-fn public_huggingface_model_ref(repo: &str, artifact: Option<&str>) -> Option<String> {
-    // `artifact` can be either a GGUF filename (e.g. `Falcon-Q4_K_M.gguf`)
-    // or an already-extracted quant selector (e.g. `Q4_K_M` or
-    // `qwen2.5-3b-instruct-q4_k_m`, when the descriptor was built from
-    // a parsed `ModelRef::selector`). Handle both — if the artifact
-    // looks like a quant selector use it directly; otherwise try to
-    // pull a selector out of the filename.
-    let selector = artifact.and_then(|a| {
-        model_ref::quant_selector_from_gguf_file(a)
-            .or_else(|| (!a.is_empty() && !a.ends_with(".gguf")).then(|| a.to_string()))
-    });
-    Some(model_ref::format_model_ref(repo, None, selector.as_deref()))
 }
 
 #[cfg(test)]

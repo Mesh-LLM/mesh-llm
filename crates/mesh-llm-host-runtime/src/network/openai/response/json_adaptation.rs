@@ -5,7 +5,7 @@ use super::common::{
 };
 use super::probe::{
     ResponseBodyReadLimits, ResponseProbe, append_capsule_nonce_headers,
-    read_transformed_response_body, try_parse_response_headers,
+    append_mesh_served_by_header, read_transformed_response_body, try_parse_response_headers,
 };
 use super::relay::relay_error_response;
 use crate::logging::OpenAiRouteObserver;
@@ -23,6 +23,7 @@ const TRANSFORMED_RESPONSE_READ_LIMITS: ResponseBodyReadLimits = ResponseBodyRea
     idle_timeout: TRANSFORMED_RESPONSE_BODY_IDLE_TIMEOUT,
 };
 
+/// Relay a chat-completions upstream response translated into Responses-API JSON.
 pub(in crate::network::openai::response) async fn relay_translated_responses_json<
     R: AsyncRead + Unpin,
 >(
@@ -30,6 +31,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
@@ -37,7 +39,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     }
 
     if !(200..300).contains(&probe.status_code) {
-        return relay_error_response(tcp_stream, reader, probe, route_observer).await;
+        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
     }
     let mut buffered = probe.buffered;
     let parsed = try_parse_response_headers(&buffered)?
@@ -57,6 +59,14 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     let translated_body = response_adapter::translate_chat_completion_to_responses(body)?;
     let usage = parse_token_usage_from_json_body(&translated_body);
     let cache_cost = parse_cache_cost_from_json_body(body);
+    // The non-streamed body is fully in hand here: digest the REAL response
+    // the host is about to serve. This branch reshapes to the Responses API,
+    // whose tool_calls/reasoning live under different keys than the
+    // chat.completion shape `ExchangeOutputDigests` looks for, so those two
+    // sub-digests stay honestly absent on this path; the response digest is
+    // always real.
+    let output_digests =
+        crate::plugin::openai_exchange::ExchangeOutputDigests::from_response_body(&translated_body);
     let mut header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
         translated_body.len()
@@ -66,6 +76,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
         parsed.client_nonce.as_deref(),
         parsed.nonce_origin.as_deref(),
     );
+    append_mesh_served_by_header(&mut header, served_by);
     header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     tcp_stream.write_all(&translated_body).await?;
@@ -75,9 +86,11 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
         status_code: 200,
         usage,
         cache_cost,
+        output_digests,
     })
 }
 
+/// Relay a chat-completions upstream response through JSON body normalization.
 pub(in crate::network::openai::response) async fn relay_normalized_chat_completion_json<
     R: AsyncRead + Unpin,
 >(
@@ -85,6 +98,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
@@ -92,7 +106,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     }
 
     if !(200..300).contains(&probe.status_code) {
-        return relay_error_response(tcp_stream, reader, probe, route_observer).await;
+        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
     }
     let mut buffered = probe.buffered;
     let parsed = try_parse_response_headers(&buffered)?
@@ -113,6 +127,14 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     }
     let usage = parse_token_usage_from_json_body(&normalized_body);
     let cache_cost = parse_cache_cost_from_json_body(&normalized_body);
+    // The whole (non-streamed) chat.completion body is in hand here — the
+    // point the host can digest the REAL response and lift the model's
+    // `tool_calls` / `reasoning_content` for the terminal event. This branch
+    // preserves the chat.completion shape (tool_calls under
+    // `choices[].message.tool_calls`), so a real `tool_calls_digest` /
+    // `reasoning_digest` becomes available whenever the model emitted either.
+    let output_digests =
+        crate::plugin::openai_exchange::ExchangeOutputDigests::from_response_body(&normalized_body);
     let mut header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
         normalized_body.len()
@@ -122,6 +144,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         parsed.client_nonce.as_deref(),
         parsed.nonce_origin.as_deref(),
     );
+    append_mesh_served_by_header(&mut header, served_by);
     header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     tcp_stream.write_all(&normalized_body).await?;
@@ -131,6 +154,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         status_code: 200,
         usage,
         cache_cost,
+        output_digests,
     })
 }
 
@@ -200,6 +224,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -224,19 +249,39 @@ mod tests {
 
         assert!(output.starts_with(b"HTTP/1.1 200 OK\r\n"));
 
+        // Destructure rather than compare the whole `Delivered` literal: this
+        // relay now also carries real `output_digests` over the served body,
+        // so assert the status/usage as before AND that the tool_calls digest
+        // is present (the body carried a tool call) and matches the same
+        // construction applied directly to the served (id-normalized) body.
+        let RouteAttemptResult::Delivered {
+            status_code,
+            usage,
+            cache_cost,
+            output_digests,
+        } = route_result
+        else {
+            panic!("expected Delivered, got {route_result:?}");
+        };
+        assert_eq!(status_code, 200);
         assert_eq!(
-            route_result,
-            RouteAttemptResult::Delivered {
-                status_code: 200,
-                usage: Some(mesh_llm_events::logging::events::TokenUsage {
-                    prompt_tokens: Some(2),
-                    cached_prompt_tokens: None,
-                    completion_tokens: Some(4),
-                    total_tokens: Some(6),
-                }),
-                cache_cost: None,
-            }
+            usage,
+            Some(mesh_llm_events::logging::events::TokenUsage {
+                prompt_tokens: Some(2),
+                cached_prompt_tokens: None,
+                completion_tokens: Some(4),
+                total_tokens: Some(6),
+            })
         );
+        assert_eq!(cache_cost, None);
+        assert_eq!(
+            output_digests.tool_calls.map(hex::encode),
+            crate::plugin::openai_exchange::request_body_digest(
+                &parsed["choices"][0]["message"]["tool_calls"].clone(),
+                None
+            )
+        );
+        assert!(output_digests.response.is_some());
         assert_eq!(
             parsed["choices"][0]["message"]["tool_calls"][0]["id"],
             "call_mesh_chatcmpl_a_0_0"
@@ -274,6 +319,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -328,6 +374,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -345,18 +392,29 @@ mod tests {
         let route_result = server_task.await.expect("server task");
 
         assert!(output.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        let RouteAttemptResult::Delivered {
+            status_code,
+            usage,
+            cache_cost,
+            output_digests,
+        } = route_result
+        else {
+            panic!("expected Delivered, got {route_result:?}");
+        };
+        assert_eq!(status_code, 200);
         assert_eq!(
-            route_result,
-            RouteAttemptResult::Delivered {
-                status_code: 200,
-                usage: Some(mesh_llm_events::logging::events::TokenUsage {
-                    prompt_tokens: Some(2),
-                    cached_prompt_tokens: None,
-                    completion_tokens: Some(4),
-                    total_tokens: Some(6),
-                }),
-                cache_cost: None,
-            }
+            usage,
+            Some(mesh_llm_events::logging::events::TokenUsage {
+                prompt_tokens: Some(2),
+                cached_prompt_tokens: None,
+                completion_tokens: Some(4),
+                total_tokens: Some(6),
+            })
         );
+        assert_eq!(cache_cost, None);
+        // This response had no tool call, so the tool_calls digest stays
+        // absent (honest null); the response digest is still real.
+        assert!(output_digests.tool_calls.is_none());
+        assert!(output_digests.response.is_some());
     }
 }

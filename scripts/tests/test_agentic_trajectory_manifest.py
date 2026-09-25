@@ -73,6 +73,27 @@ class AgenticTrajectoryManifestTest(unittest.TestCase):
             )
             self.assertTrue(all(item["assistant_turns"] == 2 for item in cohort))
 
+    def test_total_session_count_balances_remainder_without_overlap(self):
+        frameworks = ["swe-agent", "mini-swe-agent", "openhands"]
+        rows = [
+            row(framework, i, assistant_turns=5)
+            for framework in frameworks
+            for i in range(20)
+        ]
+        cohorts = MANIFEST.build_cohorts(
+            rows, ["1", "8"], frameworks, 1, sessions_per_cohort=16
+        )
+        self.assertEqual([len(c) for c in cohorts.values()], [16, 16])
+        self.assertEqual(
+            [sum(t["agent_framework"] == f for t in cohorts["8"]) for f in frameworks],
+            [6, 5, 5],
+        )
+        ids = [t["session_id"] for c in cohorts.values() for t in c]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertTrue(
+            all(t["assistant_turns"] == 5 for c in cohorts.values() for t in c)
+        )
+
     def test_manifest_reports_exact_trajectory_and_turn_counts(self) -> None:
         cohorts = {
             "1": [

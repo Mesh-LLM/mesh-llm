@@ -1,0 +1,72 @@
+From 326caa6f8afa9614cc27dd0f1aae28cae946b5e0 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sun, 20 Sep 2026 11:38:59 +1000
+Subject: [PATCH 3/3] skippy: query diffusion canvas length
+
+Expose the loaded GGUF canvas length so System One callers can size their fixed answer canvas without assuming the model was converted with OpenJEV vLLM defaults.
+
+Co-authored-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
+
+Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
+---
+ include/skippy/system_one.h | 11 +++++++++++
+ src/skippy/system_one.cpp   | 21 +++++++++++++++++++++
+ 2 files changed, 32 insertions(+)
+
+diff --git a/include/skippy/system_one.h b/include/skippy/system_one.h
+index 4faf057ba9d302358e7924642ffbe5e715625141..6046c77ec841af67796159e9fe674fabfb5cf4a7 100644
+--- a/include/skippy/system_one.h
++++ b/include/skippy/system_one.h
+@@ -27,6 +27,17 @@ struct skippy_system_one_slot {
+     size_t label_token_count;
+ };
+ 
++/**
++ * @brief Returns the fixed answer-canvas length encoded by a DiffusionGemma model.
++ *
++ * Callers use this value to size and pad the canvas supplied to
++ * `skippy_system_one_read`.
++ */
++LLAMA_API enum skippy_status skippy_system_one_canvas_length(
++        struct skippy_model * model,
++        size_t * out_canvas_token_count,
++        struct skippy_error ** out_error);
++
+ /**
+  * @brief Scores structured labels with one DiffusionGemma read.
+  *
+diff --git a/src/skippy/system_one.cpp b/src/skippy/system_one.cpp
+index d60467a468a1be33ff60f1bb8b74f26539d896a6..5a81888fe705555c56e546d0d7e28946112027b4 100644
+--- a/src/skippy/system_one.cpp
++++ b/src/skippy/system_one.cpp
+@@ -55,6 +55,27 @@ public:
+ 
+ } // namespace
+ 
++extern "C" enum skippy_status skippy_system_one_canvas_length(
++        struct skippy_model * model,
++        size_t * out_canvas_token_count,
++        struct skippy_error ** out_error) {
++    if (model == nullptr || model->model == nullptr || out_canvas_token_count == nullptr) {
++        return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "model and out_canvas_token_count are required");
++    }
++    if (model->model->arch != LLM_ARCH_DIFFUSION_GEMMA) {
++        return system_one_fail(out_error, SKIPPY_STATUS_UNSUPPORTED,
++                "system-one reads require a DiffusionGemma model");
++    }
++    auto * diffusion_model = dynamic_cast<llama_model_diffusion_gemma *>(model->model);
++    if (diffusion_model == nullptr || diffusion_model->canvas_length <= 0) {
++        return system_one_fail(out_error, SKIPPY_STATUS_MODEL_ERROR,
++                "DiffusionGemma model has no valid canvas length");
++    }
++    *out_canvas_token_count = static_cast<size_t>(diffusion_model->canvas_length);
++    return SKIPPY_STATUS_OK;
++}
++
+ extern "C" enum skippy_status skippy_system_one_read(
+         struct skippy_model * model,
+         const llama_token * prompt_tokens,
+-- 
+2.54.0 (Apple Git-157)
+

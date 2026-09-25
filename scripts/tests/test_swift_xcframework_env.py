@@ -24,6 +24,12 @@ class SwiftXcframeworkEnvTests(unittest.TestCase):
         self.assertIn("*-apple-ios*)", script)
         self.assertIn('CARGO_ENV+=("IPHONEOS_DEPLOYMENT_TARGET=$IPHONEOS_DEPLOYMENT_TARGET")', script)
 
+    def test_macos_native_target_matches_the_cargo_override(self) -> None:
+        script = SCRIPT.read_text()
+        self.assertNotIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0", script)
+        self.assertEqual(script.count('macosx arm64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"'), 1)
+        self.assertEqual(script.count('macosx x86_64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"'), 1)
+
     def test_target_mode_stages_one_library_for_parallel_ci(self) -> None:
         script = SCRIPT.read_text()
 

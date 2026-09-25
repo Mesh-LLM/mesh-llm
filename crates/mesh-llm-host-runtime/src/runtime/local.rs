@@ -39,10 +39,10 @@ pub(super) use super::local_package::{
     runtime_model_planning_bytes, scan_layer_package_metadata,
 };
 pub(super) use super::local_split::{
-    SplitCoordinatorAck, SplitCoordinatorEvent, SplitCoordinatorLocalFallbackEvent,
-    SplitCoordinatorReplaceEvent, SplitGenerationCleanup, SplitRuntimeReason, SplitRuntimeStart,
-    StartupRuntimePlan, now_unix_nanos, start_runtime_split_model, startup_runtime_plan,
-    stop_split_generation_cleanup,
+    SplitCoordinatorAck, SplitCoordinatorDrainEvent, SplitCoordinatorEvent,
+    SplitCoordinatorLocalFallbackEvent, SplitCoordinatorReplaceEvent, SplitGenerationCleanup,
+    SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan, now_unix_nanos,
+    start_runtime_split_model, startup_runtime_plan, stop_split_generation_cleanup,
 };
 pub(super) fn skippy_native_model_open_event_reporter(
     model_name: String,
@@ -101,6 +101,7 @@ pub(super) struct LocalRuntimeModelHandle {
     pub(super) context_length: u32,
     pub(super) slots: usize,
     pub(super) capabilities: models::ModelCapabilities,
+    pub(super) workload_class: mesh::ModelWorkloadClass,
     pub(super) inner: LocalRuntimeBackendHandle,
 }
 
@@ -246,6 +247,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) local_source_required: bool,
     pub(super) allow_uncertified_split: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
+    pub(super) auto_balance: bool,
     pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
@@ -419,6 +421,72 @@ pub(super) fn remove_runtime_local_target(
     }
 }
 
+/// Where the model being reported came from.
+///
+/// This decides whether the name may be reported at all, so it is a type
+/// rather than a string: the privacy rule belongs to the source, not to a
+/// comparison at one call site.
+#[derive(Clone, Copy)]
+pub(super) enum ModelLoadSource {
+    /// A local file named on the command line with `--gguf`.
+    DirectGguf,
+    /// A catalog or repository model reference.
+    LayerPackage,
+}
+
+impl ModelLoadSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DirectGguf => "direct_gguf",
+            Self::LayerPackage => "layer_package",
+        }
+    }
+
+    /// Whether the model name may go on the wire.
+    ///
+    /// `DirectGguf` names are derived from a path the user chose, so they are
+    /// never reported. The label grammar alone does not save us here: the name
+    /// handed to analytics is `resolved_model_name`, the file *stem*, and a
+    /// bare stem such as `private` passes the grammar cleanly. `acme-merger-
+    /// finetune.gguf` would go out verbatim. Redacting on the source is the
+    /// only place that holds, and it keeps the documented promise that a
+    /// filesystem path cannot reach the wire through this API even by mistake.
+    fn may_report_name(self) -> bool {
+        match self {
+            Self::DirectGguf => false,
+            Self::LayerPackage => true,
+        }
+    }
+}
+
+/// Report an anonymous `model_loaded` alongside the local `ModelLoaded`
+/// presentation event.
+///
+/// A catalog or repository identifier is reported as-is when it satisfies the
+/// analytics label grammar; anything else, and every direct `--gguf` name, is
+/// `redacted`. The count and the source still land either way, which is what
+/// the question "which models actually get run" is asking.
+fn report_model_loaded_analytics(model: &str, source: ModelLoadSource) {
+    mesh_llm_analytics::capture(
+        mesh_llm_analytics::Event::ModelLoaded,
+        mesh_llm_analytics::Properties::new()
+            .with("model", model_loaded_label(model, source))
+            .with("source", source.as_str()),
+    );
+}
+
+/// The `model` value `report_model_loaded_analytics` puts on the wire.
+///
+/// Separate from the capture so the privacy decision is testable without a
+/// reporter: the capture itself is a fire-and-forget into a global queue.
+fn model_loaded_label(model: &str, source: ModelLoadSource) -> mesh_llm_analytics::Label {
+    if source.may_report_name() {
+        mesh_llm_analytics::Label::sanitize_or_redact(model)
+    } else {
+        mesh_llm_analytics::Label::redacted()
+    }
+}
+
 pub(super) async fn advertise_model_ready(
     node: &mesh::Node,
     primary_model_name: &str,
@@ -567,11 +635,13 @@ fn weights_digest_toctou_recheck_passes(
     after.is_some() && after == before
 }
 
+/// Publish runtime-probed capabilities and workload class without losing identity updates.
 pub(super) async fn set_runtime_verified_served_model_capabilities(
     node: &mesh::Node,
     primary_model_name: &str,
     model_name: &str,
     capabilities: models::ModelCapabilities,
+    workload_class: mesh::ModelWorkloadClass,
 ) {
     node.update_served_model_descriptor(model_name, |existing| {
         runtime_verified_served_model_descriptor(
@@ -579,16 +649,20 @@ pub(super) async fn set_runtime_verified_served_model_capabilities(
             primary_model_name,
             model_name,
             capabilities,
+            workload_class,
         )
     })
     .await;
 }
 
+/// Preserve existing model identity while replacing inferred capabilities with runtime facts.
+/// Missing descriptors receive a fallback identity before their workload is advertised.
 pub(super) fn runtime_verified_served_model_descriptor(
     existing: Option<mesh::ServedModelDescriptor>,
     primary_model_name: &str,
     model_name: &str,
     capabilities: models::ModelCapabilities,
+    workload_class: mesh::ModelWorkloadClass,
 ) -> mesh::ServedModelDescriptor {
     let mut descriptor = existing.unwrap_or_else(|| mesh::ServedModelDescriptor {
         identity: mesh::ServedModelIdentity {
@@ -607,6 +681,10 @@ pub(super) fn runtime_verified_served_model_descriptor(
     descriptor.identity.is_primary = model_name == primary_model_name;
     descriptor.capabilities_known = true;
     descriptor.capabilities = capabilities;
+    descriptor
+        .metadata
+        .get_or_insert_with(Default::default)
+        .workload_class = Some(workload_class);
     descriptor
 }
 
@@ -1018,10 +1096,12 @@ async fn start_local_skippy_model(
     .await
     .context("join load skippy direct GGUF task")??;
     emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
+    let workload_class = skippy_model.workload_class()?;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_name.clone(),
         bytes: None,
     });
+    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf);
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
@@ -1033,6 +1113,7 @@ async fn start_local_skippy_model(
             context_length,
             slots: plan.slots,
             capabilities,
+            workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: skippy_model,
                 http,
@@ -1153,7 +1234,6 @@ async fn start_local_package_v2_model(
     }
     runtime_options.config.ctx_size = context_length;
     runtime_options.config.lane_count = plan.slots as u32;
-    runtime_options.config.filter_tensors_on_load = false;
     if spec.device_override.is_none()
         && let Some(gpu) = spec.pinned_gpu
     {
@@ -1191,6 +1271,8 @@ async fn start_local_package_v2_model(
     .await
     .context("join load skippy package-v2 task")??;
     emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
+    let workload_class = handle.workload_class()?;
+    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage);
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -1206,6 +1288,7 @@ async fn start_local_package_v2_model(
             context_length,
             slots: plan.slots,
             capabilities,
+            workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: handle,
                 http,
@@ -1268,9 +1351,14 @@ pub(super) fn local_process_snapshot(
 }
 
 #[cfg(test)]
+#[path = "local/descriptor_tests.rs"]
+mod descriptor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
-        LocalRuntimeModelStartSpec, RuntimeResourcePlanningProfile, openai_guardrail_policy_handle,
+        LocalRuntimeModelStartSpec, ModelLoadSource, RuntimeResourcePlanningProfile,
+        model_loaded_label, openai_guardrail_policy_handle, resolved_model_name,
         unix_nanos_to_unix_ms,
     };
     use crate::inference::skippy;
@@ -1278,6 +1366,42 @@ mod tests {
     use crate::plugin;
     use crate::runtime::survey;
     use skippy_protocol::FlashAttentionType;
+
+    #[test]
+    fn direct_gguf_never_reports_the_file_name() {
+        // The label grammar does not save us here: `resolved_model_name`
+        // hands over the file *stem*, and a bare stem passes the grammar
+        // cleanly, so `--gguf /home/you/acme-merger-finetune.gguf` would go
+        // out verbatim. `analytics.md` promises a path cannot reach the wire;
+        // this is the only place that holds.
+        let path = std::path::Path::new("/home/you/acme-merger-finetune.gguf");
+        let name = resolved_model_name(path);
+        assert_eq!(name, "acme-merger-finetune", "stem is what gets reported");
+        assert_eq!(
+            mesh_llm_analytics::Label::sanitize_or_redact(&name).as_str(),
+            "acme-merger-finetune",
+            "and the grammar accepts it, which is exactly the hole"
+        );
+        assert_eq!(
+            model_loaded_label(&name, ModelLoadSource::DirectGguf).as_str(),
+            "redacted"
+        );
+    }
+
+    #[test]
+    fn layer_package_still_reports_a_catalog_name() {
+        // Redacting the direct-file case must not cost us the answer to
+        // "which models actually get run" for catalog models.
+        assert_eq!(
+            model_loaded_label("qwen3-8b", ModelLoadSource::LayerPackage).as_str(),
+            "qwen3-8b"
+        );
+        // A catalog ref that fails the grammar still redacts, as before.
+        assert_eq!(
+            model_loaded_label("/etc/passwd", ModelLoadSource::LayerPackage).as_str(),
+            "redacted"
+        );
+    }
 
     #[test]
     fn unix_nanos_to_unix_ms_converts_a_real_capture_time() {
@@ -1565,6 +1689,7 @@ mod tests {
             local_source_required: false,
             allow_uncertified_split: false,
             split_topology_lock: None,
+            auto_balance: false,
             planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
             openai_guardrail_policy: openai_guardrail_policy_handle(
                 openai_frontend::GuardrailMode::Disabled,

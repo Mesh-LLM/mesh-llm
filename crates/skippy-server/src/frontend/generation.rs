@@ -10,6 +10,7 @@ mod streaming;
 mod timeouts;
 mod tool_call_stream;
 mod types;
+mod workload;
 
 pub use cache_hints::{CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS};
 pub(crate) use server::serve_embedded_openai_with_scheduler;

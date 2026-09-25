@@ -1105,10 +1105,12 @@ class ReleaseNotesGenerateIntegrationTest(unittest.TestCase):
         tracked.write_text("base\n", encoding="utf-8")
         subprocess.run(["git", "add", "tracked"], cwd=directory, check=True)
         subprocess.run(["git", "commit", "-qm", "chore: base"], cwd=directory, check=True)
-        subprocess.run(["git", "tag", "v1"], cwd=directory, check=True)
+        # These local fixture tags are lightweight even when the developer's
+        # global Git config defaults to signing tags and opening an editor.
+        subprocess.run(["git", "tag", "--no-sign", "v1"], cwd=directory, check=True)
         tracked.write_text("fixed\n", encoding="utf-8")
         subprocess.run(["git", "commit", "-qam", "fix: recover the release entry"], cwd=directory, check=True)
-        subprocess.run(["git", "tag", "v2"], cwd=directory, check=True)
+        subprocess.run(["git", "tag", "--no-sign", "v2"], cwd=directory, check=True)
 
         fake_bin = directory / "bin"
         fake_bin.mkdir()

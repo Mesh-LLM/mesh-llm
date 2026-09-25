@@ -25,7 +25,10 @@ use crate::{
     config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
-    runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_state_kind},
+    runtime_state::{
+        RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_has_indexer_memory,
+        loaded_model_state_kind,
+    },
     telemetry::{Telemetry, lifecycle_attrs},
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -279,6 +282,7 @@ fn run_binary_stage(
         continuous_batching,
         openai,
         l3_manager,
+        compute_meter,
     } = options;
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
     validate_config(&config, topology.as_ref())?;
@@ -340,6 +344,12 @@ fn run_binary_stage(
         );
         telemetry.emit("stage.binary_runtime_prewarm", attrs);
     }
+    if let Some(meter) = compute_meter {
+        runtime
+            .lock()
+            .map_err(|_| anyhow!("runtime lock poisoned"))?
+            .set_compute_meter(meter);
+    }
     let iteration_scheduler = IterationScheduler::new(
         runtime.clone(),
         &config,
@@ -351,6 +361,7 @@ fn run_binary_stage(
     let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &config,
         loaded_model_state_kind(Some(&runtime)),
+        loaded_model_has_indexer_memory(Some(&runtime)),
         l3_manager.clone(),
         None,
     )?

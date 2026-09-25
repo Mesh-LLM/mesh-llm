@@ -29,6 +29,19 @@ or cache identity.
   same-commit reusable lane. PRs and routine main pushes therefore keep nested
   jobs in focused native topic/platform runs; only explicit manual-full runs
   use protected detached lane dispatch.
+- `pr_ci_canary.yml` is an optional, non-required `ci:canary`-label diagnostic
+  outside the five-entry required-check census. It calls a protected `main`-
+  owned merge-source lane, which runs one catalog-derived Linux amd64 CPU chain
+  through the existing UI, host, native-runtime, and product slices, including
+  the native runtime-event gate. Runner-policy checkouts remain on `main`. It
+  deliberately does not call `ci-linux-lane.yml` or cover the other platform,
+  SDK, smoke, GPU, or release graphs.
+- The canary uses read-only `contents`/`packages` permissions and a plain
+  step-summary result. It requests no checks write, secrets, environments,
+  OIDC, Depot, or persistent self-hosted runner. The protected workflow ref and
+  default-branch runner-policy checkout keep PR-controlled workflow/action
+  changes out of runner-owning jobs. Any future persistent-runner rollout
+  still requires protected main-owned workflow references in the runner group.
 - ci/ownership.yml and ci/slices.yml define the checked ownership, dependency,
   row, runner-role, cache-mode and worker-budget catalog.
 - Protected PR planning extracts only those two manifests from the validated
@@ -90,6 +103,7 @@ Routine main validation has the same acceptance invariant and exposes
   PR macOS entry --> plan --> protected macOS lane --> PR / macOS
   PR Windows entry --> plan --> protected Windows lane --> PR / Windows
   PR Quality in-progress --> protected sibling monitor --> cancel other exact-revision lanes after first failure
+  ci:canary label --> merge-source canary plan --> Linux CPU product chain --> Canary / CI (non-required)
 
   Main Quality/Website/Linux/macOS/Windows entries --> same-commit matching lanes
   Explicit manual-full entry --> protected controller --> five dispatched lanes
@@ -104,7 +118,11 @@ contains a platform-local static superset of typed reusable calls. Workflow
 YAML is never generated, and lanes do not download a planner artifact or
 allocate a planner. Fork heads are fetched through the base repository while
 planner, action, and workflow definitions remain protected on the default
-branch.
+branch for the five required lanes. The optional canary intentionally resolves
+its local workflow and action graph from the pull-request merge commit, passes
+that same `github.sha` as the built source, and keeps the PR head SHA as
+separate identity evidence. It compares merge-source ownership/slice catalogs
+with the base and refuses catalog drift before calling its fixed graph.
 
 ## Planner contract
 
@@ -150,7 +168,7 @@ credentials may differ.
 
 ## Slice catalog
 
-- ci-quality-slice.yml: contracts, formatting, bounded Clippy and CLI docs.
+- ci-quality-slice.yml: contracts, formatting, unused-dependency check, bounded Clippy and CLI docs.
 - ci-web-slice.yml: console lint/type/test and public website build.
 - ci-ui-artifact-slice.yml: one immutable console distribution producer.
 - static-abi-artifact.yml: one verified portable static llama ABI producer.

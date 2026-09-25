@@ -1,0 +1,24 @@
+From f37219f009b664256a925fa6fe223ae4fa502081 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 21 Sep 2026 05:48:09 +1000
+Subject: [PATCH 2/2] fix(kimi-k3): name residual checkpoint activation ports
+
+---
+ src/models/kimi-k3.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/models/kimi-k3.cpp b/src/models/kimi-k3.cpp
+index 17ff450ee..5a6282b7c 100644
+--- a/src/models/kimi-k3.cpp
++++ b/src/models/kimi-k3.cpp
+@@ -287,6 +287,7 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
+         bool banked = false;
+         if (use_attn_res && (uint32_t) il % res_bs == 0) {
+             res_push(prefix_sum, n_embd, n_tokens);  // banks the RAW layer input, not `cur`
++            cb(resi_stack, "resi_stack", il);
+             banked = true;
+         }
+ 
+-- 
+2.55.0
+

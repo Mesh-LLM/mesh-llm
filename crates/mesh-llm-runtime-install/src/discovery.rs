@@ -24,11 +24,25 @@ pub fn discover_local_native_runtimes(
     explicit_dirs: &[PathBuf],
     cache: &NativeRuntimeCache,
 ) -> Result<Vec<InstalledNativeRuntime>> {
+    discover_local_native_runtimes_with_filter(explicit_dirs, cache, |_| true)
+}
+
+/// Discovers local runtime bundles and cache entries, applying `include`
+/// before identity deduplication so an ineligible higher-precedence source
+/// cannot hide an eligible fallback with the same runtime identity.
+pub fn discover_local_native_runtimes_with_filter(
+    explicit_dirs: &[PathBuf],
+    cache: &NativeRuntimeCache,
+    include: impl Fn(&InstalledNativeRuntime) -> bool,
+) -> Result<Vec<InstalledNativeRuntime>> {
     let bundle_dirs = discover_native_runtime_bundle_dirs_lenient(explicit_dirs)?;
     let mut runtimes = Vec::new();
     let mut seen = BTreeSet::new();
     for path in bundle_dirs {
         if let Some(runtime) = read_installed_runtime_lenient(&path) {
+            if !include(&runtime) {
+                continue;
+            }
             let identity = (
                 runtime.mesh_version.clone(),
                 runtime.native_runtime_id.clone(),
@@ -38,7 +52,7 @@ pub fn discover_local_native_runtimes(
             }
         }
     }
-    append_cache_runtimes_lenient(cache, &mut runtimes, &mut seen)?;
+    append_cache_runtimes_lenient(cache, &mut runtimes, &mut seen, &include)?;
     Ok(runtimes)
 }
 
@@ -58,6 +72,7 @@ fn append_cache_runtimes_lenient(
     cache: &NativeRuntimeCache,
     runtimes: &mut Vec<InstalledNativeRuntime>,
     seen: &mut BTreeSet<(String, String)>,
+    include: &impl Fn(&InstalledNativeRuntime) -> bool,
 ) -> Result<()> {
     if !cache.root().exists() {
         return Ok(());
@@ -81,6 +96,9 @@ fn append_cache_runtimes_lenient(
             let Some(runtime) = read_installed_runtime_lenient(&runtime_dir) else {
                 continue;
             };
+            if !include(&runtime) {
+                continue;
+            }
             let identity = (
                 runtime.mesh_version.clone(),
                 runtime.native_runtime_id.clone(),
@@ -301,6 +319,7 @@ mod tests {
                     os: "linux".to_string(),
                     arch: "x86_64".to_string(),
                     target: None,
+                    min_glibc: None,
                 },
                 backend: NativeRuntimeBackend::cpu(),
                 rank: 0,

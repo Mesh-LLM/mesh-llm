@@ -1189,10 +1189,13 @@ fn normalize_call_tool_output(result: &CallToolResult) -> PluginResult<String> {
 mod tests {
     use super::*;
     use crate::{mcp, plugin, plugin_server_info};
+    #[cfg(unix)]
     use crate::{read_envelope, write_envelope};
     use rmcp::model::{ArgumentInfo, ContentBlock, PromptMessage, Reference, Role};
     use serde_json::json;
+    #[cfg(unix)]
     use tokio::sync::{Barrier, Notify};
+    #[cfg(unix)]
     use tokio::time::{Duration, timeout};
 
     #[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
@@ -1210,6 +1213,7 @@ mod tests {
         )
     }
 
+    #[cfg(unix)]
     fn test_channel_message(message_kind: &str) -> proto::ChannelMessage {
         proto::ChannelMessage {
             channel: "events".into(),
@@ -1405,6 +1409,9 @@ mod tests {
         );
     }
 
+    // Unix only: this drives a real `UnixStream` pair, and `LocalStream` has no
+    // Unix variant on Windows, where the transport is a named pipe.
+    #[cfg(unix)]
     #[tokio::test]
     async fn health_request_returns_while_operation_is_running() {
         let started = Arc::new(Notify::new());
@@ -1430,10 +1437,7 @@ mod tests {
             ],
         };
 
-        #[cfg(unix)]
         let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
-        #[cfg(not(unix))]
-        panic!("runtime stream tests are only implemented for unix");
 
         let runtime = tokio::spawn(PluginRuntime::run_with_stream(
             plugin,
@@ -1492,6 +1496,9 @@ mod tests {
         runtime.abort();
     }
 
+    // Unix only: this drives a real `UnixStream` pair, and `LocalStream` has no
+    // Unix variant on Windows, where the transport is a named pipe.
+    #[cfg(unix)]
     #[tokio::test]
     async fn invokes_service_requests_concurrently() {
         let barrier = Arc::new(Barrier::new(2));
@@ -1516,10 +1523,7 @@ mod tests {
             ],
         };
 
-        #[cfg(unix)]
         let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
-        #[cfg(not(unix))]
-        panic!("runtime stream tests are only implemented for unix");
 
         let runtime = tokio::spawn(PluginRuntime::run_with_stream(
             plugin,
@@ -1599,6 +1603,9 @@ mod tests {
         );
     }
 
+    // Unix only: this drives a real `UnixStream` pair, and `LocalStream` has no
+    // Unix variant on Windows, where the transport is a named pipe.
+    #[cfg(unix)]
     #[tokio::test]
     async fn ordered_notifications_do_not_overtake_each_other() {
         let first_started = Arc::new(Notify::new());
@@ -1629,10 +1636,7 @@ mod tests {
             })
         });
 
-        #[cfg(unix)]
         let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
-        #[cfg(not(unix))]
-        panic!("runtime stream tests are only implemented for unix");
 
         let runtime = tokio::spawn(PluginRuntime::run_with_stream(
             plugin,

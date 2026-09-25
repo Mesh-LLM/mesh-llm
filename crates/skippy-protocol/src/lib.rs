@@ -41,7 +41,7 @@ pub use validation::{
     STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_admission_descriptor, validate_stage_artifact_transfer_request,
     validate_stage_artifact_transfer_response, validate_stage_control_request,
@@ -67,6 +67,7 @@ mod tests {
             version: super::STAGE_ADMISSION_DESCRIPTOR_VERSION,
             package_id: format!("sha256:{}", "c7".repeat(32)),
             plan_id: format!("skippy-plan:v1:{}", "d8".repeat(32)),
+            execution_contract: String::new(),
             layer_start,
             layer_end,
             resident_tensor_ids: vec!["tensor-a".to_string(), "tensor-b".to_string()],
@@ -128,6 +129,51 @@ mod tests {
     }
 
     #[test]
+    fn stage_config_reports_when_it_emits_an_activation_frame() {
+        let encoded = format!(
+            "{}",
+            serde_json::json!({
+                "run_id": "run",
+                "topology_id": "topology",
+                "model_id": "model",
+                "activation_codec": "f16-rne-v1",
+                "execution_contract": "",
+                "stage_id": "stage-0",
+                "stage_index": 0,
+                "layer_start": 0,
+                "layer_end": 1,
+                "ctx_size": 512,
+                "lane_count": 2,
+                "n_gpu_layers": 0,
+                "mlock": false,
+                "check_tensors": false,
+                "direct_io": false,
+                "repack": false,
+                "load_mode": "runtime-slice",
+                "bind_addr": "127.0.0.1:0",
+                "split_mode": "none",
+                "flash_attn_type": "auto",
+                "glm_dsa_policy": "auto",
+                "cache_type_k": "f16",
+                "cache_type_v": "f16",
+            })
+        );
+        let mut config: super::StageConfig = serde_json::from_str(&encoded).unwrap();
+
+        assert!(
+            !config.emits_activation_frame(),
+            "an unsplit full-model load carries no resident tensor plan"
+        );
+        config.resident_tensor_names = vec!["blk.0.attn_norm.weight".to_string()];
+        assert!(
+            !config.emits_activation_frame(),
+            "a terminal stage has no export frontier"
+        );
+        config.activation_export_identities = vec!["stage-0.out".to_string()];
+        assert!(config.emits_activation_frame());
+    }
+
+    #[test]
     fn activation_codec_policy_permits_is_fail_closed() {
         use super::StageActivationCodec as C;
         use super::StageActivationCodecPolicy as P;
@@ -165,15 +211,16 @@ mod tests {
 
     #[test]
     fn stage_config_policy_defaults_do_not_depend_on_sibling_fields() {
-        // A legacy config that sets F16 without naming a policy must keep the
-        // fixed F16 behavior after serde round-trip.
-        let legacy = format!(
+        // A config that sets F16 without naming a policy keeps fixed F16
+        // behavior independently of its execution contract.
+        let encoded = format!(
             "{}",
             serde_json::json!({
                 "run_id": "run",
                 "topology_id": "topology",
                 "model_id": "model",
                 "activation_codec": "f16-rne-v1",
+                "execution_contract": "",
                 "stage_id": "stage-0",
                 "stage_index": 0,
                 "layer_start": 0,
@@ -194,7 +241,7 @@ mod tests {
                 "cache_type_v": "f16",
             })
         );
-        let config: super::StageConfig = serde_json::from_str(&legacy).unwrap();
+        let config: super::StageConfig = serde_json::from_str(&encoded).unwrap();
         assert_eq!(
             config.activation_codec,
             super::StageActivationCodec::F16RneV1
@@ -210,8 +257,22 @@ mod tests {
             "f16-rne-v1"
         );
     }
+
+    #[test]
+    fn stage_config_rejects_obsolete_tensor_filter_flag() {
+        let mut value = serde_json::to_value(super::StageConfig::default()).unwrap();
+        value["filter_tensors_on_load"] = serde_json::Value::Bool(true);
+
+        let error = serde_json::from_value::<super::StageConfig>(value).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("filter_tensors_on_load is obsolete")
+        );
+    }
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
         StageFrameError, validate_stage_admission_descriptor,
         validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
         validate_stage_control_request, validate_stage_control_response,
@@ -221,7 +282,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }

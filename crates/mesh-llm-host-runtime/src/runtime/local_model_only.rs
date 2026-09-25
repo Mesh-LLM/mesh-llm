@@ -6,7 +6,7 @@ use super::{
     configure_run_auto_process_state, emit_shutdown, openai_guardrail_policy_handle,
     preflight_pinned_startup_models, resolve_local_model_only_startup_models,
     runtime_model_required_bytes, skippy_telemetry_options, start_local_openai_model,
-    startup_device_override, wait_shutdown_signal,
+    startup_device_override, wait_for_shutdown_signal,
 };
 use crate::inference::election;
 use crate::plugin;
@@ -180,12 +180,15 @@ async fn run_local_model_only_inner(
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
+    super::run_auto::apply_runtime_cli_parallel_override(&mut config, options.parallel);
     apply_runtime_cli_checkpoint_overrides(
         &mut config,
         options.checkpoint_quantization.as_deref(),
         options.checkpoint_imatrix.as_deref(),
     )?;
     apply_runtime_config_options(&mut options, &config);
+    let host_ram_offload = config.gpu.host_ram_offload.unwrap_or(false);
+    mesh_llm_system::capacity::set_process_host_ram_offload(host_ram_offload);
     // Task 16: same OTLP-specific runtime-event telemetry consumer as the
     // mesh-serve path in `run_auto.rs`; a disabled or failed exporter
     // degrades to a no-op instance and never affects startup. Installs its
@@ -223,7 +226,12 @@ async fn run_local_model_only_inner(
         "could not determine local model size: {}",
         model.resolved_path.display()
     );
-    let local_capacity_bytes = local_capacity_bytes(&options, model.pinned_gpu.as_ref());
+    let local_capacity_bytes = local_capacity_bytes(
+        options.max_vram,
+        model.pinned_gpu.as_ref(),
+        &hardware::survey(),
+        host_ram_offload,
+    );
     let required_bytes = runtime_model_required_bytes(model_bytes);
     anyhow::ensure!(
         local_capacity_bytes >= required_bytes,
@@ -261,7 +269,13 @@ async fn run_local_model_only_inner(
         n_batch_override: model.n_batch,
         n_ubatch_override: model.n_ubatch,
         flash_attention_override: model.flash_attention,
-        parallel_override: model.parallel,
+        // The gpu-level default applies here too: without it a `[gpu].parallel` (or
+        // `--parallel`) that every mesh-serving path honours was ignored by exactly the
+        // mode most likely to be used for a single busy box.
+        parallel_override: super::startup_models::resolve_model_parallel_override(
+            model.parallel,
+            &config.gpu,
+        ),
         planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         openai_guardrail_policy: openai_guardrail_policy_handle(
             super::status::mesh_guardrail_mode_to_openai(options.mesh_guardrails),
@@ -308,15 +322,23 @@ fn native_serving_plugin_factory(
     Ok(Some(std::sync::Arc::new(factory)))
 }
 
+/// The budget `--local-model-only` admits its model against: the same local
+/// fit budget as a mesh node, so system RAM only counts once the owner opted
+/// into `gpu.host_ram_offload`. A pinned GPU adds the node's RAM-backed share
+/// to its own device memory, which is zero unless opted in.
 fn local_capacity_bytes(
-    options: &RuntimeOptions,
+    max_vram_gb: Option<f64>,
     pinned_gpu: Option<&super::StartupPinnedGpuTarget>,
+    hw: &hardware::HardwareSurvey,
+    host_ram_offload: bool,
 ) -> u64 {
-    let detected = pinned_gpu
-        .map(super::StartupPinnedGpuTarget::allocatable_vram_bytes)
-        .unwrap_or_else(|| hardware::survey().vram_bytes);
-    options
-        .max_vram
+    let detected = match pinned_gpu {
+        Some(gpu) => gpu.allocatable_vram_bytes().saturating_add(
+            mesh_llm_system::capacity::local_ram_share_bytes(hw, None, host_ram_offload),
+        ),
+        None => mesh_llm_system::capacity::local_fit_capacity_bytes(hw, None, host_ram_offload),
+    };
+    max_vram_gb
         .map(|gb| (gb * 1e9) as u64)
         .map_or(detected, |cap| detected.min(cap))
 }
@@ -407,7 +429,7 @@ async fn wait_for_openai_exit_or_shutdown(
     let mut interval = tokio::time::interval(OPENAI_STATUS_POLL_INTERVAL);
     loop {
         tokio::select! {
-            signal = wait_shutdown_signal() => return Ok(signal),
+            signal = wait_for_shutdown_signal() => return Ok(signal),
             _ = interval.tick() => {
                 let status = model.openai_server_status();
                 match status.state {
@@ -639,6 +661,50 @@ mod tests {
         assert!(
             weak_engine.upgrade().is_none(),
             "stopped driver must not retain the uninstalled engine"
+        );
+    }
+}
+
+#[cfg(test)]
+mod local_capacity_tests {
+    use super::local_capacity_bytes;
+    use crate::runtime::StartupPinnedGpuTarget;
+    use crate::system::hardware::{GpuFacts, HardwareSurvey};
+
+    fn windows_4070_ti() -> HardwareSurvey {
+        HardwareSurvey {
+            vram_bytes: 31_427_447_193,
+            gpu_vram: vec![12_878_610_432],
+            gpu_reserved: vec![None],
+            gpus: vec![GpuFacts {
+                vram_bytes: 12_878_610_432,
+                ..GpuFacts::default()
+            }],
+            ram_offload_bytes: 18_548_836_761,
+            ..HardwareSurvey::default()
+        }
+    }
+
+    #[test]
+    fn local_model_only_admits_against_the_opt_in_local_budget() {
+        let hw = windows_4070_ti();
+        assert_eq!(local_capacity_bytes(None, None, &hw, false), 12_878_610_432);
+        assert_eq!(local_capacity_bytes(None, None, &hw, true), 31_427_447_193);
+
+        let pinned = StartupPinnedGpuTarget {
+            index: 0,
+            stable_id: "pci:0000:01:00.0".to_string(),
+            backend_device: "CUDA0".to_string(),
+            vram_bytes: 12_878_610_432,
+            reserved_bytes: None,
+        };
+        assert_eq!(
+            local_capacity_bytes(None, Some(&pinned), &hw, false),
+            12_878_610_432
+        );
+        assert_eq!(
+            local_capacity_bytes(None, Some(&pinned), &hw, true),
+            31_427_447_193
         );
     }
 }

@@ -260,12 +260,14 @@ fn config_sync_state_revision_monotonic() {
     let make_config = |model: &str| MeshConfig {
         version: Some(1),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: None,
         },
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
         telemetry: Default::default(),
+        analytics: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![crate::plugin::ModelConfigEntry {
@@ -307,12 +309,14 @@ fn config_sync_state_hash_changes_on_different_config() {
     let config_with_model = MeshConfig {
         version: Some(1),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: None,
         },
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
         telemetry: Default::default(),
+        analytics: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![crate::plugin::ModelConfigEntry {

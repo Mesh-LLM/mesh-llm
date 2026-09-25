@@ -1,0 +1,81 @@
+/* The CLI and embeddable SDK share the hero's first-screen entry point. */
+.hero-entry-points {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 24px;
+  flex: 1;
+  min-width: 0;
+}
+.hero-run,
+.hero-sdk {
+  min-width: 0;
+}
+.hero-entry-points h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.05;
+}
+.hero-entry-points .hero-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.hero-entry-points .hero-install {
+  flex-basis: 100%;
+  max-width: none;
+  width: 100%;
+  justify-content: space-between;
+}
+.hero-sdk p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.hero-sdk strong {
+  color: var(--fg-2);
+}
+.hero-sdk-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  gap: 8px;
+  color: var(--blue-3);
+  font-weight: 600;
+}
+.hero-sdk-languages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+  font-size: 13px;
+}
+.hero-sdk-languages a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  color: var(--muted);
+}
+.hero-sdk a:hover {
+  text-decoration: underline;
+}
+.hero-sdk a:focus-visible {
+  outline: 2px solid var(--blue-3);
+  outline-offset: 3px;
+}
+@media (max-width: 1000px) {
+  .hero-entry-points + .hero-sponsor {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .hero-entry-points {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .hero-entry-points .hero-learn,
+  .hero-entry-points .hero-public {
+    width: auto;
+    flex: 1;
+  }
+}

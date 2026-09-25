@@ -1,3 +1,5 @@
+use std::ffi::{CString, c_char};
+
 #[cfg(feature = "dynamic-runtime")]
 use crate::dynamic;
 #[cfg(not(feature = "dynamic-runtime"))]
@@ -5,7 +7,7 @@ use crate::static_bindings;
 
 use crate::Opaque;
 #[cfg(not(feature = "dynamic-runtime"))]
-use crate::{SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn};
+use crate::{LlamaPerfContextFn, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn};
 
 #[cfg(not(feature = "dynamic-runtime"))]
 /// Mark the statically linked native runtime as already available.
@@ -118,6 +120,56 @@ pub unsafe fn llama_model_is_hybrid(model: *const Opaque) -> Option<bool> {
     }
 }
 
+/// Reads a string-valued GGUF metadata entry from the loaded model when the
+/// native runtime exposes the corresponding upstream accessor.
+///
+/// Returns `None` for an older compatible runtime that does not export this
+/// optional upstream symbol or for a missing key, matching the upstream
+/// `llama_model_meta_val_str` contract of returning -1 and writing `'\0'`.
+///
+/// # Safety
+///
+/// `model` must be a valid llama.cpp model pointer owned by the loaded runtime.
+pub unsafe fn llama_model_meta_val_str(model: *const Opaque, key: &str) -> Option<String> {
+    let key = CString::new(key).ok()?;
+    // Upstream truncates at buf_size and always NUL-terminates, so a truncated
+    // read reports the required length; retry once with that exact size.
+    let mut buf = vec![0u8; 128];
+    loop {
+        #[cfg(feature = "dynamic-runtime")]
+        let written = {
+            let probe = dynamic::llama_model_meta_val_str_fn()?;
+            unsafe {
+                probe(
+                    model,
+                    key.as_ptr(),
+                    buf.as_mut_ptr().cast::<c_char>(),
+                    buf.len(),
+                )
+            }
+        };
+        #[cfg(not(feature = "dynamic-runtime"))]
+        let written = unsafe {
+            static_bindings::llama_model_meta_val_str(
+                model,
+                key.as_ptr(),
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf.len(),
+            )
+        };
+        if written < 0 {
+            return None;
+        }
+        let written = usize::try_from(written).expect("upstream returns a non-negative length");
+        if written < buf.len() {
+            break;
+        }
+        buf.resize(written + 1, 0);
+    }
+    let end = buf.iter().position(|&byte| byte == 0).unwrap_or(buf.len());
+    Some(String::from_utf8_lossy(&buf[..end]).into_owned())
+}
+
 /// Reports whether the loaded model is diffusion-based when the native runtime
 /// exposes the corresponding llama.cpp capability probe.
 ///
@@ -162,4 +214,13 @@ pub fn skippy_model_attach_mtp_draft_model_fn() -> Option<SkippyModelAttachMtpDr
 #[cfg(not(feature = "dynamic-runtime"))]
 pub fn skippy_decode_step_sampled_mtp_fn() -> Option<SkippyDecodeStepSampledMtpFn> {
     Some(static_bindings::skippy_decode_step_sampled_mtp)
+}
+
+/// Graph reuse counters for a statically linked native runtime.
+///
+/// There is nothing to probe here: a static runtime either exports the symbol
+/// at link time or the build fails, so the counters are always available.
+#[cfg(not(feature = "dynamic-runtime"))]
+pub fn llama_perf_context_optional() -> Option<LlamaPerfContextFn> {
+    Some(static_bindings::llama_perf_context)
 }

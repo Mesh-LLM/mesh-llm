@@ -13,7 +13,6 @@
   "suites": [
     "llama-family-certification",
     "product-smoke",
-    "product-integration-smoke",
     "scripted-binary-smoke",
     "sdk-smoke",
     "hf-download-smoke",
@@ -23,7 +22,8 @@
     "skippy-ci-smoke",
     "skippy-parity",
     "competitive-benchmark",
-    "radix-cache"
+    "radix-cache",
+    "skippy-system-one-smoke"
   ],
   "family_policy": {
     "profiles": {
@@ -53,6 +53,21 @@
           "tensor-ownership",
           "stage-load"
         ]
+      },
+      "workload-smoke": {
+        "status": "provisional",
+        "oracle": "none",
+        "required_lanes": [
+          "class-specific-smoke"
+        ]
+      },
+      "workload-oracle": {
+        "status": "certified",
+        "oracle": "local-monolithic",
+        "required_lanes": [
+          "class-specific-smoke",
+          "class-specific-oracle"
+        ]
       }
     }
   },
@@ -76,7 +91,8 @@
       "family": "qwen3-dense",
       "suites": [
         "llama-family-certification",
-        "skippy-ci-smoke"
+        "skippy-ci-smoke",
+        "skippy-system-one-smoke"
       ],
       "cadences": [
         "pull-request",
@@ -104,6 +120,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -116,7 +133,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 633495552
         },
-        "notes": "core production dense baseline"
+        "notes": "core production dense baseline",
+        "class": "causal_generation"
       }
     },
     {
@@ -150,6 +168,7 @@
         ]
       },
       "certification": {
+        "architecture": "llama",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -162,7 +181,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 799862912
         },
-        "notes": "production dense baseline; covers the trimmed olmo2 architecture path"
+        "notes": "production dense baseline; covers the trimmed olmo2 architecture path",
+        "class": "causal_generation"
       }
     },
     {
@@ -193,6 +213,7 @@
         ]
       },
       "certification": {
+        "architecture": "deepseek2",
         "profile": "full",
         "execution": {
           "trunk_layers": 47,
@@ -205,7 +226,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 18302863872
         },
-        "notes": "production MLA path shared with deepseek2; tensors span blk.0 through blk.46"
+        "notes": "production MLA path shared with deepseek2; tensors span blk.0 through blk.46",
+        "class": "causal_generation"
       }
     },
     {
@@ -235,6 +257,7 @@
         ]
       },
       "certification": {
+        "architecture": "chatglm",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -247,7 +270,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 6244892672
         },
-        "notes": "production dense GLM path"
+        "notes": "production dense GLM path",
+        "class": "causal_generation"
       }
     },
     {
@@ -284,6 +308,7 @@
         ]
       },
       "certification": {
+        "architecture": "glm4moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 46,
@@ -296,7 +321,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 72966388736
         },
-        "notes": "GLM4.5 MoE lineage; 46 trunk layers plus one MTP runtime layer; two shards"
+        "notes": "GLM4.5 MoE lineage; 46 trunk layers plus one MTP runtime layer; two shards",
+        "class": "causal_generation"
       }
     },
     {
@@ -330,6 +356,7 @@
         ]
       },
       "certification": {
+        "architecture": "deepseek2",
         "profile": "full",
         "execution": {
           "trunk_layers": 27,
@@ -342,7 +369,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 10360420352
         },
-        "notes": "production MLA path"
+        "notes": "production MLA path",
+        "class": "causal_generation"
       }
     },
     {
@@ -373,6 +401,7 @@
         ]
       },
       "certification": {
+        "architecture": "gpt-oss",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -385,7 +414,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 12096558336
         },
-        "notes": "MoE plus MXFP4; only quantization shipped"
+        "notes": "MoE plus MXFP4; only quantization shipped",
+        "class": "causal_generation"
       }
     },
     {
@@ -415,6 +445,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -427,7 +458,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 18550716416
         },
-        "notes": "production MoE; graph_max_nodes budget lane"
+        "notes": "production MoE; graph_max_nodes budget lane",
+        "class": "causal_generation"
       }
     },
     {
@@ -457,6 +489,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen2moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -469,7 +502,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 9490282496
         },
-        "notes": "small MoE architecture probe"
+        "notes": "small MoE architecture probe",
+        "class": "causal_generation"
       }
     },
     {
@@ -506,6 +540,7 @@
         ]
       },
       "certification": {
+        "architecture": "falcon-h1",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -518,7 +553,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 942121232
         },
-        "notes": "hybrid boundary sweep"
+        "notes": "hybrid boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -549,6 +585,7 @@
         ]
       },
       "certification": {
+        "architecture": "jamba",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -561,7 +598,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 1931112448
         },
-        "notes": "hybrid boundary sweep"
+        "notes": "hybrid boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -593,6 +631,7 @@
         ]
       },
       "certification": {
+        "architecture": "kimi-linear",
         "profile": "full",
         "execution": {
           "trunk_layers": 27,
@@ -605,7 +644,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 13890288384
         },
-        "notes": "hybrid 3:1 interleave; canonical boundary-sweep model"
+        "notes": "hybrid 3:1 interleave; canonical boundary-sweep model",
+        "class": "causal_generation"
       }
     },
     {
@@ -638,6 +678,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3next",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -650,7 +691,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 22211435520
         },
-        "notes": "hybrid three-linear-to-one-attention path"
+        "notes": "hybrid three-linear-to-one-attention path",
+        "class": "causal_generation"
       }
     },
     {
@@ -667,7 +709,9 @@
         "gguf",
         "hybrid",
         "multipart",
-        "qsa"
+        "qsa",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
@@ -692,6 +736,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen4exp",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -705,7 +750,20 @@
           "estimated_model_bytes": 72535436800,
           "startup_timeout_secs": 900
         },
-        "notes": "Qwen4 experimental hybrid path; four-wide hyper-connected residual boundary and QSA indexer"
+        "notes": "Qwen4 experimental hybrid path; four-wide hyper-connected residual boundary and QSA indexer; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
+          "revision": "c8b5954a88c2775c546b92593eda40ea041d3176",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 904004000,
+              "sha256": "1f7b7f0b984cf065c604360c29c8098362ed61b290db0ff12c6f360bb1a8a980"
+            }
+          ]
+        }
       }
     },
     {
@@ -738,6 +796,7 @@
         ]
       },
       "certification": {
+        "architecture": "nemotron_h_moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 52,
@@ -750,7 +809,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 25258358528
         },
-        "notes": "hybrid Mamba2 plus attention MoE; replacement for the invalid all-zero head_count_kv artifact"
+        "notes": "hybrid Mamba2 plus attention MoE; replacement for the invalid all-zero head_count_kv artifact",
+        "class": "causal_generation"
       }
     },
     {
@@ -781,6 +841,7 @@
         ]
       },
       "certification": {
+        "architecture": "mamba",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -793,7 +854,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 101794800
         },
-        "notes": "cheap recurrent boundary sweep"
+        "notes": "cheap recurrent boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -823,6 +885,7 @@
         ]
       },
       "certification": {
+        "architecture": "mamba",
         "profile": "full",
         "execution": {
           "trunk_layers": 64,
@@ -835,7 +898,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 4201906176
         },
-        "notes": "Mamba2 SSM canonical path"
+        "notes": "Mamba2 SSM canonical path",
+        "class": "causal_generation"
       }
     },
     {
@@ -865,6 +929,7 @@
         ]
       },
       "certification": {
+        "architecture": "rwkv6",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -877,7 +942,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 991330304
         },
-        "notes": "recurrent v_first sideband crossing"
+        "notes": "recurrent v_first sideband crossing",
+        "class": "causal_generation"
       }
     },
     {
@@ -907,6 +973,7 @@
         ]
       },
       "certification": {
+        "architecture": "rwkv7",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -919,7 +986,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 2313461760
         },
-        "notes": "recurrent; only real RWKV7 World3 GGUF"
+        "notes": "recurrent; only real RWKV7 World3 GGUF",
+        "class": "causal_generation"
       }
     },
     {
@@ -927,7 +995,8 @@
       "family": "granite-hybrid",
       "suites": [
         "llama-family-certification",
-        "product-integration-smoke"
+        "product-smoke",
+        "scripted-binary-smoke"
       ],
       "cadences": [
         "llama-bump",
@@ -953,6 +1022,7 @@
         ]
       },
       "certification": {
+        "architecture": "granitehybrid",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -965,7 +1035,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 219091712
         },
-        "notes": "cheap hybrid boundary sweep"
+        "notes": "cheap hybrid boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -981,7 +1052,9 @@
       "capability_tags": [
         "gguf",
         "hybrid",
-        "recurrent"
+        "recurrent",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Qwen3.5-0.8B-GGUF",
@@ -996,6 +1069,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen35",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1008,7 +1082,20 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 521555200
         },
-        "notes": "smallest public Qwen3.5 dense GGUF; hybrid gated-delta-net family with full-attention interval 4; coverage-expansion repair from the failed CI fixture row"
+        "notes": "smallest public Qwen3.5 dense GGUF; hybrid gated-delta-net family with full-attention interval 4; coverage-expansion repair from the failed CI fixture row; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+          "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 204987232,
+              "sha256": "56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453"
+            }
+          ]
+        }
       }
     },
     {
@@ -1038,6 +1125,7 @@
         ]
       },
       "certification": {
+        "architecture": "granite",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1050,7 +1138,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 1543549872
         },
-        "notes": "dense Granite path"
+        "notes": "dense Granite path",
+        "class": "causal_generation"
       }
     },
     {
@@ -1081,6 +1170,7 @@
         ]
       },
       "certification": {
+        "architecture": "lfm2",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -1093,7 +1183,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 226925568
         },
-        "notes": "cheap hybrid boundary sweep"
+        "notes": "cheap hybrid boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -1126,6 +1217,7 @@
         ]
       },
       "certification": {
+        "architecture": "lfm2",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -1150,7 +1242,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 376830976
         },
-        "notes": "small official multimodal hybrid model; text, recurrent, and mmproj lanes"
+        "notes": "small official multimodal hybrid model; text, recurrent, and mmproj lanes",
+        "class": "causal_generation"
       }
     },
     {
@@ -1180,6 +1273,7 @@
         ]
       },
       "certification": {
+        "architecture": "laguna",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1192,7 +1286,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 20270574592
         },
-        "notes": "dense explicit poolside row"
+        "notes": "dense explicit poolside row",
+        "class": "causal_generation"
       }
     },
     {
@@ -1223,6 +1318,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen2vl",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -1247,7 +1343,8 @@
               "sha256": "05cc3ae461a7b6aa4023312ccab549ecab77cf8677efee04f049fcbab55b8bc3"
             }
           ]
-        }
+        },
+        "class": "causal_generation"
       }
     },
     {
@@ -1278,6 +1375,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3vl",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -1303,7 +1401,8 @@
               "sha256": "d406d03ebabefdef86a2c86bf0c1b65f9e046f7a81c218f25de4931b46a07fc4"
             }
           ]
-        }
+        },
+        "class": "causal_generation"
       }
     },
     {
@@ -1333,6 +1432,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma2",
         "profile": "full",
         "execution": {
           "trunk_layers": 26,
@@ -1345,7 +1445,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 10457367552
         },
-        "notes": "dense; only file in repository; gemma3 path trimmed"
+        "notes": "dense; only file in repository; gemma3 path trimmed",
+        "class": "causal_generation"
       }
     },
     {
@@ -1375,6 +1476,7 @@
         ]
       },
       "certification": {
+        "architecture": "phi3",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1387,7 +1489,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 2392493568
         },
-        "notes": "dense Phi3 path"
+        "notes": "dense Phi3 path",
+        "class": "causal_generation"
       }
     },
     {
@@ -1417,6 +1520,7 @@
         ]
       },
       "certification": {
+        "architecture": "llama",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1429,7 +1533,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 8886743040
         },
-        "notes": "dense; Microsoft repository does not publish Q4_K_M"
+        "notes": "dense; Microsoft repository does not publish Q4_K_M",
+        "class": "causal_generation"
       }
     },
     {
@@ -1459,6 +1564,7 @@
         ]
       },
       "certification": {
+        "architecture": "falcon",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1471,7 +1577,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 4972826368
         },
-        "notes": "dense Falcon path"
+        "notes": "dense Falcon path",
+        "class": "causal_generation"
       }
     },
     {
@@ -1501,6 +1608,7 @@
         ]
       },
       "certification": {
+        "architecture": "internlm2",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1513,7 +1621,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 3778420736
         },
-        "notes": "dense InternLM2 path"
+        "notes": "dense InternLM2 path",
+        "class": "causal_generation"
       }
     },
     {
@@ -1528,7 +1637,9 @@
       ],
       "capability_tags": [
         "dense",
-        "gguf"
+        "gguf",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
@@ -1543,6 +1654,7 @@
         ]
       },
       "certification": {
+        "architecture": "llama",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1555,7 +1667,20 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 14326026240
         },
-        "notes": "dense; relabelled from mistral3"
+        "notes": "dense; relabelled from mistral3; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
+          "revision": "b750ec2299225e492f1bd27cab88a0a595fa848f",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 878053568,
+              "sha256": "d6af684ae9136398eaa0b59ea9e0b0b850bb6ac5084f1e8c5cb8f85251825eaf"
+            }
+          ]
+        }
       }
     },
     {
@@ -1585,6 +1710,7 @@
         ]
       },
       "certification": {
+        "architecture": "cohere2",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1597,7 +1723,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 5046091776
         },
-        "notes": "dense Cohere2 path"
+        "notes": "dense Cohere2 path",
+        "class": "causal_generation"
       }
     },
     {
@@ -1627,6 +1754,7 @@
         ]
       },
       "certification": {
+        "architecture": "smollm3",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -1639,7 +1767,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 1907462144
         },
-        "notes": "dense SmolLM3 path"
+        "notes": "dense SmolLM3 path",
+        "class": "causal_generation"
       }
     },
     {
@@ -1819,6 +1948,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen2",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1831,7 +1961,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 391859712
         },
-        "notes": "expansion: dense qwen2 arch coverage"
+        "notes": "expansion: dense qwen2 arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -1861,6 +1992,7 @@
         ]
       },
       "certification": {
+        "architecture": "bloom",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1873,7 +2005,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 548823040
         },
-        "notes": "expansion: bloom arch coverage"
+        "notes": "expansion: bloom arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -1903,6 +2036,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma",
         "profile": "full",
         "execution": {
           "trunk_layers": 18,
@@ -1915,7 +2049,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 1489203200
         },
-        "notes": "expansion: dense gemma arch coverage"
+        "notes": "expansion: dense gemma arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -1945,6 +2080,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma3",
         "profile": "full",
         "execution": {
           "trunk_layers": 26,
@@ -1957,7 +2093,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 799525120
         },
-        "notes": "expansion: dense gemma3 arch coverage"
+        "notes": "expansion: dense gemma3 arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -1987,6 +2124,7 @@
         ]
       },
       "certification": {
+        "architecture": "phi2",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1999,7 +2137,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 1787432960
         },
-        "notes": "expansion: dense phi2 arch coverage"
+        "notes": "expansion: dense phi2 arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2029,6 +2168,7 @@
         ]
       },
       "certification": {
+        "architecture": "starcoder2",
         "profile": "full",
         "execution": {
           "trunk_layers": 30,
@@ -2041,7 +2181,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 1847230464
         },
-        "notes": "expansion: dense starcoder2 arch coverage"
+        "notes": "expansion: dense starcoder2 arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2071,6 +2212,7 @@
         ]
       },
       "certification": {
+        "architecture": "stablelm",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -2083,7 +2225,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 1027883008
         },
-        "notes": "expansion: dense stablelm arch coverage"
+        "notes": "expansion: dense stablelm arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2113,6 +2256,7 @@
         ]
       },
       "certification": {
+        "architecture": "olmo2",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -2125,7 +2269,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 931962880
         },
-        "notes": "expansion: dense olmo2 arch coverage"
+        "notes": "expansion: dense olmo2 arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2155,6 +2300,7 @@
         ]
       },
       "certification": {
+        "architecture": "exaone4",
         "profile": "full",
         "execution": {
           "trunk_layers": 30,
@@ -2167,7 +2313,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 808230016
         },
-        "notes": "expansion: dense exaone4 arch coverage"
+        "notes": "expansion: dense exaone4 arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2197,6 +2344,7 @@
         ]
       },
       "certification": {
+        "architecture": "minicpm3",
         "profile": "full",
         "execution": {
           "trunk_layers": 62,
@@ -2209,7 +2357,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 2468069280
         },
-        "notes": "expansion: dense minicpm3 arch coverage"
+        "notes": "expansion: dense minicpm3 arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2239,6 +2388,7 @@
         ]
       },
       "certification": {
+        "architecture": "nemotron",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2251,7 +2401,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 2691047424
         },
-        "notes": "expansion: dense nemotron arch coverage (distinct from nemotron_h_moe row)"
+        "notes": "expansion: dense nemotron arch coverage (distinct from nemotron_h_moe row)",
+        "class": "causal_generation"
       }
     },
     {
@@ -2281,6 +2432,7 @@
         ]
       },
       "certification": {
+        "architecture": "arcee",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -2293,7 +2445,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 2908474660
         },
-        "notes": "expansion: arcee/AFM arch coverage"
+        "notes": "expansion: arcee/AFM arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2323,6 +2476,7 @@
         ]
       },
       "certification": {
+        "architecture": "mpt",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2335,7 +2489,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 4388741120
         },
-        "notes": "expansion: mpt arch coverage"
+        "notes": "expansion: mpt arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2365,6 +2520,7 @@
         ]
       },
       "certification": {
+        "architecture": "apertus",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2377,7 +2533,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 5049991424
         },
-        "notes": "expansion: apertus arch coverage"
+        "notes": "expansion: apertus arch coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2407,6 +2564,7 @@
         ]
       },
       "certification": {
+        "architecture": "glm4",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -2419,7 +2577,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 6157238272
         },
-        "notes": "expansion: glm4/chatglm arch coverage (distinct from existing glm4 row arch chatglm: replaces it only if identical family label is rejected)"
+        "notes": "expansion: glm4/chatglm arch coverage (distinct from existing glm4 row arch chatglm: replaces it only if identical family label is rejected)",
+        "class": "causal_generation"
       }
     },
     {
@@ -2449,6 +2608,7 @@
         ]
       },
       "certification": {
+        "architecture": "afmoe",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2461,7 +2621,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 15815687168
         },
-        "notes": "downloaded AFMoE architecture coverage"
+        "notes": "downloaded AFMoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2491,6 +2652,7 @@
         ]
       },
       "certification": {
+        "architecture": "arwkv7",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -2503,7 +2665,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 5111586816
         },
-        "notes": "ARWKV recurrent architecture coverage"
+        "notes": "ARWKV recurrent architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2535,6 +2698,7 @@
         ]
       },
       "certification": {
+        "architecture": "bailingmoe3",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -2547,7 +2711,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 15796958848
         },
-        "notes": "hybrid three-recurrent-to-one-attention boundary sweep"
+        "notes": "hybrid three-recurrent-to-one-attention boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -2577,6 +2742,7 @@
         ]
       },
       "certification": {
+        "architecture": "chameleon",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2589,7 +2755,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 4272308224
         },
-        "notes": "downloaded Chameleon architecture coverage"
+        "notes": "downloaded Chameleon architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2620,6 +2787,7 @@
         ]
       },
       "certification": {
+        "architecture": "deepseek32",
         "profile": "full",
         "execution": {
           "trunk_layers": 4,
@@ -2632,7 +2800,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 16125871104
         },
-        "notes": "compact four-layer DeepSeek 3.2 architecture probe"
+        "notes": "compact four-layer DeepSeek 3.2 architecture probe",
+        "class": "causal_generation"
       }
     },
     {
@@ -2662,6 +2831,7 @@
         ]
       },
       "certification": {
+        "architecture": "dots1",
         "profile": "full",
         "execution": {
           "trunk_layers": 27,
@@ -2674,7 +2844,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 14296595968
         },
-        "notes": "downloaded dots1 MoE architecture coverage"
+        "notes": "downloaded dots1 MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2704,6 +2875,7 @@
         ]
       },
       "certification": {
+        "architecture": "ernie4_5",
         "profile": "full",
         "execution": {
           "trunk_layers": 18,
@@ -2716,7 +2888,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 238262272
         },
-        "notes": "small ERNIE 4.5 dense architecture probe"
+        "notes": "small ERNIE 4.5 dense architecture probe",
+        "class": "causal_generation"
       }
     },
     {
@@ -2746,6 +2919,7 @@
         ]
       },
       "certification": {
+        "architecture": "ernie4_5-moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -2758,7 +2932,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 13243429632
         },
-        "notes": "downloaded ERNIE 4.5 MoE architecture coverage"
+        "notes": "downloaded ERNIE 4.5 MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2788,6 +2963,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma3n",
         "profile": "full",
         "execution": {
           "trunk_layers": 35,
@@ -2800,7 +2976,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 4230498240
         },
-        "notes": "text-only Gemma 3n architecture coverage"
+        "notes": "text-only Gemma 3n architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2830,6 +3007,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma4",
         "profile": "full",
         "execution": {
           "trunk_layers": 42,
@@ -2854,7 +3032,8 @@
               "sha256": "debad39ab9c1152ab67695a674fb35e8375b2320c57bfd5075835d3ccb16c7db"
             }
           ]
-        }
+        },
+        "class": "causal_generation"
       }
     },
     {
@@ -2884,6 +3063,7 @@
         ]
       },
       "certification": {
+        "architecture": "gptneox",
         "profile": "full",
         "execution": {
           "trunk_layers": 44,
@@ -2896,7 +3076,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 13133230080
         },
-        "notes": "downloaded GPT-NeoX architecture coverage"
+        "notes": "downloaded GPT-NeoX architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2927,6 +3108,7 @@
         ]
       },
       "certification": {
+        "architecture": "granite_swa",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -2939,7 +3121,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 6044351680
         },
-        "notes": "Granite sliding-window MoE architecture coverage"
+        "notes": "Granite sliding-window MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2969,6 +3152,7 @@
         ]
       },
       "certification": {
+        "architecture": "granitemoe",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -2981,7 +3165,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 820107736
         },
-        "notes": "downloaded Granite MoE architecture coverage"
+        "notes": "downloaded Granite MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3011,6 +3196,7 @@
         ]
       },
       "certification": {
+        "architecture": "graniteswitch",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -3023,7 +3209,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 8424888320
         },
-        "notes": "Granite Switch adapter-router architecture coverage"
+        "notes": "Granite Switch adapter-router architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3053,6 +3240,7 @@
         ]
       },
       "certification": {
+        "architecture": "grovemoe",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -3065,7 +3253,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 20161329152
         },
-        "notes": "downloaded GroveMoE architecture coverage"
+        "notes": "downloaded GroveMoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3095,6 +3284,7 @@
         ]
       },
       "certification": {
+        "architecture": "hunyuan-dense",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -3107,7 +3297,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 1127990304
         },
-        "notes": "downloaded Hunyuan dense architecture coverage"
+        "notes": "downloaded Hunyuan dense architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3137,6 +3328,7 @@
         ]
       },
       "certification": {
+        "architecture": "hy_v3",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -3149,7 +3341,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 18231574016
         },
-        "notes": "downloaded Tencent HY v3 MoE architecture coverage"
+        "notes": "downloaded Tencent HY v3 MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3179,6 +3372,7 @@
         ]
       },
       "certification": {
+        "architecture": "jais",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -3191,7 +3385,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 8962816000
         },
-        "notes": "downloaded Jais architecture coverage"
+        "notes": "downloaded Jais architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3221,6 +3416,7 @@
         ]
       },
       "certification": {
+        "architecture": "jais2",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -3233,7 +3429,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 5097211392
         },
-        "notes": "gated Jais 2 artifact with locally verified immutable digest"
+        "notes": "gated Jais 2 artifact with locally verified immutable digest",
+        "class": "causal_generation"
       }
     },
     {
@@ -3265,6 +3462,7 @@
         ]
       },
       "certification": {
+        "architecture": "kimi-k3",
         "profile": "full",
         "execution": {
           "trunk_layers": 8,
@@ -3277,7 +3475,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 777396384
         },
-        "notes": "compact hybrid three-recurrent-to-one-attention boundary sweep"
+        "notes": "compact hybrid three-recurrent-to-one-attention boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -3310,6 +3509,7 @@
         ]
       },
       "certification": {
+        "architecture": "lfm2moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -3322,7 +3522,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 5129959168
         },
-        "notes": "LFM2 MoE hybrid recurrent boundary sweep"
+        "notes": "LFM2 MoE hybrid recurrent boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -3352,6 +3553,7 @@
         ]
       },
       "certification": {
+        "architecture": "maincoder",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -3364,7 +3566,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 666155520
         },
-        "notes": "downloaded Maincoder architecture coverage"
+        "notes": "downloaded Maincoder architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3395,6 +3598,7 @@
         ]
       },
       "certification": {
+        "architecture": "mellum",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -3407,7 +3611,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 8067705856
         },
-        "notes": "Mellum MoE sliding-window architecture coverage"
+        "notes": "Mellum MoE sliding-window architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3437,6 +3642,7 @@
         ]
       },
       "certification": {
+        "architecture": "minicpm",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -3449,7 +3655,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 4963831552
         },
-        "notes": "downloaded MiniCPM 4.1 architecture coverage"
+        "notes": "downloaded MiniCPM 4.1 architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3466,7 +3673,9 @@
         "gguf",
         "hybrid",
         "moe",
-        "recurrent"
+        "recurrent",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
@@ -3481,6 +3690,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen35moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -3493,7 +3703,20 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 10745596416
         },
-        "notes": "Qwen3.6 MoE gated-delta-net family with a four-layer full-attention interval"
+        "notes": "Qwen3.6 MoE gated-delta-net family with a four-layer full-attention interval; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+          "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 899283680,
+              "sha256": "8971ee4f331ff0a4c609374f32984b3d4e6dc086c0aa35f1d637fad1829e887f"
+            }
+          ]
+        }
       }
     },
     {
@@ -3525,6 +3748,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3vlmoe",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -3550,7 +3774,8 @@
               "sha256": "82a9966edfdbc1b18a27fd90af96d50cbf111a51484f6290e946dccf461c8150"
             }
           ]
-        }
+        },
+        "class": "causal_generation"
       }
     },
     {
@@ -3566,7 +3791,9 @@
       "capability_tags": [
         "gguf",
         "mla",
-        "moe"
+        "moe",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Mistral-Small-4-119B-2603-GGUF",
@@ -3581,6 +3808,7 @@
         ]
       },
       "certification": {
+        "architecture": "mistral4",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -3593,7 +3821,20 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 34916274176
         },
-        "notes": "Mistral Small 4 MoE and MLA architecture coverage"
+        "notes": "Mistral Small 4 MoE and MLA architecture coverage; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Mistral-Small-4-119B-2603-GGUF",
+          "revision": "bd93c721735aa32c035c0f19e738cb3371fd56ff",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 857078496,
+              "sha256": "8afb53096537664e248a0b4a9240c25677bb0f8a8cb5a5aad3cd1d608776a4e7"
+            }
+          ]
+        }
       }
     },
     {
@@ -3622,6 +3863,7 @@
         ]
       },
       "certification": {
+        "architecture": "step35",
         "profile": "full",
         "execution": {
           "trunk_layers": 45,
@@ -3634,7 +3876,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 41296256512
         },
-        "notes": "Step 3.5 Flash MoE with three leading dense blocks and mixed attention windows"
+        "notes": "Step 3.5 Flash MoE with three leading dense blocks and mixed attention windows",
+        "class": "causal_generation"
       }
     },
     {
@@ -3670,6 +3913,7 @@
         ]
       },
       "certification": {
+        "architecture": "mimo2",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -3682,7 +3926,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 64511067648
         },
-        "notes": "MiMo V2.5 MoE with three native NextN heads"
+        "notes": "MiMo V2.5 MoE with three native NextN heads",
+        "class": "causal_generation"
       }
     },
     {
@@ -3727,6 +3972,7 @@
         ]
       },
       "certification": {
+        "architecture": "minimax-m3",
         "profile": "full",
         "execution": {
           "trunk_layers": 60,
@@ -3739,7 +3985,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 128408977920
         },
-        "notes": "MiniMax M3 MoE with three leading dense blocks and sparse-attention state"
+        "notes": "MiniMax M3 MoE with three leading dense blocks and sparse-attention state",
+        "class": "causal_generation"
       }
     },
     {
@@ -3769,6 +4016,7 @@
         ]
       },
       "certification": {
+        "architecture": "spark2_5",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -3781,7 +4029,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 2594836480
         },
-        "notes": "Spark X2.5 dense mixed-window attention architecture coverage"
+        "notes": "Spark X2.5 dense mixed-window attention architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3789,7 +4038,6 @@
       "family": "smollm2",
       "suites": [
         "product-smoke",
-        "product-integration-smoke",
         "scripted-binary-smoke",
         "sdk-smoke"
       ],
@@ -4000,6 +4248,339 @@
       "notes": "SafeTensors direct-load fixture used across every supported load-time quantization."
     },
     {
+      "id": "family-nomic-bert-embedding",
+      "family": "nomic-bert-embedding",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly"
+      ],
+      "capability_tags": [
+        "gguf",
+        "embedding"
+      ],
+      "artifact": {
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+        "revision": "0188c9bf409793f810680a5a431e7b899c46104c",
+        "selector": "Q8_0",
+        "files": [
+          {
+            "path": "nomic-embed-text-v1.5.Q8_0.gguf",
+            "size_bytes": 146146432,
+            "sha256": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7"
+          }
+        ]
+      },
+      "certification": {
+        "class": "embedding",
+        "architecture": "nomic-bert",
+        "profile": "workload-oracle",
+        "execution": {
+          "trunk_layers": 12,
+          "mtp_layers": 0,
+          "activation_width": 768,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 145389792
+        },
+        "notes": "Local full-model embedding, HTTP and official SDK smoke, and pinned CPU monolithic batch/single-vector parity; staged tensor filtering is intentionally unsupported",
+        "evidence": {
+          "fixture": "scripts/workload_fixtures.py#EMBEDDING_INPUTS",
+          "comparison": "batch and individual vectors within 1e-4 coordinate error and 0.99999 cosine"
+        }
+      }
+    },
+    {
+      "id": "family-jina-bert-v2-rerank",
+      "family": "jina-bert-v2-rerank",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly"
+      ],
+      "capability_tags": [
+        "gguf",
+        "rerank"
+      ],
+      "artifact": {
+        "repo": "ggml-org/jina-reranker-v1-turbo-en-GGUF",
+        "revision": "607d8664c787e517e5d6e339d21f680f9002c931",
+        "selector": "F16",
+        "files": [
+          {
+            "path": "Jina-Bert-Implementation-38M-F16.gguf",
+            "size_bytes": 76971168,
+            "sha256": "71abc010bb3dce97812ee971509a5cb6ff6f6b8cfffd8480129242f605521fca"
+          }
+        ]
+      },
+      "certification": {
+        "class": "rerank",
+        "architecture": "jina-bert-v2",
+        "profile": "workload-oracle",
+        "execution": {
+          "trunk_layers": 6,
+          "mtp_layers": 0,
+          "activation_width": 384,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 75293188
+        },
+        "notes": "Local full-model cross-encoder rerank and HTTP smoke with pinned CPU monolithic score/order parity; staged tensor filtering is intentionally unsupported",
+        "evidence": {
+          "fixture": "scripts/workload_fixtures.py#RERANK_DOCUMENTS",
+          "comparison": "scores within 1e-4 and identical document order"
+        }
+      }
+    },
+    {
+      "id": "family-t5-encoder-decoder",
+      "family": "t5-encoder-decoder",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly"
+      ],
+      "capability_tags": [
+        "gguf",
+        "encoder_decoder"
+      ],
+      "artifact": {
+        "repo": "Felladrin/gguf-flan-t5-small",
+        "revision": "d71c51f67519edd3154527c2d8f20288bdde9705",
+        "selector": "Q8_0",
+        "files": [
+          {
+            "path": "flan-t5-small.Q8_0.gguf",
+            "size_bytes": 113709824,
+            "sha256": "f7f769c360b1ba830b10dd3b7e7d146dbcc4d487962be7dd806d7d52e0a9c2f0"
+          }
+        ]
+      },
+      "certification": {
+        "class": "encoder_decoder",
+        "architecture": "t5",
+        "profile": "workload-oracle",
+        "execution": {
+          "trunk_layers": 8,
+          "mtp_layers": 0,
+          "activation_width": 512,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 112678400
+        },
+        "notes": "Local full-model encoder-decoder generation and HTTP smoke with pinned CPU monolithic completion text parity; cross-attention staging is intentionally unsupported",
+        "evidence": {
+          "fixture": "scripts/workload_fixtures.py#ENCODER_DECODER_PROMPT",
+          "comparison": "identical normalized greedy text from pinned llama-completion"
+        }
+      }
+    },
+    {
+      "id": "family-paddleocr",
+      "family": "paddleocr",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly"
+      ],
+      "capability_tags": [
+        "gguf",
+        "ocr"
+      ],
+      "artifact": {
+        "repo": "PaddlePaddle/PaddleOCR-VL-1.6-GGUF",
+        "revision": "511b09642bb324401f15f97cc23bc67e8f0a291d",
+        "selector": "BF16",
+        "files": [
+          {
+            "path": "PaddleOCR-VL-1.6-GGUF.gguf",
+            "size_bytes": 935769056,
+            "sha256": "f3ae46ec885050acf4b3d31944431e1fd90d50664fb09126af4a3c050ba14ee8"
+          }
+        ]
+      },
+      "certification": {
+        "class": "ocr",
+        "architecture": "paddleocr",
+        "profile": "workload-oracle",
+        "execution": {
+          "trunk_layers": 18,
+          "mtp_layers": 0,
+          "activation_width": 1024,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 933384192,
+          "startup_timeout_secs": 900
+        },
+        "notes": "Local full-model OCR and HTTP smoke with the pinned PaddleOCR projector and mandatory generated-image monolithic parity; projector and trunk remain colocated",
+        "evidence": {
+          "fixture": "scripts/generate-ocr-oracle-fixture.py#MESH 42",
+          "comparison": "normalized monolithic text parity plus independent MESH 42 label"
+        },
+        "mmproj_artifact": {
+          "repo": "PaddlePaddle/PaddleOCR-VL-1.6-GGUF",
+          "revision": "511b09642bb324401f15f97cc23bc67e8f0a291d",
+          "selector": "BF16",
+          "files": [
+            {
+              "path": "PaddleOCR-VL-1.6-GGUF-mmproj.gguf",
+              "size_bytes": 881770560,
+              "sha256": "204d757d7610d9b3faab10d506d69e5b244e32bf765e2bab2d0167e65e0a058a"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "family-qwen3tts",
+      "family": "qwen3tts",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly"
+      ],
+      "capability_tags": [
+        "gguf",
+        "speech_synthesis"
+      ],
+      "artifact": {
+        "repo": "ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+        "revision": "ca27d74bc954b73dadab5b71ca265d87fc861a7c",
+        "selector": "Q8_0",
+        "files": [
+          {
+            "path": "Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf",
+            "size_bytes": 1847874400,
+            "sha256": "ac7931aeb2e7aad1a6ed6602d353a5679c9d096b18ce8204ac730a8408d572e1"
+          }
+        ]
+      },
+      "certification": {
+        "class": "speech_synthesis",
+        "architecture": "qwen3tts",
+        "profile": "workload-oracle",
+        "execution": {
+          "trunk_layers": 28,
+          "mtp_layers": 0,
+          "activation_width": 2048,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 1841844224,
+          "startup_timeout_secs": 600
+        },
+        "notes": "Local full-model speech-synthesis and HTTP WAV smoke with deterministic pinned monolithic PCM parity; distributed staging is intentionally unsupported",
+        "evidence": {
+          "fixture": "scripts/skippy-tts-oracle.py#PROMPT",
+          "comparison": "fixed-seed PCM format and length; RMS error at most 2 percent and waveform cosine at least 0.9995"
+        },
+        "mmproj_artifact": {
+          "repo": "ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+          "revision": "ca27d74bc954b73dadab5b71ca265d87fc861a7c",
+          "selector": "Q8_0",
+          "files": [
+            {
+              "path": "mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf",
+              "size_bytes": 446422912,
+              "sha256": "6fd65188839bcd6ecc91b277ad471e22a0edfada4699a0fe82f1165c18cfcce2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "family-ultravox",
+      "family": "ultravox",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly"
+      ],
+      "capability_tags": [
+        "gguf",
+        "speech_recognition"
+      ],
+      "artifact": {
+        "repo": "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF",
+        "revision": "5390c7c41cbd6f261f7f205fc0c5ae61bbdca650",
+        "selector": "Q8_0",
+        "files": [
+          {
+            "path": "Llama-3.2-1B-Instruct-Q8_0.gguf",
+            "size_bytes": 1321083008,
+            "sha256": "432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3"
+          }
+        ]
+      },
+      "certification": {
+        "class": "speech_recognition",
+        "architecture": "llama",
+        "profile": "workload-oracle",
+        "execution": {
+          "trunk_layers": 16,
+          "mtp_layers": 0,
+          "activation_width": 2048,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 1313251456,
+          "startup_timeout_secs": 600
+        },
+        "notes": "Local full-model audio-to-text and HTTP smoke with the pinned Ultravox projector and monolithic transcript parity; unlabeled WAV does not establish transcription accuracy",
+        "evidence": {
+          "fixture": "ci/llama-canary/fixtures/audio-smoke.wav",
+          "comparison": "identical normalized transcript against pinned llama-server; fixture is unlabeled"
+        },
+        "mmproj_artifact": {
+          "repo": "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF",
+          "revision": "5390c7c41cbd6f261f7f205fc0c5ae61bbdca650",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-ultravox-v0_5-llama-3_2-1b-f16.gguf",
+              "size_bytes": 1371123616,
+              "sha256": "b34dde1835752949d6b960528269af93c92fec91c61ea0534fcc73f96c1ed8b2"
+            }
+          ]
+        }
+      }
+    },
+    {
       "id": "family-inkling",
       "family": "inkling",
       "suites": [
@@ -4021,36 +4602,33 @@
       "artifact": {
         "repo": "unsloth/Inkling-Small-GGUF",
         "revision": "1a19ef82883cb7b9c581b93c30ea252dabbf658d",
-        "selector": "UD-Q4_K_M",
+        "selector": "UD-Q3_K_XL",
         "files": [
           {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00001-of-00005.gguf",
+            "path": "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00001-of-00004.gguf",
             "size_bytes": 12986592,
-            "sha256": "a51ac3f439198f2817219edd582be4b600c273be24e78cbd58ebff982d9f007e"
+            "sha256": "110190a3c20fbc6d9783125184e470ab7479a79bee7bdf4b5ceda2a6a736f496"
           },
           {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00002-of-00005.gguf",
-            "size_bytes": 48810843872,
-            "sha256": "3dccdd473cc3a191e6028f6105b01831ed3a8dc30ec4e02679f9e0c2ccb59671"
+            "path": "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00002-of-00004.gguf",
+            "size_bytes": 49513784096,
+            "sha256": "8df5f2d79e206f7edfc811303c352734c95dc05a2e6c7bc0192c967fdd783d7f"
           },
           {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00003-of-00005.gguf",
-            "size_bytes": 49237390240,
-            "sha256": "1a7edf29bda1d278b4668e1a082d7db634b845a53ea58c918a8cea1f9006c21c"
+            "path": "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00003-of-00004.gguf",
+            "size_bytes": 49969966752,
+            "sha256": "6078bcbe08ad005feb3cfd87dd2a21258101197bcefee9d7d6c65eb94317f4bb"
           },
           {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00004-of-00005.gguf",
-            "size_bytes": 49458817088,
-            "sha256": "376f67568438da96b10566730e8a9e17e3f665ab1b9d82eba48ec33708b172f7"
-          },
-          {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00005-of-00005.gguf",
-            "size_bytes": 15017569600,
-            "sha256": "e34364af0d04d2d295bc374f1a4fa80002e4277db1bcf4b56240dbd443ac21d3"
+            "path": "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00004-of-00004.gguf",
+            "size_bytes": 20057642400,
+            "sha256": "dd0f2e32d7ca2fabb7b1c40e8bcbc1f951e8271c42b31f8c318c002b7cdc4209"
           }
         ]
       },
       "certification": {
+        "class": "causal_generation",
+        "architecture": "inkling",
         "profile": "full",
         "execution": {
           "trunk_layers": 42,
@@ -4073,10 +4651,10 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 162524557480,
+          "estimated_model_bytes": 119541330088,
           "startup_timeout_secs": 1800
         },
-        "notes": "Inkling-Small MoE with per-layer short-convolution state and real split image-projector coverage"
+        "notes": "Inkling-Small MoE with per-layer short-convolution state, a Q3 quant sized for the single-host certification runner, and real split image-projector coverage"
       }
     },
     {
@@ -4092,7 +4670,9 @@
       "capability_tags": [
         "gguf",
         "moe",
-        "multipart"
+        "multipart",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF",
@@ -4112,6 +4692,8 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
+        "architecture": "llama4",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -4125,8 +4707,52 @@
           "estimated_model_bytes": 65346798336,
           "startup_timeout_secs": 1800
         },
-        "notes": "Llama 4 Scout MoE with single-split, chained-split, and exact-state certification"
+        "notes": "Llama 4 Scout MoE with single-split, chained-split, and exact-state certification; pinned projector with local and split image smoke",
+        "mmproj_artifact": {
+          "repo": "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF",
+          "revision": "72a6853f56a66dc13a3a4b6bdc9cf7ee4c364b47",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 1746780928,
+              "sha256": "70240ddf9daa0a91570a0975c0480044cb6b84bea427feb52bc0226df682fdeb"
+            }
+          ]
+        }
       }
+    },
+    {
+      "id": "family-diffusion-gemma",
+      "family": "diffusion-gemma",
+      "suites": [
+        "skippy-system-one-smoke"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "capability_tags": [
+        "diffusion",
+        "gguf",
+        "system-one",
+        "text-only"
+      ],
+      "artifact": {
+        "repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
+        "revision": "f4183a2c7a354128d02545752303c4354d165bf0",
+        "selector": "Q4_K_M",
+        "files": [
+          {
+            "path": "diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+            "size_bytes": 16806810208,
+            "sha256": "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5"
+          }
+        ]
+      },
+      "notes": "System One (OpenJEV) smoke: complete single-lane DiffusionGemma read consumed by scripts/skippy-system-one-smoke.sh. The proof of concept certifies a CUDA backend only."
     }
   ]
 }

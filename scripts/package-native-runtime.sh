@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Emit one LC_RPATH path per line. `otool -l` prints `path <value> (offset N)`
+# and <value> may contain spaces, so take everything between the keyword and the
+# trailing offset rather than a single whitespace field.
+rpath_paths() {
+    awk '
+        $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+        in_rpath && $1 == "path" {
+            line = $0
+            sub(/^[[:space:]]*path[[:space:]]+/, "", line)
+            sub(/[[:space:]]+\(offset[[:space:]]+[0-9]+\)[[:space:]]*$/, "", line)
+            print line
+            in_rpath = 0
+        }
+    '
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -573,10 +589,23 @@ rewrite_macos_runtime_paths() {
         library="$stage_dir/$rel_path"
         name="$(basename "$library")"
         install_name_tool -id "@rpath/$name" "$library"
-        if ! otool -l "$library" | awk '
-            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
-            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
-        ' | grep -qx '@loader_path'; then
+        # Strip every rpath inherited from the build tree. dyld searches LC_RPATH
+        # entries in order, so a leftover absolute build-dir path ahead of
+        # @loader_path makes a packaged bundle resolve its siblings out of
+        # .deps/llama-build instead of out of itself. That fails only on the
+        # machine that built the bundle, and when another llama pin has since been
+        # built there it fails silently by loading the wrong library generation.
+        while IFS= read -r stale_rpath; do
+            [[ -z "$stale_rpath" || "$stale_rpath" == '@loader_path' ]] && continue
+            # A swallowed failure here leaves a build-tree rpath in a bundle that
+            # then passes the @loader_path check below, which is the exact silent
+            # wrong-library load this function exists to prevent.
+            if ! install_name_tool -delete_rpath "$stale_rpath" "$library"; then
+                echo "error: failed to delete rpath '$stale_rpath' from $library" >&2
+                return 1
+            fi
+        done < <(otool -l "$library" | rpath_paths)
+        if ! otool -l "$library" | rpath_paths | grep -qx '@loader_path'; then
             install_name_tool -add_rpath "@loader_path" "$library"
         fi
     done
@@ -620,12 +649,19 @@ if [[ -z "$TARGET_TRIPLE" ]]; then
     exit 1
 fi
 
+# The build directory is keyed by the checkout's pin stamp, so it can only be
+# resolved after the pin is prepared. Resolving first would key the new pin's
+# build to the previous stamp -- or to no stamp at all on a fresh checkout --
+# and quietly build into the directory this keying exists to separate.
+if [[ "$BUILD" == "1" ]]; then
+    "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
+fi
+
 if [[ -z "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
     LLAMA_STAGE_BUILD_DIR="$(LLAMA_STAGE_LINK_MODE=dynamic LLAMA_STAGE_BACKEND="$(build_backend)" "$SCRIPT_DIR/build-llama.sh" --print-build-dir)"
 fi
 
 if [[ "$BUILD" == "1" ]]; then
-    "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
     env \
         LLAMA_STAGE_LINK_MODE=dynamic \
         LLAMA_STAGE_BACKEND="$(build_backend)" \
@@ -783,6 +819,8 @@ manifest_args+=(-- "${linux_relocatable_library_paths[@]}")
 import json
 import hashlib
 import os
+import re
+import subprocess
 import sys
 
 manifest_path = sys.argv[1]
@@ -821,6 +859,38 @@ def file_sha256(path):
             digest.update(chunk)
     return digest.hexdigest()
 
+def packaged_glibc_requirement(paths):
+    if "$runtime_os" != "linux":
+        return None
+    requirements = []
+    readelf_env = os.environ.copy()
+    readelf_env["LC_ALL"] = "C"
+    for relative_path in paths:
+        path = os.path.join(os.path.dirname(manifest_path), relative_path)
+        with open(path, "rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                continue
+        output = subprocess.run(
+            ["readelf", "-V", path], check=True, capture_output=True, text=True,
+            env=readelf_env,
+        ).stdout
+        _, heading, needs = output.partition("Version needs section")
+        if heading:
+            def glibc_requirement(version):
+                if version == "GLIBC_ABI_DT_RELR":
+                    return (2, 36)
+                major, minor = version.removeprefix("GLIBC_").split(".")
+                return (int(major), int(minor))
+
+            requirements.extend(
+                glibc_requirement(version)
+                for version in re.findall(r"GLIBC_(?:\d+\.\d+|ABI_DT_RELR)", needs)
+            )
+    if not requirements:
+        return None
+    major, minor = max(requirements)
+    return f"{major}.{minor}"
+
 files = {
     path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
     for path in [*library_paths, *license_paths]
@@ -829,6 +899,7 @@ tools = {
     path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
     for path in tool_paths
 }
+min_glibc = packaged_glibc_requirement([*library_paths, *tool_paths])
 backend_manifest = {"kind": kind}
 if kind == "cuda":
     backend_manifest["cuda"] = {
@@ -860,6 +931,7 @@ manifest = {
             "os": "$runtime_os",
             "arch": "$runtime_arch",
             "target": "$TARGET_TRIPLE",
+            "min_glibc": min_glibc,
         },
         "backend": backend_manifest,
         "rank": int(os.environ.get("MESH_LLM_NATIVE_RUNTIME_RANK") or 0),

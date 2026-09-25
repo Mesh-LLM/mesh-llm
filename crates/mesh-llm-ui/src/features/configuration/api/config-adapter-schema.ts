@@ -25,6 +25,7 @@ import type {
 } from './config-adapter-types'
 import { combineSettingsHarnessData } from './config-adapter-schema-values'
 import { rendererIdForEntry } from './config-adapter-schema-placement'
+import { configSectionForPath, lastPathSegment } from './config-adapter-paths'
 
 export {
   DEFAULT_MODEL_PLACEMENT_PATHS,
@@ -226,25 +227,6 @@ const DEFAULTS_CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory>
 
 function settingIdFromPath(canonicalPath: string) {
   return canonicalPath
-}
-
-function lastPathSegment(canonicalPath: string) {
-  return canonicalPath.split('.').filter(Boolean).at(-1) ?? canonicalPath
-}
-
-function defaultsSectionForPath(canonicalPath: string) {
-  const segments = canonicalPath.split('.')
-  if (segments[0] !== 'defaults') return undefined
-  if (segments[1] === 'advanced' && segments[2] === 'server') return 'defaults.advanced.server'
-  return segments.length >= 2 ? `defaults.${segments[1]}` : undefined
-}
-
-function configSectionForPath(canonicalPath: string) {
-  if (canonicalPath.startsWith('plugin.')) return undefined
-  const segments = canonicalPath.split('.').filter(Boolean)
-  if (segments.length <= 1) return undefined
-  if (segments[0] === 'defaults') return defaultsSectionForPath(canonicalPath)
-  return segments.slice(0, -1).join('.')
 }
 
 function categoryForDefaultsPath(canonicalPath: string) {

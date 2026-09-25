@@ -19,8 +19,67 @@ pub const FEATURE_KV_EVENTS: u64 = 1 << 33;
 pub const FEATURE_DEVICE_EVENTS: u64 = 1 << 34;
 pub const FEATURE_DIAGNOSTIC_EVENTS: u64 = 1 << 35;
 pub const FEATURE_UNLOAD_EVENTS: u64 = 1 << 36;
-pub const FEATURE_CACHEGEN_KV_PAGE: u64 = 1 << 37;
+/// Full-model workloads use a separate bit from all runtime-event families.
+pub const FEATURE_NON_CHAT_WORKLOADS: u64 = 1 << 37;
+pub const FEATURE_SYSTEM_ONE: u64 = 1 << 38;
+pub const FEATURE_CACHEGEN_KV_PAGE: u64 = 1 << 39;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
+pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(i32)]
+pub enum WorkloadKind {
+    #[default]
+    CausalGeneration = 0,
+    Embedding = 1,
+    Rerank = 2,
+    EncoderDecoder = 3,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(i32)]
+pub enum WorkloadPooling {
+    Unspecified = -1,
+    #[default]
+    None = 0,
+    Mean = 1,
+    Cls = 2,
+    Last = 3,
+    Rank = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WorkloadInfoV1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub kind: WorkloadKind,
+    pub pooling: WorkloadPooling,
+    pub output_dimensions: u32,
+    pub classifier_outputs: u32,
+    pub has_encoder: bool,
+    pub has_decoder: bool,
+    pub full_model_only: bool,
+    pub reserved0: u8,
+}
+
+impl Default for WorkloadInfoV1 {
+    /// Initialize the workload descriptor with its ABI size and version.
+    fn default() -> Self {
+        Self {
+            abi_version: WORKLOAD_INFO_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<Self>() as u32,
+            kind: WorkloadKind::default(),
+            pooling: WorkloadPooling::default(),
+            output_dimensions: 0,
+            classifier_outputs: 0,
+            has_encoder: false,
+            has_decoder: false,
+            full_model_only: true,
+            reserved0: 0,
+        }
+    }
+}
 
 pub type ModelReadTensorF32Callback = Option<
     unsafe extern "C" fn(
@@ -63,6 +122,14 @@ pub struct IterationRequest {
     pub input_desc: *const crate::ActivationDesc,
     pub input_payload: *const c_void,
     pub sample_last: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemOneSlot {
+    pub canvas_position: u32,
+    pub label_token_offset: usize,
+    pub label_token_count: usize,
 }
 
 #[repr(C)]
@@ -329,17 +396,15 @@ pub struct RuntimeConfig {
     pub disable_repack: bool,
     pub use_mmap_prefetch: bool,
     pub use_mmap_buffer: bool,
-    pub filter_tensors_on_load: bool,
     pub resident_tensor_names: *const *const c_char,
     pub resident_tensor_name_count: usize,
+    pub execution_contract: *const c_char,
     pub activation_import_identities: *const *const c_char,
     pub activation_import_identity_count: usize,
     pub activation_import_bindings: *const *const c_char,
     pub activation_export_identities: *const *const c_char,
     pub activation_export_identity_count: usize,
     pub activation_export_bindings: *const *const c_char,
-    pub include_embeddings: bool,
-    pub include_output: bool,
     pub mtp_source: MtpSource,
     pub selected_backend_device: *const c_char,
     pub glm_dsa_policy_profile: i32,
@@ -417,9 +482,27 @@ pub type SkippyDecodeStepSampledMtpFn = unsafe extern "C" fn(
     out_error: *mut *mut Error,
 ) -> Status;
 
-#[repr(C)]
-pub struct SlicePlan {
-    _private: [u8; 0],
-}
-
 pub type Opaque = c_void;
+
+/// `llama_perf_context`, resolved dynamically when the runtime exports it and
+/// called directly when the runtime is linked statically.
+pub type LlamaPerfContextFn = unsafe extern "C" fn(ctx: *mut Opaque) -> LlamaPerfContextData;
+
+/// Mirrors `llama_perf_context_data` from llama.h.
+///
+/// `n_reused` is the number of times a compute graph was reused instead of
+/// rebuilt. It is the only direct read on whether graph reuse is firing under
+/// real load, and nothing on the host could see it before: the counter stopped
+/// at the C++ boundary, so the reuse hit rate had to be inferred from
+/// throughput deltas.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LlamaPerfContextData {
+    pub t_start_ms: f64,
+    pub t_load_ms: f64,
+    pub t_p_eval_ms: f64,
+    pub t_eval_ms: f64,
+    pub n_p_eval: i32,
+    pub n_eval: i32,
+    pub n_reused: i32,
+}

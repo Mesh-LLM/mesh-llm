@@ -2,9 +2,9 @@
 //! and peer list management (add/remove/update).
 
 use super::{
-    DEAD_PEER_TTL, InviteTokenMaterial, MeshOperationalEvent, MeshPeerRemovalReason,
-    MeshPolicyRejectionReason, Node, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS,
-    PeerAnnouncement, PeerInfo, connect_mesh, elapsed_ms_u64, emit_mesh_info,
+    DEAD_PEER_TTL, DEPARTED_PEER_TRANSITIVE_BLOCK_TTL, InviteTokenMaterial, MeshOperationalEvent,
+    MeshPeerRemovalReason, MeshPolicyRejectionReason, Node, PEER_CONNECT_AND_GOSSIP_TIMEOUT,
+    PEER_STALE_SECS, PeerAnnouncement, PeerInfo, connect_mesh, elapsed_ms_u64, emit_mesh_info,
     mesh_peer_operational_context, parse_invite_token, record_mesh_operational_event,
     record_mesh_operational_event_with_context,
 };
@@ -180,6 +180,7 @@ impl Node {
         let (recovered_from_dead, prior_state) = {
             let mut state = self.state.lock().await;
             let recovered_from_dead = state.dead_peers.remove(&context.remote).is_some();
+            state.departed_peers.remove(&context.remote);
             let prior_state = state
                 .peers
                 .get(&context.remote)
@@ -934,6 +935,7 @@ impl Node {
         {
             let mut state = self.state.lock().await;
             state.dead_peers.remove(&peer_id);
+            state.departed_peers.remove(&peer_id);
             state.connections.insert(peer_id, conn.clone());
         }
         let node_for_dispatch = self.clone();
@@ -1219,6 +1221,7 @@ impl Node {
         // If this peer was previously dead, clear it — add_peer is only called
         // after a successful gossip exchange, which is proof of life.
         let recovered = state.dead_peers.remove(&id).is_some();
+        state.departed_peers.remove(&id);
         if recovered {
             super::emit_mesh_info(format!(
                 "🔄 Peer {} back from the dead (successful gossip)",
@@ -1328,6 +1331,17 @@ impl Node {
             .dead_peers
             .get(&id)
             .is_some_and(|t| t.elapsed() < DEAD_PEER_TTL)
+        {
+            return;
+        }
+        // Issue #1756: even after DEAD_PEER_TTL expires, a departed id stays
+        // barred from transitive re-admission so a bridge's stale
+        // announcement cannot resurrect a ghost `state: serving` entry for a
+        // genuinely gone peer. Only direct proof of life clears this early.
+        if state
+            .departed_peers
+            .get(&id)
+            .is_some_and(|t| t.elapsed() < DEPARTED_PEER_TRANSITIVE_BLOCK_TTL)
         {
             return;
         }

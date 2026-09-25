@@ -26,10 +26,35 @@ fn chat_sampling_metadata_for_native(metadata_json: &str) -> &str {
     }
 }
 
+/// Graph reuse counters read from the native context.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GraphReuseStats {
+    pub graphs_reused: u64,
+    pub tokens_evaluated: u64,
+}
+
+impl GraphReuseStats {
+    /// Graph reuses per single-token evaluation, if any evaluation happened.
+    ///
+    /// `tokens_evaluated` counts single-token decode calls -- llama.cpp routes
+    /// multi-token work to the prompt-eval counters -- while a reuse on a
+    /// multi-token decode still increments the numerator, so a batched or
+    /// speculative step can push this above 1. The raw counters are the
+    /// authoritative fields for diagnosis.
+    pub fn reuse_rate(self) -> Option<f64> {
+        (self.tokens_evaluated > 0)
+            .then(|| self.graphs_reused as f64 / self.tokens_evaluated as f64)
+    }
+}
+
 pub struct StageSession {
     pub(crate) raw: *mut RawSession,
     pub(crate) token_count: u64,
-    pub(crate) include_output: bool,
+    pub(crate) terminal_stage: bool,
+    /// Whether one native batch may carry activation exports for more than one
+    /// request. False for memory layouts that split an all-output batch by
+    /// sequence, where only the last microbatch's exports stay live.
+    pub(crate) batched_activation_exports: bool,
 }
 
 pub struct DecodeBatchRequest<'a> {
@@ -55,6 +80,27 @@ fn validate_native_sequence_id(sequence_id: i32) -> Result<i32> {
 unsafe impl Send for StageSession {}
 
 impl StageSession {
+    /// Graph reuse counters for this session's llama context.
+    ///
+    /// `n_reused` counts compute graphs reused instead of rebuilt; `n_eval`
+    /// counts generated tokens. Together they give the reuse hit rate under
+    /// real load, which until now could only be inferred from throughput
+    /// deltas between builds -- an inference that cannot separate "reuse is
+    /// firing and the residual cost is elsewhere" from "reuse is not firing".
+    pub fn graph_reuse_stats(&self) -> Option<GraphReuseStats> {
+        let ctx = unsafe { skippy_ffi::skippy_session_llama_context(self.raw) };
+        if ctx.is_null() {
+            return None;
+        }
+        // Optional symbol: a runtime without it simply reports no stats.
+        let perf_fn = skippy_ffi::llama_perf_context_optional()?;
+        let perf = unsafe { perf_fn(ctx) };
+        Some(GraphReuseStats {
+            graphs_reused: perf.n_reused.max(0) as u64,
+            tokens_evaluated: perf.n_eval.max(0) as u64,
+        })
+    }
+
     pub fn token_count(&self) -> u64 {
         self.token_count
     }
@@ -85,6 +131,76 @@ impl StageSession {
         ensure_ok(status, error)?;
         self.token_count = 0;
         Ok(())
+    }
+
+    /// Produce one native pooled vector with a positive, caller-verified dimension.
+    pub fn embed(&mut self, token_ids: &[i32], dimensions: usize) -> Result<Vec<f32>> {
+        if dimensions == 0 {
+            return Err(anyhow!("embedding dimensions must be greater than zero"));
+        }
+        let mut output = vec![0.0_f32; dimensions];
+        let mut actual_dimensions = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_embed(
+                self.raw,
+                token_ids.as_ptr(),
+                token_ids.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut actual_dimensions,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        if actual_dimensions != dimensions {
+            return Err(anyhow!(
+                "native embedding dimensions changed from {dimensions} to {actual_dimensions}"
+            ));
+        }
+        self.token_count = u64::try_from(token_ids.len()).context("token count exceeds u64")?;
+        Ok(output)
+    }
+
+    /// Score a query/document pair and return the native template's consumed tokens.
+    pub fn rerank(&mut self, query: &str, document: &str) -> Result<(f32, usize)> {
+        let query = CString::new(query).context("rerank query contains an interior NUL byte")?;
+        let document =
+            CString::new(document).context("rerank document contains an interior NUL byte")?;
+        let mut score = 0.0_f32;
+        let mut token_count = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_rerank(
+                self.raw,
+                query.as_ptr(),
+                document.as_ptr(),
+                &mut score,
+                &mut token_count,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        self.token_count = u64::try_from(token_count).context("token count exceeds u64")?;
+        Ok((score, token_count))
+    }
+
+    /// Encode source tokens and reset decoder position, returning its first input token.
+    pub fn encode_prompt(&mut self, token_ids: &[i32]) -> Result<i32> {
+        let mut decoder_start_token = 0_i32;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_encode_prompt(
+                self.raw,
+                token_ids.as_ptr(),
+                token_ids.len(),
+                &mut decoder_start_token,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        self.token_count = 0;
+        Ok(decoder_start_token)
     }
 
     pub fn configure_chat_sampling(
@@ -474,5 +590,41 @@ mod tests {
         );
         let grammar = r#"{"grammar":"root ::= \"ok\""}"#;
         assert_eq!(chat_sampling_metadata_for_native(grammar), grammar);
+    }
+}
+
+#[cfg(test)]
+mod graph_reuse_stats_tests {
+    use super::GraphReuseStats;
+
+    #[test]
+    fn reuse_rate_is_none_without_evaluations() {
+        assert_eq!(GraphReuseStats::default().reuse_rate(), None);
+        assert_eq!(
+            GraphReuseStats {
+                graphs_reused: 5,
+                tokens_evaluated: 0
+            }
+            .reuse_rate(),
+            None
+        );
+    }
+
+    #[test]
+    fn reuse_rate_is_reused_over_evaluated() {
+        let stats = GraphReuseStats {
+            graphs_reused: 37,
+            tokens_evaluated: 100,
+        };
+        assert_eq!(stats.reuse_rate(), Some(0.37));
+    }
+
+    #[test]
+    fn full_reuse_reports_one() {
+        let stats = GraphReuseStats {
+            graphs_reused: 64,
+            tokens_evaluated: 64,
+        };
+        assert_eq!(stats.reuse_rate(), Some(1.0));
     }
 }

@@ -780,15 +780,22 @@ fn terminal_outcome(result: OpenAiTerminalResult) -> TerminalOutcome {
     }
 }
 
+/// Map backend operations to bounded labels, separating non-chat and streaming workloads.
 const fn operation_label(operation: OpenAiBackendOperation) -> &'static str {
     match operation {
         OpenAiBackendOperation::Models => "models",
+        OpenAiBackendOperation::Embeddings => "embeddings",
+        OpenAiBackendOperation::Rerank => "rerank",
+        OpenAiBackendOperation::AudioSpeech => "audio_speech",
+        OpenAiBackendOperation::AudioTranscription => "audio_transcription",
+        OpenAiBackendOperation::AudioTranslation => "audio_translation",
         OpenAiBackendOperation::ChatCompletion => "chat_completion",
         OpenAiBackendOperation::ChatCompletionStream => "chat_completion_stream",
         OpenAiBackendOperation::Completion => "completion",
         OpenAiBackendOperation::CompletionStream => "completion_stream",
         OpenAiBackendOperation::Responses => "responses",
         OpenAiBackendOperation::ResponsesStream => "responses_stream",
+        OpenAiBackendOperation::SystemOne => "system_one",
     }
 }
 
@@ -1394,6 +1401,10 @@ mod tests {
             })
             .expect("event should serialize"),
             r#"{"type":"route_selected","provider":"openai_frontend","engine":"responses"}"#
+        );
+        assert_eq!(
+            operation_label(OpenAiBackendOperation::SystemOne),
+            "system_one"
         );
     }
 

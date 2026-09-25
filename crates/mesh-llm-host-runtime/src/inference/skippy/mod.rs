@@ -30,11 +30,12 @@ use std::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use openai_frontend::{
+    AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompactingOpenAiBackend,
-    CompactionConfig, CompletionRequest, CompletionResponse, CompletionStream,
-    GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle,
+    CompactionConfig, CompletionRequest, CompletionResponse, CompletionStream, EmbeddingResponse,
+    EmbeddingsRequest, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle,
     GuardrailTelemetrySink, ModelObject, OpenAiBackend, OpenAiHookPolicy, OpenAiRequestContext,
-    OpenAiResult,
+    OpenAiResult, RerankRequest, RerankResponse,
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, StageKvCacheConfig};
 use skippy_runtime::{ModelInfo, MtpSource};
@@ -86,7 +87,7 @@ pub(crate) use resolver::{
     resolve_skippy_config_for_selector_with_publisher_defaults,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
-pub(crate) use split_certification::{require_split_certification, split_certification_label};
+pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;
 pub(crate) use stage::{
@@ -669,6 +670,27 @@ impl SkippyModelHandle {
         self.runtime.output_activation_boundary()
     }
 
+    /// Classify the loaded native runtime, including speech-capable projectors.
+    pub(crate) fn workload_class(&self) -> Result<crate::mesh::ModelWorkloadClass> {
+        if self.runtime.supports_speech_synthesis() {
+            return Ok(crate::mesh::ModelWorkloadClass::SpeechSynthesis);
+        }
+        let workload = self
+            .runtime
+            .workload_info()
+            .context("read loaded model workload contract")?;
+        Ok(match workload.kind {
+            skippy_runtime::ModelWorkload::CausalGeneration => {
+                crate::mesh::ModelWorkloadClass::CausalGeneration
+            }
+            skippy_runtime::ModelWorkload::Embedding => crate::mesh::ModelWorkloadClass::Embedding,
+            skippy_runtime::ModelWorkload::Rerank => crate::mesh::ModelWorkloadClass::Rerank,
+            skippy_runtime::ModelWorkload::EncoderDecoder => {
+                crate::mesh::ModelWorkloadClass::EncoderDecoder
+            }
+        })
+    }
+
     fn resolved_mtp_source(
         native_mtp_enabled: bool,
         native_mtp_draft_model_path: Option<&Path>,
@@ -994,6 +1016,9 @@ impl SkippyModelHandle {
             Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
             guardrails.telemetry.guardrail_sink(),
         );
+        // Registered last so a failed load cannot leave a stale meter behind
+        // for a run id that never serves.
+        register_stage0_compute_meter(&runtime_config.run_id, &runtime);
         lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
@@ -1080,6 +1105,9 @@ impl SkippyModelHandle {
             Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
             guardrails.telemetry.guardrail_sink(),
         );
+        // Registered last so a failed load cannot leave a stale meter behind
+        // for a run id that never serves.
+        register_stage0_compute_meter(&runtime_config.run_id, &runtime);
         lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
@@ -1238,6 +1266,51 @@ impl OpenAiBackend for SkippyModelHandle {
     ) -> OpenAiResult<CompletionStream> {
         self.backend.completion_stream(request, context).await
     }
+
+    /// Forward embeddings and request context without chat processing.
+    async fn embeddings(
+        &self,
+        request: EmbeddingsRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<EmbeddingResponse> {
+        self.backend.embeddings(request, context).await
+    }
+
+    /// Forward reranking and request context without chat processing.
+    async fn rerank(
+        &self,
+        request: RerankRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<RerankResponse> {
+        self.backend.rerank(request, context).await
+    }
+
+    /// Forward speech generation and request context unchanged.
+    async fn audio_speech(
+        &self,
+        request: AudioSpeechRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioResponse> {
+        self.backend.audio_speech(request, context).await
+    }
+
+    /// Forward multipart transcription and request context unchanged.
+    async fn audio_transcription(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.backend.audio_transcription(request, context).await
+    }
+
+    /// Forward multipart translation and request context unchanged.
+    async fn audio_translation(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.backend.audio_translation(request, context).await
+    }
 }
 
 pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<StageConfig> {
@@ -1328,8 +1401,8 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         kv_unified: options.kv_unified,
         swa_full: options.swa_full,
         cache_idle_slots: options.cache_idle_slots,
-        filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
         activation_export_identities: Vec::new(),
@@ -1476,6 +1549,39 @@ fn now_unix_nanos() -> i64 {
         .unwrap_or(0)
 }
 
+/// Stage-0 compute meters of running split generations, keyed by run id, so
+/// the split coordinator can read the local stage's busy time alongside the
+/// peer stages' reported status.
+static STAGE0_COMPUTE_METERS: std::sync::LazyLock<
+    std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            std::sync::Arc<skippy_server::compute_meter::StageComputeMeter>,
+        >,
+    >,
+> = std::sync::LazyLock::new(Default::default);
+
+fn register_stage0_compute_meter(run_id: &str, runtime: &SkippyRuntimeHandle) {
+    let Ok(state) = runtime.runtime().lock().map(|state| state.compute_meter()) else {
+        return;
+    };
+    if let Ok(mut meters) = STAGE0_COMPUTE_METERS.lock() {
+        meters.insert(run_id.to_string(), state);
+    }
+}
+
+pub(crate) fn stage0_compute_meter(
+    run_id: &str,
+) -> Option<std::sync::Arc<skippy_server::compute_meter::StageComputeMeter>> {
+    STAGE0_COMPUTE_METERS.lock().ok()?.get(run_id).cloned()
+}
+
+pub(crate) fn forget_stage0_compute_meter(run_id: &str) {
+    if let Ok(mut meters) = STAGE0_COMPUTE_METERS.lock() {
+        meters.remove(run_id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1599,6 +1705,8 @@ mod tests {
                 tracked_token_counts: 0,
                 max_session_tokens: 2048,
                 total_session_tokens: 0,
+                graphs_reused: 0,
+                tokens_evaluated: 0,
                 lanes: vec![],
             },
             sessions_captured_at_unix_nanos: 111,

@@ -26,6 +26,7 @@ pub use manifest::{
 };
 pub use resolver::{
     CandidateEvaluation, CandidateRejection, NativeRuntimeResolution, NativeRuntimeResolver,
-    NativeRuntimeSource, RuntimeSelection, select_native_runtime,
+    NativeRuntimeSource, RuntimeSelection, evaluate_native_runtime_artifact,
+    has_startup_compatibility_metadata, select_native_runtime,
     select_native_runtime_for_skippy_abi, select_native_runtime_from_artifacts,
 };

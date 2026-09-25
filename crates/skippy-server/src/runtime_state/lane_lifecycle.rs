@@ -162,6 +162,12 @@ impl RuntimeState {
     pub fn session_stats(&self) -> RuntimeSessionStats {
         let mut max_session_tokens = 0u64;
         let mut total_session_tokens = 0u64;
+        // Graph reuse is the single biggest lever on split decode throughput and
+        // was previously invisible to the host: llama counts it, but the counter
+        // stopped at the C++ boundary, so the hit rate could only be inferred
+        // from throughput deltas between builds.
+        let mut graphs_reused = 0u64;
+        let mut tokens_evaluated = 0u64;
         let mut lanes = (0..self.lane_count as usize)
             .map(|index| RuntimeSessionLaneStats {
                 index,
@@ -172,6 +178,10 @@ impl RuntimeState {
             .collect::<Vec<_>>();
 
         for (session_id, lane_session) in &self.sessions {
+            if let Some(stats) = lane_session.session.graph_reuse_stats() {
+                graphs_reused = graphs_reused.saturating_add(stats.graphs_reused);
+                tokens_evaluated = tokens_evaluated.saturating_add(stats.tokens_evaluated);
+            }
             if let Some(token_count) = self.session_token_counts.get(session_id).copied() {
                 max_session_tokens = max_session_tokens.max(token_count);
                 total_session_tokens = total_session_tokens.saturating_add(token_count);
@@ -195,6 +205,8 @@ impl RuntimeState {
             tracked_token_counts: self.session_token_counts.len(),
             max_session_tokens,
             total_session_tokens,
+            graphs_reused,
+            tokens_evaluated,
             lanes,
         }
     }

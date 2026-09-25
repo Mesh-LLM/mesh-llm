@@ -325,6 +325,10 @@ impl Node {
     /// established in one direction (multi-homed initiator), the other side
     /// dials back on the direction that works.
     pub async fn dial_peer_addr(&self, addr: EndpointAddr) -> Result<()> {
+        // Permit the dial by clearing the short tombstone only. The departure
+        // record is cleared by successful direct admission, not by the
+        // attempt, so a failed dial cannot reopen the ghost-resurrection
+        // window (issue #1756 review).
         self.state.lock().await.dead_peers.remove(&addr.id);
         self.connect_to_peer(addr).await
     }
@@ -447,6 +451,10 @@ impl Node {
             .map_err(|reason| anyhow::anyhow!("join rejected: {}", reason.code()))?
         {
             InviteTokenMaterial::Signed(token) => {
+                let token_is_expired = matches!(
+                    token.verify(),
+                    Err(MeshRequirementRejectReason::BootstrapTokenExpired)
+                );
                 let addrs = match self.validate_bootstrap_token(&token).await {
                     Ok(addrs) => addrs,
                     Err(reason) => {
@@ -463,14 +471,24 @@ impl Node {
                     anyhow::anyhow!("bootstrap token does not contain any endpoint addresses")
                 })?;
                 self.reject_join_to_own_identity(&addr).await?;
-                self.install_requirement_aware_mesh_state(
-                    token.mesh_id.clone(),
-                    token.policy_hash.clone(),
-                    token.genesis_policy.clone(),
-                    None,
-                    Some(*token),
-                )
-                .await?;
+                if token_is_expired {
+                    if !self
+                        .restore_adopted_mesh_membership(&[invite_token.to_owned()])
+                        .await
+                    {
+                        anyhow::bail!("join rejected: could not restore adopted mesh membership");
+                    }
+                    tracing::info!("join_token_expired_using_persisted_membership");
+                } else {
+                    self.install_requirement_aware_mesh_state(
+                        token.mesh_id.clone(),
+                        token.policy_hash.clone(),
+                        token.genesis_policy.clone(),
+                        None,
+                        Some(*token),
+                    )
+                    .await?;
+                }
                 addr
             }
             InviteTokenMaterial::Legacy(addr) => {
@@ -483,7 +501,9 @@ impl Node {
 
     pub async fn join(&self, invite_token: &str) -> Result<()> {
         let addr = self.prepare_join_target(invite_token).await?;
-        // Clear dead status — explicit join should always attempt connection
+        // Clear dead status — explicit join should always attempt connection.
+        // As with dial_peer_addr, the departure record is only cleared by
+        // successful direct admission.
         self.state.lock().await.dead_peers.remove(&addr.id);
         self.remember_join_target(addr.clone()).await;
         self.connect_to_peer(addr).await

@@ -442,6 +442,23 @@ mod tests {
     #[test]
     fn unchanged_file_loads_digest_from_a_persisted_record_without_rehashing() {
         let path = temp_file("persisted-hit", b"persisted-bytes-under-test");
+
+        // Pin the mtime to a fixed past value before fingerprinting. Without
+        // this, the fingerprint planted below and the one
+        // `weights_digest_for_file` reads back moments later both come from
+        // whatever mtime the OS assigned to a just-written file -- two
+        // independent `stat` calls that close together can observe different
+        // precision under a loaded parallel run, so the planted record
+        // silently misses its match and the test falls through to a real
+        // re-hash instead of exercising the persisted-record path.
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("reopen to pin mtime");
+        file.set_modified(past)
+            .expect("pin mtime to a fixed past value");
+
         let (size, mtime_nanos) = file_fingerprint(&path).expect("fingerprint");
         store_persisted_record(&path, size, mtime_nanos, "not-a-real-sha256-digest");
 

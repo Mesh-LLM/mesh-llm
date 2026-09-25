@@ -4,6 +4,31 @@ export function sectionPathSegments(section: string | undefined): string[] {
   return section?.split('.').filter(Boolean) ?? []
 }
 
+export function lastPathSegment(canonicalPath: string): string {
+  return canonicalPath.split('.').filter(Boolean).at(-1) ?? canonicalPath
+}
+
+function defaultsSectionForPath(canonicalPath: string): string | undefined {
+  const segments = canonicalPath.split('.')
+  if (segments[0] !== 'defaults') return undefined
+  if (segments[1] === 'advanced' && segments[2] === 'server') return 'defaults.advanced.server'
+  return segments.length >= 2 ? `defaults.${segments[1]}` : undefined
+}
+
+/**
+ * The TOML table a canonical setting path lives under. Nested runtime
+ * sub-tables (for example `runtime.activity` or `runtime.native_runtime`) must
+ * keep their own table so a copied preview does not flatten them into
+ * `[runtime]`, where the keys are silently ignored.
+ */
+export function configSectionForPath(canonicalPath: string): string | undefined {
+  if (canonicalPath.startsWith('plugin.')) return undefined
+  const segments = canonicalPath.split('.').filter(Boolean)
+  if (segments.length <= 1) return undefined
+  if (segments[0] === 'defaults') return defaultsSectionForPath(canonicalPath)
+  return segments.slice(0, -1).join('.')
+}
+
 export function resolveConfigSettingPath(setting: ConfigurationDefaultsSetting): string[] {
   if (setting.canonicalPath?.startsWith('defaults.')) {
     return setting.canonicalPath.slice('defaults.'.length).split('.').filter(Boolean)

@@ -351,6 +351,7 @@ fn test_runtime_tool_selection_excludes_preferred_legacy_runtime_without_tool() 
                     os: "linux".to_string(),
                     arch: "x86_64".to_string(),
                     target: None,
+                    min_glibc: None,
                 },
                 backend: NativeRuntimeBackend::cuda(12, vec![]),
                 rank,

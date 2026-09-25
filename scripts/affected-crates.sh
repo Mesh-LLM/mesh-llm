@@ -9,6 +9,7 @@ set -euo pipefail
 # Hardcoded workspace members (fallback for fail-open)
 WORKSPACE_MEMBERS=(
   "mesh-llm"
+  "mesh-llm-analytics"
   "mesh-llm-build-info"
   "mesh-llm-cli"
   "mesh-llm-commands"
@@ -78,11 +79,11 @@ WORKSPACE_MEMBERS=(
 is_website_input() {
   local file="$1"
 
-  [[ "$file" =~ ^website/ ]] || \
+  [[ "$file" =~ ^(mesh/)?website/ ]] || \
     [[ "$file" =~ ^install\.sh$ ]] || \
     [[ "$file" =~ ^install\.ps1$ ]] || \
-    [[ "$file" =~ ^docs/(index\.html|CNAME|install\.sh|install\.ps1|mesh-llm-logo\.svg)$ ]] || \
-    [[ "$file" =~ ^docs/(assets|catalog|docs|pagefind)(/|$) ]]
+    [[ "$file" =~ ^(mesh/)?docs/(index\.html|CNAME|install\.sh|install\.ps1|mesh-llm-logo\.svg)$ ]] || \
+    [[ "$file" =~ ^(mesh/)?docs/(assets|catalog|docs|pagefind)(/|$) ]]
 }
 
 FAIL_OPEN_UI_CHANGED=false
@@ -160,7 +161,7 @@ main() {
     fi
 
     # UI changed detection
-    if [[ "$file" =~ ^crates/mesh-llm-ui/ ]]; then
+    if [[ "$file" =~ ^(mesh/)?crates/mesh-llm-ui/ ]]; then
       ui_changed=true
       FAIL_OPEN_UI_CHANGED=true
     fi
@@ -178,11 +179,11 @@ main() {
     # line in crates/skippy-ffi/build.rs is hand-maintained, so only the Rust
     # test batches can prove the link still closes. Advancing the pin without
     # this escalation is how an undefined hash_sha256_hex reached main.
-    if [[ "$file" =~ ^third_party/llama\.cpp/upstream\.txt$ ]] || \
-       [[ "$file" =~ ^third_party/llama\.cpp/patches/ ]] || \
+    if [[ "$file" =~ ^(skippy/)?third_party/llama\.cpp/upstream\.txt$ ]] || \
+       [[ "$file" =~ ^(skippy/)?third_party/llama\.cpp/patches/ ]] || \
        [[ "$file" =~ ^Cargo\.lock$ ]] || \
        [[ "$file" =~ ^Cargo\.toml$ ]] || \
-            [[ "$file" =~ ^scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|skippy-ci-smoke|ci-install-native-runtime|ci-prepare-native-runtime|ci-smoke-test|ci-compat-smoke|ci-client-auto-test|ci-two-node-client-serving-smoke|ci-two-node-split-smoke)\. ]] || \
+            [[ "$file" =~ ^(mesh/|skippy/)?scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|skippy-ci-smoke|ci-install-native-runtime|ci-prepare-native-runtime|ci-smoke-test|ci-compat-smoke|ci-client-auto-test|ci-two-node-client-serving-smoke|ci-two-node-split-smoke)\. ]] || \
        [[ "$file" =~ ^\.github/cache-version\.txt$ ]] || \
        [[ "$file" =~ ^rust-toolchain(\.toml)?$ ]]; then
       escalate=true
@@ -245,13 +246,16 @@ EOF
   local -a test_crates=()
 
   for file in "${changed_files[@]}"; do
-    # Skip non-Rust files (docs, config, etc.)
-    if [[ ! "$file" =~ ^crates/ ]] && [[ ! "$file" =~ ^tools/ ]]; then
+    # Skip non-Rust files (docs, config, etc.). Relocated product crates under
+    # mesh/crates/ and skippy/crates/ must still reach Cargo ownership matching
+    # so a relocated crate change cannot skip its compilation and tests.
+    if [[ ! "$file" =~ ^crates/ ]] && [[ ! "$file" =~ ^tools/ ]] &&
+       [[ ! "$file" =~ ^mesh/crates/ ]] && [[ ! "$file" =~ ^skippy/crates/ ]]; then
       continue
     fi
 
     # Skip UI crate files (they don't affect Rust builds)
-    if [[ "$file" =~ ^crates/mesh-llm-ui/ ]]; then
+    if [[ "$file" =~ ^(mesh/)?crates/mesh-llm-ui/ ]]; then
       continue
     fi
 

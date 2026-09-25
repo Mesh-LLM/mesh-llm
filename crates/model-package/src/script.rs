@@ -157,6 +157,8 @@ mod tests {
         ));
         assert!(EMBEDDED_SCRIPT.contains("Package manifest SHA-256"));
         assert!(EMBEDDED_SCRIPT.contains("uploaded to this repository"));
+        assert!(EMBEDDED_SCRIPT.contains("speculative_decoding"));
+        assert!(EMBEDDED_SCRIPT.contains("Speculative decoding"));
     }
 
     #[test]

@@ -30,6 +30,8 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
         retry_policy,
         response_adapter,
         route_observer,
+        served_by: _,
+        peer_capsule_id: _,
     } = logging;
     let target = match build_external_endpoint_target(base_url, request_path, prefetched) {
         Ok(target) => target,
@@ -54,6 +56,9 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
     .await
 }
 
+// `RouteAttemptResult` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn connect_external_endpoint(
     base_url: &str,
     target: &ExternalEndpointTarget,
@@ -75,6 +80,9 @@ async fn connect_external_endpoint(
     }
 }
 
+// `RouteAttemptResult` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn forward_external_endpoint_request(
     upstream: &mut ClientStream,
     base_url: &str,
@@ -113,6 +121,7 @@ async fn route_http_endpoint_attempt_after_forward(
                     request_id,
                     disconnect_message: "API proxy (external endpoint): downstream client disconnected during relay",
                     commit_message: "API proxy (external endpoint) ended after commit",
+                    served_by: None,
                     route_observer,
                 },
                 retry_policy,

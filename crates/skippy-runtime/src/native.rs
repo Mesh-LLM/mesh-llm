@@ -18,14 +18,87 @@ use crate::{
     RuntimeEvent, Status,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelWorkload {
+    CausalGeneration,
+    Embedding,
+    Rerank,
+    EncoderDecoder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolingType {
+    Unspecified,
+    None,
+    Mean,
+    Cls,
+    Last,
+    Rank,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkloadInfo {
+    pub kind: ModelWorkload,
+    pub pooling: PoolingType,
+    pub output_dimensions: u32,
+    pub classifier_outputs: u32,
+    pub has_encoder: bool,
+    pub has_decoder: bool,
+    pub full_model_only: bool,
+}
+
+impl TryFrom<skippy_ffi::WorkloadInfoV1> for WorkloadInfo {
+    type Error = anyhow::Error;
+
+    /// Validate the native descriptor layout and translate supported workload and pooling values.
+    fn try_from(raw: skippy_ffi::WorkloadInfoV1) -> Result<Self> {
+        if raw.abi_version != skippy_ffi::WORKLOAD_INFO_V1_ABI_VERSION
+            || raw.struct_size != std::mem::size_of::<skippy_ffi::WorkloadInfoV1>() as u32
+        {
+            return Err(anyhow!(
+                "native workload descriptor uses an incompatible ABI"
+            ));
+        }
+        let kind = match raw.kind {
+            skippy_ffi::WorkloadKind::CausalGeneration => ModelWorkload::CausalGeneration,
+            skippy_ffi::WorkloadKind::Embedding => ModelWorkload::Embedding,
+            skippy_ffi::WorkloadKind::Rerank => ModelWorkload::Rerank,
+            skippy_ffi::WorkloadKind::EncoderDecoder => ModelWorkload::EncoderDecoder,
+        };
+        let pooling = match raw.pooling {
+            skippy_ffi::WorkloadPooling::Unspecified => PoolingType::Unspecified,
+            skippy_ffi::WorkloadPooling::None => PoolingType::None,
+            skippy_ffi::WorkloadPooling::Mean => PoolingType::Mean,
+            skippy_ffi::WorkloadPooling::Cls => PoolingType::Cls,
+            skippy_ffi::WorkloadPooling::Last => PoolingType::Last,
+            skippy_ffi::WorkloadPooling::Rank => PoolingType::Rank,
+        };
+        Ok(Self {
+            kind,
+            pooling,
+            output_dimensions: raw.output_dimensions,
+            classifier_outputs: raw.classifier_outputs,
+            has_encoder: raw.has_encoder,
+            has_decoder: raw.has_decoder,
+            full_model_only: raw.full_model_only,
+        })
+    }
+}
+
 pub struct StageModel {
     inner: Arc<StageModelInner>,
     pub(crate) media: Option<MediaProjector>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemOneReadSlot {
+    pub canvas_position: u32,
+    pub label_token_ids: Vec<i32>,
+}
+
 struct StageModelInner {
     raw: *mut RawModel,
-    include_output: bool,
+    terminal_stage: bool,
     capability: Option<LoadedModelCapability>,
 }
 
@@ -57,13 +130,30 @@ fn classify_model_state(recurrent: bool, hybrid: bool, diffusion: bool) -> Model
     }
 }
 
+/// Architectures that build a separate indexer memory tier on top of their
+/// attention/recurrent state. Mirrors the upstream `needs_mem_idx` allowlist
+/// (llama-model.cpp); extend this alongside that expression when upstream adds
+/// indexer architectures. Indexer state is only covered by full-state
+/// snapshots, so these models must not serve lossy KV-page/recurrent snapshots.
+const INDEXER_MEMORY_ARCHITECTURES: &[&str] = &["qwen4exp"];
+
+/// Reads the model's GGUF `general.architecture` value. `None` means the
+/// native runtime does not export the metadata accessor or the key is absent;
+/// architecture-dependent capability flags must fail closed in that case.
+fn model_architecture(model: *const skippy_ffi::Opaque) -> Option<String> {
+    unsafe { skippy_ffi::llama_model_meta_val_str(model, "general.architecture") }
+}
+
 fn capability_from_state_probes(
     recurrent: Option<bool>,
     hybrid: Option<bool>,
     diffusion: Option<bool>,
+    architecture: Option<&str>,
 ) -> Option<LoadedModelCapability> {
     Some(LoadedModelCapability {
         state_kind: classify_model_state(recurrent?, hybrid?, diffusion?),
+        has_indexer_memory: architecture
+            .is_some_and(|arch| INDEXER_MEMORY_ARCHITECTURES.contains(&arch)),
     })
 }
 
@@ -72,10 +162,12 @@ fn loaded_model_capability(raw: *mut RawModel) -> Option<LoadedModelCapability> 
     if model.is_null() {
         return None;
     }
+    let architecture = model_architecture(model);
     capability_from_state_probes(
         unsafe { skippy_ffi::llama_model_is_recurrent(model) },
         unsafe { skippy_ffi::llama_model_is_hybrid(model) },
         unsafe { skippy_ffi::llama_model_is_diffusion(model) },
+        architecture.as_deref(),
     )
 }
 
@@ -84,11 +176,19 @@ impl StageModel {
         Self {
             inner: Arc::new(StageModelInner {
                 raw: std::ptr::null_mut(),
-                include_output: true,
+                terminal_stage: true,
                 capability: None,
             }),
             media: None,
         }
+    }
+
+    /// Whether this handle wraps a real native model. False for the bypass
+    /// dummy used when model loading is disabled; callers that mirror
+    /// native-side load decisions must skip the dummy, since there is no
+    /// native contract to mirror.
+    pub fn has_native_model(&self) -> bool {
+        !self.inner.raw.is_null()
     }
 
     pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
@@ -104,6 +204,17 @@ impl StageModel {
         let present =
             unsafe { skippy_ffi::skippy_model_input_activation_boundary(self.inner.raw, &mut raw) };
         present.then(|| raw.into())
+    }
+
+    /// Read the loaded model's ABI-validated workload, pooling, and output dimensions.
+    pub fn workload_info(&self) -> Result<WorkloadInfo> {
+        let mut raw = skippy_ffi::WorkloadInfoV1::default();
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_model_workload_info_v1(self.inner.raw, &mut raw, &mut error)
+        };
+        ensure_ok(status, error)?;
+        raw.try_into()
     }
 
     fn from_opened_raw(
@@ -123,7 +234,7 @@ impl StageModel {
         Ok(Self {
             inner: Arc::new(StageModelInner {
                 raw,
-                include_output: config.include_output,
+                terminal_stage: config.is_terminal_stage(),
                 capability,
             }),
             media,
@@ -434,7 +545,8 @@ impl StageModel {
         Ok(StageSession {
             raw,
             token_count: 0,
-            include_output: self.inner.include_output,
+            terminal_stage: self.inner.terminal_stage,
+            batched_activation_exports: self.supports_batched_activation_exports(),
         })
     }
 
@@ -464,12 +576,111 @@ impl StageModel {
         Ok(StageSession {
             raw,
             token_count: u64::try_from(token_ids.len()).context("token count exceeds u64")?,
-            include_output: self.inner.include_output,
+            terminal_stage: self.inner.terminal_stage,
+            batched_activation_exports: self.supports_batched_activation_exports(),
         })
     }
 
     pub fn tokenize(&self, text: &str, add_special: bool) -> Result<Vec<i32>> {
         tokenize(self.inner.raw, text, add_special)
+    }
+
+    /// Scores caller-declared labels at fixed positions in a DiffusionGemma
+    /// answer canvas using one zero-self-conditioning diffusion read.
+    pub fn system_one_read(
+        &self,
+        prompt_tokens: &[i32],
+        canvas_tokens: &[i32],
+        slots: &[SystemOneReadSlot],
+    ) -> Result<Vec<Vec<f32>>> {
+        if skippy_ffi::try_abi_features()
+            .is_none_or(|features| features & skippy_ffi::FEATURE_SYSTEM_ONE == 0)
+        {
+            return Err(anyhow!("native runtime does not support System One reads"));
+        }
+
+        let label_count = slots
+            .iter()
+            .try_fold(0usize, |count, slot| {
+                count.checked_add(slot.label_token_ids.len())
+            })
+            .context("System One label-token count overflow")?;
+        let mut labels = Vec::with_capacity(label_count);
+        let mut raw_slots = Vec::with_capacity(slots.len());
+        for slot in slots {
+            let label_token_offset = labels.len();
+            labels.extend_from_slice(&slot.label_token_ids);
+            raw_slots.push(skippy_ffi::SystemOneSlot {
+                canvas_position: slot.canvas_position,
+                label_token_offset,
+                label_token_count: slot.label_token_ids.len(),
+            });
+        }
+
+        let mut probabilities = vec![0.0_f32; labels.len()];
+        let mut output_count = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_system_one_read(
+                self.inner.raw,
+                prompt_tokens.as_ptr(),
+                prompt_tokens.len(),
+                canvas_tokens.as_ptr(),
+                canvas_tokens.len(),
+                labels.as_ptr(),
+                labels.len(),
+                raw_slots.as_ptr(),
+                raw_slots.len(),
+                probabilities.as_mut_ptr(),
+                probabilities.len(),
+                &mut output_count,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        if output_count != probabilities.len() {
+            return Err(anyhow!(
+                "native System One read returned {output_count} probabilities for {} labels",
+                probabilities.len()
+            ));
+        }
+
+        let mut offset = 0usize;
+        Ok(slots
+            .iter()
+            .map(|slot| {
+                let end = offset + slot.label_token_ids.len();
+                let distribution = probabilities[offset..end].to_vec();
+                offset = end;
+                distribution
+            })
+            .collect())
+    }
+
+    /// Returns the fixed answer-canvas length encoded by a DiffusionGemma model.
+    pub fn system_one_canvas_length(&self) -> Result<usize> {
+        if skippy_ffi::try_abi_features()
+            .is_none_or(|features| features & skippy_ffi::FEATURE_SYSTEM_ONE == 0)
+        {
+            return Err(anyhow!("native runtime does not support System One reads"));
+        }
+
+        let mut canvas_token_count = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_system_one_canvas_length(
+                self.inner.raw,
+                &mut canvas_token_count,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        if canvas_token_count == 0 {
+            return Err(anyhow!(
+                "native System One canvas length must be greater than zero"
+            ));
+        }
+        Ok(canvas_token_count)
     }
 
     /// Tokenize without allocating a token buffer larger than `max_tokens`.
@@ -506,6 +717,21 @@ impl StageModel {
 
     pub fn capability(&self) -> Option<&LoadedModelCapability> {
         self.inner.capability.as_ref()
+    }
+
+    /// Whether a multi-request iteration may read activation exports out of a
+    /// single native batch.
+    ///
+    /// The batched path slices exports by request offset out of the last
+    /// native microbatch, so it is only sound while the whole iteration is one
+    /// microbatch. Attention memory with a unified KV cache satisfies that. A
+    /// recurrent or hybrid model splits an all-output batch by sequence
+    /// (`split_seq`) and an indexer memory tier is not part of that contract,
+    /// so both fail closed here and run one request at a time instead.
+    fn supports_batched_activation_exports(&self) -> bool {
+        self.capability().is_some_and(|capability| {
+            capability.state_kind == ModelStateKind::Dense && !capability.has_indexer_memory
+        })
     }
 
     pub fn apply_chat_template(
@@ -992,10 +1218,67 @@ impl Drop for StageModel {
 #[cfg(test)]
 mod output_capacity_tests {
     use super::{
-        ModelStateKind, OPTIMISTIC_OUTPUT_HEADROOM, capability_from_state_probes,
-        classify_model_state, optimistic_chat_metadata_capacity, optimistic_chat_parse_capacity,
-        optimistic_chat_prompt_capacity, optimistic_token_capacity,
+        ModelStateKind, ModelWorkload, OPTIMISTIC_OUTPUT_HEADROOM, PoolingType, WorkloadInfo,
+        capability_from_state_probes, classify_model_state, optimistic_chat_metadata_capacity,
+        optimistic_chat_parse_capacity, optimistic_chat_prompt_capacity, optimistic_token_capacity,
     };
+
+    #[test]
+    /// Cover all supported native workload and pooling discriminants.
+    fn workload_descriptor_converts_all_native_classes_and_pooling_modes() {
+        let cases = [
+            (
+                skippy_ffi::WorkloadKind::CausalGeneration,
+                ModelWorkload::CausalGeneration,
+            ),
+            (
+                skippy_ffi::WorkloadKind::Embedding,
+                ModelWorkload::Embedding,
+            ),
+            (skippy_ffi::WorkloadKind::Rerank, ModelWorkload::Rerank),
+            (
+                skippy_ffi::WorkloadKind::EncoderDecoder,
+                ModelWorkload::EncoderDecoder,
+            ),
+        ];
+        for (raw_kind, expected_kind) in cases {
+            let converted = WorkloadInfo::try_from(skippy_ffi::WorkloadInfoV1 {
+                kind: raw_kind,
+                pooling: skippy_ffi::WorkloadPooling::Mean,
+                output_dimensions: 768,
+                classifier_outputs: 2,
+                has_encoder: true,
+                has_decoder: false,
+                full_model_only: true,
+                ..Default::default()
+            })
+            .expect("valid workload descriptor");
+
+            assert_eq!(converted.kind, expected_kind);
+            assert_eq!(converted.pooling, PoolingType::Mean);
+            assert_eq!(converted.output_dimensions, 768);
+            assert_eq!(converted.classifier_outputs, 2);
+            assert!(converted.has_encoder);
+            assert!(!converted.has_decoder);
+            assert!(converted.full_model_only);
+        }
+    }
+
+    #[test]
+    /// Reject incompatible native descriptor versions and sizes.
+    fn workload_descriptor_rejects_incompatible_layout_versions() {
+        let invalid_version = skippy_ffi::WorkloadInfoV1 {
+            abi_version: skippy_ffi::WORKLOAD_INFO_V1_ABI_VERSION + 1,
+            ..Default::default()
+        };
+        assert!(WorkloadInfo::try_from(invalid_version).is_err());
+
+        let invalid_size = skippy_ffi::WorkloadInfoV1 {
+            struct_size: 0,
+            ..Default::default()
+        };
+        assert!(WorkloadInfo::try_from(invalid_size).is_err());
+    }
 
     #[test]
     fn loaded_model_flags_classify_state_without_family_names() {
@@ -1019,15 +1302,37 @@ mod output_capacity_tests {
 
     #[test]
     fn missing_native_state_probe_fails_capability_closed() {
-        assert!(capability_from_state_probes(None, Some(false), Some(false)).is_none());
-        assert!(capability_from_state_probes(Some(false), None, Some(false)).is_none());
-        assert!(capability_from_state_probes(Some(false), Some(false), None).is_none());
+        assert!(capability_from_state_probes(None, Some(false), Some(false), None).is_none());
+        assert!(capability_from_state_probes(Some(false), None, Some(false), None).is_none());
+        assert!(capability_from_state_probes(Some(false), Some(false), None, None).is_none());
         assert_eq!(
-            capability_from_state_probes(Some(true), Some(true), Some(false))
+            capability_from_state_probes(Some(true), Some(true), Some(false), Some("qwen4exp"))
                 .expect("all native probes are present")
                 .state_kind,
             ModelStateKind::Hybrid
         );
+    }
+
+    #[test]
+    fn indexer_memory_flag_follows_the_upstream_architecture_allowlist() {
+        // qwen4exp builds the QSA indexer memory (upstream needs_mem_idx).
+        let capability =
+            capability_from_state_probes(Some(true), Some(true), Some(false), Some("qwen4exp"))
+                .expect("all native probes are present");
+        assert!(capability.has_indexer_memory);
+
+        // Every other architecture stays exact-state-free...
+        for arch in ["llama4", "qwen3", "gemma3", "nemotron_h", ""] {
+            let capability =
+                capability_from_state_probes(Some(true), Some(true), Some(false), Some(arch))
+                    .expect("all native probes are present");
+            assert!(!capability.has_indexer_memory, "{arch} must not be flagged");
+        }
+
+        // ...and a runtime without the metadata probe fails closed to false.
+        let capability = capability_from_state_probes(Some(true), Some(true), Some(false), None)
+            .expect("all native probes are present");
+        assert!(!capability.has_indexer_memory);
     }
 
     #[test]

@@ -13,6 +13,7 @@ use crate::runtime_state::RuntimeState;
 use super::{
     ExactStateExtra, ExactStateRecordAdmission, ExactStateRestore, KvStageIntegration,
     PendingExactStateRecord, PrefillKvIdentity, StagePrefixCachePayload,
+    exact_state::{CaptureAdmission, ExactStateAdmissionCredit},
     records::add_reconstruct_stats,
 };
 
@@ -317,21 +318,29 @@ impl KvStageIntegration {
         }
         let logical_bytes = payload.byte_len();
         let payload_kind = payload.kind();
-        let rewarm_enqueued = self.try_begin_record(&identity.page_id)
-            && matches!(
-                self.enqueue_exact_state_record(PendingExactStateRecord {
-                    page_id: identity.page_id.clone(),
-                    payload,
-                    extra: ExactStateExtra { kv_desc },
-                    namespace: identity.namespace.clone(),
-                    token_ids: identity.token_ids[..token_count as usize].to_vec(),
-                    l3_fill_claim: None,
-                    write_through_l3: false,
-                    l2_promotion_digest: None,
-                    l3_cost: None,
-                }),
-                ExactStateRecordAdmission::Queued
-            );
+        let rewarm_enqueued = ExactStateAdmissionCredit::acquire(
+            &self.admission_outstanding,
+            &self.admission_best_effort_outstanding,
+            CaptureAdmission::BestEffort,
+        )
+        .is_some_and(|admission_credit| {
+            self.try_begin_record(&identity.page_id)
+                && matches!(
+                    self.enqueue_exact_state_record(PendingExactStateRecord {
+                        page_id: identity.page_id.clone(),
+                        payload,
+                        extra: ExactStateExtra { kv_desc },
+                        namespace: identity.namespace.clone(),
+                        token_ids: identity.token_ids[..token_count as usize].to_vec(),
+                        l3_fill_claim: None,
+                        write_through_l3: false,
+                        l2_promotion_digest: None,
+                        l3_cost: None,
+                        admission_credit,
+                    }),
+                    ExactStateRecordAdmission::Queued
+                )
+        });
         Ok(Some(ExactStateRestore {
             page_id: identity.page_id.clone(),
             token_count: token_count as usize,

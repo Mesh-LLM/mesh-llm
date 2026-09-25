@@ -63,6 +63,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
         source_model_sha256: None,
+        split_certification: None,
         local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,
@@ -335,6 +336,7 @@ pub(super) fn runtime_status_for_stage(
         manifest_sha256: Some("direct-gguf:1:model.gguf".to_string()),
         source_model_path: Some("/model.gguf".to_string()),
         source_model_sha256: None,
+        split_certification: Some("certified".to_string()),
         source_model_bytes: Some(1),
         materialized_path: None,
         materialized_pinned: false,
@@ -362,6 +364,8 @@ pub(super) fn runtime_status_for_stage(
         flash_attn_type: FlashAttentionType::Auto,
         error: None,
         shutdown_generation: generation.generation,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -490,6 +494,7 @@ stop = ["END"]
         projector_path: Some("/models/fallback-mmproj.gguf".to_string()),
         ctx_size: 8192,
         compact_meta: &compact_meta,
+        split_certification: skippy::SplitCertificationAdmission::Certified,
         capacity_budget_bytes: Some(6_000_000_000),
         pinned_gpu: None,
         device_override: None,
@@ -627,6 +632,7 @@ async fn split_stage_load_guards_publisher_kv_default_with_planned_metadata() {
         projector_path: None,
         ctx_size: 4096,
         compact_meta: &incompatible_meta,
+        split_certification: skippy::SplitCertificationAdmission::Certified,
         capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,
@@ -817,6 +823,7 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
             source_kind: mesh::ModelSourceKind::HuggingFace,
             repository: Some("Qwen/Qwen3-VL-2B-Instruct-GGUF".into()),
             artifact: Some("Qwen3VL-2B-Instruct-Q4_K_M.gguf".into()),
+            weights_digest: Some("sha256:verified-weights".into()),
             ..Default::default()
         },
         capabilities_known: false,
@@ -835,6 +842,7 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
         "Qwen3VL-2B-Instruct-Q4_K_M",
         "Qwen3VL-2B-Instruct-Q4_K_M",
         capabilities,
+        mesh::ModelWorkloadClass::CausalGeneration,
     );
 
     assert_eq!(
@@ -848,6 +856,14 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
     assert!(descriptor.identity.is_primary);
     assert!(descriptor.capabilities_known);
     assert_eq!(descriptor.capabilities, capabilities);
+    assert_eq!(
+        descriptor.identity.weights_digest.as_deref(),
+        Some("sha256:verified-weights")
+    );
+    assert_eq!(
+        descriptor.metadata.unwrap().workload_class,
+        Some(mesh::ModelWorkloadClass::CausalGeneration)
+    );
 }
 
 #[test]
@@ -857,6 +873,7 @@ fn runtime_verified_served_model_descriptor_builds_fallback_identity() {
         "Primary",
         "Runtime",
         models::ModelCapabilities::default(),
+        mesh::ModelWorkloadClass::Embedding,
     );
 
     assert_eq!(descriptor.identity.model_name, "Runtime");
@@ -906,6 +923,7 @@ pub(super) fn test_stage_status_from_load(
         manifest_sha256: Some(load.manifest_sha256.clone()),
         source_model_path: load.model_path.clone(),
         source_model_sha256: None,
+        split_certification: load.split_certification.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
@@ -932,6 +950,8 @@ pub(super) fn test_stage_status_from_load(
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -957,6 +977,7 @@ pub(super) fn test_stage_status_from_stop(
         manifest_sha256: None,
         source_model_path: None,
         source_model_sha256: None,
+        split_certification: None,
         source_model_bytes: None,
         materialized_path: None,
         materialized_pinned: false,
@@ -983,6 +1004,8 @@ pub(super) fn test_stage_status_from_stop(
         coordinator_term: stop.coordinator_term,
         coordinator_id: None,
         lease_until_unix_ms: 0,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 

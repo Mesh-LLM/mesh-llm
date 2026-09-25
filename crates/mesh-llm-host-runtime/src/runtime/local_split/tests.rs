@@ -221,6 +221,7 @@ layer_end = 40
             recurrent_bytes_per_sequence_by_layer: vec![0; 40],
             ctx_size_override: Some(1024),
             parallel_override: Some(1),
+            auto_balance: false,
         },
         &assignments,
     )
@@ -454,6 +455,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
             recurrent_bytes_per_sequence_by_layer: Vec::new(),
             ctx_size_override: Some(65_536),
             parallel_override: Some(1),
+            auto_balance: false,
         },
         Some(canonical.node_id),
     )
@@ -1528,6 +1530,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         projector_path: None,
         ctx_size: 4096,
         compact_meta: &compact_meta,
+        split_certification: skippy::SplitCertificationAdmission::Certified,
         capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,

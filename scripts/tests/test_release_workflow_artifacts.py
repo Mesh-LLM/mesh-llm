@@ -192,6 +192,12 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             "Manual release tag already exists and is immutable",
             metadata,
         )
+        self.assertIn(
+            'if ! existing_tag_refs="$(git ls-remote --tags origin',
+            metadata,
+        )
+        self.assertIn('[[ -n "$existing_tag_refs" ]]', metadata)
+        self.assertNotIn("Reject republishing an existing release on tag push", metadata)
 
     def test_release_source_version_is_synchronized_before_builds(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")

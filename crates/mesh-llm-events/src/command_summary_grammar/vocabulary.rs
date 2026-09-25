@@ -19,6 +19,7 @@ pub(super) fn is_static_summary_token(token: &str) -> bool {
             | "detect"
             | "run-benchmark"
             | "config"
+            | "analytics"
             | "validate"
             | "doctor"
             | "split"

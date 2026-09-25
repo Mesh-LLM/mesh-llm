@@ -13,6 +13,7 @@ pub fn runtime_surface_help(surface: RuntimeSurface) -> String {
             "                               Use --help-advanced to list every valid recipe\n",
             "      --auto                   Auto-join the best discovered mesh\n",
             "      --join <JOIN>            Join a mesh via invite token\n",
+            "      --join-file <PATH>       Read the invite token from a file (re-read on rejoin)\n",
             "      --publish                Publish this mesh for discovery\n",
             "      --local-model-only       Serve one local model without mesh networking or management APIs\n",
             "      --port <PORT>            OpenAI-compatible API port [default: 9337]\n",
@@ -21,6 +22,9 @@ pub fn runtime_surface_help(surface: RuntimeSurface) -> String {
             "Bare `mesh-llm serve` loads startup models from ~/.mesh-llm/config.toml.\n",
             "Add [[models]] there or pass --model / --gguf explicitly.\n",
             "With --local-model-only, --model, --gguf, and --mmproj must be absolute, non-symlink paths.\n",
+            "Joining a private mesh: pass --join <TOKEN>, or --join-file <PATH> to keep the invite token\n",
+            "out of argv. With 'setup --service', put MESH_LLM_JOIN_FILE in the service env file\n",
+            "(~/.config/mesh-llm/service.env) so the generated unit needs no hand-editing.\n",
             "Run `mesh-llm --help-advanced` for the full runtime option surface.\n"
         )
         .to_string(),
@@ -31,6 +35,7 @@ pub fn runtime_surface_help(surface: RuntimeSurface) -> String {
             "      --auto                   Auto-join the best discovered mesh\n",
             "      --discover [NAME]        Discover and join a mesh by name\n",
             "      --join <JOIN>            Join a mesh via invite token\n",
+            "      --join-file <PATH>       Read the invite token from a file (re-read on rejoin)\n",
             "      --port <PORT>            Local OpenAI-compatible proxy port [default: 9337]\n",
             "      --console <CONSOLE>      Management console/API port [default: 3131]\n",
             "      --log-format <FORMAT>    Terminal output format [default: pretty]\n\n",

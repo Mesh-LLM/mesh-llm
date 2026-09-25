@@ -8,6 +8,11 @@ on:
         required: false
         default: ''
         type: string
+      policy_source_sha:
+        description: Optional source revision for the runner-policy checkout; defaults to the protected branch.
+        required: false
+        default: ''
+        type: string
       original_event_name:
         description: Original event used for protected runner and cache policy.
         required: false
@@ -50,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ inputs.policy_source_sha || github.event.repository.default_branch }}
           persist-credentials: false
       - name: Select provider for the console artifact role
         id: policy
@@ -78,9 +83,6 @@ jobs:
     timeout-minutes: 20
     container:
       image: ${{ inputs.release_tag != '' && 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ff53048ee7a87b3244ccbfa1b2888fde5db31a73d0dfa42f283d25dde0115307' || 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:37dc12322bd2efaefc59e51ad58d8cd3284974cb23721d13f0ff3564715037bb' }}
-    defaults:
-      run:
-        working-directory: crates/mesh-llm-ui
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -92,6 +94,9 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+      - name: Resolve product source layout
+        id: layout
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
       - name: Prepare release UI version
         if: ${{ inputs.release_tag != '' }}
         working-directory: .
@@ -119,31 +124,36 @@ jobs:
       # have against ui_quality's save (three lanes restored a key only
       # ui_quality ever saved).
       - name: Point pnpm at the image's baked store
+        working-directory: ${{ steps.layout.outputs.ui_dir }}
         run: pnpm config set store-dir /home/runner/.local/share/pnpm/store
       - name: Install UI dependencies
+        working-directory: ${{ steps.layout.outputs.ui_dir }}
         run: pnpm i --frozen-lockfile
       - name: Build console distribution
+        working-directory: ${{ steps.layout.outputs.ui_dir }}
         run: pnpm run build
       - name: Verify console distribution
+        working-directory: ${{ steps.layout.outputs.ui_dir }}
         run: test -s dist/index.html
       - name: Bind release UI identity and checksums
         if: ${{ inputs.release_tag != '' }}
         working-directory: .
         shell: bash
         env:
+          UI_DIR: ${{ steps.layout.outputs.ui_dir }}
           UI_SOURCE_SHA: ${{ inputs.source_sha }}
           UI_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           python3 scripts/ui-distribution.py stamp \
-            --dist crates/mesh-llm-ui/dist \
+            --dist "$UI_DIR/dist" \
             --source-sha "$UI_SOURCE_SHA" \
             --release-tag "$UI_RELEASE_TAG"
       - name: Upload immutable console distribution
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ inputs.artifact_name }}
-          path: crates/mesh-llm-ui/dist
+          path: ${{ steps.layout.outputs.ui_dir }}/dist
           include-hidden-files: true
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}

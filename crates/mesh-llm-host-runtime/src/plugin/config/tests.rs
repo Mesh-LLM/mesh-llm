@@ -661,6 +661,7 @@ ctx_size = 8192
 fn pinned_gpu_config_missing_gpu_id_rejected() {
     let config = MeshConfig {
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Pinned,
             parallel: None,
         },
@@ -725,6 +726,7 @@ device = "CUDA1"
 fn pinned_gpu_config_empty_gpu_id_rejected() {
     let config = MeshConfig {
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Pinned,
             parallel: None,
         },
@@ -767,6 +769,7 @@ gpu_layers = 2147483648
 fn pinned_gpu_config_auto_assignment_rejects_gpu_id() {
     let config = MeshConfig {
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: None,
         },
@@ -850,6 +853,7 @@ model = "Qwen3-8B-Q4_K_M"
 fn gpu_parallel_zero_rejected() {
     let config = MeshConfig {
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: Some(0),
         },
@@ -869,6 +873,7 @@ fn gpu_parallel_zero_rejected() {
 fn gpu_parallel_one_accepted() {
     let config = MeshConfig {
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: Some(1),
         },
@@ -883,6 +888,7 @@ fn gpu_parallel_one_accepted() {
 fn gpu_parallel_none_accepted() {
     let config = MeshConfig {
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: None,
         },
@@ -897,6 +903,7 @@ fn gpu_parallel_none_accepted() {
 fn gpu_parallel_large_value_accepted() {
     let config = MeshConfig {
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: Some(64),
         },

@@ -52,7 +52,7 @@ same Rust crate.
 
 ## ABI Contract
 
-The staged ABI is versioned as `0.1.31`. The patch header in
+The staged ABI is versioned as `0.1.59`. The patch header in
 `third_party/llama.cpp/patches/` and the Rust constants in
 `crates/skippy-ffi/src/lib.rs` are the source of truth, so keep this README
 aligned with those files instead of treating it as canonical prose.
@@ -86,7 +86,8 @@ Opaque handles are caller-owned after successful creation:
 | `skippy_model` | `skippy_model_open` | `skippy_model_free` |
 | `skippy_session` | `skippy_session_create` | `skippy_session_free` |
 | `skippy_model_info` | `skippy_model_info_open` | `skippy_model_info_free` |
-| `skippy_slice_plan` | `skippy_slice_plan_create` | `skippy_slice_plan_free` |
+| `skippy_stage_planner` | `skippy_stage_planner_create_v1` | `skippy_stage_planner_free` |
+| `skippy_stage_plan` | `skippy_stage_planner_realize_v1` | `skippy_stage_plan_free` |
 
 Buffer-writing functions use the usual C ABI sizing pattern: the caller passes a
 pointer, a capacity, and an output byte/count pointer. If the buffer is too
@@ -95,8 +96,8 @@ the output pointer when the implementation can compute it.
 
 ## Protocol Shape
 
-The same ABI supports single-stage inference, split runtime stages, state
-movement, tokenizer/chat helpers, and model slicing:
+The same ABI supports single-stage inference, graph-planned runtime stages,
+state movement, tokenizer/chat helpers, and exact package-tensor admission:
 
 ```mermaid
 sequenceDiagram
@@ -129,7 +130,6 @@ read it directly:
 | `LAYER_PACKAGE` | `1 << 1` | Layer-package load mode |
 | `ARTIFACT_SLICE` | `1 << 2` | Artifact-slice load mode |
 | `MODEL_INTROSPECTION` | `1 << 3` | `skippy_model_info_*` tensor metadata calls |
-| `GGUF_SLICE_WRITE` | `1 << 4` | `skippy_slice_plan_*`, `skippy_write_*` |
 | `TOKENIZE_DETOKENIZE` | `1 << 6` | Tokenization, detokenization, EOG checks |
 | `ACTIVATION_FRAME` | `1 << 7` | Descriptor-plus-payload execution calls |
 | `SESSION_RESET` | `1 << 9` | `skippy_session_reset` |
@@ -251,7 +251,7 @@ hook currently bound by this crate.
 | `skippy_apply_chat_template_json` | Applies llama.cpp's OpenAI-compatible chat template path from JSON messages, tools, and tool-choice metadata, returning the prompt plus parser metadata. |
 | `skippy_parse_chat_response_json` | Parses generated assistant text with llama.cpp's chat parser and returns an OpenAI-compatible assistant message JSON object, including tool calls when emitted by the model. |
 
-### Model introspection and GGUF writing
+### Model introspection and package composition
 
 | Function | Purpose |
 | --- | --- |
@@ -259,8 +259,4 @@ hook currently bound by this crate.
 | `skippy_model_info_free` | Releases model metadata. |
 | `skippy_model_info_tensor_count` | Returns the number of tensors visible through model metadata. |
 | `skippy_model_info_tensor_at` | Returns tensor metadata for one index. |
-| `skippy_slice_plan_create` | Creates a GGUF slicing plan from model metadata. |
-| `skippy_slice_plan_free` | Releases a slicing plan. |
-| `skippy_slice_plan_add_layer_range` | Adds one stage layer range and shared-tensor ownership flags to a plan. |
-| `skippy_write_slice_gguf` | Writes one planned stage slice as a GGUF artifact. |
 | `skippy_write_gguf_from_parts` | Composes multiple GGUF parts into one materialized package. |

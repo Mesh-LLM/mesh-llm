@@ -72,6 +72,7 @@ pub(crate) struct StageLoadRequest {
     pub(crate) model_path: Option<String>,
     pub(crate) source_model_bytes: Option<u64>,
     pub(crate) source_model_sha256: Option<String>,
+    pub(crate) split_certification: Option<String>,
     pub(crate) local_source_required: bool,
     pub(crate) projector_path: Option<String>,
     pub(crate) projector_use_gpu: Option<bool>,
@@ -124,6 +125,7 @@ pub(crate) fn test_stage_admission(
         version: skippy_protocol::STAGE_ADMISSION_DESCRIPTOR_VERSION,
         package_id: format!("sha256:{}", "a5".repeat(32)),
         plan_id: format!("skippy-plan:v1:{}", "b6".repeat(32)),
+        execution_contract: String::new(),
         layer_start,
         layer_end,
         resident_tensor_ids: vec!["tensor-0".to_string()],
@@ -252,6 +254,7 @@ pub(crate) struct StageStatusSnapshot {
     pub(crate) manifest_sha256: Option<String>,
     pub(crate) source_model_path: Option<String>,
     pub(crate) source_model_sha256: Option<String>,
+    pub(crate) split_certification: Option<String>,
     pub(crate) source_model_bytes: Option<u64>,
     pub(crate) materialized_path: Option<String>,
     pub(crate) materialized_pinned: bool,
@@ -278,4 +281,7 @@ pub(crate) struct StageStatusSnapshot {
     pub(crate) coordinator_term: u64,
     pub(crate) coordinator_id: Option<iroh::EndpointId>,
     pub(crate) lease_until_unix_ms: u64,
+    /// Cumulative runtime compute-busy time; see `skippy_server::compute_meter`.
+    pub(crate) compute_busy_nanos: u64,
+    pub(crate) compute_operations: u64,
 }

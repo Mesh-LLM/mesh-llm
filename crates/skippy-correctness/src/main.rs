@@ -47,6 +47,7 @@ fn main() -> Result<()> {
         CommandKind::RemoteHandoff(args) => remote_handoff(args),
         CommandKind::SplitPrefixHit(args) => split_prefix_hit(args),
         CommandKind::NativeMtpOpenAiAb(args) => native_mtp_openai_ab(*args),
+        CommandKind::NativeMtpHeads(args) => runner::native_mtp_heads::native_mtp_heads(args),
         CommandKind::GlmDsaStage0Trace(args) => glm_dsa_stage0_trace(*args),
         CommandKind::StageFaParity(args) => stage_fa_parity(args),
         CommandKind::KvPageGrowth(args) => kv_page_growth(args),

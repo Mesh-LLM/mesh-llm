@@ -1,4 +1,5 @@
 mod attestation;
+mod auto_balance;
 mod coordinator;
 mod loading;
 mod recovery;
@@ -86,9 +87,24 @@ pub(super) struct SplitRuntimeGenerationHandle {
 }
 
 pub(super) enum SplitCoordinatorEvent {
+    /// Stop admitting new requests to the serving generation and hand back its
+    /// lifecycle record so the coordinator can wait for in-flight work before
+    /// a planned cutover. Admission resumes when the next `Replace` re-arms
+    /// the record, or when the coordinator re-arms it after a failed load.
+    Drain(SplitCoordinatorDrainEvent),
     Replace(Box<SplitCoordinatorReplaceEvent>),
     LocalFallback(SplitCoordinatorLocalFallbackEvent),
     Withdraw(SplitCoordinatorWithdrawEvent),
+}
+
+pub(super) struct SplitCoordinatorDrainEvent {
+    pub(super) reason: &'static str,
+    pub(super) deadline: std::time::Instant,
+    pub(super) ack: tokio::sync::oneshot::Sender<
+        Option<
+            std::sync::Arc<tokio::sync::Mutex<super::instance_lifecycle::InstanceLifecycleRecord>>,
+        >,
+    >,
 }
 
 pub(super) struct SplitCoordinatorReplaceEvent {
@@ -162,16 +178,21 @@ pub(super) async fn start_runtime_split_model(
     spec.capacity_budget_bytes = spec.capacity_budget_bytes.filter(|bytes| *bytes > 0);
     let local_source_required = spec.local_source_required;
     skippy::register_local_source_policy(model_ref, spec.runtime_profile, local_source_required);
-    // Resolve the immutable identity and fail closed before coordinator
-    // election. This keeps unsupported artifacts out of topology planning and
-    // ensures every candidate coordinator applies the same admission policy.
+    // Resolve immutable identity and architecture, then fail closed before
+    // coordinator election. This keeps unsupported architectures out of
+    // topology planning and ensures every candidate applies the same policy.
     let preindexed_package = match spec.preindexed_split_package {
         Some(package) => package.clone(),
         None => {
             resolve_split_runtime_package(spec.model_path, model_ref, local_source_required).await?
         }
     };
-    skippy::require_split_certification(&preindexed_package, spec.allow_uncertified_split)?;
+    let preindexed_compact_meta = split_runtime_compact_meta(&preindexed_package).await?;
+    let split_certification = skippy::require_split_certification(
+        &preindexed_package,
+        &preindexed_compact_meta.architecture,
+        spec.allow_uncertified_split,
+    )?;
     let coordinator_start = elect_split_start_coordinator(
         &spec,
         model_ref,
@@ -195,7 +216,7 @@ pub(super) async fn start_runtime_split_model(
         &settled_membership,
         canonical_coordinator,
         Duration::from_secs(30),
-        Some(preindexed_package),
+        Some((preindexed_package, preindexed_compact_meta)),
     )
     .await?;
     let SplitRuntimeStartPreparation {
@@ -264,6 +285,7 @@ pub(super) async fn start_runtime_split_model(
         projector_path: projector_path.clone(),
         ctx_size,
         compact_meta: &compact_meta,
+        split_certification,
         capacity_budget_bytes: spec.capacity_budget_bytes,
         cache_type_k_override: spec.cache_type_k_override,
         cache_type_v_override: spec.cache_type_v_override,
@@ -292,6 +314,7 @@ pub(super) async fn start_runtime_split_model(
         runtime_profile: spec.runtime_profile.to_string(),
         package: package.clone(),
         compact_meta: compact_meta.clone(),
+        split_certification,
         active,
         projector_path,
         ctx_size,
@@ -302,6 +325,7 @@ pub(super) async fn start_runtime_split_model(
                 .recurrent_bytes_per_configured_lane_by_layer(),
             ctx_size_override: spec.ctx_size_override,
             parallel_override: spec.parallel_override,
+            auto_balance: spec.auto_balance,
         },
         cache_type_k_override: spec.cache_type_k_override.map(str::to_string),
         cache_type_v_override: spec.cache_type_v_override.map(str::to_string),
@@ -318,6 +342,11 @@ pub(super) async fn start_runtime_split_model(
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
         previously_unavailable_stage_nodes: Vec::new(),
+        auto_balance: (spec.auto_balance && !topology_locked).then(|| {
+            auto_balance::AutoBalanceController::new(
+                auto_balance::AutoBalanceControllerConfig::from_env(),
+            )
+        }),
         topology_locked,
         local_source_required,
         health_interval: loading::configured_stage_lifecycle_intervals(
@@ -347,13 +376,17 @@ async fn prepare_split_runtime_start(
     settled_membership: &[SplitParticipant],
     canonical_coordinator: iroh::EndpointId,
     timeout: Duration,
-    preindexed_package: Option<skippy::SkippyPackageIdentity>,
+    preindexed: Option<(skippy::SkippyPackageIdentity, models::gguf::GgufCompactMeta)>,
 ) -> Result<SplitRuntimeStartPreparation> {
     let local_source_required = spec.local_source_required;
-    let package = match preindexed_package {
-        Some(package) => package,
+    let (package, compact_meta) = match preindexed {
+        Some(preindexed) => preindexed,
         None => {
-            resolve_split_runtime_package(spec.model_path, model_ref, local_source_required).await?
+            let package =
+                resolve_split_runtime_package(spec.model_path, model_ref, local_source_required)
+                    .await?;
+            let compact_meta = split_runtime_compact_meta(&package).await?;
+            (package, compact_meta)
         }
     };
     let participant_snapshot = wait_for_split_participants(SplitParticipantWaitRequest {
@@ -368,7 +401,6 @@ async fn prepare_split_runtime_start(
         timeout,
     })
     .await?;
-    let compact_meta = split_runtime_compact_meta(&package).await?;
     let kv_bytes_per_token = split_runtime_kv_bytes_per_token(
         &package,
         &compact_meta,
@@ -382,6 +414,7 @@ async fn prepare_split_runtime_start(
             .recurrent_bytes_per_configured_lane_by_layer(),
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
+        auto_balance: spec.auto_balance,
     };
     let configured_locked_stages = load_configured_split_assignments(
         spec.mesh_config,
@@ -544,7 +577,7 @@ fn realize_split_stage_admissions(
     } else {
         anyhow::ensure!(
             model_path.is_file(),
-            "generation-10 direct-GGUF split source must be a local file: {}",
+            "generation-11 direct-GGUF split source must be a local file: {}",
             model_path.display()
         );
         super::stage_admission::realize_direct_gguf_stage_admissions(
@@ -556,7 +589,7 @@ fn realize_split_stage_admissions(
             "skippy-backend:auto:v1",
         )
     }
-    .context("realize and admit generation-10 native stage chain")
+    .context("realize and admit generation-11 native stage chain")
 }
 
 async fn elect_split_start_coordinator(

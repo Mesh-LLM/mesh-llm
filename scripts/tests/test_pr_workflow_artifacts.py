@@ -8,7 +8,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 PLATFORM = WORKFLOWS / "ci-platform-checks-slice.yml"
-NON_VALIDATION_PR_WORKFLOWS = {"pr_auto_assign.yml", "pr_cleanup.yml"}
+NON_VALIDATION_PR_WORKFLOWS = {
+    "pr_auto_assign.yml",
+    "pr_cleanup.yml",
+    "pr_ci_canary.yml",
+}
 
 
 def workflow_triggers(path: Path) -> set[str]:
@@ -141,6 +145,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
     def test_ci_docs_forbid_monolithic_or_dispatch_only_pr_visibility(self):
         docs = (ROOT / "ci" / "ci.md").read_text()
         self.assertIn("The five-way split is a hard CI architecture invariant", docs)
+        self.assertIn("optional, non-required diagnostic exception", docs)
         self.assertIn("`dispatched`, with the real work detached", docs)
         self.assertIn("Do not add another all-lanes PR", docs)
         self.assertIn("Do not funnel main pushes through `ci-control.yml`", docs)
@@ -240,7 +245,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("Save trusted Skippy correctness model cache", workflow)
         self.assertIn("uses: actions/cache/save@", workflow)
         self.assertIn(
-            "if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') && "
+            "if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') && "
             "needs.runner_policy.outputs.allow_native_github_cache == 'true'",
             workflow,
         )

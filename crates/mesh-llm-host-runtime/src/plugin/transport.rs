@@ -358,7 +358,7 @@ pub(crate) async fn bind_local_listener(instance_id: &str, name: &str) -> Result
         let server = tokio::net::windows::named_pipe::ServerOptions::new()
             .create(&endpoint)
             .with_context(|| format!("Failed to create plugin pipe {endpoint}"))?;
-        return Ok(LocalListener::Pipe(endpoint, server));
+        Ok(LocalListener::Pipe(endpoint, server))
     }
 }
 

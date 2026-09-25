@@ -20,6 +20,7 @@ pub enum CommandKind {
     RemoteHandoff(RemoteHandoffArgs),
     SplitPrefixHit(SplitPrefixHitArgs),
     NativeMtpOpenAiAb(Box<NativeMtpOpenAiAbArgs>),
+    NativeMtpHeads(NativeMtpHeadsArgs),
     GlmDsaStage0Trace(Box<GlmDsaStage0TraceArgs>),
     StageFaParity(StageFaParityArgs),
     KvPageGrowth(KvPageGrowthArgs),
@@ -159,6 +160,15 @@ pub struct NativeMtpArgs {
         help = "Fail the correctness run unless the final stage returns a native MTP draft sideband"
     )]
     pub require_native_mtp_draft: bool,
+}
+
+/// Exercise every integrated prediction head and compare target state with a clean decoder.
+#[derive(Args)]
+pub struct NativeMtpHeadsArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Args)]

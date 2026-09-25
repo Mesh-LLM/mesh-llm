@@ -1,7 +1,7 @@
 use skippy_ffi::{
     FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS, FEATURE_KV_EVENTS,
-    FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS,
-    FEATURE_UNLOAD_EVENTS,
+    FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_NON_CHAT_WORKLOADS, FEATURE_RUNTIME_EVENT_REPORTER,
+    FEATURE_RUNTIME_EVENTS, FEATURE_UNLOAD_EVENTS,
 };
 
 use crate::logging::write_native_log_note;
@@ -10,7 +10,7 @@ use crate::runtime_events::abi_features_bitmask;
 /// Highest feature bit this build's probe understands. A queried bitmask
 /// setting any bit above this is reserved to a future build, not tied to a
 /// specific family, and is reported once rather than disabling anything.
-const MAX_KNOWN_FEATURE_BIT: u32 = 36;
+const MAX_KNOWN_FEATURE_BIT: u32 = 37;
 
 struct FamilySpec {
     bit: u64,
@@ -59,6 +59,16 @@ const FAMILIES: &[FamilySpec] = &[
         bit: FEATURE_UNLOAD_EVENTS,
         name: "unload_events",
         required_symbols: &[b"skippy_emit_unload_event\0"],
+    },
+    FamilySpec {
+        bit: FEATURE_NON_CHAT_WORKLOADS,
+        name: "non_chat_workloads",
+        required_symbols: &[
+            b"skippy_model_workload_info_v1\0",
+            b"skippy_session_embed\0",
+            b"skippy_session_rerank\0",
+            b"skippy_session_encode_prompt\0",
+        ],
     },
 ];
 
@@ -140,8 +150,8 @@ pub(crate) fn symbol_available(name: &[u8]) -> bool {
     }
 }
 
-/// Probes the loaded native runtime's optional family bit+symbol groups
-/// (bits 24 and 31-36), logging one bounded health record per malformed
+/// Probes the loaded native runtime's family bit+symbol groups
+/// (bits 24 and 31-37), logging one bounded health record per malformed
 /// family plus at most one for reserved bits. Callers must have already
 /// confirmed exact ABI compatibility; this probe never runs that check
 /// itself.
@@ -162,6 +172,57 @@ pub fn probe_capabilities() -> CapabilityReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const WORKLOAD_SYMBOLS: &[&[u8]] = &[
+        b"skippy_model_workload_info_v1\0",
+        b"skippy_session_embed\0",
+        b"skippy_session_rerank\0",
+        b"skippy_session_encode_prompt\0",
+    ];
+
+    #[test]
+    fn complete_workload_family_checks_all_exports_without_reserved_warning() {
+        let checked = std::cell::RefCell::new(Vec::new());
+        let report = build_report(FEATURE_NON_CHAT_WORKLOADS, |symbol| {
+            checked.borrow_mut().push(symbol.to_vec());
+            WORKLOAD_SYMBOLS.contains(&symbol)
+        });
+        assert_eq!(report.confirmed, FEATURE_NON_CHAT_WORKLOADS);
+        assert!(report.health_messages.is_empty());
+        assert_eq!(*checked.borrow(), WORKLOAD_SYMBOLS);
+    }
+
+    #[test]
+    fn each_missing_workload_export_disables_only_the_workload_family() {
+        for missing in WORKLOAD_SYMBOLS {
+            let report = build_report(FEATURE_NON_CHAT_WORKLOADS | FEATURE_KV_EVENTS, |symbol| {
+                symbol != *missing
+            });
+            assert!(!report.family_confirmed(FEATURE_NON_CHAT_WORKLOADS));
+            assert!(report.family_confirmed(FEATURE_KV_EVENTS));
+            assert_eq!(report.health_messages.len(), 1);
+            assert!(report.health_messages[0].contains("non_chat_workloads"));
+            assert!(!report.health_messages[0].contains("reserved"));
+        }
+    }
+
+    #[test]
+    fn unadvertised_workload_family_does_not_resolve_its_exports() {
+        let report = build_report(FEATURE_KV_EVENTS, |symbol| {
+            assert!(!WORKLOAD_SYMBOLS.contains(&symbol));
+            true
+        });
+        assert_eq!(report.confirmed, FEATURE_KV_EVENTS);
+        assert!(report.health_messages.is_empty());
+    }
+
+    #[test]
+    fn the_bit_after_workloads_remains_reserved() {
+        let report = build_report(FEATURE_NON_CHAT_WORKLOADS | (1 << 38), |_| true);
+        assert!(report.family_confirmed(FEATURE_NON_CHAT_WORKLOADS));
+        assert_eq!(report.health_messages.len(), 1);
+        assert!(report.health_messages[0].contains("reserved"));
+    }
 
     #[test]
     fn missing_family_falls_back_without_a_health_message() {

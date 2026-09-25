@@ -15,6 +15,7 @@ use crate::network::affinity::{
 use crate::network::openai::auto_route;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response_quality::ResponseQualityFailure;
+use crate::network::openai::workload_routing;
 use crate::network::router;
 use std::time::{Duration, Instant};
 
@@ -25,13 +26,12 @@ pub use super::request_parse::{
     read_http_request, rewrite_model_field, rewrite_public_model_alias,
 };
 pub(crate) use super::response::{
-    PipelineCapsuleNonce, PipelineProxyResult, append_safe_header, pipeline_proxy_local,
-    send_400_observed, send_503_observed, send_error_observed, send_json_ok_with_headers,
-    send_json_with_status_and_headers_observed, send_models_list_with_descriptors,
+    PeerCapsuleIdSink, PipelineCapsuleNonce, PipelineProxyResult, append_safe_header,
+    pipeline_proxy_local, send_400_observed, send_409_observed, send_503_observed,
+    send_error_observed, send_json_ok_with_headers, send_json_with_status_and_headers_observed,
+    send_models_list_with_descriptors,
 };
-pub(crate) use super::routing_rank::{
-    capabilities_for_model, descriptor_metadata_for_model, request_budget_tokens_from_parts,
-};
+pub(crate) use super::routing_rank::{capabilities_for_model, request_budget_tokens_from_parts};
 
 use super::response::{
     CacheCostObservation, ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
@@ -65,6 +65,22 @@ pub(crate) enum RouteDispatchOutcome {
     RespondedWithUsage {
         status_code: u16,
         usage: TokenUsage,
+        /// Digests over the REAL served response body (response / tool_calls
+        /// / reasoning), lifted from [`RouteAttemptResult::Delivered`]'s own
+        /// field of the same name. `Copy` (raw sha-256 bytes) so this outcome
+        /// stays `Copy`. Default (all-`None`) wherever no such body was
+        /// captured or assembled, so the terminal event simply omits those
+        /// digests rather than fabricating any.
+        output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
+    },
+    /// A response body was written whose digests the host captured, but the
+    /// backend reported no `usage` for it. Digests do not depend on `usage`:
+    /// a JSON error body, or a served body from any backend that omits the
+    /// OpenAI `usage` object, still digests — and would otherwise be silently
+    /// dropped at the `usage.map_or` boundary that builds these outcomes.
+    RespondedWithDigests {
+        status_code: u16,
+        output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
     },
     Failed(&'static str),
     FailedWithStatus {
@@ -72,6 +88,29 @@ pub(crate) enum RouteDispatchOutcome {
         reason: &'static str,
     },
     Dropped(&'static str),
+}
+
+/// The dispatch outcome for a [`RouteAttemptResult::Delivered`] attempt: the
+/// backend's `usage` when it reported any, and the captured response digests
+/// whenever the body was digestsable — the two are independent, so a delivered
+/// body that carried no `usage` still reports its digests.
+pub(super) fn delivered_outcome(
+    status_code: u16,
+    usage: Option<TokenUsage>,
+    output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
+) -> RouteDispatchOutcome {
+    match usage {
+        Some(usage) => RouteDispatchOutcome::RespondedWithUsage {
+            status_code,
+            usage,
+            output_digests,
+        },
+        None if output_digests.has_any() => RouteDispatchOutcome::RespondedWithDigests {
+            status_code,
+            output_digests,
+        },
+        None => RouteDispatchOutcome::Responded(status_code),
+    }
 }
 
 pub(super) fn record_moa_stream_lifecycle(
@@ -90,11 +129,17 @@ pub(super) fn record_moa_stream_lifecycle(
         RouteDispatchOutcome::RespondedWithUsage {
             status_code: 200..=299,
             usage,
+            ..
         } => observer.stream_completed(Some(usage)),
-        RouteDispatchOutcome::Responded(200..=299) => observer.stream_completed(None),
+        RouteDispatchOutcome::Responded(200..=299)
+        | RouteDispatchOutcome::RespondedWithDigests {
+            status_code: 200..=299,
+            ..
+        } => observer.stream_completed(None),
         RouteDispatchOutcome::Failed(_)
         | RouteDispatchOutcome::FailedWithStatus { .. }
         | RouteDispatchOutcome::Responded(_)
+        | RouteDispatchOutcome::RespondedWithDigests { .. }
         | RouteDispatchOutcome::RespondedWithUsage { .. }
         | RouteDispatchOutcome::Dropped(_) => observer.stream_error("moa_stream_failed"),
     }
@@ -102,7 +147,12 @@ pub(super) fn record_moa_stream_lifecycle(
 
 impl RouteDispatchOutcome {
     pub(crate) const fn response_written(self) -> bool {
-        matches!(self, Self::Responded(_) | Self::RespondedWithUsage { .. })
+        matches!(
+            self,
+            Self::Responded(_)
+                | Self::RespondedWithUsage { .. }
+                | Self::RespondedWithDigests { .. }
+        )
     }
 
     pub(crate) fn terminal_outcome(self) -> crate::logging::TerminalOutcome {
@@ -110,7 +160,9 @@ impl RouteDispatchOutcome {
             Self::Responded(status @ 200..=299) => {
                 crate::logging::TerminalOutcome::CompletedWithStatus(status)
             }
-            Self::RespondedWithUsage { status_code, usage } => match status_code {
+            Self::RespondedWithUsage {
+                status_code, usage, ..
+            } => match status_code {
                 200..=299 => {
                     crate::logging::TerminalOutcome::CompletedWithUsage { status_code, usage }
                 }
@@ -133,6 +185,11 @@ impl RouteDispatchOutcome {
                 error: format!("http_status_{status}"),
                 status_code: status,
             },
+            // Same classification as `Responded`: this variant exists only to
+            // carry digests, which the terminal outcome does not report.
+            Self::RespondedWithDigests { status_code, .. } => {
+                Self::Responded(status_code).terminal_outcome()
+            }
             Self::Failed(reason) => crate::logging::TerminalOutcome::Failed(reason.into()),
             Self::FailedWithStatus {
                 status_code,
@@ -172,11 +229,12 @@ pub(crate) async fn reject_legacy_lifecycle_request(
     )
 }
 
-/// Generation context is a property of decode requests, not capability RPCs.
-/// A tokenizer request may carry a megabyte of source text while using no
-/// target KV context at all.
+/// Generation context cannot be estimated from every request body's byte size.
+/// Tokenizer requests use no target KV context, and multipart audio bodies
+/// contain encoded media rather than text tokens. The audio backend performs
+/// the authoritative media/context validation after routing.
 pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u32> {
-    if request.is_tokenize_request() {
+    if request.is_tokenize_request() || request.is_audio_upload_request() {
         None
     } else {
         request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens)
@@ -186,6 +244,7 @@ pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u3
 enum AutoModelResolution {
     Model(Option<String>),
     UnsupportedMedia,
+    UnsupportedWorkload,
 }
 
 enum MeshTargetResolution {
@@ -206,6 +265,7 @@ struct MeshRequestPlan {
 
 enum MeshRequestFailure {
     UnsupportedMedia,
+    UnsupportedWorkload,
     ModelUnavailable(String),
     NoHostsAvailable,
 }
@@ -417,6 +477,9 @@ pub async fn handle_mesh_request(
     release_request_objects(&node, &request.request_object_request_ids).await;
 }
 
+// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn route_mesh_moa_or_passthrough(
     node: &mesh::Node,
     tcp_stream: ClientStream,
@@ -430,15 +493,18 @@ async fn route_mesh_moa_or_passthrough(
     let moa_model_name = request.model_name.clone();
     let moa_required_tokens = request_context_budget(request);
     let adapter = request.response_adapter;
+    let mesh_routing_requested =
+        crate::network::openai::ingress::mesh_routing_headers_requested(request);
     let result = match crate::network::openai::moa_gateway::try_handle_moa(
         node,
         tcp_stream,
         request,
         moa_model_name.as_deref(),
-        super::moa_gateway::MoaRoutingContext {
+        crate::network::openai::moa_gateway::MoaRoutingContext {
             targets: None, // passive path has no local targets table
             required_tokens: moa_required_tokens,
             affinity,
+            mesh_routing_requested,
         },
         route_observer,
     )
@@ -451,7 +517,13 @@ async fn route_mesh_moa_or_passthrough(
         crate::network::openai::moa_gateway::MoaDispatchResult::RespondedWithUsage {
             status_code,
             usage,
-        } => Err(RouteDispatchOutcome::RespondedWithUsage { status_code, usage }),
+        } => Err(RouteDispatchOutcome::RespondedWithUsage {
+            status_code,
+            usage,
+            // The MoA gateway aggregates across sub-calls; no single buffered
+            // response body is captured here to digest.
+            output_digests: Default::default(),
+        }),
         crate::network::openai::moa_gateway::MoaDispatchResult::FailedWithStatus {
             status_code,
             reason,
@@ -508,7 +580,21 @@ async fn build_mesh_request_plan(
         AutoModelResolution::UnsupportedMedia => {
             return Err(MeshRequestFailure::UnsupportedMedia);
         }
+        AutoModelResolution::UnsupportedWorkload => {
+            return Err(MeshRequestFailure::UnsupportedWorkload);
+        }
     };
+    if let Some(model) = effective_model.as_deref()
+        && let Some(workload) = workload_routing::request_workload_class(&request.client_path)
+        && !workload_routing::model_satisfies_request_workload(
+            model,
+            workload,
+            &request.client_path,
+            &descriptors,
+        )
+    {
+        return Err(MeshRequestFailure::UnsupportedWorkload);
+    }
     rewrite_effective_model(request, effective_model.as_deref());
     if is_auto_request {
         inject_mesh_hooks_flag(&mut request.raw, true);
@@ -524,6 +610,21 @@ async fn build_mesh_request_plan(
         }
         MeshTargetResolution::NoHostsAvailable => return Err(MeshRequestFailure::NoHostsAvailable),
     };
+
+    let resolved_hosts = if let Some(model) = effective_model.as_deref() {
+        workload_routing::eligible_remote_hosts(node, model, &request.client_path, &resolved_hosts)
+            .await
+    } else {
+        resolved_hosts
+    };
+    if resolved_hosts.is_empty() {
+        // Fleet-wide admission already rejected a workload no descriptor
+        // advertises, so an empty set here means the resolved hosts dropped out
+        // of the eligible set — a peer that vanished between discovery and this
+        // filter, most often. That is transient routing state, not a client
+        // request error, so answer with the no-hosts path the resolver uses.
+        return Err(MeshRequestFailure::NoHostsAvailable);
+    }
 
     let mut prepared = prepare_mesh_targets(
         request,
@@ -571,7 +672,7 @@ fn prepare_mesh_targets(
     if !request.is_tokenize_request() && effective_model.is_some() && !target_hosts.is_empty() {
         request.ensure_body_json();
     }
-    let body_json = request.body_json.as_ref();
+    let body_json = workload_routing::affinity_body(request);
     effective_model
         .map(|name| prepare_remote_targets_for_request(name, target_hosts, body_json, affinity))
         .unwrap_or(PreparedTargets {
@@ -651,6 +752,15 @@ async fn handle_mesh_request_failure(
 ) {
     let mut tcp_stream = Some(tcp_stream);
     match failure {
+        MeshRequestFailure::UnsupportedWorkload => {
+            let _ = send_error_observed(
+                tcp_stream.take().unwrap(),
+                422,
+                "no serving target advertises support for the requested workload endpoint",
+                route_observer,
+            )
+            .await;
+        }
         MeshRequestFailure::UnsupportedMedia => {
             let _ = send_error_observed(
                 tcp_stream.take().unwrap(),
@@ -728,6 +838,15 @@ async fn route_mesh_request_attempts(
                 retry_policy: ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
                 response_adapter: request.response_adapter,
                 route_observer,
+                // This is the separate "mesh" auto-plan fan-out across many
+                // candidate hosts, not the `x-mesh-target` forced single-peer
+                // path -- there is no one chosen target to echo here.
+                served_by: None,
+                // Not the `RemoteMesh` dispatch path (see
+                // `network::openai::ingress::route_missing_local_model`) —
+                // this fan-out has no plugin-channel pair to attach a peer
+                // capsule id to.
+                peer_capsule_id: None,
             },
         )
         .await;
@@ -911,6 +1030,7 @@ fn handle_mesh_attempt_result(
             status_code,
             usage,
             cache_cost,
+            output_digests,
         } => {
             let outcome = request_outcome_for_status(
                 status_code,
@@ -929,6 +1049,7 @@ fn handle_mesh_attempt_result(
                 status_code,
                 usage,
                 cache_cost,
+                output_digests,
             })
         }
         RouteAttemptResult::RetryableContextOverflow => handle_retryable_context_overflow(context),
@@ -1011,10 +1132,14 @@ fn terminal_outcome_for_mesh_route_result(
     }
 }
 
+/// Distinguish rejected workload/media admission from unavailable-model routing failures.
 fn terminal_outcome_for_mesh_request_failure(
     failure: &MeshRequestFailure,
 ) -> crate::logging::TerminalOutcome {
     match failure {
+        MeshRequestFailure::UnsupportedWorkload => {
+            crate::logging::TerminalOutcome::Rejected(Some("unsupported_workload".into()))
+        }
         MeshRequestFailure::UnsupportedMedia => {
             crate::logging::TerminalOutcome::Rejected(Some("unsupported_media".into()))
         }
@@ -1119,11 +1244,12 @@ async fn finish_exhausted_mesh_request(
     let _ = send_503_observed(tcp_stream, &reason, route_observer).await;
 }
 
+/// Derive generation affinity only for automatic chat routes, never stateless workloads.
 fn auto_session_key_for_request(
     request: &mut BufferedHttpRequest,
     is_auto_request: bool,
 ) -> Option<u64> {
-    if !is_auto_request {
+    if !is_auto_request || !workload_routing::supports_generation_affinity(&request.client_path) {
         return None;
     }
     request.ensure_body_json();
@@ -1159,34 +1285,30 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
         return AutoModelResolution::Model(None);
     }
     request.ensure_body_json();
-    let Some(body_json) = request.body_json.as_ref() else {
+    if request.body_json.is_none() && !workload_routing::is_audio_upload_path(&request.client_path)
+    {
         return AutoModelResolution::Model(None);
-    };
-    let media = router::media_requirements(body_json);
-    // Build candidates with observed throughput so pick_model_classified
-    // can weight by locally-measured tok/s where samples exist.
-    let routing_metrics = node.routing_metrics();
-    let with_caps: Vec<router::RoutingCandidate<'_>> = served
-        .iter()
-        .map(|name| {
-            let caps = capabilities_for_model(name, descriptors);
-            let (tps_hint, throughput_samples) = routing_metrics
-                .tps_for_model(name)
-                .map(|(tps, samples)| (Some(tps), samples))
-                .unwrap_or((None, 0));
-            router::RoutingCandidate {
-                name: name.as_str(),
-                caps,
-                parameter_count_b: descriptor_metadata_for_model(name, descriptors)
-                    .and_then(|metadata| metadata.parameter_count_b),
-                tps_hint,
-                throughput_samples,
-            }
-        })
-        .collect();
+    }
+    let empty_body = serde_json::Value::Null;
+    let body_json = request.body_json.as_ref().unwrap_or(&empty_body);
+    let media = workload_routing::request_media(&request.client_path, request.body_json.as_ref());
+    let with_caps =
+        workload_routing::routing_candidates(node, served, &request.client_path, descriptors);
+    if with_caps.is_empty()
+        && workload_routing::request_workload_class(&request.client_path).is_some()
+    {
+        return AutoModelResolution::UnsupportedWorkload;
+    }
     let available = router::filter_media_compatible_candidates(&with_caps, &media);
     let ready_models = if let Some(available) = available.as_ref() {
-        auto_route::ready_remote_models(node, required_tokens, available, affinity).await
+        auto_route::ready_remote_models(
+            node,
+            required_tokens,
+            &request.client_path,
+            available,
+            affinity,
+        )
+        .await
     } else {
         Vec::new()
     };
@@ -1200,7 +1322,12 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     )
     .await
     {
-        return AutoModelResolution::Model(Some(model));
+        if with_caps.iter().any(|candidate| candidate.name == model) {
+            return AutoModelResolution::Model(Some(model));
+        }
+        if let Some(key) = auto_session_key {
+            affinity.forget_auto_model(key);
+        }
     }
 
     let Some(available) = available else {
@@ -1515,6 +1642,8 @@ pub async fn route_to_target(
             retry_policy,
             response_adapter,
             route_observer,
+            served_by: None,
+            peer_capsule_id: None,
         },
     )
     .await;
@@ -1534,7 +1663,10 @@ pub async fn route_to_target(
     );
     match result {
         RouteAttemptResult::Delivered {
-            status_code, usage, ..
+            status_code,
+            usage,
+            output_digests,
+            ..
         } => {
             let service = request_service_for_target(&target);
             let outcome = request_outcome_for_status(status_code, service);
@@ -1547,9 +1679,7 @@ pub async fn route_to_target(
                 );
             }
             node.record_routed_request(model, 1, outcome);
-            usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
-                RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
-            })
+            delivered_outcome(status_code, usage, output_digests)
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow
@@ -1606,6 +1736,8 @@ pub async fn route_http_endpoint_request(
             retry_policy: ResponseRetryPolicy::next_target_available(false),
             response_adapter: request.response_adapter,
             route_observer,
+            served_by: None,
+            peer_capsule_id: None,
         },
     )
     .await;
@@ -1633,7 +1765,10 @@ pub async fn route_http_endpoint_request(
     );
     match result {
         RouteAttemptResult::Delivered {
-            status_code, usage, ..
+            status_code,
+            usage,
+            output_digests,
+            ..
         } => {
             let outcome = request_outcome_for_status(
                 status_code,
@@ -1648,9 +1783,7 @@ pub async fn route_http_endpoint_request(
                 );
             }
             node.record_routed_request(model, 1, outcome);
-            usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
-                RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
-            })
+            delivered_outcome(status_code, usage, output_digests)
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow

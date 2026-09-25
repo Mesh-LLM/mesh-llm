@@ -138,7 +138,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-website-lane.yml": 2,
             "ci-linux-lane.yml": 10,
             "ci-macos-lane.yml": 9,
-            "ci-windows-lane.yml": 7,
+            "ci-windows-lane.yml": 6,
         }
         for workflow_name, expected_calls in lane_workflows.items():
             with self.subTest(workflow=workflow_name):
@@ -169,7 +169,6 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "swift-sdk-artifact.yml",
             "smoke.yml",
             "scripted-binary-smoke.yml",
-            "product-integration-smoke.yml",
             "sdk-smoke.yml",
             "hf-download-smoke.yml",
         )
@@ -179,10 +178,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn("source_sha:", workflow)
                 checkout_ref = (
                     "ref: ${{ inputs.source_sha }}"
-                    if workflow_name in (
-                        "ci-windows-runtime-slice.yml",
-                        "product-integration-smoke.yml",
-                    )
+                    if workflow_name == "ci-windows-runtime-slice.yml"
                     else "ref: ${{ inputs.source_sha || github.sha }}"
                 )
                 self.assertIn(
@@ -215,15 +211,11 @@ class CiLaneWorkflowTests(unittest.TestCase):
         for platform in ("linux", "macos", "windows"):
             self.assertIn(f'select(.platform == "{platform}")', action)
         self.assertIn(
-            'smoke: [.matrices.smoke[] | select(.id != "metal-model-load" and .id != "product-integration-metal" and .id != "product-integration-windows-cpu")]',
+            'smoke: [.matrices.smoke[] | select(.id != "metal-model-load")]',
             action,
         )
         self.assertIn(
-            'smoke: [.matrices.smoke[] | select(.id == "metal-model-load" or .id == "product-integration-metal")]',
-            action,
-        )
-        self.assertIn(
-            'smoke: [.matrices.smoke[] | select(.id == "product-integration-windows-cpu")]',
+            'smoke: [.matrices.smoke[] | select(.id == "metal-model-load")]',
             action,
         )
 
@@ -322,18 +314,11 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 "core",
                 "two-node-client",
                 "two-node-split",
-                "product-integration-cpu",
-                "product-integration-cuda",
-                "qwen-recurrent-gate",
                 "core-cuda",
                 "model-download",
             ),
             "ci-macos-product-smoke-slice.yml": (
                 "metal-model-load",
-                "product-integration-metal",
-            ),
-            "ci-windows-product-smoke-slice.yml": (
-                "product-integration-windows-cpu",
             ),
         }
         for workflow_name, smoke_ids in smoke_workflows.items():
