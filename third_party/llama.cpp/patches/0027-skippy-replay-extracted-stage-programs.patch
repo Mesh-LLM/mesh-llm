@@ -4463,7 +4463,7 @@ index 000000000..b8a8a35f4
 +        const llama_model & model,
 +        const llm_graph_params & params,
 +        std::string & error) const {
-+    if (!matches_control_flow_domain(params, error)) return false;
++    if (!matches_control_flow_domain(params, &error)) return false;
 +    const bool hidden_input = std::any_of(inputs.begin(), inputs.end(), [](const input & value) {
 +        return value.kind == input_kind::embeddings_hidden;
 +    });
@@ -5279,7 +5279,7 @@ new file mode 100644
 index 000000000..16a96c117
 --- /dev/null
 +++ b/src/skippy/stage_program.h
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,304 @@
 +#pragma once
 +
 +#include "graph_identity.h"
@@ -5512,9 +5512,11 @@ index 000000000..16a96c117
 +            const llm_graph_params & params,
 +            std::string & error) const;
 +
++    // Domain checks run on every graph build, so the mismatch description is
++    // composed only when the caller passes a non-null `mismatch_description`.
 +    bool matches_control_flow_domain(
 +            const llm_graph_params & params,
-+            std::string & error) const;
++            std::string * mismatch_description) const;
 +};
 +
 +struct skippy_stage_program_installation {
@@ -7573,7 +7575,7 @@ new file mode 100644
 index 000000000..3a6aef254
 --- /dev/null
 +++ b/src/skippy/stage_program_installation.cpp
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,135 @@
 +#include "stage_program.h"
 +
 +#include "llama-graph.h"
@@ -7583,10 +7585,11 @@ index 000000000..3a6aef254
 +
 +bool skippy_stage_program::matches_control_flow_domain(
 +        const llm_graph_params & params,
-+        std::string & error) const {
-+    error.clear();
++        std::string * mismatch_description) const {
 +    if (params.computation_generation != computation_generation) {
-+        error = "stage program computation configuration changed after installation";
++        if (mismatch_description != nullptr) {
++            *mismatch_description = "stage program computation configuration changed after installation";
++        }
 +        return false;
 +    }
 +    const bool hidden_input = std::any_of(inputs.begin(), inputs.end(), [](const input & value) {
@@ -7609,7 +7612,8 @@ index 000000000..3a6aef254
 +            (embedding_input && !supports_embedding_inputs) || params.n_outputs > params.ubatch.n_tokens ||
 +            !params.samplers.empty() || params.build_inputs.selection.layer_start != layer_start ||
 +            params.build_inputs.selection.layer_end != layer_end) {
-+        error = "runtime graph is outside the recorded stage program control-flow domain: gtype=" +
++        if (mismatch_description != nullptr) {
++            *mismatch_description = "runtime graph is outside the recorded stage program control-flow domain: gtype=" +
 +                std::to_string(static_cast<uint32_t>(params.gtype)) + "/" + std::to_string(graph_type) +
 +                " nextn_offset=" + std::to_string(params.cparams.nextn_layer_offset) + "/" +
 +                std::to_string(nextn_layer_offset) +
@@ -7627,6 +7631,7 @@ index 000000000..3a6aef254
 +                " layers=" + std::to_string(params.build_inputs.selection.layer_start) + ".." +
 +                std::to_string(params.build_inputs.selection.layer_end) + "/" +
 +                std::to_string(layer_start) + ".." + std::to_string(layer_end);
++        }
 +        return false;
 +    }
 +    return true;
@@ -7691,16 +7696,19 @@ index 000000000..3a6aef254
 +        error = "stage program is not bound to this immutable model configuration";
 +        return false;
 +    }
-+    std::string domain_error;
-+    if (program.matches_control_flow_domain(params, domain_error)) {
++    // Probe with no description so a rejected candidate costs no string work,
++    // then compose the diagnostic once every candidate has been rejected.
++    if (program.matches_control_flow_domain(params, nullptr)) {
 +        return program.instantiate(runtime_model, params, error);
 +    }
++    const skippy_stage_program * rejected = &program;
 +    for (const auto & alternative : alternatives) {
-+        if (alternative.matches_control_flow_domain(params, domain_error)) {
++        if (alternative.matches_control_flow_domain(params, nullptr)) {
 +            return alternative.instantiate(runtime_model, params, error);
 +        }
++        rejected = &alternative;
 +    }
-+    error = domain_error;
++    rejected->matches_control_flow_domain(params, &error);
 +    return false;
 +}
 diff --git a/src/skippy/stage_program_internal.h b/src/skippy/stage_program_internal.h
