@@ -646,6 +646,7 @@ HEALTH_COUNTER_FIELDS: tuple[str, ...] = (
     "cancelled_reservation_rejected",
     "terminal_delivery_failed",
     "dropped_progress",
+    "coalesced_progress",
     "dropped_diagnostic",
     "replay_evicted",
     "subscriber_disconnected",

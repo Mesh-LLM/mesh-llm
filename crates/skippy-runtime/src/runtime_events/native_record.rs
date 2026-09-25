@@ -32,6 +32,7 @@ use std::ptr;
 
 use skippy_ffi::{SkippyRuntimeEventV1 as RawRuntimeEvent, Status};
 
+use super::RUNTIME_EVENT_V1_ABI_VERSION;
 use super::wire_types::{BaseRawRuntimeEvent, MAX_DETAIL_BYTES, RuntimeEvent};
 
 /// Detail bytes carried inline. Longer detail is truncated to this and
@@ -81,9 +82,28 @@ pub struct NativeEventRecord {
     pub detail: [u8; INLINE_DETAIL_BYTES],
 }
 
+/// Why a native event was refused at the callback boundary instead of being
+/// copied into a record.
+///
+/// Every variant is decided from fixed-size header fields, so classifying a
+/// rejection is as cheap as accepting a record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordRejection {
+    /// The native side passed a null event pointer.
+    Null,
+    /// `struct_size` does not cover the base (pre-extension) layout.
+    ShortStruct,
+    /// `abi_version` is not the runtime-event v1 version this build reads.
+    AbiVersion(u32),
+    /// `detail_len` exceeds the ABI's detail bound.
+    OversizedDetail,
+}
+
 impl NativeEventRecord {
-    /// Copy `event` onto the stack, or `None` when the pointer is null or
-    /// its `struct_size` does not cover the base layout.
+    /// Copy `event` onto the stack, or say why it was refused: a null
+    /// pointer, a `struct_size` short of the base layout, an `abi_version`
+    /// other than v1, or a `detail_len` past the ABI bound. A `struct_size`
+    /// larger than the known layout is accepted; only known fields are read.
     ///
     /// Allocation-free and branch-light by construction: the only variable
     /// work is one bounded `copy_from_slice`.
@@ -96,17 +116,16 @@ impl NativeEventRecord {
     /// initialized and in bounds for the duration of this call, and
     /// `detail_ptr`'s `detail_len` bytes must be valid and immutable for
     /// the same duration.
-    pub unsafe fn from_raw_ptr(event: *const RawRuntimeEvent) -> Option<Self> {
+    pub unsafe fn from_raw_ptr(event: *const RawRuntimeEvent) -> Result<Self, RecordRejection> {
         if event.is_null() {
-            return None;
+            return Err(RecordRejection::Null);
         }
-        // Prefix-validate before any other field read, exactly as
-        // `RuntimeEvent::from_raw_ptr` does: read only `struct_size` via
-        // `read_unaligned`, and refuse to form a struct reference until it
-        // proves the allocation covers the base layout.
+        // Prefix-validate before any other field read: read only
+        // `struct_size` via `read_unaligned`, and refuse to form a struct
+        // reference until it proves the allocation covers the base layout.
         let struct_size = unsafe { ptr::read_unaligned(ptr::addr_of!((*event).struct_size)) };
         if (struct_size as usize) < mem::size_of::<BaseRawRuntimeEvent>() {
-            return None;
+            return Err(RecordRejection::ShortStruct);
         }
         let covers_extension = (struct_size as usize) >= mem::size_of::<RawRuntimeEvent>();
 
@@ -116,11 +135,14 @@ impl NativeEventRecord {
         // pattern), so reading through it never touches bytes past what
         // `struct_size` proved is allocated.
         let base = unsafe { &*event.cast::<BaseRawRuntimeEvent>() };
-
-        let declared = usize::try_from(base.detail_len).ok()?;
-        if declared > MAX_DETAIL_BYTES {
-            return None;
+        if base.abi_version != RUNTIME_EVENT_V1_ABI_VERSION {
+            return Err(RecordRejection::AbiVersion(base.abi_version));
         }
+
+        let declared = usize::try_from(base.detail_len)
+            .ok()
+            .filter(|declared| *declared <= MAX_DETAIL_BYTES)
+            .ok_or(RecordRejection::OversizedDetail)?;
         let mut detail = [0u8; INLINE_DETAIL_BYTES];
         let copied = if declared == 0 || base.detail_ptr.is_null() {
             0
@@ -154,7 +176,7 @@ impl NativeEventRecord {
             ([0; 4], 0)
         };
 
-        Some(Self {
+        Ok(Self {
             abi_version: base.abi_version,
             struct_size,
             category: base.category.0,

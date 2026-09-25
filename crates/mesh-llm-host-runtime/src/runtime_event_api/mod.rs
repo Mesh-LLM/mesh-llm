@@ -7,4 +7,5 @@
 //! `runtime_event_api::state_projection` test path resolves against a real
 //! module.
 
+pub(crate) mod node_projection;
 pub(crate) mod state_projection;

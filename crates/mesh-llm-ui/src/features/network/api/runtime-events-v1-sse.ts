@@ -107,6 +107,83 @@ export type RuntimeEventEnvelope = {
   readonly rebuildGeneration: number
 }
 
+/**
+ * Additive, optional shape of `state.node` and `state.requests[]`. Every
+ * sub-object below is omitted while the host has observed nothing for it,
+ * so an empty `runtime_state` keeps exactly the frozen fixture keys.
+ */
+export type RuntimeStateNativeRuntime = {
+  readonly status?: string
+  readonly abi_compatible?: boolean
+  readonly last_outcome?: string
+  readonly last_reason_code?: string
+}
+
+export type RuntimeStateNodeAvailability = {
+  readonly state?: string
+  readonly available_model_count?: number
+  readonly available_stage_count?: number
+  readonly local_capacity_available?: boolean
+  readonly capacity?: Readonly<Record<string, number>>
+  readonly capacity_overflow?: number
+}
+
+export type RuntimeStateDiagnosticEntry = {
+  readonly key: string
+  readonly reason_code?: string
+  readonly summary?: string
+}
+
+export type RuntimeStateDiagnostics = {
+  readonly active_warnings: readonly RuntimeStateDiagnosticEntry[]
+  readonly evicted_warnings: number
+  readonly degraded: boolean
+  readonly fatal?: RuntimeStateDiagnosticEntry
+  readonly recoverable_failures: number
+  readonly fallbacks: number
+  readonly invariant_violations: number
+}
+
+export type RuntimeStateEventSystem = {
+  readonly counts_by_kind: Readonly<Record<string, number>>
+  readonly pressure?: string
+  readonly lagging_subscribers: number
+  readonly telemetry_exporter?: string
+  readonly last_kind?: string
+}
+
+export type RuntimeStateNode = {
+  readonly rebuild_generation: number
+  readonly tracked_operation_count: number
+  readonly runtime?: RuntimeStateNativeRuntime
+  readonly availability?: RuntimeStateNodeAvailability
+  readonly diagnostics?: RuntimeStateDiagnostics
+  readonly event_system?: RuntimeStateEventSystem
+}
+
+export type RuntimeStateRequestPrefill = {
+  readonly phase?: string
+  readonly cached_tokens?: number
+  readonly computed_tokens?: number
+  readonly cache_restore?: string
+  readonly outcome?: string
+}
+
+export type RuntimeStateRequestGeneration = {
+  readonly phase?: string
+  readonly generated_tokens?: number
+  readonly first_token: boolean
+  readonly stop_condition_reached: boolean
+  readonly outcome?: string
+}
+
+export type RuntimeStateRequest = {
+  readonly id: string
+  readonly state?: string
+  readonly prefill?: RuntimeStateRequestPrefill
+  readonly generation?: RuntimeStateRequestGeneration
+}
+
 export type RuntimeEventsV1Frame =
   | { readonly type: 'runtime_state'; readonly envelope: RuntimeEventEnvelope; readonly state: Record<string, unknown> }
   | { readonly type: 'runtime_event'; readonly envelope: RuntimeEventEnvelope; readonly event: Record<string, unknown> }

@@ -13,11 +13,11 @@ use super::{
     RuntimeResourcePlanningProfile, RuntimeSurface, SkippyNativeLogForwardingGuard,
     StartupLocalModelTask, StartupMeshCreationState, StartupModelPlan, StartupModelSpec,
     StartupReadyReporter, bridge_skippy_native_logs, build_serving_list, cli_has_explicit_models,
-    configure_skippy_native_logging, emit_configuration_ui_read_only_hint,
-    initialize_embedded_runtime_entrypoint, initialize_runtime_entrypoint,
-    maybe_discover_join_candidates, next_runtime_instance_id, nostr_rediscovery, nostr_relays,
-    openai_guardrail_policy_handle, owner_runtime_config, prepare_runtime_startup,
-    publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
+    configure_lifecycle_log_parser, configure_skippy_native_logging,
+    emit_configuration_ui_read_only_hint, initialize_embedded_runtime_entrypoint,
+    initialize_runtime_entrypoint, maybe_discover_join_candidates, next_runtime_instance_id,
+    nostr_rediscovery, nostr_relays, openai_guardrail_policy_handle, owner_runtime_config,
+    prepare_runtime_startup, publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
     record_runtime_operational_event, resolve_runtime_owner_key_path,
     resolve_startup_mesh_creation_state, run_auto_join_mesh_phase, run_auto_model_identity,
     run_auto_model_path_or_shutdown, run_auto_runtime_loop_and_shutdown, run_local_model_only,
@@ -25,7 +25,7 @@ use super::{
     setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
     spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
     start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
-    swarm_capture_observer_requested,
+    structured_event_capabilities, swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -756,12 +756,12 @@ pub(super) fn configure_run_auto_process_state(
     }
 
     let native_log_rx = skippy_runtime::register_filtered_native_logs();
-    let parser_mode = native_log_parser_mode(config.runtime.lifecycle_log_parser);
-    let capabilities = skippy_runtime::probe_capabilities();
-    skippy_runtime::configure_native_log_parser(skippy_runtime::NativeLogParserPolicy::new(
-        parser_mode,
-        &capabilities,
-    ));
+    let capabilities = structured_event_capabilities(
+        skippy_runtime::probe_capabilities(),
+        mesh_llm_config::event_system_off().unwrap_or(false),
+        skippy_runtime::runtime_event_reporter_installed(),
+    );
+    configure_lifecycle_log_parser(config.runtime.lifecycle_log_parser, &capabilities);
     tracing::info!(
         source = config.runtime.lifecycle_log_parser_source.as_str(),
         "configured lifecycle native-log parser"
@@ -769,20 +769,6 @@ pub(super) fn configure_run_auto_process_state(
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));
-}
-
-pub(super) fn native_log_parser_mode(
-    mode: mesh_llm_config::LifecycleLogParserMode,
-) -> skippy_runtime::NativeLogParserMode {
-    match mode {
-        mesh_llm_config::LifecycleLogParserMode::Auto => skippy_runtime::NativeLogParserMode::Auto,
-        mesh_llm_config::LifecycleLogParserMode::Enabled => {
-            skippy_runtime::NativeLogParserMode::Enabled
-        }
-        mesh_llm_config::LifecycleLogParserMode::Disabled => {
-            skippy_runtime::NativeLogParserMode::Disabled
-        }
-    }
 }
 
 /// Lift the soft open-file limit to the hard limit. A serving node holds a
@@ -1674,6 +1660,8 @@ fn install_run_auto_runtime_event_stack_with_selector(
     let engine = crate::runtime_events::engine::RuntimeEventEngine::new();
     engine.set_progress_diagnostic_class_bypass(progress_diagnostic_class_bypass);
     crate::runtime_events::install_runtime_event_engine(engine.clone());
+    #[cfg(feature = "dynamic-native-runtime")]
+    crate::system::native_runtime_events::replay_deferred_resolution(&engine);
     // Task 3: the engine-owned driver is the process's one production
     // drain loop (defect D3 -- previously nothing but the presentation
     // subscriber's own tick ever drained anything, and that tick is now a

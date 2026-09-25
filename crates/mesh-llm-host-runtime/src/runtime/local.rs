@@ -40,11 +40,11 @@ pub(super) use super::local_split::{
     SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan, now_unix_nanos,
     start_runtime_split_model, startup_runtime_plan, stop_split_generation_cleanup,
 };
-pub(super) fn skippy_native_model_open_event_reporter(
+pub(super) fn skippy_native_model_open_events(
     model_name: String,
     progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
-) -> skippy::NativeModelOpenEventReporter {
-    native_runtime_events::skippy_native_model_open_event_reporter(model_name, progress_ingress)
+) -> skippy::NativeModelOpenEvents {
+    native_runtime_events::skippy_native_model_open_events(model_name, progress_ingress)
 }
 
 pub(super) type OpenAiGuardrailPolicyHandle = openai_frontend::GuardrailPolicyHandle;
@@ -1055,7 +1055,7 @@ async fn start_local_skippy_model(
         skippy::SkippyModelHandle::load_with_hooks_and_open_events(
             options,
             hook_policy,
-            Some(skippy_native_model_open_event_reporter(
+            Some(skippy_native_model_open_events(
                 reporter_model_name,
                 progress_ingress,
             )),
@@ -1222,7 +1222,7 @@ async fn start_local_package_v2_model(
             embedded_openai,
             hook_policy,
             skippy_telemetry,
-            Some(skippy_native_model_open_event_reporter(
+            Some(skippy_native_model_open_events(
                 reporter_model_ref,
                 progress_ingress,
             )),

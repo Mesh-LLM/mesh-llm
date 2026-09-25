@@ -68,6 +68,9 @@ pub(crate) struct RuntimeStatusPayload {
     /// Intent summary counts and errors. Optional for backward compatibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) intent_summary: Option<IntentSummary>,
+    /// Reducer-derived runtime-event summary. Optional for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) runtime_events: Option<RuntimeEventsStatusSummary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -792,6 +795,7 @@ pub(crate) fn build_runtime_status_payload(
         capabilities: None,
         lifecycle_instances: vec![],
         intent_summary: None,
+        runtime_events: None,
     }
 }
 
@@ -1192,6 +1196,7 @@ mod tests {
                 capabilities: None,
                 lifecycle_instances: vec![],
                 intent_summary: None,
+                runtime_events: None,
             },
             model_name: "Qwen".to_string(),
             models: vec![],
@@ -1264,6 +1269,7 @@ mod tests {
                 capabilities: None,
                 lifecycle_instances: vec![],
                 intent_summary: None,
+                runtime_events: None,
             },
             model_name: "Qwen".to_string(),
             models: vec!["Qwen".to_string()],
@@ -1329,6 +1335,7 @@ mod tests {
                 capabilities: None,
                 lifecycle_instances: vec![],
                 intent_summary: None,
+                runtime_events: None,
             },
             model_name: String::new(),
             models: vec![],
@@ -1403,6 +1410,7 @@ mod tests {
                 capabilities: None,
                 lifecycle_instances: vec![],
                 intent_summary: None,
+                runtime_events: None,
             },
             model_name: String::new(),
             models: vec![],

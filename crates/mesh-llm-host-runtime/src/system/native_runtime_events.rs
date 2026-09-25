@@ -56,16 +56,30 @@ fn synthetic_terminal() -> RuntimeFact {
     ))
 }
 
+mod deferred;
+pub(crate) use deferred::replay_deferred_resolution;
+
 /// One native-runtime resolution attempt. Reserved before any discovery,
-/// install, or load work begins.
+/// install, or load work begins. When no engine is installed yet (host
+/// startup resolves the runtime before the engine exists), steps are
+/// recorded and replayed once the engine is installed.
 pub(crate) struct NativeRuntimeResolution {
     root: Option<OperationReservation>,
+    deferred: Option<deferred::DeferredSteps>,
 }
 
 impl NativeRuntimeResolution {
     pub(crate) fn begin() -> Self {
         let Some(engine) = runtime_event_engine() else {
-            return Self { root: None };
+            let mut steps = deferred::DeferredSteps::default();
+            steps.record(
+                NativeRuntimeEventKind::RuntimeResolutionStarted,
+                FactData::default(),
+            );
+            return Self {
+                root: None,
+                deferred: Some(steps),
+            };
         };
         let root = engine.reserve_root(OperationId::new(), synthetic_terminal);
         if let Some(root) = &root {
@@ -75,30 +89,44 @@ impl NativeRuntimeResolution {
                 FactData::default(),
             );
         }
-        Self { root }
+        Self {
+            root,
+            deferred: None,
+        }
     }
 
-    pub(crate) fn library_loaded(&self) {
+    fn step(&mut self, kind: NativeRuntimeEventKind, data: FactData) {
         if let Some(root) = &self.root {
-            submit(
-                root,
-                NativeRuntimeEventKind::NativeLibraryLoaded,
-                FactData::default(),
-            );
+            submit(root, kind, data);
+        } else if let Some(steps) = &mut self.deferred {
+            steps.record(kind, data);
         }
+    }
+
+    fn terminal(&mut self, kind: NativeRuntimeEventKind, data: FactData) {
+        if let Some(root) = self.root.take() {
+            submit(&root, kind, data);
+        } else if let Some(mut steps) = self.deferred.take() {
+            steps.record(kind, data);
+            steps.finish();
+        }
+    }
+
+    pub(crate) fn library_loaded(&mut self) {
+        self.step(
+            NativeRuntimeEventKind::NativeLibraryLoaded,
+            FactData::default(),
+        );
     }
 
     /// §8.1 `runtime initialized` -- call once the loaded library is fully
     /// set up and ready to serve (after the runtime-scoped event reporter
     /// install attempt, win or lose). StateTransition class.
-    pub(crate) fn initialized(&self) {
-        if let Some(root) = &self.root {
-            submit(
-                root,
-                NativeRuntimeEventKind::RuntimeInitialized,
-                FactData::default(),
-            );
-        }
+    pub(crate) fn initialized(&mut self) {
+        self.step(
+            NativeRuntimeEventKind::RuntimeInitialized,
+            FactData::default(),
+        );
     }
 
     /// No compatible native library could be found at all (as opposed to
@@ -106,59 +134,59 @@ impl NativeRuntimeResolution {
     /// resolution work happened). Resolves with a real
     /// `RuntimeResolutionFailed` terminal, not a no-op release.
     pub(crate) fn unavailable(mut self, reason: ReasonCode) {
-        if let Some(root) = &self.root {
-            submit(
-                root,
-                NativeRuntimeEventKind::NativeLibraryUnavailable,
-                FactData::default(),
-            );
-        }
-        if let Some(root) = self.root.take() {
-            submit(
-                &root,
-                NativeRuntimeEventKind::RuntimeResolutionFailed,
-                FactData {
-                    outcome: Some(Outcome::Failure),
-                    reason: Some(reason),
-                    ..FactData::default()
-                },
-            );
-        }
+        self.step(
+            NativeRuntimeEventKind::NativeLibraryUnavailable,
+            FactData::default(),
+        );
+        self.failed_with(reason);
     }
 
     /// A compatible runtime is already loaded, so no resolution work
     /// actually happened: release without a terminal rather than reporting
     /// a resolution outcome for work that never ran.
     pub(crate) fn not_needed(mut self) {
+        self.deferred = None;
         if let Some(root) = self.root.take() {
             root.cancel();
         }
     }
 
     pub(crate) fn completed(mut self) {
-        if let Some(root) = self.root.take() {
-            submit(
-                &root,
-                NativeRuntimeEventKind::RuntimeResolutionCompleted,
-                FactData {
-                    outcome: Some(Outcome::Success),
-                    ..FactData::default()
-                },
-            );
-        }
+        self.terminal(
+            NativeRuntimeEventKind::RuntimeResolutionCompleted,
+            FactData {
+                outcome: Some(Outcome::Success),
+                ..FactData::default()
+            },
+        );
     }
 
     pub(crate) fn failed(mut self, reason: ReasonCode) {
-        if let Some(root) = self.root.take() {
-            submit(
-                &root,
-                NativeRuntimeEventKind::RuntimeResolutionFailed,
-                FactData {
-                    outcome: Some(Outcome::Failure),
-                    reason: Some(reason),
-                    ..FactData::default()
-                },
-            );
+        self.failed_with(reason);
+    }
+
+    fn failed_with(&mut self, reason: ReasonCode) {
+        self.terminal(
+            NativeRuntimeEventKind::RuntimeResolutionFailed,
+            FactData {
+                outcome: Some(Outcome::Failure),
+                reason: Some(reason),
+                ..FactData::default()
+            },
+        );
+    }
+}
+
+impl Drop for NativeRuntimeResolution {
+    /// A live reservation synthesizes its own terminal on drop; a deferred
+    /// resolution records the same synthetic terminal so the replayed
+    /// operation is still settled exactly once.
+    fn drop(&mut self) {
+        if let Some(mut steps) = self.deferred.take() {
+            if let RuntimeFact::NativeRuntime(fact) = synthetic_terminal() {
+                steps.record(*fact.kind(), fact.data().clone());
+            }
+            steps.finish();
         }
     }
 }
@@ -1435,7 +1463,7 @@ mod tests {
     #[serial_test::serial(runtime_event_engine_state)]
     fn resolution_reserves_before_completing_with_one_terminal() {
         let engine = install_test_engine();
-        let resolution = NativeRuntimeResolution::begin();
+        let mut resolution = NativeRuntimeResolution::begin();
         assert_eq!(engine.occupied_count(), 1);
         resolution.library_loaded();
         resolution.initialized();
@@ -1509,8 +1537,85 @@ mod tests {
     #[serial_test::serial(runtime_event_engine_state)]
     fn absent_engine_never_panics() {
         clear_runtime_event_engine();
-        let resolution = NativeRuntimeResolution::begin();
+        let mut resolution = NativeRuntimeResolution::begin();
         resolution.library_loaded();
         resolution.completed();
+        super::deferred::clear_pending();
+    }
+
+    fn native_runtime_kinds(
+        engine: &RuntimeEventEngine,
+    ) -> Vec<mesh_llm_runtime_event_contracts::NativeRuntimeEventKind> {
+        engine
+            .replay()
+            .snapshot()
+            .into_iter()
+            .filter_map(|frame| match frame.fact.as_ref() {
+                mesh_llm_runtime_event_contracts::RuntimeFact::NativeRuntime(fact) => {
+                    Some(*fact.kind())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn resolution_before_engine_install_replays_onto_the_installed_engine() {
+        use mesh_llm_runtime_event_contracts::NativeRuntimeEventKind as Kind;
+        clear_runtime_event_engine();
+        super::deferred::clear_pending();
+        let mut resolution = NativeRuntimeResolution::begin();
+        resolution.library_loaded();
+        resolution.initialized();
+        resolution.completed();
+        assert!(super::deferred::has_pending());
+
+        let engine = RuntimeEventEngine::new();
+        install_runtime_event_engine(engine.clone());
+        super::replay_deferred_resolution(&engine);
+        engine.drain();
+
+        assert_eq!(engine.occupied_count(), 0);
+        assert_eq!(
+            native_runtime_kinds(&engine),
+            vec![
+                Kind::RuntimeResolutionStarted,
+                Kind::NativeLibraryLoaded,
+                Kind::RuntimeInitialized,
+                Kind::RuntimeResolutionCompleted,
+            ]
+        );
+        assert!(!super::deferred::has_pending());
+        clear_runtime_event_engine();
+    }
+
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn deferred_resolution_dropped_without_terminal_replays_a_synthetic_one() {
+        use mesh_llm_runtime_event_contracts::NativeRuntimeEventKind as Kind;
+        clear_runtime_event_engine();
+        super::deferred::clear_pending();
+        drop(NativeRuntimeResolution::begin());
+        let engine = install_test_engine();
+        super::replay_deferred_resolution(&engine);
+        engine.drain();
+        assert_eq!(
+            native_runtime_kinds(&engine),
+            vec![
+                Kind::RuntimeResolutionStarted,
+                Kind::RuntimeResolutionFailed
+            ]
+        );
+        clear_runtime_event_engine();
+    }
+
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn deferred_not_needed_records_nothing() {
+        clear_runtime_event_engine();
+        super::deferred::clear_pending();
+        NativeRuntimeResolution::begin().not_needed();
+        assert!(!super::deferred::has_pending());
     }
 }

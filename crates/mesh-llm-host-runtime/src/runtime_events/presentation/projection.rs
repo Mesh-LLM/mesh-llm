@@ -69,7 +69,7 @@ fn outcome_str(outcome: Outcome) -> &'static str {
     }
 }
 
-fn reason_code_str(reason: &ReasonCode) -> String {
+pub(crate) fn reason_code_str(reason: &ReasonCode) -> String {
     match reason {
         ReasonCode::InvalidConfiguration => "invalid_configuration".to_string(),
         ReasonCode::UnsupportedCapability => "unsupported_capability".to_string(),
@@ -239,9 +239,9 @@ pub fn health_projection_event(
     OutputEvent::Info {
         message: format!(
             "version={} reservation_exhausted={} terminal_delivery_failed={} dropped_progress={} \
-             dropped_diagnostic={} replay_evicted={} subscriber_disconnected={} \
+             coalesced_progress={} dropped_diagnostic={} replay_evicted={} subscriber_disconnected={} \
              shutdown_degraded={} reducer_rejected={} state_transition_rejected={} \
-             cancelled_reservation_rejected={} \
+             cancelled_reservation_rejected={} dropped_native={} rejected_native={} \
              state_degraded={} rebuild_required={} rebuild_generation={} \
              bounds.reservation_table_capacity={} bounds.state_transition_lane_depth={} \
              bounds.diagnostic_lane_depth={} bounds.wake_list_depth={} \
@@ -251,6 +251,7 @@ pub fn health_projection_event(
             snapshot.reservation_exhausted,
             snapshot.terminal_delivery_failed,
             snapshot.dropped_progress,
+            snapshot.coalesced_progress,
             snapshot.dropped_diagnostic,
             snapshot.replay_evicted,
             snapshot.subscriber_disconnected,
@@ -258,6 +259,8 @@ pub fn health_projection_event(
             snapshot.reducer_rejected,
             snapshot.state_transition_rejected,
             snapshot.cancelled_reservation_rejected,
+            snapshot.dropped_native,
+            snapshot.rejected_native,
             snapshot.state_degraded,
             snapshot.rebuild_required,
             snapshot.rebuild_generation,

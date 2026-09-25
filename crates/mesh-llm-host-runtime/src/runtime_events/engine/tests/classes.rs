@@ -292,11 +292,12 @@ fn progress_flushes_at_most_once_per_hundred_milliseconds_with_the_latest_value(
         "sequences are assigned at publication, so the first published frame is 1 \
          however many submissions were superseded to produce it"
     );
+    let health = engine.health().snapshot();
     assert_eq!(
-        engine.health().snapshot().dropped_progress,
-        1,
-        "the superseded snapshot is counted"
+        health.coalesced_progress, 1,
+        "the superseded snapshot is counted as coalesced"
     );
+    assert_eq!(health.dropped_progress, 0, "coalescing is not loss");
 
     reservation.cancel();
 }

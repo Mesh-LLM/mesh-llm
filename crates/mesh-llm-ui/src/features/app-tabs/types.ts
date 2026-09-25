@@ -512,6 +512,14 @@ export type RuntimeStatus = {
   }
   lifecycle_instances: Array<{ instance_id: string; model_ref: string; lifecycle_state: string }>
   intent_summary: { durable_count: number; session_count: number; recent_errors: number }
+  runtime_events?: {
+    node_state?: string
+    native_runtime_status?: string
+    diagnostics_degraded: boolean
+    fatal: boolean
+    fatal_reason_code?: string
+    active_warning_count: number
+  }
 }
 
 export type ConfigurationHarnessData = {

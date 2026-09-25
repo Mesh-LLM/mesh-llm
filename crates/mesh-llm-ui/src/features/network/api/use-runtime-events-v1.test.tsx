@@ -141,6 +141,7 @@ describe('runtime events v1 wire constants', () => {
       reservation_exhausted: 0,
       terminal_delivery_failed: 0,
       dropped_progress: 0,
+      coalesced_progress: 0,
       dropped_diagnostic: 0,
       replay_evicted: 0,
       subscriber_disconnected: 0,
@@ -148,6 +149,8 @@ describe('runtime events v1 wire constants', () => {
       reducer_rejected: 0,
       state_transition_rejected: 0,
       cancelled_reservation_rejected: 0,
+      dropped_native: 0,
+      rejected_native: 0,
       state_degraded: false,
       rebuild_required: false,
       bounds: {

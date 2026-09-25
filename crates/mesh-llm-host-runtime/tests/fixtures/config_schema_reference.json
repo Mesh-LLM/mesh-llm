@@ -874,10 +874,10 @@
       "apply_mode": "static_on_load",
       "restart_scope": "process_restart",
       "visibility": "user",
-      "description": "Use parsed native log summaries only when the loaded runtime lacks the matching structured event family. Enabled forces compatibility output; disabled proves structured coverage.",
+      "description": "Auto shows parsed native log summaries only for categories the loaded runtime cannot report through structured events, so older runtimes keep them. Enabled forwards every category as debug-only raw log output. Disabled forwards none.",
       "presentation": {
         "label": "Lifecycle log parser",
-        "help": "Use parsed native log summaries only when the loaded runtime lacks the matching structured event family. Enabled forces compatibility output; disabled proves structured coverage.",
+        "help": "Auto shows parsed native log summaries only for categories the loaded runtime cannot report through structured events, so older runtimes keep them. Enabled forwards every category as debug-only raw log output. Disabled forwards none.",
         "category_id": "runtime-policy",
         "category_label": "Runtime Policy",
         "category_summary": "Runtime reconciliation behavior applied by the local process",

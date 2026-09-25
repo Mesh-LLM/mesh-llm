@@ -1,16 +1,18 @@
-//! Real native-runtime integration test for Task 8's ABI admission +
-//! capability-probe + reporter wiring. Gated behind
+//! Real native-runtime integration test for the runtime-event ABI:
+//! admission, capability probe, the process-global reporter, and per-call
+//! `ModelOpenEventQueue` delivery. Gated behind
 //! `MESH_LLM_RUNTIME_EVENTS_NATIVE_TEST=1` so it never touches a native
 //! symbol during an ordinary `cargo test`. An ungated run still executes
 //! (it is never skipped), but it must never claim `executed`: it prints a
 //! `BLOCKED: <prerequisite>` line to stdout, writes only a
 //! `blocked-when-ungated: <prerequisite>` evidence marker, and exits 0.
-//! `executed` is written only after `run_real_native_gate` has installed the
-//! reporter, successfully opened a real model, observed structured production
-//! callbacks, exercised unload when that capability is advertised, and cleared
-//! the reporter, so a marker file that starts with `executed` reflects a
-//! genuine run (review defect D10 -- see `.omo/plans/event-system-fixes.md`
-//! task 11).
+//!
+//! Gated steps record their evidence in memory. `executed` is written, followed
+//! by those markers, only after every step passed; a failing step writes
+//! `failed: <panic>` followed by what the earlier steps established, and the
+//! test still fails. A marker file that starts with `executed` therefore
+//! reflects a genuine, complete run (review defect D10 -- see
+//! `.omo/plans/event-system-fixes.md` task 11).
 //!
 //! The three prerequisites checked once the gate is set to `1` (the
 //! `dynamic-native-runtime` feature, the native runtime bundle directory,
@@ -22,6 +24,22 @@
 
 use std::env;
 use std::path::PathBuf;
+
+#[cfg(feature = "dynamic-native-runtime")]
+#[path = "runtime_events_native/evidence.rs"]
+mod evidence;
+#[cfg(feature = "dynamic-native-runtime")]
+#[path = "runtime_events_native/families.rs"]
+mod families;
+#[cfg(feature = "dynamic-native-runtime")]
+#[path = "runtime_events_native/family_coverage.rs"]
+mod family_coverage;
+#[cfg(feature = "dynamic-native-runtime")]
+#[path = "runtime_events_native/libraries.rs"]
+mod libraries;
+#[cfg(feature = "dynamic-native-runtime")]
+#[path = "runtime_events_native/model_open_checks.rs"]
+mod model_open_checks;
 
 const GATE_ENV: &str = "MESH_LLM_RUNTIME_EVENTS_NATIVE_TEST";
 #[cfg(feature = "dynamic-native-runtime")]
@@ -72,242 +90,132 @@ fn runtime_events_native_gate() {
 }
 
 #[cfg(feature = "dynamic-native-runtime")]
+fn required_env(name: &str, evidence_path: &std::path::Path, purpose: &str) -> String {
+    env::var(name).unwrap_or_else(|_| {
+        println!("BLOCKED: {name} unset");
+        write_marker(
+            Some(evidence_path),
+            &format!("blocked: {name} unset, required when {GATE_ENV}=1"),
+        );
+        panic!("{GATE_ENV}=1 requires {name} to {purpose}")
+    })
+}
+
+#[cfg(feature = "dynamic-native-runtime")]
 fn run_real_native_gate(evidence_path: Option<PathBuf>) {
     let evidence_path = evidence_path.unwrap_or_else(|| {
         panic!("{GATE_ENV}=1 requires {EVIDENCE_FILE_ENV} to name the evidence file")
     });
-    let bundle_dir = env::var(BUNDLE_DIR_ENV).unwrap_or_else(|_| {
-        println!("BLOCKED: {BUNDLE_DIR_ENV} unset");
-        write_marker(
-            Some(&evidence_path),
-            &format!("blocked: {BUNDLE_DIR_ENV} unset, required when {GATE_ENV}=1"),
-        );
-        panic!("{GATE_ENV}=1 requires {BUNDLE_DIR_ENV} to point at a dynamic native runtime")
-    });
-    let model_path = env::var(MODEL_ENV).unwrap_or_else(|_| {
-        println!("BLOCKED: {MODEL_ENV} unset");
-        write_marker(
-            Some(&evidence_path),
-            &format!("blocked: {MODEL_ENV} unset, required when {GATE_ENV}=1"),
-        );
-        panic!("{GATE_ENV}=1 requires {MODEL_ENV} to name a readable model")
-    });
+    let bundle_dir = required_env(
+        BUNDLE_DIR_ENV,
+        &evidence_path,
+        "point at a dynamic native runtime",
+    );
+    let model_path = required_env(MODEL_ENV, &evidence_path, "name a readable model");
 
-    let bundle_dir = PathBuf::from(bundle_dir);
-    let libraries = discover_libraries(&bundle_dir);
+    let evidence = evidence::Evidence::new(evidence_path);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        gated_steps(&PathBuf::from(bundle_dir), &model_path, &evidence);
+    }));
+    match outcome {
+        Ok(()) => evidence.flush_executed(),
+        Err(payload) => {
+            // A failing step may leave the global reporter installed.
+            skippy_runtime::clear_runtime_event_reporter();
+            let reason = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("non-string panic");
+            evidence.flush_failed(reason.lines().next().unwrap_or(reason));
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-native-runtime")]
+fn load_runtime(bundle_dir: &std::path::Path) -> skippy_runtime::CapabilityReport {
+    let libraries = libraries::discover_libraries(bundle_dir);
     assert!(
         !libraries.is_empty(),
         "no native runtime libraries found under {}",
         bundle_dir.display()
     );
-
     if !skippy_runtime::native_runtime_loaded() {
         unsafe { skippy_runtime::load_native_runtime_libraries(&libraries) }
             .expect("load native runtime libraries for the real ABI admission test");
     }
+    skippy_runtime::probe_capabilities()
+}
 
-    let report = skippy_runtime::probe_capabilities();
+#[cfg(feature = "dynamic-native-runtime")]
+fn gated_steps(bundle_dir: &std::path::Path, model_path: &str, evidence: &evidence::Evidence) {
+    use families::{FamilyTally, drain_global};
 
-    // The reporter's callback now only copies records into a ring, so this
-    // test counts what the ring received rather than what a sink observed.
-    // That is the same evidence -- a record is in the ring if and only if a
-    // native callback produced it -- and it is what a real consumer sees.
-    fn is_structured(kind: skippy_runtime::RuntimeEventKind) -> bool {
-        use skippy_runtime::RuntimeEventKind as Kind;
-        matches!(
-            kind,
-            Kind::ModelLoadPhaseChanged
-                | Kind::ModelLoadMemoryAllocated
-                | Kind::ModelLoadTensorsOffloaded
-                | Kind::ModelLoadTokenizerReady
-                | Kind::ModelLoadAuxComponentReady
-                | Kind::KvInitialized
-                | Kind::KvPressureCrossed
-                | Kind::KvPressureCleared
-                | Kind::KvContextApproachingCapacity
-                | Kind::KvContextCapacityExhausted
-                | Kind::DeviceBackendInitialized
-                | Kind::DeviceReady
-                | Kind::DeviceDegraded
-                | Kind::DeviceUnavailable
-                | Kind::DeviceRecovered
-                | Kind::DeviceLost
-                | Kind::DeviceResourceAllocated
-                | Kind::DeviceOutOfMemory
-                | Kind::DeviceFallbackActivated
-                | Kind::DiagnosticWarningRaised
-                | Kind::DiagnosticWarningCleared
-                | Kind::DiagnosticRecoverableFailure
-                | Kind::DiagnosticFatalFailure
-                | Kind::DiagnosticInvariantViolation
-        ) || is_unload(kind)
-    }
+    let report = load_runtime(bundle_dir);
+    evidence.record(
+        "exact-abi-admission: native runtime loaded (loader enforces exact major.minor.patch)",
+    );
+    evidence.record(format!(
+        "capability-probe: confirmed={:#x} health_messages={}",
+        report.confirmed,
+        report.health_messages.len()
+    ));
 
-    fn is_unload(kind: skippy_runtime::RuntimeEventKind) -> bool {
-        use skippy_runtime::RuntimeEventKind as Kind;
-        matches!(
-            kind,
-            Kind::UnloadStarted
-                | Kind::UnloadCompleted
-                | Kind::UnloadFailed
-                | Kind::UnloadForced
-                | Kind::UnloadSessionDraining
-        )
-    }
-
-    /// Take everything buffered and classify it, the way the host driver's
-    /// pre-drain ingest does.
-    fn take_counts() -> (usize, usize) {
-        let mut records = Vec::new();
-        skippy_runtime::drain_runtime_events(&mut records, usize::MAX);
-        let mut structured = 0;
-        let mut unload = 0;
-        for record in records {
-            let kind = record.to_event().kind;
-            if is_structured(kind) {
-                structured += 1;
-            }
-            if is_unload(kind) {
-                unload += 1;
-            }
-        }
-        (structured, unload)
-    }
+    // (e) This runtime must advertise per-call model-open events; the
+    // no-event fallback is proven at the unit layer (see the marker).
+    assert!(
+        report.family_confirmed(skippy_ffi::FEATURE_RUNTIME_EVENTS),
+        "capability probe must confirm FEATURE_RUNTIME_EVENTS on this runtime"
+    );
+    evidence.record(format!(
+        "runtime-events-feature-bit: confirmed (FEATURE_RUNTIME_EVENTS={:#x})",
+        skippy_ffi::FEATURE_RUNTIME_EVENTS
+    ));
+    evidence.record(
+        "mixed-version-fallback: unit-covered by runtime_events::tests::\
+         queue_supplied_but_events_unsupported_takes_legacy_path_and_queue_stays_empty and \
+         assert_model_open_events_feature_missing_falls_back; not reachable in this process \
+         because the loaded runtime advertises FEATURE_RUNTIME_EVENTS",
+    );
 
     // Start from a clean ring: it is process-global and outlives any one
     // test, so a stale record would be miscounted as this run's evidence.
-    let _ = take_counts();
-    let installed = skippy_runtime::install_runtime_event_reporter();
+    let _ = drain_global();
     assert!(
-        installed,
+        skippy_runtime::install_runtime_event_reporter(),
         "runtime event reporter must install when the explicit native gate is enabled"
     );
+    evidence.record("reporter-install: true");
 
     let config = skippy_runtime::RuntimeConfig::default();
-    let model = match skippy_runtime::StageModel::open(&model_path, &config) {
-        Ok(model) => model,
-        Err(error) => {
-            skippy_runtime::clear_runtime_event_reporter();
-            panic!("real model-open failed with the reporter installed: {error}");
-        }
-    };
+    let mut tally = FamilyTally::default();
 
-    let (structured_count, _) = take_counts();
-    let unload_advertised = report.family_confirmed(skippy_ffi::FEATURE_UNLOAD_EVENTS);
-    drop(model);
-    let (_, unload_count) = take_counts();
-    skippy_runtime::clear_runtime_event_reporter();
-
+    // (d) First, so the plain-open structured count reflects a fresh load.
+    let structured =
+        family_coverage::run_load_session_unload(model_path, &config, evidence, &mut tally);
     assert!(
-        structured_count > 0,
+        structured > 0,
         "successful model-open must produce at least one structured production callback; \
          old model-open progress alone is insufficient"
     );
-    if unload_advertised {
-        assert!(
-            unload_count > 0,
-            "advertised unload-events support must produce an unload callback when the model is dropped"
-        );
-    }
+    evidence.record(format!("structured-production-callbacks: {structured}"));
 
-    // Only after reporter installation, successful model-open, structured
-    // production callbacks, and the unload exercise have all completed do we
-    // claim that this opt-in path actually executed.
-    write_marker(Some(&evidence_path), "executed");
-    write_marker(
-        Some(&evidence_path),
-        "exact-abi-admission: native runtime loaded (loader enforces exact major.minor.patch)",
-    );
-    write_marker(
-        Some(&evidence_path),
-        &format!(
-            "capability-probe: confirmed={:#x} health_messages={}",
-            report.confirmed,
-            report.health_messages.len()
-        ),
-    );
-    write_marker(Some(&evidence_path), "reporter-install: true");
-    write_marker(
-        Some(&evidence_path),
-        "model-open: single-part real model-open succeeded",
-    );
-    write_marker(
-        Some(&evidence_path),
-        &format!("structured-production-callbacks: {structured_count}"),
-    );
-    write_marker(
-        Some(&evidence_path),
-        &format!("unload-callbacks: {unload_count}"),
-    );
-    write_marker(Some(&evidence_path), "reporter-clear: returned");
-}
+    // (a) + (b)
+    model_open_checks::check_successful_opens(model_path, &config, evidence, &mut tally);
+    // (c)
+    model_open_checks::check_failed_opens(&config, evidence, &mut tally);
 
-/// Resolves the real installed-runtime layout: `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`
-/// names the PARENT of one or more `<runtime-id>/{manifest.json,lib/*}`
-/// subdirectories (see `dist/native-runtimes/README.md` and
-/// `mesh-llm-runtime-install`'s own discovery convention), not a flat
-/// directory of libraries. Prefers each candidate's own `manifest.json`
-/// `runtime.libraries` ORDER — dependencies before the primary
-/// `libllama.dylib` — over a lexicographic guess, since symbol-search order
-/// in `skippy-ffi::dynamic::Symbols::load_paths` walks the list in reverse
-/// and a naive alphabetical sort places `libllama*` before `libmtmd*`,
-/// inverting the manifest's own dependency-then-primary contract.
-#[cfg(feature = "dynamic-native-runtime")]
-fn discover_libraries(bundle_dir: &std::path::Path) -> Vec<PathBuf> {
-    if let Some(libraries) = libraries_from_flat_dir(bundle_dir) {
-        return libraries;
-    }
-    let Ok(entries) = std::fs::read_dir(bundle_dir) else {
-        return Vec::new();
-    };
-    let mut subdirs: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
-    subdirs.sort();
-    for subdir in subdirs {
-        if let Some(libraries) = libraries_from_manifest(&subdir) {
-            return libraries;
-        }
-    }
-    Vec::new()
-}
-
-#[cfg(feature = "dynamic-native-runtime")]
-fn libraries_from_flat_dir(dir: &std::path::Path) -> Option<Vec<PathBuf>> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut libraries = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
-            continue;
-        };
-        if matches!(extension, "dylib" | "so" | "dll") {
-            libraries.push(path);
-        }
-    }
-    if libraries.is_empty() {
-        return None;
-    }
-    libraries.sort();
-    Some(libraries)
-}
-
-#[cfg(feature = "dynamic-native-runtime")]
-fn libraries_from_manifest(runtime_dir: &std::path::Path) -> Option<Vec<PathBuf>> {
-    let manifest_path = runtime_dir.join("manifest.json");
-    let manifest_text = std::fs::read_to_string(&manifest_path).ok()?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_text).ok()?;
-    let entries = manifest
-        .get("runtime")?
-        .get("libraries")?
-        .as_array()?
-        .iter()
-        .filter_map(|value| value.as_str());
-    let libraries: Vec<PathBuf> = entries
-        .map(|relative| runtime_dir.join(relative))
-        .filter(|path| path.is_file())
-        .collect();
-    (!libraries.is_empty()).then_some(libraries)
+    let missing = family_coverage::judge_family_coverage(&report, &tally, evidence);
+    evidence.record(format!(
+        "global-reporter: dropped={} rejected={}",
+        skippy_runtime::dropped_runtime_events(),
+        skippy_runtime::rejected_runtime_events()
+    ));
+    skippy_runtime::clear_runtime_event_reporter();
+    evidence.record("reporter-clear: returned");
+    assert!(
+        missing.is_empty(),
+        "confirmed families never observed during a real load + session + unload: {missing:?}"
+    );
 }
