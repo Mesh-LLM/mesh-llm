@@ -947,14 +947,19 @@ pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
     .await?;
     node.set_plugin_manager(plugin_manager.clone()).await;
     #[cfg(feature = "payments")]
-    crate::network::payments::spawn_payment_recovery(&node);
+    crate::network::payments::spawn_payment_recovery(&node).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
 
     if plugin_manager.list().await.is_empty() {
         tracing::warn!("No plugins are enabled for MCP exposure");
     }
 
-    plugin::mcp::run_mcp_server(plugin_manager).await
+    let serving = plugin::mcp::run_mcp_server(plugin_manager).await;
+    // The recovery loop holds a `Node` clone, so stop it here rather than
+    // leaving it to poll behind a runtime that has already returned.
+    #[cfg(feature = "payments")]
+    node.shutdown_payment_recovery().await;
+    serving
 }
 
 pub use super::discovery::nostr_relays;

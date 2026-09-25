@@ -40,6 +40,17 @@ pub(crate) async fn call_node<Req: Serialize, Res: DeserializeOwned>(
     call(&plugins, operation, request).await
 }
 
+/// Whether any provider is registered for the `payments.v1` capability —
+/// including one that is currently unavailable.
+///
+/// A node with no provider at all is the documented free-only configuration;
+/// a node whose provider is registered but unhealthy must keep failing closed.
+/// Callers that only need "is this node a seller?" ask here, then let `call`
+/// report the provider's own health.
+pub(crate) async fn has_provider(plugins: &PluginManager) -> Result<bool> {
+    Ok(plugins.provider_for_capability(CAPABILITY).await?.is_some())
+}
+
 /// Invokes `operation` on the named provider, applying the operation's bound.
 /// Settlement and wallet operations may legitimately outlast the default RPC
 /// deadline and own their durability, so only the operations the contract
