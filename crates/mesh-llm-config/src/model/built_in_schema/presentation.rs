@@ -264,7 +264,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         "runtime.lifecycle_log_parser" => Some(
             sp(
                 "Lifecycle log parser",
-                "Auto shows parsed native log summaries only for categories the loaded runtime cannot report through structured events, so older runtimes keep them. Enabled forwards every category as debug-only raw log output. Disabled forwards none.",
+                "Auto shows parsed native log summaries only for categories the loaded runtime cannot report through structured events, so older runtimes keep them. Enabled forwards parsed summaries for every category as debug-only output. Disabled forwards none.",
                 RUNTIME_POLICY_CATEGORY,
                 5,
             )

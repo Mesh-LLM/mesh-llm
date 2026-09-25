@@ -48,6 +48,8 @@ impl From<ModelDomainState> for ModelProjection {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct StageProjection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) topology_id: Option<String>,
     pub(crate) id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) index: Option<u32>,
@@ -60,6 +62,7 @@ pub(crate) struct StageProjection {
 impl From<StageDomainState> for StageProjection {
     fn from(stage: StageDomainState) -> Self {
         Self {
+            topology_id: stage.topology_id,
             id: stage.id,
             index: stage.index,
             state: stage.state,

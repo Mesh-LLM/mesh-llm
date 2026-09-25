@@ -84,6 +84,7 @@ async fn build_test_mesh_api() -> api::MeshApi {
 
 mod auto_join;
 mod dashboard;
+mod lifecycle_log_parser;
 mod local_model_only;
 mod logging;
 mod model_lifecycle;
