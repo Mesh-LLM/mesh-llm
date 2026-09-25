@@ -137,6 +137,7 @@
             "runner_role": {"const": "family-certify"},
             "cache_policy": {"const": "immutable-local"},
             "estimated_model_bytes": {"type": "integer", "minimum": 1},
+            "minimum_runner_memory_gib": {"enum": [128, 256]},
             "startup_timeout_secs": {"type": "integer", "minimum": 180, "maximum": 1800}
           }
         },
