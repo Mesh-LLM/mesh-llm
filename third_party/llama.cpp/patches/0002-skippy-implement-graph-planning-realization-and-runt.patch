@@ -201,10 +201,10 @@ index 000000000..cfc6a2e66
 +}
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 new file mode 100644
-index 000000000..37bca572d
+index 000000000..abe36674c
 --- /dev/null
 +++ b/src/skippy/activation.cpp
-@@ -0,0 +1,995 @@
+@@ -0,0 +1,1000 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -676,8 +676,13 @@ index 000000000..37bca572d
 +                token_count);
 +    }
 +    skippy_glm_dsa_op_timing_begin(session, token_count);
-+    const int32_t rc = session->ctx->decode(batch, inputs);
++    int32_t rc = 0;
++    const bool decoded = skippy_contain_native_failure(
++            out_error, [&] { rc = session->ctx->decode(batch, inputs); });
 +    skippy_glm_dsa_op_timing_end(session);
++    if (!decoded) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
 +    if (rc != 0) {
 +        // llama.cpp's own diagnostics go to its log callback, which stage
 +        // hosts may not surface; carry the batch and session placement in the
@@ -1756,16 +1761,17 @@ index 000000000..f22af9c5a
 +
 diff --git a/src/skippy/errors.h b/src/skippy/errors.h
 new file mode 100644
-index 000000000..e3e7cb38d
+index 000000000..69706e3fa
 --- /dev/null
 +++ b/src/skippy/errors.h
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,66 @@
 +#pragma once
 +
 +#include "skippy/common.h"
 +
 +#include <cstdlib>
 +#include <cstring>
++#include <exception>
 +
 +static inline skippy_error * skippy_make_error(enum skippy_status status, const char * message) {
 +    skippy_error * error = new skippy_error{};
@@ -1804,6 +1810,27 @@ index 000000000..e3e7cb38d
 +    }
 +    return SKIPPY_STATUS_OK;
 +}
++// A C++ exception must never unwind out of this ABI into Rust: Rust cannot
++// catch a foreign exception, so its personality routine prints
++// "fatal runtime error: Rust cannot catch foreign exceptions, aborting" and
++// terminates the process. Every entry point that can execute stage program
++// code therefore contains an escaping exception here and reports it as an
++// ordinary skippy failure. Pass nullptr for `out_error` when the caller
++// reports the failure itself.
++template <typename Body>
++static inline bool skippy_contain_native_failure(skippy_error ** out_error, Body && body) {
++    try {
++        body();
++        return true;
++    } catch (const std::exception & exception) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, exception.what());
++        return false;
++    } catch (...) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "native stage program failure without a diagnostic");
++        return false;
++    }
++}
++
 diff --git a/src/skippy/events.cpp b/src/skippy/events.cpp
 new file mode 100644
 index 000000000..a7bbe6028
@@ -2474,10 +2501,10 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..0e90ceaac
+index 000000000..3e4211566
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
-@@ -0,0 +1,417 @@
+@@ -0,0 +1,422 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -2813,7 +2840,12 @@ index 000000000..0e90ceaac
 +        seq_ids.data(),
 +        logits.data(),
 +    };
-+    if (first->ctx->decode(batch, graph_inputs) != 0) {
++    int32_t decode_rc = 0;
++    if (!skippy_contain_native_failure(
++                out_error, [&] { decode_rc = first->ctx->decode(batch, graph_inputs); })) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    if (decode_rc != 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
 +                "llama_decode failed for scheduler iteration");
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
@@ -2897,10 +2929,10 @@ index 000000000..0e90ceaac
 +} // extern "C"
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
 new file mode 100644
-index 000000000..2d5fa4a32
+index 000000000..d5ae4d66d
 --- /dev/null
 +++ b/src/skippy/execution-single.cpp
-@@ -0,0 +1,613 @@
+@@ -0,0 +1,619 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -3122,7 +3154,13 @@ index 000000000..2d5fa4a32
 +    const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(
 +            &first->stage_model->config,
 +            SKIPPY_GLM_DSA_PHASE_HINT_DECODE);
-+    const int32_t rc = first->ctx->decode(batch, graph_build_inputs);
++    int32_t rc = 0;
++    const bool decoded = skippy_contain_native_failure(
++            out_error, [&] { rc = first->ctx->decode(batch, graph_build_inputs); });
++    if (!decoded) {
++        llama_batch_free(batch);
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
 +    if (rc != 0) {
 +        llama_batch_free(batch);
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed");
@@ -10558,10 +10596,10 @@ index 000000000..d5cce47f2
 +} // extern "C"
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
 new file mode 100644
-index 000000000..2dfac488a
+index 000000000..e5f0d9032
 --- /dev/null
 +++ b/src/skippy/speculative_decoding.cpp
-@@ -0,0 +1,531 @@
+@@ -0,0 +1,547 @@
 +#include "skippy/speculative_decoding.h"
 +#include "skippy/environment.h"
 +#include "skippy/errors.h"
@@ -10834,7 +10872,10 @@ index 000000000..2dfac488a
 +                mtp_depth_scope.select(depth);
 +            }
 +
-+            rc = mtp_ctx->decode(batch, graph_build_inputs);
++            if (!skippy_contain_native_failure(
++                        nullptr, [&] { rc = mtp_ctx->decode(batch, graph_build_inputs); })) {
++                rc = -1;
++            }
 +            if (rc != 0) {
 +                session->mtp_prefix_valid = false;
 +            }
@@ -10992,8 +11033,16 @@ index 000000000..2dfac488a
 +            const int64_t t_start_us = ggml_time_us();
 +            const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(
 +                    &session->stage_model->config);
-+            const int32_t rc = mtp_ctx->decode(batch, graph_build_inputs);
++            int32_t rc = 0;
++            const bool decoded = skippy_contain_native_failure(
++                    out_error, [&] { rc = mtp_ctx->decode(batch, graph_build_inputs); });
 +            elapsed_us += ggml_time_us() - t_start_us;
++            if (!decoded) {
++                std::free(batch.token);
++                batch.token = nullptr;
++                llama_batch_free(batch);
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
 +            if (rc != 0) {
 +                std::free(batch.token);
 +                batch.token = nullptr;
@@ -11055,8 +11104,13 @@ index 000000000..2dfac488a
 +            const int64_t t_start_us = ggml_time_us();
 +            const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(
 +                    &session->stage_model->config);
-+            const int32_t rc = mtp_ctx->decode(batch, graph_build_inputs);
++            int32_t rc = 0;
++            const bool decoded = skippy_contain_native_failure(
++                    out_error, [&] { rc = mtp_ctx->decode(batch, graph_build_inputs); });
 +            elapsed_us += ggml_time_us() - t_start_us;
++            if (!decoded) {
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
 +            if (rc != 0) {
 +                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed for MTP sidecar proposal");
 +                return SKIPPY_STATUS_RUNTIME_ERROR;

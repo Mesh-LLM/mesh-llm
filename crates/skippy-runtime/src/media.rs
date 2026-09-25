@@ -44,14 +44,57 @@ pub struct SpeechAudio {
 
 /// Restore the session's generation mode on every speech exit, including
 /// failures before the external-decode guard can be acquired.
-struct SpeechEmbeddingsGuard(*mut skippy_ffi::Opaque);
+struct SpeechEmbeddingsGuard {
+    session: *mut skippy_ffi::Session,
+    context: *mut skippy_ffi::Opaque,
+    active: bool,
+}
+
+impl SpeechEmbeddingsGuard {
+    fn restore(&mut self) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        // SAFETY: the borrowed StageSession outlives this guard and owns the
+        // context; speech generation holds exclusive access to the session.
+        unsafe { skippy_ffi::llama_set_embeddings(self.context, false) };
+        let mut error = ptr::null_mut();
+        let status =
+            unsafe { skippy_ffi::skippy_session_begin_external_decode(self.session, &mut error) };
+        ensure_ok(status, error).context("refresh stage program after speech synthesis")?;
+        // The begin has been issued, so this guard's restore is complete. The
+        // external-decode scope is now owned by the caller's ExternalDecodeGuard,
+        // which ends it. Clearing `active` here keeps Drop from re-entering
+        // begin after a failed end, which would report "another external decode
+        // session is already active on this thread" and skip the end, pinning
+        // the thread in external-decode state.
+        self.active = false;
+        let mut error = ptr::null_mut();
+        let status =
+            unsafe { skippy_ffi::skippy_session_end_external_decode(self.session, &mut error) };
+        ensure_ok(status, error).context("end stage-program refresh after speech synthesis")?;
+        Ok(())
+    }
+}
 
 impl Drop for SpeechEmbeddingsGuard {
     /// Restore logits output even when speech setup or generation exits with an error.
     fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
         // SAFETY: the borrowed StageSession outlives this guard and owns the
         // context; speech generation holds exclusive access to the session.
-        unsafe { skippy_ffi::llama_set_embeddings(self.0, false) };
+        let mut error = ptr::null_mut();
+        unsafe {
+            skippy_ffi::llama_set_embeddings(self.context, false);
+            if skippy_ffi::skippy_session_begin_external_decode(self.session, &mut error)
+                == skippy_ffi::Status::Ok
+            {
+                let _ = skippy_ffi::skippy_session_end_external_decode(self.session, &mut error);
+            }
+        }
+        free_error(error);
     }
 }
 
@@ -210,26 +253,54 @@ impl StageModel {
                 }
             }
         }
-        struct ExternalDecodeGuard(*mut skippy_ffi::Session);
+        struct ExternalDecodeGuard {
+            session: *mut skippy_ffi::Session,
+            active: bool,
+        }
+        impl ExternalDecodeGuard {
+            fn finish(&mut self) -> Result<()> {
+                if !self.active {
+                    return Ok(());
+                }
+                let mut error = ptr::null_mut();
+                let status = unsafe {
+                    skippy_ffi::skippy_session_end_external_decode(self.session, &mut error)
+                };
+                ensure_ok(status, error).context("end speech external-decode scope")?;
+                self.active = false;
+                Ok(())
+            }
+        }
         impl Drop for ExternalDecodeGuard {
             /// End speech's external-decode scope and free any native cleanup error.
             fn drop(&mut self) {
+                if !self.active {
+                    return;
+                }
                 let mut error = ptr::null_mut();
                 unsafe {
-                    let _ = skippy_ffi::skippy_session_end_external_decode(self.0, &mut error);
+                    let _ =
+                        skippy_ffi::skippy_session_end_external_decode(self.session, &mut error);
                 }
                 free_error(error);
             }
         }
         session.reset()?;
         unsafe { skippy_ffi::llama_set_embeddings(lctx, true) };
-        let _embeddings_mode = SpeechEmbeddingsGuard(lctx);
+        let mut embeddings_mode = SpeechEmbeddingsGuard {
+            session: session.raw,
+            context: lctx,
+            active: true,
+        };
         let mut guard_error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_session_begin_external_decode(session.raw, &mut guard_error)
         };
         ensure_ok(status, guard_error)?;
-        let _external_decode = ExternalDecodeGuard(session.raw);
+        let mut external_decode = ExternalDecodeGuard {
+            session: session.raw,
+            active: true,
+        };
         let generator =
             AudioGenerator(unsafe { skippy_ffi::mtmd_helper_gen_audio_init(lctx, projector.raw) });
         if generator.0.is_null() {
@@ -348,12 +419,15 @@ impl StageModel {
             SpeechOutputFormat::Wav => native_bytes.to_vec(),
             SpeechOutputFormat::PcmS16Le => pcm_f32_to_s16le(native_bytes)?,
         };
-        Ok(SpeechAudio {
+        let audio = SpeechAudio {
             bytes,
             sample_rate,
             sample_count,
             generated_frames,
-        })
+        };
+        external_decode.finish()?;
+        embeddings_mode.restore()?;
+        Ok(audio)
     }
 
     fn eval_media(
