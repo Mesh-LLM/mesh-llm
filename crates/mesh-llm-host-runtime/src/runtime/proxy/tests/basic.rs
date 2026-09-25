@@ -319,6 +319,30 @@ async fn test_builtin_moa_virtual_model_runs_end_to_end_through_plugin_api() {
 }
 
 #[tokio::test]
+async fn test_builtin_moa_is_not_advertised_before_a_candidate_is_ready() {
+    let plugin_manager = start_moa_plugin_manager().await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness_with_plugin_manager(local_targets(&[]), plugin_manager).await;
+
+    let response = send_request_and_read_response(
+        proxy_addr,
+        vec![b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()],
+    )
+    .await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or_default();
+    let json: serde_json::Value = serde_json::from_str(body).unwrap();
+    let entries = json["data"].as_array().cloned().unwrap_or_default();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(
+        entries.iter().all(|entry| entry["id"] != "mesh"),
+        "candidate-backed virtual models must not signal readiness early: {response}"
+    );
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
 async fn test_builtin_moa_single_model_preserves_small_context_request() {
     let worker_response = json!({
         "id": "chatcmpl-worker",

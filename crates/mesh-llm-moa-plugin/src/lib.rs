@@ -20,6 +20,7 @@ pub fn plugin() -> SimplePlugin {
         virtual_model(moa::VIRTUAL_MODEL_NAME, HANDLER)
             .supports_tools(true)
             .supports_streaming(true)
+            .requires_candidates(true)
             .input_modalities(["text", "image", "audio"])
     ];
     let mut router = VirtualModelRouter::new();
@@ -291,6 +292,7 @@ mod tests {
             manifest.virtual_models[0].input_modalities,
             ["text", "image", "audio"]
         );
+        assert!(manifest.virtual_models[0].requires_candidates);
     }
 
     #[test]

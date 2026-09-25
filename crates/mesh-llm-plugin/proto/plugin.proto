@@ -197,6 +197,7 @@ message VirtualModelManifest {
   repeated string output_modalities = 4;
   bool supports_tools = 5;
   bool supports_streaming = 6;
+  bool requires_candidates = 7;
 }
 
 message PluginWebUiManifest {

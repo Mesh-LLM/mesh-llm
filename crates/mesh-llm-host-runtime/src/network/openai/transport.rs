@@ -344,6 +344,7 @@ async fn handle_mesh_control_request(
             Some(manager) => manager.virtual_models().await.unwrap_or_default(),
             None => Vec::new(),
         };
+        let virtual_models = super::virtual_model::advertisable_routes(virtual_models, &served);
         served.extend(virtual_models.iter().map(|route| route.model_id.clone()));
         served.sort();
         served.dedup();

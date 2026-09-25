@@ -463,6 +463,7 @@ async fn handle_models_list_request(
         Some(plugin_manager) => plugin_manager.virtual_models().await.unwrap_or_default(),
         None => Vec::new(),
     };
+    let virtual_models = super::virtual_model::advertisable_routes(virtual_models, &models);
     models.extend(virtual_models.iter().map(|route| route.model_id.clone()));
     models.sort();
     models.dedup();

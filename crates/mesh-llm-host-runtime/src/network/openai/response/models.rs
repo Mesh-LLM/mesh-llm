@@ -589,6 +589,7 @@ mod tests {
             output_modalities: vec!["text".into()],
             supports_tools: true,
             supports_streaming: true,
+            requires_candidates: true,
         }];
         let body = models_list_json_with_virtual(&models, &[], &runtimes, &virtual_models);
         let mesh = body["data"]
@@ -615,6 +616,7 @@ mod tests {
             output_modalities: vec!["text".into()],
             supports_tools: false,
             supports_streaming: false,
+            requires_candidates: true,
         }];
 
         let body = models_list_json_with_virtual(&models, &[], &[], &virtual_models);

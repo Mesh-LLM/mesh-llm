@@ -201,6 +201,7 @@ pub struct VirtualModelRoute {
     pub output_modalities: Vec<String>,
     pub supports_tools: bool,
     pub supports_streaming: bool,
+    pub requires_candidates: bool,
 }
 
 #[cfg(test)]

@@ -921,6 +921,7 @@ impl PluginManager {
                     output_modalities: model.output_modalities,
                     supports_tools: model.supports_tools,
                     supports_streaming: model.supports_streaming,
+                    requires_candidates: model.requires_candidates,
                 });
             }
         }
@@ -1590,6 +1591,7 @@ pub(crate) fn plugin_manifest_to_json(manifest: &proto::PluginManifest) -> Value
                 "output_modalities": model.output_modalities,
                 "supports_tools": model.supports_tools,
                 "supports_streaming": model.supports_streaming,
+                "requires_candidates": model.requires_candidates,
             })
         }).collect::<Vec<_>>(),
         "mesh_channels": manifest.mesh_channels.iter().map(|channel| {

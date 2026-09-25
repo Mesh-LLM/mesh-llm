@@ -110,6 +110,7 @@ pub fn virtual_model(
             output_modalities: vec!["text".into()],
             supports_tools: false,
             supports_streaming: false,
+            requires_candidates: false,
         },
     }
 }
@@ -122,6 +123,11 @@ impl VirtualModelBuilder {
 
     pub fn supports_streaming(mut self, value: bool) -> Self {
         self.inner.supports_streaming = value;
+        self
+    }
+
+    pub fn requires_candidates(mut self, value: bool) -> Self {
+        self.inner.requires_candidates = value;
         self
     }
 
@@ -1817,7 +1823,8 @@ mod tests {
                     .input_modalities(["text", "image"])
                     .output_modalities(["text"])
                     .supports_tools(true)
-                    .supports_streaming(true),
+                    .supports_streaming(true)
+                    .requires_candidates(true),
             )
             .build();
 
@@ -1829,6 +1836,7 @@ mod tests {
         assert_eq!(model.output_modalities, ["text"]);
         assert!(model.supports_tools);
         assert!(model.supports_streaming);
+        assert!(model.requires_candidates);
     }
 
     #[test]

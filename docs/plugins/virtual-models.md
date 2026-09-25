@@ -68,6 +68,7 @@ message VirtualModelManifest {
   repeated string output_modalities = 4;
   bool supports_tools = 5;
   bool supports_streaming = 6;
+  bool requires_candidates = 7;
 }
 ```
 
@@ -78,6 +79,8 @@ V1 validation rules:
 - model ids may not collide with a concrete, built-in, or another plugin's
   virtual model;
 - a model is advertised only while its plugin is healthy;
+- a model with `requires_candidates` is advertised only while at least one
+  concrete model is reachable;
 - undeclared handlers cannot be invoked.
 
 ## Host-to-Plugin Invocation
