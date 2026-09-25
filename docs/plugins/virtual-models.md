@@ -152,13 +152,118 @@ V1 host inference accepts only concrete model ids. It rejects built-in aliases
 and all virtual model ids, including the caller, so a plugin cannot recurse.
 Virtual-to-virtual composition can be added later with an explicit hop budget.
 
+## Routing And Affinity Hooks
+
+Virtual-model orchestration chooses *which model* should handle a nested call.
+Affinity chooses *where* an eligible instance of that model should run. Keep
+those policies separate so every nested call still receives mesh admission,
+health, cache-locality, and sticky-routing behavior.
+
+An optional affinity hook runs only after the host applies hard eligibility:
+
+```text
+host trust/admission/capability filter
+  -> optional plugin candidate ranking
+  -> host validates and clamps the result
+  -> host dispatches and records the outcome
+```
+
+The rank request contains opaque target ids and a bounded snapshot of locality,
+health, RTT, capacity/queue signals, and cache-affinity evidence. Request
+context contains host-derived session, explicit cache-key, and stable scaffold
+hashes by default; it does not disclose raw prompt text to a generic routing
+plugin.
+
+The plugin may reorder or remove eligible candidates. It may not invent a
+target, restore a host-rejected target, bypass admission or trust, or weaken a
+required model capability. The host uses its current deterministic affinity
+logic when the plugin is absent, unhealthy, times out, or returns an invalid
+ranking.
+
+`PluginContext::infer` should make this policy explicit:
+
+```rust
+context
+    .infer(
+        route.model,
+        request.with_reasoning_effort(route.effort),
+        RoutingPolicy::PluginHook("affinity"),
+    )
+    .await
+```
+
+`RoutingPolicy::HostDefault` remains the safe default. A named hook must be
+declared by the calling plugin; the host rejects ambiguous or undeclared hooks.
+A later protocol slice may add `RequireTarget`, but only for a target already
+present in the host's eligible snapshot.
+
+## Gossip Extensions
+
+Plugins already subscribe to `PEER_UP`, `PEER_DOWN`, and `PEER_UPDATED`, can
+use declared mesh channels, and contribute healthy external inference models
+to the host's normal model advertisement. They do not currently have a typed
+initial peer snapshot or a bounded way to add plugin-specific advisory data to
+peer announcements.
+
+Add host-governed gossip extensions rather than exposing the gossip encoder:
+
+```proto
+message GossipExtensionManifest {
+  string namespace = 1;
+  uint32 schema_version = 2;
+  GossipVisibility visibility = 3;
+  uint32 max_bytes = 4;
+}
+
+message PluginGossipAdvertisement {
+  string namespace = 1;
+  uint32 schema_version = 2;
+  bytes payload = 3;
+  uint64 expires_at_unix_ms = 4;
+}
+```
+
+A plugin submits a namespaced value and TTL to the host. The host validates
+the declared namespace and schema, enforces fixed size/rate/TTL and public vs
+private visibility limits, and publishes the value as a self-reported advisory
+claim. Compatible values are exposed through an initial peer snapshot and
+subsequent peer events.
+
+Plugin gossip may not overwrite endpoint identity, ownership/trust,
+admission, role, hardware, serving-model truth, or the host's core
+cache-affinity evidence. Direct-peer-only propagation should be the default;
+transitive propagation requires an explicitly reviewed schema and bound.
+
+## MoA Migration
+
+Move the existing `model: "mesh"` MoA implementation behind this interface as
+the first in-process conformance plugin. MoA exercises parallel nested
+inference, candidate snapshots, partial failure, cancellation, streaming
+fan-in, and aggregate usage before Goose adds session and tool semantics.
+
+Migrate without changing the public model id:
+
+1. add the registry and buffered nested-inference path;
+2. register an in-process `mesh-moa` plugin through the existing in-process
+   plugin loader;
+3. adapt the current orchestrator behind its virtual-model handler and run
+   response/error parity tests;
+4. switch `model: "mesh"` dispatch to the registry;
+5. remove the special ingress intercept only after streaming, cancellation,
+   and usage accounting have parity.
+
+The host advertises `mesh` from healthy plugin registration. The MoA plugin
+does not directly mutate gossip. Its nested calls choose concrete models, then
+host or plugin-ranked affinity chooses an eligible placement for each model.
+
 ## Delivery Order
 
 1. Add manifest types, builders, validation, and registry projection.
 2. Add buffered host-to-plugin invocation and plugin-to-host inference.
-3. Move the built-in MoA path behind the contract as a conformance test.
-4. Add negotiated streaming, cancellation, and aggregate usage.
-5. Implement the Goose/OpenJEV virtual model against the stable contract.
+3. Add bounded affinity-rank and namespaced gossip-extension contracts.
+4. Move the built-in MoA path behind the contract as a conformance test.
+5. Add negotiated streaming, cancellation, and aggregate usage.
+6. Implement the Goose/OpenJEV virtual model against the stable contract.
 
 Goose is deliberately downstream of this boundary. Its unrolled state machine
 can yield on each host inference or tool operation without adding Goose types
