@@ -91,12 +91,12 @@ async fn fragmented_exchange() -> Result<()> {
     let (mut output, mut application) = tokio::io::duplex(1024);
     let (ready, _wait_ready) = tokio::sync::oneshot::channel();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
-    let payer_service = service.clone();
+    let payer_service =
+        super::super::client::Payments::attach_for_tests(&node, service.clone()).await?;
     let request_id = id.clone();
     let exchange = tokio::spawn(async move {
         let mut reader = reader;
         let initial = wire::read(&mut reader).await?;
-        let balance = payer_service.prefetch_balance();
         crate::network::openai::test_payment_exchange(
             payer_service,
             peer,
@@ -106,7 +106,6 @@ async fn fragmented_exchange() -> Result<()> {
             payer_write,
             reader,
             initial,
-            balance,
             &mut output,
             ready,
             cancellation,

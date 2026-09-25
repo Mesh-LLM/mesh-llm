@@ -307,6 +307,8 @@ async fn paid_exchange(
         .set(provider_service.clone())
         .map_err(|_| anyhow::anyhow!("service already initialized"))?;
     let payer = Node::new_for_tests(NodeRole::Client).await?;
+    let payer_payments =
+        super::client::Payments::attach_for_tests(&payer, payer_service.clone()).await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
     let backend = tokio::spawn(simulated_backend(
@@ -349,14 +351,12 @@ async fn paid_exchange(
     let (mut output, mut receiver) = tokio::io::duplex(4096);
     let (ready, _ready_receiver) = tokio::sync::oneshot::channel();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
-    let payer_for_exchange = payer_service.clone();
     let evidence = Some((payer.clone(), "host-evidence-id".to_owned()));
     let exchange = tokio::spawn(async move {
         let mut recv = recv;
         let initial = wire::read(&mut recv).await?;
-        let balance = payer_for_exchange.prefetch_balance();
         crate::network::openai::test_payment_exchange(
-            payer_for_exchange,
+            payer_payments,
             provider_id,
             id,
             request,
@@ -364,7 +364,6 @@ async fn paid_exchange(
             send,
             recv,
             initial,
-            balance,
             &mut output,
             ready,
             cancellation,

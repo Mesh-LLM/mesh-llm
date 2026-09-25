@@ -46,6 +46,9 @@ pub struct PaymentService {
     payment_lock: Mutex<()>,
     receivable_lock: Mutex<()>,
     input_recovery_cursor: Mutex<i64>,
+    /// Balance reads started by `prefetch`, consumed by `authorize`/`cancel`.
+    pub(crate) prefetched:
+        std::sync::Mutex<std::collections::HashMap<String, JoinHandle<Result<Balance>>>>,
     _process_lock: std::fs::File,
 }
 
@@ -81,6 +84,7 @@ impl PaymentService {
             payment_lock: Mutex::new(()),
             receivable_lock: Mutex::new(()),
             input_recovery_cursor: Mutex::new(0),
+            prefetched: Default::default(),
             _process_lock: process_lock,
         })
     }

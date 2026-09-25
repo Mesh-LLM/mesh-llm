@@ -47,3 +47,38 @@ pub(crate) async fn call_node<Req: Serialize, Res: DeserializeOwned>(
         .ok_or_else(|| anyhow!("payments are not available yet"))?;
     call(&plugins, operation, request).await
 }
+
+/// A handle to the `payments.v1` provider for one paid exchange.
+#[derive(Clone)]
+pub(crate) struct Payments(PluginManager);
+
+impl Payments {
+    /// Serves `service` from `node` over an in-process `payments.v1`, as
+    /// runtime startup does, and returns a client to it.
+    #[cfg(test)]
+    pub(crate) async fn attach_for_tests(
+        node: &Node,
+        service: std::sync::Arc<mesh_llm_payments::service::PaymentService>,
+    ) -> Result<Self> {
+        node.payments
+            .set(service)
+            .map_err(|_| anyhow!("payments already initialized"))?;
+        let plugins = super::node_ext::attach_payments_plugin(node).await?;
+        Ok(Self(plugins))
+    }
+
+    pub(crate) async fn for_node(node: &Node) -> Result<Self> {
+        node.plugin_manager()
+            .await
+            .map(Self)
+            .ok_or_else(|| anyhow!("payments are not available yet"))
+    }
+
+    pub(crate) async fn call<Req: Serialize, Res: DeserializeOwned>(
+        &self,
+        operation: &str,
+        request: &Req,
+    ) -> Result<Res> {
+        call(&self.0, operation, request).await
+    }
+}

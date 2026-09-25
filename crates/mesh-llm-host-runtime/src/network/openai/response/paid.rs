@@ -1,20 +1,22 @@
-use std::sync::Arc;
-
 use anyhow::{Context, Result, bail, ensure};
-use mesh_llm_payments::{
-    ledger::{Charge, RequestTerms},
-    pricing::{Pricing, payment_cap_msat},
-    service::PaymentService,
-    wallet::Balance,
+use mesh_llm_payments_types::contract::{
+    AuthorizeRequest, CancelRequest, CancelStage, Empty, IdRequest, PayInputRequest,
+    SettleOutputRequest, ops,
+};
+use mesh_llm_payments_types::{
+    RequestTerms,
+    intent::PaymentIntent,
+    pricing::Pricing,
     wire::{self, Frame},
 };
+use mesh_llm_wallet::provider::Transaction;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream};
 
 use super::{
     common::{ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult},
     routing::route_local_attempt_after_forward,
 };
-use crate::network::payments::request::PaidRequest;
+use crate::network::payments::{client::Payments, request::PaidRequest};
 use crate::{mesh::Node, network::openai::client_stream::ClientStream};
 
 pub(super) async fn route(
@@ -147,16 +149,20 @@ async fn start(
         .open_http_tunnel(peer)
         .await
         .map_err(|_| PrePaymentTransportFailure)?;
-    let service = node.payment_service().await?;
+    let payments = crate::network::payments::client::Payments::for_node(node).await?;
     ensure!(
-        effective_intent(&service, &request)?.permits(&price, 0),
+        effective_intent(&payments, &request)
+            .await?
+            .permits(&price, 0),
         "paid inference is excluded by spending policy or request restriction"
     );
     // Read the balance for approval during the seller's prefill. If a
     // concurrent payment settles in between, the balance overstates the
     // funds, but the wallet still refuses any payment it cannot afford.
-    let balance = service.prefetch_balance();
     let id = uuid::Uuid::new_v4().to_string();
+    let _: Empty = payments
+        .call(ops::PREFETCH, &IdRequest { id: id.clone() })
+        .await?;
     send.write_all(wire::HTTP_UPGRADE)
         .await
         .map_err(|_| PrePaymentTransportFailure)?;
@@ -178,14 +184,17 @@ async fn start(
     )
     .await
     .map_err(|_| PrePaymentTransportFailure)??;
-    validate_initial_invoice(&service, &request, &price, &id, &initial)?;
+    if let Err(error) = validate_initial_invoice(&payments, &request, &price, &id, &initial).await {
+        cancel(&payments, &id, CancelStage::Unstarted).await;
+        return Err(error);
+    }
     let (pipe, mut output) = tokio::io::duplex(64 * 1024);
     let (ready, wait_ready) = tokio::sync::oneshot::channel();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
     let evidence = exchange_id.map(|id| (node.clone(), id.to_owned()));
     tokio::spawn(async move {
         let result = exchange(
-            service,
+            payments,
             peer,
             id,
             request,
@@ -193,7 +202,6 @@ async fn start(
             send,
             recv,
             initial,
-            balance,
             &mut output,
             ready,
             cancellation,
@@ -225,8 +233,8 @@ async fn read_initial_invoice(recv: &mut (impl AsyncRead + Unpin)) -> Result<Fra
     Ok(frame)
 }
 
-fn validate_initial_invoice(
-    service: &PaymentService,
+async fn validate_initial_invoice(
+    payments: &Payments,
     request: &PaidRequest,
     price: &Pricing,
     id: &str,
@@ -251,10 +259,12 @@ fn validate_initial_invoice(
         "payment limit mismatch"
     );
     ensure!(
-        effective_intent(service, request)?.permits(price, total),
+        effective_intent(payments, request)
+            .await?
+            .permits(price, total),
         "paid inference is excluded by spending policy or request restriction"
     );
-    invoice.validate_payment(input_amount, mesh_llm_payments::now_ms())?;
+    invoice.validate_payment(input_amount, mesh_llm_wallet::now_ms())?;
     ensure!(
         invoice.amount_msat == Some(input_amount),
         "fixed-amount inference invoice required"
@@ -264,7 +274,7 @@ fn validate_initial_invoice(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn exchange(
-    service: Arc<PaymentService>,
+    payments: Payments,
     peer: iroh::EndpointId,
     id: String,
     request: PaidRequest,
@@ -272,14 +282,19 @@ pub(crate) async fn exchange(
     mut send: impl AsyncWrite + Unpin,
     mut recv: impl AsyncRead + Unpin,
     initial: Frame,
-    balance: tokio::task::JoinHandle<Result<Balance>>,
     output: &mut DuplexStream,
     ready: tokio::sync::oneshot::Sender<()>,
     mut cancellation: tokio::sync::watch::Receiver<bool>,
     evidence: Option<(Node, String)>,
 ) -> Result<()> {
-    let (input_amount, total) =
-        validate_initial_invoice(&service, &request, &price, &id, &initial)?;
+    let (_input_amount, total) =
+        match validate_initial_invoice(&payments, &request, &price, &id, &initial).await {
+            Ok(amounts) => amounts,
+            Err(error) => {
+                cancel(&payments, &id, CancelStage::Unstarted).await;
+                return Err(error);
+            }
+        };
     let Frame::InputInvoice { mut terms, invoice } = initial else {
         bail!("expected input invoice");
     };
@@ -287,19 +302,16 @@ pub(crate) async fn exchange(
     terms.exchange_id = evidence.as_ref().map(|(_, id)| id.clone());
     terms.peer = peer.to_string();
     terms.payee = Some(invoice.payee.clone());
-    tokio::select! {
-        result = service.await_authorization_with(&terms, async { balance.await? }) => result?,
-        _ = cancellation.changed() => {
-            let _ = service.ledger.cancel_unstarted(&id);
-            let _ = wire::write(&mut send, &Frame::Cancel).await;
-            bail!("application disconnected before approval");
-        }
-    }
-    if !effective_intent(&service, &request)?.permits(&price, total) {
-        service.ledger.fail_authorization_if_idle(&id)?;
-        let _ = wire::write(&mut send, &Frame::Cancel).await;
-        bail!("spending policy or request restriction changed before submission");
-    }
+    authorize_terms(
+        &payments,
+        &request,
+        &price,
+        total,
+        &terms,
+        &mut send,
+        &mut cancellation,
+    )
+    .await?;
     let observations =
         super::paid_events::Observations::for_exchange(evidence.as_ref(), &terms).await;
     observations.accepted(terms.max_total_msat);
@@ -309,15 +321,16 @@ pub(crate) async fn exchange(
     // provider stream concurrently. The provider releases output only after
     // its own receiving wallet sees the payment arrive, so the payer's later
     // terminal observation must not become a second delivery gate.
-    let payment_service = service.clone();
-    let charge = Charge {
-        request_id: id.clone(),
-        segment: 0,
+    let payment_client = payments.clone();
+    let pay_input = PayInputRequest {
+        terms: terms.clone(),
         invoice,
-        amount_msat: input_amount,
-        max_total_msat: payment_cap_msat(input_amount)?,
     };
-    let mut input_payment = tokio::spawn(async move { payment_service.pay_charge(&charge).await });
+    let mut input_payment = tokio::spawn(async move {
+        payment_client
+            .call::<_, Transaction>(ops::PAY_INPUT, &pay_input)
+            .await
+    });
     let mut input_settled = false;
     let _ = ready.send(());
     let mut cancelled = false;
@@ -358,7 +371,7 @@ pub(crate) async fn exchange(
                     "unexpected output invoice"
                 );
                 observations.invoice(1, &invoice);
-                let payment = settle_output(&service, &terms, tokens, invoice).await?;
+                let payment = settle_output(&payments, &terms, tokens, invoice).await?;
                 accounted_msat = accounted_msat
                     .saturating_add(payment.amount_msat)
                     .saturating_add(payment.fee_msat);
@@ -373,7 +386,9 @@ pub(crate) async fn exchange(
                         .saturating_add(payment.fee_msat);
                     observations.settled(0, &payment);
                 }
-                service.ledger.finish(&id)?;
+                let _: Empty = payments
+                    .call(ops::FINISH, &IdRequest { id: id.clone() })
+                    .await?;
                 observations.final_amount(accounted_msat);
                 return Ok(());
             }
@@ -382,26 +397,82 @@ pub(crate) async fn exchange(
     }
 }
 
+/// Durably approve `terms`, then re-check spending policy before any payment.
+async fn authorize_terms(
+    payments: &Payments,
+    request: &PaidRequest,
+    price: &Pricing,
+    total: u64,
+    terms: &RequestTerms,
+    send: &mut (impl AsyncWrite + Unpin),
+    cancellation: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
+    let authorize = AuthorizeRequest {
+        terms: terms.clone(),
+    };
+    tokio::select! {
+        result = payments.call::<_, Empty>(ops::AUTHORIZE, &authorize) => { result?; }
+        _ = cancellation.changed() => {
+            cancel(payments, &terms.id, CancelStage::Unstarted).await;
+            let _ = wire::write(send, &Frame::Cancel).await;
+            bail!("application disconnected before approval");
+        }
+    }
+    if !effective_intent(payments, request)
+        .await?
+        .permits(price, total)
+    {
+        payments
+            .call::<_, Empty>(
+                ops::CANCEL,
+                &CancelRequest {
+                    id: terms.id.clone(),
+                    stage: CancelStage::Authorization,
+                },
+            )
+            .await?;
+        let _ = wire::write(send, &Frame::Cancel).await;
+        bail!("spending policy or request restriction changed before submission");
+    }
+    Ok(())
+}
+
 pub(crate) async fn settle_output(
-    service: &PaymentService,
+    payments: &Payments,
     terms: &RequestTerms,
     tokens: u64,
-    invoice: mesh_llm_payments::invoice::Invoice,
-) -> Result<mesh_llm_payments::wallet::Transaction> {
-    service
-        .settle_output(mesh_llm_payments_types::contract::SettleOutputRequest {
-            terms: terms.clone(),
-            tokens,
-            invoice,
-        })
+    invoice: mesh_llm_wallet::invoice::Invoice,
+) -> Result<Transaction> {
+    payments
+        .call(
+            ops::SETTLE_OUTPUT,
+            &SettleOutputRequest {
+                terms: terms.clone(),
+                tokens,
+                invoice,
+            },
+        )
         .await
 }
 
-pub(super) fn effective_intent(
-    service: &PaymentService,
+/// Best-effort release of a request that never started paying.
+async fn cancel(payments: &Payments, id: &str, stage: CancelStage) {
+    let _ = payments
+        .call::<_, Empty>(
+            ops::CANCEL,
+            &CancelRequest {
+                id: id.to_owned(),
+                stage,
+            },
+        )
+        .await;
+}
+
+pub(super) async fn effective_intent(
+    payments: &Payments,
     request: &PaidRequest,
-) -> Result<mesh_llm_payments::intent::PaymentIntent> {
-    let profile = service.ledger.payment_intent()?;
+) -> Result<PaymentIntent> {
+    let profile: PaymentIntent = payments.call(ops::PAYMENT_INTENT, &Empty {}).await?;
     Ok(request
         .intent
         .as_ref()

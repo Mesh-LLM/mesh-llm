@@ -9,7 +9,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use mesh_llm_payments_types::contract::{
-    Empty, FinishRequest, OpError, RoutingBudgetRequest, SettleOutputRequest,
+    AuthorizeRequest, CancelRequest, Empty, FinishRequest, IdRequest, OpError, PayInputRequest,
+    RoutingBudgetRequest, SettleOutputRequest,
 };
 use mesh_llm_plugin::{
     InternalRpcPlugin, InternalRpcPluginBuilder, OperationRouter, PluginMetadata, PluginResult,
@@ -96,7 +97,49 @@ fn operation_router(source: ServiceSource) -> OperationRouter {
         &source,
         ops::FINISH,
         "Mark a request finished.",
-        |service, request: FinishRequest| async move { service.ledger.finish(&request.id) },
+        |service, request: FinishRequest| async move {
+            service.ledger.finish(&request.id).map(|()| Empty {})
+        },
+    );
+    add_op(
+        &mut router,
+        &source,
+        ops::PAYMENT_INTENT,
+        "The operator's profile payment intent.",
+        |service, _: Empty| async move { service.ledger.payment_intent() },
+    );
+    add_op(
+        &mut router,
+        &source,
+        ops::PREFETCH,
+        "Start reading the balance for a request.",
+        |service, request: IdRequest| async move { service.prefetch(request.id).map(|()| Empty {}) },
+    );
+    add_op(
+        &mut router,
+        &source,
+        ops::AUTHORIZE,
+        "Propose and approve request terms.",
+        |service, request: AuthorizeRequest| async move {
+            service.authorize(request).await.map(|()| Empty {})
+        },
+    );
+    add_op(
+        &mut router,
+        &source,
+        ops::CANCEL,
+        "Release a request that has not started paying.",
+        |service, request: CancelRequest| async move { service.cancel(request).map(|()| Empty {}) },
+    );
+    add_op(
+        &mut router,
+        &source,
+        ops::PAY_INPUT,
+        "Pay the input invoice of an authorized request.",
+        |service, request: PayInputRequest| async move {
+            // Durable submission continues even if the caller goes away.
+            tokio::spawn(async move { service.pay_input(request).await }).await?
+        },
     );
     router
 }

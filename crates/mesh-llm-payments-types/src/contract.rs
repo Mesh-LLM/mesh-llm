@@ -23,6 +23,16 @@ pub mod ops {
     pub const SETTLE_OUTPUT: &str = "settle_output";
     /// Mark a request finished.
     pub const FINISH: &str = "finish";
+    /// The operator's profile payment intent (no wallet I/O).
+    pub const PAYMENT_INTENT: &str = "payment_intent";
+    /// Start reading the balance for a request so it overlaps seller prefill.
+    pub const PREFETCH: &str = "prefetch";
+    /// Durably propose and approve request terms against policy and balance.
+    pub const AUTHORIZE: &str = "authorize";
+    /// Release a request that did not (or can no longer) start paying.
+    pub const CANCEL: &str = "cancel";
+    /// Pay the seller's input invoice for an authorized request.
+    pub const PAY_INPUT: &str = "pay_input";
 }
 
 /// Error body of a failed operation.
@@ -60,10 +70,40 @@ pub struct SettleOutputRequest {
     pub invoice: mesh_llm_wallet::invoice::Invoice,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FinishRequest {
-    pub id: String,
-}
+/// Request for [`ops::FINISH`].
+pub type FinishRequest = IdRequest;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Empty {}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IdRequest {
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthorizeRequest {
+    pub terms: RequestTerms,
+}
+
+/// Which release a [`ops::CANCEL`] performs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancelStage {
+    /// Before approval: reject the request if no charge exists.
+    Unstarted,
+    /// After approval: fail the authorization if no charge is in flight.
+    Authorization,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CancelRequest {
+    pub id: String,
+    pub stage: CancelStage,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PayInputRequest {
+    pub terms: RequestTerms,
+    pub invoice: mesh_llm_wallet::invoice::Invoice,
+}
