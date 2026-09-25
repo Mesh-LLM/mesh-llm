@@ -71,7 +71,6 @@ async fn pending_htlc_recovers(outcome: PaymentStatus) -> Result<()> {
     wallet.pending.store(true, Ordering::SeqCst);
     wallet.lose_response.store(true, Ordering::SeqCst);
     let mut charge = charge("uncertain", 0, 90, 600, 700);
-    charge.invoice = invoice_with_expiry(90, 600, 2);
     {
         let service = PaymentService::with_provider(directory.path(), wallet.clone())?;
         service.ledger.set_policy(&Policy {
@@ -81,6 +80,10 @@ async fn pending_htlc_recovers(outcome: PaymentStatus) -> Result<()> {
         service
             .await_authorization(&terms("uncertain", 700))
             .await?;
+        // Built only after the slow setup above: a 2 s BOLT11 invoice is
+        // 1000-2000 ms from expiry, and creating it first let the setup consume
+        // that margin under CPU starvation. See tests/resubmission.rs.
+        charge.invoice = invoice_with_expiry(90, 600, 2);
         assert!(service.pay_charge(&charge).await.is_err());
     }
     let service = PaymentService::with_provider(directory.path(), wallet.clone())?;
