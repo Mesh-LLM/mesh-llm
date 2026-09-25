@@ -1,0 +1,110 @@
+name: Prepare repository automation
+description: >
+  Build only the xtask automation tool through `just automation-bootstrap`
+  and expose its absolute path. The recipe proves the tool compiled with no
+  product, native-runtime, or UI crate, so llama.cpp and the UI are never
+  prepared. Toolchain, linker, and compiler-cache setup reuse the existing
+  per-platform bootstrap: Linux requires the digest-pinned runner image
+  (verify-runner-image); macOS uses the pinned Rust action plus
+  setup-macos-lld; Windows uses setup-windows-short-paths, the pinned Rust
+  action, sccache, and the MSVC environment. The caller owns checkout; PR
+  planning must check out protected code, never PR code.
+
+inputs:
+  allow_depot_remote_cache:
+    description: Runner-policy-derived Depot cache authority, forwarded to configure-sccache-gha.
+    required: false
+    default: "false"
+  allow_native_github_cache:
+    description: Runner-policy-derived GitHub cache authority, forwarded to configure-sccache-gha.
+    required: false
+    default: "false"
+
+outputs:
+  binary_path:
+    description: Absolute path to the built xtask executable.
+    value: ${{ steps.bootstrap_unix.outputs.binary_path || steps.bootstrap_windows.outputs.binary_path }}
+  target_directory:
+    description: Cargo's resolved target directory for this checkout.
+    value: ${{ steps.bootstrap_unix.outputs.target_directory || steps.bootstrap_windows.outputs.target_directory }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify prebuilt Linux automation environment
+      if: runner.os == 'Linux'
+      shell: bash
+      run: verify-runner-image public cpu
+
+    - name: Configure Linux compiler cache
+      if: runner.os == 'Linux'
+      uses: ./.github/actions/configure-sccache-gha
+      with:
+        allow_depot_remote_cache: ${{ inputs.allow_depot_remote_cache }}
+        allow_native_github_cache: ${{ inputs.allow_native_github_cache }}
+
+    - name: Configure short Windows build paths
+      if: runner.os == 'Windows'
+      uses: ./.github/actions/setup-windows-short-paths
+
+    - name: Install pinned Rust toolchain
+      if: runner.os != 'Linux'
+      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+
+    - name: Install macOS linker and compiler cache
+      if: runner.os == 'macOS'
+      uses: ./.github/actions/setup-macos-lld
+
+    - name: Install Windows compiler cache
+      if: runner.os == 'Windows'
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
+    - name: Configure Windows compiler cache
+      if: runner.os == 'Windows'
+      uses: ./.github/actions/configure-sccache-gha
+      with:
+        allow_depot_remote_cache: ${{ inputs.allow_depot_remote_cache }}
+        allow_native_github_cache: ${{ inputs.allow_native_github_cache }}
+
+    - name: Configure MSVC environment
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      with:
+        arch: x64
+
+    - name: Install just
+      if: runner.os != 'Linux'
+      uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
+
+    - name: Build automation tool
+      id: bootstrap_unix
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        report="$RUNNER_TEMP/automation-bootstrap.txt"
+        just automation-bootstrap | tee "$report"
+        binary_path="$(sed -n 's/^binary_path=//p' "$report")"
+        target_directory="$(sed -n 's/^target_directory=//p' "$report")"
+        test -x "$binary_path"
+        {
+          echo "binary_path=$binary_path"
+          echo "target_directory=$target_directory"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build automation tool
+      id: bootstrap_windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $PSNativeCommandUseErrorActionPreference = $true
+        $report = @(just automation-bootstrap)
+        $report | Write-Host
+        $binaryPath = ($report | Where-Object { $_ -like "binary_path=*" }) -replace "^binary_path=", ""
+        $targetDirectory = ($report | Where-Object { $_ -like "target_directory=*" }) -replace "^target_directory=", ""
+        if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
+          throw "automation bootstrap did not report an existing binary: $binaryPath"
+        }
+        "binary_path=$binaryPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        "target_directory=$targetDirectory" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
