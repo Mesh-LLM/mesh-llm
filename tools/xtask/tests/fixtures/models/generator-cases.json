@@ -1,0 +1,2587 @@
+[
+  {
+    "name": "check-stale-all",
+    "registry": {
+      "ops": []
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 1,
+    "stdout": "",
+    "stderr": "generated test-model manifests are stale:\n  ci/llama-canary/family-certified.json\n  ci/model-artifacts/manifests/product-smoke.json\n  ci/model-artifacts/manifests/scripted-binary-smoke.json\n  ci/model-artifacts/manifests/sdk-smoke.json\n  ci/model-artifacts/manifests/hf-download-smoke.json\n  ci/model-artifacts/manifests/openai-smoke.json\n  ci/model-artifacts/manifests/skippy-correctness.json\n  ci/model-artifacts/manifests/safetensors-runtime-smoke.json\n  ci/model-artifacts/manifests/skippy-ci-smoke.json\n  ci/model-artifacts/manifests/skippy-parity.json\n  ci/model-artifacts/manifests/competitive-benchmark.json\n  ci/model-artifacts/manifests/radix-cache.json\n"
+  },
+  {
+    "name": "usage-unknown",
+    "registry": {
+      "ops": []
+    },
+    "args": [
+      "--bogus"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "usage: generate-test-model-manifests.py [-h] [--registry REGISTRY] [--check]\ngenerate-test-model-manifests.py: error: unrecognized arguments: --bogus\n"
+  },
+  {
+    "name": "usage-registry-no-value",
+    "registry": {
+      "ops": []
+    },
+    "args": [
+      "--registry"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "usage: generate-test-model-manifests.py [-h] [--registry REGISTRY] [--check]\ngenerate-test-model-manifests.py: error: argument --registry: expected one argument\n"
+  },
+  {
+    "name": "registry-missing",
+    "registry": {
+      "absent": true
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: [Errno 2] No such file or directory: '{root}/ci/model-artifacts/registry.json'\n"
+  },
+  {
+    "name": "registry-invalid-json",
+    "registry": {
+      "text": "{"
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n"
+  },
+  {
+    "name": "not-object",
+    "registry": {
+      "ops": [
+        {
+          "set": [],
+          "value": []
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry must be an object\n"
+  },
+  {
+    "name": "unknown-top-key",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "extra"
+          ],
+          "value": 1
+        },
+        {
+          "set": [
+            "zz"
+          ],
+          "value": 2
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry contains unknown fields: extra, zz\n"
+  },
+  {
+    "name": "schema-version-2",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "schema_version"
+          ],
+          "value": 2
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.schema_version must be 1\n"
+  },
+  {
+    "name": "schema-version-float-ok",
+    "registry": {
+      "ops": []
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 1,
+    "stdout": "",
+    "stderr": "generated test-model manifests are stale:\n  ci/llama-canary/family-certified.json\n  ci/model-artifacts/manifests/product-smoke.json\n  ci/model-artifacts/manifests/scripted-binary-smoke.json\n  ci/model-artifacts/manifests/sdk-smoke.json\n  ci/model-artifacts/manifests/hf-download-smoke.json\n  ci/model-artifacts/manifests/openai-smoke.json\n  ci/model-artifacts/manifests/skippy-correctness.json\n  ci/model-artifacts/manifests/safetensors-runtime-smoke.json\n  ci/model-artifacts/manifests/skippy-ci-smoke.json\n  ci/model-artifacts/manifests/skippy-parity.json\n  ci/model-artifacts/manifests/competitive-benchmark.json\n  ci/model-artifacts/manifests/radix-cache.json\n"
+  },
+  {
+    "name": "schema-version-true-ok",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "schema_version"
+          ],
+          "value": true
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 1,
+    "stdout": "",
+    "stderr": "generated test-model manifests are stale:\n  ci/llama-canary/family-certified.json\n  ci/model-artifacts/manifests/product-smoke.json\n  ci/model-artifacts/manifests/scripted-binary-smoke.json\n  ci/model-artifacts/manifests/sdk-smoke.json\n  ci/model-artifacts/manifests/hf-download-smoke.json\n  ci/model-artifacts/manifests/openai-smoke.json\n  ci/model-artifacts/manifests/skippy-correctness.json\n  ci/model-artifacts/manifests/safetensors-runtime-smoke.json\n  ci/model-artifacts/manifests/skippy-ci-smoke.json\n  ci/model-artifacts/manifests/skippy-parity.json\n  ci/model-artifacts/manifests/competitive-benchmark.json\n  ci/model-artifacts/manifests/radix-cache.json\n"
+  },
+  {
+    "name": "cadences-empty",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "cadences"
+          ],
+          "value": []
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.cadences must be a non-empty array\n"
+  },
+  {
+    "name": "cadences-duplicate",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "cadences"
+          ],
+          "value": [
+            "llama-bump",
+            "manual-full",
+            "nightly",
+            "rotating",
+            "pull-request",
+            "main",
+            "release",
+            "manual",
+            "manual"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.cadences must not contain duplicates\n"
+  },
+  {
+    "name": "cadences-pipe",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "cadences",
+            0
+          ],
+          "value": "a|b"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.cadences[0] must be a single-line value\n"
+  },
+  {
+    "name": "cadences-newline",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "cadences",
+            0
+          ],
+          "value": "a\nb"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.cadences[0] must be a single-line value\n"
+  },
+  {
+    "name": "cadences-tab",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "cadences",
+            0
+          ],
+          "value": "a\tb"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.cadences[0] must be a single-line value\n"
+  },
+  {
+    "name": "suites-not-list",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "suites"
+          ],
+          "value": "x"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.suites must be a non-empty array\n"
+  },
+  {
+    "name": "policy-not-object",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "family_policy"
+          ],
+          "value": []
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.family_policy must be an object\n"
+  },
+  {
+    "name": "policy-extra-key",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "family_policy",
+            "extra"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.family_policy contains unknown fields: extra\n"
+  },
+  {
+    "name": "profiles-missing-one",
+    "registry": {
+      "ops": [
+        {
+          "delete": [
+            "family_policy",
+            "profiles",
+            "full"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.family_policy.profiles must contain the five family profiles\n"
+  },
+  {
+    "name": "profile-extra-key",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "family_policy",
+            "profiles",
+            "full",
+            "x"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: profile full contains unknown fields: x\n"
+  },
+  {
+    "name": "profile-lanes-empty",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "family_policy",
+            "profiles",
+            "full",
+            "required_lanes"
+          ],
+          "value": []
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: profile full.required_lanes must be a non-empty array\n"
+  },
+  {
+    "name": "profile-not-object",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "family_policy",
+            "profiles",
+            "full"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.family_policy.profiles.full must be an object\n"
+  },
+  {
+    "name": "artifacts-empty",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts"
+          ],
+          "value": []
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts must be a non-empty array\n"
+  },
+  {
+    "name": "artifacts-not-list",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts must be a non-empty array\n"
+  },
+  {
+    "name": "row-not-object",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0] must be an object\n"
+  },
+  {
+    "name": "row-unknown-keys",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "alpha"
+          ],
+          "value": 2
+        },
+        {
+          "set": [
+            "artifacts",
+            0,
+            "zeta"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0] contains unknown fields: alpha, zeta\n"
+  },
+  {
+    "name": "row-id-invalid",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "id"
+          ],
+          "value": "Bad"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].id has invalid characters\n"
+  },
+  {
+    "name": "row-id-duplicate",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            1,
+            "id"
+          ],
+          "value": "family-qwen3-dense"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: duplicate artifact id: family-qwen3-dense\n"
+  },
+  {
+    "name": "row-family-missing",
+    "registry": {
+      "ops": [
+        {
+          "delete": [
+            "artifacts",
+            0,
+            "family"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].family must be a non-empty string\n"
+  },
+  {
+    "name": "row-undeclared-suite",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "suites"
+          ],
+          "value": [
+            "product-smoke",
+            "scripted-binary-smoke",
+            "sdk-smoke",
+            "other"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].suites contains an undeclared suite\n"
+  },
+  {
+    "name": "row-undeclared-cadence",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "cadences"
+          ],
+          "value": [
+            "pull-request",
+            "main",
+            "release",
+            "weekly"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].cadences contains an undeclared cadence\n"
+  },
+  {
+    "name": "row-tag-invalid",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "capability_tags"
+          ],
+          "value": [
+            "dense",
+            "gguf",
+            "inference",
+            "small",
+            "Upper"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].capability_tags contains an invalid tag\n"
+  },
+  {
+    "name": "artifact-not-object",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact must be an object\n"
+  },
+  {
+    "name": "artifact-unknown-key",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "x"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact contains unknown fields: x\n"
+  },
+  {
+    "name": "repo-no-slash",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "repo"
+          ],
+          "value": "repo"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.repo must be an owner/repository coordinate\n"
+  },
+  {
+    "name": "repo-two-slash",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "repo"
+          ],
+          "value": "a/b/c"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.repo must be an owner/repository coordinate\n"
+  },
+  {
+    "name": "repo-leading-slash",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "repo"
+          ],
+          "value": "/ab"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.repo must be an owner/repository coordinate\n"
+  },
+  {
+    "name": "revision-uppercase",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "revision"
+          ],
+          "value": "9E6855BC4BE717FCA1EF21360A1DB4B29D5C559A"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.revision must be a lowercase immutable SHA\n"
+  },
+  {
+    "name": "revision-short",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "revision"
+          ],
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.revision must be a lowercase immutable SHA\n"
+  },
+  {
+    "name": "revision-long-ok",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "revision"
+          ],
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 1,
+    "stdout": "",
+    "stderr": "generated test-model manifests are stale:\n  ci/llama-canary/family-certified.json\n  ci/model-artifacts/manifests/product-smoke.json\n  ci/model-artifacts/manifests/scripted-binary-smoke.json\n  ci/model-artifacts/manifests/sdk-smoke.json\n  ci/model-artifacts/manifests/hf-download-smoke.json\n  ci/model-artifacts/manifests/openai-smoke.json\n  ci/model-artifacts/manifests/skippy-correctness.json\n  ci/model-artifacts/manifests/safetensors-runtime-smoke.json\n  ci/model-artifacts/manifests/skippy-ci-smoke.json\n  ci/model-artifacts/manifests/skippy-parity.json\n  ci/model-artifacts/manifests/competitive-benchmark.json\n  ci/model-artifacts/manifests/radix-cache.json\n"
+  },
+  {
+    "name": "selector-pipe",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "selector"
+          ],
+          "value": "a|b"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.selector must be a single-line value\n"
+  },
+  {
+    "name": "files-empty",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files"
+          ],
+          "value": []
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files must be a non-empty array\n"
+  },
+  {
+    "name": "file-not-object",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0
+          ],
+          "value": "x"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0] must be an object\n"
+  },
+  {
+    "name": "file-unknown-key",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "x"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0] contains unknown fields: x\n"
+  },
+  {
+    "name": "path-traversal",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "path"
+          ],
+          "value": "../x.gguf"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].path is unsafe: '../x.gguf'\n"
+  },
+  {
+    "name": "path-absolute",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "path"
+          ],
+          "value": "/x.gguf"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].path is unsafe: '/x.gguf'\n"
+  },
+  {
+    "name": "path-trailing-slash",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "path"
+          ],
+          "value": "dir/"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].path is unsafe: 'dir/'\n"
+  },
+  {
+    "name": "path-backslash",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "path"
+          ],
+          "value": "a\\b"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].path is unsafe: 'a\\\\b'\n"
+  },
+  {
+    "name": "path-quote-repr",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "path"
+          ],
+          "value": "../it's"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].path is unsafe: \"../it's\"\n"
+  },
+  {
+    "name": "path-newline",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "path"
+          ],
+          "value": "a\nb"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].path must be a single-line value\n"
+  },
+  {
+    "name": "path-nul",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "path"
+          ],
+          "value": "a\u0000b"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].path must be a single-line value\n"
+  },
+  {
+    "name": "path-duplicate",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            1,
+            "artifact",
+            "files",
+            1,
+            "path"
+          ],
+          "value": "Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[1].artifact.files contains duplicate path: Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf\n"
+  },
+  {
+    "name": "size-zero",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "size_bytes"
+          ],
+          "value": 0
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].size_bytes must be positive\n"
+  },
+  {
+    "name": "size-float",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "size_bytes"
+          ],
+          "value": 1.5
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].size_bytes must be positive\n"
+  },
+  {
+    "name": "size-bool",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "size_bytes"
+          ],
+          "value": true
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].size_bytes must be positive\n"
+  },
+  {
+    "name": "size-string",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "size_bytes"
+          ],
+          "value": "1"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].size_bytes must be positive\n"
+  },
+  {
+    "name": "sha-uppercase",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "sha256"
+          ],
+          "value": "C4A3DD037301B6ECEA31D6DA37F5CD793EAD920DD5DDFE6D589294628D6CE66A"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].sha256 must be a SHA-256\n"
+  },
+  {
+    "name": "sha-short",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "sha256"
+          ],
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].sha256 must be a SHA-256\n"
+  },
+  {
+    "name": "sha-missing",
+    "registry": {
+      "ops": [
+        {
+          "delete": [
+            "artifacts",
+            6,
+            "artifact",
+            "files",
+            0,
+            "sha256"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].artifact.files[0].sha256 must be a non-empty string\n"
+  },
+  {
+    "name": "quantizations-empty",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "quantizations"
+          ],
+          "value": []
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].quantizations must be a non-empty array\n"
+  },
+  {
+    "name": "notes-empty",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            6,
+            "notes"
+          ],
+          "value": ""
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[6].notes must be a non-empty string\n"
+  },
+  {
+    "name": "cert-missing",
+    "registry": {
+      "ops": [
+        {
+          "delete": [
+            "artifacts",
+            0,
+            "certification"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification must be an object\n"
+  },
+  {
+    "name": "cert-unknown-key",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "certification",
+            "zz"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification contains unknown fields: zz\n"
+  },
+  {
+    "name": "cert-class-bad",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "certification",
+            "class"
+          ],
+          "value": "vision"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification.class is not a workload class\n"
+  },
+  {
+    "name": "cert-arch-bad",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "certification",
+            "architecture"
+          ],
+          "value": "Qwen"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification.architecture has invalid characters\n"
+  },
+  {
+    "name": "cert-profile-bad",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "certification",
+            "profile"
+          ],
+          "value": "nope"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification.profile is not a family profile\n"
+  },
+  {
+    "name": "cert-embedding-full",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "certification",
+            "class"
+          ],
+          "value": "embedding"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification class and profile are incompatible\n"
+  },
+  {
+    "name": "cert-causal-workload",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "certification",
+            "profile"
+          ],
+          "value": "workload-smoke"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification class and profile are incompatible\n"
+  },
+  {
+    "name": "cert-evidence-not-oracle",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "certification",
+            "evidence"
+          ],
+          "value": {
+            "fixture": "a",
+            "comparison": "b"
+          }
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification.evidence requires workload-oracle\n"
+  },
+  {
+    "name": "cert-oracle-evidence-missing",
+    "registry": {
+      "ops": [
+        {
+          "delete": [
+            "artifacts",
+            11,
+            "certification",
+            "evidence"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[11].certification.evidence must be an object\n"
+  },
+  {
+    "name": "cert-oracle-evidence-extra",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            11,
+            "certification",
+            "evidence",
+            "x"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[11].certification.evidence contains unknown fields: x\n"
+  },
+  {
+    "name": "cert-execution-not-object",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "certification",
+            "execution"
+          ],
+          "value": []
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification.execution must be an object\n"
+  },
+  {
+    "name": "cert-resources-missing",
+    "registry": {
+      "ops": [
+        {
+          "delete": [
+            "artifacts",
+            0,
+            "certification",
+            "resources"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification.resources must be an object\n"
+  },
+  {
+    "name": "cert-notes-missing",
+    "registry": {
+      "ops": [
+        {
+          "delete": [
+            "artifacts",
+            0,
+            "certification",
+            "notes"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[0].certification.notes must be a non-empty string\n"
+  },
+  {
+    "name": "cert-mmproj-bad",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            11,
+            "certification",
+            "mmproj_artifact",
+            "revision"
+          ],
+          "value": "x"
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.artifacts[11].certification.mmproj_artifact.revision must be a lowercase immutable SHA\n"
+  },
+  {
+    "name": "cert-draft-ok",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            0,
+            "certification",
+            "draft_artifact"
+          ],
+          "value": {
+            "repo": "unsloth/SmolLM2-135M-Instruct-GGUF",
+            "revision": "9e6855bc4be717fca1ef21360a1db4b29d5c559a",
+            "selector": "Q8_0",
+            "files": [
+              {
+                "path": "SmolLM2-135M-Instruct-Q8_0.gguf",
+                "size_bytes": 144811072,
+                "sha256": "c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 1,
+    "stdout": "",
+    "stderr": "generated test-model manifests are stale:\n  ci/llama-canary/family-certified.json\n  ci/model-artifacts/manifests/product-smoke.json\n  ci/model-artifacts/manifests/scripted-binary-smoke.json\n  ci/model-artifacts/manifests/sdk-smoke.json\n  ci/model-artifacts/manifests/hf-download-smoke.json\n  ci/model-artifacts/manifests/openai-smoke.json\n  ci/model-artifacts/manifests/skippy-correctness.json\n  ci/model-artifacts/manifests/safetensors-runtime-smoke.json\n  ci/model-artifacts/manifests/skippy-ci-smoke.json\n  ci/model-artifacts/manifests/skippy-parity.json\n  ci/model-artifacts/manifests/competitive-benchmark.json\n  ci/model-artifacts/manifests/radix-cache.json\n"
+  },
+  {
+    "name": "unverified-not-list",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "unverified_consumers"
+          ],
+          "value": {}
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.unverified_consumers must be an array\n"
+  },
+  {
+    "name": "unverified-absent-ok",
+    "registry": {
+      "ops": [
+        {
+          "delete": [
+            "unverified_consumers"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 1,
+    "stdout": "",
+    "stderr": "generated test-model manifests are stale:\n  ci/llama-canary/family-certified.json\n  ci/model-artifacts/manifests/product-smoke.json\n  ci/model-artifacts/manifests/scripted-binary-smoke.json\n  ci/model-artifacts/manifests/sdk-smoke.json\n  ci/model-artifacts/manifests/hf-download-smoke.json\n  ci/model-artifacts/manifests/openai-smoke.json\n  ci/model-artifacts/manifests/skippy-correctness.json\n  ci/model-artifacts/manifests/safetensors-runtime-smoke.json\n  ci/model-artifacts/manifests/skippy-ci-smoke.json\n  ci/model-artifacts/manifests/skippy-parity.json\n  ci/model-artifacts/manifests/competitive-benchmark.json\n  ci/model-artifacts/manifests/radix-cache.json\n"
+  },
+  {
+    "name": "unverified-extra-key",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "unverified_consumers",
+            0,
+            "x"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.unverified_consumers[0] contains unknown fields: x\n"
+  },
+  {
+    "name": "unverified-reason-missing",
+    "registry": {
+      "ops": [
+        {
+          "delete": [
+            "unverified_consumers",
+            0,
+            "reason"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: registry.unverified_consumers[0].reason must be a non-empty string\n"
+  },
+  {
+    "name": "suite-without-rows",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts",
+            2,
+            "suites"
+          ],
+          "value": [
+            "llama-family-certification",
+            "skippy-parity"
+          ]
+        },
+        {
+          "set": [
+            "artifacts",
+            3,
+            "suites"
+          ],
+          "value": [
+            "llama-family-certification",
+            "skippy-ci-smoke",
+            "skippy-parity",
+            "competitive-benchmark"
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: suite radix-cache has no registered artifacts\n"
+  },
+  {
+    "name": "family-without-rows",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts"
+          ],
+          "value": [
+            {
+              "id": "qwen3-q8-parity",
+              "family": "qwen3-dense",
+              "suites": [
+                "skippy-parity"
+              ],
+              "cadences": [
+                "manual"
+              ],
+              "capability_tags": [
+                "dense",
+                "gguf",
+                "parity"
+              ],
+              "artifact": {
+                "repo": "meshllm/qwen3-0.6b-parity-q8_0-gguf",
+                "revision": "1a2502cafd4a9a780338b126055ad1772037fe75",
+                "selector": "Q8_0",
+                "files": [
+                  {
+                    "path": "qwen3-0.6b-q8_0.gguf",
+                    "size_bytes": 804753664,
+                    "sha256": "01c657652e8f88a397c0a7bf540633b92d2c132fac1dcf88a47d0c86ce34843a"
+                  }
+                ]
+              },
+              "notes": "Parity-owned Qwen3 fixture; distinct from the canary and correctness revisions."
+            },
+            {
+              "id": "smollm2-q8-inference",
+              "family": "smollm2",
+              "suites": [
+                "product-smoke",
+                "scripted-binary-smoke",
+                "sdk-smoke"
+              ],
+              "cadences": [
+                "pull-request",
+                "main",
+                "release"
+              ],
+              "capability_tags": [
+                "dense",
+                "gguf",
+                "inference",
+                "small"
+              ],
+              "artifact": {
+                "repo": "unsloth/SmolLM2-135M-Instruct-GGUF",
+                "revision": "9e6855bc4be717fca1ef21360a1db4b29d5c559a",
+                "selector": "Q8_0",
+                "files": [
+                  {
+                    "path": "SmolLM2-135M-Instruct-Q8_0.gguf",
+                    "size_bytes": 144811072,
+                    "sha256": "c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a"
+                  }
+                ]
+              },
+              "notes": "Shared product, scripted-binary, and SDK inference fixture."
+            },
+            {
+              "id": "smollm2-q4-download",
+              "family": "smollm2",
+              "suites": [
+                "hf-download-smoke",
+                "openai-smoke"
+              ],
+              "cadences": [
+                "pull-request",
+                "main",
+                "manual"
+              ],
+              "capability_tags": [
+                "dense",
+                "download",
+                "gguf",
+                "small"
+              ],
+              "artifact": {
+                "repo": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF",
+                "revision": "62aa73156aea1ea66d752916ad281b9e344115b3",
+                "selector": "Q4_K_M",
+                "files": [
+                  {
+                    "path": "SmolLM2-135M-Instruct.Q4_K_M.gguf",
+                    "size_bytes": 105454144,
+                    "sha256": "8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684"
+                  }
+                ]
+              },
+              "notes": "Real Rust Hugging Face resolve/download identity fixture."
+            },
+            {
+              "id": "gemma3-bf16-metadata",
+              "family": "gemma3",
+              "suites": [
+                "hf-download-smoke"
+              ],
+              "cadences": [
+                "pull-request",
+                "main",
+                "manual"
+              ],
+              "capability_tags": [
+                "bf16",
+                "gguf",
+                "metadata-only",
+                "multipart"
+              ],
+              "artifact": {
+                "repo": "unsloth/gemma-3-27b-it-GGUF",
+                "revision": "7cd0121f2530b00e42c4df952d4cad4418c0b3c1",
+                "selector": "BF16",
+                "files": [
+                  {
+                    "path": "BF16/gemma-3-27b-it-BF16-00001-of-00002.gguf",
+                    "size_bytes": 49898757248,
+                    "sha256": "75fbc33e46f7e5f4798fb0940bef3d70d324b8bfe7be95e6d18d8e3aa2330014"
+                  },
+                  {
+                    "path": "BF16/gemma-3-27b-it-BF16-00002-of-00002.gguf",
+                    "size_bytes": 4129207200,
+                    "sha256": "4dc1b732f3ffff1a4db5f14367181204f575c52258f5286455d3a25d58b95275"
+                  }
+                ]
+              },
+              "notes": "API-only multipart GGUF listing fixture; its large shards are never downloaded by the smoke test."
+            },
+            {
+              "id": "qwen3-q8-correctness",
+              "family": "qwen3-dense",
+              "suites": [
+                "skippy-correctness"
+              ],
+              "cadences": [
+                "pull-request",
+                "main",
+                "manual"
+              ],
+              "capability_tags": [
+                "dense",
+                "gguf",
+                "skippy-correctness",
+                "small"
+              ],
+              "artifact": {
+                "repo": "Qwen/Qwen3-0.6B-GGUF",
+                "revision": "ef4088322893040952513f532f736ddeab518403",
+                "selector": "Q8_0",
+                "files": [
+                  {
+                    "path": "Qwen3-0.6B-Q8_0.gguf",
+                    "size_bytes": 804753088,
+                    "sha256": "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735"
+                  }
+                ]
+              },
+              "notes": "Pinned Skippy runtime/model-package correctness fixture."
+            },
+            {
+              "id": "smollm2-safetensors",
+              "family": "smollm2",
+              "suites": [
+                "safetensors-runtime-smoke"
+              ],
+              "cadences": [
+                "pull-request"
+              ],
+              "capability_tags": [
+                "safetensors",
+                "direct-load",
+                "dense",
+                "small"
+              ],
+              "artifact": {
+                "repo": "HuggingFaceTB/SmolLM2-135M-Instruct",
+                "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+                "selector": "safetensors",
+                "files": [
+                  {
+                    "path": "config.json",
+                    "size_bytes": 861,
+                    "sha256": "8eb740e8bbe4cff95ea7b4588d17a2432deb16e8075bc5828ff7ba9be94d982a"
+                  },
+                  {
+                    "path": "tokenizer.json",
+                    "size_bytes": 2104556,
+                    "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c"
+                  },
+                  {
+                    "path": "tokenizer_config.json",
+                    "size_bytes": 3764,
+                    "sha256": "4ec77d44f62efeb38d7e044a1db318f6a939438425312dfa333b8382dbad98df"
+                  },
+                  {
+                    "path": "model.safetensors",
+                    "size_bytes": 269060552,
+                    "sha256": "5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c"
+                  }
+                ]
+              },
+              "quantizations": [
+                "preserve",
+                "F32",
+                "F16",
+                "BF16",
+                "Q1_0",
+                "Q2_0",
+                "Q4_0",
+                "Q4_1",
+                "Q5_0",
+                "Q5_1",
+                "IQ2_XXS",
+                "IQ2_XS",
+                "IQ2_S",
+                "IQ2_M",
+                "IQ1_S",
+                "IQ1_M",
+                "TQ1_0",
+                "TQ2_0",
+                "Q2_K",
+                "Q2_K_S",
+                "IQ3_XS",
+                "IQ3_XXS",
+                "IQ3_S",
+                "IQ3_M",
+                "Q3_K_S",
+                "Q3_K_M",
+                "Q3_K_L",
+                "IQ4_NL",
+                "IQ4_XS",
+                "Q4_K_S",
+                "Q4_K_M",
+                "Q5_K_S",
+                "Q5_K_M",
+                "Q6_K",
+                "Q8_0",
+                "MXFP4_MOE"
+              ],
+              "notes": "SafeTensors direct-load fixture used across every supported load-time quantization."
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: suite llama-family-certification has no registered artifacts\n"
+  },
+  {
+    "name": "default-artifact-missing",
+    "registry": {
+      "ops": [
+        {
+          "set": [
+            "artifacts"
+          ],
+          "value": [
+            {
+              "id": "family-qwen3-dense",
+              "family": "qwen3-dense",
+              "suites": [
+                "llama-family-certification",
+                "skippy-ci-smoke"
+              ],
+              "cadences": [
+                "pull-request",
+                "main",
+                "llama-bump",
+                "manual-full",
+                "nightly",
+                "manual"
+              ],
+              "capability_tags": [
+                "dense",
+                "gguf",
+                "qwen3"
+              ],
+              "artifact": {
+                "repo": "Qwen/Qwen3-0.6B-GGUF",
+                "revision": "23749fefcc72300e3a2ad315e1317431b06b590a",
+                "selector": "Q8_0",
+                "files": [
+                  {
+                    "path": "Qwen3-0.6B-Q8_0.gguf",
+                    "size_bytes": 639446688,
+                    "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"
+                  }
+                ]
+              },
+              "certification": {
+                "architecture": "qwen3",
+                "profile": "full",
+                "execution": {
+                  "trunk_layers": 28,
+                  "mtp_layers": 0,
+                  "activation_width": 1024,
+                  "speculative_policy": "mtp-if-present",
+                  "ratio": 0.5,
+                  "scale": 1.0
+                },
+                "resources": {
+                  "runner_role": "family-certify",
+                  "cache_policy": "immutable-local",
+                  "estimated_model_bytes": 633495552
+                },
+                "notes": "naïve ✓ baseline   é",
+                "class": "causal_generation"
+              }
+            },
+            {
+              "id": "family-glm45-air",
+              "family": "glm45-air",
+              "suites": [
+                "llama-family-certification"
+              ],
+              "cadences": [
+                "llama-bump",
+                "manual-full"
+              ],
+              "capability_tags": [
+                "gguf",
+                "moe",
+                "mtp",
+                "multipart"
+              ],
+              "artifact": {
+                "repo": "unsloth/GLM-4.5-Air-GGUF",
+                "revision": "506d64aa8c5cfe9dbbf00bc7a15739438f83204d",
+                "selector": "Q4_K_M",
+                "files": [
+                  {
+                    "path": "Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf",
+                    "size_bytes": 50000746752,
+                    "sha256": "3e7e5d25a6db33b7c90f8c5203d6f490d6c0a4f04a46f228af0e33727db5df5e"
+                  },
+                  {
+                    "path": "Q4_K_M/GLM-4.5-Air-Q4_K_M-00002-of-00002.gguf",
+                    "size_bytes": 22975001632,
+                    "sha256": "ac6e50523d45c53faf3bf72d8fe109f3dd54bc6abe98a7773a3636112ead82a6"
+                  }
+                ]
+              },
+              "certification": {
+                "architecture": "glm4moe",
+                "profile": "full",
+                "execution": {
+                  "trunk_layers": 46,
+                  "mtp_layers": 1,
+                  "activation_width": 4096,
+                  "speculative_policy": "mtp-if-present"
+                },
+                "resources": {
+                  "runner_role": "family-certify",
+                  "cache_policy": "immutable-local",
+                  "estimated_model_bytes": 72966388736
+                },
+                "notes": "GLM4.5 MoE lineage; 46 trunk layers plus one MTP runtime layer; two shards",
+                "class": "causal_generation"
+              }
+            },
+            {
+              "id": "family-deepseek2",
+              "family": "deepseek2",
+              "suites": [
+                "llama-family-certification",
+                "skippy-parity",
+                "radix-cache"
+              ],
+              "cadences": [
+                "llama-bump",
+                "manual-full",
+                "manual"
+              ],
+              "capability_tags": [
+                "gguf",
+                "mla",
+                "moe"
+              ],
+              "artifact": {
+                "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+                "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+                "selector": "Q4_K_M",
+                "files": [
+                  {
+                    "path": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+                    "size_bytes": 10364416768,
+                    "sha256": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8"
+                  }
+                ]
+              },
+              "certification": {
+                "architecture": "deepseek2",
+                "profile": "full",
+                "execution": {
+                  "trunk_layers": 27,
+                  "mtp_layers": 0,
+                  "activation_width": 2048,
+                  "speculative_policy": "mtp-if-present"
+                },
+                "resources": {
+                  "runner_role": "family-certify",
+                  "cache_policy": "immutable-local",
+                  "estimated_model_bytes": 10360420352
+                },
+                "notes": "production MLA path",
+                "class": "causal_generation"
+              }
+            },
+            {
+              "id": "family-falcon-h1",
+              "family": "falcon-h1",
+              "suites": [
+                "llama-family-certification",
+                "skippy-ci-smoke",
+                "skippy-parity",
+                "competitive-benchmark",
+                "radix-cache"
+              ],
+              "cadences": [
+                "llama-bump",
+                "manual-full",
+                "nightly",
+                "manual"
+              ],
+              "capability_tags": [
+                "gguf",
+                "hybrid",
+                "recurrent"
+              ],
+              "artifact": {
+                "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
+                "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
+                "selector": "Q4_K_M",
+                "files": [
+                  {
+                    "path": "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
+                    "size_bytes": 944786656,
+                    "sha256": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f"
+                  }
+                ]
+              },
+              "certification": {
+                "architecture": "falcon-h1",
+                "profile": "full",
+                "execution": {
+                  "trunk_layers": 24,
+                  "mtp_layers": 0,
+                  "activation_width": 2048,
+                  "speculative_policy": "mtp-if-present"
+                },
+                "resources": {
+                  "runner_role": "family-certify",
+                  "cache_policy": "immutable-local",
+                  "estimated_model_bytes": 942121232
+                },
+                "notes": "hybrid boundary sweep",
+                "class": "causal_generation"
+              }
+            },
+            {
+              "id": "family-granite-hybrid",
+              "family": "granite-hybrid",
+              "suites": [
+                "llama-family-certification",
+                "product-smoke",
+                "scripted-binary-smoke"
+              ],
+              "cadences": [
+                "llama-bump",
+                "manual-full",
+                "pull-request",
+                "main",
+                "release"
+              ],
+              "capability_tags": [
+                "gguf",
+                "hybrid"
+              ],
+              "artifact": {
+                "repo": "ibm-granite/granite-4.0-h-350m-GGUF",
+                "revision": "a864f823cce6e6048b5752e2816fe7a23987d790",
+                "selector": "Q4_K_M",
+                "files": [
+                  {
+                    "path": "granite-4.0-h-350m-Q4_K_M.gguf",
+                    "size_bytes": 222662560,
+                    "sha256": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb"
+                  }
+                ]
+              },
+              "certification": {
+                "architecture": "granitehybrid",
+                "profile": "full",
+                "execution": {
+                  "trunk_layers": 32,
+                  "mtp_layers": 0,
+                  "activation_width": 768,
+                  "speculative_policy": "mtp-if-present"
+                },
+                "resources": {
+                  "runner_role": "family-certify",
+                  "cache_policy": "immutable-local",
+                  "estimated_model_bytes": 219091712
+                },
+                "notes": "cheap hybrid boundary sweep",
+                "class": "causal_generation"
+              }
+            },
+            {
+              "id": "qwen3-q8-parity",
+              "family": "qwen3-dense",
+              "suites": [
+                "skippy-parity"
+              ],
+              "cadences": [
+                "manual"
+              ],
+              "capability_tags": [
+                "dense",
+                "gguf",
+                "parity"
+              ],
+              "artifact": {
+                "repo": "meshllm/qwen3-0.6b-parity-q8_0-gguf",
+                "revision": "1a2502cafd4a9a780338b126055ad1772037fe75",
+                "selector": "Q8_0",
+                "files": [
+                  {
+                    "path": "qwen3-0.6b-q8_0.gguf",
+                    "size_bytes": 804753664,
+                    "sha256": "01c657652e8f88a397c0a7bf540633b92d2c132fac1dcf88a47d0c86ce34843a"
+                  }
+                ]
+              },
+              "notes": "Parity-owned Qwen3 fixture; distinct from the canary and correctness revisions."
+            },
+            {
+              "id": "smollm2-q4-download",
+              "family": "smollm2",
+              "suites": [
+                "hf-download-smoke",
+                "openai-smoke"
+              ],
+              "cadences": [
+                "pull-request",
+                "main",
+                "manual"
+              ],
+              "capability_tags": [
+                "dense",
+                "download",
+                "gguf",
+                "small"
+              ],
+              "artifact": {
+                "repo": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF",
+                "revision": "62aa73156aea1ea66d752916ad281b9e344115b3",
+                "selector": "Q4_K_M",
+                "files": [
+                  {
+                    "path": "SmolLM2-135M-Instruct.Q4_K_M.gguf",
+                    "size_bytes": 105454144,
+                    "sha256": "8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684"
+                  }
+                ]
+              },
+              "notes": "Real Rust Hugging Face resolve/download identity fixture."
+            },
+            {
+              "id": "gemma3-bf16-metadata",
+              "family": "gemma3",
+              "suites": [
+                "hf-download-smoke"
+              ],
+              "cadences": [
+                "pull-request",
+                "main",
+                "manual"
+              ],
+              "capability_tags": [
+                "bf16",
+                "gguf",
+                "metadata-only",
+                "multipart"
+              ],
+              "artifact": {
+                "repo": "unsloth/gemma-3-27b-it-GGUF",
+                "revision": "7cd0121f2530b00e42c4df952d4cad4418c0b3c1",
+                "selector": "BF16",
+                "files": [
+                  {
+                    "path": "BF16/gemma-3-27b-it-BF16-00001-of-00002.gguf",
+                    "size_bytes": 49898757248,
+                    "sha256": "75fbc33e46f7e5f4798fb0940bef3d70d324b8bfe7be95e6d18d8e3aa2330014"
+                  },
+                  {
+                    "path": "BF16/gemma-3-27b-it-BF16-00002-of-00002.gguf",
+                    "size_bytes": 4129207200,
+                    "sha256": "4dc1b732f3ffff1a4db5f14367181204f575c52258f5286455d3a25d58b95275"
+                  }
+                ]
+              },
+              "notes": "API-only multipart GGUF listing fixture; its large shards are never downloaded by the smoke test."
+            },
+            {
+              "id": "qwen3-q8-correctness",
+              "family": "qwen3-dense",
+              "suites": [
+                "skippy-correctness"
+              ],
+              "cadences": [
+                "pull-request",
+                "main",
+                "manual"
+              ],
+              "capability_tags": [
+                "dense",
+                "gguf",
+                "skippy-correctness",
+                "small"
+              ],
+              "artifact": {
+                "repo": "Qwen/Qwen3-0.6B-GGUF",
+                "revision": "ef4088322893040952513f532f736ddeab518403",
+                "selector": "Q8_0",
+                "files": [
+                  {
+                    "path": "Qwen3-0.6B-Q8_0.gguf",
+                    "size_bytes": 804753088,
+                    "sha256": "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735"
+                  }
+                ]
+              },
+              "notes": "Pinned Skippy runtime/model-package correctness fixture."
+            },
+            {
+              "id": "smollm2-safetensors",
+              "family": "smollm2",
+              "suites": [
+                "safetensors-runtime-smoke"
+              ],
+              "cadences": [
+                "pull-request"
+              ],
+              "capability_tags": [
+                "safetensors",
+                "direct-load",
+                "dense",
+                "small"
+              ],
+              "artifact": {
+                "repo": "HuggingFaceTB/SmolLM2-135M-Instruct",
+                "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+                "selector": "safetensors",
+                "files": [
+                  {
+                    "path": "config.json",
+                    "size_bytes": 861,
+                    "sha256": "8eb740e8bbe4cff95ea7b4588d17a2432deb16e8075bc5828ff7ba9be94d982a"
+                  },
+                  {
+                    "path": "tokenizer.json",
+                    "size_bytes": 2104556,
+                    "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c"
+                  },
+                  {
+                    "path": "tokenizer_config.json",
+                    "size_bytes": 3764,
+                    "sha256": "4ec77d44f62efeb38d7e044a1db318f6a939438425312dfa333b8382dbad98df"
+                  },
+                  {
+                    "path": "model.safetensors",
+                    "size_bytes": 269060552,
+                    "sha256": "5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c"
+                  }
+                ]
+              },
+              "quantizations": [
+                "preserve",
+                "F32",
+                "F16",
+                "BF16",
+                "Q1_0",
+                "Q2_0",
+                "Q4_0",
+                "Q4_1",
+                "Q5_0",
+                "Q5_1",
+                "IQ2_XXS",
+                "IQ2_XS",
+                "IQ2_S",
+                "IQ2_M",
+                "IQ1_S",
+                "IQ1_M",
+                "TQ1_0",
+                "TQ2_0",
+                "Q2_K",
+                "Q2_K_S",
+                "IQ3_XS",
+                "IQ3_XXS",
+                "IQ3_S",
+                "IQ3_M",
+                "Q3_K_S",
+                "Q3_K_M",
+                "Q3_K_L",
+                "IQ4_NL",
+                "IQ4_XS",
+                "Q4_K_S",
+                "Q4_K_M",
+                "Q5_K_S",
+                "Q5_K_M",
+                "Q6_K",
+                "Q8_0",
+                "MXFP4_MOE"
+              ],
+              "notes": "SafeTensors direct-load fixture used across every supported load-time quantization."
+            },
+            {
+              "id": "family-paddleocr",
+              "family": "paddleocr",
+              "suites": [
+                "llama-family-certification"
+              ],
+              "cadences": [
+                "llama-bump",
+                "manual-full",
+                "nightly"
+              ],
+              "capability_tags": [
+                "gguf",
+                "ocr"
+              ],
+              "artifact": {
+                "repo": "PaddlePaddle/PaddleOCR-VL-1.6-GGUF",
+                "revision": "511b09642bb324401f15f97cc23bc67e8f0a291d",
+                "selector": "BF16",
+                "files": [
+                  {
+                    "path": "PaddleOCR-VL-1.6-GGUF.gguf",
+                    "size_bytes": 935769056,
+                    "sha256": "f3ae46ec885050acf4b3d31944431e1fd90d50664fb09126af4a3c050ba14ee8"
+                  }
+                ]
+              },
+              "certification": {
+                "class": "ocr",
+                "architecture": "paddleocr",
+                "profile": "workload-oracle",
+                "execution": {
+                  "trunk_layers": 18,
+                  "mtp_layers": 0,
+                  "activation_width": 1024,
+                  "speculative_policy": "disabled"
+                },
+                "resources": {
+                  "runner_role": "family-certify",
+                  "cache_policy": "immutable-local",
+                  "estimated_model_bytes": 933384192,
+                  "startup_timeout_secs": 900
+                },
+                "notes": "Local full-model OCR and HTTP smoke with the pinned PaddleOCR projector and mandatory generated-image monolithic parity; projector and trunk remain colocated",
+                "evidence": {
+                  "fixture": "scripts/generate-ocr-oracle-fixture.py#MESH 42",
+                  "comparison": "normalized monolithic text parity plus independent MESH 42 label"
+                },
+                "mmproj_artifact": {
+                  "repo": "PaddlePaddle/PaddleOCR-VL-1.6-GGUF",
+                  "revision": "511b09642bb324401f15f97cc23bc67e8f0a291d",
+                  "selector": "BF16",
+                  "files": [
+                    {
+                      "path": "PaddleOCR-VL-1.6-GGUF-mmproj.gguf",
+                      "size_bytes": 881770560,
+                      "sha256": "204d757d7610d9b3faab10d506d69e5b244e32bf765e2bab2d0167e65e0a058a"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "args": [
+      "--check"
+    ],
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model registry error: suite product-smoke default artifact is not registered: smollm2-q8-inference\n"
+  },
+  {
+    "name": "registry-flag-relative",
+    "registry": {
+      "ops": []
+    },
+    "args": [
+      "--registry",
+      "ci/model-artifacts/registry.json",
+      "--check"
+    ],
+    "code": 1,
+    "stdout": "",
+    "stderr": "generated test-model manifests are stale:\n  ci/llama-canary/family-certified.json\n  ci/model-artifacts/manifests/product-smoke.json\n  ci/model-artifacts/manifests/scripted-binary-smoke.json\n  ci/model-artifacts/manifests/sdk-smoke.json\n  ci/model-artifacts/manifests/hf-download-smoke.json\n  ci/model-artifacts/manifests/openai-smoke.json\n  ci/model-artifacts/manifests/skippy-correctness.json\n  ci/model-artifacts/manifests/safetensors-runtime-smoke.json\n  ci/model-artifacts/manifests/skippy-ci-smoke.json\n  ci/model-artifacts/manifests/skippy-parity.json\n  ci/model-artifacts/manifests/competitive-benchmark.json\n  ci/model-artifacts/manifests/radix-cache.json\n"
+  },
+  {
+    "name": "registry-flag-equals",
+    "registry": {
+      "ops": []
+    },
+    "args": [
+      "--registry=ci/model-artifacts/registry.json",
+      "--check"
+    ],
+    "code": 1,
+    "stdout": "",
+    "stderr": "generated test-model manifests are stale:\n  ci/llama-canary/family-certified.json\n  ci/model-artifacts/manifests/product-smoke.json\n  ci/model-artifacts/manifests/scripted-binary-smoke.json\n  ci/model-artifacts/manifests/sdk-smoke.json\n  ci/model-artifacts/manifests/hf-download-smoke.json\n  ci/model-artifacts/manifests/openai-smoke.json\n  ci/model-artifacts/manifests/skippy-correctness.json\n  ci/model-artifacts/manifests/safetensors-runtime-smoke.json\n  ci/model-artifacts/manifests/skippy-ci-smoke.json\n  ci/model-artifacts/manifests/skippy-parity.json\n  ci/model-artifacts/manifests/competitive-benchmark.json\n  ci/model-artifacts/manifests/radix-cache.json\n"
+  }
+]

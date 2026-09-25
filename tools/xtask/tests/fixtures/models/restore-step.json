@@ -1,0 +1,4762 @@
+[
+  {
+    "name": "manifest:competitive-benchmark.json:family-llama:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-llama",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-llama\nrepo=bartowski/Llama-3.2-1B-Instruct-GGUF\nrevision=067b946cf014b7c697f3654f621d577a3e3afd1c\nselector=Q4_K_M\nmodel_ref=bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Llama-3.2-1B-Instruct-Q4_K_M.gguf\"]\nfile=Llama-3.2-1B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf\nsha256=6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83\nsize_bytes=807694464\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-llama:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-llama",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-llama\nrepo=bartowski/Llama-3.2-1B-Instruct-GGUF\nrevision=067b946cf014b7c697f3654f621d577a3e3afd1c\nselector=Q4_K_M\nmodel_ref=bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Llama-3.2-1B-Instruct-Q4_K_M.gguf\"]\nfile=Llama-3.2-1B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf\nsha256=6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83\nsize_bytes=807694464\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-llama:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-llama",
+      "model_cadence": "nightly"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-llama\nrepo=bartowski/Llama-3.2-1B-Instruct-GGUF\nrevision=067b946cf014b7c697f3654f621d577a3e3afd1c\nselector=Q4_K_M\nmodel_ref=bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Llama-3.2-1B-Instruct-Q4_K_M.gguf\"]\nfile=Llama-3.2-1B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf\nsha256=6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83\nsize_bytes=807694464\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-llama:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-llama",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-llama is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-llama:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-llama",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-llama is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-llama:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-llama",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-llama is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-llama:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-llama",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-llama is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-llama:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-llama",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-llama\nrepo=bartowski/Llama-3.2-1B-Instruct-GGUF\nrevision=067b946cf014b7c697f3654f621d577a3e3afd1c\nselector=Q4_K_M\nmodel_ref=bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Llama-3.2-1B-Instruct-Q4_K_M.gguf\"]\nfile=Llama-3.2-1B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf\nsha256=6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83\nsize_bytes=807694464\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-llama:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-llama",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-llama is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-falcon-h1:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-falcon-h1:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-falcon-h1:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "nightly"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-falcon-h1:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-falcon-h1:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-falcon-h1:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-falcon-h1:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-falcon-h1:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:family-falcon-h1:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:deepseek2-q3-competitive:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "deepseek2-q3-competitive",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact deepseek2-q3-competitive is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:deepseek2-q3-competitive:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "deepseek2-q3-competitive",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact deepseek2-q3-competitive is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:deepseek2-q3-competitive:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "deepseek2-q3-competitive",
+      "model_cadence": "nightly"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=deepseek2-q3-competitive\nrepo=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF\nrevision=8f248fa2072348f77a8bc37754e470de1f61866e\nselector=Q3_K_M\nmodel_ref=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q3_K_M\nfiles_json=[\"DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf\"]\nfile=DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf\nurl=https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf\nsha256=30f78fce33d19c4bf68c410cd6504d424346dfbe846b4d3df5558e0be078a2a1\nsize_bytes=8126607104\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:deepseek2-q3-competitive:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "deepseek2-q3-competitive",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact deepseek2-q3-competitive is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:deepseek2-q3-competitive:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "deepseek2-q3-competitive",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact deepseek2-q3-competitive is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:deepseek2-q3-competitive:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "deepseek2-q3-competitive",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact deepseek2-q3-competitive is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:deepseek2-q3-competitive:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "deepseek2-q3-competitive",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact deepseek2-q3-competitive is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:deepseek2-q3-competitive:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "deepseek2-q3-competitive",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=deepseek2-q3-competitive\nrepo=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF\nrevision=8f248fa2072348f77a8bc37754e470de1f61866e\nselector=Q3_K_M\nmodel_ref=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q3_K_M\nfiles_json=[\"DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf\"]\nfile=DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf\nurl=https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf\nsha256=30f78fce33d19c4bf68c410cd6504d424346dfbe846b4d3df5558e0be078a2a1\nsize_bytes=8126607104\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:deepseek2-q3-competitive:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "deepseek2-q3-competitive",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact deepseek2-q3-competitive is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:granite-h1-bf16-competitive:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "granite-h1-bf16-competitive",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact granite-h1-bf16-competitive is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:granite-h1-bf16-competitive:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "granite-h1-bf16-competitive",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact granite-h1-bf16-competitive is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:granite-h1-bf16-competitive:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "granite-h1-bf16-competitive",
+      "model_cadence": "nightly"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=granite-h1-bf16-competitive\nrepo=ibm-granite/granite-4.0-h-1b-GGUF\nrevision=c2cb1972f511add21f3bae244990b8ff3a3ffb23\nselector=bf16\nmodel_ref=ibm-granite/granite-4.0-h-1b-GGUF:bf16\nfiles_json=[\"granite-4.0-h-1b-bf16.gguf\"]\nfile=granite-4.0-h-1b-bf16.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-1b-GGUF/resolve/c2cb1972f511add21f3bae244990b8ff3a3ffb23/granite-4.0-h-1b-bf16.gguf\nsha256=263ecc8dbe190d61b03639a3e71eec1ba6c70445e8488ce46cfe52d61786eb96\nsize_bytes=2928332288\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:granite-h1-bf16-competitive:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "granite-h1-bf16-competitive",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact granite-h1-bf16-competitive is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:granite-h1-bf16-competitive:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "granite-h1-bf16-competitive",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact granite-h1-bf16-competitive is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:granite-h1-bf16-competitive:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "granite-h1-bf16-competitive",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact granite-h1-bf16-competitive is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:granite-h1-bf16-competitive:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "granite-h1-bf16-competitive",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact granite-h1-bf16-competitive is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:granite-h1-bf16-competitive:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "granite-h1-bf16-competitive",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=granite-h1-bf16-competitive\nrepo=ibm-granite/granite-4.0-h-1b-GGUF\nrevision=c2cb1972f511add21f3bae244990b8ff3a3ffb23\nselector=bf16\nmodel_ref=ibm-granite/granite-4.0-h-1b-GGUF:bf16\nfiles_json=[\"granite-4.0-h-1b-bf16.gguf\"]\nfile=granite-4.0-h-1b-bf16.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-1b-GGUF/resolve/c2cb1972f511add21f3bae244990b8ff3a3ffb23/granite-4.0-h-1b-bf16.gguf\nsha256=263ecc8dbe190d61b03639a3e71eec1ba6c70445e8488ce46cfe52d61786eb96\nsize_bytes=2928332288\n"
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:granite-h1-bf16-competitive:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "granite-h1-bf16-competitive",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact granite-h1-bf16-competitive is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:competitive-benchmark.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/competitive-benchmark.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:smollm2-q4-download:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:smollm2-q4-download:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:smollm2-q4-download:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:smollm2-q4-download:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:smollm2-q4-download:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q4-download\nrepo=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF\nrevision=62aa73156aea1ea66d752916ad281b9e344115b3\nselector=Q4_K_M\nmodel_ref=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M\nfiles_json=[\"SmolLM2-135M-Instruct.Q4_K_M.gguf\"]\nfile=SmolLM2-135M-Instruct.Q4_K_M.gguf\nurl=https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf\nsha256=8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684\nsize_bytes=105454144\n"
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:smollm2-q4-download:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q4-download\nrepo=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF\nrevision=62aa73156aea1ea66d752916ad281b9e344115b3\nselector=Q4_K_M\nmodel_ref=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M\nfiles_json=[\"SmolLM2-135M-Instruct.Q4_K_M.gguf\"]\nfile=SmolLM2-135M-Instruct.Q4_K_M.gguf\nurl=https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf\nsha256=8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684\nsize_bytes=105454144\n"
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:smollm2-q4-download:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:smollm2-q4-download:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q4-download\nrepo=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF\nrevision=62aa73156aea1ea66d752916ad281b9e344115b3\nselector=Q4_K_M\nmodel_ref=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M\nfiles_json=[\"SmolLM2-135M-Instruct.Q4_K_M.gguf\"]\nfile=SmolLM2-135M-Instruct.Q4_K_M.gguf\nurl=https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf\nsha256=8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684\nsize_bytes=105454144\n"
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:smollm2-q4-download:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:gemma3-bf16-metadata:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:gemma3-bf16-metadata:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:gemma3-bf16-metadata:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:gemma3-bf16-metadata:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:gemma3-bf16-metadata:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata must contain exactly one file\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:gemma3-bf16-metadata:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata must contain exactly one file\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:gemma3-bf16-metadata:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:gemma3-bf16-metadata:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata must contain exactly one file\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:gemma3-bf16-metadata:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:hf-download-smoke.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:smollm2-q4-download:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:smollm2-q4-download:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:smollm2-q4-download:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:smollm2-q4-download:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:smollm2-q4-download:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q4-download\nrepo=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF\nrevision=62aa73156aea1ea66d752916ad281b9e344115b3\nselector=Q4_K_M\nmodel_ref=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M\nfiles_json=[\"SmolLM2-135M-Instruct.Q4_K_M.gguf\"]\nfile=SmolLM2-135M-Instruct.Q4_K_M.gguf\nurl=https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf\nsha256=8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684\nsize_bytes=105454144\n"
+  },
+  {
+    "name": "manifest:openai-smoke.json:smollm2-q4-download:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q4-download\nrepo=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF\nrevision=62aa73156aea1ea66d752916ad281b9e344115b3\nselector=Q4_K_M\nmodel_ref=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M\nfiles_json=[\"SmolLM2-135M-Instruct.Q4_K_M.gguf\"]\nfile=SmolLM2-135M-Instruct.Q4_K_M.gguf\nurl=https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf\nsha256=8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684\nsize_bytes=105454144\n"
+  },
+  {
+    "name": "manifest:openai-smoke.json:smollm2-q4-download:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:smollm2-q4-download:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q4-download\nrepo=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF\nrevision=62aa73156aea1ea66d752916ad281b9e344115b3\nselector=Q4_K_M\nmodel_ref=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M\nfiles_json=[\"SmolLM2-135M-Instruct.Q4_K_M.gguf\"]\nfile=SmolLM2-135M-Instruct.Q4_K_M.gguf\nurl=https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf\nsha256=8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684\nsize_bytes=105454144\n"
+  },
+  {
+    "name": "manifest:openai-smoke.json:smollm2-q4-download:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "smollm2-q4-download",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q4-download\nrepo=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF\nrevision=62aa73156aea1ea66d752916ad281b9e344115b3\nselector=Q4_K_M\nmodel_ref=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M\nfiles_json=[\"SmolLM2-135M-Instruct.Q4_K_M.gguf\"]\nfile=SmolLM2-135M-Instruct.Q4_K_M.gguf\nurl=https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf\nsha256=8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684\nsize_bytes=105454144\n"
+  },
+  {
+    "name": "manifest:openai-smoke.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q4-download\nrepo=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF\nrevision=62aa73156aea1ea66d752916ad281b9e344115b3\nselector=Q4_K_M\nmodel_ref=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M\nfiles_json=[\"SmolLM2-135M-Instruct.Q4_K_M.gguf\"]\nfile=SmolLM2-135M-Instruct.Q4_K_M.gguf\nurl=https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf\nsha256=8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684\nsize_bytes=105454144\n"
+  },
+  {
+    "name": "manifest:openai-smoke.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:openai-smoke.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q4-download\nrepo=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF\nrevision=62aa73156aea1ea66d752916ad281b9e344115b3\nselector=Q4_K_M\nmodel_ref=jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M\nfiles_json=[\"SmolLM2-135M-Instruct.Q4_K_M.gguf\"]\nfile=SmolLM2-135M-Instruct.Q4_K_M.gguf\nurl=https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf\nsha256=8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684\nsize_bytes=105454144\n"
+  },
+  {
+    "name": "manifest:openai-smoke.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/openai-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q4-download is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:family-granite-hybrid:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:family-granite-hybrid:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:family-granite-hybrid:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-granite-hybrid is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:family-granite-hybrid:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-granite-hybrid is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:family-granite-hybrid:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:family-granite-hybrid:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:family-granite-hybrid:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "release"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:family-granite-hybrid:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-granite-hybrid is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:family-granite-hybrid:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-granite-hybrid is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:smollm2-q8-inference:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:smollm2-q8-inference:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:smollm2-q8-inference:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:smollm2-q8-inference:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:smollm2-q8-inference:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:smollm2-q8-inference:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:smollm2-q8-inference:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "release"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:smollm2-q8-inference:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:smollm2-q8-inference:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:product-smoke.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:product-smoke.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-deepseek2:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-deepseek2\nrepo=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF\nrevision=8f248fa2072348f77a8bc37754e470de1f61866e\nselector=Q4_K_M\nmodel_ref=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M\nfiles_json=[\"DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\"]\nfile=DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nsha256=603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8\nsize_bytes=10364416768\n"
+  },
+  {
+    "name": "manifest:radix-cache.json:family-deepseek2:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-deepseek2\nrepo=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF\nrevision=8f248fa2072348f77a8bc37754e470de1f61866e\nselector=Q4_K_M\nmodel_ref=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M\nfiles_json=[\"DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\"]\nfile=DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nsha256=603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8\nsize_bytes=10364416768\n"
+  },
+  {
+    "name": "manifest:radix-cache.json:family-deepseek2:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-deepseek2:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-deepseek2:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-deepseek2:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-deepseek2:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-deepseek2:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-deepseek2\nrepo=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF\nrevision=8f248fa2072348f77a8bc37754e470de1f61866e\nselector=Q4_K_M\nmodel_ref=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M\nfiles_json=[\"DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\"]\nfile=DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nsha256=603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8\nsize_bytes=10364416768\n"
+  },
+  {
+    "name": "manifest:radix-cache.json:family-deepseek2:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-falcon-h1:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:radix-cache.json:family-falcon-h1:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:radix-cache.json:family-falcon-h1:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "nightly"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:radix-cache.json:family-falcon-h1:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-falcon-h1:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-falcon-h1:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-falcon-h1:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:family-falcon-h1:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:radix-cache.json:family-falcon-h1:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:llama-q4-parity-radix:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:llama-q4-parity-radix:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:llama-q4-parity-radix:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:llama-q4-parity-radix:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:llama-q4-parity-radix:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:llama-q4-parity-radix:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:llama-q4-parity-radix:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:llama-q4-parity-radix:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=llama-q4-parity-radix\nrepo=bartowski/Llama-3.2-1B-Instruct-GGUF\nrevision=067b946cf014b7c697f3654f621d577a3e3afd1c\nselector=Q4_K_M\nmodel_ref=bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Llama-3.2-1B-Instruct-Q4_K_M.gguf\"]\nfile=Llama-3.2-1B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf\nsha256=6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83\nsize_bytes=807694464\n"
+  },
+  {
+    "name": "manifest:radix-cache.json:llama-q4-parity-radix:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:gemma2-q4-parity-radix:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:gemma2-q4-parity-radix:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:gemma2-q4-parity-radix:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:gemma2-q4-parity-radix:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:gemma2-q4-parity-radix:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:gemma2-q4-parity-radix:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:gemma2-q4-parity-radix:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:gemma2-q4-parity-radix:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=gemma2-q4-parity-radix\nrepo=bartowski/gemma-2-2b-it-GGUF\nrevision=855f67caed130e1befc571b52bd181be2e858883\nselector=Q4_K_M\nmodel_ref=bartowski/gemma-2-2b-it-GGUF:Q4_K_M\nfiles_json=[\"gemma-2-2b-it-Q4_K_M.gguf\"]\nfile=gemma-2-2b-it-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/855f67caed130e1befc571b52bd181be2e858883/gemma-2-2b-it-Q4_K_M.gguf\nsha256=e0aee85060f168f0f2d8473d7ea41ce2f3230c1bc1374847505ea599288a7787\nsize_bytes=1708582752\n"
+  },
+  {
+    "name": "manifest:radix-cache.json:gemma2-q4-parity-radix:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:radix-cache.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/radix-cache.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:smollm2-safetensors:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "smollm2-safetensors",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:smollm2-safetensors:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "smollm2-safetensors",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:smollm2-safetensors:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "smollm2-safetensors",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:smollm2-safetensors:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "smollm2-safetensors",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:smollm2-safetensors:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "smollm2-safetensors",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors must contain exactly one file\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:smollm2-safetensors:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "smollm2-safetensors",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:smollm2-safetensors:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "smollm2-safetensors",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:smollm2-safetensors:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "smollm2-safetensors",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:smollm2-safetensors:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "smollm2-safetensors",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors must contain exactly one file\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:safetensors-runtime-smoke.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/safetensors-runtime-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-safetensors is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:family-granite-hybrid:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:family-granite-hybrid:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:family-granite-hybrid:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-granite-hybrid is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:family-granite-hybrid:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-granite-hybrid is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:family-granite-hybrid:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:family-granite-hybrid:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:family-granite-hybrid:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "release"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-granite-hybrid\nrepo=ibm-granite/granite-4.0-h-350m-GGUF\nrevision=a864f823cce6e6048b5752e2816fe7a23987d790\nselector=Q4_K_M\nmodel_ref=ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M\nfiles_json=[\"granite-4.0-h-350m-Q4_K_M.gguf\"]\nfile=granite-4.0-h-350m-Q4_K_M.gguf\nurl=https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf\nsha256=0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb\nsize_bytes=222662560\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:family-granite-hybrid:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-granite-hybrid is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:family-granite-hybrid:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "family-granite-hybrid",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-granite-hybrid is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:smollm2-q8-inference:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:smollm2-q8-inference:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:smollm2-q8-inference:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:smollm2-q8-inference:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:smollm2-q8-inference:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:smollm2-q8-inference:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:smollm2-q8-inference:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "release"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:smollm2-q8-inference:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:smollm2-q8-inference:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:scripted-binary-smoke.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/scripted-binary-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:smollm2-q8-inference:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:smollm2-q8-inference:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:smollm2-q8-inference:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:smollm2-q8-inference:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:smollm2-q8-inference:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:sdk-smoke.json:smollm2-q8-inference:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:sdk-smoke.json:smollm2-q8-inference:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "release"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:sdk-smoke.json:smollm2-q8-inference:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:smollm2-q8-inference:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:sdk-smoke.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:sdk-smoke.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=smollm2-q8-inference\nrepo=unsloth/SmolLM2-135M-Instruct-GGUF\nrevision=9e6855bc4be717fca1ef21360a1db4b29d5c559a\nselector=Q8_0\nmodel_ref=unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\nfiles_json=[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]\nfile=SmolLM2-135M-Instruct-Q8_0.gguf\nurl=https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\nsha256=c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\nsize_bytes=144811072\n"
+  },
+  {
+    "name": "manifest:sdk-smoke.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'manual'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:sdk-smoke.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/sdk-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-qwen3-dense:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-qwen3-dense",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-qwen3-dense\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=23749fefcc72300e3a2ad315e1317431b06b590a\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf\nsha256=9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031\nsize_bytes=639446688\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-qwen3-dense:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-qwen3-dense",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-qwen3-dense\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=23749fefcc72300e3a2ad315e1317431b06b590a\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf\nsha256=9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031\nsize_bytes=639446688\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-qwen3-dense:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-qwen3-dense",
+      "model_cadence": "nightly"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-qwen3-dense\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=23749fefcc72300e3a2ad315e1317431b06b590a\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf\nsha256=9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031\nsize_bytes=639446688\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-qwen3-dense:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-qwen3-dense",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-qwen3-dense is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-qwen3-dense:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-qwen3-dense",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-qwen3-dense\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=23749fefcc72300e3a2ad315e1317431b06b590a\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf\nsha256=9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031\nsize_bytes=639446688\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-qwen3-dense:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-qwen3-dense",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-qwen3-dense\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=23749fefcc72300e3a2ad315e1317431b06b590a\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf\nsha256=9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031\nsize_bytes=639446688\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-qwen3-dense:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-qwen3-dense",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-qwen3-dense is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-qwen3-dense:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-qwen3-dense",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-qwen3-dense\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=23749fefcc72300e3a2ad315e1317431b06b590a\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf\nsha256=9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031\nsize_bytes=639446688\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-qwen3-dense:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-qwen3-dense",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-qwen3-dense is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-falcon-h1:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-falcon-h1:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-falcon-h1:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "nightly"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-falcon-h1:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-falcon-h1:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-falcon-h1:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-falcon-h1:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-falcon-h1:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:family-falcon-h1:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-ci-smoke.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-ci-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:qwen3-q8-correctness:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "qwen3-q8-correctness",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:qwen3-q8-correctness:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "qwen3-q8-correctness",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:qwen3-q8-correctness:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "qwen3-q8-correctness",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:qwen3-q8-correctness:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "qwen3-q8-correctness",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:qwen3-q8-correctness:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "qwen3-q8-correctness",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=qwen3-q8-correctness\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=ef4088322893040952513f532f736ddeab518403\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/ef4088322893040952513f532f736ddeab518403/Qwen3-0.6B-Q8_0.gguf\nsha256=12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735\nsize_bytes=804753088\n"
+  },
+  {
+    "name": "manifest:skippy-correctness.json:qwen3-q8-correctness:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "qwen3-q8-correctness",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=qwen3-q8-correctness\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=ef4088322893040952513f532f736ddeab518403\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/ef4088322893040952513f532f736ddeab518403/Qwen3-0.6B-Q8_0.gguf\nsha256=12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735\nsize_bytes=804753088\n"
+  },
+  {
+    "name": "manifest:skippy-correctness.json:qwen3-q8-correctness:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "qwen3-q8-correctness",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:qwen3-q8-correctness:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "qwen3-q8-correctness",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=qwen3-q8-correctness\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=ef4088322893040952513f532f736ddeab518403\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/ef4088322893040952513f532f736ddeab518403/Qwen3-0.6B-Q8_0.gguf\nsha256=12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735\nsize_bytes=804753088\n"
+  },
+  {
+    "name": "manifest:skippy-correctness.json:qwen3-q8-correctness:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "qwen3-q8-correctness",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=qwen3-q8-correctness\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=ef4088322893040952513f532f736ddeab518403\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/ef4088322893040952513f532f736ddeab518403/Qwen3-0.6B-Q8_0.gguf\nsha256=12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735\nsize_bytes=804753088\n"
+  },
+  {
+    "name": "manifest:skippy-correctness.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=qwen3-q8-correctness\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=ef4088322893040952513f532f736ddeab518403\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/ef4088322893040952513f532f736ddeab518403/Qwen3-0.6B-Q8_0.gguf\nsha256=12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735\nsize_bytes=804753088\n"
+  },
+  {
+    "name": "manifest:skippy-correctness.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-correctness.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=qwen3-q8-correctness\nrepo=Qwen/Qwen3-0.6B-GGUF\nrevision=ef4088322893040952513f532f736ddeab518403\nselector=Q8_0\nmodel_ref=Qwen/Qwen3-0.6B-GGUF:Q8_0\nfiles_json=[\"Qwen3-0.6B-Q8_0.gguf\"]\nfile=Qwen3-0.6B-Q8_0.gguf\nurl=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/ef4088322893040952513f532f736ddeab518403/Qwen3-0.6B-Q8_0.gguf\nsha256=12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735\nsize_bytes=804753088\n"
+  },
+  {
+    "name": "manifest:skippy-correctness.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-correctness.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-correctness is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-deepseek2:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-deepseek2\nrepo=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF\nrevision=8f248fa2072348f77a8bc37754e470de1f61866e\nselector=Q4_K_M\nmodel_ref=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M\nfiles_json=[\"DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\"]\nfile=DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nsha256=603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8\nsize_bytes=10364416768\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-deepseek2:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-deepseek2\nrepo=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF\nrevision=8f248fa2072348f77a8bc37754e470de1f61866e\nselector=Q4_K_M\nmodel_ref=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M\nfiles_json=[\"DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\"]\nfile=DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nsha256=603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8\nsize_bytes=10364416768\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-deepseek2:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-deepseek2:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-deepseek2:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-deepseek2:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-deepseek2:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-deepseek2:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-deepseek2\nrepo=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF\nrevision=8f248fa2072348f77a8bc37754e470de1f61866e\nselector=Q4_K_M\nmodel_ref=bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M\nfiles_json=[\"DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\"]\nfile=DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf\nsha256=603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8\nsize_bytes=10364416768\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-deepseek2:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-deepseek2",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-deepseek2 is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-falcon-h1:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "llama-bump"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-falcon-h1:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "manual-full"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-falcon-h1:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "nightly"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-falcon-h1:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-falcon-h1:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-falcon-h1:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-falcon-h1:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-falcon-h1:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=family-falcon-h1\nrepo=tiiuae/Falcon-H1-1.5B-Instruct-GGUF\nrevision=0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a\nselector=Q4_K_M\nmodel_ref=tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\"]\nfile=Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf\nsha256=8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f\nsize_bytes=944786656\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:family-falcon-h1:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "family-falcon-h1",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact family-falcon-h1 is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:qwen3-q8-parity:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "qwen3-q8-parity",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-parity is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:qwen3-q8-parity:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "qwen3-q8-parity",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-parity is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:qwen3-q8-parity:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "qwen3-q8-parity",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-parity is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:qwen3-q8-parity:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "qwen3-q8-parity",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-parity is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:qwen3-q8-parity:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "qwen3-q8-parity",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-parity is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:qwen3-q8-parity:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "qwen3-q8-parity",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-parity is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:qwen3-q8-parity:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "qwen3-q8-parity",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-parity is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:qwen3-q8-parity:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "qwen3-q8-parity",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=qwen3-q8-parity\nrepo=meshllm/qwen3-0.6b-parity-q8_0-gguf\nrevision=1a2502cafd4a9a780338b126055ad1772037fe75\nselector=Q8_0\nmodel_ref=meshllm/qwen3-0.6b-parity-q8_0-gguf:Q8_0\nfiles_json=[\"qwen3-0.6b-q8_0.gguf\"]\nfile=qwen3-0.6b-q8_0.gguf\nurl=https://huggingface.co/meshllm/qwen3-0.6b-parity-q8_0-gguf/resolve/1a2502cafd4a9a780338b126055ad1772037fe75/qwen3-0.6b-q8_0.gguf\nsha256=01c657652e8f88a397c0a7bf540633b92d2c132fac1dcf88a47d0c86ce34843a\nsize_bytes=804753664\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:qwen3-q8-parity:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "qwen3-q8-parity",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact qwen3-q8-parity is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:llama-q4-parity-radix:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:llama-q4-parity-radix:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:llama-q4-parity-radix:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:llama-q4-parity-radix:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:llama-q4-parity-radix:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:llama-q4-parity-radix:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:llama-q4-parity-radix:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:llama-q4-parity-radix:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=llama-q4-parity-radix\nrepo=bartowski/Llama-3.2-1B-Instruct-GGUF\nrevision=067b946cf014b7c697f3654f621d577a3e3afd1c\nselector=Q4_K_M\nmodel_ref=bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M\nfiles_json=[\"Llama-3.2-1B-Instruct-Q4_K_M.gguf\"]\nfile=Llama-3.2-1B-Instruct-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf\nsha256=6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83\nsize_bytes=807694464\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:llama-q4-parity-radix:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "llama-q4-parity-radix",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact llama-q4-parity-radix is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:gemma2-q4-parity-radix:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'llama-bump'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:gemma2-q4-parity-radix:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'manual-full'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:gemma2-q4-parity-radix:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'nightly'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:gemma2-q4-parity-radix:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'rotating'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:gemma2-q4-parity-radix:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'pull-request'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:gemma2-q4-parity-radix:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'main'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:gemma2-q4-parity-radix:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'release'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:gemma2-q4-parity-radix:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "manual"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "artifact_id=gemma2-q4-parity-radix\nrepo=bartowski/gemma-2-2b-it-GGUF\nrevision=855f67caed130e1befc571b52bd181be2e858883\nselector=Q4_K_M\nmodel_ref=bartowski/gemma-2-2b-it-GGUF:Q4_K_M\nfiles_json=[\"gemma-2-2b-it-Q4_K_M.gguf\"]\nfile=gemma-2-2b-it-Q4_K_M.gguf\nurl=https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/855f67caed130e1befc571b52bd181be2e858883/gemma-2-2b-it-Q4_K_M.gguf\nsha256=e0aee85060f168f0f2d8473d7ea41ce2f3230c1bc1374847505ea599288a7787\nsize_bytes=1708582752\n"
+  },
+  {
+    "name": "manifest:skippy-parity.json:gemma2-q4-parity-radix:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "gemma2-q4-parity-radix",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma2-q4-parity-radix is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:<none>:llama-bump",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "",
+      "model_cadence": "llama-bump"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:<none>:manual-full",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual-full"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:<none>:nightly",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "",
+      "model_cadence": "nightly"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:<none>:rotating",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "",
+      "model_cadence": "rotating"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:<none>:pull-request",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:<none>:main",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "",
+      "model_cadence": "main"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:<none>:release",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "",
+      "model_cadence": "release"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:<none>:manual",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest:skippy-parity.json:<none>:unauthorized-fixture-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/skippy-parity.json",
+      "model_artifact_id": "",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: manifest contains multiple artifacts; pass --artifact-id\n",
+    "github_output": ""
+  },
+  {
+    "name": "no-model",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "url=\nfile=\nsha256=\nsize_bytes=\n"
+  },
+  {
+    "name": "direct",
+    "inputs": {
+      "model_url": "https://example.invalid/m.gguf",
+      "model_file": "m.gguf",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "url=https://example.invalid/m.gguf\nfile=m.gguf\nsha256=\nsize_bytes=\n"
+  },
+  {
+    "name": "direct-wins-over-manifest",
+    "inputs": {
+      "model_url": "https://example.invalid/m.gguf",
+      "model_file": "Model-1_2.gguf",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": "pull-request"
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "url=https://example.invalid/m.gguf\nfile=Model-1_2.gguf\nsha256=\nsize_bytes=\n"
+  },
+  {
+    "name": "direct-url-only",
+    "inputs": {
+      "model_url": "https://example.invalid/m.gguf",
+      "model_file": "",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "model_url and model_file must be supplied together\n",
+    "github_output": ""
+  },
+  {
+    "name": "direct-file-only",
+    "inputs": {
+      "model_url": "",
+      "model_file": "m.gguf",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "model_url and model_file must be supplied together\n",
+    "github_output": ""
+  },
+  {
+    "name": "direct-unsafe-file-traversal",
+    "inputs": {
+      "model_url": "https://example.invalid/m.gguf",
+      "model_file": "../m.gguf",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "model_file must be a safe single filename\n",
+    "github_output": ""
+  },
+  {
+    "name": "direct-unsafe-file-slash",
+    "inputs": {
+      "model_url": "https://example.invalid/m.gguf",
+      "model_file": "dir/m.gguf",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "model_file must be a safe single filename\n",
+    "github_output": ""
+  },
+  {
+    "name": "direct-unsafe-file-leading-dot",
+    "inputs": {
+      "model_url": "https://example.invalid/m.gguf",
+      "model_file": ".m.gguf",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "model_file must be a safe single filename\n",
+    "github_output": ""
+  },
+  {
+    "name": "direct-unsafe-file-newline",
+    "inputs": {
+      "model_url": "https://example.invalid/m.gguf",
+      "model_file": "m.gguf\nsha256=x",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "model_file must be a safe single filename\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest-without-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "model_cadence is required with model_manifest\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest-missing",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/absent.json",
+      "model_artifact_id": "",
+      "model_cadence": "manual"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: [Errno 2] No such file or directory: 'manifests/absent.json'\n",
+    "github_output": ""
+  },
+  {
+    "name": "direct-url-newline-legacy",
+    "inputs": {
+      "model_url": "https://example.invalid/m.gguf\nsha256=injected",
+      "model_file": "m.gguf",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "url=https://example.invalid/m.gguf\nsha256=injected\nfile=m.gguf\nsha256=\nsize_bytes=\n"
+  },
+  {
+    "name": "direct-url-percent",
+    "inputs": {
+      "model_url": "https://example.invalid/%s%d.gguf",
+      "model_file": "m.gguf",
+      "model_manifest": "",
+      "model_artifact_id": "",
+      "model_cadence": ""
+    },
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "github_output": "url=https://example.invalid/%s%d.gguf\nfile=m.gguf\nsha256=\nsize_bytes=\n"
+  },
+  {
+    "name": "manifest-absent-artifact",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "missing-model",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact id is absent from manifest: missing-model\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest-multi-file",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/hf-download-smoke.json",
+      "model_artifact_id": "gemma3-bf16-metadata",
+      "model_cadence": "pull-request"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact gemma3-bf16-metadata must contain exactly one file\n",
+    "github_output": ""
+  },
+  {
+    "name": "manifest-unauthorized-cadence",
+    "inputs": {
+      "model_url": "",
+      "model_file": "",
+      "model_manifest": "manifests/product-smoke.json",
+      "model_artifact_id": "smollm2-q8-inference",
+      "model_cadence": "unauthorized-fixture-cadence"
+    },
+    "code": 2,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "github_output": ""
+  }
+]
