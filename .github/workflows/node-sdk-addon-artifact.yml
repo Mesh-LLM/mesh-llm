@@ -98,8 +98,12 @@ jobs:
         with:
           allow_depot_remote_cache: "false"
           allow_native_github_cache: "true"
+      - name: Resolve product source layout
+        id: layout
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
       - name: Build, smoke, and stage immutable addon
         env:
+          SDK_DIR: ${{ steps.layout.outputs.sdk_dir }}
           NODE_SDK_TARGET: ${{ inputs.target }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
@@ -117,19 +121,19 @@ jobs:
             scripts/release-version.sh "$RELEASE_TAG"
           fi
           expected_version="${RELEASE_TAG#v}"
-          actual_version="$(node -p "require('./sdk/node/package.json').version")"
+          actual_version="$(node -p "require('./' + process.env.SDK_DIR + '/node/package.json').version")"
           [[ "$actual_version" == "$expected_version" ]] || {
             echo "Node SDK version mismatch: expected $expected_version, got $actual_version" >&2
             exit 1
           }
-          npm test --prefix sdk/node
-          npm run build:native --prefix sdk/node
-          source="sdk/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          npm test --prefix "$SDK_DIR/node"
+          npm run build:native --prefix "$SDK_DIR/node"
+          source="$SDK_DIR/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
           test -s "$source"
           smoke_root="$(mktemp -d)"
           trap 'rm -rf "$smoke_root"' EXIT
           mkdir -p "$smoke_root/tarball" "$smoke_root/consumer"
-          (cd sdk/node && npm pack --pack-destination "$smoke_root/tarball")
+          (cd "$SDK_DIR/node" && npm pack --pack-destination "$smoke_root/tarball")
           tarball="$(find "$smoke_root/tarball" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
           test -n "$tarball"
           (cd "$smoke_root/consumer" && npm init --yes >/dev/null && npm install "$tarball")
@@ -208,8 +212,12 @@ jobs:
           printf 'fn main() {}\n' > "$probe/src/main.rs"
           PATH="$lld_bin:$PATH" \
             cargo rustc --quiet --manifest-path "$probe/Cargo.toml" --target x86_64-apple-darwin
+      - name: Resolve product source layout
+        id: layout
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
       - name: Build, smoke, and stage immutable addon
         env:
+          SDK_DIR: ${{ steps.layout.outputs.sdk_dir }}
           NODE_SDK_TARGET: ${{ inputs.target }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
@@ -227,19 +235,19 @@ jobs:
             scripts/release-version.sh "$RELEASE_TAG"
           fi
           expected_version="${RELEASE_TAG#v}"
-          actual_version="$(node -p "require('./sdk/node/package.json').version")"
+          actual_version="$(node -p "require('./' + process.env.SDK_DIR + '/node/package.json').version")"
           [[ "$actual_version" == "$expected_version" ]] || {
             echo "Node SDK version mismatch: expected $expected_version, got $actual_version" >&2
             exit 1
           }
-          npm test --prefix sdk/node
-          npm run build:native --prefix sdk/node
-          source="sdk/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          npm test --prefix "$SDK_DIR/node"
+          npm run build:native --prefix "$SDK_DIR/node"
+          source="$SDK_DIR/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
           test -s "$source"
           smoke_root="$(mktemp -d)"
           trap 'rm -rf "$smoke_root"' EXIT
           mkdir -p "$smoke_root/tarball" "$smoke_root/consumer"
-          (cd sdk/node && npm pack --pack-destination "$smoke_root/tarball")
+          (cd "$SDK_DIR/node" && npm pack --pack-destination "$smoke_root/tarball")
           tarball="$(find "$smoke_root/tarball" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
           test -n "$tarball"
           (cd "$smoke_root/consumer" && npm init --yes >/dev/null && npm install "$tarball")
@@ -304,8 +312,12 @@ jobs:
         with:
           allow_depot_remote_cache: "false"
           allow_native_github_cache: "true"
+      - name: Resolve product source layout
+        id: layout
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
       - name: Build, smoke, and stage immutable addon
         env:
+          SDK_DIR: ${{ steps.layout.outputs.sdk_dir }}
           NODE_SDK_TARGET: ${{ inputs.target }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
@@ -323,19 +335,19 @@ jobs:
             scripts/release-version.sh "$RELEASE_TAG"
           fi
           expected_version="${RELEASE_TAG#v}"
-          actual_version="$(node -p "require('./sdk/node/package.json').version")"
+          actual_version="$(node -p "require('./' + process.env.SDK_DIR + '/node/package.json').version")"
           [[ "$actual_version" == "$expected_version" ]] || {
             echo "Node SDK version mismatch: expected $expected_version, got $actual_version" >&2
             exit 1
           }
-          npm test --prefix sdk/node
-          npm run build:native --prefix sdk/node
-          source="sdk/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
+          npm test --prefix "$SDK_DIR/node"
+          npm run build:native --prefix "$SDK_DIR/node"
+          source="$SDK_DIR/node/native/$NODE_SDK_TARGET/mesh_llm_nodejs.node"
           test -s "$source"
           smoke_root="$(mktemp -d)"
           trap 'rm -rf "$smoke_root"' EXIT
           mkdir -p "$smoke_root/tarball" "$smoke_root/consumer"
-          (cd sdk/node && npm pack --pack-destination "$smoke_root/tarball")
+          (cd "$SDK_DIR/node" && npm pack --pack-destination "$smoke_root/tarball")
           tarball="$(find "$smoke_root/tarball" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
           test -n "$tarball"
           (cd "$smoke_root/consumer" && npm init --yes >/dev/null && npm install "$tarball")

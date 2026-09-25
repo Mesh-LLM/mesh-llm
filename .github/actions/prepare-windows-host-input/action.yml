@@ -40,10 +40,13 @@ outputs:
 runs:
   using: composite
   steps:
+    - id: layout
+      uses: ./.github/actions/resolve-source-layout
     - name: Build and prepare immutable Windows host
       id: prepare
       shell: pwsh
       env:
+        UI_DIR: ${{ steps.layout.outputs.ui_dir }}
         INPUT_PROFILE: ${{ inputs.profile }}
         INPUT_SKIP_UI: ${{ inputs.skip_ui }}
         INPUT_ATTESTATION_SIGNING_KEY_FILE: ${{ inputs.attestation_signing_key_file }}
@@ -77,7 +80,7 @@ runs:
 
         if ($env:INPUT_SKIP_UI -eq "true") {
           $env:MESH_LLM_SKIP_UI = "1"
-          $uiDist = "crates/mesh-llm-ui/dist"
+          $uiDist = Join-Path $env:UI_DIR "dist"
           New-Item -ItemType Directory -Force -Path $uiDist | Out-Null
           $uiEntryPoint = Join-Path $uiDist "index.html"
           if (-not (Test-Path -LiteralPath $uiEntryPoint -PathType Leaf)) {

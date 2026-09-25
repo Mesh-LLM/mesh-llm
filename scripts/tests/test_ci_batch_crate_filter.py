@@ -225,6 +225,30 @@ class BatchCrateFilterTest(unittest.TestCase):
                 self.assertIn("mesh-llm", executed)
                 self.assertIn("mesh-llm-host-runtime", executed)
 
+    def test_renamed_batches_are_translated_before_the_workspace_filter(self) -> None:
+        """A planned batch is translated first, then filtered by this revision.
+
+        The translation maps a pre-extraction package to its extracted owners;
+        the filter drops a name the checked-out tree does not have. Every
+        package-specific step consumes the filtered list, so a renamed owner is
+        matched and a stale plan cannot fail the lane.
+        """
+        for workflow, resolve_step, batch_step in _BATCH_STEPS:
+            with self.subTest(workflow=workflow):
+                data = yaml.safe_load((WORKFLOWS_DIR / workflow).read_text(encoding="utf-8"))
+                steps = [step for job in data["jobs"].values() for step in job.get("steps", []) or []]
+                translate = next(step for step in steps if step.get("id") == "packages")
+                resolve = next(step for step in steps if step.get("name") == resolve_step)
+                batch = next(step for step in steps if step.get("name") == batch_step)
+                self.assertIn("resolve-cargo-packages", translate["uses"])
+                self.assertEqual(
+                    resolve["env"]["PLANNED_BATCH_CRATES"],
+                    "${{ steps.packages.outputs.crates }}",
+                )
+                self.assertLess(steps.index(translate), steps.index(resolve))
+                self.assertLess(steps.index(resolve), steps.index(batch))
+                self.assertIn("steps.resolve_batch_crates.outputs.crates", str(batch))
+
 
 if __name__ == "__main__":
     unittest.main()

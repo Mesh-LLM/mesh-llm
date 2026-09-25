@@ -1,0 +1,40 @@
+name: Resolve product source layout
+description: Resolve the existing or relocated product directories after source checkout.
+outputs:
+  ui_dir:
+    description: Console source directory, relative to the workspace.
+    value: ${{ steps.paths.outputs.ui_dir }}
+  website_dir:
+    description: Website source directory, relative to the workspace.
+    value: ${{ steps.paths.outputs.website_dir }}
+  sdk_dir:
+    description: SDK source directory, relative to the workspace.
+    value: ${{ steps.paths.outputs.sdk_dir }}
+runs:
+  using: composite
+  steps:
+    - id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        resolve_directory() {
+          local output="$1" legacy="$2" relocated="$3"
+          local selected=""
+          for candidate in "$legacy" "$relocated"; do
+            if [[ -d "$candidate" ]]; then
+              if [[ -n "$selected" ]]; then
+                echo "ambiguous source layout: $legacy and $relocated both exist" >&2
+                return 1
+              fi
+              selected="$candidate"
+            fi
+          done
+          if [[ -z "$selected" ]]; then
+            echo "missing source directory: $legacy or $relocated" >&2
+            return 1
+          fi
+          printf '%s=%s\n' "$output" "$selected" >> "$GITHUB_OUTPUT"
+        }
+        resolve_directory ui_dir crates/mesh-llm-ui mesh/crates/mesh-llm-ui
+        resolve_directory website_dir website mesh/website
+        resolve_directory sdk_dir sdk mesh/sdk

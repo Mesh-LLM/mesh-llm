@@ -73,6 +73,26 @@ class MeshRefTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'invalid llama.cpp pin'):
             R.resolve(self.checkout, 'main')
 
+    def test_relocated_pin_and_ambiguous_or_missing_pin(self):
+        legacy = self.repo / 'third_party/llama.cpp/upstream.txt'
+        relocated = self.repo / 'skippy/third_party/llama.cpp/upstream.txt'
+        relocated.parent.mkdir(parents=True)
+        legacy.rename(relocated)
+        self.git(self.repo, 'add', '-A')
+        self.git(self.repo, 'commit', '-m', 'relocate pin')
+        self.assertEqual(R.resolve(self.checkout, 'main')['upstream'], 'a'*40)
+        legacy.write_text('b'*40 + '\n')
+        self.git(self.repo, 'add', '-A')
+        self.git(self.repo, 'commit', '-m', 'ambiguous pin')
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            R.resolve(self.checkout, 'main')
+        legacy.unlink()
+        relocated.unlink()
+        self.git(self.repo, 'add', '-A')
+        self.git(self.repo, 'commit', '-m', 'missing pin')
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            R.resolve(self.checkout, 'main')
+
     def test_only_manual_dispatch_can_select_source(self):
         with patch.dict(os.environ, GITHUB_EVENT_NAME='schedule', MESH_REF='candidate'):
             with self.assertRaisesRegex(ValueError, 'manual dispatch'):
