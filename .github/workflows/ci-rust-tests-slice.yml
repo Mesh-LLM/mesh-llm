@@ -136,12 +136,56 @@ jobs:
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
           allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - name: Resolve protected test package names
+        id: packages
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        with:
+          # Switch with the protected workspace package rename, not PR source.
+          generation: legacy
+          crates: ${{ toJson(matrix.batch.crates) }}
+          batches: ${{ inputs.rust_tests_matrix }}
+      - name: Resolve planned batch crates against the checked-out workspace
+        id: resolve_batch_crates
+        env:
+          PLANNED_BATCH_CRATES: ${{ steps.packages.outputs.crates }}
+        run: |
+          set -euo pipefail
+          # The protected planner names these packages in its own generation, so
+          # the translation step above has already mapped them to this revision's
+          # owners. Filtering here matches renamed owners too, because workspace
+          # membership is decided by the tree that is actually checked out.
+          # The batch is planned from the default branch's crate inventory while
+          # this job builds the revision under test. A branch that predates a
+          # workspace member added on the default branch would otherwise abort
+          # the whole batch with "package ID specification <crate> did not match
+          # any packages", and package-specific setup would run for a crate that
+          # is not present. Workspace discovery belongs to Cargo metadata, not a
+          # workflow-maintained allowlist, so resolve the planned batch against
+          # the tree that is actually checked out exactly once. Every
+          # package-specific condition and the build step below consume this
+          # resolved list so skip decisions cannot drift.
+          mapfile -t requested < <(jq -r '.[]' <<<"$PLANNED_BATCH_CRATES")
+          crates=("${requested[@]}")
+          if [[ "${#requested[@]}" -gt 0 ]] && cargo metadata --no-deps --format-version 1 > "$RUNNER_TEMP/workspace-metadata.json"; then
+            jq -r '.packages[].name' "$RUNNER_TEMP/workspace-metadata.json" > "$RUNNER_TEMP/workspace-members.txt"
+            crates=()
+            for crate in "${requested[@]}"; do
+              if grep -qxF -- "$crate" "$RUNNER_TEMP/workspace-members.txt"; then
+                crates+=("$crate")
+              else
+                echo "::warning::batch plans $crate, which is not a workspace member of the checked-out revision; skipping it"
+              fi
+            done
+          elif [[ "${#requested[@]}" -gt 0 ]]; then
+            echo "::warning::cargo metadata failed; running the planned batch unchanged"
+          fi
+          printf 'crates=%s\n' "$(jq -cn --args '$ARGS.positional' ${crates[@]+"${crates[@]}"})" >> "$GITHUB_OUTPUT"
       - name: Prepare UI placeholder
         env:
           UI_DIR: ${{ steps.layout.outputs.ui_dir }}
         run: mkdir -p "$UI_DIR/dist" && printf '<html></html>' > "$UI_DIR/dist/index.html"
       - name: Prepare patched llama.cpp when required
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-quantize') || contains(toJson(matrix.batch.crates), 'skippy-runtime') || (contains(toJson(matrix.batch.crates), 'skippy-model-package') || contains(toJson(matrix.batch.crates), 'skippy-package-builder')) || contains(toJson(matrix.batch.crates), 'skippy-ffi') }}
+        if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-quantize') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-ffi') }}
         run: scripts/prepare-llama.sh pinned
       - name: Download immutable static ABI input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -152,7 +196,7 @@ jobs:
         run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
       - name: Resolve Skippy correctness model when required
         id: skippy_correctness_model
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') || (contains(toJson(matrix.batch.crates), 'skippy-model-package') || contains(toJson(matrix.batch.crates), 'skippy-package-builder')) }}
+        if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) }}
         run: |
           python3 scripts/resolve-test-model-manifest.py \
             ci/model-artifacts/manifests/skippy-correctness.json \
@@ -160,13 +204,13 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
       - name: Restore Skippy correctness model cache when required
         id: skippy_correctness_model_cache
-        if: ${{ (contains(toJson(matrix.batch.crates), 'skippy-runtime') || (contains(toJson(matrix.batch.crates), 'skippy-model-package') || contains(toJson(matrix.batch.crates), 'skippy-package-builder'))) && needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        if: ${{ (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder'))) && needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}/skippy-correctness-model
           key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-correctness-model-${{ steps.skippy_correctness_model.outputs.sha256 }}-${{ hashFiles('.github/cache-version.txt') }}
       - name: Download Skippy correctness model when required
-        if: ${{ (contains(toJson(matrix.batch.crates), 'skippy-runtime') || (contains(toJson(matrix.batch.crates), 'skippy-model-package') || contains(toJson(matrix.batch.crates), 'skippy-package-builder'))) && steps.skippy_correctness_model_cache.outputs.cache-hit != 'true' }}
+        if: ${{ (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder'))) && steps.skippy_correctness_model_cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/skippy-correctness-model"
@@ -175,7 +219,7 @@ jobs:
             --revision "${{ steps.skippy_correctness_model.outputs.revision }}" \
             --local-dir "$RUNNER_TEMP/skippy-correctness-model"
       - name: Verify Skippy correctness model when required
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') || (contains(toJson(matrix.batch.crates), 'skippy-model-package') || contains(toJson(matrix.batch.crates), 'skippy-package-builder')) }}
+        if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) }}
         run: |
           set -euo pipefail
           python3 scripts/resolve-test-model-manifest.py \
@@ -185,31 +229,24 @@ jobs:
       - name: Save trusted Skippy correctness model cache
         # Main is exhaustive, so the batch containing skippy-runtime is the
         # sole publisher for this shared package-manager-style cache key.
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') && needs.runner_policy.outputs.allow_native_github_cache == 'true' && github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request' && inputs.original_event_name != 'pull_request_target' && steps.skippy_correctness_model_cache.outputs.cache-hit != 'true' }}
+        if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') && needs.runner_policy.outputs.allow_native_github_cache == 'true' && github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request' && inputs.original_event_name != 'pull_request_target' && steps.skippy_correctness_model_cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}/skippy-correctness-model
           key: ${{ steps.skippy_correctness_model_cache.outputs.cache-primary-key }}
-      - name: Resolve protected test package names
-        id: packages
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
-        with:
-          # Switch with the protected workspace package rename, not PR source.
-          generation: legacy
-          crates: ${{ toJson(matrix.batch.crates) }}
-          batches: ${{ inputs.rust_tests_matrix }}
       - name: Run isolated Cargo tests for the batch
         env:
-          TEST_CRATES: ${{ steps.packages.outputs.crates }}
+          TEST_CRATES: ${{ steps.resolve_batch_crates.outputs.crates }}
           SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/${{ steps.skippy_correctness_model.outputs.file }}
         run: |
           set -euo pipefail
-          while IFS= read -r crate; do
+          mapfile -t crates < <(jq -r '.[]' <<<"$TEST_CRATES")
+          for crate in ${crates[@]+"${crates[@]}"}; do
             [[ "$crate" == "skippy-ffi" ]] && continue
             echo "::group::cargo test -p $crate"
             cargo test --locked -p "$crate"
             echo "::endgroup::"
-          done < <(jq -r '.[]' <<<"$TEST_CRATES")
+          done
       - name: Capture Rust test cache evidence
         if: ${{ !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats

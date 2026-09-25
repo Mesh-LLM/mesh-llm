@@ -150,9 +150,10 @@ mount fails with its actual path; the workflow never creates or seeds a model
 cache. Existing `HF_TOKEN`/`HF_TOKEN_PATH` configuration is preserved, with tokens
 masked before export. `HF_HUB_OFFLINE=1` is applied as certification policy rather
 than required in the machine environment. Compiler-cache and local-tool defaults
-use the runner account's home directory instead of a fixed username. One service
-per physical certification machine avoids competing model loads and ports.
-There is no Actions model cache and no worker-side compilation or download.
+use the runner account's home directory instead of a fixed username. Runner
+services sharing a physical certification machine serialize model loads and
+ports through the per-account host lock. There is no Actions model cache and no
+worker-side compilation or download.
 
 The aggregate requires every planned family exactly once, successful worker
 status, matching candidate/plan/build digests, and each family's required
@@ -1262,15 +1263,18 @@ execution budgets two complete weight copies plus 25% and 2 GiB per process.
 These are explicit admission estimates for the current short-context harness,
 not measured peak guarantees; changes to concurrency/context require review.
 
-The worker recomputes placement from the digest-verified plan, holds one local
-per-account host lock, checks actual physical capacity and available memory,
-and polls availability once per second while running the battery. Available
-memory is macOS free + inactive + speculative pages; purgeable pages are not
-counted twice. A reserve violation or monitoring failure stops only this
-family's process group and fails certification. `memory-admission.json` retains
-the estimate and host observations even on failure. Sampling cannot guarantee
-that instantaneous allocations never cross the reserve. Unrelated workloads
-must leave enough headroom at admission; labels alone are insufficient.
+The worker recomputes placement from the digest-verified plan, waits for one
+local per-account host lock, checks actual physical capacity and available
+memory, and polls availability once per second while running the battery.
+Expected contention between runner services on one machine is serialized rather
+than reported as a family failure; the evidence records whether and how long the
+worker waited. Available memory is macOS free + inactive + speculative pages;
+purgeable pages are not counted twice. A reserve violation or monitoring failure
+stops only this family's process group and fails certification.
+`memory-admission.json` retains the estimate and host observations even on
+failure. Sampling cannot guarantee that instantaneous allocations never cross
+the reserve. Unrelated workloads must leave enough headroom at admission;
+labels alone are insufficient.
 
 The shared `setup-canary-python` action restores `ci/canary-python/uv.lock` into
 a controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
