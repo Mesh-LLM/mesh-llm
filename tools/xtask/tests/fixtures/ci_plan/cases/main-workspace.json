@@ -1,0 +1,12 @@
+{
+  "manifest": "default",
+  "input": {
+    "profile": "main",
+    "event_name": "push",
+    "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_sha": "",
+    "changed_files": [
+      "crates/mesh-llm/src/lib.rs"
+    ]
+  }
+}
