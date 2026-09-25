@@ -4598,7 +4598,6 @@ dependencies = [
  "mesh-llm-plugin",
  "mesh-mixture-of-agents",
  "serde_json",
- "tokio",
 ]
 
 [[package]]

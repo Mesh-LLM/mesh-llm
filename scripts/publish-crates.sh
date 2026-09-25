@@ -429,6 +429,7 @@ publish_crates=(
     mesh-native-serving-plugin-host
     mesh-llm-plugin-manager
     mesh-mixture-of-agents
+    mesh-llm-moa-plugin
     mesh-llm-runtime-install
     mesh-llm-system
     mesh-llm-host-runtime
