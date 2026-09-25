@@ -1,5 +1,7 @@
 use super::routing_rank::RankedCandidates;
 use crate::{inference::election::InferenceTarget, mesh::Node};
+#[cfg(feature = "payments")]
+use mesh_llm_payments_types::contract::{RoutingBudgetRequest, RoutingBudgetResponse, ops};
 
 /// Apply economics after capability/context/health eligibility. Stable sorting
 /// preserves observed performance ordering for equal-price offers.
@@ -23,44 +25,20 @@ pub(super) async fn rank(
     if prices.is_empty() {
         return Ok(false);
     }
-    // Do not provision an empty wallet merely because a paid peer appeared.
-    let service = node.payment_service().await.ok();
-    let intent = service
-        .as_ref()
-        .and_then(|service| service.ledger.payment_intent().ok())
-        .unwrap_or_default();
-    let intent = match request_body.and_then(|body| body.get("mesh_payment")) {
-        Some(value) => {
-            match serde_json::from_value::<mesh_llm_payments::intent::PaymentIntent>(value.clone())
-            {
-                Ok(request) if request.validate().is_ok() => intent.restrict(&request),
-                _ => mesh_llm_payments::intent::PaymentIntent::FreeOnly,
-            }
-        }
-        None => intent,
-    };
-    let available = match service {
-        Some(service)
-            if !matches!(intent, mesh_llm_payments::intent::PaymentIntent::FreeOnly)
-                && service.has_wallet() =>
-        {
-            match service.wallet().await {
-                Ok(wallet) => wallet
-                    .balance()
-                    .await
-                    .ok()
-                    .and_then(|balance| {
-                        service
-                            .ledger
-                            .available_budget(balance.spendable_msat, mesh_llm_payments::now_ms())
-                            .ok()
-                    })
-                    .unwrap_or(0),
-                Err(_) => 0,
-            }
-        }
-        _ => 0,
-    };
+    // The provider never provisions an empty wallet merely because a paid
+    // peer appeared, and reads the balance only when paid is permitted.
+    let budget: RoutingBudgetResponse = crate::network::payments::client::call_node(
+        node,
+        ops::ROUTING_BUDGET,
+        &RoutingBudgetRequest {
+            request_intent: request_body
+                .and_then(|body| body.get("mesh_payment"))
+                .cloned(),
+        },
+    )
+    .await
+    .unwrap_or_default();
+    let (intent, available) = (budget.intent, budget.available_msat);
     let key = |target: &InferenceTarget| -> Option<(u8, u64)> {
         match target {
             InferenceTarget::Local(_) => Some((0, 0)),

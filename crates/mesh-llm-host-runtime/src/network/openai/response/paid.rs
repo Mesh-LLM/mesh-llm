@@ -388,26 +388,11 @@ pub(crate) async fn settle_output(
     tokens: u64,
     invoice: mesh_llm_payments::invoice::Invoice,
 ) -> Result<mesh_llm_payments::wallet::Transaction> {
-    ensure!(
-        tokens > 0 && tokens <= terms.max_output_tokens,
-        "output token allowance exceeded"
-    );
-    ensure!(
-        terms.payee.as_deref() == Some(invoice.payee.as_str()),
-        "output invoice changed receiving wallet"
-    );
-    let amount_msat = terms.pricing.output_charge(tokens)?;
-    ensure!(
-        invoice.amount_msat == Some(amount_msat),
-        "output invoice amount mismatch"
-    );
     service
-        .pay_charge(&Charge {
-            request_id: terms.id.clone(),
-            segment: 1,
+        .settle_output(mesh_llm_payments_types::contract::SettleOutputRequest {
+            terms: terms.clone(),
+            tokens,
             invoice,
-            amount_msat,
-            max_total_msat: payment_cap_msat(amount_msat)?,
         })
         .await
 }

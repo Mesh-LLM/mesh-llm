@@ -46,15 +46,10 @@ impl Node {
                     tokio::spawn(async move {
                         loop {
                             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                            if node.endpoint.is_closed() {
+                            if node.endpoint.is_closed() || recovery_service.strong_count() == 0 {
                                 break;
                             }
-                            let Some(service) = recovery_service.upgrade() else {
-                                break;
-                            };
-                            let _ =
-                                crate::network::openai::payment_recovery::recover(&node, &service)
-                                    .await;
+                            let _ = crate::network::openai::payment_recovery::recover(&node).await;
                         }
                     });
                     Ok::<_, anyhow::Error>(service)
@@ -86,6 +81,32 @@ pub(crate) fn in_process_plugins(node: &Node) -> crate::plugin::InProcessPlugins
     crate::plugin::InProcessPlugins::default().with(crate::plugin::PAYMENTS_PLUGIN_ID, runner)
 }
 
+/// Starts a plugin manager serving this node's payments engine in-process and
+/// installs it on the node, as runtime startup does.
+#[cfg(test)]
+pub(crate) async fn attach_payments_plugin(
+    node: &Node,
+) -> anyhow::Result<crate::plugin::PluginManager> {
+    let specs = crate::plugin::ResolvedPlugins {
+        externals: vec![crate::plugin::in_process_builtin_spec(
+            crate::plugin::PAYMENTS_PLUGIN_ID,
+        )],
+        inactive: Vec::new(),
+    };
+    let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(8);
+    let manager = crate::plugin::PluginManager::start_with_in_process(
+        &specs,
+        crate::plugin::PluginHostMode {
+            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+        },
+        mesh_tx,
+        in_process_plugins(node),
+    )
+    .await?;
+    node.set_plugin_manager(manager.clone()).await;
+    Ok(manager)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,22 +119,7 @@ mod tests {
         node.payments
             .set(Arc::new(PaymentService::open(directory.path())?))
             .map_err(|_| anyhow::anyhow!("already set"))?;
-        let specs = crate::plugin::ResolvedPlugins {
-            externals: vec![crate::plugin::in_process_builtin_spec(
-                crate::plugin::PAYMENTS_PLUGIN_ID,
-            )],
-            inactive: Vec::new(),
-        };
-        let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(8);
-        let manager = crate::plugin::PluginManager::start_with_in_process(
-            &specs,
-            crate::plugin::PluginHostMode {
-                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
-            },
-            mesh_tx,
-            in_process_plugins(&node),
-        )
-        .await?;
+        let manager = attach_payments_plugin(&node).await?;
 
         let set = r#"{"command":"set_pricing","model":"m","value":{"input_msat_per_million":1,"output_msat_per_million":2,"minimum_invoice_msat":3}}"#;
         let result = manager

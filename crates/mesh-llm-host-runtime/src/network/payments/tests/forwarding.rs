@@ -33,6 +33,7 @@ async fn remote_request(legacy: bool) -> Result<()> {
         .payments
         .set(service.clone())
         .map_err(|_| anyhow::anyhow!("already initialized"))?;
+    crate::network::payments::node_ext::attach_payments_plugin(&relay).await?;
     provider.set_models(vec!["test".into()]).await;
     provider.set_serving_models(vec!["test".into()]).await;
     let mut announcement =

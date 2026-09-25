@@ -107,6 +107,7 @@ async fn payer_fixture(
         .payments
         .set(service.clone())
         .map_err(|_| anyhow::anyhow!("already set"))?;
+    crate::network::payments::node_ext::attach_payments_plugin(&payer).await?;
     Ok((dir, network, service, payer))
 }
 
@@ -331,7 +332,7 @@ async fn recover_original() -> Result<()> {
         expires_at_ms: u64::MAX,
     };
     service.await_authorization(&terms).await?;
-    crate::network::openai::payment_recovery::recover(&payer, &service).await?;
+    crate::network::openai::payment_recovery::recover(&payer).await?;
     assert_eq!(
         service.ledger.request_state(&terms.id)?.as_deref(),
         Some("approved")
@@ -370,7 +371,7 @@ async fn recover_original() -> Result<()> {
         Ok::<_, anyhow::Error>(())
     });
     cache_connection(&payer, &original).await?;
-    crate::network::openai::payment_recovery::recover(&payer, &service).await?;
+    crate::network::openai::payment_recovery::recover(&payer).await?;
     assert_eq!(
         service.ledger.request_state(&terms.id)?.as_deref(),
         Some("completed")

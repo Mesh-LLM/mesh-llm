@@ -1,9 +1,10 @@
 //! Invoice exchange over authenticated peer tunnels. Wallet authorization is
 //! owned by local ingress; remote forwarding cannot spend the relay's wallet.
 
+pub(crate) mod client;
 mod delivery;
 mod gate;
-mod node_ext;
+pub(crate) mod node_ext;
 pub(crate) mod request;
 mod server;
 pub(crate) mod wallet_plugin;

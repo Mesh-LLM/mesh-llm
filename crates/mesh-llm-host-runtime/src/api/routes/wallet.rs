@@ -1,5 +1,5 @@
 use mesh_llm_payments::control::ControlCommand;
-use mesh_llm_payments::plugin_server::{CAPABILITY, ops};
+use mesh_llm_payments_types::contract::ops;
 use tokio::net::TcpStream;
 
 use super::super::{
@@ -57,45 +57,12 @@ pub(super) async fn handle(
         Ok(command) => command,
         Err(_) => return respond_error(stream, 400, "invalid wallet command").await,
     };
-    let Some(plugins) = node.plugin_manager().await else {
-        return respond_error(stream, 503, "payments are not available yet").await;
-    };
     // The engine spawns durable settlement itself, so it continues even if
     // this HTTP connection disappears.
-    let input = serde_json::to_string(&command)?;
-    let result = invoke_control(&plugins, &input).await;
+    let result: anyhow::Result<serde_json::Value> =
+        crate::network::payments::client::call_node(&node, ops::CONTROL, &command).await;
     match result {
         Ok(value) => respond_json(stream, 200, &value).await,
         Err(error) => respond_error(stream, 400, &error.to_string()).await,
     }
-}
-
-/// Runs `control` on whichever provider serves `payments.v1`. No timeout: a
-/// funding or send command may legitimately outlast the default RPC deadline.
-async fn invoke_control(
-    plugins: &crate::plugin::PluginManager,
-    input: &str,
-) -> anyhow::Result<serde_json::Value> {
-    let provider = plugins
-        .available_provider_for_capability(CAPABILITY)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no provider for '{CAPABILITY}'"))?;
-    let result = plugins
-        .invoke_operation_without_timeout(&provider.plugin_name, ops::CONTROL, input)
-        .await?;
-    control_output(result)
-}
-
-/// Decodes a `payments.v1` `control` result; an operation error carries
-/// `{"message": ...}`.
-fn control_output(result: crate::plugin::ToolCallResult) -> anyhow::Result<serde_json::Value> {
-    let value: serde_json::Value = serde_json::from_str(&result.content_json)?;
-    if result.is_error {
-        let message = value
-            .get("message")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("payments operation failed");
-        anyhow::bail!("{message}");
-    }
-    Ok(value)
 }

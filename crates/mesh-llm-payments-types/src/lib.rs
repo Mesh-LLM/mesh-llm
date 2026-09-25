@@ -5,6 +5,8 @@
 //! settlement engine in `mesh-llm-payments`.
 #![forbid(unsafe_code)]
 
+pub mod contract;
+pub mod intent;
 pub mod lifetimes;
 pub mod pricing;
 pub mod terms;

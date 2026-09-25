@@ -1,32 +1,34 @@
 use anyhow::{Result, bail, ensure};
-use mesh_llm_payments::{
-    ledger::RequestTerms,
-    service::PaymentService,
+use mesh_llm_payments_types::{
+    RequestTerms,
+    contract::{Empty, FinishRequest, ReconcileResponse, SettleOutputRequest, ops},
     wire::{self, Frame},
 };
 
 use crate::mesh::Node;
+use crate::network::payments::client;
+use crate::plugin::PluginManager;
 
 /// Recover financial state only. Never regenerate or replay application output
 /// after a restart, and never infer failure just from invoice expiry.
-pub(crate) async fn recover(node: &Node, service: &PaymentService) -> Result<()> {
-    // One uncertain charge or unavailable invoice must not block other debts.
-    let _ = service.reconcile_pending().await;
-    let _ = service.recover_output_debt().await;
-    for request in service.ledger.requests()? {
-        if request.state != "approved" || request.terms.peer == "wallet-send" {
-            continue;
-        }
+pub(crate) async fn recover(node: &Node) -> Result<()> {
+    let Some(plugins) = node.plugin_manager().await else {
+        return Ok(());
+    };
+    // The provider ignores individual uncertain charges so one cannot block
+    // other debts; it returns the requests still owed by their sellers.
+    let pending: ReconcileResponse = client::call(&plugins, ops::RECONCILE, &Empty {}).await?;
+    for terms in pending.approved {
         // Bound each peer independently so one unavailable provider cannot stop
         // reconciliation of other requests.
-        let Ok(original_peer) = request.terms.peer.parse::<iroh::EndpointId>() else {
+        let Ok(original_peer) = terms.peer.parse::<iroh::EndpointId>() else {
             continue;
         };
         // Recovery stays bound to the original authenticated endpoint. Replacing
         // that identity while retaining the wallet/database is not supported.
         let _ = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            recover_request(node, service, &request.terms, original_peer),
+            recover_request(node, &plugins, &terms, original_peer),
         )
         .await;
     }
@@ -35,7 +37,7 @@ pub(crate) async fn recover(node: &Node, service: &PaymentService) -> Result<()>
 
 async fn recover_request(
     node: &Node,
-    service: &PaymentService,
+    plugins: &PluginManager,
     terms: &RequestTerms,
     peer: iroh::EndpointId,
 ) -> Result<()> {
@@ -56,10 +58,19 @@ async fn recover_request(
                 invoice,
             } => {
                 ensure!(request_id == terms.id, "recovery request mismatch");
-                super::paid::settle_output(service, terms, tokens, invoice).await?;
+                let request = SettleOutputRequest {
+                    terms: terms.clone(),
+                    tokens,
+                    invoice,
+                };
+                let _: serde_json::Value =
+                    client::call(plugins, ops::SETTLE_OUTPUT, &request).await?;
             }
             Frame::Complete => {
-                service.ledger.finish(&terms.id)?;
+                let finish = FinishRequest {
+                    id: terms.id.clone(),
+                };
+                let _: serde_json::Value = client::call(plugins, ops::FINISH, &finish).await?;
                 return Ok(());
             }
             Frame::Pending => return Ok(()),
