@@ -9885,7 +9885,7 @@ index 11559ce5c..5c8617fe9 100644
              n_tokens,
              n_seqs,
 diff --git a/src/skippy/tests/profile_residency.cpp b/src/skippy/tests/profile_residency.cpp
-index e2ec9e4a6..c9f811954 100644
+index e2ec9e4a6..0d4d602fa 100644
 --- a/src/skippy/tests/profile_residency.cpp
 +++ b/src/skippy/tests/profile_residency.cpp
 @@ -4,6 +4,8 @@
@@ -9948,7 +9948,7 @@ index e2ec9e4a6..c9f811954 100644
      config.n_gpu_layers = 0;
      config.n_threads = config.n_threads_batch = 1;
      config.flash_attn_type = 0;
-@@ -128,35 +139,105 @@ static int run(const char * path, bool integrated) {
+@@ -128,35 +140,106 @@ static int run(const char * path, bool integrated) {
          if (found == runtime->model->tensors_by_name.end() || found->second == nullptr ||
                  (found->second->data == nullptr && found->second->buffer == nullptr)) return 13;
      }
@@ -10060,10 +10060,11 @@ index e2ec9e4a6..c9f811954 100644
 +                !stage_program_reference::snapshot(runtime->mtp_ctx, receipt->draft_roots, receipt->draft)) return 18;
 +        receipt->tokens.assign(draft.token_ids, draft.token_ids + draft.token_count);
 +    }
++    if (!stage_program_reference::boundary_probe(runtime, path)) return 28;
      skippy_session_free(session, &error);
      skippy_model_free(runtime, &error);
      skippy_error_free(error);
-@@ -164,10 +245,33 @@ static int run(const char * path, bool integrated) {
+@@ -164,10 +246,33 @@ static int run(const char * path, bool integrated) {
  }
  
  int main(int argc, char ** argv) {
@@ -10455,10 +10456,10 @@ index 92b0271ce..7124b3a1a 100644
                  runtime_error == nullptr ? "" : runtime_error->message);
 diff --git a/src/skippy/tests/stage_program_parity.h b/src/skippy/tests/stage_program_parity.h
 new file mode 100644
-index 000000000..206674f92
+index 000000000..f73ab0b34
 --- /dev/null
 +++ b/src/skippy/tests/stage_program_parity.h
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,374 @@
 +#pragma once
 +
 +#include "llama-context.h"
@@ -10474,10 +10475,12 @@ index 000000000..206674f92
 +#include "llama-model.h"
 +#include "skippy/runtime_types.h"
 +#include "skippy/stage_program.h"
++#include "skippy/execution.h"
 +#include "skippy/state_effects.h"
 +#include "../../../ggml/src/ggml-impl.h"
 +
 +#include <cmath>
++#include <cstdio>
 +#include <cstring>
 +
 +// An independent ordinary-execution stage with the same package and configuration.
@@ -10698,6 +10701,138 @@ index 000000000..206674f92
 +            default: return nullptr;
 +        }
 +    }
++
++public:
++    // Exercise the C ABI decode boundary. A stage program that cannot serve a
++    // request has to fail that request: if its C++ exception unwinds out of the
++    // ABI into Rust, the process aborts with "Rust cannot catch foreign
++    // exceptions" and the diagnostic is lost. This runs the lab shape on a
++    // two-lane sibling of the runtime under test -- a one-request warmup, then
++    // a multi-request batch -- and then a request after the program's
++    // computation configuration changed.
++    static bool boundary_probe(skippy_model * runtime, const char * path) {
++        if (runtime == nullptr || runtime->ctx == nullptr || path == nullptr) return true;
++        if (runtime->ctx->get_stage_program_installation() == nullptr) return true;
++        skippy_error * error = nullptr;
++        skippy_runtime_config config = runtime->config;
++        config.lane_count = 2;
++        skippy_model * concurrent = nullptr;
++        if (skippy_model_open(path, &config, &concurrent, &error) != SKIPPY_STATUS_OK || concurrent == nullptr ||
++                concurrent->ctx->get_stage_program_installation() == nullptr) {
++            std::fprintf(stderr, "boundary probe could not open a two-lane runtime: %s\n",
++                    error != nullptr ? error->message : "unknown");
++            if (concurrent != nullptr) skippy_model_free(concurrent, &error);
++            return false;
++        }
++        bool served = false;
++        skippy_session * lanes[2] = {nullptr, nullptr};
++        if (skippy_session_create(concurrent, &lanes[0], &error) == SKIPPY_STATUS_OK &&
++                skippy_session_create(concurrent, &lanes[1], &error) == SKIPPY_STATUS_OK) {
++            served = boundary_probe_warmup(lanes[0], &error) &&
++                    boundary_probe_concurrent(lanes, &error) &&
++                    boundary_probe_invalidated(concurrent, lanes[0], &error);
++        } else {
++            std::fprintf(stderr, "boundary probe could not open two lanes\n");
++        }
++        for (skippy_session * lane : lanes) {
++            if (lane == nullptr) continue;
++            skippy_error_free(error);
++            error = nullptr;
++            skippy_session_free(lane, &error);
++        }
++        skippy_error_free(error);
++        skippy_model_free(concurrent, &error);
++        skippy_error_free(error);
++        return served;
++    }
++
++private:
++    // One request through the batch entrypoint the serving path uses.
++    static skippy_status boundary_probe_request(
++            skippy_session * session, llama_token token, llama_token * predicted, skippy_error ** error) {
++        size_t sampled_indexes[1] = {0};
++        size_t sampled_count = 0;
++        skippy_iteration_request request = {};
++        request.session = session;
++        request.token_ids = &token;
++        request.token_count = 1;
++        request.sample_last = true;
++        *predicted = -1;
++        return skippy_iteration_batch_sampled(
++                &request, 1, nullptr, nullptr, nullptr, nullptr, sampled_indexes, predicted, 1, &sampled_count, error);
++    }
++
++    // One request on the freshly installed program.
++    static bool boundary_probe_warmup(skippy_session * session, skippy_error ** error) {
++        llama_token predicted = -1;
++        const skippy_status status = boundary_probe_request(session, 3, &predicted, error);
++        if (status != SKIPPY_STATUS_OK || predicted < 0) {
++            std::fprintf(stderr, "boundary probe warmup decode failed: %s\n",
++                    *error != nullptr ? (*error)->message : "unknown");
++            return false;
++        }
++        return true;
++    }
++
++    // Two concurrent requests. Serving both from the installed program is the
++    // product contract, but the regression is the boundary: a rejection has to
++    // arrive as a skippy error with its diagnostic, never as an abort.
++    static bool boundary_probe_concurrent(skippy_session * const * lanes, skippy_error ** error) {
++        const llama_token tokens[2] = {5, 7};
++        llama_token predicted[2] = {-1, -1};
++        size_t sampled_indexes[2] = {0, 0};
++        size_t sampled_count = 0;
++        skippy_iteration_request requests[2] = {};
++        for (size_t index = 0; index < 2; ++index) {
++            requests[index].session = lanes[index];
++            requests[index].token_ids = &tokens[index];
++            requests[index].token_count = 1;
++            requests[index].sample_last = true;
++        }
++        skippy_stage_program_reset_test_counters();
++        const skippy_status status = skippy_iteration_batch_sampled(
++                requests, 2, nullptr, nullptr, nullptr, nullptr, sampled_indexes,
++                predicted, 2, &sampled_count, error);
++        bool served = false;
++        if (status == SKIPPY_STATUS_OK) {
++            served = sampled_count == 2 && predicted[0] >= 0 && predicted[1] >= 0 &&
++                    skippy_stage_program_arch_builder_calls() == 0 &&
++                    skippy_stage_program_selector_calls() == 0;
++            if (!served) std::fprintf(stderr, "boundary probe two-request batch rebuilt the graph\n");
++        } else if (status == SKIPPY_STATUS_RUNTIME_ERROR && *error != nullptr && (*error)->message != nullptr &&
++                (*error)->message[0] != '\0') {
++            // Rejected, but reported. This is the outcome that used to abort.
++            std::fprintf(stderr, "boundary probe two-request batch reported: %s\n", (*error)->message);
++            served = true;
++        } else {
++            std::fprintf(stderr, "boundary probe two-request batch failed without a surfaced error (status %d)\n",
++                    static_cast<int>(status));
++        }
++        skippy_error_free(*error);
++        *error = nullptr;
++        return served;
++    }
++
++    // A program is bound to the configuration it was installed against. The
++    // change below invalidates it, so the decode must report the mismatch
++    // instead of letting the exception escape.
++    static bool boundary_probe_invalidated(
++            skippy_model * runtime, skippy_session * session, skippy_error ** error) {
++        runtime->ctx->set_embeddings(!runtime->ctx->get_cparams().embeddings);
++        llama_token predicted = -1;
++        const skippy_status status = boundary_probe_request(session, 11, &predicted, error);
++        const char * message = *error != nullptr ? (*error)->message : nullptr;
++        if (status != SKIPPY_STATUS_RUNTIME_ERROR || message == nullptr ||
++                std::strstr(message, "computation configuration changed after installation") == nullptr) {
++            std::fprintf(stderr, "boundary probe invalidated stage program did not report its rejection: %s\n",
++                    message != nullptr ? message : "unknown");
++            return false;
++        }
++        skippy_error_free(*error);
++        *error = nullptr;
++        return true;
++    }
++
 +};
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
 index b5afa3e48..81da0f960 100644
