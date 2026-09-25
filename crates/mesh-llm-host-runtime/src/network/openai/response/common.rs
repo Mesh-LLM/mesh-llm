@@ -25,6 +25,12 @@ pub(in crate::network::openai::response) fn sse_data_frame_is_openai_error(data:
 
 #[derive(Clone, Copy)]
 pub(in crate::network::openai) struct RouteAttemptLoggingContext<'a> {
+    // Populated for observability on every route attempt but only consumed by
+    // the paid-settlement path. Gating the field would cascade cfgs through
+    // ~30 ingress/transport call sites, so it stays present and is simply
+    // unread when wallets are compiled out.
+    #[cfg_attr(not(feature = "payments"), allow(dead_code))]
+    pub(in crate::network::openai) exchange_id: Option<&'a str>,
     pub(in crate::network::openai) request_id: RequestId,
     pub(in crate::network::openai) retry_policy: ResponseRetryPolicy,
     pub(in crate::network::openai) response_adapter: ResponseAdapter,

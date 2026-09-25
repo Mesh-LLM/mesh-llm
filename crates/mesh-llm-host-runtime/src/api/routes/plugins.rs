@@ -249,8 +249,16 @@ async fn handle_tools(stream: &mut TcpStream, state: &MeshApi, path: &str) -> an
     let rest = &path["/api/plugins/".len()..];
     let plugin_name = rest.trim_end_matches("/tools");
     let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+    let published = match published_operations(&plugin_manager, plugin_name).await {
+        Ok(published) => published,
+        Err(e) => return respond_error(stream, 404, &e.to_string()).await,
+    };
+    if published.is_empty() {
+        return respond_json(stream, 200, &Vec::<Value>::new()).await;
+    }
     match plugin_manager.tools(plugin_name).await {
-        Ok(tools) => {
+        Ok(mut tools) => {
+            tools.retain(|tool| published.contains(&tool.name));
             let json = serde_json::to_string(&tools)?;
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -294,6 +302,19 @@ async fn handle_manifest(
     Ok(())
 }
 
+/// Operation names the plugin publishes in its manifest; empty when it
+/// publishes none (or no manifest), which makes it unreachable over HTTP tools.
+async fn published_operations(
+    plugin_manager: &crate::plugin::PluginManager,
+    plugin_name: &str,
+) -> anyhow::Result<Vec<String>> {
+    Ok(plugin_manager
+        .manifest(plugin_name)
+        .await?
+        .map(|manifest| manifest.operations.into_iter().map(|op| op.name).collect())
+        .unwrap_or_default())
+}
+
 async fn handle_call(
     stream: &mut TcpStream,
     state: &MeshApi,
@@ -304,6 +325,20 @@ async fn handle_call(
     if let Some((plugin_name, tool_name)) = rest.split_once("/tools/") {
         let payload = if body.trim().is_empty() { "{}" } else { body };
         let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+        // Only operations the plugin publishes in its manifest are callable here,
+        // matching MCP discovery. Capability-only plugins (wallet, blobstore) are
+        // host-internal: e.g. `wallet_pay` must go through the /api/wallet ledger.
+        let published = published_operations(&plugin_manager, plugin_name)
+            .await
+            .unwrap_or_default();
+        if !published.iter().any(|name| name == tool_name) {
+            return respond_error(
+                stream,
+                404,
+                &format!("Operation '{tool_name}' is not published by plugin '{plugin_name}'"),
+            )
+            .await;
+        }
         match plugin_manager
             .invoke_operation(plugin_name, tool_name, payload)
             .await

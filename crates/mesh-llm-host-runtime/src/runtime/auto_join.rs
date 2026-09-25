@@ -934,9 +934,17 @@ pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
     join_mesh_for_mcp(options, &node).await?;
 
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
-    let plugin_manager =
-        plugin::PluginManager::start(&resolved_plugins, plugin_host_mode(options), plugin_mesh_tx)
-            .await?;
+    #[cfg(feature = "payments")]
+    let in_process = crate::network::payments::in_process_plugins(&node);
+    #[cfg(not(feature = "payments"))]
+    let in_process = plugin::InProcessPlugins::default();
+    let plugin_manager = plugin::PluginManager::start_with_in_process(
+        &resolved_plugins,
+        plugin_host_mode(options),
+        plugin_mesh_tx,
+        in_process,
+    )
+    .await?;
     node.set_plugin_manager(plugin_manager.clone()).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
 

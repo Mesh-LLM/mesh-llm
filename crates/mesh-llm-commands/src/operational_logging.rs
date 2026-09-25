@@ -140,6 +140,7 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         Command::Update { .. } | Command::Setup { .. } | Command::Uninstall { .. } => {
             CliCommandFamily::Installation
         }
+        Command::Wallet { .. } => CliCommandFamily::Wallet,
         Command::Gpus { .. } => CliCommandFamily::Hardware,
         Command::Serve
         | Command::Client
