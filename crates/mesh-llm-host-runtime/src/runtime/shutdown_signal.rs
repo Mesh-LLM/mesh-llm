@@ -8,11 +8,21 @@
 //! then taken by the platform default disposition instead of shutting down
 //! gracefully (#1812).
 //!
+//! The registration is process-lifetime, so the forwarder that owns the
+//! streams must be too. The platform keeps its handler installed for the life
+//! of the process and never restores the default disposition, which means a
+//! signal arriving after every observer is gone is captured and delivered to
+//! nobody: the process stops being interruptible instead of being terminated.
+//! A runtime that is dropped while the process lives on would leave that state
+//! behind, so the forwarder runs on its own detached thread rather than on the
+//! runtime that installs it.
+//!
 //! Call [`install_shutdown_signals`] as early as possible from a runtime
 //! entrypoint. A signal delivered before the handlers exist is handled by the
 //! platform default, which terminates the process without a graceful shutdown.
 
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use tokio::sync::watch;
 
@@ -59,8 +69,19 @@ impl ShutdownDelivery {
     }
 }
 
+/// Name of the process-lifetime thread that owns the signal streams.
+const FORWARDER_THREAD_NAME: &str = "mesh-llm-shutdown-forwarder";
+
 static DELIVERY: OnceLock<ShutdownDelivery> = OnceLock::new();
 static INSTALL: Mutex<()> = Mutex::new(());
+
+/// Set once the forwarder thread's own signal streams are registered, which is
+/// strictly later than the delivery being published.
+///
+/// The delivery has to be published synchronously so no waiter can fall through
+/// to the ctrl-c fallback while the thread starts, but that makes the delivery
+/// an unreliable witness of a live observer. This flag is the honest one.
+static FORWARDER_READY: AtomicBool = AtomicBool::new(false);
 
 /// Register the process termination-signal handlers once.
 ///
@@ -73,19 +94,36 @@ pub(crate) fn install_shutdown_signals() {
     if DELIVERY.get().is_some() {
         return;
     }
-    let signals = match TerminationSignals::register() {
-        Ok(signals) => signals,
+    // The forwarder registers its own streams so their wakers belong to a
+    // runtime that outlives this one. Probing here still decides whether the
+    // platform can deliver these signals at all, which keeps the ctrl-c
+    // fallback in `wait_for_shutdown_signal` in place when it cannot; the
+    // probe's streams are dropped unused.
+    if let Err(error) = TerminationSignals::register() {
+        tracing::warn!(
+            %error,
+            "could not register termination-signal handlers; the platform default disposition applies"
+        );
+        return;
+    }
+    let delivery = ShutdownDelivery::new();
+    let sender = delivery.sender.clone();
+    match std::thread::Builder::new()
+        .name(FORWARDER_THREAD_NAME.to_owned())
+        .spawn(move || run_shutdown_forwarder(sender))
+    {
+        // Detached on purpose: the forwarder observes signals for the life of
+        // the process, and an unjoined thread does not hold the process open.
+        Ok(_forwarder) => {
+            let _ = DELIVERY.set(delivery);
+        }
         Err(error) => {
             tracing::warn!(
                 %error,
-                "could not register termination-signal handlers; the platform default disposition applies"
+                "could not start the termination-signal forwarder; the platform default disposition applies"
             );
-            return;
         }
-    };
-    let delivery = ShutdownDelivery::new();
-    tokio::spawn(forward_shutdown_signals(signals, delivery.sender.clone()));
-    let _ = DELIVERY.set(delivery);
+    }
 }
 
 /// Wait for a termination signal, including one delivered before this call.
@@ -117,9 +155,46 @@ async fn resolve_fallback_registration(result: io::Result<()>) -> &'static str {
     }
 }
 
+/// Own the termination-signal streams on a runtime that lives for the life of
+/// the process.
+///
+/// The streams cannot move to a runtime that outlives the one that created
+/// them: each stream's waker is registered against its creating runtime's
+/// signal driver, so a stream carried across would never be woken again. This
+/// thread therefore registers its own, and the platform's process-wide handler
+/// makes that registration equivalent to the first one.
+fn run_shutdown_forwarder(sender: watch::Sender<Option<&'static str>>) {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "the termination-signal forwarder has no runtime to observe signals with"
+            );
+            return;
+        }
+    };
+    runtime.block_on(async move {
+        let signals = match TerminationSignals::register() {
+            Ok(signals) => signals,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "the termination-signal forwarder could not observe termination signals"
+                );
+                return;
+            }
+        };
+        FORWARDER_READY.store(true, Ordering::Release);
+        forward_shutdown_signals(signals, &sender).await;
+    });
+}
 async fn forward_shutdown_signals(
     mut signals: TerminationSignals,
-    sender: watch::Sender<Option<&'static str>>,
+    sender: &watch::Sender<Option<&'static str>>,
 ) {
     loop {
         let signal = signals.recv().await;
@@ -261,6 +336,58 @@ mod tests {
     #[tokio::test]
     async fn a_registered_fallback_reports_the_platform_signal() {
         assert_eq!(resolve_fallback_registration(Ok(())).await, FALLBACK_SIGNAL);
+    }
+
+    /// A termination signal must still reach a waiter on a different runtime
+    /// after the runtime that installed the handlers has been dropped.
+    ///
+    /// The handler registration is a process-lifetime one, so dropping a
+    /// runtime must not take the observation of later signals with it. While
+    /// the forwarder was a task on the installing runtime, dropping that
+    /// runtime dropped the signal receivers while the platform handler stayed
+    /// installed, so a later SIGTERM was captured and delivered to nobody and
+    /// the daemon kept serving until its supervisor killed it (#1812).
+    #[cfg(unix)]
+    #[test]
+    fn a_signal_raised_after_the_installing_runtime_drops_is_still_observed() {
+        let installing = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime to install the handlers from");
+        installing.block_on(async {
+            super::install_shutdown_signals();
+        });
+        drop(installing);
+
+        // The published delivery only proves the forwarder was started, so wait
+        // for its own registration before raising: that is the observer this
+        // test is about, and it is what makes the raise observable.
+        let ready = std::time::Instant::now() + Duration::from_secs(10);
+        while !super::FORWARDER_READY.load(Ordering::Acquire) {
+            assert!(
+                std::time::Instant::now() < ready,
+                "the process-lifetime forwarder must register its signal streams"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // SAFETY: `raise` sends SIGTERM to this process only, and the
+        // process-lifetime handler for it is now registered.
+        unsafe { libc::raise(libc::SIGTERM) };
+
+        let waiter = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for the waiter");
+        let observed = waiter.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), super::wait_for_shutdown_signal()).await
+        });
+        assert_eq!(
+            observed.expect(
+                "a signal raised after the installing runtime dropped must not be silently dropped (#1812)",
+            ),
+            "SIGTERM"
+        );
     }
 
     /// The platform path must observe a raised signal that arrived before the
