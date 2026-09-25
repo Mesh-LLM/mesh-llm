@@ -159,6 +159,15 @@ pub struct ArrivalResponse {
     pub claiming: bool,
 }
 
+/// Request for [`ops::SERVE_FINISH`]: raise the delivered-token watermark to
+/// `tokens` and close serving accounting in one atomic step, so a close can
+/// never freeze a watermark lower than what was delivered.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServeFinishRequest {
+    pub id: String,
+    pub tokens: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecordDeliveredRequest {
     pub id: String,

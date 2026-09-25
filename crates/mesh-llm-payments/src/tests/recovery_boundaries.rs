@@ -286,3 +286,45 @@ async fn recovery_lapses_an_unpaid_pending_invoice_after_the_grace() -> Result<(
     }
     Ok(())
 }
+
+/// Regression: a failed final watermark write followed by a successful close
+/// used to freeze the older, lower count. Close now carries the final
+/// watermark atomically.
+#[tokio::test]
+async fn serve_finish_records_final_watermark_atomically() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet)?;
+    let pricing = terms("close", 1000).pricing;
+
+    // Last batched flush reached 5; the final flush of 20 "failed" (never
+    // written). The atomic close still lands 20.
+    service
+        .ledger
+        .begin_serving("close", "peer", &pricing, 32)?;
+    service.ledger.record_delivered_tokens("close", 5)?;
+    service.ledger.finish_serving_at("close", 20)?;
+    assert_eq!(service.ledger.serving_account("close")?.2, 20);
+    assert!(service.ledger.serving_account("close")?.3);
+    // Idempotent retry (Drop backstop) with the same or lower count succeeds.
+    service.ledger.finish_serving_at("close", 20)?;
+    service.ledger.finish_serving_at("close", 7)?;
+    assert_eq!(service.ledger.serving_account("close")?.2, 20);
+
+    // A close that already froze a lower count cannot report success for a
+    // higher one: the caller sees the loss instead of silently dropping it.
+    service
+        .ledger
+        .begin_serving("frozen", "peer-frozen", &pricing, 32)?;
+    service.ledger.record_delivered_tokens("frozen", 5)?;
+    service.ledger.finish_serving("frozen")?;
+    assert!(service.ledger.finish_serving_at("frozen", 20).is_err());
+
+    // A watermark beyond the output allowance is refused and does not close.
+    service
+        .ledger
+        .begin_serving("over", "peer-over", &pricing, 8)?;
+    assert!(service.ledger.finish_serving_at("over", 9).is_err());
+    assert!(!service.ledger.serving_account("over")?.3);
+    Ok(())
+}

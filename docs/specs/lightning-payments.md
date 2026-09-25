@@ -96,9 +96,18 @@ feature that links Lexe. The shipped CLI enables both. `mesh-llm-sdk` with
 `serving` compiles neither; with `serving,payments` it compiles the ledger and
 adapter and expects an external `wallet.v1` plugin.
 
-What stays in the host: token metering, output gating, budgets, the ledger,
-settlement bookkeeping, recovery, invoice lifetimes and fee policy. What the
-plugin does: turn wallet intents into wallet facts. Response bytes never cross
+Ownership: the host keeps token metering, output gating (host atomics on the
+decode thread) and response bytes, and talks to the payments engine only
+through coarse per-request `payments.v1` operations. The engine
+(`mesh-llm-payments`, installed in-process by the binary or the SDK's
+`payments` feature) owns budgets, the ledger, settlement bookkeeping, recovery,
+invoice lifetimes and fee policy; host-runtime links only
+`mesh-llm-payments-types`. With no engine installed the node is free-only.
+Only the builtin engine is supported as the `payments.v1` provider: seller
+price advertisement, the remote-HTTP payment check and the recovery loop still
+read the builtin engine directly, so replacing it by capability is a protocol
+goal, not yet a supported configuration. What the wallet plugin does: turn
+wallet intents into wallet facts. Response bytes never cross
 the plugin boundary, and no per-token IPC exists.
 
 The host supplies every invoice's expiry (`wallet_create_invoice.expiry_secs`);

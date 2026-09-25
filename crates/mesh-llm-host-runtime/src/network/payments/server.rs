@@ -317,9 +317,11 @@ async fn deliver_output(
 /// How long a new request waits for the same peer's prior debt to settle.
 const PRIOR_SETTLEMENT_WAIT: Duration = Duration::from_secs(30);
 
-/// Delivered-token watermark writes are batched: the ledger is raised at
-/// least every this many tokens and always before serving closes, so a crash
-/// can under-record (never over-record) at most this many delivered tokens.
+/// Delivered-token watermark writes are batched: the ledger is raised once at
+/// least this many tokens accumulate, and the final count is written
+/// atomically with the serving close. A crash can only under-record (never
+/// over-record): the loss is bounded by one batch plus the last output frame,
+/// which for coalesced SSE or a nonstreaming response can hold many tokens.
 const DELIVERED_FLUSH_TOKENS: u64 = 32;
 
 pub(super) async fn recover(

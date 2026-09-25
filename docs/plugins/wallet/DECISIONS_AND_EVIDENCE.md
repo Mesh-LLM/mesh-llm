@@ -7,9 +7,12 @@ not a live-test report or a claim that the proposed fixtures are implemented.
 ## Keep wallet observations separate from inference claims
 
 The `wallet.v1` process boundary keeps a concrete wallet SDK outside the host's
-payment-policy implementation. The host owns metering, budgets, output gates,
-ledger accounting and recovery; the plugin supplies wallet operations and
-observations. The host resolves the capability rather than a particular plugin
+payment-policy implementation. Trust boundaries: the host owns token metering,
+the decode-thread output gate (host atomics only) and response bytes; the
+payments engine (`mesh-llm-payments`, installed as an in-process builtin
+serving `payments.v1`) owns budgets, the ledger, settlement bookkeeping and
+recovery; the wallet plugin supplies wallet operations and observations.
+Host-runtime links only `mesh-llm-payments-types`. The host resolves the capability rather than a particular plugin
 name. See the [wallet contract](../../../crates/mesh-llm-wallet/src/contract.rs).
 
 A separate process is not, by itself, proof of trustworthy settlement or a

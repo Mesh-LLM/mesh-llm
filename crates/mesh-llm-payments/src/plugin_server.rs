@@ -11,7 +11,8 @@ use std::sync::Arc;
 use mesh_llm_payments_types::contract::{
     ArrivalResponse, AuthorizeRequest, CancelRequest, Empty, FinishRequest, IdRequest,
     InvoiceRequest, OpError, OutputReceivableResponse, PayInputRequest, RecordDeliveredRequest,
-    RoutingBudgetRequest, ServeBeginRequest, ServeInputInvoiceRequest, SettleOutputRequest,
+    RoutingBudgetRequest, ServeBeginRequest, ServeFinishRequest, ServeInputInvoiceRequest,
+    SettleOutputRequest,
 };
 use mesh_llm_plugin::{
     InternalRpcPlugin, InternalRpcPluginBuilder, OperationRouter, PluginMetadata, PluginResult,
@@ -259,11 +260,11 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
         router,
         source,
         ops::SERVE_FINISH,
-        "Close serving accounting.",
-        |service, request: IdRequest| async move {
+        "Record the final delivered-token watermark and close serving accounting atomically.",
+        |service, request: ServeFinishRequest| async move {
             service
                 .ledger
-                .finish_serving(&request.id)
+                .finish_serving_at(&request.id, request.tokens)
                 .map(|()| Empty {})
         },
     );

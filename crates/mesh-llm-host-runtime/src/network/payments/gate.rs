@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use anyhow::{Context, Result, ensure};
 use mesh_llm_payments_types::{
     contract::{
-        ArrivalResponse, Empty, IdRequest, InputInvoiceResponse, InvoiceRequest,
-        RecordDeliveredRequest, ServeInputInvoiceRequest, ops,
+        ArrivalResponse, Empty, InputInvoiceResponse, InvoiceRequest, RecordDeliveredRequest,
+        ServeFinishRequest, ServeInputInvoiceRequest, ops,
     },
     lifetimes::{INPUT_ARRIVAL_WAIT, PRE_PAYMENT_OUTPUT_TOKENS},
     pricing::Pricing,
@@ -73,7 +73,9 @@ impl InvoiceGate {
         Ok(())
     }
 
-    /// Flush the watermark, then close serving accounting. Idempotent.
+    /// Record the final watermark and close serving accounting in one engine
+    /// call, so a failed watermark write can never be followed by a
+    /// successful close that freezes a lower count. Idempotent.
     /// Bounded so a stuck engine or wallet cannot hold the response open;
     /// on timeout the request fails and startup recovery reconciles it.
     pub(super) async fn close_serving(&self) -> Result<()> {
@@ -83,17 +85,19 @@ impl InvoiceGate {
     }
 
     async fn close_serving_inner(&self) -> Result<()> {
-        let flushed = self.flush_delivered().await;
+        let tokens = self.delivered_tokens.load(Ordering::Acquire);
         let _: Empty = self
             .payments
             .call(
                 ops::SERVE_FINISH,
-                &IdRequest {
+                &ServeFinishRequest {
                     id: self.request_id.clone(),
+                    tokens,
                 },
             )
             .await?;
-        flushed
+        self.flushed_tokens.fetch_max(tokens, Ordering::AcqRel);
+        Ok(())
     }
 
     pub(super) async fn await_input_settlement(&self) -> Result<()> {

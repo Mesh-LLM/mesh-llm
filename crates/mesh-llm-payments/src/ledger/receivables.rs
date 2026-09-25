@@ -115,6 +115,30 @@ impl Ledger {
         Ok(())
     }
 
+    /// Raise the delivered-token watermark to `tokens` and close serving
+    /// accounting atomically. Idempotent: closing an already-finished request
+    /// succeeds only if its recorded watermark already covers `tokens`, so a
+    /// retry can never report success over a lower frozen watermark. A
+    /// watermark above the output allowance is refused and leaves the request
+    /// open (fail closed; startup recovery closes it).
+    pub fn finish_serving_at(&self, id: &str, tokens: u64) -> Result<()> {
+        let connection = self.lock()?;
+        let changed = connection.execute(
+            "UPDATE serving_accounting SET tokens=MAX(tokens,?2), finished=1 WHERE id=?1 AND finished=0 AND max_output>=?2",
+            params![id, sql_amount(tokens)?],
+        )?;
+        if changed == 1 {
+            return Ok(());
+        }
+        let covered: bool = connection.query_row(
+            "SELECT finished=1 AND tokens>=?2 FROM serving_accounting WHERE id=?1",
+            params![id, sql_amount(tokens)?],
+            |row| row.get(0),
+        )?;
+        ensure!(covered, "invalid final delivered token watermark");
+        Ok(())
+    }
+
     /// Only run once when opening the process's service. Native KV state is not
     /// resumable after a process restart, while already committed debt is.
     pub fn close_interrupted_serving(&self) -> Result<()> {
