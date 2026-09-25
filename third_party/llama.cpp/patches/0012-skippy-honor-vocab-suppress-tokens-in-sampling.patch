@@ -1,7 +1,7 @@
-From 1ae4d37484184d576fad2bef9f83cdddf8369d52 Mon Sep 17 00:00:00 2001
+From 13396eeaa8506af9fcc5833e4cbcb3380a51fb52 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 04:07:46 -0700
-Subject: [PATCH 12/14] skippy: honor vocab suppress tokens in sampling
+Subject: [PATCH] skippy: honor vocab suppress tokens in sampling
 
 ---
  src/CMakeLists.txt                      |  1 +
@@ -344,5 +344,5 @@ index 000000000..4cf702bef
 +    return 0;
 +}
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

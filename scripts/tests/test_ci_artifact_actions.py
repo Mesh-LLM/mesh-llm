@@ -571,8 +571,8 @@ class CiArtifactActionTests(unittest.TestCase):
         cpu_routing = routing[: routing.index("WINDOWS_GPU_INPUTS=")]
         gpu_routing = routing[routing.index("WINDOWS_GPU_INPUTS=") :]
 
-        self.assertIn("^crates/mesh-llm-release-footer/", cpu_routing)
-        self.assertNotIn("^crates/mesh-llm-release-footer/", gpu_routing)
+        self.assertIn("^(mesh/|skippy/)?crates/mesh-llm-release-footer/", cpu_routing)
+        self.assertNotIn("^(mesh/|skippy/)?crates/mesh-llm-release-footer/", gpu_routing)
         self.assertIn("package-release", cpu_routing)
         self.assertIn("package-release", gpu_routing)
         for workflow in (
@@ -1724,7 +1724,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("max-parallel: ${{ inputs.max_parallel }}", producer)
         self.assertEqual(producer.count("- aarch64-apple-ios\n"), 1)
         self.assertIn(
-            'build-xcframework.sh --target "${{ matrix.target }}"',
+            'build-xcframework.sh" --target "${{ matrix.target }}"',
             producer,
         )
         self.assertIn(
@@ -1741,7 +1741,7 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn(
-            "build-xcframework.sh --assemble-from dist/swift-targets",
+            'build-xcframework.sh" --assemble-from dist/swift-targets',
             producer,
         )
         self.assertIn(

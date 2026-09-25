@@ -428,22 +428,20 @@ scan_model() {
 
 preflight_environment() {
   local model_root="${HF_HOME:-$(dirname "$PREFLIGHT_FIRST_TARGET")}"
-  local port_mode="full" needs_oracle_server=0
-  if ! jq -e '[.selected_models[].class] | any(. == "causal_generation")' "$POLICY_PLAN_COPY" >/dev/null; then
-    port_mode="workload"
-    if jq -e '[.selected_models[].class] | any(. == "embedding" or . == "rerank" or . == "ocr" or . == "speech_recognition")' "$POLICY_PLAN_COPY" >/dev/null; then
-      needs_oracle_server=1
-    fi
-  fi
+  local candidate_port="${SKIPPY_WORKLOAD_OPENAI_PORT:-19337}"
+  local oracle_port="${SKIPPY_WORKLOAD_ORACLE_PORT:-19338}"
+  local required_ports
+  required_ports="$(python3 "$ROOT/scripts/lib/canary_family_ports.py" \
+    "$RESOLVED_MANIFEST" "$candidate_port" "$oracle_port")"
   python3 - "$ARTIFACT_DIR" "$model_root" "$MIN_FREE_GIB" "$PREFLIGHT_ONLY" "$PREFLIGHT_DIR/environment.json" \
-    "$port_mode" "${SKIPPY_WORKLOAD_OPENAI_PORT:-19337}" "${SKIPPY_WORKLOAD_ORACLE_PORT:-19338}" "$needs_oracle_server" <<'PY'
+    "$required_ports" <<'PY'
 import json
 import shutil
 import socket
 import sys
 from pathlib import Path
 
-artifact_root, model_root, minimum_gib, preflight_only, output, port_mode, candidate_port, oracle_port, needs_oracle_server = sys.argv[1:]
+artifact_root, model_root, minimum_gib, preflight_only, output, required_ports = sys.argv[1:]
 minimum_bytes = int(minimum_gib) * 1024**3
 filesystems = []
 for label, path_text in (("artifacts", artifact_root), ("models", model_root)):
@@ -462,11 +460,9 @@ for label, path_text in (("artifacts", artifact_root), ("models", model_root)):
     )
 
 busy_ports = []
-ports = list(range(19000, 20032)) if port_mode == "full" else [int(candidate_port)]
-if port_mode == "workload" and needs_oracle_server == "1":
-    ports.append(int(oracle_port))
+ports = [int(port) for port in required_ports.split(",")]
 if any(port < 1 or port > 65535 for port in ports) or len(ports) != len(set(ports)):
-    raise SystemExit("invalid or conflicting workload certification ports")
+    raise SystemExit("invalid or conflicting certification ports")
 if preflight_only == "0":
     for port in ports:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -484,7 +480,7 @@ report = {
     "port_range": {
         "start": min(ports),
         "end": max(ports),
-        "ports_checked": ports if port_mode == "workload" else None,
+        "ports_checked": ports,
         "checked": preflight_only == "0",
         "busy": busy_ports,
     },
@@ -836,7 +832,7 @@ preflight_manifest() {
   fi
   local environment_note="disk headroom validated; certification ports not checked in preflight-only mode"
   if (( PREFLIGHT_ONLY == 0 )); then
-    environment_note="disk headroom and certification port range validated"
+    environment_note="disk headroom and required certification ports validated"
   fi
   record_preflight_outcome "environment-preflight" "battery" "environment" "pass" "pass" "$environment_note"
 

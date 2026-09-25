@@ -906,6 +906,16 @@ pub(crate) fn local_ann_to_proto_ann(
             ann.local_gguf_content_id_supported,
         ),
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
+        lightning_offers: {
+            #[cfg(feature = "payments")]
+            {
+                super::payment_offers::encode(&ann.lightning_offers)
+            }
+            #[cfg(not(feature = "payments"))]
+            {
+                Vec::new()
+            }
+        },
         cache_affinity: ann
             .cache_affinity
             .as_ref()
@@ -1166,6 +1176,8 @@ pub(crate) fn proto_ann_to_local(
         inference_admission_state: pa
             .inference_admission_state
             .and_then(|v| crate::proto::node::InferenceAdmissionState::try_from(v).ok()),
+        #[cfg(feature = "payments")]
+        lightning_offers: super::payment_offers::decode(&pa.lightning_offers)?,
         cache_affinity: pa
             .cache_affinity
             .as_ref()
@@ -1354,6 +1366,7 @@ fn legacy_proto_config_to_mesh(
     let mut config = MeshConfig {
         version: Some(snapshot.version),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment,
             parallel: None,
         },

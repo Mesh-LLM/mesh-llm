@@ -517,11 +517,14 @@ actual execution still requires the immutable metadata and tensor scans.
 Canary scheduling reserves 10% of physical memory. The controller projects
 source-owned plans onto the existing `accelerator-memory-128plus` and
 `accelerator-memory-256plus` labels (115.2 and 230.4 GiB workload budgets).
-Never add scheduling fields to a historical source's canonical plan. Estimates
-include pinned artifact bytes, concurrent workload copies, and explicit runtime
-allowances; they are admission estimates, not measured peak guarantees. Workers
-recompute the tier from the verified handoff, check physical and available memory,
-and stop their own process group if available memory falls below the reserve.
+Never add scheduling fields to a historical source's canonical plan. A current
+source plan may declare `minimum_runner_memory_gib` as 128 or 256; it may promote
+an estimate-selected row to the larger tier but never demote it. Plans that omit
+the field retain estimate-only placement. Estimates include pinned artifact
+bytes, concurrent workload copies, and explicit runtime allowances; they are
+admission estimates, not measured peak guarantees. Workers recompute the tier
+from the verified handoff, check physical and available memory, and stop their
+own process group if available memory falls below the reserve.
 One certification per runner account/host holds a local lock. Oversized families
 fail closed rather than silently skipping certification. The embedding SDK uses
 a locked controller-owned Python project, including with historical sources.

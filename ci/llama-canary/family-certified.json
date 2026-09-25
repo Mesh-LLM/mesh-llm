@@ -77,7 +77,7 @@
       "profile": "full",
       "artifact": {"repo": "unsloth/GLM-4.5-Air-GGUF", "revision": "506d64aa8c5cfe9dbbf00bc7a15739438f83204d", "files": ["Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf", "Q4_K_M/GLM-4.5-Air-Q4_K_M-00002-of-00002.gguf"], "file_integrity": {"Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf": {"size_bytes": 50000746752, "blob_id": "3e7e5d25a6db33b7c90f8c5203d6f490d6c0a4f04a46f228af0e33727db5df5e"}, "Q4_K_M/GLM-4.5-Air-Q4_K_M-00002-of-00002.gguf": {"size_bytes": 22975001632, "blob_id": "ac6e50523d45c53faf3bf72d8fe109f3dd54bc6abe98a7773a3636112ead82a6"}}, "selector": "Q4_K_M"},
       "execution": {"trunk_layers": 46, "mtp_layers": 1, "activation_width": 4096, "speculative_policy": "mtp-if-present"},
-      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 72966388736},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 72966388736, "minimum_runner_memory_gib": 256},
       "notes": "GLM4.5 MoE lineage; 46 trunk layers plus one MTP runtime layer; two shards"
     },
     {
@@ -168,7 +168,7 @@
       "artifact": {"repo": "unsloth/Qwen3.8-Flash-Next-GGUF", "revision": "c8b5954a88c2775c546b92593eda40ea041d3176", "files": ["UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00001-of-00003.gguf", "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00002-of-00003.gguf", "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00003-of-00003.gguf"], "file_integrity": {"UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00001-of-00003.gguf": {"size_bytes": 10946624, "blob_id": "88a1420825a9304063e882ada29d438263617f51ac8923d438d927496693bafd"}, "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00002-of-00003.gguf": {"size_bytes": 49990818368, "blob_id": "3a62e35bbf9add4733bd1438ebd3a67649d5edd6cb0e72bb78e33c913992b2b6"}, "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00003-of-00003.gguf": {"size_bytes": 22544696352, "blob_id": "0e25ceaeb89b8a80aa973c6c0c7448943682f7408c2855b2ebd016b7643a861a"}}, "selector": "UD-IQ1_S"},
       "mmproj_artifact": {"repo": "unsloth/Qwen3.8-Flash-Next-GGUF", "revision": "c8b5954a88c2775c546b92593eda40ea041d3176", "files": ["mmproj-F16.gguf"], "file_integrity": {"mmproj-F16.gguf": {"size_bytes": 904004000, "blob_id": "1f7b7f0b984cf065c604360c29c8098362ed61b290db0ff12c6f360bb1a8a980"}}, "selector": "F16"},
       "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 10240, "speculative_policy": "mtp-if-present"},
-      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 72535436800, "startup_timeout_secs": 900},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 72535436800, "minimum_runner_memory_gib": 256, "startup_timeout_secs": 900},
       "notes": "Qwen4 experimental hybrid path; four-wide hyper-connected residual boundary and QSA indexer; pinned projector with local and split image smoke"
     },
     {
@@ -938,7 +938,7 @@
       "artifact": {"repo": "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF", "revision": "72a6853f56a66dc13a3a4b6bdc9cf7ee4c364b47", "files": ["Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00001-of-00002.gguf", "Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00002-of-00002.gguf"], "file_integrity": {"Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00001-of-00002.gguf": {"size_bytes": 49848379744, "blob_id": "fbe956902467171ed7c0c326e5d868771a84d46468d407abecd0f289297313f9"}, "Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00002-of-00002.gguf": {"size_bytes": 15511520608, "blob_id": "e7330ae14527f08e8a44a6a573b45084052b8822c4b8a5179c5cad9cd6f6f795"}}, "selector": "Q4_K_M"},
       "mmproj_artifact": {"repo": "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF", "revision": "72a6853f56a66dc13a3a4b6bdc9cf7ee4c364b47", "files": ["mmproj-F16.gguf"], "file_integrity": {"mmproj-F16.gguf": {"size_bytes": 1746780928, "blob_id": "70240ddf9daa0a91570a0975c0480044cb6b84bea427feb52bc0226df682fdeb"}}, "selector": "F16"},
       "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 5120, "speculative_policy": "mtp-if-present"},
-      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 65346798336, "startup_timeout_secs": 1800},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 65346798336, "minimum_runner_memory_gib": 256, "startup_timeout_secs": 1800},
       "notes": "Llama 4 Scout MoE with single-split, chained-split, and exact-state certification; pinned projector with local and split image smoke"
     },
     {

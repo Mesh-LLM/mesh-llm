@@ -1,0 +1,94 @@
+From 6204cfa051490b03e04fd217750ead3080910757 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 17:24:41 +1000
+Subject: [PATCH] test(skippy): certify synthetic GLM DSA MTP
+
+---
+ src/CMakeLists.txt           |  8 ++++++++
+ src/skippy/stage_program.cpp | 13 +++++++++----
+ tests/test-llama-archs.cpp   |  8 +++++++-
+ 3 files changed, 24 insertions(+), 5 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 436d6718d..568b73a0e 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -193,6 +193,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     set_tests_properties(skippy_generate_dense_mtp PROPERTIES FIXTURES_SETUP dense-mtp-model)
+     add_test(NAME skippy_stage_program_mtp COMMAND skippy-profile-residency "${DENSE_MTP_FIXTURE_DIR}/dense-mtp.gguf")
+     set_tests_properties(skippy_stage_program_mtp PROPERTIES FIXTURES_REQUIRED dense-mtp-model)
++    set(GLM_DSA_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/glm-dsa-mtp-models")
++    file(MAKE_DIRECTORY "${GLM_DSA_MTP_FIXTURE_DIR}")
++    add_test(NAME skippy_generate_glm_dsa_mtp COMMAND skippy-model-fixture-generator
++        --arch glm-dsa --seed 42 --dense-mtp --out "${GLM_DSA_MTP_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_glm_dsa_mtp PROPERTIES FIXTURES_SETUP glm-dsa-mtp-model)
++    add_test(NAME skippy_glm_dsa_mtp COMMAND skippy-profile-residency
++        "${GLM_DSA_MTP_FIXTURE_DIR}/dense-mtp.gguf")
++    set_tests_properties(skippy_glm_dsa_mtp PROPERTIES FIXTURES_REQUIRED glm-dsa-mtp-model)
+     set(MULTIDEPTH_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/multidepth-mtp-models")
+     file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
+     add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
+diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
+index b61f47aeb..c734a094d 100644
+--- a/src/skippy/stage_program.cpp
++++ b/src/skippy/stage_program.cpp
+@@ -296,16 +296,20 @@ bool skippy_stage_program::instantiate(
+     auto bind = [&](const std::string & id, ggml_tensor * tensor) {
+         if (!id.empty() && tensor != nullptr) values[id] = tensor;
+     };
+-    const auto make_kq_mask = [&](const llama_kv_cache_context * memory, const std::string & id) {
++    const auto make_kq_mask_with_type = [&](const llama_kv_cache_context * memory,
++            const std::string & id, ggml_type type) {
+         if (id.empty()) return static_cast<ggml_tensor *>(nullptr);
+         const int64_t streams = params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq;
+-        ggml_tensor * tensor = ggml_new_tensor_4d(context,
+-                params.cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32,
++        ggml_tensor * tensor = ggml_new_tensor_4d(context, type,
+                 memory->get_n_kv(), params.ubatch.n_tokens/streams, 1, streams);
+         ggml_set_input(tensor);
+         bind(id, tensor);
+         return tensor;
+     };
++    const auto make_kq_mask = [&](const llama_kv_cache_context * memory, const std::string & id) {
++        return make_kq_mask_with_type(memory, id,
++                params.cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32);
++    };
+     const auto make_recurrent_input = [&](const input & recipe, size_t slot) {
+         auto recurrent = std::make_unique<llm_graph_input_rs>(memory_recurrent);
+         if (!recipe.values[slot].empty()) {
+@@ -375,7 +379,8 @@ bool skippy_stage_program::instantiate(
+         if (!input.values[base + 1].empty()) recipe.self_k_idxs_lid = lid->build_input_k_idxs(context, params.ubatch);
+         recipe.self_kq_mask_mla = make_kq_mask(mla, input.values[base + 2]);
+         recipe.self_kq_mask_mla_cnv = recipe.self_kq_mask_mla;
+-        recipe.self_kq_mask_lid = make_kq_mask(lid, input.values[base + 3]);
++        recipe.self_kq_mask_lid = make_kq_mask_with_type(lid, input.values[base + 3],
++                params.cparams.fused_lid ? GGML_TYPE_F16 : GGML_TYPE_F32);
+         recipe.self_kq_mask_lid_cnv = recipe.self_kq_mask_lid;
+         if (!input.values[base + 4].empty()) recipe.self_k_rot_lid = lid->build_input_k_rot(context);
+         bind(input.values[base + 0], recipe.self_k_idxs_mla);
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index bde52d933..e1c04709b 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -1215,11 +1215,17 @@ int main(int argc, char ** argv) {
+             if (out.empty() || arch == LLM_ARCH_UNKNOWN) throw std::runtime_error("--dense-mtp requires architecture and output");
+             if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
+             auto gguf = get_gguf_ctx(arch,
+-                    arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3,
++                    arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3 ||
++                            arch == LLM_ARCH_GLM_DSA,
+                     glm_dsa_indexshare_fixture::DEFAULT,
+                     256, 8, false, 2 + dense_mtp_depth, 256);
+             llama_model_saver metadata(arch, gguf.get());
+             metadata.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, dense_mtp_depth);
++            if (arch == LLM_ARCH_GLM_DSA) {
++                const std::array<uint32_t, 2> indexer_types = {1, 0};
++                gguf_set_arr_data(gguf.get(), metadata.llm_kv(LLM_KV_ATTENTION_INDEXER_TYPES).c_str(),
++                        GGUF_TYPE_UINT32, indexer_types.data(), indexer_types.size());
++            }
+             ggml_tensor probe{};
+             probe.type = GGML_TYPE_F32;
+             probe.ne[0] = 512;
+-- 
+2.54.0 (Apple Git-157)
+

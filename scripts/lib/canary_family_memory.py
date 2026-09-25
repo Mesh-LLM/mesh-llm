@@ -72,7 +72,20 @@ def tier_for(peak):
 def placement(model):
     estimate = memory_estimate(model)
     try:
-        return {**estimate, "memory_tier": tier_for(estimate["estimated_peak_bytes"])}
+        estimated_tier = tier_for(estimate["estimated_peak_bytes"])
+        minimum = model["resources"].get("minimum_runner_memory_gib")
+        if minimum is not None and (type(minimum) is not int or minimum not in TIERS):
+            raise ValueError("missing or invalid minimum runner memory")
+        estimated_gib = next(
+            tier for tier in TIERS
+            if estimated_tier == f"accelerator-memory-{tier}plus"
+        )
+        selected_gib = max(estimated_gib, minimum or estimated_gib)
+        return {
+            **estimate,
+            **({"minimum_runner_memory_gib": minimum} if minimum is not None else {}),
+            "memory_tier": f"accelerator-memory-{selected_gib}plus",
+        }
     except ValueError as error:
         raise ValueError(f"{model['family']}: {error}") from error
 
@@ -158,10 +171,15 @@ def guarded_run(model, expected_tier, command, evidence, *, cwd=None):
     lock_path = Path(tempfile.gettempdir()) / f"mesh-canary-family-{os.getuid()}.lock"
     try:
         with lock_path.open("a") as lock:
+            lock_wait_started = time.monotonic()
+            report["host_lock_contended"] = False
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise ValueError("another family certification holds the host lock") from error
+            except BlockingIOError:
+                report["host_lock_contended"] = True
+                print(f"another family certification holds {lock_path}; waiting", flush=True)
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            report["host_lock_wait_seconds"] = round(time.monotonic() - lock_wait_started, 3)
             estimate = placement(model)
             report.update(estimate)
             if estimate["memory_tier"] != expected_tier:

@@ -54,14 +54,32 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
     }
 }
 
+/// Model and download commands size and select models for this host with the
+/// same local fit budget as `serve`, so they honour `gpu.host_ram_offload`
+/// from the config. An absent config leaves the default, off; an unreadable or
+/// invalid one fails the command, as it fails `serve`, rather than selecting
+/// against a budget the owner did not ask for.
+fn apply_config_host_ram_offload(config_path: Option<&std::path::Path>) -> Result<()> {
+    let config = mesh_llm_host_runtime::command_support::plugin::load_config(config_path)?;
+    mesh_llm_system::capacity::set_process_host_ram_offload(
+        config.gpu.host_ram_offload.unwrap_or(false),
+    );
+    Ok(())
+}
+
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Serve | Command::Client => Ok(()),
+        Command::Wallet { port, command } => {
+            mesh_llm_commands::wallet::run(command, *port, cli.config.as_deref()).await
+        }
         Command::Models { command } => {
+            apply_config_host_ram_offload(cli.config.as_deref())?;
             dispatch_models_command(command).await?;
             Ok(())
         }
         Command::Download { name, draft } => {
+            apply_config_host_ram_offload(cli.config.as_deref())?;
             dispatch_download_command(name.as_deref(), *draft).await
         }
         Command::Update { .. } => mesh_llm_commands::update::run_update(cli).await,
@@ -144,6 +162,26 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::RotateKey => {
             mesh_llm_host_runtime::command_support::discovery::nostr::rotate_keys()
         }
+        Command::Goose { .. }
+        | Command::Claude { .. }
+        | Command::Pi { .. }
+        | Command::Opencode { .. } => dispatch_agent_command(cmd).await,
+        Command::Skills { command } => mesh_llm_commands::skills::run_skills_command(command),
+        Command::Plugin { command } => run_plugin_command(command, cli).await,
+        Command::Benchmark { command } => {
+            mesh_llm_commands::benchmark::dispatch_benchmark_command(cli.config.as_deref(), command)
+                .await
+        }
+        Command::ModelPrepare { .. }
+        | Command::Auth { .. }
+        | Command::Hermes(_)
+        | Command::Openclaw(_) => unreachable!("handled by dispatch_command"),
+        Command::ExternalPlugin(args) => run_external_plugin_command(cli, args).await,
+    }
+}
+
+async fn dispatch_agent_command(cmd: &Command) -> Result<()> {
+    match cmd {
         Command::Goose { model, port } => {
             mesh_llm_commands::agent_cli::run_goose(model.clone(), *port).await
         }
@@ -156,17 +194,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Opencode { model, host, write } => {
             mesh_llm_commands::agent_cli::run_opencode(model.clone(), host, *write).await
         }
-        Command::Skills { command } => mesh_llm_commands::skills::run_skills_command(command),
-        Command::Plugin { command } => run_plugin_command(command, cli).await,
-        Command::Benchmark { command } => {
-            mesh_llm_commands::benchmark::dispatch_benchmark_command(cli.config.as_deref(), command)
-                .await
-        }
-        Command::ModelPrepare { .. }
-        | Command::Auth { .. }
-        | Command::Hermes(_)
-        | Command::Openclaw(_) => unreachable!("handled by dispatch_command"),
-        Command::ExternalPlugin(args) => run_external_plugin_command(cli, args).await,
+        _ => unreachable!("dispatch_agent_command called for non-agent command"),
     }
 }
 

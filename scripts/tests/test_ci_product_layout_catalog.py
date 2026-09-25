@@ -2,11 +2,18 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
 import unittest
 from unittest import mock
 
 from scripts.tests.test_plan_ci import PLANNER, ROOT, fixture
+
+COMPAT_SPEC = importlib.util.spec_from_file_location(
+    "ci_cargo_packages", ROOT / "scripts" / "ci-cargo-packages.py"
+)
+COMPAT = importlib.util.module_from_spec(COMPAT_SPEC)
+COMPAT_SPEC.loader.exec_module(COMPAT)
 
 
 class ProductLayoutCatalogTests(unittest.TestCase):
@@ -101,6 +108,50 @@ class ProductLayoutCatalogTests(unittest.TestCase):
             ),
             ["rust", "split-serving", "model-download"],
         )
+
+    def test_executor_successor_map_preserves_planner_semantic_coverage(self) -> None:
+        """Every translated successor keeps the domains of the owner it replaces.
+
+        ``scripts/ci-cargo-packages.py`` rewrites a protected batch into the
+        extracted package names. Translation is only sound while the planner
+        catalog routes a successor the way it routes the predecessor, because a
+        crate that matches no direct rule falls through to generic ``rust``
+        routing and its runtime-product/artifact/smoke consumers are skipped.
+
+        The three exceptions below are the deferred catalog migration: those
+        successors have no ``crate_rules`` entry yet, and ``ci/ownership.yml``
+        can only change on the protected branch (the PR plan step requires a PR's
+        catalogs to match the protected copies byte for byte). This test locks
+        that exact set, so adding a new successor or closing a gap without
+        emptying this list fails until the catalog catches up. The successor may
+        only ever lose coverage here, never gain it.
+        """
+        reused_package_name = {("model-package", "skippy-model-package")}
+        observed: dict[str, tuple[str, ...]] = {}
+        for predecessor, successors in COMPAT.SUCCESSORS.items():
+            expected = set(PLANNER._matched_domains(self.ownership, [], [predecessor]))
+            for successor in successors:
+                if (predecessor, successor) in reused_package_name:
+                    # Documented separately: the extracted tree reuses the
+                    # package-builder name for acquisition.
+                    continue
+                actual = set(PLANNER._matched_domains(self.ownership, [], [successor]))
+                if actual == expected:
+                    continue
+                self.assertTrue(
+                    actual < expected,
+                    f"{successor} must not gain domains over {predecessor}: {sorted(actual)}",
+                )
+                observed[successor] = tuple(sorted(expected - actual))
+        self.assertEqual(
+            observed,
+            {
+                "skippy-hf-hub": ("model-download",),
+                "skippy-api": ("split-serving",),
+                "skippy-events": ("split-serving",),
+            },
+        )
+
 
     def test_unknown_product_paths_are_not_admitted_by_a_catch_all(self) -> None:
         for path in ("mesh/unowned/payload.bin", "skippy/unowned/payload.bin", "shared/crates/demo/src/lib.rs"):

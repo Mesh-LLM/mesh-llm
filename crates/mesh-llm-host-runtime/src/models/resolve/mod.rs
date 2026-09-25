@@ -410,7 +410,8 @@ where
     };
     let revision_ref = revision.as_deref().unwrap_or("main");
     let sibling_entries = fetch_repo_sibling_entries(&repo, revision_ref).await?;
-    let available_bytes = crate::system::hardware::survey().vram_bytes;
+    let available_bytes =
+        mesh_llm_system::capacity::local_fit_budget_bytes(&crate::system::hardware::survey());
     let variants = collect_show_gguf_variants_from_siblings(&sibling_entries, available_bytes);
     if variants.is_empty() {
         return Ok(Some(Vec::new()));
@@ -911,7 +912,8 @@ async fn select_default_hf_file_fit_aware(
         return None;
     }
 
-    let available_bytes = crate::system::hardware::survey().vram_bytes;
+    let available_bytes =
+        mesh_llm_system::capacity::local_fit_budget_bytes(&crate::system::hardware::survey());
     if available_bytes == 0 {
         gguf_candidates.sort_by(|left, right| {
             file_preference_score(&left.0)
@@ -950,6 +952,15 @@ async fn select_default_hf_file_fit_aware(
         };
         scored.push((file, size));
     }
+    pick_gguf_for_budget(scored, available_bytes)
+}
+
+/// The preferred GGUF among sized candidates for a local fit budget: the
+/// largest file that fits, before anything that does not.
+fn pick_gguf_for_budget(
+    mut scored: Vec<(String, Option<u64>)>,
+    available_bytes: u64,
+) -> Option<String> {
     scored.sort_by(|left, right| {
         compare_gguf_candidates_by_fit(&left.0, left.1, &right.0, right.1, available_bytes)
     });

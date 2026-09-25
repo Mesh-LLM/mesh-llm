@@ -415,6 +415,7 @@ async fn make_test_node_with_requirements(
         )),
         vram_bytes: 64 * 1024 * 1024 * 1024,
         local_runtime_capacity_bytes: 64 * 1024 * 1024 * 1024,
+        host_ram_offload_gain_bytes: 0,
         peer_change_tx,
         peer_change_rx,
         inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -463,6 +464,8 @@ async fn make_test_node_with_requirements(
             let (tx, _rx) = tokio::sync::watch::channel(0u64);
             Arc::new(tx)
         },
+        #[cfg(feature = "payments")]
+        payments: Arc::new(tokio::sync::OnceCell::new()),
         activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
             &mesh_llm_config::RuntimeActivityConfig::default(),
         ),

@@ -1,14 +1,34 @@
-# Private Meshes
+<a id="private-meshes"></a>
 
-A private mesh is a named group of your own machines. Use the same name on each
-machine you want to connect. Traffic between those Mesh nodes is end-to-end
+# Meshes for Your Own Machines
+
+Use a named mesh to connect your own machines through Nostr discovery. This
+is not a private-mesh setup: the name is not an access-control credential.
+For an unpublished mesh, start without `--discover` or `--publish` and share its
+join token out of band; see the
+[token-based setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/MESHES.md#create-an-unpublished-mesh-and-join-by-token).
+
+Traffic between those Mesh nodes is end-to-end
 encrypted by QUIC. If iroh uses a relay, the relay forwards encrypted packets
 and cannot read prompts, responses, or split-model activations.
+
+## Discovery and admission
+
+A mesh created without `--publish` is **unpublished**, not necessarily
+access-controlled. Named discovery (`--discover`) and public discovery (`--auto`)
+are ways to find a mesh; neither defines who is allowed to participate.
+
+A **default join token** supplies endpoint identity and connection addresses,
+not bearer authorization. `--join` and `--join-file` can target published or
+unpublished meshes. For controlled private deployments, configure and verify
+owner/trust policy rather than relying on the mesh name or token secrecy. Signed
+bootstrap tokens bind policy but do not by themselves imply owner allowlisting.
+See [ownership and admission control](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/MESHES.md#ownership-and-admission-control).
 
 ## Start the first serving node
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 ## Add another serving machine
@@ -16,7 +36,7 @@ mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD
 Install Mesh on the second machine, then use the same mesh name:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model <model-ref>
+mesh-llm serve --discover my-mesh --model <model-ref>
 ```
 
 ## Join as an API-only client
@@ -24,7 +44,7 @@ mesh-llm serve --discover my-private-mesh --model <model-ref>
 Use this for a laptop that should send requests but not serve a model:
 
 ```sh
-mesh-llm client --discover my-private-mesh
+mesh-llm client --discover my-mesh
 ```
 
 ## Check that peers are visible
@@ -41,11 +61,11 @@ Or check status:
 curl -s http://localhost:3131/api/status | jq .
 ```
 
-Private meshes are useful for lab machines, office workstations, or a home cluster where you want your own machines to find each other by name.
+Named meshes are useful for lab machines, office workstations, or a home cluster where you want your own machines to find each other by name.
 
 ## Control an owned node
 
-Public/private mesh membership and private owner-control are separate
+Mesh membership and private owner-control are separate
 boundaries. To manage a model on one remote node you own, read that target's
 endpoint token locally and transfer it out of band:
 

@@ -1,12 +1,12 @@
-From 5612aca2b4fe7282eff26f6ae939a16bc08a7e85 Mon Sep 17 00:00:00 2001
+From 9819440b481282aa0f2f641d16d5f86beab2e3d8 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Fri, 25 Sep 2026 06:30:38 +1000
 Subject: [PATCH] skippy: replay extracted stage programs
 
 ---
  src/CMakeLists.txt                            |  98 ++
- src/llama-context.cpp                         | 204 ++++
- src/llama-context.h                           |  19 +
+ src/llama-context.cpp                         | 234 +++++
+ src/llama-context.h                           |  20 +
  src/llama-graph.cpp                           | 342 +++++--
  src/llama-graph.h                             |  36 +-
  src/llama-impl.h                              |  36 +
@@ -34,15 +34,15 @@ Subject: [PATCH] skippy: replay extracted stage programs
  src/skippy/model_loading.cpp                  |  24 +-
  src/skippy/session.cpp                        |   6 +
  src/skippy/stage_plan.cpp                     |  10 +-
- src/skippy/stage_program.cpp                  | 850 +++++++++++++++++
- src/skippy/stage_program.h                    | 302 ++++++
- src/skippy/stage_program_extraction.cpp       | 699 ++++++++++++++
+ src/skippy/stage_program.cpp                  | 878 +++++++++++++++++
+ src/skippy/stage_program.h                    | 326 +++++++
+ src/skippy/stage_program_extraction.cpp       | 705 ++++++++++++++
  .../stage_program_extraction_internal.h       |  75 ++
  src/skippy/stage_program_extraction_roots.cpp | 587 ++++++++++++
  src/skippy/stage_program_geometry.cpp         | 506 ++++++++++
  src/skippy/stage_program_inputs.cpp           |  56 ++
  src/skippy/stage_program_inputs.h             |  27 +
- src/skippy/stage_program_installation.cpp     | 129 +++
+ src/skippy/stage_program_installation.cpp     | 139 +++
  src/skippy/stage_program_internal.h           |  45 +
  src/skippy/stage_program_outputs.cpp          |  61 ++
  src/skippy/stage_program_outputs.h            |  27 +
@@ -54,11 +54,11 @@ Subject: [PATCH] skippy: replay extracted stage programs
  src/skippy/state_effects.cpp                  |   8 +-
  src/skippy/tests/graph_build_inputs.cpp       | 891 +++++++++++++++++-
  src/skippy/tests/noalloc_graph_planning.cpp   |  45 +
- src/skippy/tests/profile_residency.cpp        | 136 ++-
- .../tests/renamed_multishard_planning.cpp     | 211 ++++-
- src/skippy/tests/stage_program_parity.h       | 240 +++++
- tests/test-llama-archs.cpp                    |  37 +
- 54 files changed, 7692 insertions(+), 267 deletions(-)
+ src/skippy/tests/profile_residency.cpp        | 137 ++-
+ .../tests/renamed_multishard_planning.cpp     | 223 ++++-
+ src/skippy/tests/stage_program_parity.h       | 374 ++++++++
+ tests/test-llama-archs.cpp                    |  39 +
+ 54 files changed, 7940 insertions(+), 267 deletions(-)
  create mode 100644 src/skippy/stage_program.cpp
  create mode 100644 src/skippy/stage_program.h
  create mode 100644 src/skippy/stage_program_extraction.cpp
@@ -76,7 +76,7 @@ Subject: [PATCH] skippy: replay extracted stage programs
  create mode 100644 src/skippy/tests/stage_program_parity.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index b4f9bb467..de75e976a 100644
+index 0e9e0011c..ffdce1a3e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -70,6 +70,15 @@ add_library(llama
@@ -95,7 +95,7 @@ index b4f9bb467..de75e976a 100644
              skippy/stage_realization.cpp
              skippy/stage_execution_contract.cpp
              skippy/state.cpp
-@@ -171,11 +180,28 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -172,11 +181,28 @@ if (LLAMA_STAGE_BUILD_TESTS)
  
      add_executable(skippy-profile-residency skippy/tests/profile_residency.cpp)
      target_include_directories(skippy-profile-residency PRIVATE .)
@@ -124,7 +124,7 @@ index b4f9bb467..de75e976a 100644
  
      add_executable(skippy-model-loader-accounting
          ../tests/test-skippy-model-loader-accounting.cpp)
-@@ -268,6 +294,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -269,6 +295,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_executable(skippy-graph-build-inputs
          skippy/tests/graph_build_inputs.cpp)
      target_include_directories(skippy-graph-build-inputs PRIVATE .)
@@ -132,7 +132,7 @@ index b4f9bb467..de75e976a 100644
      target_compile_features(skippy-graph-build-inputs PRIVATE cxx_std_17)
      target_link_libraries(skippy-graph-build-inputs PRIVATE llama)
      add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs skippy-profile-residency)
-@@ -281,6 +308,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -282,6 +309,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_graph_build_inputs PROPERTIES
          FIXTURES_REQUIRED "skippy-model-loader-fixtures;skippy-graph-build-input-fixtures")
  
@@ -148,7 +148,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_graph_build_input_fixture
          COMMAND skippy-model-fixture-generator
-@@ -358,6 +394,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -359,6 +395,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_model_loader_accounting_moe PROPERTIES
          FIXTURES_REQUIRED skippy-model-loader-fixtures)
  
@@ -164,7 +164,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_noalloc_graph_planning_dense
          COMMAND skippy-noalloc-graph-planning
-@@ -378,6 +423,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -379,6 +424,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_qwen3 PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-qwen3-fixture)
  
@@ -180,7 +180,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_gemma2_fixture
          COMMAND skippy-model-fixture-generator
-@@ -396,6 +450,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -397,6 +451,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_iswa PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-gemma2-fixture)
  
@@ -196,7 +196,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_minimax_m3_fixture
          COMMAND skippy-model-fixture-generator
-@@ -414,6 +477,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -415,6 +478,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_msa PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-minimax-m3-fixture)
  
@@ -212,7 +212,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_kimi_linear_fixture
          COMMAND skippy-model-fixture-generator
-@@ -432,6 +504,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -433,6 +505,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_kimi_linear PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-kimi-linear-fixture)
  
@@ -227,7 +227,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_deepseek4_fixture
          COMMAND skippy-model-fixture-generator
-@@ -517,6 +597,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -518,6 +598,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_recurrent_source PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-mamba2-fixture)
  
@@ -243,7 +243,7 @@ index b4f9bb467..de75e976a 100644
      add_test(
          NAME skippy_generate_mamba_fixture
          COMMAND skippy-model-fixture-generator
-@@ -534,6 +623,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -535,6 +624,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
              "recurrent,recurrent")
      set_tests_properties(skippy_noalloc_graph_planning_mamba_state_ownership PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-mamba-fixture)
@@ -260,18 +260,57 @@ index b4f9bb467..de75e976a 100644
  
  if (BUILD_SHARED_LIBS)
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 96c226162..ba9a1af79 100644
+index 4826bfb19..5578ef1f1 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -14,6 +14,7 @@
+@@ -14,9 +14,12 @@
  #include "llama.h"
  #include "skippy/graph_build_inputs.h"
  #include "skippy/activation.h"
 +#include "skippy/stage_program.h"
  
++#include <atomic>
  #include <cinttypes>
  #include <cmath>
-@@ -631,6 +632,11 @@ void llama_context::sched_reserve() {
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <stdexcept>
+@@ -517,6 +520,33 @@ llama_context::~llama_context() {
+     // wait for any pending asynchronous copies into the output buffers before they are freed
+     synchronize();
+ 
++    // Field-observable replay accounting: one bounded record per context that
++    // carries an installed stage program, emitted only when SKIPPY_GRAPH_TRACE
++    // is enabled. The environment is read once so tracing off costs a branch.
++    if (stage_program_installs != 0) {
++        static const bool stage_program_trace = [] {
++            const char * value = std::getenv("SKIPPY_GRAPH_TRACE");
++            return value != nullptr && value[0] != '\0' && value[0] != '0';
++        }();
++        if (stage_program_trace) {
++            uint64_t replays = 0;
++            uint64_t domain_misses = 0;
++            uint64_t alternative_hits = 0;
++            for (const auto & entry : stage_programs) {
++                replays += entry.second->replays.load(std::memory_order_relaxed);
++                domain_misses += entry.second->domain_probe_misses.load(std::memory_order_relaxed);
++                alternative_hits += entry.second->alternative_hits.load(std::memory_order_relaxed);
++            }
++            LLAMA_LOG_INFO("SKIPPY-GRAPH-STATS phase=teardown context=%p installs=%llu replays=%llu "
++                    "domain_probe_misses=%llu alternative_hits=%llu\n",
++                    static_cast<const void *>(this),
++                    static_cast<unsigned long long>(stage_program_installs),
++                    static_cast<unsigned long long>(replays),
++                    static_cast<unsigned long long>(domain_misses),
++                    static_cast<unsigned long long>(alternative_hits));
++        }
++    }
++
+     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
+     if (!model.hparams.no_alloc && !opt_ctx) {
+         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+@@ -672,6 +702,11 @@ void llama_context::sched_reserve() {
  }
  
  void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_inputs) {
@@ -283,7 +322,7 @@ index 96c226162..ba9a1af79 100644
      if (!sched_need_reserve) {
          return;
      }
-@@ -814,6 +820,168 @@ const skippy_graph_build_inputs & llama_context::get_graph_build_inputs() const
+@@ -868,6 +903,169 @@ const skippy_graph_build_inputs & llama_context::get_graph_build_inputs() const
      return graph_build_inputs;
  }
  
@@ -353,6 +392,7 @@ index 96c226162..ba9a1af79 100644
 +                return false;
 +            }
 +            stage_programs.emplace(key, std::move(installation));
++            ++stage_program_installs;
 +            stage_program_capture_target = nullptr;
 +        }
 +    } catch (const std::exception & exception) {
@@ -452,7 +492,7 @@ index 96c226162..ba9a1af79 100644
  ggml_backend_sched_t llama_context::get_sched() const {
      return sched.get();
  }
-@@ -1237,6 +1405,8 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
+@@ -1291,6 +1489,8 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
  void llama_context::set_embeddings(bool value) {
      LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
  
@@ -461,7 +501,7 @@ index 96c226162..ba9a1af79 100644
      cparams.embeddings = value;
  
      // TODO: not sure yet if we want to reserve here
-@@ -1246,6 +1416,8 @@ void llama_context::set_embeddings(bool value) {
+@@ -1300,6 +1500,8 @@ void llama_context::set_embeddings(bool value) {
  void llama_context::set_embeddings_nextn(bool value, bool masked) {
      LLAMA_LOG_DEBUG("%s: value = %d, masked = %d\n", __func__, value, masked);
  
@@ -470,7 +510,7 @@ index 96c226162..ba9a1af79 100644
      cparams.embeddings_nextn        = value;
      cparams.embeddings_nextn_masked = masked;
  }
-@@ -1255,6 +1427,8 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
+@@ -1309,6 +1511,8 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
  
      GGML_ASSERT(lid < model.hparams.n_layer());
  
@@ -479,7 +519,7 @@ index 96c226162..ba9a1af79 100644
      cparams.embeddings_layer_inp[lid] = enable;
  
      // note: without this reserve, the draft acceptance drops to zero. not sure why - this is unexpected
-@@ -1262,7 +1436,18 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
+@@ -1316,7 +1520,18 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
  }
  
  void llama_context::set_nextn_layer_offset(int32_t offset) {
@@ -498,7 +538,7 @@ index 96c226162..ba9a1af79 100644
  }
  
  void llama_context::set_causal_attn(bool value) {
-@@ -1272,6 +1457,7 @@ void llama_context::set_causal_attn(bool value) {
+@@ -1326,6 +1541,7 @@ void llama_context::set_causal_attn(bool value) {
          return;
      }
  
@@ -506,7 +546,7 @@ index 96c226162..ba9a1af79 100644
      cparams.causal_attn = value;
  
      sched_need_reserve = true;
-@@ -1284,6 +1470,7 @@ void llama_context::set_warmup(bool value) {
+@@ -1338,6 +1554,7 @@ void llama_context::set_warmup(bool value) {
          return;
      }
  
@@ -514,7 +554,7 @@ index 96c226162..ba9a1af79 100644
      cparams.warmup = value;
  
      // warmups are usually with small batches, so no need to reserve
-@@ -1297,6 +1484,12 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+@@ -1351,6 +1568,12 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
  
      LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
  
@@ -527,7 +567,7 @@ index 96c226162..ba9a1af79 100644
      if (sampler && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
          static bool warned = false;
          if (!warned) {
-@@ -1362,6 +1555,7 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
+@@ -1416,6 +1639,7 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
          }
      }
  
@@ -535,7 +575,7 @@ index 96c226162..ba9a1af79 100644
      sched_need_reserve = true;
  }
  
-@@ -1401,6 +1595,7 @@ bool llama_context::set_adapter_cvec(
+@@ -1455,6 +1679,7 @@ bool llama_context::set_adapter_cvec(
  
      bool res = cvec->apply(model, data, len, n_embd, il_start, il_end);
  
@@ -543,7 +583,7 @@ index 96c226162..ba9a1af79 100644
      sched_need_reserve = true;
  
      return res;
-@@ -2613,6 +2808,11 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -2681,6 +2906,11 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
          ubatch.token = nullptr;
          ubatch.embd  = &embedding_placeholder;
      }
@@ -555,7 +595,7 @@ index 96c226162..ba9a1af79 100644
  
      ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
  
-@@ -2678,6 +2878,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -2748,6 +2978,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
                      static_cast<uint32_t>(port.token_axis + 1));
              shape.token_axis = port.token_axis;
              shape.optional = port.optional;
@@ -563,7 +603,7 @@ index 96c226162..ba9a1af79 100644
              for (int dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
                  shape.dimensions[dimension] = dimension == port.token_axis ? -1 : port.tensor->ne[dimension];
              }
-@@ -2701,6 +2902,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -2771,6 +3002,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
                  stable = false;
                  return;
              }
@@ -571,7 +611,7 @@ index 96c226162..ba9a1af79 100644
              for (int dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
                  if (expected.dimensions[dimension] != actual.dimensions[dimension]) expected.dimensions[dimension] = -1;
              }
-@@ -2799,6 +3001,8 @@ llm_graph_params llama_context::graph_params(
+@@ -2869,6 +3101,8 @@ llm_graph_params llama_context::graph_params(
          /*.samplers    =*/ sampling.samplers,
          /*.build_inputs=*/ graph_build_inputs,
          /*.activation_export_token_axes=*/ std::move(export_token_axes),
@@ -581,7 +621,7 @@ index 96c226162..ba9a1af79 100644
          /*.cb          =*/ graph_get_cb(),
          /*.res         =*/ res,
 diff --git a/src/llama-context.h b/src/llama-context.h
-index f9896cbd4..b2234dbee 100644
+index 88457f390..9f957033e 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -18,6 +18,7 @@
@@ -618,11 +658,12 @@ index f9896cbd4..b2234dbee 100644
  
      ggml_backend_sched_t get_sched() const;
  
-@@ -332,6 +345,12 @@ private:
+@@ -338,6 +351,13 @@ private:
      llama_cparams cparams;
  
      const skippy_graph_build_inputs graph_build_inputs;
 +    std::map<int32_t, std::unique_ptr<skippy_stage_program_installation>> stage_programs;
++    uint64_t stage_program_installs = 0;
 +    skippy_stage_program_installation * stage_program_capture_target = nullptr;
 +    uint64_t computation_generation = 0;
 +
@@ -632,7 +673,7 @@ index f9896cbd4..b2234dbee 100644
      llama_adapter_cvec_ptr  cvec;
      llama_adapter_loras_ptr loras;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 6f248659a..ce4e093fd 100644
+index b5025dd26..af38c5b02 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -15,6 +15,7 @@
@@ -1042,7 +1083,7 @@ index 6f248659a..ce4e093fd 100644
          cb(up, "ffn_moe_up", il);
      } else {
          // separate gate and up path
-@@ -2819,6 +2951,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2823,6 +2955,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
      for (uint32_t i = 0; i < n_expert_used_il; ++i) {
          cur_experts[i] = ggml_view_2d(ctx0, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
  
@@ -1056,7 +1097,7 @@ index 6f248659a..ce4e093fd 100644
          ggml_build_forward_expand(gf, cur_experts[i]);
      }
  
-@@ -2833,7 +2972,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2837,7 +2976,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
  
      if (n_expert_used_il == 1) {
          // avoid returning a non-contiguous tensor
@@ -1065,7 +1106,7 @@ index 6f248659a..ce4e093fd 100644
      }
  
      cb(moe_out, "ffn_moe_out", il);
-@@ -2841,6 +2980,16 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2845,6 +2984,16 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
      return moe_out;
  }
  
@@ -1082,7 +1123,7 @@ index 6f248659a..ce4e093fd 100644
  // input embeddings with optional lora
  ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, bool allow_embeddings) const {
      if (ubatch.embd && !allow_embeddings) {
-@@ -2911,24 +3060,42 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, bool all
+@@ -2915,24 +3064,42 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, bool all
      assert(ggml_are_same_shape (inps[0], inps[1]));
      assert(ggml_are_same_stride(inps[0], inps[1]));
  
@@ -1133,23 +1174,23 @@ index 6f248659a..ce4e093fd 100644
      cb(cur, "embd", -1);
  
      res->add_input(std::move(inp));
-@@ -2999,6 +3166,7 @@ ggml_tensor * llm_graph_context::build_inp_mean() const {
- 
+@@ -3006,6 +3173,7 @@ ggml_tensor * llm_graph_context::build_inp_mean() const {
      cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, ubatch.n_seqs_unq);
      ggml_set_input(cur);
+     ggml_set_name(cur, "mean");
 +    request_input(cur, "pooling.mean");
  
      res->add_input(std::move(inp));
  
-@@ -3012,6 +3180,7 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
- 
+@@ -3020,6 +3188,7 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
      cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_seqs_unq);
      ggml_set_input(cur);
+     ggml_set_name(cur, "cls");
 +    request_input(cur, "pooling.indices");
  
      res->add_input(std::move(inp));
  
-@@ -3104,6 +3273,18 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3115,6 +3284,18 @@ ggml_tensor * llm_graph_context::build_attn_mha(
      const auto n_stream = k->ne[3];
  
      q = ggml_view_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream, q->nb[1], q->nb[2], q->nb[3]/n_stream, 0);
@@ -1168,7 +1209,7 @@ index 6f248659a..ce4e093fd 100644
  
      q = ggml_permute(ctx0, q, 0, 2, 1, 3);
      k = ggml_permute(ctx0, k, 0, 2, 1, 3);
-@@ -3197,6 +3378,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3225,6 +3406,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          if (!v_trans) {
              // note: avoid this branch
              v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
@@ -1180,7 +1221,7 @@ index 6f248659a..ce4e093fd 100644
              cb(v, "v_cont", il);
          }
  
-@@ -3213,6 +3399,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3241,6 +3427,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
          // recombine streams
          cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
@@ -1192,7 +1233,7 @@ index 6f248659a..ce4e093fd 100644
  
          if (!cparams.offload_kqv) {
              // all nodes between the KV store and the attention output are run on the CPU
-@@ -3488,6 +3679,12 @@ ggml_tensor * llm_graph_context::build_attn(
+@@ -3517,6 +3708,12 @@ ggml_tensor * llm_graph_context::build_attn(
      ggml_tensor * q = q_cur;
      ggml_tensor * k = mctx_cur->get_k(ctx0, il);
      ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
@@ -1205,7 +1246,7 @@ index 6f248659a..ce4e093fd 100644
  
      state_read(skippy_state_kind::kv_key, k, il);
  
-@@ -3976,27 +4173,7 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
+@@ -4005,27 +4202,7 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
  
  llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
      const auto * mctx_cur = static_cast<const llama_kv_cache_dsv4_context *>(mctx);
@@ -1234,7 +1275,7 @@ index 6f248659a..ce4e093fd 100644
  
      request_inputs(inp.get());
  
-@@ -4036,10 +4213,15 @@ ggml_tensor * llm_graph_context::build_rs_impl(
+@@ -4065,10 +4242,15 @@ ggml_tensor * llm_graph_context::build_rs_impl(
          state_read(*kind, s, il);
      }
      ggml_tensor * states = ggml_reshape_2d(ctx0, s, state_size, s->ne[1]);
@@ -1250,7 +1291,7 @@ index 6f248659a..ce4e093fd 100644
      ggml_tensor * zero_write = ggml_scale_inplace(ctx0, state_zero, 0);
      ggml_build_forward_expand(gf, zero_write);
      if (kind != nullptr) {
-@@ -4054,8 +4236,12 @@ ggml_tensor * llm_graph_context::build_rs_impl(
+@@ -4083,8 +4265,12 @@ ggml_tensor * llm_graph_context::build_rs_impl(
  
      // copy extra states which won't be changed further (between n_seqs and n_rs)
      ggml_tensor * states_extra = ggml_get_rows(ctx0, states, state_copy_extra);
@@ -1265,7 +1306,7 @@ index 6f248659a..ce4e093fd 100644
      ggml_build_forward_expand(gf, extra_write);
      if (kind != nullptr) {
          state_write(*kind, s, extra_write, il);
-@@ -4079,6 +4265,13 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
+@@ -4109,6 +4295,13 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
  
      inp->s_copy_main  = ggml_view_1d(ctx0, inp->s_copy, n_seqs, 0);
      inp->s_copy_extra = ggml_view_1d(ctx0, inp->s_copy, n_rs - n_seqs, n_seqs * inp->s_copy->nb[0]);
@@ -1279,7 +1320,7 @@ index 6f248659a..ce4e093fd 100644
  
      inp->head = mctx_cur->get_head();
      inp->rs_z = mctx_cur->get_rs_z();
-@@ -4155,10 +4348,19 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
+@@ -4185,10 +4378,19 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
  
      const auto kv_head = mctx_cur->get_head();
  
@@ -1571,7 +1612,7 @@ index 9664a6260..c814869d0 100644
  
  void llama_kv_cache_msa::clear(bool data) {
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index e556d2fa2..3fe2c322e 100644
+index 5bc12108a..63b360bfc 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -5,6 +5,7 @@
@@ -1745,7 +1786,7 @@ index e556d2fa2..3fe2c322e 100644
  
      return ggml_set_rows(ctx, v_view, v_cur, v_idxs);
  }
-@@ -3776,6 +3848,30 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
+@@ -3778,6 +3850,30 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
      return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
  }
  
@@ -1777,7 +1818,7 @@ index e556d2fa2..3fe2c322e 100644
      return kv->get_k_idx(ctx, il, n_kv, sinfos[i_cur]);
  }
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 9d855f1d5..1e022ad3f 100644
+index fea4ce1c6..a1ab534d9 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -176,6 +176,8 @@ public:
@@ -1789,7 +1830,7 @@ index 9d855f1d5..1e022ad3f 100644
      const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
  
      // state_read, plus the cells the restored tokens were placed in
-@@ -454,6 +456,14 @@ public:
+@@ -458,6 +460,14 @@ public:
      ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
      ggml_tensor * get_k_idx(ggml_context * ctx, int32_t il) const;
  
@@ -1805,7 +1846,7 @@ index 9d855f1d5..1e022ad3f 100644
      // note: the heads in k_cur and v_cur should be laid out contiguously in memory
      //   - k_cur  [n_embd_head_k, n_head_k, n_tokens]
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index f2bb90ab6..c990230d8 100644
+index 2c1cd275f..650cbd25f 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,4 +1,5 @@
@@ -1814,7 +1855,7 @@ index f2bb90ab6..c990230d8 100644
  
  #include "llama-arch.h"
  #include "llama-ext.h"
-@@ -2894,6 +2895,27 @@ llama_memory_i * llama_model::create_memory(
+@@ -2910,6 +2911,27 @@ llama_memory_i * llama_model::create_memory(
  }
  
  ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
@@ -1842,7 +1883,7 @@ index f2bb90ab6..c990230d8 100644
      std::unique_ptr<llm_graph_context> llm = build_arch_graph(params);
  
      // Build one canonical whole-model graph. Stage realization below is the
-@@ -2904,6 +2926,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
+@@ -2920,6 +2942,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
  
      llm->res->set_outputs(params);
      skippy_realize_stage_graph(*this, params, *llm->res);
@@ -1853,10 +1894,10 @@ index f2bb90ab6..c990230d8 100644
      return llm->res->get_gf();
  }
 diff --git a/src/models/bailingmoe3.cpp b/src/models/bailingmoe3.cpp
-index d375502dd..0006c01ee 100644
+index 046e390c2..23a8b981d 100644
 --- a/src/models/bailingmoe3.cpp
 +++ b/src/models/bailingmoe3.cpp
-@@ -313,18 +313,46 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
+@@ -320,18 +320,46 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
              ggml_tensor * q_nope = ggml_view_3d(ctx0, q_all, qk_nope_head_dim, n_head, n_tokens,
                      ggml_row_size(q_all->type, qk_head_dim),
                      ggml_row_size(q_all->type, qk_head_dim) * n_head, 0);
@@ -1901,9 +1942,9 @@ index d375502dd..0006c01ee 100644
 +                skippy_stage_geometry_note(k_pe, geometry);
 +            }
  
-             q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                     ext_factor, attn_factor, beta_fast, beta_slow);
-@@ -338,6 +366,11 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
+             if (use_mrope) {
+                 q_pe = ggml_rope_multi(ctx0, q_pe, inp_pos, nullptr, n_rot, sections, rope_type,
+@@ -352,6 +380,11 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
  
              ggml_tensor * q = ggml_concat(ctx0, q_nope, q_pe, 0);
              kv = ggml_reshape_3d(ctx0, kv, kv_lora_rank, 1, n_tokens);
@@ -1915,7 +1956,7 @@ index d375502dd..0006c01ee 100644
              ggml_tensor * k = ggml_concat(ctx0, kv, k_pe, 0);
  
              cur = build_attn(inp_attn, nullptr, nullptr, nullptr,
-@@ -347,7 +380,13 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
+@@ -361,7 +394,13 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
              attn_gate = ggml_sigmoid(ctx0, ggml_reshape_3d(ctx0, attn_gate, 1, n_head, n_tokens));
              cur = ggml_reshape_3d(ctx0, cur, v_head_dim, n_head, n_tokens);
              cur = ggml_mul(ctx0, cur, attn_gate);
@@ -1930,7 +1971,7 @@ index d375502dd..0006c01ee 100644
              cb(cur, "mla_out", il);
          }
  
-@@ -469,18 +508,46 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
+@@ -484,18 +523,46 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
      ggml_tensor * q_nope = ggml_view_3d(ctx0, q_all, qk_nope_head_dim, n_head, n_tokens,
              ggml_row_size(q_all->type, qk_head_dim),
              ggml_row_size(q_all->type, qk_head_dim) * n_head, 0);
@@ -1975,9 +2016,9 @@ index d375502dd..0006c01ee 100644
 +                skippy_stage_geometry_note(k_pe, geometry);
 +            }
  
-     q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-             ext_factor, attn_factor, beta_fast, beta_slow);
-@@ -494,6 +561,11 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
+     const bool use_mrope = hparams.use_mrope();
+     int sections[4];
+@@ -520,6 +587,11 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
  
      ggml_tensor * q = ggml_concat(ctx0, q_nope, q_pe, 0);
      kv = ggml_reshape_3d(ctx0, kv, kv_lora_rank, 1, n_tokens);
@@ -1989,7 +2030,7 @@ index d375502dd..0006c01ee 100644
      ggml_tensor * k = ggml_concat(ctx0, kv, k_pe, 0);
  
      cur = build_attn(inp_attn, nullptr, nullptr, nullptr,
-@@ -503,7 +575,13 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
+@@ -529,7 +601,13 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
      attn_gate = ggml_sigmoid(ctx0, ggml_reshape_3d(ctx0, attn_gate, 1, n_head, n_tokens));
      cur = ggml_reshape_3d(ctx0, cur, v_head_dim, n_head, n_tokens);
      cur = ggml_mul(ctx0, cur, attn_gate);
@@ -2005,7 +2046,7 @@ index d375502dd..0006c01ee 100644
      ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
      cur = build_norm(ffn_inp, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
 diff --git a/src/models/deepseek4.cpp b/src/models/deepseek4.cpp
-index 35e229566..f502f9e62 100644
+index 33007e933..381103a13 100644
 --- a/src/models/deepseek4.cpp
 +++ b/src/models/deepseek4.cpp
 @@ -2,6 +2,7 @@
@@ -2509,7 +2550,7 @@ index 35e229566..f502f9e62 100644
      cb(inpL, "hc_init", -1);
  
      for (int il = 0; il < n_layer; ++il) {
-@@ -1334,6 +1577,7 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
+@@ -1337,6 +1580,7 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
      }
  
      ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
@@ -2517,7 +2558,7 @@ index 35e229566..f502f9e62 100644
      ggml_tensor * flat_out = inp_out_ids ? ggml_get_rows(ctx0, flat, inp_out_ids) : flat;
  
      if (cparams.embeddings_nextn) {
-@@ -1344,6 +1588,7 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
+@@ -1347,6 +1591,7 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
  
      if (inp_out_ids) {
          inpL = ggml_reshape_3d(ctx0, flat_out, n_embd, hc, n_outputs);
@@ -2769,7 +2810,7 @@ index 342a5d795..84efdd843 100644
      ggml_tensor * ssm_write = ggml_cpy(ctx0, src, dst);
      ggml_build_forward_expand(gf, ssm_write);
 diff --git a/src/models/kimi-linear.cpp b/src/models/kimi-linear.cpp
-index b8c455360..af8aaa757 100644
+index 26bc95bd7..d6d10e2f2 100644
 --- a/src/models/kimi-linear.cpp
 +++ b/src/models/kimi-linear.cpp
 @@ -1,5 +1,6 @@
@@ -2857,7 +2898,7 @@ index b8c455360..af8aaa757 100644
  }
  
  llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph_params & params) :
-@@ -317,18 +345,30 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
+@@ -319,18 +347,30 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
              g1 = ggml_add(ctx0, g1, layer.ssm_dt_b);
              g1 = ggml_softplus(ctx0, g1);
              g1 = ggml_reshape_3d(ctx0, g1, head_dim, n_head, n_tokens);
@@ -2888,7 +2929,7 @@ index b8c455360..af8aaa757 100644
              cb(beta, "kda_beta", il);
  
              beta = ggml_sigmoid(ctx0, beta);
-@@ -336,11 +376,18 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
+@@ -338,11 +378,18 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
              // Reshape for KDA recurrence
              // {n_embd, n_tokens} -> {n_embd, n_seq_tokens, n_seqs}
              cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
@@ -2907,7 +2948,7 @@ index b8c455360..af8aaa757 100644
  
  
              const float eps_norm = hparams.f_norm_rms_eps;
-@@ -352,27 +399,46 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
+@@ -354,27 +401,46 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
              auto attn_out = build_delta_net(Qcur, Kcur, Vcur, g1, beta, state, il);
  
              ggml_tensor * output = ggml_cont(ctx0, attn_out.first);
@@ -2958,7 +2999,7 @@ index b8c455360..af8aaa757 100644
              ggml_tensor * normed = build_norm(attn_out_final, layer.ssm_o_norm, nullptr, LLM_NORM_RMS, il);
              cb(normed, "kda_normed", il);
              ggml_tensor * gate = ggml_sigmoid(ctx0, g2);
-@@ -380,6 +446,9 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
+@@ -382,6 +448,9 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
  
              // Output projection
              gated = ggml_cont_2d(ctx0, gated, d_inner, n_tokens);
@@ -2968,7 +3009,7 @@ index b8c455360..af8aaa757 100644
              cur = ggml_mul_mat(ctx0, layer.wo, gated);
              cb(cur, "kda_out", il);
  
-@@ -398,10 +467,19 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
+@@ -400,10 +469,19 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
              // Split: kv_cmpr = kv_lora[:kv_lora_rank], k_pe = kv_lora[kv_lora_rank:]
              ggml_tensor * kv_cmpr = ggml_view_2d(ctx0, kv_cmpr_pe, kv_lora_rank, n_tokens,
                  ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope), 0);
@@ -2988,7 +3029,7 @@ index b8c455360..af8aaa757 100644
              // Note: Kimi MLA does NOT apply RoPE (rotary_emb=None in vLLM)
              // k_pe is used directly without RoPE
              // Normalize kv_c
-@@ -412,12 +490,20 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
+@@ -414,12 +492,20 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
                  ggml_tensor * q_nope =
                      ggml_view_3d(ctx0, Qcur, n_embd_head_qk_nope, n_head, n_tokens, ggml_row_size(Qcur->type, n_embd_head_k_mla),
                                   ggml_row_size(Qcur->type, n_embd_head_k_mla) * n_head, 0);
@@ -3009,7 +3050,7 @@ index b8c455360..af8aaa757 100644
                  cb(q_pe, "q_pe", il);
  
                  // {n_embd_head_qk_nope, n_tokens, n_head}
-@@ -438,6 +524,9 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
+@@ -440,6 +526,9 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
                  cb(Qcur, "Qcur", il);
  
                  kv_cmpr = ggml_reshape_3d(ctx0, kv_cmpr, kv_lora_rank, 1, n_tokens);
@@ -3020,7 +3061,7 @@ index b8c455360..af8aaa757 100644
  
                  // {n_embd_head_qk_rope + kv_lora_rank, 1, n_tokens}
 diff --git a/src/models/laguna.cpp b/src/models/laguna.cpp
-index 2bc4fa8a0..f78b86f7f 100644
+index a33b66f0f..a3fb40c21 100644
 --- a/src/models/laguna.cpp
 +++ b/src/models/laguna.cpp
 @@ -5,6 +5,7 @@
@@ -3031,7 +3072,7 @@ index 2bc4fa8a0..f78b86f7f 100644
  
  void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
      ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-@@ -248,8 +249,16 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+@@ -250,8 +251,16 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
              if (model.layers[il].wqkv_gate->ne[1] == n_head_il) {
                  cur  = ggml_reshape_3d(ctx0, cur,  n_embd_head, n_head_il, n_tokens);
                  gate = ggml_reshape_3d(ctx0, gate, 1,           n_head_il, n_tokens);
@@ -3395,7 +3436,7 @@ index 2d17560e8..01ad85449 100644
          // {d_inner, n_embd} @ {d_inner, n_tokens} => {n_embd, n_tokens}
          cur = build_lora_mm(model.layers[il].ssm_out, y, model.layers[il].ssm_out_s);
 diff --git a/src/models/mimo2.cpp b/src/models/mimo2.cpp
-index accde102c..61ca240a7 100644
+index 373efc07e..3af6573c6 100644
 --- a/src/models/mimo2.cpp
 +++ b/src/models/mimo2.cpp
 @@ -1,4 +1,5 @@
@@ -3404,7 +3445,7 @@ index accde102c..61ca240a7 100644
  
  void llama_model_mimo2::load_arch_hparams(llama_model_loader & ml) {
      ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-@@ -154,6 +155,12 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
+@@ -156,6 +157,12 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
                  Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head_v, n_head_kv_l, n_tokens);
              }
  
@@ -3418,7 +3459,7 @@ index accde102c..61ca240a7 100644
                  ctx0, Qcur, inp_pos, nullptr,
                  n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
 diff --git a/src/models/minicpm3.cpp b/src/models/minicpm3.cpp
-index 7820d5224..2d4ce750a 100644
+index 07987e9c8..c2f45e7df 100644
 --- a/src/models/minicpm3.cpp
 +++ b/src/models/minicpm3.cpp
 @@ -1,4 +1,5 @@
@@ -3427,7 +3468,7 @@ index 7820d5224..2d4ce750a 100644
  
  void llama_model_minicpm3::load_arch_hparams(llama_model_loader & ml) {
      ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-@@ -117,6 +118,9 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -119,6 +120,9 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
  
              // {n_embd_head_k, n_head, n_tokens}, RoPE is applied to the trailing dims only
              q = ggml_reshape_3d(ctx0, q, hparams.n_embd_head_k(), n_head, n_tokens);
@@ -3437,7 +3478,7 @@ index 7820d5224..2d4ce750a 100644
              cb(q, "q", il);
  
              // {n_embd, kv_lora_rank + n_embd_head_qk_rope} * {n_embd, n_tokens} -> {kv_lora_rank + n_embd_head_qk_rope, n_tokens}
-@@ -127,6 +131,10 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -129,6 +133,10 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
              ggml_tensor * kv_compressed = ggml_view_2d(ctx0, kv_pe_compresseed, kv_lora_rank, n_tokens,
                      kv_pe_compresseed->nb[1],
                      0);
@@ -3448,7 +3489,7 @@ index 7820d5224..2d4ce750a 100644
              cb(kv_compressed, "kv_compressed", il);
  
              // and {n_embd_head_qk_rope, n_tokens}
-@@ -134,6 +142,11 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -136,6 +144,11 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
                      kv_pe_compresseed->nb[1],
                      kv_pe_compresseed->nb[1],
                      ggml_row_size(kv_pe_compresseed->type, kv_lora_rank));
@@ -3460,7 +3501,7 @@ index 7820d5224..2d4ce750a 100644
              cb(k_pe, "k_pe", il);
  
              kv_compressed = build_norm(kv_compressed,
-@@ -150,6 +163,10 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -152,6 +165,10 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
                      ggml_row_size(kv->type, n_embd_head_qk_nope + hparams.n_embd_head_v()),
                      ggml_row_size(kv->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v())),
                      0);
@@ -3471,7 +3512,7 @@ index 7820d5224..2d4ce750a 100644
              cb(k_nope, "k_nope", il);
  
              // and {n_head * n_embd_head_v, n_tokens}
-@@ -157,6 +174,10 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -159,6 +176,10 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
                      ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v())),
                      ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v())*n_head),
                      ggml_row_size(kv->type, (n_embd_head_qk_nope)));
@@ -3482,7 +3523,7 @@ index 7820d5224..2d4ce750a 100644
              cb(v_states, "v_states", il);
  
              v_states = ggml_cont(ctx0, v_states);
-@@ -181,8 +202,11 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -183,8 +204,11 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
              ggml_tensor * q_states = q;
              cb(q_states, "q_states", il);
  
@@ -3497,10 +3538,10 @@ index 7820d5224..2d4ce750a 100644
  
              cur = build_attn(inp_attn,
 diff --git a/src/models/models.h b/src/models/models.h
-index 3f9c67c63..b7070be6b 100644
+index e567d0b71..be7f04899 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -2382,7 +2382,37 @@ struct llama_model_qwen35 : public llama_model_base {
+@@ -2455,7 +2455,37 @@ struct llama_model_qwen35 : public llama_model_base {
  struct llama_model_qwen4exp : public llama_model_base {
      llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
  
@@ -3540,7 +3581,7 @@ index 3f9c67c63..b7070be6b 100644
      void load_arch_hparams(llama_model_loader & ml) override;
      void load_arch_tensors(llama_model_loader & ml) override;
 diff --git a/src/models/olmo2.cpp b/src/models/olmo2.cpp
-index fe5dc88d4..dc554a3b5 100644
+index 0880c0732..055983a04 100644
 --- a/src/models/olmo2.cpp
 +++ b/src/models/olmo2.cpp
 @@ -1,4 +1,5 @@
@@ -3549,7 +3590,7 @@ index fe5dc88d4..dc554a3b5 100644
  
  void llama_model_olmo2::load_arch_hparams(llama_model_loader & ml) {
      ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-@@ -111,6 +112,11 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
+@@ -113,6 +114,11 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
              Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
              Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
              Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
@@ -3562,7 +3603,7 @@ index fe5dc88d4..dc554a3b5 100644
              const bool is_swa = hparams.is_swa(il);
  
 diff --git a/src/models/qwen35.cpp b/src/models/qwen35.cpp
-index 583fcea71..41dc7fa06 100644
+index bf9ebfce1..f70512d90 100644
 --- a/src/models/qwen35.cpp
 +++ b/src/models/qwen35.cpp
 @@ -1,4 +1,5 @@
@@ -3571,7 +3612,7 @@ index 583fcea71..41dc7fa06 100644
  #include "llama-memory-recurrent.h"
  
  void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
-@@ -232,6 +233,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph::build_qkvz(
+@@ -235,6 +236,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph::build_qkvz(
  
      ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input, model.layers[il].wqkv_s);
      qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
@@ -3582,7 +3623,7 @@ index 583fcea71..41dc7fa06 100644
      cb(qkv_mixed, "linear_attn_qkv_mixed", il);
  
      ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input, model.layers[il].wqkv_gate_s);
-@@ -275,6 +280,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
+@@ -278,6 +283,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
      ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
          ggml_element_size(Qcur_full) * n_embd_head * 2,
          ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head, 0);
@@ -3592,7 +3633,7 @@ index 583fcea71..41dc7fa06 100644
      cb(Qcur, "Qcur_reshaped", il);
  
      // Apply Q normalization
-@@ -283,6 +291,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
+@@ -286,6 +294,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
  
      // Apply K normalization
      Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -3602,7 +3643,7 @@ index 583fcea71..41dc7fa06 100644
      Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
      cb(Kcur, "Kcur_normed", il);
  
-@@ -290,10 +301,19 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
+@@ -293,10 +304,19 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
          ggml_element_size(Qcur_full) * n_embd_head * 2,
          ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
          ggml_element_size(Qcur_full) * n_embd_head);
@@ -3622,7 +3663,7 @@ index 583fcea71..41dc7fa06 100644
  
      // Apply MRoPE
      Qcur = ggml_rope_multi(
-@@ -357,6 +377,10 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -360,6 +380,10 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
  
      ggml_tensor * beta = build_lora_mm(model.layers[il].ssm_beta, cur, model.layers[il].ssm_beta_s);
      beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
@@ -3633,7 +3674,7 @@ index 583fcea71..41dc7fa06 100644
      cb(beta, "beta", il);
  
      beta = ggml_sigmoid(ctx0, beta);
-@@ -364,6 +388,10 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -367,6 +391,10 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
  
      ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_s);
      alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
@@ -3644,7 +3685,7 @@ index 583fcea71..41dc7fa06 100644
      cb(alpha, "alpha", il);
  
      ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
-@@ -374,6 +402,10 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -377,6 +405,10 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
      cb(gate, "gate", il);
  
      gate = ggml_reshape_4d(ctx0, gate, 1, num_v_heads, n_seq_tokens, n_seqs);
@@ -3655,7 +3696,7 @@ index 583fcea71..41dc7fa06 100644
  
      ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
      ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
-@@ -386,6 +418,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -389,6 +421,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
  
      ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
      state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
@@ -3665,7 +3706,7 @@ index 583fcea71..41dc7fa06 100644
      cb(state, "state_predelta", il);
  
      ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
-@@ -419,6 +454,14 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -422,6 +457,14 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
              nb1_qkv * n_seq_tokens,
              ggml_row_size(conv_qkv_mix->type, 2 * head_k_dim * num_k_heads));
  
@@ -3680,7 +3721,7 @@ index 583fcea71..41dc7fa06 100644
      cb(q_conv, "q_conv", il);
      cb(k_conv, "k_conv", il);
      cb(v_conv, "v_conv", il);
-@@ -449,12 +492,20 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -452,12 +495,20 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
  
      // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
      ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
@@ -3701,7 +3742,7 @@ index 583fcea71..41dc7fa06 100644
      cb(final_output, "final_output", il);
  
      // Output projection
-@@ -463,6 +514,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -466,6 +517,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
  
      // Reshape back to original dimensions
      cur = ggml_reshape_2d(ctx0, cur, n_embd, n_seq_tokens * n_seqs);
@@ -3711,7 +3752,7 @@ index 583fcea71..41dc7fa06 100644
  
      return cur;
  }
-@@ -561,11 +615,23 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
+@@ -564,11 +618,23 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
              il, false);
      cb(Qcur_full, "mtp_Qcur_full", il);
  
@@ -3735,7 +3776,7 @@ index 583fcea71..41dc7fa06 100644
      Qcur = build_norm(Qcur, layer.attn_q_norm, nullptr, LLM_NORM_RMS, il);
      cb(Qcur, "mtp_Qcur_normed", il);
  
-@@ -574,14 +640,30 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
+@@ -577,14 +643,30 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
              ggml_element_size(Qcur_full) * n_embd_head * 2,
              ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
              ggml_element_size(Qcur_full) * n_embd_head);
@@ -3767,7 +3808,7 @@ index 583fcea71..41dc7fa06 100644
  
      Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr,
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 7b637b455..7c9dd490f 100644
+index aa3aea631..68f661b79 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
 @@ -1,4 +1,5 @@
@@ -3776,7 +3817,7 @@ index 7b637b455..7c9dd490f 100644
  #include "llama-memory-recurrent.h"
  
  void llama_model_qwen35moe::load_arch_hparams(llama_model_loader & ml) {
-@@ -256,6 +257,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35moe::graph::build_qkvz
+@@ -259,6 +260,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35moe::graph::build_qkvz
  
      ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input, model.layers[il].wqkv_s);
      qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
@@ -3787,7 +3828,7 @@ index 7b637b455..7c9dd490f 100644
      cb(qkv_mixed, "linear_attn_qkv_mixed", il);
  
      ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input, model.layers[il].wqkv_gate_s);
-@@ -299,6 +304,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
+@@ -302,6 +307,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
      ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
          ggml_element_size(Qcur_full) * n_embd_head * 2,
          ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head, 0);
@@ -3797,7 +3838,7 @@ index 7b637b455..7c9dd490f 100644
      cb(Qcur, "Qcur_reshaped", il);
  
      // Apply Q normalization
-@@ -307,6 +315,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
+@@ -310,6 +318,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
  
      // Apply K normalization
      Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -3807,7 +3848,7 @@ index 7b637b455..7c9dd490f 100644
      Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
      cb(Kcur, "Kcur_normed", il);
  
-@@ -314,10 +325,19 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
+@@ -317,10 +328,19 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn(
          ggml_element_size(Qcur_full) * n_embd_head * 2,
          ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
          ggml_element_size(Qcur_full) * n_embd_head);
@@ -3827,7 +3868,7 @@ index 7b637b455..7c9dd490f 100644
  
      // Apply IMRoPE
      Qcur = ggml_rope_multi(
-@@ -381,6 +401,10 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
+@@ -384,6 +404,10 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
  
      ggml_tensor * beta = build_lora_mm(model.layers[il].ssm_beta, cur, model.layers[il].ssm_beta_s);
      beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
@@ -3838,7 +3879,7 @@ index 7b637b455..7c9dd490f 100644
      cb(beta, "beta", il);
  
      beta = ggml_sigmoid(ctx0, beta);
-@@ -388,6 +412,10 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
+@@ -391,6 +415,10 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
  
      ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_s);
      alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
@@ -3849,7 +3890,7 @@ index 7b637b455..7c9dd490f 100644
      cb(alpha, "alpha", il);
  
      ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
-@@ -398,6 +426,10 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
+@@ -401,6 +429,10 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
      cb(gate, "gate", il);
  
      gate = ggml_reshape_4d(ctx0, gate, 1, num_v_heads, n_seq_tokens, n_seqs);
@@ -3860,7 +3901,7 @@ index 7b637b455..7c9dd490f 100644
  
      ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
      ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
-@@ -410,6 +442,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
+@@ -413,6 +445,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
  
      ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
      state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
@@ -3870,7 +3911,7 @@ index 7b637b455..7c9dd490f 100644
      cb(state, "state_predelta", il);
  
      ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
-@@ -443,6 +478,14 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
+@@ -446,6 +481,14 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
              nb1_qkv * n_seq_tokens,
              ggml_row_size(conv_qkv_mix->type, 2 * head_k_dim * num_k_heads));
  
@@ -3885,7 +3926,7 @@ index 7b637b455..7c9dd490f 100644
      cb(q_conv, "q_conv", il);
      cb(k_conv, "k_conv", il);
      cb(v_conv, "v_conv", il);
-@@ -473,12 +516,20 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
+@@ -476,12 +519,20 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
  
      // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
      ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
@@ -3906,7 +3947,7 @@ index 7b637b455..7c9dd490f 100644
      cb(final_output, "final_output", il);
  
      // Output projection
-@@ -487,6 +538,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
+@@ -490,6 +541,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
  
      // Reshape back to original dimensions
      cur = ggml_reshape_2d(ctx0, cur, n_embd, n_seq_tokens * n_seqs);
@@ -3917,7 +3958,7 @@ index 7b637b455..7c9dd490f 100644
      return cur;
  }
 diff --git a/src/models/qwen3next.cpp b/src/models/qwen3next.cpp
-index 1bdfc3e3f..7927fae51 100644
+index e9654c87a..1cdf134db 100644
 --- a/src/models/qwen3next.cpp
 +++ b/src/models/qwen3next.cpp
 @@ -1,4 +1,5 @@
@@ -3926,7 +3967,7 @@ index 1bdfc3e3f..7927fae51 100644
  #include "llama-memory-recurrent.h"
  
  void llama_model_qwen3next::load_arch_hparams(llama_model_loader & ml) {
-@@ -254,6 +255,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
+@@ -257,6 +258,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
      cb(Vcur, "Vcur", il);
  
      Qcur_full = ggml_reshape_4d(ctx0, Qcur_full, n_embd_head * 2, n_head, n_tokens, 1);
@@ -3936,7 +3977,7 @@ index 1bdfc3e3f..7927fae51 100644
  
      // Split Q projection into query and gate
      // The split should be along dimension 0 (the feature dimension)
-@@ -266,8 +270,22 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
+@@ -269,8 +273,22 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
                       Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], n_embd_head * ggml_element_size(Qcur_full));
      cb(gate, "gate", il);
  
@@ -3959,7 +4000,7 @@ index 1bdfc3e3f..7927fae51 100644
  
      Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
      cb(Qcur, "Qcur_normed", il);
-@@ -298,6 +316,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
+@@ -301,6 +319,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
  
      // TODO: CUDA is missing non-contiguous unary ops. when implemented: remove this cont
      gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
@@ -3969,7 +4010,7 @@ index 1bdfc3e3f..7927fae51 100644
  
      gate = ggml_sigmoid(ctx0, gate);
      cb(gate, "gate_sigmoid", il);
-@@ -326,6 +347,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen3next::graph::build_qkvz
+@@ -329,6 +350,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen3next::graph::build_qkvz
          // optimized path
          ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input);
          qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
@@ -3980,7 +4021,7 @@ index 1bdfc3e3f..7927fae51 100644
          cb(qkv_mixed, "linear_attn_qkv_mixed", il);
  
          ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input);
-@@ -421,6 +446,10 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+@@ -424,6 +449,10 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
      // Reshape mixed_ba: [batch, seq_len, hidden_size] -> [batch, seq_len, num_k_heads, 2*num_v_heads/num_k_heads]
      int64_t       ba_new_dim        = 2 * num_v_heads / num_k_heads;
      ggml_tensor * mixed_ba_reshaped = ggml_reshape_4d(ctx0, mixed_ba, ba_new_dim, num_k_heads, n_seq_tokens, n_seqs);
@@ -3991,7 +4032,7 @@ index 1bdfc3e3f..7927fae51 100644
  
      // Split mixed_ba into b and a (beta and alpha parameters)
      int64_t split_sizes_ba[2] = {
-@@ -437,6 +466,16 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+@@ -440,6 +469,16 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
                                     split_sizes_ba[0] * ggml_element_size(mixed_ba_reshaped));
      cb(a, "a", il);
  
@@ -4008,7 +4049,7 @@ index 1bdfc3e3f..7927fae51 100644
      // TODO: CUDA is missing non-contiguous unary ops. when implemented: remove this cont
      b = ggml_cont(ctx0, b);
  
-@@ -444,6 +483,10 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+@@ -447,6 +486,10 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
  
      // Reshape a to merge head dimensions: [batch, seq_len, num_k_heads, num_v_heads/num_k_heads] -> [batch, seq_len, num_v_heads]
      ggml_tensor * alpha = ggml_cont_3d(ctx0, a, num_v_heads, n_seq_tokens, n_seqs);
@@ -4019,7 +4060,7 @@ index 1bdfc3e3f..7927fae51 100644
  
      ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
      ggml_tensor * alpha_softplus = ggml_softplus(ctx0, alpha_biased);
-@@ -454,6 +497,12 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+@@ -457,6 +500,12 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
  
      beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
      gate = ggml_reshape_4d(ctx0, gate, 1, num_v_heads, n_seq_tokens, n_seqs);
@@ -4032,7 +4073,7 @@ index 1bdfc3e3f..7927fae51 100644
  
      ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
      ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
-@@ -466,6 +515,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+@@ -469,6 +518,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
  
      ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
      state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
@@ -4042,7 +4083,7 @@ index 1bdfc3e3f..7927fae51 100644
      cb(state, "state_predelta", il);
  
      ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
-@@ -499,6 +551,14 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+@@ -502,6 +554,14 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
              nb1_qkv * n_seq_tokens,
              ggml_row_size(conv_qkv_mix->type, 2 * head_k_dim * num_k_heads));
  
@@ -4057,7 +4098,7 @@ index 1bdfc3e3f..7927fae51 100644
      cb(q_conv, "q_conv", il);
      cb(k_conv, "k_conv", il);
      cb(v_conv, "v_conv", il);
-@@ -522,18 +582,34 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+@@ -525,18 +585,34 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
          // repeat interleave: reshape to (repeat part, 1, remaining part...), do repeat, then reshape back
          ggml_tensor * q_reshaped = ggml_reshape_4d(ctx0, q_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
          ggml_tensor * k_reshaped = ggml_reshape_4d(ctx0, k_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
@@ -4092,7 +4133,7 @@ index 1bdfc3e3f..7927fae51 100644
      }
  
      cb(q_conv, "q_conv_predelta", il);
-@@ -544,12 +620,20 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+@@ -547,12 +623,20 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
  
      // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
      ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
@@ -4113,7 +4154,7 @@ index 1bdfc3e3f..7927fae51 100644
      cb(final_output, "final_output", il);
  
      // Output projection
-@@ -558,6 +642,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+@@ -561,6 +645,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
  
      // Reshape back to original dimensions
      cur = ggml_reshape_2d(ctx0, cur, n_embd, n_seq_tokens * n_seqs);
@@ -4123,7 +4164,7 @@ index 1bdfc3e3f..7927fae51 100644
  
      return cur;
  }
-@@ -704,14 +791,23 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
+@@ -707,14 +794,23 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
              ggml_element_size(Qcur_full) * n_embd_head * 2,
              ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
              0);
@@ -4147,7 +4188,7 @@ index 1bdfc3e3f..7927fae51 100644
  
      Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
              n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-@@ -737,9 +833,15 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
+@@ -740,9 +836,15 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
              ggml_element_size(Qcur_full) * n_embd_head * 2,
              ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
              ggml_element_size(Qcur_full) * n_embd_head);
@@ -4164,10 +4205,10 @@ index 1bdfc3e3f..7927fae51 100644
  
      cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, gate));
 diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
-index 7925db11c..69e2cdbca 100644
+index 9126631b9..3c7e2cd8b 100644
 --- a/src/models/qwen4exp.cpp
 +++ b/src/models/qwen4exp.cpp
-@@ -487,57 +487,33 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
+@@ -490,57 +490,33 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
  
  // QSA attends to a budget of whole blocks of compress_ratio tokens, plus the incomplete tail
  // one mean-pooled indexer key scores each block; set_input resolves the cache layout
@@ -4247,7 +4288,7 @@ index 7925db11c..69e2cdbca 100644
  
  ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
          const llama_memory_hybrid_idx_context * mctx_hyb,
-@@ -1045,31 +1021,16 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
+@@ -1048,31 +1024,16 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
  //   mixed_n = (t[p]*m[0]) ^ ... ^ (t[p-n+1]*m[n-1]);  row = mixed_n % vocab[h] + offset[h]
  // The hash runs host-side because ggml has no int64 and no xor. EOS resets the window.
  
@@ -4287,7 +4328,7 @@ index 7925db11c..69e2cdbca 100644
      const auto & hp = pmodel.hparams;
  
      // an image arrives as an embd batch, so ubatch->token is null, but every position still needs a row for ggml_get_rows
-@@ -1195,7 +1156,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
+@@ -1198,7 +1159,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
      const int64_t n_heads = hparams.ple_n_heads;
  
      // the attention cells see every ubatch regardless of the layer types
@@ -4297,7 +4338,7 @@ index 7925db11c..69e2cdbca 100644
  
      ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
 diff --git a/src/models/spark2-5.cpp b/src/models/spark2-5.cpp
-index 107448777..7eab7191d 100644
+index 02cb7d914..dd47cf866 100644
 --- a/src/models/spark2-5.cpp
 +++ b/src/models/spark2-5.cpp
 @@ -1,4 +1,5 @@
@@ -4306,7 +4347,7 @@ index 107448777..7eab7191d 100644
  
  void llama_model_spark2_5::load_arch_hparams(llama_model_loader & ml) {
      ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-@@ -101,8 +102,16 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -103,8 +104,16 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
          const int64_t n_tokens_i = cur->ne[1];
          cur = ggml_reshape_3d(ctx0, cur, n_embd_head, n_head_i, n_tokens_i);
          gate = ggml_reshape_3d(ctx0, gate, 1, n_head_i, n_tokens_i);
@@ -4374,7 +4415,7 @@ index 66e485666..7aea81aeb 100644
      return skippy_success(out_error);
  }
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 29024ed0c..cd0806c2b 100644
+index c2c2e5450..1fe72b2cc 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
 @@ -212,6 +212,12 @@ enum skippy_status skippy_session_begin_external_decode(
@@ -4420,10 +4461,10 @@ index f0cd2726c..539a9bdc7 100644
      params.embeddings = false;
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
 new file mode 100644
-index 000000000..b8a8a35f4
+index 000000000..9d484103c
 --- /dev/null
 +++ b/src/skippy/stage_program.cpp
-@@ -0,0 +1,850 @@
+@@ -0,0 +1,878 @@
 +#include "stage_program.h"
 +
 +#include "stage_program_inputs.h"
@@ -4458,6 +4499,49 @@ index 000000000..b8a8a35f4
 +#include "stage_program_internal.h"
 +
 +using namespace skippy_stage_program_detail;
++
++skippy_stage_program::replay_plan skippy_stage_program::build_replay_plan(bool token_input) const {
++    replay_plan plan;
++    std::unordered_set<std::string> live_operations;
++    for (const auto & operation : operations) {
++        if ((operation.flags & GGML_TENSOR_FLAG_COMPUTE) != 0 || operation.input_choice_branches != 0) {
++            live_operations.insert(operation.value_id);
++        }
++    }
++    for (const auto & exported : activation_exports) live_operations.insert(exported);
++    const auto selected_choice_value = [&](const std::string & value_id) {
++        for (const auto & choice : input_choices) {
++            if (choice.value_id == value_id) {
++                return choice.alternatives[token_input ? 0 : 1];
++            }
++        }
++        return value_id;
++    };
++    for (auto operation = operations.rbegin(); operation != operations.rend(); ++operation) {
++        if (live_operations.count(operation->value_id) == 0) continue;
++        for (const auto & source_id : operation->sources) {
++            if (!source_id.empty()) live_operations.insert(selected_choice_value(source_id));
++        }
++    }
++    plan.operation_indexes.reserve(live_operations.size());
++    for (size_t index = 0; index < operations.size(); ++index) {
++        if (live_operations.count(operations[index].value_id) != 0) {
++            plan.operation_indexes.push_back(static_cast<uint32_t>(index));
++        }
++    }
++    // Every value the replay map can hold: bound roots, the input values each
++    // recipe binds, one entry per operation, and the input-choice aliases.
++    uint64_t capacity = roots.size() + operations.size() + input_choices.size() + 16;
++    for (const auto & input : inputs) capacity += input.values.size();
++    plan.value_capacity = static_cast<uint32_t>(capacity);
++    return plan;
++}
++
++void skippy_stage_program::prepare_replay_plans() {
++    replay_plans[0] = build_replay_plan(true);
++    replay_plans[1] = build_replay_plan(false);
++    replay_plans_prepared = true;
++}
 +
 +bool skippy_stage_program::instantiate(
 +        const llama_model & model,
@@ -5150,29 +5234,14 @@ index 000000000..b8a8a35f4
 +        }
 +    };
 +    bind_input_choices();
-+    std::unordered_set<std::string> live_operations;
-+    for (const auto & operation : operations) {
-+        if ((operation.flags & GGML_TENSOR_FLAG_COMPUTE) != 0 || operation.input_choice_branches != 0) {
-+            live_operations.insert(operation.value_id);
-+        }
-+    }
-+    for (const auto & exported : activation_exports) live_operations.insert(exported);
-+    const auto selected_choice_value = [&](const std::string & value_id) {
-+        for (const auto & choice : input_choices) {
-+            if (choice.value_id == value_id) {
-+                return choice.alternatives[token_input ? 0 : 1];
-+            }
-+        }
-+        return value_id;
-+    };
-+    for (auto operation = operations.rbegin(); operation != operations.rend(); ++operation) {
-+        if (live_operations.count(operation->value_id) == 0) continue;
-+        for (const auto & source_id : operation->sources) {
-+            if (!source_id.empty()) live_operations.insert(selected_choice_value(source_id));
-+        }
-+    }
-+    for (const auto & operation : operations) {
-+        if (live_operations.count(operation.value_id) == 0) continue;
++    // The replay plan only depends on the captured program and the selected
++    // input branch, so it was derived once at extraction/installation. A
++    // program assembled without extraction falls back to the same derivation.
++    const replay_plan fallback_plan = replay_plans_prepared ? replay_plan() : build_replay_plan(token_input);
++    const replay_plan & plan = replay_plans_prepared ? replay_plans[token_input ? 0 : 1] : fallback_plan;
++    values.reserve(plan.value_capacity);
++    for (const uint32_t index : plan.operation_indexes) {
++        const operation & operation = operations[index];
 +        std::array<ggml_tensor *, GGML_MAX_SRC> sources = {};
 +        for (int source = 0; source < GGML_MAX_SRC; ++source) {
 +            if (operation.sources[source].empty()) continue;
@@ -5276,16 +5345,17 @@ index 000000000..b8a8a35f4
 +#endif
 diff --git a/src/skippy/stage_program.h b/src/skippy/stage_program.h
 new file mode 100644
-index 000000000..16a96c117
+index 000000000..b6902afd2
 --- /dev/null
 +++ b/src/skippy/stage_program.h
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,326 @@
 +#pragma once
 +
 +#include "graph_identity.h"
 +#include "stage_program_outputs.h"
 +
 +#include <array>
++#include <atomic>
 +#include <cstdint>
 +#include <string>
 +#include <vector>
@@ -5507,6 +5577,21 @@ index 000000000..16a96c117
 +    std::vector<int32_t> activation_export_token_axes;
 +    skippy_stage_program_outputs outputs;
 +
++    // Everything replay derives from the captured program alone: the ordered
++    // operations it builds and how many values its map holds. This is a pure
++    // function of (program, selected input branch), so it is computed once when
++    // the program is extracted or installed instead of on every graph build.
++    // Index 0 is the token branch, index 1 the embedding branch.
++    struct replay_plan {
++        std::vector<uint32_t> operation_indexes;
++        uint32_t value_capacity = 0;
++    };
++
++    replay_plan build_replay_plan(bool token_input) const;
++    void prepare_replay_plans();
++    std::array<replay_plan, 2> replay_plans = {};
++    bool replay_plans_prepared = false;
++
 +    bool instantiate(
 +            const llama_model & model,
 +            const llm_graph_params & params,
@@ -5525,6 +5610,12 @@ index 000000000..16a96c117
 +    std::vector<skippy_stage_program> alternatives;
 +    bool installed = false;
 +    bool capturing = false;
++    // Production replay accounting. Counted on every graph build and reported
++    // only when SKIPPY_GRAPH_TRACE is enabled, so a field deployment can prove
++    // the captured program is reused without a telemetry sink or a test build.
++    mutable std::atomic<uint64_t> replays = 0;
++    mutable std::atomic<uint64_t> domain_probe_misses = 0;
++    mutable std::atomic<uint64_t> alternative_hits = 0;
 +
 +    bool instantiate(
 +            const llama_model & runtime_model,
@@ -5586,10 +5677,10 @@ index 000000000..16a96c117
 +#endif
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
 new file mode 100644
-index 000000000..79fd5f6d2
+index 000000000..4e89b911b
 --- /dev/null
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -0,0 +1,699 @@
+@@ -0,0 +1,705 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -6285,9 +6376,15 @@ index 000000000..79fd5f6d2
 +        error = "stage program activation import token-axis contract is incomplete";
 +        return false;
 +    }
-+    return stage_program_extraction_detail::extraction(model, result, selection, n_tokens, n_sequences, n_outputs, graph_type,
++    if (!stage_program_extraction_detail::extraction(model, result, selection, n_tokens, n_sequences, n_outputs, graph_type,
 +            activation_import_token_axes,
-+            program, error, reference).run();
++            program, error, reference).run()) {
++        return false;
++    }
++    // The replay plan is a pure function of the captured program, so derive it
++    // here rather than on every graph build.
++    program.prepare_replay_plans();
++    return true;
 +}
 diff --git a/src/skippy/stage_program_extraction_internal.h b/src/skippy/stage_program_extraction_internal.h
 new file mode 100644
@@ -7572,10 +7669,10 @@ index 000000000..a369823ef
 +};
 diff --git a/src/skippy/stage_program_installation.cpp b/src/skippy/stage_program_installation.cpp
 new file mode 100644
-index 000000000..3a6aef254
+index 000000000..97400d7e5
 --- /dev/null
 +++ b/src/skippy/stage_program_installation.cpp
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,139 @@
 +#include "stage_program.h"
 +
 +#include "llama-graph.h"
@@ -7699,15 +7796,19 @@ index 000000000..3a6aef254
 +    // Probe with no description so a rejected candidate costs no string work,
 +    // then compose the diagnostic once every candidate has been rejected.
 +    if (program.matches_control_flow_domain(params, nullptr)) {
++        replays.fetch_add(1, std::memory_order_relaxed);
 +        return program.instantiate(runtime_model, params, error);
 +    }
 +    const skippy_stage_program * rejected = &program;
 +    for (const auto & alternative : alternatives) {
 +        if (alternative.matches_control_flow_domain(params, nullptr)) {
++            replays.fetch_add(1, std::memory_order_relaxed);
++            alternative_hits.fetch_add(1, std::memory_order_relaxed);
 +            return alternative.instantiate(runtime_model, params, error);
 +        }
 +        rejected = &alternative;
 +    }
++    domain_probe_misses.fetch_add(1, std::memory_order_relaxed);
 +    rejected->matches_control_flow_domain(params, &error);
 +    return false;
 +}
@@ -9948,7 +10049,7 @@ index e2ec9e4a6..0d4d602fa 100644
      config.n_gpu_layers = 0;
      config.n_threads = config.n_threads_batch = 1;
      config.flash_attn_type = 0;
-@@ -128,35 +140,106 @@ static int run(const char * path, bool integrated) {
+@@ -128,35 +139,106 @@ static int run(const char * path, bool integrated) {
          if (found == runtime->model->tensors_by_name.end() || found->second == nullptr ||
                  (found->second->data == nullptr && found->second->buffer == nullptr)) return 13;
      }
@@ -10101,7 +10202,7 @@ index e2ec9e4a6..0d4d602fa 100644
      return result;
  }
 diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
-index 92b0271ce..7124b3a1a 100644
+index 92b0271ce..c1cc42e99 100644
 --- a/src/skippy/tests/renamed_multishard_planning.cpp
 +++ b/src/skippy/tests/renamed_multishard_planning.cpp
 @@ -1,10 +1,17 @@
@@ -10835,34 +10936,35 @@ index 000000000..f73ab0b34
 +
 +};
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index b5afa3e48..81da0f960 100644
+index 3a588b682..57313f4e3 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -981,6 +981,8 @@ int main(int argc, char ** argv) {
-     size_t seed = rd();
+@@ -1082,6 +1082,8 @@ int main(int argc, char ** argv) {
      std::string out;
+     const char * target_backend = nullptr;
      bool deepseek4_mtp = false;
 +    bool dense_mtp = false;
 +    uint32_t dense_mtp_depth = 1;
-     uint32_t contract_mtp = 0;
      bool text_only = false;
      std::string mtp_model;
-@@ -1000,6 +1002,10 @@ int main(int argc, char ** argv) {
-         if (strcmp(argv[i], "--text-only") == 0) {
+     uint32_t contract_layers = 0, contract_width = 0, contract_mtp_layers = 0;
+@@ -1095,6 +1097,10 @@ int main(int argc, char ** argv) {
+             contract_mtp_layers = std::stoul(argv[++i]);
+         } else if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
              text_only = true;
-         }
-+        if (strcmp(argv[i], "--dense-mtp") == 0) dense_mtp = true;
-+        if (strcmp(argv[i], "--dense-mtp-depth") == 0 && i + 1 < argc) {
++        } else if (strcmp(argv[i], "--dense-mtp") == 0) {
++            dense_mtp = true;
++        } else if (strcmp(argv[i], "--dense-mtp-depth") == 0 && i + 1 < argc) {
 +            dense_mtp_depth = std::stoul(argv[++i]);
-+        }
-         if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
+         } else if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
              deepseek4_mtp = true;
-         }
-@@ -1058,6 +1064,37 @@ int main(int argc, char ** argv) {
+         } else if (strcmp(argv[i], "--test-mtp-model") == 0 && i + 1 < argc) {
+@@ -1182,6 +1188,39 @@ int main(int argc, char ** argv) {
          if (!mtp_model.empty()) {
              return test_deepseek4_mtp(mtp_model);
          }
 +        if (dense_mtp) {
++            const llm_arch arch = arch_from_filter(arch_filter);
 +            if (out.empty() || arch == LLM_ARCH_UNKNOWN) throw std::runtime_error("--dense-mtp requires architecture and output");
 +            if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
 +            auto gguf = get_gguf_ctx(arch,
@@ -10881,7 +10983,8 @@ index b5afa3e48..81da0f960 100644
 +            auto params = llama_model_default_params();
 +            params.n_gpu_layers = 0;
 +            params.load_mtp = true;
-+            llama_model_ptr model(llama_model_init_from_user(gguf.get(), set_tensor_data, &seed, params));
++            tensor_data_params tensor_params = { seed, 0.1f };
++            llama_model_ptr model(llama_model_init_from_user(gguf.get(), set_tensor_data, &tensor_params, params));
 +            if (!model || model->hparams.n_layer_nextn != dense_mtp_depth) throw std::runtime_error("failed to generate dense MTP fixture");
 +            const std::string path = out + "/dense-mtp.gguf";
 +            llama_model_saver saver(model.get());
@@ -10894,8 +10997,8 @@ index b5afa3e48..81da0f960 100644
 +            return 0;
 +        }
          if (deepseek4_mtp) {
+             const llm_arch arch = arch_from_filter(arch_filter);
              if (arch != LLM_ARCH_DEEPSEEK4 || out.empty()) {
-                 throw std::runtime_error("--deepseek4-mtp requires -a deepseek4 and -o directory");
 -- 
 2.54.0 (Apple Git-157)
 

@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 mod routing_telemetry;
 mod startup;
 
-pub use startup::detect_vram_bytes_capped;
+pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
 use startup::{
@@ -114,6 +114,8 @@ pub struct Node {
     pub(crate) vram_bytes: u64,
     /// Local fit budget, which may additionally include CPU offload memory.
     pub(crate) local_runtime_capacity_bytes: u64,
+    /// What `gpu.host_ram_offload = true` would add to the local fit budget.
+    pub(crate) host_ram_offload_gain_bytes: u64,
     pub(crate) peer_change_tx: watch::Sender<usize>,
     pub peer_change_rx: watch::Receiver<usize>,
     pub(crate) inflight_requests: Arc<std::sync::atomic::AtomicUsize>,
@@ -172,6 +174,8 @@ pub struct Node {
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    #[cfg(feature = "payments")]
+    pub(crate) payments: crate::network::payments::PaymentsSlot,
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
@@ -837,6 +841,7 @@ impl Node {
             )),
             vram_bytes: hardware.vram_bytes,
             local_runtime_capacity_bytes: hardware.local_runtime_capacity_bytes,
+            host_ram_offload_gain_bytes: hardware.host_ram_offload_gain_bytes,
             peer_change_tx,
             peer_change_rx,
             inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -883,6 +888,8 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
             },
+            #[cfg(feature = "payments")]
+            payments: Arc::new(tokio::sync::OnceCell::new()),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &activity_policy_config,
             ),
@@ -906,10 +913,7 @@ impl Node {
 
         // Accept loop starts but waits for start_accepting() before processing connections.
         // This lets a node exist before it is ready to accept mesh traffic.
-        let node2 = node.clone();
-        tokio::spawn(async move {
-            node2.accept_loop().await;
-        });
+        node.spawn_accept_loop();
 
         Ok((
             node,
@@ -919,6 +923,13 @@ impl Node {
                 stage: stage_transport_rx,
             },
         ))
+    }
+
+    fn spawn_accept_loop(&self) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            node.accept_loop().await;
+        });
     }
 
     #[cfg(test)]
@@ -1008,6 +1019,7 @@ impl Node {
             )),
             vram_bytes: 0,
             local_runtime_capacity_bytes: 0,
+            host_ram_offload_gain_bytes: 0,
             advertised_memory: AdvertisedMemory::default(),
             peer_change_tx,
             peer_change_rx,
@@ -1056,6 +1068,8 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)
             },
+            #[cfg(feature = "payments")]
+            payments: Arc::new(tokio::sync::OnceCell::new()),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &mesh_llm_config::RuntimeActivityConfig::default(),
             ),

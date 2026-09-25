@@ -105,6 +105,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "gpu.host_ram_offload",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "mesh_requirements.min_node_version",
         status: WiringStatus::Wired,
         owner: "n/a",

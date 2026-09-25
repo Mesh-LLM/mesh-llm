@@ -1,4 +1,4 @@
-From a88f8a7e71b9f3920378dc25633818af6ecb900c Mon Sep 17 00:00:00 2001
+From d6a7e6e15f9e85e4dcc27faaf85e681e43cc76a7 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Tue, 22 Sep 2026 16:13:09 +1000
 Subject: [PATCH] fix(skippy): admit raw embedding graph execution profiles
@@ -17,10 +17,10 @@ Subject: [PATCH] fix(skippy): admit raw embedding graph execution profiles
  create mode 100644 src/skippy/tests/embedding_input_regression.h
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 57cacad5a..50ad90b77 100644
+index 44e8cb7ad..29979b063 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2571,14 +2571,14 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
+@@ -2611,14 +2611,14 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
      return true;
  }
  
@@ -43,7 +43,7 @@ index 57cacad5a..50ad90b77 100644
      LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
      GGML_ASSERT(n_outputs >= 1);
  
-@@ -2605,6 +2605,13 @@ ggml_cgraph * llama_context::graph_reserve(
+@@ -2645,6 +2645,13 @@ ggml_cgraph * llama_context::graph_reserve(
  
      llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
      llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
@@ -58,10 +58,10 @@ index 57cacad5a..50ad90b77 100644
      ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
  
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 108b53a02..4b4128f22 100644
+index b07fc4f2c..fe26b966b 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -280,9 +280,14 @@ public:
+@@ -286,9 +286,14 @@ public:
      ggml_status graph_compute(ggml_cgraph * gf, bool batched);
  
      // reserve a graph with a dummy ubatch of the specified size

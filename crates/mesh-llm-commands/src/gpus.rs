@@ -49,7 +49,7 @@ fn map_gpu_backend(backend: GpuBenchmarkBackend) -> &'static str {
 pub fn run_gpus(json_output: bool, config_path: Option<&Path>) -> Result<()> {
     let mut hw = hardware::survey();
     attach_cached_bandwidth(&mut hw);
-    let margin = configured_safety_margin(config_path);
+    let margin = configured_fit_settings(config_path);
 
     if json_output {
         return print_json(gpus_json(&hw, &margin));
@@ -61,26 +61,35 @@ pub fn run_gpus(json_output: bool, config_path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// The safety margin the local fit withholds, and where its value came from.
+/// The local fit settings this command reports against: the safety margin
+/// the fit withholds and where its value came from, and whether the owner
+/// opted into host-RAM offload.
 ///
 /// `gpus` runs on hosts that have never been configured, so an unreadable or
-/// absent config is not an error here: the built-in margin applies and the
+/// absent config is not an error here: the built-in defaults apply and the
 /// output says so, rather than the command failing over a file it only needs
-/// one number from.
-struct SafetyMargin {
+/// two values from.
+struct FitSettings {
     bytes: u64,
     configured: bool,
+    host_ram_offload: bool,
 }
 
-fn configured_safety_margin(config_path: Option<&Path>) -> SafetyMargin {
-    let safety_margin_gb = mesh_llm_config::load_config(config_path)
-        .ok()
-        .and_then(|config| config.defaults)
-        .and_then(|defaults| defaults.hardware)
+fn configured_fit_settings(config_path: Option<&Path>) -> FitSettings {
+    let config = mesh_llm_config::load_config(config_path).ok();
+    let safety_margin_gb = config
+        .as_ref()
+        .and_then(|config| config.defaults.as_ref())
+        .and_then(|defaults| defaults.hardware.as_ref())
         .and_then(|hardware| hardware.safety_margin_gb);
-    SafetyMargin {
+    let host_ram_offload = config
+        .as_ref()
+        .and_then(|config| config.gpu.host_ram_offload)
+        .unwrap_or(false);
+    FitSettings {
         bytes: capacity::safety_margin_bytes(safety_margin_gb),
         configured: safety_margin_gb.is_some(),
+        host_ram_offload,
     }
 }
 
@@ -88,8 +97,8 @@ fn configured_safety_margin(config_path: Option<&Path>) -> SafetyMargin {
 ///
 /// The `--max-vram` ceiling belongs to `serve`, so it is not applied here; the
 /// figures are what an uncapped node would advertise from this survey.
-fn advertised_memory(hw: &HardwareSurvey, margin: &SafetyMargin) -> AdvertisedMemory {
-    capacity::advertised_memory(hw, None, margin.bytes)
+fn advertised_memory(hw: &HardwareSurvey, margin: &FitSettings) -> AdvertisedMemory {
+    capacity::advertised_memory(hw, None, margin.bytes, margin.host_ram_offload)
 }
 
 fn run_gpu_benchmark(json_output: bool) -> Result<()> {
@@ -135,7 +144,7 @@ fn run_gpu_benchmark(json_output: bool) -> Result<()> {
     Ok(())
 }
 
-fn gpus_json(hw: &HardwareSurvey, margin: &SafetyMargin) -> Value {
+fn gpus_json(hw: &HardwareSurvey, margin: &FitSettings) -> Value {
     json!({
         "gpu_count": hw.gpus.len(),
         "gpus": hw.gpus.iter().map(gpu_json).collect::<Vec<_>>(),
@@ -143,7 +152,7 @@ fn gpus_json(hw: &HardwareSurvey, margin: &SafetyMargin) -> Value {
     })
 }
 
-fn advertised_memory_json(hw: &HardwareSurvey, margin: &SafetyMargin) -> Value {
+fn advertised_memory_json(hw: &HardwareSurvey, margin: &FitSettings) -> Value {
     let memory = advertised_memory(hw, margin);
     json!({
         "total_bytes": memory.total_bytes,
@@ -154,6 +163,7 @@ fn advertised_memory_json(hw: &HardwareSurvey, margin: &SafetyMargin) -> Value {
         "usable_bytes": memory.usable_bytes,
         "system_ram_bytes": memory.system_ram_bytes,
         "ram_offload_bytes": memory.ram_offload_bytes,
+        "host_ram_offload": margin.host_ram_offload,
     })
 }
 
@@ -275,7 +285,7 @@ fn attach_cached_bandwidth(hw: &mut HardwareSurvey) {
     }
 }
 
-fn format_gpus(hw: &HardwareSurvey, margin: &SafetyMargin) -> String {
+fn format_gpus(hw: &HardwareSurvey, margin: &FitSettings) -> String {
     if hw.gpus.is_empty() {
         return "⚠️ No runtime-selectable GPUs reported by the embedded inference backend. This node will run CPU-only until the backend exposes a selectable device.".to_string();
     }
@@ -286,7 +296,7 @@ fn format_gpus(hw: &HardwareSurvey, margin: &SafetyMargin) -> String {
 
 /// Explains the single number a node announces: what it starts from, what each
 /// party withholds, and what is left for the mesh to place work in.
-fn format_advertised_memory(hw: &HardwareSurvey, margin: &SafetyMargin) -> String {
+fn format_advertised_memory(hw: &HardwareSurvey, margin: &FitSettings) -> String {
     let memory = advertised_memory(hw, margin);
     let margin_source = if margin.configured {
         "configured"
@@ -328,10 +338,20 @@ fn format_advertised_memory(hw: &HardwareSurvey, margin: &SafetyMargin) -> Strin
     if let Some(system_ram_bytes) = memory.system_ram_bytes {
         lines.push(format!("  System RAM: {}", format_bytes(system_ram_bytes)));
     }
-    lines.push(format!(
-        "  RAM-backed local budget: {} (local fit only, never advertised)",
-        format_bytes(memory.ram_offload_bytes)
-    ));
+    if memory.total_bytes > 0 && !margin.host_ram_offload {
+        // An accelerator host that did not opt in plans on its device memory
+        // only; say what the setting would add rather than printing a zero.
+        let available = capacity::advertised_memory(hw, None, margin.bytes, true);
+        lines.push(format!(
+            "  Host RAM offload: off ({} more for the local fit with `gpu.host_ram_offload = true`, never advertised)",
+            format_bytes(available.ram_offload_bytes)
+        ));
+    } else {
+        lines.push(format!(
+            "  RAM-backed local budget: {} (local fit only, never advertised)",
+            format_bytes(memory.ram_offload_bytes)
+        ));
+    }
     if memory.usable_bytes > 0 {
         lines.push(
             "  A `serve --max-vram` ceiling would lower the usable share further.".to_string(),
@@ -402,10 +422,11 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn built_in_margin() -> SafetyMargin {
-        SafetyMargin {
+    fn built_in_margin() -> FitSettings {
+        FitSettings {
             bytes: capacity::safety_margin_bytes(None),
             configured: false,
+            host_ram_offload: false,
         }
     }
 
@@ -452,9 +473,22 @@ mod tests {
         assert!(output.contains("  Configured reserve: 2.1 GB (built-in default)"));
         assert!(output.contains("  Usable for mesh placement: 9.4 GB"));
         assert!(output.contains("  System RAM: 32.0 GB"));
-        assert!(output.contains("  RAM-backed local budget: 18.0 GB"));
+        // Off by default: the local fit stays on the device, and the output
+        // says what the setting would add.
+        assert!(output.contains(
+            "  Host RAM offload: off (18.0 GB more for the local fit with `gpu.host_ram_offload = true`, never advertised)"
+        ));
+        assert!(!output.contains("RAM-backed local budget"));
         // A discrete GPU keeps nothing back by platform policy.
         assert!(!output.contains("Platform reserve"));
+
+        let opted_in = FitSettings {
+            host_ram_offload: true,
+            ..built_in_margin()
+        };
+        let output = format_gpus(&hw, &opted_in);
+        assert!(output.contains("  RAM-backed local budget: 18.0 GB"));
+        assert!(output.contains("  Usable for mesh placement: 9.4 GB"));
     }
 
     #[test]
@@ -488,9 +522,10 @@ mod tests {
             gpus: vec![sample_gpu(0)],
             ..HardwareSurvey::default()
         };
-        let configured = SafetyMargin {
+        let configured = FitSettings {
             bytes: capacity::safety_margin_bytes(Some(4.0)),
             configured: true,
+            host_ram_offload: false,
         };
 
         let output = format_gpus(&hw, &configured);
@@ -538,8 +573,17 @@ mod tests {
         assert_eq!(memory["reserved_bytes"], json!(500_000_000u64));
         assert_eq!(memory["platform_reserve_bytes"], json!(0));
         assert_eq!(memory["system_ram_bytes"], json!(32_000_000_000u64));
-        assert_eq!(memory["ram_offload_bytes"], json!(18_000_000_000u64));
+        assert_eq!(memory["ram_offload_bytes"], json!(0));
+        assert_eq!(memory["host_ram_offload"], json!(false));
         assert_eq!(memory["configured_reserve_source"], json!("built-in"));
+        let opted_in = FitSettings {
+            host_ram_offload: true,
+            ..built_in_margin()
+        };
+        let opted_in = &gpus_json(&hw, &opted_in)["advertised_memory"];
+        assert_eq!(opted_in["ram_offload_bytes"], json!(18_000_000_000u64));
+        assert_eq!(opted_in["host_ram_offload"], json!(true));
+        assert_eq!(opted_in["usable_bytes"], memory["usable_bytes"]);
         // The itemized shares account for the whole total, as the announcement
         // invariant requires.
         let sum = memory["reserved_bytes"].as_u64().unwrap()
@@ -563,7 +607,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_config_falls_back_to_the_built_in_margin() {
-        let margin = configured_safety_margin(Some(Path::new(
+        let margin = configured_fit_settings(Some(Path::new(
             "/nonexistent/mesh-llm/config-that-is-not-there.toml",
         )));
 
@@ -631,6 +675,7 @@ mod tests {
                     "usable_bytes": 0,
                     "system_ram_bytes": Value::Null,
                     "ram_offload_bytes": 0,
+                    "host_ram_offload": false,
                 },
             })
         );

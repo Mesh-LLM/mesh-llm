@@ -134,6 +134,24 @@ class FamilyEvidenceTests(unittest.TestCase):
         path.write_text(json.dumps(preflight, indent=2) + '\n' + json.dumps(certification) + '\n')
         E.validate_results(path, 'dense', self.plan['selected_models'][0])
 
+    def test_global_battery_preflight_is_validated_separately(self):
+        path = self.evidence / 'dense/results.jsonl'
+        certification = path.read_text()
+        battery = {'family': 'battery', 'exit_code': 0, 'model_id': 'environment',
+                   'outcomes': [{'name': 'environment-preflight', 'status': 'pass',
+                                 'outcome': 'pass', 'exit_code': 0}]}
+        path.write_text(json.dumps(battery) + '\n' + certification)
+        E.validate_results(path, 'dense', self.plan['selected_models'][0])
+        battery['outcomes'][0]['status'] = 'fail'
+        path.write_text(json.dumps(battery) + '\n' + certification)
+        with self.assertRaisesRegex(ValueError, 'global battery preflight incomplete'):
+            E.validate_results(path, 'dense', self.plan['selected_models'][0])
+        battery['family'] = 'foreign'
+        battery['outcomes'][0]['status'] = 'pass'
+        path.write_text(json.dumps(battery) + '\n' + certification)
+        with self.assertRaisesRegex(ValueError, 'foreign'):
+            E.validate_results(path, 'dense', self.plan['selected_models'][0])
+
     def rerun_receipt(self, family='dense', outcome='success', attempt='3'):
         previous = self.evidence / f'{family}-previous'
         shutil.copytree(self.evidence / family, previous)
@@ -432,6 +450,20 @@ class FamilyEvidenceTests(unittest.TestCase):
         self.assertEqual((checkout / 'candidate.txt').read_text(), 'candidate bytes\n')
         self.assertEqual(E.git(checkout, 'status', '--porcelain', '--untracked-files=no'), '')
 
+    def test_rerun_binds_verifier_to_producer_branch_from_identity(self):
+        checkout = self.changed_candidate()
+        env = dict(CANARY_SOURCE_ROOT=str(checkout), CANARY_MESH_SOURCE='',
+                   CANARY_HARNESS_MODE='verify-build', CANARY_PASS_ID='verify-1',
+                   CANARY_PREVIOUS_PACKAGE=str(self.package), CANARY_PREVIOUS_IDENTITY=self.digest,
+                   CANARY_CANDIDATE_SHA=self.identity['candidate'], GITHUB_RUN_ATTEMPT='3')
+        with patch.dict(os.environ, env), patch.object(E, 'preflight_battery'), \
+                patch.object(E, 'git', return_value=self.identity['base']), \
+                patch.object(E.subprocess, 'run') as run:
+            E.build(SimpleNamespace())
+        wrapper_env = run.call_args.kwargs['env']
+        self.assertEqual(wrapper_env['CANARY_CANDIDATE_BRANCH'], self.identity['branch'])
+        self.assertNotIn('-3-', wrapper_env['CANARY_CANDIDATE_BRANCH'])
+
     def test_candidate_cannot_replace_trusted_worker_code(self):
         checkout = self.changed_candidate(protected=True)
         with self.assertRaisesRegex(ValueError, 'trusted orchestration'):
@@ -491,6 +523,12 @@ class WorkflowRerunContractTests(unittest.TestCase):
     def test_artifact_selection_is_bound_to_producer_across_attempts(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
         jobs = workflow['jobs']
+        package_output = jobs['build']['outputs']['package']
+        package_upload = next(step for step in jobs['build']['steps']
+                              if step.get('name') == 'Upload exact candidate and executable handoff')['with']['name']
+        self.assertEqual(package_output, package_upload)
+        self.assertIn('${{ github.run_attempt }}', package_output)
+        self.assertIn('${{ steps.build.outputs.identity_sha256 }}', package_output)
         upload = next(step for step in jobs['family']['steps'] if step.get('name') == 'Upload family evidence')
         download = next(step for step in jobs['aggregate']['steps'] if 'pattern' in step.get('with', {}))
         name = upload['with']['name']

@@ -5,6 +5,12 @@ This is the checked-in implementation. Normative rules live in
 `.agents/skills/manage-ci/references/current-inventory.md`; the design record
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
+The affected-crate fallback roster in `scripts/affected-crates.sh` includes
+`mesh-llm-wallet` and `mesh-wallet-lexe` alongside `mesh-llm-payments`;
+`just ci-crate-lists` checks it against workspace membership. The publish
+chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
+`mesh-wallet-lexe` and `mesh-llm-payments`, including optional dependencies.
+
 ## Entry points
 
 | Workflow | Trigger | Role |
@@ -150,9 +156,10 @@ mount fails with its actual path; the workflow never creates or seeds a model
 cache. Existing `HF_TOKEN`/`HF_TOKEN_PATH` configuration is preserved, with tokens
 masked before export. `HF_HUB_OFFLINE=1` is applied as certification policy rather
 than required in the machine environment. Compiler-cache and local-tool defaults
-use the runner account's home directory instead of a fixed username. One service
-per physical certification machine avoids competing model loads and ports.
-There is no Actions model cache and no worker-side compilation or download.
+use the runner account's home directory instead of a fixed username. Runner
+services sharing a physical certification machine serialize model loads and
+ports through the per-account host lock. There is no Actions model cache and no
+worker-side compilation or download.
 
 The aggregate requires every planned family exactly once, successful worker
 status, matching candidate/plan/build digests, and each family's required
@@ -1195,6 +1202,56 @@ acquisition after extraction: retain its existing split-serving rule on main,
 with model-download ownership on the relocated path. That conservatively runs
 both domains until the later catalog cleanup; existing main routing is unchanged.
 
+### Protected executor compatibility for the product extraction
+
+The protected executor workflows pin both resolver actions to commit
+`38d63b2f6e27998034fdf0452150c7cc081fe921`, so older PR source checkouts do not need
+the new helper files. The package resolver loads its Python implementation
+from that same pinned action checkout and inspects the candidate only through
+Cargo metadata in the existing executor trust context.
+
+`resolve-source-layout` resolves the checked-out console, website and SDK
+source directories from the two supported layouts. Missing or ambiguous
+components fail before producer/consumer work. UI build, artifact upload,
+platform host restore, SDK restore and release checksum verification use the
+same resolved directory; native ABI cache recipes include both native source
+locations. Workspace CI script entrypoints remain at `scripts/`.
+
+The protected planner still uses its own Cargo metadata and byte-identical
+catalogs. `scripts/ci-cargo-packages.py` runs only in candidate executors and
+translates a pre-extraction batch to its fixed successor owners when the
+protected executor declares `--generation legacy` and the candidate contains
+the extracted package builder. Explicit generation disambiguates the reused
+package name even in a one-package plan. Matrix executors must switch to
+`--generation current` in the same commit that migrates the protected workspace
+package names; the fixed platform owner requests remain legacy selectors. It checks
+successors against candidate Cargo workspace metadata, rejects unknown/missing
+owners and preserves new-plan batches unchanged. The frozen old/new workspace
+censuses verify all 75 extracted members have exactly one predecessor batch,
+including the reused `skippy-model-package` name. This adds no matrix workers,
+runner authority, permissions, catalog exception or skipped checks. Remove the
+migration map only after protected main and all in-flight sources use the new
+package names.
+
+The SafeTensors smoke selects its exact ignored test from the host or extracted
+adapter, asserts its presence, compiles once and retains the complete immutable
+checkpoint/quantization sweep. Platform unit rows use the same source-owner
+translation. Candidate workflow tests and local checks validate compatibility;
+protected PR runs alone cannot certify a workflow definition that has not yet
+landed on main.
+
+Node addon release producers also resolve `sdk` or `mesh/sdk` before version
+checks, native builds, npm pack and immutable artifact staging on Linux, macOS
+and Windows. Executable fixtures cover all three producers in both layouts.
+
+Legacy change-detection entrypoints and Windows cache triggers recognize both
+product layouts. Nightly and explicit-revision canary pin readers accept exactly
+one legacy or relocated pin, rejecting missing and ambiguous source trees.
+
+Release version propagation discovers both relocated crate trees, including
+versioned local dependencies. The compiler seed warmer uses the resolved UI
+placeholder directory. Neither change expands runner or cache authority.
+
 ### Canary memory admission and Python SDK
 
 The controller projects each immutable source plan onto `family-certify` plus
@@ -1202,6 +1259,10 @@ The controller projects each immutable source plan onto `family-certify` plus
 (230.4 GiB), reserving 10% of physical RAM. The source plan and its digest are
 unchanged, including historical `mesh_ref` certification. Missing artifact sizes
 and peaks beyond the larger tier fail planning. No family is silently skipped.
+An optional source-owned `minimum_runner_memory_gib` value of 128 or 256 may
+promote an estimate-selected row but cannot demote it; plans without the field
+remain estimate-only. GLM-4.5-Air, Qwen4exp and Llama4 currently require the
+256-plus tier through this policy.
 
 `scripts/lib/canary_family_memory.py` uses the greater of pinned file sizes and
 the model estimate, including projector/draft artifacts. Causal parity releases
@@ -1212,15 +1273,18 @@ execution budgets two complete weight copies plus 25% and 2 GiB per process.
 These are explicit admission estimates for the current short-context harness,
 not measured peak guarantees; changes to concurrency/context require review.
 
-The worker recomputes placement from the digest-verified plan, holds one local
-per-account host lock, checks actual physical capacity and available memory,
-and polls availability once per second while running the battery. Available
-memory is macOS free + inactive + speculative pages; purgeable pages are not
-counted twice. A reserve violation or monitoring failure stops only this
-family's process group and fails certification. `memory-admission.json` retains
-the estimate and host observations even on failure. Sampling cannot guarantee
-that instantaneous allocations never cross the reserve. Unrelated workloads
-must leave enough headroom at admission; labels alone are insufficient.
+The worker recomputes placement from the digest-verified plan, waits for one
+local per-account host lock, checks actual physical capacity and available
+memory, and polls availability once per second while running the battery.
+Expected contention between runner services on one machine is serialized rather
+than reported as a family failure; the evidence records whether and how long the
+worker waited. Available memory is macOS free + inactive + speculative pages;
+purgeable pages are not counted twice. A reserve violation or monitoring failure
+stops only this family's process group and fails certification.
+`memory-admission.json` retains the estimate and host observations even on
+failure. Sampling cannot guarantee that instantaneous allocations never cross
+the reserve. Unrelated workloads must leave enough headroom at admission;
+labels alone are insufficient.
 
 The shared `setup-canary-python` action restores `ci/canary-python/uv.lock` into
 a controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.

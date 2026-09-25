@@ -165,6 +165,10 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         qwen4exp = by_family["qwen4exp"]
         self.assertEqual(10240, qwen4exp["execution"]["activation_width"])
         self.assertEqual(3, len(qwen4exp["artifact"]["files"]))
+        for family in ("glm45-air", "qwen4exp", "llama4"):
+            self.assertEqual(
+                256, by_family[family]["resources"]["minimum_runner_memory_gib"]
+            )
         expected_workloads = {
             "nomic-bert-embedding": ("embedding", "embedding-smoke"),
             "jina-bert-v2-rerank": ("rerank", "rerank-smoke"),

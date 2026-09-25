@@ -543,6 +543,10 @@ impl Node {
         existing.stage_status_list_supported = ann.stage_status_list_supported;
         existing.local_gguf_content_id_supported = ann.local_gguf_content_id_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+        #[cfg(feature = "payments")]
+        {
+            existing.lightning_offers = ann.lightning_offers.clone();
+        }
         cache_affinity_gossip::merge_advertisement(
             &mut existing.cache_affinity,
             ann.cache_affinity.as_ref(),
@@ -1402,8 +1406,10 @@ impl Node {
             // last_mentioned = now keeps the peer alive for the prune window.
             let mut peer = PeerInfo::from_announcement(id, addr.clone(), ann, owner_summary);
             // Capability provenance must be direct. A bridge can report that a
-            // peer exists, but it cannot make that peer eligible for strict
-            // local-GGUF election on the peer's behalf.
+            // peer exists, but it cannot make that peer eligible for the
+            // current stage protocol or strict local-GGUF election on the
+            // peer's behalf.
+            peer.stage_protocol_generation_supported = false;
             peer.local_gguf_content_id_supported = false;
             // Mark as never directly seen — only transitively mentioned.
             peer.admitted = false;

@@ -31,6 +31,7 @@ pub enum CliCommandFamily {
     Runtime,
     Skills,
     Unknown,
+    Wallet,
 }
 
 /// A grammar-validated summary of a parsed CLI command.
@@ -88,6 +89,7 @@ impl CliCommandFamily {
             Self::Runtime => "runtime",
             Self::Skills => "skills",
             Self::Unknown => "unknown",
+            Self::Wallet => "wallet",
         }
     }
 }

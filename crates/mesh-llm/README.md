@@ -6,7 +6,7 @@ Its Rust source is intentionally tiny:
 
 ```text
 src/
-├── lib.rs     compatibility re-export of mesh-llm-host-runtime
+├── lib.rs     run_main: CLI parse, command dispatch, runtime handoff
 └── main.rs    binary entrypoint
 ```
 

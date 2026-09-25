@@ -19,15 +19,25 @@ SPEC.loader.exec_module(E)
 M = E.MEMORY
 
 
-def model(size=1, kind='causal_generation', projector=0):
+def model(size=1, kind='causal_generation', projector=0, minimum=None):
     def artifact(value):
         return {'files': ['model.gguf'], 'file_integrity': {'model.gguf': {'size_bytes': value}}}
+    resources = {'estimated_model_bytes': size}
+    if minimum is not None:
+        resources['minimum_runner_memory_gib'] = minimum
     return {'family': 'fixture', 'class': kind, 'artifact': artifact(size),
-            'resources': {'estimated_model_bytes': size},
+            'resources': resources,
             'mmproj_artifact': artifact(projector) if projector else None}
 
 
 class MemoryTests(unittest.TestCase):
+    def setUp(self):
+        self.lock_root = tempfile.TemporaryDirectory()
+        self.addCleanup(self.lock_root.cleanup)
+        lock_root = patch('tempfile.gettempdir', return_value=self.lock_root.name)
+        lock_root.start()
+        self.addCleanup(lock_root.stop)
+
     def test_exact_boundaries_and_invalid_estimates(self):
         small = 128 * M.GIB * 90 // 100
         large = 256 * M.GIB * 90 // 100
@@ -45,6 +55,16 @@ class MemoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'fixture.*exceeds'):
             M.placement(model(200*M.GIB))
 
+    def test_policy_minimum_can_promote_but_not_demote_estimated_tier(self):
+        promoted = M.placement(model(1*M.GIB, minimum=256))
+        self.assertEqual(promoted['memory_tier'], 'accelerator-memory-256plus')
+        self.assertEqual(promoted['minimum_runner_memory_gib'], 256)
+        self.assertEqual(M.placement(model(100*M.GIB, minimum=128))['memory_tier'],
+                         'accelerator-memory-256plus')
+        for invalid in (64, 192, 512, True, '256'):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, 'fixture.*minimum'):
+                M.placement(model(minimum=invalid))
+
     def test_missing_or_understated_artifact_bytes_fail_safe(self):
         value = model(100*M.GIB)
         value['resources']['estimated_model_bytes'] = 1
@@ -58,7 +78,7 @@ class MemoryTests(unittest.TestCase):
         original = copy.deepcopy(plan)
         rows = {r['families']: r for r in E.scheduling_matrix(plan)['include']}
         self.assertEqual(plan, original)
-        for family in ('minimax-m3', 'inkling'):
+        for family in ('minimax-m3', 'inkling', 'glm45-air', 'qwen4exp', 'llama4'):
             self.assertEqual(rows[family]['memory_tier'], 'accelerator-memory-256plus')
         self.assertEqual(rows['lfm2-vl']['memory_tier'], 'accelerator-memory-128plus')
 
@@ -111,6 +131,47 @@ class MemoryTests(unittest.TestCase):
     def test_insufficient_memory_never_starts_child(self):
         with self.assertRaisesRegex(ValueError, 'available'):
             self.run_guard(['/should/not/run'], [(128*M.GIB, 18*M.GIB)])
+
+    @unittest.skipIf(os.name != 'posix', 'host lock uses POSIX flock')
+    def test_busy_host_lock_waits_then_runs_family(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / 'evidence'
+            lock = Path(directory) / f'mesh-canary-family-{os.getuid()}.lock'
+            ready = Path(directory) / 'lock-ready'
+            released = Path(directory) / 'lock-released'
+            holder = subprocess.Popen([
+                sys.executable, '-c',
+                ('import fcntl,pathlib,sys,time\n'
+                 'with open(sys.argv[1], "a") as lock:\n'
+                 ' fcntl.flock(lock, fcntl.LOCK_EX)\n'
+                 ' pathlib.Path(sys.argv[2]).write_text("ready")\n'
+                 ' time.sleep(0.2)\n'
+                 ' pathlib.Path(sys.argv[3]).write_text("released")\n'),
+                str(lock), str(ready), str(released),
+            ])
+            def stop_holder():
+                if holder.poll() is None:
+                    holder.kill()
+                holder.wait(timeout=5)
+            self.addCleanup(stop_holder)
+            deadline = time.monotonic() + 5
+            while not ready.exists():
+                if holder.poll() is not None:
+                    self.fail(f'lock holder exited with {holder.returncode}')
+                if time.monotonic() >= deadline:
+                    self.fail('lock holder did not become ready')
+                time.sleep(0.01)
+            command = [sys.executable, '-c',
+                       f'import pathlib; assert pathlib.Path({str(released)!r}).exists()']
+            with patch('tempfile.gettempdir', return_value=directory), \
+                 patch.object(M, 'host_memory', return_value=(128*M.GIB, 128*M.GIB)):
+                result = M.guarded_run(model(), 'accelerator-memory-128plus', command, evidence)
+            holder.wait(timeout=5)
+            report = json.loads((evidence / 'memory-admission.json').read_text())
+            self.assertEqual(result, 0)
+            self.assertTrue(report['host_lock_contended'])
+            self.assertGreater(report['host_lock_wait_seconds'], 0)
+            self.assertEqual(report['status'], 'passed')
 
     @unittest.skipIf(os.name != 'posix', 'process-group guard is macOS/POSIX')
     def test_pressure_stops_real_child_and_records_failure(self):

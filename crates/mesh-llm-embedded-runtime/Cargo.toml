@@ -14,9 +14,16 @@ categories = ["api-bindings", "network-programming"]
 default = []
 web-ui = ["mesh-llm-host-runtime/web-ui"]
 dynamic-native-runtime = ["mesh-llm-host-runtime/dynamic-native-runtime"]
+# Paid inference: ledger, gates and the `wallet.v1` plugin adapter. Off unless a
+# serving consumer opts in; pulls the rusqlite/lightning-invoice/bitcoin stack
+# back into host-runtime but never a wallet SDK (the built-in Lexe wallet is
+# host-runtime's separate `wallet-lexe` feature, enabled only by the CLI).
+payments = ["mesh-llm-host-runtime/payments", "dep:mesh-llm-payments", "dep:anyhow"]
 
 [lints]
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true, optional = true }
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.76.1", features = ["plugin-server"], optional = true }
 mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.76.1", default-features = false }

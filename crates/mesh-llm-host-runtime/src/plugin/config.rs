@@ -3,7 +3,10 @@ use super::installed::{
     configured_disabled_installed_plugin_summary, configured_external_plugin_spec,
 };
 use super::schema_validation::strict_plugin_schema_availability;
-use super::{BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary};
+use super::{
+    BLOBSTORE_PLUGIN_ID, PAYMENTS_PLUGIN_ID, PluginStartupOptions, PluginSummary,
+    WALLET_LEXE_PLUGIN_ID,
+};
 use crate::{
     MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
     ReleaseAttestationRequirement,
@@ -290,23 +293,26 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
+    let mut wallet_lexe_enabled = true;
+    let mut payments_enabled = true;
     for entry in &config.plugins {
         if names.insert(entry.name.clone(), ()).is_some() {
             bail!("Duplicate plugin entry '{}'", entry.name);
         }
         let enabled = entry.enabled.unwrap_or(true);
         if entry.name == BLOBSTORE_PLUGIN_ID {
-            if entry.command.is_some()
-                || !entry.args.is_empty()
-                || entry.url.is_some()
-                || !entry.startup.is_default()
-            {
-                bail!(
-                    "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
-                    BLOBSTORE_PLUGIN_ID
-                );
-            }
+            ensure_builtin_entry_only_toggles_enabled(entry)?;
             blobstore_enabled = enabled;
+            continue;
+        }
+        if entry.name == WALLET_LEXE_PLUGIN_ID {
+            ensure_builtin_entry_only_toggles_enabled(entry)?;
+            wallet_lexe_enabled = enabled;
+            continue;
+        }
+        if entry.name == PAYMENTS_PLUGIN_ID {
+            ensure_builtin_entry_only_toggles_enabled(entry)?;
+            payments_enabled = enabled;
             continue;
         }
         if !enabled {
@@ -324,7 +330,13 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     append_installed_plugins(&mut externals, &mut inactive, &mut names);
 
     if blobstore_enabled {
-        externals.push(blobstore_plugin_spec()?);
+        externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID)?);
+    }
+    if wallet_lexe_enabled && wallet_lexe_compiled_in() {
+        externals.push(builtin_plugin_spec(WALLET_LEXE_PLUGIN_ID)?);
+    }
+    if payments_enabled && payments_compiled_in() {
+        externals.push(in_process_builtin_spec(PAYMENTS_PLUGIN_ID));
     }
 
     Ok(ResolvedPlugins {
@@ -333,19 +345,98 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     })
 }
 
-pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
+/// Built-in plugins are served by this executable; the only thing an operator
+/// may change about them is whether they run.
+fn ensure_builtin_entry_only_toggles_enabled(entry: &PluginConfigEntry) -> Result<()> {
+    if entry.command.is_some()
+        || !entry.args.is_empty()
+        || entry.url.is_some()
+        || !entry.startup.is_default()
+    {
+        bail!(
+            "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
+            entry.name
+        );
+    }
+    Ok(())
+}
+
+/// Whether this build carries the built-in Lexe wallet. A `[[plugin]]
+/// name = "wallet-lexe"` stanza stays valid in a build without it (the
+/// documented off switch must not break a wallet-free SDK host); the plugin is
+/// simply not registered.
+///
+/// Under test the answer is forced per thread and defaults to "absent", so the
+/// many resolver tests that count plugins are independent of the cargo
+/// features the test binary happened to be built with.
+#[cfg(not(test))]
+fn wallet_lexe_compiled_in() -> bool {
+    cfg!(feature = "wallet-lexe")
+}
+
+#[cfg(test)]
+fn wallet_lexe_compiled_in() -> bool {
+    TEST_WALLET_LEXE_COMPILED_IN.with(|slot| slot.borrow().unwrap_or(false))
+}
+
+/// Whether this build carries the payments engine. Forced per thread under
+/// test for the same reason as [`wallet_lexe_compiled_in`].
+#[cfg(not(test))]
+fn payments_compiled_in() -> bool {
+    cfg!(feature = "payments")
+}
+
+#[cfg(test)]
+fn payments_compiled_in() -> bool {
+    TEST_PAYMENTS_COMPILED_IN.with(|slot| slot.borrow().unwrap_or(false))
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static TEST_PAYMENTS_COMPILED_IN: std::cell::RefCell<Option<bool>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Spec for a builtin served as a task in this process: no command, so the
+/// plugin manager starts it from the runner supplied for its name.
+pub fn in_process_builtin_spec(name: &str) -> ExternalPluginSpec {
+    ExternalPluginSpec {
+        name: name.to_string(),
+        command: String::new(),
+        args: Vec::new(),
+        url: None,
+        env: BTreeMap::new(),
+        startup: PluginStartupOptions {
+            optional: true,
+            ..PluginStartupOptions::default()
+        },
+        web_ui_enabled: None,
+        installed_metadata: None,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static TEST_WALLET_LEXE_COMPILED_IN: std::cell::RefCell<Option<bool>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Launch spec for a plugin served by this executable: the host re-executes
+/// itself with `--plugin <name>`. Built-ins are optional so a failure to start
+/// one degrades that capability instead of blocking node startup.
+pub fn builtin_plugin_spec(name: &str) -> Result<ExternalPluginSpec> {
     let command = std::env::current_exe()
         .context("Cannot determine mesh-llm executable path")?
         .display()
         .to_string();
     Ok(ExternalPluginSpec {
-        name: BLOBSTORE_PLUGIN_ID.to_string(),
+        name: name.to_string(),
         command,
         args: vec![
             "--log-format".into(),
             "json".into(),
             "--plugin".into(),
-            BLOBSTORE_PLUGIN_ID.into(),
+            name.into(),
         ],
         url: None,
         env: BTreeMap::new(),
