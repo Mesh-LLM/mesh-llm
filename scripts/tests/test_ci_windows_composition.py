@@ -1,15 +1,52 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import tomllib
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTIONS = ROOT / ".github" / "actions"
+PLATFORM_CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "ci-platform-checks-slice.yml"
+RESOLVE_CARGO_PACKAGES = "Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages"
 RELEASE_FOOTER_MANIFEST = ROOT / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
 XTASK_MANIFEST = ROOT / "tools" / "xtask" / "Cargo.toml"
+
+
+def _unit_row_crates(platform: str) -> set[str]:
+    """Crates a platform's unit row runs, however the row resolves them.
+
+    The row no longer names a literal `foreach ($crate in '...', '...')` list:
+    each platform's owners come from the `crates:` inputs of the
+    `resolve-cargo-packages` steps that apply to that platform's unit check.
+    A step with no platform guard applies to both unit rows; a platform-guarded
+    step applies only to the named platform.
+    """
+    workflow = yaml.safe_load(PLATFORM_CHECKS_WORKFLOW.read_text(encoding="utf-8"))
+    crates: set[str] = set()
+    found = False
+    for step in workflow["jobs"]["platform_checks"]["steps"]:
+        if not str(step.get("uses", "")).startswith(RESOLVE_CARGO_PACKAGES + "@"):
+            continue
+        condition = str(step.get("if", ""))
+        if "kind == 'unit'" not in condition:
+            continue
+        if "platform == '" in condition and f"platform == '{platform}'" not in condition:
+            continue
+        crates.update(json.loads(step["with"]["crates"]))
+        found = True
+    if not found:
+        raise AssertionError(f"{platform} unit row no longer resolves any package owners")
+    return crates
+
+
+def _windows_unit_row_crates() -> set[str]:
+    """Crates the windows-unit row runs, across its shared and Windows inputs."""
+    return _unit_row_crates("windows")
 
 
 class CiWindowsCompositionTests(unittest.TestCase):
@@ -97,8 +134,8 @@ class CiWindowsCompositionTests(unittest.TestCase):
         cpu_routing = routing[: routing.index("WINDOWS_GPU_INPUTS=")]
         gpu_routing = routing[routing.index("WINDOWS_GPU_INPUTS=") :]
 
-        self.assertIn("^crates/mesh-llm-release-footer/", cpu_routing)
-        self.assertNotIn("^crates/mesh-llm-release-footer/", gpu_routing)
+        self.assertIn("^(mesh/|skippy/)?crates/mesh-llm-release-footer/", cpu_routing)
+        self.assertNotIn("^(mesh/|skippy/)?crates/mesh-llm-release-footer/", gpu_routing)
         self.assertIn("package-release", cpu_routing)
         self.assertIn("package-release", gpu_routing)
         for workflow in (
@@ -316,6 +353,32 @@ class CiWindowsCompositionTests(unittest.TestCase):
                             block,
                         )
             self.assertEqual(expected_counts, actual_counts)
+
+    def test_windows_unit_row_names_every_routed_crate(self) -> None:
+        """Routing a crate to windows-unit is only signal if the row names it."""
+        ownership = json.loads((ROOT / "ci" / "ownership.yml").read_text(encoding="utf-8"))
+        domain_crates = {
+            crate
+            for rule in ownership["crate_rules"]
+            if rule["domain"] == "platform-windows-cfg"
+            for crate in rule["crates"]
+        }
+        self.assertTrue(domain_crates)
+        self.assertEqual(set(), domain_crates - _windows_unit_row_crates())
+
+    def test_windows_unit_row_keeps_shared_owners_without_widening_macos(self) -> None:
+        shared = {"model-artifact", "mesh-llm-host-runtime", "mesh-llm"}
+        # The shared macOS/Windows owners stay identical and platform-neutral.
+        self.assertLessEqual(shared, _windows_unit_row_crates())
+        self.assertLessEqual(shared, _unit_row_crates("macos"))
+        # The platform-windows-cfg crate runs on Windows only.
+        self.assertIn("mesh-llm-plugin", _windows_unit_row_crates())
+        self.assertNotIn("mesh-llm-plugin", _unit_row_crates("macos"))
+
+    def test_windows_unit_row_resolves_crates_through_the_package_resolver(self) -> None:
+        source = PLATFORM_CHECKS_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("steps.windows_packages.outputs.crates", source)
+        self.assertNotIn("foreach ($crate in 'model-artifact'", source)
 
 
 if __name__ == "__main__":

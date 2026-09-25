@@ -55,9 +55,14 @@ jobs:
         with:
           allow_depot_remote_cache: "false"
           allow_native_github_cache: "false"
+      - name: Resolve product source layout
+        id: layout
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
       - name: Prepare UI placeholder
         if: ${{ steps.restore.outputs.cache-hit != 'true' }}
-        run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
+        env:
+          UI_DIR: ${{ steps.layout.outputs.ui_dir }}
+        run: mkdir -p "$UI_DIR/dist" && printf '<html></html>' > "$UI_DIR/dist/index.html"
       - name: Compile the dominant host dependency graph
         if: ${{ steps.restore.outputs.cache-hit != 'true' }}
         run: just ci-sccache-seed-build

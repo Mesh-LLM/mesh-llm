@@ -1,0 +1,39 @@
+name: Resolve protected Cargo batch
+description: Keep protected package selections valid across the reviewed source extraction.
+inputs:
+  crates:
+    description: JSON package names requested by this protected batch.
+    required: true
+  batches:
+    description: Complete protected matrix, or empty for fixed platform owner requests.
+    required: false
+    default: ''
+  generation:
+    description: Naming generation of the protected planner workspace (legacy or current).
+    required: true
+outputs:
+  crates:
+    description: JSON source package names to validate in this executor.
+    value: ${{ steps.resolve.outputs.crates }}
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        REQUESTED_CRATES: ${{ inputs.crates }}
+        PLANNED_BATCHES: ${{ inputs.batches }}
+        PACKAGE_GENERATION: ${{ inputs.generation }}
+      run: |
+        set -euo pipefail
+        if command -v python3 >/dev/null 2>&1; then
+          python_bin=python3
+        else
+          python_bin=python
+        fi
+        args=(--generation "$PACKAGE_GENERATION" --crates "$REQUESTED_CRATES")
+        if [[ -n "$PLANNED_BATCHES" ]]; then
+          args+=(--batches "$PLANNED_BATCHES")
+        fi
+        resolved=$("$python_bin" "$GITHUB_ACTION_PATH/../../../scripts/ci-cargo-packages.py" "${args[@]}")
+        printf 'crates=%s\n' "$resolved" >> "$GITHUB_OUTPUT"

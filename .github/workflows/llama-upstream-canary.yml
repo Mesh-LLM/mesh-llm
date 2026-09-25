@@ -53,7 +53,15 @@ jobs:
             python3 scripts/llama-canary-resolve-mesh-ref.py
             exit 0
           fi
-          old="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
+          pins=()
+          for pin in third_party/llama.cpp/upstream.txt skippy/third_party/llama.cpp/upstream.txt; do
+            if [[ -f "$pin" ]]; then pins+=("$pin"); fi
+          done
+          if [[ "${#pins[@]}" != 1 ]]; then
+            echo "expected exactly one llama.cpp pin in the source checkout" >&2
+            exit 1
+          fi
+          old="$(tr -d '[:space:]' < "${pins[0]}")"
           upstream="$UPSTREAM"
           if [[ -z "$upstream" || "$upstream" == latest ]]; then
             upstream="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
