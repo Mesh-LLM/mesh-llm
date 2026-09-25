@@ -45,9 +45,7 @@ use rmcp::model::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::future::Future;
 #[cfg(test)]
@@ -140,6 +138,44 @@ pub(in crate::plugin) struct PluginManagerInner {
     pub(in crate::plugin) test_stream_handlers: Arc<Mutex<BTreeMap<String, TestStreamHandler>>>,
 }
 
+#[derive(Clone, Copy)]
+enum VirtualModelCollisionPolicy {
+    Reject,
+    Omit,
+}
+
+fn apply_virtual_model_collision_policy(
+    mut routes: Vec<VirtualModelRoute>,
+    concrete_models: &BTreeSet<String>,
+    collision_policy: VirtualModelCollisionPolicy,
+) -> Result<Vec<VirtualModelRoute>> {
+    if matches!(collision_policy, VirtualModelCollisionPolicy::Reject) {
+        if let Some(route) = routes
+            .iter()
+            .find(|route| concrete_models.contains(&route.model_id))
+        {
+            bail!(
+                "Virtual model '{}' declared by '{}' collides with a concrete plugin model",
+                route.model_id,
+                route.plugin_name
+            );
+        }
+    } else {
+        routes.retain(|route| {
+            let collides = concrete_models.contains(&route.model_id);
+            if collides {
+                tracing::warn!(
+                    model = %route.model_id,
+                    plugin = %route.plugin_name,
+                    "virtual model collides with a concrete plugin model; route disabled"
+                );
+            }
+            !collides
+        });
+    }
+    Ok(routes)
+}
+
 impl PluginManager {
     pub async fn start(
         specs: &ResolvedPlugins,
@@ -201,7 +237,9 @@ impl PluginManager {
         for plugin_name in plugin_names {
             manager.refresh_plugin_endpoints(&plugin_name).await?;
         }
-        manager.virtual_models().await?;
+        manager
+            .virtual_models_with_collision_policy(VirtualModelCollisionPolicy::Reject)
+            .await?;
         manager.start_supervisor();
         Ok(manager)
     }
@@ -899,6 +937,14 @@ impl PluginManager {
     }
 
     pub async fn virtual_models(&self) -> Result<Vec<VirtualModelRoute>> {
+        self.virtual_models_with_collision_policy(VirtualModelCollisionPolicy::Omit)
+            .await
+    }
+
+    async fn virtual_models_with_collision_policy(
+        &self,
+        collision_policy: VirtualModelCollisionPolicy,
+    ) -> Result<Vec<VirtualModelRoute>> {
         let mut routes = Vec::new();
         for (plugin_name, plugin) in &self.inner.plugins {
             let Some(manifest) = plugin.manifest_snapshot().await else {
@@ -945,18 +991,8 @@ impl PluginManager {
             .await?
             .into_iter()
             .flat_map(|endpoint| endpoint.models)
-            .collect::<std::collections::BTreeSet<_>>();
-        if let Some(route) = routes
-            .iter()
-            .find(|route| concrete_models.contains(&route.model_id))
-        {
-            bail!(
-                "Virtual model '{}' declared by '{}' collides with a concrete plugin model",
-                route.model_id,
-                route.plugin_name
-            );
-        }
-        Ok(routes)
+            .collect::<BTreeSet<_>>();
+        apply_virtual_model_collision_policy(routes, &concrete_models, collision_policy)
     }
 
     pub async fn virtual_model_for_model(

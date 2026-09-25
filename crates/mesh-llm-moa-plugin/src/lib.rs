@@ -172,15 +172,18 @@ async fn direct_capability_response(
         })
         .await
     {
-        Ok(response) => VirtualModelResponse {
-            status_code: response.status_code,
-            body: response.body,
-            headers: response
-                .served_by
-                .map(|served_by| vec![("x-mesh-served-by".into(), served_by)])
-                .unwrap_or_default(),
-            event_stream: requested_stream,
-        },
+        Ok(mut response) => {
+            normalize_direct_response_body(&mut response.body);
+            VirtualModelResponse {
+                status_code: response.status_code,
+                body: response.body,
+                headers: response
+                    .served_by
+                    .map(|served_by| vec![("x-mesh-served-by".into(), served_by)])
+                    .unwrap_or_default(),
+                event_stream: requested_stream,
+            }
+        }
         Err(error) => error_response(502, &format!("capability route failed: {error}")),
     }
 }
@@ -212,6 +215,13 @@ fn strip_response_thinking(body: &mut Value) {
         return;
     };
     body["choices"][0]["message"]["content"] = Value::String(content);
+}
+
+fn normalize_direct_response_body(body: &mut Value) {
+    strip_response_thinking(body);
+    if body.is_object() {
+        body["model"] = Value::String(moa::VIRTUAL_MODEL_NAME.into());
+    }
 }
 
 fn actor_candidates(models: &[moa::ModelEntry]) -> Vec<usize> {
@@ -321,5 +331,21 @@ mod tests {
 
         response["choices"][0]["finish_reason"] = Value::String("error".into());
         assert!(is_failure_body(&response));
+    }
+
+    #[test]
+    fn direct_response_uses_virtual_identity_after_thinking_is_removed() {
+        let mut response = json!({
+            "model": "worker-a",
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": "<think>private</think>answer"}
+            }]
+        });
+
+        normalize_direct_response_body(&mut response);
+
+        assert_eq!(response["model"], moa::VIRTUAL_MODEL_NAME);
+        assert_eq!(response["choices"][0]["message"]["content"], "answer");
     }
 }

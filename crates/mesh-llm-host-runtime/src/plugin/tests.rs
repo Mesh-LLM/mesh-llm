@@ -45,6 +45,53 @@ fn plugin_manifest_overview_includes_web_ui_declaration() {
     assert_eq!(web_ui.config_sections[0].id, "settings");
 }
 
+fn virtual_route(plugin_name: &str, model_id: &str) -> VirtualModelRoute {
+    VirtualModelRoute {
+        plugin_name: plugin_name.into(),
+        model_id: model_id.into(),
+        handler: "chat".into(),
+        input_modalities: vec!["text".into()],
+        output_modalities: vec!["text".into()],
+        supports_tools: false,
+        supports_streaming: false,
+        requires_candidates: false,
+    }
+}
+
+#[test]
+fn runtime_virtual_model_lookup_omits_only_concrete_collisions() {
+    let routes = vec![
+        virtual_route("colliding", "shared"),
+        virtual_route("healthy", "virtual-only"),
+    ];
+    let concrete_models = BTreeSet::from(["shared".to_string()]);
+
+    let routes = apply_virtual_model_collision_policy(
+        routes,
+        &concrete_models,
+        VirtualModelCollisionPolicy::Omit,
+    )
+    .expect("runtime routes");
+
+    assert_eq!(routes, vec![virtual_route("healthy", "virtual-only")]);
+}
+
+#[test]
+fn startup_virtual_model_lookup_rejects_concrete_collisions() {
+    let error = apply_virtual_model_collision_policy(
+        vec![virtual_route("colliding", "shared")],
+        &BTreeSet::from(["shared".to_string()]),
+        VirtualModelCollisionPolicy::Reject,
+    )
+    .expect_err("startup must reject the collision");
+
+    assert!(
+        error
+            .to_string()
+            .contains("collides with a concrete plugin model")
+    );
+}
+
 #[test]
 fn resolves_default_builtin_plugins() {
     let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();

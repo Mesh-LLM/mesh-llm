@@ -341,7 +341,12 @@ async fn handle_mesh_control_request(
     if is_models_list_request(&request.method, &request.path) {
         let mut served = node.models_being_served().await;
         let virtual_models = match node.plugin_manager().await {
-            Some(manager) => manager.virtual_models().await.unwrap_or_default(),
+            Some(manager) => {
+                if let Ok(mut inference_models) = manager.inference_models().await {
+                    served.append(&mut inference_models);
+                }
+                manager.virtual_models().await.unwrap_or_default()
+            }
             None => Vec::new(),
         };
         let virtual_models = super::virtual_model::advertisable_routes(virtual_models, &served);
@@ -499,9 +504,29 @@ async fn route_virtual_model_or_passthrough(
     if request.is_tokenize_request() {
         return Ok(tcp_stream);
     }
-    let Some(model_id) = request.model_name.clone() else {
+    let Some(mut model_id) = request.model_name.clone() else {
         return Ok(tcp_stream);
     };
+    if crate::network::openai::automatic::is_directive(&model_id) {
+        crate::network::openai::automatic::warn_if_deprecated_alias(Some(&model_id));
+        request.ensure_body_json();
+        let Some(body) = request.body_json.as_ref() else {
+            return Ok(tcp_stream);
+        };
+        if matches!(
+            crate::network::openai::automatic::serving_mode(
+                crate::network::openai::automatic::AutomaticRequest {
+                    model: Some(&model_id),
+                    path: &request.path,
+                    body,
+                }
+            ),
+            crate::network::openai::automatic::ServingMode::SingleModel(_)
+        ) {
+            return Ok(tcp_stream);
+        }
+        model_id = crate::network::openai::automatic::DIRECTIVE.to_string();
+    }
     let Some(plugin_manager) = node.plugin_manager().await else {
         return Ok(tcp_stream);
     };
@@ -544,6 +569,9 @@ async fn route_virtual_model_or_passthrough(
     };
     let mut candidates = node.models_being_served().await;
     candidates.extend(node.serving_models().await);
+    if let Ok(inference_models) = plugin_manager.inference_models().await {
+        candidates.extend(inference_models);
+    }
     candidates.extend(
         node.all_served_model_descriptors()
             .await
@@ -554,6 +582,7 @@ async fn route_virtual_model_or_passthrough(
         &plugin_manager,
         node,
         tcp_stream,
+        &request.path,
         &model_id,
         body,
         candidates,
@@ -580,9 +609,9 @@ async fn build_mesh_request_plan(
     let tokenize_request = request.is_tokenize_request();
     // The automatic directive (either spelling) and a model-less request both
     // resolve through the auto selector, so they get the media-capability
-    // filter, readiness, affinity and context-budget fit. A `mesh` request
-    // reaches here only in single-model mode — the MoA gateway has already
-    // taken any request it is serving as a committee.
+    // filter, readiness, affinity and context-budget fit. A directive reaches
+    // here only in single-model mode; committee-eligible requests have already
+    // been dispatched through the manifest-declared virtual model.
     let is_auto_request = !tokenize_request
         && request
             .model_name

@@ -343,6 +343,73 @@ async fn test_builtin_moa_is_not_advertised_before_a_candidate_is_ready() {
 }
 
 #[tokio::test]
+async fn test_builtin_moa_uses_plugin_inference_model_as_its_only_candidate() {
+    let worker_response = json!({
+        "id": "chatcmpl-plugin-worker",
+        "object": "chat.completion",
+        "model": "plugin-worker",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "plugin candidate"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4}
+    })
+    .to_string();
+    let (worker_port, worker_requests, worker_handle) =
+        spawn_repeating_upstream(&worker_response).await;
+    let plugin_manager = start_moa_plugin_manager().await;
+    plugin_manager
+        .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
+            plugin_name: "endpoint-plugin".into(),
+            endpoint_id: "endpoint-plugin".into(),
+            address: format!("http://127.0.0.1:{worker_port}/api/v1"),
+            models: vec!["plugin-worker".into()],
+        }])
+        .await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness_with_plugin_manager(local_targets(&[]), plugin_manager.clone())
+            .await;
+    crate::network::openai::virtual_model::install_inference_bridge(
+        &plugin_manager,
+        proxy_addr.port(),
+    )
+    .await;
+
+    let models_response = send_request_and_read_response(
+        proxy_addr,
+        vec![b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()],
+    )
+    .await;
+    assert!(
+        models_response.contains(r#""id":"mesh""#),
+        "plugin inference candidates must make candidate-backed virtual models ready: {models_response}"
+    );
+
+    let body = json!({
+        "model": "mesh",
+        "messages": [{"role": "user", "content": "Say hi."}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "response: {response}");
+    assert!(response.contains("plugin candidate"), "response: {response}");
+    assert!(
+        worker_requests.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+        "the virtual model must receive and invoke plugin inference candidates"
+    );
+
+    proxy_handle.abort();
+    worker_handle.abort();
+}
+
+#[tokio::test]
 async fn test_builtin_moa_single_model_preserves_small_context_request() {
     let worker_response = json!({
         "id": "chatcmpl-worker",

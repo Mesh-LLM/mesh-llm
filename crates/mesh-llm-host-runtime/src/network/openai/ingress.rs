@@ -1945,10 +1945,14 @@ async fn try_handle_virtual_model_intercept(
     let mut candidate_models = callable_models(ctx.route.targets);
     candidate_models.extend(ctx.route.node.models_being_served().await);
     candidate_models.extend(ctx.route.node.serving_models().await);
+    if let Ok(inference_models) = plugin_manager.inference_models().await {
+        candidate_models.extend(inference_models);
+    }
     match crate::network::openai::virtual_model::try_handle_virtual_model(
         plugin_manager,
         ctx.route.node,
         tcp_stream,
+        &request.path,
         model_id,
         body,
         candidate_models,

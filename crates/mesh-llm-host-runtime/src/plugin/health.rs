@@ -138,7 +138,7 @@ impl PluginManager {
 
     pub async fn inference_endpoints(&self) -> Result<Vec<InferenceEndpointRoute>> {
         #[cfg(test)]
-        if self.inner.plugins.is_empty() && self.inner.inactive.is_empty() {
+        {
             let mut endpoints = self.inner.test_inference_endpoints.lock().await.clone();
             endpoints.sort_by(|a, b| {
                 a.plugin_name

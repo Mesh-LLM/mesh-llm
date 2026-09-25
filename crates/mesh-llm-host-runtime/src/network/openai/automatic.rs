@@ -92,7 +92,7 @@ const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 ///
 /// Reads the forwarded path, not the client's: `/v1/responses` is normalised
 /// onto chat completions before routing, so it is committee-eligible.
-fn is_chat_shaped_path(path: &str) -> bool {
+pub(crate) fn is_chat_shaped_path(path: &str) -> bool {
     path.split('?').next().unwrap_or(path) == CHAT_COMPLETIONS_PATH
 }
 

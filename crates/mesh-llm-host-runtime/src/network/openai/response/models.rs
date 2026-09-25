@@ -57,7 +57,21 @@ fn models_list_json_with_virtual(
                 if !seen.insert(route.model_id.clone()) {
                     return None;
                 }
-                let mut capabilities = route.input_modalities.clone();
+                let mut capabilities = route
+                    .input_modalities
+                    .iter()
+                    .map(|modality| match modality.as_str() {
+                        "image" => "vision".to_string(),
+                        other => other.to_string(),
+                    })
+                    .collect::<Vec<_>>();
+                if route
+                    .input_modalities
+                    .iter()
+                    .any(|modality| modality != "text")
+                {
+                    capabilities.push("multimodal".into());
+                }
                 if route.supports_tools {
                     capabilities.push("tools".into());
                 }
@@ -585,7 +599,7 @@ mod tests {
             plugin_name: "mesh-moa".into(),
             model_id: "mesh".into(),
             handler: "chat".into(),
-            input_modalities: vec!["text".into()],
+            input_modalities: vec!["text".into(), "image".into(), "audio".into()],
             output_modalities: vec!["text".into()],
             supports_tools: true,
             supports_streaming: true,
@@ -601,6 +615,14 @@ mod tests {
 
         assert_eq!(mesh["display_name"], "mesh");
         assert_eq!(mesh["owned_by"], "plugin:mesh-moa");
+        assert_eq!(
+            mesh["capabilities"],
+            serde_json::json!(["audio", "multimodal", "text", "tools", "vision"])
+        );
+        assert_eq!(
+            mesh["virtual_model"]["input_modalities"],
+            serde_json::json!(["text", "image", "audio"])
+        );
         assert_eq!(mesh["virtual_model"]["supports_tools"], true);
         assert_eq!(mesh["virtual_model"]["supports_streaming"], true);
     }

@@ -39,26 +39,28 @@ impl InferenceRpcBridge {
     async fn infer(&self, params_json: &str) -> Result<RpcResult, proto::ErrorResponse> {
         let mut request: HostInferenceRequest = serde_json::from_str(params_json)
             .map_err(|error| invalid_params(format!("invalid inference request: {error}")))?;
-        if request.model_id.trim().is_empty() {
+        let model_id = request.model_id.trim().to_string();
+        if model_id.is_empty() {
             return Err(invalid_params("model_id is required"));
         }
-        if self
-            .plugins
-            .virtual_model_for_model(&request.model_id)
-            .await
-            .map_err(internal)?
-            .is_some()
+        if super::automatic::is_directive(&model_id)
+            || self
+                .plugins
+                .virtual_model_for_model(&model_id)
+                .await
+                .map_err(internal)?
+                .is_some()
         {
             return Err(invalid_params(format!(
                 "nested inference cannot target virtual model '{}'",
-                request.model_id
+                model_id
             )));
         }
         let object = request
             .request
             .as_object_mut()
             .ok_or_else(|| invalid_params("request must be a JSON object"))?;
-        object.insert("model".into(), request.model_id.clone().into());
+        object.insert("model".into(), model_id.into());
         object.insert("stream".into(), false.into());
         let timeout = std::time::Duration::from_millis(
             request.timeout_ms.unwrap_or(60_000).clamp(1, 300_000),
@@ -152,11 +154,56 @@ pub(crate) enum VirtualModelDispatchResult {
     Responded(proxy::RouteDispatchOutcome),
 }
 
+fn validate_virtual_request(
+    forwarded_path: &str,
+    model_id: &str,
+    route: &crate::plugin::VirtualModelRoute,
+    request_body: &serde_json::Value,
+    candidate_models: &[String],
+) -> Option<(u16, String)> {
+    if !super::automatic::is_chat_shaped_path(forwarded_path) {
+        return Some((
+            422,
+            format!("virtual model '{model_id}' supports chat-shaped requests only"),
+        ));
+    }
+    if candidate_models
+        .iter()
+        .any(|candidate| candidate == model_id)
+    {
+        return Some((
+            409,
+            format!("virtual model '{model_id}' collides with a concrete model"),
+        ));
+    }
+    let requests_tools = request_body.get("tools").is_some_and(|tools| {
+        !tools.is_null() && tools.as_array().is_none_or(|items| !items.is_empty())
+    });
+    if requests_tools && !route.supports_tools {
+        return Some((
+            422,
+            format!("virtual model '{model_id}' does not support tools"),
+        ));
+    }
+    let requests_stream = request_body
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if requests_stream && !route.supports_streaming {
+        return Some((
+            422,
+            format!("virtual model '{model_id}' does not support streaming"),
+        ));
+    }
+    None
+}
+
 #[allow(clippy::cognitive_complexity, clippy::too_many_arguments)]
 pub(crate) async fn try_handle_virtual_model(
     plugins: &PluginManager,
     node: &mesh::Node,
     tcp_stream: ClientStream,
+    forwarded_path: &str,
     model_id: &str,
     request_body: serde_json::Value,
     candidate_models: Vec<String>,
@@ -177,6 +224,16 @@ pub(crate) async fn try_handle_virtual_model(
             return VirtualModelDispatchResult::Responded(response_outcome(503, result));
         }
     };
+    if let Some((status, message)) = validate_virtual_request(
+        forwarded_path,
+        model_id,
+        &route,
+        &request_body,
+        &candidate_models,
+    ) {
+        let result = proxy::send_error_observed(tcp_stream, status, &message, route_observer).await;
+        return VirtualModelDispatchResult::Responded(response_outcome(status, result));
+    }
     let virtual_ids = plugins
         .virtual_models()
         .await
@@ -184,46 +241,10 @@ pub(crate) async fn try_handle_virtual_model(
         .into_iter()
         .map(|route| route.model_id)
         .collect::<std::collections::BTreeSet<_>>();
-    if candidate_models
-        .iter()
-        .any(|candidate| candidate == model_id)
-    {
-        let result = proxy::send_error_observed(
-            tcp_stream,
-            409,
-            &format!("virtual model '{model_id}' collides with a concrete model"),
-            route_observer,
-        )
-        .await;
-        return VirtualModelDispatchResult::Responded(response_outcome(409, result));
-    }
-    let requests_tools = request_body.get("tools").is_some_and(|tools| {
-        !tools.is_null() && tools.as_array().is_none_or(|items| !items.is_empty())
-    });
-    if requests_tools && !route.supports_tools {
-        let result = proxy::send_error_observed(
-            tcp_stream,
-            422,
-            &format!("virtual model '{model_id}' does not support tools"),
-            route_observer,
-        )
-        .await;
-        return VirtualModelDispatchResult::Responded(response_outcome(422, result));
-    }
     let requests_stream = request_body
         .get("stream")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    if requests_stream && !route.supports_streaming {
-        let result = proxy::send_error_observed(
-            tcp_stream,
-            422,
-            &format!("virtual model '{model_id}' does not support streaming"),
-            route_observer,
-        )
-        .await;
-        return VirtualModelDispatchResult::Responded(response_outcome(422, result));
-    }
     let descriptors = node.all_served_model_descriptors().await;
     let runtimes = node.all_model_runtime_descriptors().await;
     let mut candidates = candidate_models

@@ -104,52 +104,77 @@ message InvokeVirtualModelResponse {
 ```
 
 `request_json` is a normalized OpenAI request with the requested virtual model
-preserved. The host assigns a correlation id in the envelope. Cancellation is
-an explicit host notification for that id; dropping the client connection also
-cancels all nested inference owned by the call.
+preserved. The host assigns a correlation id in the envelope. Propagating an
+explicit cancellation notification for that id, including cancellation of all
+nested inference when the client disconnects, remains a requirement for the
+later cancellation slice. The current buffered bridge bounds nested calls with
+request timeouts but does not yet propagate client-disconnect cancellation.
 
 ## Plugin-to-Host Inference
 
 Plugin-originated calls use the reserved request-id range already used by
-`PluginContext::open_mesh_stream`:
+`PluginContext::open_mesh_stream`. The implemented Rust request carries a
+concrete model id, an OpenAI-compatible JSON body, and an optional timeout:
 
-```proto
-message HostInferenceRequest {
-  uint64 parent_request_id = 1;
-  string model_id = 2;
-  string request_json = 3;
-  optional uint64 deadline_unix_ms = 4;
-}
-
-message HostInferenceResponse {
-  string response_json = 1;
-  string served_by = 2;
-  string usage_json = 3;
+```rust
+HostInferenceRequest {
+    model_id: String,
+    request: serde_json::Value,
+    timeout_ms: Option<u64>,
 }
 ```
 
-The Rust authoring API should hide this wire shape:
+Register the virtual model in the manifest, bind the declared handler on a
+`VirtualModelRouter`, and pass one `HostInferenceRequest` to
+`PluginContext::infer`:
 
 ```rust
-plugin! {
-    metadata: metadata,
-    virtual_models: [
-        virtual_model::new("mesh-agent")
-            .supports_tools(true)
-            .handle(handle_mesh_agent),
-    ],
+fn plugin(metadata: PluginMetadata) -> SimplePlugin {
+    let manifest = plugin_manifest![
+        virtual_model("mesh-agent", "chat").supports_tools(true)
+    ];
+    let mut router = VirtualModelRouter::new();
+    router.add_raw(
+        operation_with_schema("chat", "Run an agent turn", serde_json::Map::new()),
+        |request, context| {
+            let context = context.owned();
+            Box::pin(async move {
+                let invocation: VirtualModelInvocation = request.arguments()?;
+                structured_tool_result(handle_mesh_agent(invocation, context).await)
+            })
+        },
+    );
+    SimplePlugin::new(metadata)
+        .with_manifest(manifest)
+        .with_virtual_model_router(router)
 }
 
 async fn handle_mesh_agent(
-    request: ChatRequest,
-    context: &mut PluginContext<'_>,
-) -> Result<ChatResponse> {
-    let route = choose_route(&request).await?;
-    context
-        .infer(route.model, request.with_reasoning_effort(route.effort))
-        .await
+    invocation: VirtualModelInvocation,
+    context: PluginContext<'static>,
+) -> anyhow::Result<VirtualModelResponse> {
+    let candidate = choose_route(&invocation.candidates)?;
+    let response = context
+        .infer(HostInferenceRequest {
+            model_id: candidate.model_id.clone(),
+            request: invocation.request,
+            timeout_ms: Some(60_000),
+        })
+        .await?;
+    Ok(VirtualModelResponse {
+        status_code: response.status_code,
+        body: response.body,
+        headers: response
+            .served_by
+            .map(|host| vec![("x-mesh-served-by".into(), host)])
+            .unwrap_or_default(),
+        event_stream: false,
+    })
 }
 ```
+
+The built-in implementation in `crates/mesh-llm-moa-plugin/src/lib.rs` is the
+complete conformance example.
 
 V1 host inference accepts only concrete model ids. It rejects built-in aliases
 and all virtual model ids, including the caller, so a plugin cannot recurse.
