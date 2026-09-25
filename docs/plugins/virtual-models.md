@@ -267,7 +267,7 @@ transitive propagation requires an explicitly reviewed schema and bound.
 Move the existing `model: "mesh"` MoA implementation behind this interface as
 the first in-process conformance plugin. MoA exercises parallel nested
 inference, candidate snapshots, partial failure, cancellation, streaming
-fan-in, and aggregate usage before Goose adds session and tool semantics.
+fan-in, and aggregate usage before later plugins add session and tool semantics.
 
 Migrate without changing the public model id:
 
@@ -291,8 +291,3 @@ host or plugin-ranked affinity chooses an eligible placement for each model.
 3. Add bounded affinity-rank and namespaced gossip-extension contracts.
 4. Move the built-in MoA path behind the contract as a conformance test.
 5. Add negotiated streaming, cancellation, and aggregate usage.
-6. Implement the Goose/OpenJEV virtual model against the stable contract.
-
-Goose is deliberately downstream of this boundary. Its unrolled state machine
-can yield on each host inference or tool operation without adding Goose types
-to the host runtime.
