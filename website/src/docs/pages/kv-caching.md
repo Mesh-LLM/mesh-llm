@@ -30,14 +30,16 @@ With no cache settings:
 - Mesh enables the in-memory prefix cache with family-aware limits. Prefixes of
   at least 256 tokens are eligible, and Mesh selects the stored state format
   from the model architecture.
-- With no explicit K/V dtype, the resolver selects Q8_0 for both caches when
-  the model is smaller than 50 GiB and Q4_0 for both caches at 50 GiB or above.
-  It checks GGUF architecture and head dimensions before applying that default
-  and falls back to F16 when metadata proves the quantized layout is invalid.
-  An explicit incompatible dtype fails instead of changing silently.
+- With no explicit K/V dtype, the resolver uses a validated publisher KV
+  declaration from the model package; with no such declaration it uses F16 for
+  both caches. Model weight bytes and weight quantization are deliberately not
+  inputs to that choice. A publisher default the model cannot load (GGUF
+  architecture, head dimensions, or fused-attention support) degrades to F16;
+  an explicit user dtype that cannot load fails instead of changing silently.
 - KV offload and unified-cache behavior remain automatic.
-- The durable disk cache is off, so a process restart starts with an empty
-  prompt cache and Mesh writes no prompt state to disk.
+- The durable disk cache and its host-RAM L2 mirror are off, so a process
+  restart starts with an empty prompt cache and Mesh writes no prompt state to
+  disk.
 
 These defaults apply across the supported CPU, Metal, CUDA, and ROCm runtimes.
 
@@ -53,6 +55,7 @@ These defaults apply across the supported CPU, Metal, CUDA, and ROCm runtimes.
 | Disable all prompt-prefix reuse | `model_fit.prompt_cache` | `auto` | config file |
 | Tune or disable in-memory prefix reuse | `model_fit.prefix_cache.*` | family defaults | config file |
 | Persist prompt state across restarts | `runtime.kv_cache.disk.*` | `off` | config, environment, or `serve` flags |
+| Mirror the disk tier in host RAM | `model_fit.cache_ram_mib` | `0`/unset = off | config file |
 | Inspect or remove disk entries | `mesh-llm kv-cache ...` | n/a | CLI |
 
 Model-level cache controls do not currently have CLI equivalents. Use
@@ -91,8 +94,8 @@ failure is only known when the runtime loads, so metadata validation alone
 cannot prove that every quantized combination will start.
 
 K and V may use different dtypes. For these technical fields, per-model values
-override global values, which override family defaults and finally the built-in
-size rule.
+override global values, which override the publisher-derived default and
+finally the F16 fallback.
 
 The config validator currently recognizes additional GGML dtype labels that
 the pinned embedded runtime does not load. The table above lists the values
@@ -141,9 +144,10 @@ not cache automatically. The size fields are byte counts; `max_bytes = 0`
 means no explicit byte cap. Setting `prompt_cache = false` disables prefix
 caching and conflicts with an explicitly enabled `prefix_cache` block.
 
-Per-model `[[models]]` values override `[defaults]`; explicit cache dtypes
-override policy-derived dtypes; unresolved values fall back through family
-policy and built-ins. Model cache changes apply when the model reloads.
+Per-model `[[models]]` values override `[defaults]`, and an explicit cache
+dtype always wins. Anything unresolved falls back to the validated publisher
+KV declaration and then to F16. Model cache changes apply when the model
+reloads.
 
 The OpenAI request field `prompt_cache_retention` accepts `in_memory` and
 `24h`. Mesh records it as telemetry, but neither value currently enforces a
@@ -152,9 +156,11 @@ below to control retention.
 
 `cache_idle_slots` limits how many reset native sessions remain available for
 reuse. Unset means the runtime lane count is the bound, `0` drops every reset
-lane, and a positive value adds a lower cap. `cache_ram_mib` is reserved; any
-positive value currently fails model loading, so there is no configurable
-host-RAM L2 tier.
+lane, and a positive value adds a lower cap. `cache_ram_mib` is the opt-in
+host-RAM L2 mirror and is off when unset or `0`. A positive MiB value requires
+prefix caching and an active disk tier (`runtime.kv_cache.disk.mode` other than
+`off`); with no disk tier the stage runs with L2 disabled and logs why. L2 mirrors verified L3 entries, so it never
+serves state the disk tier would not have served.
 
 Cache matches require the exact token prefix and exact runtime identity. Mesh
 does not use fuzzy or semantic prompt matching.
@@ -251,12 +257,13 @@ experiments:
 
 ## CacheGen status
 
-CacheGen is an experimental compressed representation for saved KV state. The
-implementation targets CPU, Metal, CUDA, and ROCm, but it is still undergoing
-backend qualification, including completion and verification of the ROCm path,
-and is not selected by the normal serving config or CLI today. Use the stable
-resident/exact-state cache paths described above for production operation; do
-not add an invented `cachegen` setting to the config.
+CacheGen is an experimental compressed representation for persisted KV state,
+selected with `codec = "cachegen"` in the disk tier configuration. It is never
+selected by default, and it activates only for the measured Metal F32/F32,
+F32/F16, and F16/F32 layouts; every other backend and layout stores exact native
+pages. The ROCm path is still being qualified, so keep `codec = "native"` (the
+default) for production until the qualified set broadens. Archives are encoded
+on the cache worker and restored directly into the native runtime.
 
 For every field and allowed value, see the [Config Reference](/docs/pages/config-reference/).
 For disk storage details, failure modes, and recovery procedures, see the
