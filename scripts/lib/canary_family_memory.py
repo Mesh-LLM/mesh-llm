@@ -158,10 +158,15 @@ def guarded_run(model, expected_tier, command, evidence, *, cwd=None):
     lock_path = Path(tempfile.gettempdir()) / f"mesh-canary-family-{os.getuid()}.lock"
     try:
         with lock_path.open("a") as lock:
+            lock_wait_started = time.monotonic()
+            report["host_lock_contended"] = False
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise ValueError("another family certification holds the host lock") from error
+            except BlockingIOError:
+                report["host_lock_contended"] = True
+                print(f"another family certification holds {lock_path}; waiting", flush=True)
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            report["host_lock_wait_seconds"] = round(time.monotonic() - lock_wait_started, 3)
             estimate = placement(model)
             report.update(estimate)
             if estimate["memory_tier"] != expected_tier:

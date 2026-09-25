@@ -415,6 +415,7 @@ fn config_sync_config_hash_determinism() {
     let config = crate::plugin::MeshConfig {
         version: Some(1),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: None,
         },
@@ -450,6 +451,7 @@ fn config_sync_config_hash_determinism() {
     let config2 = crate::plugin::MeshConfig {
         version: Some(1),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: None,
         },
@@ -519,6 +521,7 @@ fn pinned_gpu_proto_roundtrip() {
     let config = crate::plugin::MeshConfig {
         version: Some(1),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Pinned,
             parallel: None,
         },

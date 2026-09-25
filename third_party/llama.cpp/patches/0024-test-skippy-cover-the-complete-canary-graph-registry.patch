@@ -1,9 +1,18 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From eac3d31678630797f618265ab5a15cb4bc967b57 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 09:51:50 +1000
 Subject: [PATCH] test(skippy): cover the complete canary graph registry
 
 ---
+ src/CMakeLists.txt                          | 103 +-------------------
+ src/skippy/tests/graph_contract_cases.cmake | 101 +++++++++++++++++++
+ src/skippy/tests/graph_contract_checks.h    |  84 +++++++++++++++-
+ src/skippy/tests/graph_contract_models.cpp  |  52 ++++++++--
+ tests/test-graph-contract-fixture.h         |  74 +++++++++++++-
+ tests/test-llama-archs.cpp                  |  28 ++++--
+ 6 files changed, 318 insertions(+), 124 deletions(-)
+ create mode 100644 src/skippy/tests/graph_contract_cases.cmake
+
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index c98a11390..b4f9bb467 100644
 --- a/src/CMakeLists.txt
@@ -341,7 +350,7 @@ index 3e4c1c15f..69844b1f8 100644
 +    if (!rejected) { throw std::runtime_error("impossible output profile was admitted"); }
 +}
 diff --git a/src/skippy/tests/graph_contract_models.cpp b/src/skippy/tests/graph_contract_models.cpp
-index bf5472dae..36444a95e 100644
+index bf5472dae..d22503d9e 100644
 --- a/src/skippy/tests/graph_contract_models.cpp
 +++ b/src/skippy/tests/graph_contract_models.cpp
 @@ -10,11 +10,12 @@
@@ -396,17 +405,20 @@ index bf5472dae..36444a95e 100644
      skippy_stage_plan * whole_raw = nullptr;
      if (skippy_stage_planner_realize_v1(planner, 0, layers, &whole_raw, &error) != SKIPPY_STATUS_OK) {
          std::fprintf(stderr, "whole-model plan failed: %s\n", error ? error->message : "unknown");
-@@ -75,6 +96,9 @@ static int run_contract(int argc, char ** argv) {
+@@ -75,6 +96,12 @@ static int run_contract(int argc, char ** argv) {
      }
      std::unique_ptr<skippy_stage_plan, decltype(&skippy_stage_plan_free)> whole(whole_raw, skippy_stage_plan_free);
      const auto all_parameters = contract_parameters(whole.get());
 +    const auto all_states = contract_states(whole.get());
++    if (mode == "stateless" && !all_states.empty()) {
++        throw std::runtime_error("stateless graph contract unexpectedly owns mutable state");
++    }
 +    check_state_ownership(whole.get(), mode != "stateless");
 +    check_mtp_contract(whole.get(), mtp_layers);
      // Balanced canary cuts, edge cuts, and a multi-stage chain exercise forwarding.
      std::vector<std::vector<int32_t>> chains = {
          {0, 1, layers}, {0, layers / 2, layers}, {0, layers - 1, layers},
-@@ -86,7 +110,7 @@ static int run_contract(int argc, char ** argv) {
+@@ -86,7 +113,7 @@ static int run_contract(int argc, char ** argv) {
                  [shared_tail](int32_t cut) { return cut > shared_tail; });
          std::vector<std::unique_ptr<skippy_stage_plan, decltype(&skippy_stage_plan_free)>> owned;
          std::vector<const skippy_stage_plan *> chain;
@@ -415,7 +427,7 @@ index bf5472dae..36444a95e 100644
          for (size_t i = 1; i < cuts.size(); ++i) {
              skippy_stage_plan * plan = nullptr;
              status = skippy_stage_planner_realize_v1(planner, cuts[i-1], cuts[i], &plan, &error);
-@@ -95,7 +119,7 @@ static int run_contract(int argc, char ** argv) {
+@@ -95,7 +122,7 @@ static int run_contract(int argc, char ** argv) {
              skippy_stage_plan_desc_v1 descriptor{};
              status = skippy_stage_plan_describe_v1(plan, &descriptor, &error);
              if (status != SKIPPY_STATUS_OK) { break; }
@@ -424,7 +436,7 @@ index bf5472dae..36444a95e 100644
                  std::fprintf(stderr, "expected token and embedding decode/prefill profiles, got %zu\n", size_t(descriptor.profile_count));
                  return 1;
              }
-@@ -113,13 +137,21 @@ static int run_contract(int argc, char ** argv) {
+@@ -113,13 +140,21 @@ static int run_contract(int argc, char ** argv) {
                  names.emplace_back(name, length);
              }
              std::sort(names.begin(), names.end());
@@ -448,7 +460,7 @@ index bf5472dae..36444a95e 100644
              chain.push_back(plan);
          }
          if (forbidden_cut) {
-@@ -141,6 +173,9 @@ static int run_contract(int argc, char ** argv) {
+@@ -141,6 +176,9 @@ static int run_contract(int argc, char ** argv) {
              skippy_error_free(error);
              return 1;
          }
@@ -566,34 +578,78 @@ index 61f936bbe..32ceaf95b 100644
      if (!gguf_write_to_file(output.get(), path.c_str(), true)) {
          throw std::runtime_error("cannot write graph contract fixture");
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 858941c41..fd2901367 100644
+index 90cf83e08..32d8c6af3 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -985,6 +985,7 @@ int main(int argc, char ** argv) {
-     size_t seed = rd();
-     std::string out;
+@@ -130,7 +130,8 @@ static gguf_context_ptr get_gguf_ctx(
+         const glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT,
+         const uint32_t context_length = 256,
+         const uint32_t glm_dsa_indexer_top_k = 8,
+-        const bool deepseek4_mtp = false) {
++        const bool deepseek4_mtp = false,
++        const uint32_t contract_layers = 0, const uint32_t contract_width = 0) {
+     (void) glm_dsa_indexshare;
+     gguf_context_ptr ret(gguf_init_empty());
+     llama_model_saver ms(arch, ret.get());
+@@ -186,6 +187,8 @@ static gguf_context_ptr get_gguf_ctx(
+         n_layer = 8; // 1 layer per stack x 2 h-cycles x (3 l-cycles + 1) cache slots
+     }
+ 
++    if (contract_layers) { n_layer = contract_layers; n_embd = contract_width; }
++
+     uint32_t n_head_kv = n_head;
+     if (arch == LLM_ARCH_QWEN3) {
+         n_head_kv = 1; // MQA coverage
+@@ -1043,6 +1046,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+ }
+ 
+ #include "test-deepseek4-mtp.h"
++#include "test-graph-contract-fixture.h"
+ 
+ int main(int argc, char ** argv) {
+     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
+@@ -1059,20 +1063,22 @@ int main(int argc, char ** argv) {
      bool deepseek4_mtp = false;
-+    uint32_t contract_mtp = 0;
      bool text_only = false;
      std::string mtp_model;
-     uint32_t contract_layers = 0, contract_width = 0;
-@@ -992,6 +993,10 @@ int main(int argc, char ** argv) {
++    uint32_t contract_layers = 0, contract_width = 0, contract_mtp_layers = 0;
      int verbosity = LOG_LEVEL_ERROR;
  
      for (int i = 1; i < argc; i++) {
-+        if (strcmp(argv[i], "--contract-mtp") == 0 && i + 1 < argc) {
-+            contract_mtp = std::stoul(argv[++i]);
-+            continue;
-+        }
-         if (strcmp(argv[i], "--graph-contract") == 0 && i + 2 < argc) {
-             contract_layers = std::stoul(argv[++i]);
-             contract_width = std::stoul(argv[++i]);
-@@ -1052,7 +1057,7 @@ int main(int argc, char ** argv) {
+-        if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
++        if (strcmp(argv[i], "--graph-contract") == 0 && i + 2 < argc) {
++            contract_layers = std::stoul(argv[++i]);
++            contract_width = std::stoul(argv[++i]);
++        } else if (strcmp(argv[i], "--contract-mtp") == 0 && i + 1 < argc) {
++            contract_mtp_layers = std::stoul(argv[++i]);
++        } else if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
+             text_only = true;
+-        }
+-        if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
++        } else if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
+             deepseek4_mtp = true;
+-        }
+-        if (strcmp(argv[i], "--test-mtp-model") == 0 && i + 1 < argc) {
++        } else if (strcmp(argv[i], "--test-mtp-model") == 0 && i + 1 < argc) {
+             mtp_model = argv[++i];
+-        }
+-
+-        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
++        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+             usage(argv);
+             return 0;
+         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
+@@ -1148,6 +1154,10 @@ int main(int argc, char ** argv) {
+     LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
  
      try {
-         if (contract_layers) {
--            return save_graph_contract_fixture(arch, out, contract_layers, contract_width);
-+            return save_graph_contract_fixture(arch, out, contract_layers, contract_width, contract_mtp);
-         }
++        if (contract_layers) {
++            return save_graph_contract_fixture(
++                    arch_from_filter(arch_filter), out, contract_layers, contract_width, contract_mtp_layers);
++        }
          if (!mtp_model.empty()) {
              return test_deepseek4_mtp(mtp_model);
+         }
+-- 
+2.54.0 (Apple Git-157)
+

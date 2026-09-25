@@ -1,4 +1,4 @@
-From 7054e1bee02da76ead8cb5f6d549ccd2a1d30bc6 Mon Sep 17 00:00:00 2001
+From 7673f33345b3821fb4f259ab79597f7c1f41ff8e Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 08:37:33 +1000
 Subject: [PATCH] test(skippy): validate synthetic canary graph contracts
@@ -7,8 +7,7 @@ Subject: [PATCH] test(skippy): validate synthetic canary graph contracts
  src/CMakeLists.txt                         |  41 +++++++
  src/skippy/tests/graph_contract_models.cpp | 125 +++++++++++++++++++++
  tests/test-graph-contract-fixture.h        |  46 ++++++++
- tests/test-llama-archs.cpp                 |  14 ++-
- 4 files changed, 225 insertions(+), 1 deletion(-)
+ 3 files changed, 212 insertions(+)
  create mode 100644 src/skippy/tests/graph_contract_models.cpp
  create mode 100644 tests/test-graph-contract-fixture.h
 
@@ -247,63 +246,6 @@ index 000000000..61f936bbe
 +    std::filesystem::resize_file(path, size);
 +    return 0;
 +}
-diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index f43a2df79..858941c41 100644
---- a/tests/test-llama-archs.cpp
-+++ b/tests/test-llama-archs.cpp
-@@ -95,7 +95,8 @@ static gguf_context_ptr get_gguf_ctx(
-         const glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT,
-         const uint32_t context_length = 256,
-         const uint32_t glm_dsa_indexer_top_k = 8,
--        const bool deepseek4_mtp = false) {
-+        const bool deepseek4_mtp = false,
-+        const uint32_t contract_layers = 0, const uint32_t contract_width = 0) {
-     (void) glm_dsa_indexshare;
-     gguf_context_ptr ret(gguf_init_empty());
-     llama_model_saver ms(arch, ret.get());
-@@ -151,6 +152,8 @@ static gguf_context_ptr get_gguf_ctx(
-         n_layer = 8; // 1 layer per stack x 2 h-cycles x (3 l-cycles + 1) cache slots
-     }
- 
-+    if (contract_layers) { n_layer = contract_layers; n_embd = contract_width; }
-+
-     uint32_t n_head_kv = n_head;
-     if (arch == LLM_ARCH_QWEN3) {
-         n_head_kv = 1; // MQA coverage
-@@ -969,6 +972,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
- }
- 
- #include "test-deepseek4-mtp.h"
-+#include "test-graph-contract-fixture.h"
- 
- int main(int argc, char ** argv) {
-     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
-@@ -983,10 +987,15 @@ int main(int argc, char ** argv) {
-     bool deepseek4_mtp = false;
-     bool text_only = false;
-     std::string mtp_model;
-+    uint32_t contract_layers = 0, contract_width = 0;
- 
-     int verbosity = LOG_LEVEL_ERROR;
- 
-     for (int i = 1; i < argc; i++) {
-+        if (strcmp(argv[i], "--graph-contract") == 0 && i + 2 < argc) {
-+            contract_layers = std::stoul(argv[++i]);
-+            contract_width = std::stoul(argv[++i]);
-+        }
-         if (strcmp(argv[i], "--text-only") == 0) {
-             text_only = true;
-         }
-@@ -1042,6 +1051,9 @@ int main(int argc, char ** argv) {
-     printf("%s: using seed %zu\n", __func__, seed);
- 
-     try {
-+        if (contract_layers) {
-+            return save_graph_contract_fixture(arch, out, contract_layers, contract_width);
-+        }
-         if (!mtp_model.empty()) {
-             return test_deepseek4_mtp(mtp_model);
-         }
 -- 
 2.54.0 (Apple Git-157)
 

@@ -8,6 +8,7 @@ fn config_sync_full_config_roundtrip() {
     let config = crate::plugin::MeshConfig {
         version: Some(1),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Pinned,
             parallel: None,
         },

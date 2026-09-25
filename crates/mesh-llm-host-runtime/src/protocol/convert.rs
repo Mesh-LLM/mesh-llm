@@ -1354,6 +1354,7 @@ fn legacy_proto_config_to_mesh(
     let mut config = MeshConfig {
         version: Some(snapshot.version),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment,
             parallel: None,
         },

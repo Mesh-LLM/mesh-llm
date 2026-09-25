@@ -1,7 +1,7 @@
-From cddedddce6daf2b681ed1eebcb93acc1a941438b Mon Sep 17 00:00:00 2001
+From 11d8f884b831dbd3e4d0cf41e7953e776e233125 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:03 +1000
-Subject: [PATCH 01/14] skippy: define graph-derived stage ABI
+Subject: [PATCH] skippy: define graph-derived stage ABI
 
 ---
  include/skippy.h                      |  28 +++
@@ -2073,5 +2073,5 @@ index 000000000..c9697cf6c
 +
 +#endif // SKIPPY_TOKENIZATION_H
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

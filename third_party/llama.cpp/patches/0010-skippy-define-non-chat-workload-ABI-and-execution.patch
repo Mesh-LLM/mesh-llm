@@ -1,7 +1,7 @@
-From 167b8b5148beb9610934b4d81502f740f0dc3fed Mon Sep 17 00:00:00 2001
+From 8c251178c549337156a794c9a1355c6f16cf6530 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 01:35:50 -0700
-Subject: [PATCH 10/14] skippy: define non-chat workload ABI and execution
+Subject: [PATCH] skippy: define non-chat workload ABI and execution
 
 ---
  include/skippy.h                      |   1 +
@@ -643,5 +643,5 @@ index 000000000..d6f9570ba
 +    return 0;
 +}
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

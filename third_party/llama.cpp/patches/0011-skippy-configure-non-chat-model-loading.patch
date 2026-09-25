@@ -1,7 +1,7 @@
-From 7cbd939c6000d61a810032a59f0c4b965975e4b0 Mon Sep 17 00:00:00 2001
+From 5c8c5553cf3da845822fbc1c56b39ae41c4f5273 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 01:36:02 -0700
-Subject: [PATCH 11/14] skippy: configure non-chat model loading
+Subject: [PATCH] skippy: configure non-chat model loading
 
 ---
  src/skippy/model_loading.cpp | 25 ++++++++++++++++++++++---
@@ -53,5 +53,5 @@ index f38f4a936..15b29abfa 100644
      const bool glm_dsa_tensor_trace_enabled = skippy_glm_dsa_tensor_trace_enabled();
      if (model->arch == LLM_ARCH_GLM_DSA && (glm_dsa_op_timing_enabled || glm_dsa_tensor_trace_enabled)) {
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "852fc938a5095a681d932bf7114877e161b8599f803f5020b1d5a0f410d2c796",
+  "full_patch_sha256": "9d7525b00573ae939a69c0aac41a962f4a9cc287c7a722fb989a7d14d3217fd7",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -49,7 +49,7 @@
         "bailingmoe3"
       ],
       "file": "0005-family-bailingmoe3.patch",
-      "sha256": "3a44a60091b7f4fb389645f8480ec9779ac40e5889ed70b11f6a06cd8e54a9b4",
+      "sha256": "c2b1877782b84403335a9a26ac873103e112cf4c61d2e4a1efed9a47414bcea4",
       "sources": [
         "src/models/bailingmoe3.cpp"
       ]
@@ -334,7 +334,7 @@
         "hunyuan-dense"
       ],
       "file": "0033-family-hunyuan-dense.patch",
-      "sha256": "097033dbc8fe256afdf0715d5647146c88153b29b9a6b301ce124ac212accb0b",
+      "sha256": "514ab4d6860fe098a7a5c3042b84fd0119bb8d85b8217d18267f7402ba1d17b0",
       "sources": [
         "src/models/hunyuan-vl.cpp"
       ]
@@ -528,7 +528,7 @@
         "minimax-m3"
       ],
       "file": "0052-family-minimax-m3.patch",
-      "sha256": "e29250d0f2e63fa8de56dc57089f3a8c0f8e1495cbf4b7ca7aa1864bdd6140d8",
+      "sha256": "e33b7d6cefaad8687975b28d187a17d4593e2befe387dea75056e97637fc09a5",
       "sources": [
         "src/models/minimax-m3.cpp"
       ]
