@@ -13,7 +13,7 @@ use super::{
     RuntimeResourcePlanningProfile, RuntimeSurface, SkippyNativeLogForwardingGuard,
     StartupLocalModelTask, StartupMeshCreationState, StartupModelPlan, StartupModelSpec,
     StartupReadyReporter, bridge_skippy_native_logs, build_serving_list, cli_has_explicit_models,
-    configure_lifecycle_log_parser, configure_skippy_native_logging,
+    configure_skippy_native_logging, configure_startup_lifecycle_log_parser,
     emit_configuration_ui_read_only_hint, initialize_embedded_runtime_entrypoint,
     initialize_runtime_entrypoint, maybe_discover_join_candidates, next_runtime_instance_id,
     nostr_rediscovery, nostr_relays, openai_guardrail_policy_handle, owner_runtime_config,
@@ -25,7 +25,7 @@ use super::{
     setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
     spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
     start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
-    structured_event_capabilities, swarm_capture_observer_requested,
+    swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -756,15 +756,9 @@ pub(super) fn configure_run_auto_process_state(
     }
 
     let native_log_rx = skippy_runtime::register_filtered_native_logs();
-    let capabilities = structured_event_capabilities(
-        skippy_runtime::probe_capabilities(),
-        mesh_llm_config::event_system_off().unwrap_or(false),
-        skippy_runtime::runtime_event_reporter_installed(),
-    );
-    configure_lifecycle_log_parser(config.runtime.lifecycle_log_parser, &capabilities);
-    tracing::info!(
-        source = config.runtime.lifecycle_log_parser_source.as_str(),
-        "configured lifecycle native-log parser"
+    configure_startup_lifecycle_log_parser(
+        config.runtime.lifecycle_log_parser,
+        config.runtime.lifecycle_log_parser_source.as_str(),
     );
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
