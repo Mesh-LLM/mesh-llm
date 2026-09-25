@@ -3,6 +3,14 @@
 
 This runs only after candidate source checkout, where Cargo tests already run.
 It does not change the protected planner, its catalogs, or matrix worker count.
+
+Translation and workspace membership are separate responsibilities. A planned
+package that has a successor mapping must resolve to an owner the candidate
+actually has, or the migration is incomplete and the batch fails. A planned
+package without a mapping is passed through unchanged: the executor's
+workspace filter drops a name the checked-out revision does not have, with a
+warning, so a branch that predates a member added on the default branch still
+gets a verdict instead of a red lane.
 """
 from __future__ import annotations
 
@@ -58,10 +66,13 @@ def resolve(requested: list[str], planned: list[str], available: set[str], gener
     migrating = generation == "legacy" and "skippy-package-builder" in available
     result = []
     for name in requested:
-        candidates = SUCCESSORS.get(name, [name]) if migrating else [name]
-        missing = set(candidates) - available
-        if missing:
-            raise ValueError(f'planned package {name!r} has missing source owners: {sorted(missing)}')
+        if migrating and name in SUCCESSORS:
+            candidates = SUCCESSORS[name]
+            missing = sorted(set(candidates) - available)
+            if missing:
+                raise ValueError(f'planned package {name!r} has missing source owners: {missing}')
+        else:
+            candidates = [name]
         for candidate in candidates:
             if candidate in result:
                 raise ValueError(f'package resolves more than once: {candidate}')

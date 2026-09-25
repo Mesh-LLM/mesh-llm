@@ -1065,8 +1065,29 @@ product layouts. Nightly and explicit-revision canary pin readers accept exactly
 one legacy or relocated pin, rejecting missing and ambiguous source trees.
 
 Release version propagation discovers both relocated crate trees, including
-versioned local dependencies. The compiler seed warmer uses the resolved UI
-placeholder directory. Neither change expands runner or cache authority.
+versioned local dependencies, and resolves each versioned sidecar from the same
+source layout, so a relocated-only checkout can propagate a version without a
+root `website/`, `sdk/` or `docs/` tree. The website recipes consume the
+directory the workflow resolved through `MESH_LLM_WEBSITE_DIR`, so the
+`website-build` and `cli-inventory-check` boundaries cannot silently fall back to
+a root `website/`. Neither change expands runner or cache authority.
+
+Relocated runtime owners keep their consumers: the SDK-smoke and
+inference-artifact selectors name `skippy-native-runtime` beside
+`mesh-llm-native-runtime`, and a planner-level assertion locks every successor in
+`scripts/ci-cargo-packages.py` to its predecessor's semantic domains. Three
+successors (`skippy-hf-hub`, `skippy-api`, `skippy-events`) have no
+`crate_rules` entry yet; the assertion records that exact set instead of hiding
+it. `ci/ownership.yml` can only change on the protected branch, because the PR
+plan step requires a source revision's catalogs to match the protected copies
+byte for byte, so that catalog migration is a prerequisite before the map can be
+narrowed and the recorded set can be emptied.
+
+Executor batch translation and workspace membership stay separate: a mapped
+successor that the checked-out revision does not have fails the batch, while an
+unmapped planned package is passed through to the executor's workspace filter,
+which drops and annotates it. A branch that predates a member added on the
+default branch therefore still gets a verdict instead of a red lane.
 
 ### Canary memory admission and Python SDK
 

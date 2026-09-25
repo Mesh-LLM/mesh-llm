@@ -27,6 +27,34 @@ require_file() {
     fi
 }
 
+# Resolve a versioned sidecar in either supported product source layout. The
+# reviewed extraction relocates the product trees under mesh/ and skippy/, so
+# the release lane must bump the same file that CI and the planner resolve.
+# Legacy wins only when no relocated copy exists; two copies are ambiguous and
+# fail before any version is written.
+resolve_product_path() {
+    local logical="$1"
+    local candidate
+    local -a present=()
+
+    for candidate in "$logical" "mesh/$logical" "skippy/$logical"; do
+        if [[ -e "$REPO_ROOT/$candidate" ]]; then
+            present+=("$candidate")
+        fi
+    done
+
+    if [[ "${#present[@]}" -eq 0 ]]; then
+        echo "missing required file: $logical under the repository root, mesh/ or skippy/" >&2
+        exit 1
+    fi
+    if [[ "${#present[@]}" -gt 1 ]]; then
+        echo "ambiguous source layout for $logical: ${present[*]}" >&2
+        exit 1
+    fi
+
+    printf '%s\n' "${present[0]}"
+}
+
 update_manifest_version() {
     local file="$1"
     local next="$2"
@@ -258,8 +286,8 @@ for relative_manifest in "${manifests[@]}"; do
     versioned_files+=("$manifest")
 done
 
-kotlin_build_file="$REPO_ROOT/sdk/kotlin/build.gradle.kts"
-require_file "$kotlin_build_file"
+kotlin_build_logical="sdk/kotlin/build.gradle.kts"
+kotlin_build_file="$REPO_ROOT/$(resolve_product_path "$kotlin_build_logical")"
 update_gradle_project_version "$kotlin_build_file" "$version"
 versioned_files+=("$kotlin_build_file")
 
@@ -285,10 +313,12 @@ literal_version_files=(
     "website/src/docs/pages/developing-plugins.md"
 )
 
-for relative_file in "${literal_version_files[@]}"; do
+for logical_file in "${literal_version_files[@]}"; do
+    relative_file="$(resolve_product_path "$logical_file")"
     file="$REPO_ROOT/$relative_file"
-    require_file "$file"
-    case "$relative_file" in
+    # The versioned JSON sidecars are identified by their logical path, so a
+    # relocated copy keeps the dedicated JSON updater.
+    case "$logical_file" in
         crates/mesh-llm-ui/package.json | crates/mesh-llm-ui/package-lock.json | sdk/node/package.json)
             update_json_package_version_references "$file" "$previous_version" "$version"
             ;;
@@ -299,8 +329,8 @@ for relative_file in "${literal_version_files[@]}"; do
     versioned_files+=("$file")
 done
 
-known_versions_file="$REPO_ROOT/crates/mesh-llm-config/src/model/built_in_schema/setting_schema.rs"
-require_file "$known_versions_file"
+known_versions_logical="crates/mesh-llm-config/src/model/built_in_schema/setting_schema.rs"
+known_versions_file="$REPO_ROOT/$(resolve_product_path "$known_versions_logical")"
 update_known_mesh_versions "$known_versions_file" "$version"
 versioned_files+=("$known_versions_file")
 

@@ -147,6 +147,71 @@ class SourceLayoutTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
 
+    @unittest.skipUnless(shutil.which('just'), 'needs just')
+    def test_website_recipes_consume_the_resolved_layout(self):
+        """`just website-build` must not fall back to a root `website/` tree."""
+        justfile = (ROOT / 'Justfile').read_text(encoding='utf-8')
+        self.assertIn('MESH_LLM_WEBSITE_DIR', justfile)
+        for name, job_name, step_name in (
+            ('ci-web-slice.yml', 'website', 'Build public website'),
+            ('ci-quality-slice.yml', 'cli_docs_sync', 'Verify generated CLI inventory is deterministic and current'),
+        ):
+            steps = workflow(name)['jobs'][job_name]['steps']
+            layout = next(i for i, step in enumerate(steps) if step.get('id') == 'layout')
+            index = next(i for i, step in enumerate(steps) if step.get('name') == step_name)
+            self.assertLess(layout, index)
+            self.assertEqual(
+                steps[index]['env']['MESH_LLM_WEBSITE_DIR'],
+                '${{ steps.layout.outputs.website_dir }}',
+            )
+        evaluated = subprocess.run(
+            ['just', '--evaluate', 'website_dir'],
+            cwd=ROOT,
+            env={**os.environ, 'MESH_LLM_WEBSITE_DIR': 'mesh/website'},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(evaluated.returncode, 0, evaluated.stderr)
+        self.assertEqual(evaluated.stdout.strip(), 'mesh/website')
+        fallback = subprocess.run(
+            ['just', '--evaluate', 'website_dir'],
+            cwd=ROOT,
+            env={key: value for key, value in os.environ.items() if key != 'MESH_LLM_WEBSITE_DIR'},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(fallback.returncode, 0, fallback.stderr)
+        self.assertEqual(fallback.stdout.strip(), 'website')
+
+
+    def test_relocated_runtime_owner_gates_sdk_smoke_and_inference_artifacts(self):
+        """A relocated runtime owner must still select the artifact consumers."""
+        source = (ROOT / '.github/actions/compute-changes/derive-outputs.sh').read_text()
+        script = source[source.index('SDK_SMOKE_REQUIRED="false"'):source.index('LINUX_TEST_GROUPS_JSON')]
+        script += '\nprintf "%s %s" "$SDK_SMOKE_REQUIRED" "$INFERENCE_ARTIFACT_REQUIRED"\n'
+        cases = {
+            '["mesh-llm-native-runtime"]': 'true true',
+            '["skippy-native-runtime"]': 'true true',
+            '["mesh-llm-config"]': 'true true',
+            '[]': 'false false',
+        }
+        for affected, expected in cases.items():
+            with self.subTest(affected=affected):
+                env = {
+                    **os.environ,
+                    'CHANGED_FILES': 'mesh/crates/skippy-native-runtime/src/lib.rs',
+                    'ALL_RUST': 'false',
+                    'FORCE_ALL': 'false',
+                    'EVENT_NAME': 'push',
+                    'UI_CHANGED': 'false',
+                    'BACKEND_CHANGED': 'false',
+                    'AFFECTED_CRATES': affected,
+                }
+                result = subprocess.run(['bash', '-euc', script], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+
+
     def test_nightly_pin_resolution_rejects_missing_and_ambiguous_layouts(self):
         steps = workflow('llama-upstream-canary.yml')['jobs']['resolve']['steps']
         body = next(s['run'] for s in steps if s.get('id') == 'resolve')

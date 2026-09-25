@@ -49,9 +49,24 @@ class CargoPackageCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing source owners'):
             COMPAT.resolve(['mesh-llm-host-runtime'], LEGACY, available, "legacy")
 
-    def test_unknown_planned_package_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'missing source owners'):
-            COMPAT.resolve(['unknown'], ['unknown'], set(EXTRACTED), 'legacy')
+    def test_unmapped_planned_package_defers_to_the_workspace_filter(self):
+        # A protected plan may name a crate that this revision does not have (a
+        # member added on the default branch after the branch was cut). Only a
+        # mapped successor proves an incomplete extraction, so an unmapped name
+        # is passed through for the executor's workspace filter to drop and
+        # annotate instead of failing the whole batch.
+        self.assertEqual(
+            COMPAT.resolve(['unknown'], ['unknown'], set(EXTRACTED), 'legacy'),
+            ['unknown'],
+        )
+        self.assertEqual(
+            COMPAT.resolve(['mesh-llm-analytics'], ['mesh-llm-analytics'], set(EXTRACTED), 'legacy'),
+            ['mesh-llm-analytics'],
+        )
+        self.assertEqual(
+            COMPAT.resolve(['unknown'], ['unknown'], set(LEGACY), 'legacy'),
+            ['unknown'],
+        )
 
     def test_batch_cannot_add_a_package_outside_its_plan(self):
         with self.assertRaisesRegex(ValueError, 'outside the protected plan'):
