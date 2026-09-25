@@ -22,6 +22,12 @@ ci-validate:
 ci-crate-lists:
     just with-lld cargo run -p xtask -- repo-consistency ci-crate-lists
 
+# Build only the xtask automation tool, then prove it is Cargo's target output
+# with no product/native/UI dependency (no llama.cpp or UI preparation).
+automation-bootstrap:
+    just with-lld cargo build --locked -p xtask --bin xtask
+    just with-lld cargo run --locked -p xtask --bin xtask -- automation bootstrap
+
 # Run crates.io publish-chain consistency checks.
 publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
