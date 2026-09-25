@@ -82,7 +82,8 @@ WINDOWS_UNVERIFIED_CRATES = {
 # Rust allows whitespace between a macro name and its `!`: `cfg ! (unix)`.
 CFG_OPEN = re.compile(r"\b(cfg_attr|cfg(?:\s*!)?)\s*\(")
 BARE_PLATFORM = re.compile(r"\b(?:windows|unix)\b")
-PLATFORM_KEY = re.compile(r"\btarget_(?:os|family)\s*=\s*\"(\d+)\"")
+TARGET_OS = re.compile(r"\btarget_os\s*=")
+TARGET_FAMILY = re.compile(r"\btarget_family\s*=\s*\"(\d+)\"")
 RAW_STRING = re.compile(r"b?r(#*)\"")
 CHAR_LITERAL = re.compile(r"'(?:\\(?:u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'")
 
@@ -162,14 +163,16 @@ def _cfg_predicates(code: str) -> list[str]:
 
 
 def _selects_platform_code(source: str) -> bool:
-    """Whether a cfg predicate names `windows` or `unix`, directly or as the
-    value of `target_os` / `target_family`. A `feature = "windows"` is not a
-    platform, and a cfg inside a comment or a string is not code."""
+    """Whether a cfg predicate selects code by platform: a bare `windows` or
+    `unix`, any `target_os` (code for `linux` and `macos` alone may not build on
+    Windows), or a `target_family` of `windows` or `unix`. A
+    `feature = "windows"` is not a platform, and a cfg inside a comment or a
+    string is not code."""
     code, literals = _mask_rust_source(source)
     for predicate in _cfg_predicates(code):
-        if BARE_PLATFORM.search(predicate):
+        if BARE_PLATFORM.search(predicate) or TARGET_OS.search(predicate):
             return True
-        if any(literals[int(i)] in ("windows", "unix") for i in PLATFORM_KEY.findall(predicate)):
+        if any(literals[int(i)] in ("windows", "unix") for i in TARGET_FAMILY.findall(predicate)):
             return True
     return False
 
@@ -578,6 +581,10 @@ class CiWindowsCompositionTests(unittest.TestCase):
             "nested-first": "#[cfg(all(not(test), windows))]\nfn platform() {}\n",
             "nested-macro": "const UNIX: bool = cfg!(all(not(test), unix));\n",
             "spaced-macro": "const WINDOWS: bool = cfg ! (windows);\n",
+            "target-os-linux": (
+                "#[cfg(target_os = \"linux\")]\nfn platform() {}\n"
+                "#[cfg(target_os = \"macos\")]\nfn platform() {}\n"
+            ),
             "target-family": "#[cfg(target_family = \"unix\")]\nfn platform() {}\n",
         }
         portable = {
