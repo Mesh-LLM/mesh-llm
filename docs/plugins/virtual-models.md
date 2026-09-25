@@ -48,6 +48,11 @@ client
 
 The first implementation is buffered chat completions. Streaming is additive:
 the host and plugin negotiate an event stream correlated to the same request.
+A streaming virtual model is framed by the host from the plugin's complete
+body: the buffered chat completion is translated into the matching
+`/v1/chat/completions` or `/v1/responses` event sequence, so
+`message.tool_calls` reaches the client as `function_call` items instead of
+being flattened to text.
 
 ## Manifest
 

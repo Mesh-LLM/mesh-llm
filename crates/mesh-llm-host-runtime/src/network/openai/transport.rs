@@ -437,7 +437,16 @@ pub async fn handle_mesh_request(
     {
         Ok(stream) => stream,
         Err(outcome) => {
-            // A virtual-model plugin handled the request and consumed the stream.
+            // A virtual-model plugin handled the request and consumed the
+            // stream. A streamed virtual model owes the same stream lifecycle
+            // the active ingress records, so its events are not invisible to a
+            // passive (mesh transport) caller.
+            record_virtual_model_stream_lifecycle(
+                lifecycle.route_observer(),
+                request.model_name.as_deref().unwrap_or("virtual-model"),
+                request.response_adapter,
+                outcome,
+            );
             lifecycle.terminal(outcome.terminal_outcome());
             release_request_objects(&node, &request.request_object_request_ids).await;
             return;

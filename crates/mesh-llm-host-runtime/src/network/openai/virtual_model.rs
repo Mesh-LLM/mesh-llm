@@ -613,52 +613,29 @@ async fn send_responses_sse(
     extra_headers: &[(&str, String)],
 ) -> std::io::Result<()> {
     write_sse_headers(&mut stream, extra_headers).await?;
-    let response_id = response
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("resp_virtual");
-    let model = response
-        .get("model")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("virtual-model");
-    let content = response
-        .pointer("/choices/0/message/content")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    let usage = response
-        .get("usage")
-        .map(openai_frontend::responses::chat_usage_to_responses_usage);
-    let item_id = format!("msg_{response_id}");
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0);
-    use openai_frontend::responses as resp;
-    let mut created = resp::responses_stream_created_event_with_sequence(model, created_at, 0);
-    if let Some(object) = created
-        .get_mut("response")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        object.insert("id".into(), response_id.into());
-    }
-    let events = [
-        created,
-        resp::responses_stream_delta_event_with_logprobs_and_sequence(&item_id, content, None, 1),
-        resp::responses_stream_text_done_event_with_sequence(&item_id, content, 2),
-        resp::responses_stream_completed_event_with_sequence(
-            response_id,
-            created_at,
-            model,
-            &item_id,
-            content,
-            usage,
-            3,
-        ),
-    ];
-    for event in &events {
-        write_sse_event(&mut stream, event).await?;
+    // Expand the same Responses body the non-streaming adapter serves, so a
+    // buffered answer keeps message text *and* the `function_call` items that
+    // `message.tool_calls` produces.
+    let responses = chat_completion_to_responses_json(response);
+    for event in openai_frontend::responses::responses_stream_events_for_response(&responses) {
+        write_named_sse_event(&mut stream, &event).await?;
     }
     finish_sse(&mut stream).await
+}
+
+/// Write one `/v1/responses` SSE frame. Responses streams name their events,
+/// matching the framing the host uses for a served stream, so the frame name
+/// comes from the event's own `type`.
+async fn write_named_sse_event(
+    stream: &mut ClientStream,
+    event: &serde_json::Value,
+) -> std::io::Result<()> {
+    let Some(name) = event.get("type").and_then(serde_json::Value::as_str) else {
+        return write_sse_event(stream, event).await;
+    };
+    let payload = format!("event: {name}\ndata: {event}\n\n");
+    let framed = format!("{:x}\r\n{}\r\n", payload.len(), payload);
+    stream.write_all(framed.as_bytes()).await
 }
 
 fn chat_completion_to_responses_json(chat: &serde_json::Value) -> serde_json::Value {

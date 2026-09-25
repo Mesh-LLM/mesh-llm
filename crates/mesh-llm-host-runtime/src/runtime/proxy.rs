@@ -38,4 +38,4 @@ pub(super) fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

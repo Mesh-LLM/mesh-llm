@@ -816,3 +816,104 @@ fn remote_transports_record_target_failover_and_retry_under_one_parent() {
         assert!(!record.entry.payload.contains("completion"));
     }
 }
+
+#[tokio::test]
+#[serial_test::serial]
+async fn passive_virtual_model_stream_records_stream_lifecycle() {
+    use super::{AffinityRouter, handle_mesh_request};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let temporary_root = tempfile::tempdir().expect("temporary logging root");
+    crate::initialize_logging_foundation(&mesh_llm_config::LoggingConfig {
+        enabled: true,
+        application_state_root: Some(temporary_root.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+
+    // A named virtual model, not the automatic directive: `mesh` with
+    // `stream: true` resolves to single-model routing, so only a named virtual
+    // model reaches the streaming adapters.
+    let plugin_manager =
+        crate::runtime::proxy::tests::start_standalone_virtual_model_plugin_manager(
+            "test-virtual",
+            serde_json::json!({
+                "id": "chatcmpl-virtual",
+                "object": "chat.completion",
+                "model": "test-virtual",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "virtual"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
+            }),
+        )
+        .await;
+    let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    node.set_plugin_manager(plugin_manager).await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind passive listener");
+    let address = listener.local_addr().expect("passive listener address");
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept passive client");
+        handle_mesh_request(node, stream.into(), true, AffinityRouter::new()).await;
+    });
+
+    let body =
+        r#"{"model":"test-virtual","messages":[{"role":"user","content":"hi"}],"stream":true}"#;
+    let request_id = RequestId::new();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-request-id: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        request_id.as_uuid(),
+        body.len(),
+    );
+    let mut client = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("connect passive client");
+    client
+        .write_all(request.as_bytes())
+        .await
+        .expect("write passive request");
+    let mut wire = Vec::new();
+    client
+        .read_to_end(&mut wire)
+        .await
+        .expect("read passive response");
+    server.await.expect("passive handler joins");
+
+    let response = String::from_utf8_lossy(&wire);
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "a passive virtual-model stream answers on the wire: {response}"
+    );
+    assert!(
+        response.contains("data: "),
+        "the streamed response carries SSE events: {response}"
+    );
+
+    let service = crate::logging_runtime_state()
+        .expect("installed logging runtime")
+        .service_for_test()
+        .expect("logging service");
+    let events = request_lifecycle_events(&service, &request_id.as_uuid().to_string());
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            mesh_llm_events::logging::events::LifecycleEvent::StreamStarted { model }
+                if model.as_deref() == Some("test-virtual")
+        )),
+        "a passively-routed virtual-model stream records its start: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            mesh_llm_events::logging::events::LifecycleEvent::StreamCompleted { .. }
+        )),
+        "a passively-routed virtual-model stream records its completion: {events:?}"
+    );
+}

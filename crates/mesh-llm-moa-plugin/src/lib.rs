@@ -54,6 +54,15 @@ async fn handle(
     mut invocation: VirtualModelInvocation,
     context: PluginContext<'static>,
 ) -> VirtualModelResponse {
+    // The MoA admission contract applied to every chat request before the
+    // plugin owned `mesh`: `messages` must be a present, non-empty array.
+    // `handle_turn` builds an empty session from those shapes and still
+    // returns a worker result or a 502, so a malformed request must be
+    // rejected here — ahead of both the committee and the single-candidate
+    // passthrough.
+    if let Some(message) = chat_request_rejection(&invocation.request) {
+        return error_response(400, message);
+    }
     if invocation.candidates.is_empty() {
         return error_response(503, "no concrete models available in the mesh");
     }
@@ -188,6 +197,15 @@ async fn direct_capability_response(
     }
 }
 
+/// The chat contract MoA shares with host ingress: `messages` must be a
+/// present, non-empty array. Returns the client-facing message when it is not.
+fn chat_request_rejection(request: &Value) -> Option<&'static str> {
+    match request.get("messages") {
+        Some(Value::Array(messages)) if !messages.is_empty() => None,
+        _ => Some("MoA requires a non-empty `messages` array"),
+    }
+}
+
 fn contains_any_key(value: &Value, keys: &[&str]) -> bool {
     match value {
         Value::Object(object) => object
@@ -303,6 +321,27 @@ mod tests {
             ["text", "image", "audio"]
         );
         assert!(manifest.virtual_models[0].requires_candidates);
+    }
+
+    #[test]
+    fn rejects_malformed_messages_before_dispatch() {
+        for request in [
+            json!({}),
+            json!({"messages": []}),
+            json!({"messages": "hi"}),
+        ] {
+            assert_eq!(
+                chat_request_rejection(&request),
+                Some("MoA requires a non-empty `messages` array"),
+                "unexpected contract decision for {request}"
+            );
+        }
+        assert_eq!(
+            chat_request_rejection(&json!({
+                "messages": [{"role": "user", "content": "hi"}]
+            })),
+            None
+        );
     }
 
     #[test]

@@ -319,6 +319,130 @@ async fn test_builtin_moa_virtual_model_runs_end_to_end_through_plugin_api() {
 }
 
 #[tokio::test]
+async fn test_streamed_virtual_model_responses_preserves_tool_calls() {
+    let tool_call_response = json!({
+        "id": "chatcmpl-tool-call",
+        "object": "chat.completion",
+        "model": "worker-a",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_lookup",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{\"q\":\"hi\"}"}
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+    });
+    let plugin_manager =
+        start_standalone_virtual_model_plugin_manager("test-virtual", tool_call_response).await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness_with_plugin_manager(local_targets(&[]), plugin_manager).await;
+
+    let body = json!({
+        "model": "test-virtual",
+        "input": "find the thing",
+        "stream": true,
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected virtual-model stream response: {response}"
+    );
+    let events = responses_sse_events(&response);
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "response.function_call_arguments.done"),
+        "a streamed Responses tool call must emit its function-call events: {response}"
+    );
+    let completed = events
+        .iter()
+        .find(|event| event["type"] == "response.completed")
+        .unwrap_or_else(|| panic!("response.completed missing: {response}"));
+    let call = completed["response"]["output"]
+        .as_array()
+        .and_then(|output| output.iter().find(|item| item["type"] == "function_call"))
+        .unwrap_or_else(|| panic!("function_call output item missing: {response}"));
+    assert_eq!(call["name"], "lookup");
+    assert_eq!(call["call_id"], "call_lookup");
+    assert_eq!(call["arguments"], "{\"q\":\"hi\"}");
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn test_builtin_moa_rejects_malformed_messages_before_dispatch() {
+    let worker_response = json!({
+        "id": "chatcmpl-worker",
+        "object": "chat.completion",
+        "model": "worker-a",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "should never run"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
+    })
+    .to_string();
+    let (worker_port, worker_requests, worker_handle) =
+        spawn_repeating_upstream(&worker_response).await;
+    let plugin_manager = start_moa_plugin_manager().await;
+    let (proxy_addr, proxy_handle) = spawn_api_proxy_test_harness_with_plugin_manager(
+        local_targets(&[("worker-a", worker_port)]),
+        plugin_manager.clone(),
+    )
+    .await;
+    crate::network::openai::virtual_model::install_inference_bridge(
+        &plugin_manager,
+        proxy_addr.port(),
+    )
+    .await;
+
+    for body in [
+        json!({"model": "mesh"}),
+        json!({"model": "mesh", "messages": []}),
+        json!({"model": "mesh", "messages": "not-an-array"}),
+    ] {
+        let body = body.to_string();
+        let request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "a malformed chat envelope must be a contract error: {response}"
+        );
+        assert!(
+            response.contains("MoA requires a non-empty `messages` array"),
+            "unexpected contract error body: {response}"
+        );
+    }
+    assert_eq!(
+        worker_requests.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "a malformed chat request must not reach a worker"
+    );
+
+    proxy_handle.abort();
+    worker_handle.abort();
+}
+
+#[tokio::test]
 async fn test_builtin_moa_is_not_advertised_before_a_candidate_is_ready() {
     let plugin_manager = start_moa_plugin_manager().await;
     let (proxy_addr, proxy_handle) =

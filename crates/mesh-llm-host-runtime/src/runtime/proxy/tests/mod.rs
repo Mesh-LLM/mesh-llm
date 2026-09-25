@@ -661,5 +661,106 @@ async fn send_request_and_read_response(addr: SocketAddr, parts: Vec<Vec<u8>>) -
     String::from_utf8(response).unwrap()
 }
 
+/// Parse the `/v1/responses` SSE events out of a raw response body. The body
+/// arrives with chunked framing, but each event is written as its own chunk, so
+/// every `data:` line carries one whole event.
+fn responses_sse_events(response: &str) -> Vec<serde_json::Value> {
+    response
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter(|data| *data != "[DONE]")
+        .filter_map(|data| serde_json::from_str(data).ok())
+        .collect()
+}
+
+/// A manifest-declared virtual model that answers with a canned chat
+/// completion. It lets a streamed virtual-model request run end to end without
+/// a worker, a candidate snapshot, or the built-in MoA plugin — and without the
+/// automatic directive, which resolves to single-model routing when a client
+/// asks for `stream: true`.
+pub(crate) fn standalone_virtual_model_plugin(
+    model_id: &'static str,
+    response: serde_json::Value,
+) -> mesh_llm_plugin::SimplePlugin {
+    use mesh_llm_plugin as sdk;
+
+    let manifest = sdk::plugin_manifest![
+        sdk::virtual_model(model_id, "chat")
+            .supports_tools(true)
+            .supports_streaming(true)
+    ];
+    let mut router = sdk::VirtualModelRouter::new();
+    router.add_raw(
+        sdk::operation_with_schema(
+            "chat",
+            "Answer with a canned chat completion",
+            serde_json::Map::new(),
+        ),
+        move |_request, _context| {
+            let response = response.clone();
+            Box::pin(async move {
+                sdk::structured_tool_result(sdk::VirtualModelResponse {
+                    status_code: 200,
+                    body: response,
+                    headers: Vec::new(),
+                    event_stream: false,
+                })
+            })
+        },
+    );
+    let plugin_id = STANDALONE_VIRTUAL_MODEL_PLUGIN_ID;
+    sdk::SimplePlugin::new(sdk::PluginMetadata::new(
+        plugin_id,
+        env!("CARGO_PKG_VERSION"),
+        sdk::plugin_server_info(
+            plugin_id,
+            env!("CARGO_PKG_VERSION"),
+            "Standalone virtual model",
+            "Test double for the virtual-model streaming adapters",
+            None::<String>,
+        ),
+    ))
+    .with_manifest(manifest)
+    .with_virtual_model_router(router)
+}
+
+pub(crate) const STANDALONE_VIRTUAL_MODEL_PLUGIN_ID: &str = "test-standalone-virtual-model";
+
+/// Start an in-process plugin manager whose only plugin is
+/// [`standalone_virtual_model_plugin`].
+pub(crate) async fn start_standalone_virtual_model_plugin_manager(
+    model_id: &'static str,
+    response: serde_json::Value,
+) -> plugin::PluginManager {
+    let mut spec = plugin::in_process_builtin_spec(STANDALONE_VIRTUAL_MODEL_PLUGIN_ID);
+    spec.startup.optional = false;
+    let specs = plugin::ResolvedPlugins {
+        externals: vec![spec],
+        inactive: Vec::new(),
+    };
+    let (mesh_tx, mut mesh_rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move { while mesh_rx.recv().await.is_some() {} });
+    let runner: plugin::InProcessPluginRunner = Arc::new(move |stream| {
+        let response = response.clone();
+        Box::pin(async move {
+            mesh_llm_plugin::PluginRuntime::run_with_stream(
+                standalone_virtual_model_plugin(model_id, response),
+                stream,
+            )
+            .await
+        })
+    });
+    plugin::PluginManager::start_with_in_process(
+        &specs,
+        plugin::PluginHostMode {
+            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+        },
+        mesh_tx,
+        plugin::InProcessPlugins::default().with(STANDALONE_VIRTUAL_MODEL_PLUGIN_ID, runner),
+    )
+    .await
+    .expect("start standalone virtual model plugin")
+}
+
 include!("basic.rs");
 include!("routing.rs");
