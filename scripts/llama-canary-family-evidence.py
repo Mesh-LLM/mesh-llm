@@ -185,6 +185,7 @@ def build(args) -> None:
         if identity["candidate"] != env["CANARY_CANDIDATE_SHA"] or identity["base"] != git(root, "rev-parse", "HEAD"):
             raise ValueError("previous candidate/base does not match dependency outputs")
         env["CANARY_INPUT_BUNDLE"] = str(package / "candidate.bundle")
+        env["CANARY_CANDIDATE_BRANCH"] = identity["branch"]
     elif mode == "verify-build":
         raise ValueError("independent verification requires a candidate")
     preflight_battery(root)
@@ -512,8 +513,20 @@ def read_json_documents(path: Path) -> list[dict]:
 
 def validate_results(path: Path, family: str, model: dict) -> None:
     rows = read_json_documents(path)
-    if not rows or any(row.get("family") != family or row.get("exit_code") != 0 for row in rows):
+    if not rows or any(row.get("family") not in {family, "battery"} or row.get("exit_code") != 0 for row in rows):
         raise ValueError(f"{family}: missing, foreign, or failed results")
+    battery_rows = [row for row in rows if row.get("family") == "battery"]
+    if battery_rows:
+        if len(battery_rows) != 1:
+            raise ValueError(f"{family}: expected one global battery preflight")
+        outcomes = battery_rows[0].get("outcomes", [])
+        preflight = [item for item in outcomes if item.get("name") == "environment-preflight"]
+        if (len(preflight) != 1 or preflight[0].get("status") != "pass"
+                or preflight[0].get("exit_code") != 0):
+            raise ValueError(f"{family}: global battery preflight incomplete")
+    rows = [row for row in rows if row.get("family") == family]
+    if not rows:
+        raise ValueError(f"{family}: missing family-scoped results")
     if model["class"] == "causal_generation":
         core_rows = [row for row in rows if row.get("split_layer") is not None]
         # The battery runs one consolidated certification per family and itself

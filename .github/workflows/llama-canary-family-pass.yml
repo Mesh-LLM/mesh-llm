@@ -64,7 +64,7 @@ jobs:
       identity: ${{ steps.build.outputs.identity_sha256 }}
       head: ${{ steps.build.outputs.candidate }}
       branch: ${{ steps.build.outputs.branch }}
-      package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+      package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}
     env:
       MESH_LLM_REQUIRE_SCCACHE: '1'
       LLAMA_STAGE_BACKEND: metal
@@ -163,7 +163,7 @@ jobs:
         id: upload_package
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          name: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}
           path: ${{ runner.temp }}/canary-export-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
           if-no-files-found: error
           retention-days: 7
