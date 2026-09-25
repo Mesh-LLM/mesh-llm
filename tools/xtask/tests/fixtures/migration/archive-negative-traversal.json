@@ -1,0 +1,57 @@
+{
+  "fixture_schema": 1,
+  "case_id": "safe-extract-tar-parent-traversal",
+  "source": {
+    "path": "scripts/tests/test_safe_extract_tar.py",
+    "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6"
+  },
+  "input": {
+    "archive_format": "tar",
+    "member": "../escape",
+    "destination": "fresh-empty-directory"
+  },
+  "command": [
+    "python3",
+    "scripts/safe-extract-tar.py",
+    "<TEMP>/unsafe.tar.gz",
+    "<TEMP>/output"
+  ],
+  "observed": {
+    "outcome": "rejected",
+    "test_exit_status": 0,
+    "child_exit_status": 1,
+    "stdout": "",
+    "stderr": "unsafe or invalid tar archive: traversing archive member path is not allowed: ../escape\n",
+    "captured_child_stdout": "",
+    "captured_child_stderr": "unsafe or invalid tar archive: traversing archive member path is not allowed: ../escape\n",
+    "consumed_json": null,
+    "outside_destination_written": false,
+    "test_case": "SafeExtractTarTests.test_rejects_traversal_absolute_and_device_members"
+  },
+  "parity_proof": {
+    "status": "legacy_behavior_observed",
+    "note": "The unit test asserts nonzero exit, diagnostic substring and no write outside the extraction root. The recorded member spelling is the test's actual ../escape input."
+  },
+  "positive_control": {
+    "source_test": "scripts.tests.test_safe_extract_tar.SafeExtractTarTests.test_extracts_regular_files_with_executable_mode",
+    "input": {"archive_format": "tar.gz", "members": [{"path": "runtime", "type": "directory", "mode": "0755"}, {"path": "runtime/tool", "type": "regular", "mode": "0755", "bytes_utf8": "#!/bin/sh\nexit 0\n"}]},
+    "observed": {"unittest_exit_status": 0, "child_exit_status": 0, "extracted_path": "runtime/tool", "extracted_bytes_utf8": "#!/bin/sh\nexit 0\n", "executable_bits_nonzero": true, "consumed_json": null},
+    "note": "Focused unittest passed with the same archive construction; child outcome and bytes/mode are asserted by the source test, not an independently captured CLI transcript."
+  },
+  "normalization": {
+    "allowed": [
+      {
+        "field": "command.archive_path",
+        "replace": "<TEMP>/unsafe.tar.gz",
+        "actual_shape": "unique system temporary directory followed by unsafe.tar.gz"
+      },
+      {
+        "field": "command.destination_path",
+        "replace": "<TEMP>/output",
+        "actual_shape": "unique system temporary directory followed by output"
+      }
+    ],
+    "not_normalized": ["member spelling", "stdout", "stderr", "exit statuses"],
+    "identity_fields_never_normalize": ["source_revision", "sha256", "model_revision"]
+  }
+}

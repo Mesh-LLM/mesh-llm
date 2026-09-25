@@ -1,0 +1,63 @@
+{
+  "fixture_schema": 1,
+  "case_id": "model-manifest-unauthorized-cadence",
+  "source": {
+    "path": "scripts/tests/test_model_artifact_registry.py",
+    "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
+    "manifest_path": "ci/model-artifacts/manifests/product-smoke.json",
+    "resolver_path": "scripts/resolve-test-model-manifest.py"
+  },
+  "input": {
+    "artifact_id": "smollm2-q8-inference",
+    "suite": "product-smoke",
+    "cadence": "unauthorized-fixture-cadence"
+  },
+  "command": [
+    "python3",
+    "scripts/resolve-test-model-manifest.py",
+    "ci/model-artifacts/manifests/product-smoke.json",
+    "--artifact-id",
+    "smollm2-q8-inference",
+    "--cadence",
+    "unauthorized-fixture-cadence"
+  ],
+  "observed": {
+    "outcome": "rejected",
+    "child_exit_status": 2,
+    "test_exit_status": 0,
+    "stdout": "",
+    "stderr": "test-model manifest error: artifact smollm2-q8-inference is not allowed at cadence 'unauthorized-fixture-cadence'\n",
+    "consumed_json": null,
+    "repo": "unsloth/SmolLM2-135M-Instruct-GGUF",
+    "revision": "9e6855bc4be717fca1ef21360a1db4b29d5c559a",
+    "sha256": "c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a",
+    "download_attempted": false
+  },
+  "positive_control": {
+    "command": "python3 scripts/resolve-test-model-manifest.py ci/model-artifacts/manifests/product-smoke.json --artifact-id smollm2-q8-inference --cadence pull-request --require-single-file",
+    "exit_status": 0,
+    "stdout": "{\"artifact_id\": \"smollm2-q8-inference\", \"file\": \"SmolLM2-135M-Instruct-Q8_0.gguf\", \"files_json\": \"[\\\"SmolLM2-135M-Instruct-Q8_0.gguf\\\"]\", \"model_ref\": \"unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0\", \"repo\": \"unsloth/SmolLM2-135M-Instruct-GGUF\", \"revision\": \"9e6855bc4be717fca1ef21360a1db4b29d5c559a\", \"selector\": \"Q8_0\", \"sha256\": \"c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a\", \"size_bytes\": \"144811072\", \"url\": \"https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf\"}\n",
+    "stdout_json": {
+      "artifact_id": "smollm2-q8-inference",
+      "file": "SmolLM2-135M-Instruct-Q8_0.gguf",
+      "files_json": "[\"SmolLM2-135M-Instruct-Q8_0.gguf\"]",
+      "model_ref": "unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0",
+      "repo": "unsloth/SmolLM2-135M-Instruct-GGUF",
+      "revision": "9e6855bc4be717fca1ef21360a1db4b29d5c559a",
+      "selector": "Q8_0",
+      "sha256": "c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a",
+      "size_bytes": "144811072",
+      "url": "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf"
+    },
+    "stderr": ""
+  },
+  "parity_proof": {
+    "status": "legacy_behavior_observed",
+    "note": "The resolver child exits 2 for the unauthorized cadence (distinct from the unittest process exit 0). Its authorized pull-request positive control exits 0 and emits parsed JSON. Immutable model revision and SHA-256 are retained."
+  },
+  "normalization": {
+    "allowed": [],
+    "not_normalized": ["command arguments", "stdout", "stderr", "exit statuses", "model URL", "revision", "SHA-256"],
+    "identity_fields_never_normalize": ["artifact_id", "model_revision", "sha256"]
+  }
+}

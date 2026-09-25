@@ -1,0 +1,12 @@
+{
+  "github_path": ".github/workflows/fixture.yml",
+  "github_source": "- uses: actions/setup-python@pinned\n  with:\n    cache-dependency-path: |\n      ci/requirements-ci-python.txt\n  run: |\n    python3 -c 'print(1)'\n    python3 -c 'print(1)'\n    selected_python=python3\n    \"$selected_python\" - <<'PY'\n    print('python3 -c is data')\n    PY\n",
+  "github_rows": [
+    {"id": ".github/workflows/fixture.yml#candidate:3d243c25cd749c31:1", "executable": false},
+    {"id": ".github/workflows/fixture.yml#candidate:e88a4d094ac6519b:1", "executable": false},
+    {"id": ".github/workflows/fixture.yml#candidate:a7cdc9a7375a9a85:1", "executable": true},
+    {"id": ".github/workflows/fixture.yml#candidate:a7cdc9a7375a9a85:2", "executable": true},
+    {"id": ".github/workflows/fixture.yml#candidate:fe923b0994f8def7:1", "executable": false},
+    {"id": ".github/workflows/fixture.yml#candidate:4dfe913f2cedf5b2:1", "executable": true}
+  ]
+}
