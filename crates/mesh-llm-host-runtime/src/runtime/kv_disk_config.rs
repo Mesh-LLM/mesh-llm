@@ -483,26 +483,42 @@ mod tests {
         resolve_kv_disk_config_with_env(&config, &options, |name| env.get(name).cloned())
     }
 
+    fn test_absolute_path(suffix: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!("C:/{suffix}"))
+        } else {
+            PathBuf::from(format!("/{suffix}"))
+        }
+    }
+
     #[test]
     fn precedence_is_field_by_field_and_reports_each_source() {
+        let config_directory = test_absolute_path("config/cache");
+        let environment_directory = test_absolute_path("env/cache");
         let options = RuntimeOptions {
             kv_cache_disk: Some("48GiB".to_string()),
             kv_cache_min_free: Some("20GiB".to_string()),
             ..RuntimeOptions::default()
         };
         let resolved = resolve(
-            "[runtime.kv_cache.disk]\nmode='fixed'\ndirectory='/config/cache'\nbudget_mib=32768\nminimum_free_mib=12288\n",
+            &format!(
+                "[runtime.kv_cache.disk]\nmode='fixed'\ndirectory='{}'\nbudget_mib=32768\nminimum_free_mib=12288\n",
+                config_directory.display()
+            ),
             options,
             &[
                 ("MESH_LLM_KV_CACHE_DISK", "auto"),
-                ("MESH_LLM_KV_CACHE_DISK_DIR", "/env/cache"),
+                (
+                    "MESH_LLM_KV_CACHE_DISK_DIR",
+                    environment_directory.to_str().unwrap(),
+                ),
             ],
         )
         .unwrap();
 
         assert_eq!(resolved.mode, KvDiskTierMode::Fixed);
         assert_eq!(resolved.budget_bytes, Some(48 * 1024_u64.pow(3)));
-        assert_eq!(resolved.directory, PathBuf::from("/env/cache"));
+        assert_eq!(resolved.directory, environment_directory);
         assert_eq!(resolved.minimum_free_bytes, 20 * 1024_u64.pow(3));
         assert_eq!(resolved.sources.mode, KvDiskConfigSource::Cli);
         assert_eq!(resolved.sources.budget, KvDiskConfigSource::Cli);
@@ -512,11 +528,13 @@ mod tests {
 
     #[test]
     fn legacy_environment_is_fallback_only_and_zero_is_bounded() {
+        let legacy_directory = test_absolute_path("legacy/cache");
+        let legacy_directory = legacy_directory.to_str().unwrap();
         let resolved = resolve(
             "",
             RuntimeOptions::default(),
             &[
-                ("SKIPPY_L3_DIR", "/legacy/cache"),
+                ("SKIPPY_L3_DIR", legacy_directory),
                 ("SKIPPY_L3_BUDGET_BYTES", "0"),
             ],
         )
@@ -529,21 +547,21 @@ mod tests {
         let public = resolve(
             "[runtime.kv_cache.disk]\nmode='off'\n",
             RuntimeOptions::default(),
-            &[("SKIPPY_L3_DIR", "/legacy/cache")],
+            &[("SKIPPY_L3_DIR", legacy_directory)],
         )
         .unwrap();
         assert_eq!(public.mode, KvDiskTierMode::Off);
         assert_eq!(public.sources.mode, KvDiskConfigSource::Config);
         assert_eq!(
             public.directory,
-            PathBuf::from("/legacy/cache"),
+            PathBuf::from(legacy_directory),
             "legacy directory remains a field-level fallback"
         );
 
         let minimum_only = resolve(
             "[runtime.kv_cache.disk]\nminimum_free_mib=20480\n",
             RuntimeOptions::default(),
-            &[("SKIPPY_L3_DIR", "/legacy/cache")],
+            &[("SKIPPY_L3_DIR", legacy_directory)],
         )
         .unwrap();
         assert_eq!(minimum_only.mode, KvDiskTierMode::Fixed);
@@ -577,14 +595,22 @@ mod tests {
 
     #[test]
     fn live_apply_preserves_restart_only_mode_directory_and_coupled_budget() {
+        let old_directory = test_absolute_path("old/cache");
+        let new_directory = test_absolute_path("new/cache");
         let previous = resolve(
-            "[runtime.kv_cache.disk]\nmode='fixed'\ndirectory='/old/cache'\nbudget_mib=32768\nminimum_free_mib=16384\n",
+            &format!(
+                "[runtime.kv_cache.disk]\nmode='fixed'\ndirectory='{}'\nbudget_mib=32768\nminimum_free_mib=16384\n",
+                old_directory.display()
+            ),
             RuntimeOptions::default(),
             &[],
         )
         .unwrap();
         let mut next = resolve(
-            "[runtime.kv_cache.disk]\nmode='auto'\ndirectory='/new/cache'\nminimum_free_mib=20480\n",
+            &format!(
+                "[runtime.kv_cache.disk]\nmode='auto'\ndirectory='{}'\nminimum_free_mib=20480\n",
+                new_directory.display()
+            ),
             RuntimeOptions::default(),
             &[],
         )
@@ -593,7 +619,7 @@ mod tests {
         preserve_restart_fields(&previous, &mut next);
 
         assert_eq!(next.mode, KvDiskTierMode::Fixed);
-        assert_eq!(next.directory, PathBuf::from("/old/cache"));
+        assert_eq!(next.directory, old_directory);
         assert_eq!(next.budget_bytes, Some(32 * 1024_u64.pow(3)));
         assert_eq!(next.minimum_free_bytes, 20 * 1024_u64.pow(3));
     }
