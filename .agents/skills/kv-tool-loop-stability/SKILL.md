@@ -7,6 +7,12 @@ metadata:
 
 # KV Tool-Loop Stability
 
+New QA orchestration follows `../manage-ci/SKILL.md`: do not add Python
+tooling. Use typed `tools/xtask` commands behind thin Just recipes;
+`cargo xtool repo-consistency ci-crate-lists` is a working alias example from
+the repository root, not a QA replacement. Python test commands below remain
+transitional until their Rust replacements pass behavioral parity.
+
 Use this skill when changing Skippy KV slot cleanup, prefix-cache lookup,
 OpenAI tool-loop behavior, agent harnesses, or any runtime path related to
 `llama_decode failed`, `failed to find a memory slot`, low same-prefix cache

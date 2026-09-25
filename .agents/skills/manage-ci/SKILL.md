@@ -20,6 +20,33 @@ The specification records design, status and acceptance criteria. When
 implementation and documentation disagree, inspect the implementation, fix the
 owning source, and update the inventory and topology in the same change.
 
+## Rust automation ownership during migration
+
+For new repository automation, reuse an existing typed Rust command in
+`tools/xtask` or add a focused Rust subcommand there with behavioral fixtures
+first. Keep `tools/xtask/src/main.rs` limited to dispatch. Run existing commands
+from the repository root with `cargo xtool <domain> <command> [options]`; for
+example, `cargo xtool repo-consistency ci-crate-lists`. Keep human-facing Just
+recipes thin and preserve required toolchain wrappers such as
+`just with-lld cargo xtool repo-consistency ci-crate-lists`. Use typed inputs,
+argument arrays, explicit working directories, bounded child processes, and
+stable machine-readable output. Record parity against the existing command
+before changing a caller or deleting its implementation.
+
+Do not write new Python tooling, including temporary helpers, inline Python,
+workflow steps, generic test runners, or skill-local scripts. Do not move
+generic automation into shell, PowerShell, or JavaScript to evade this rule;
+platform adapters may remain thin. Existing Python checks, Just recipes and
+workflow entrypoints remain operational during migration and are transitional,
+not templates for new tooling. Existing isolated compatibility or upstream
+fixtures may be retained only under the exception policy in
+`.omo/specs/xtask-automation-migration.md` sections 7.5 and 9; new Python
+tooling requires an explicit maintainer decision to change that policy. The
+four SDK ecosystem candidates in
+`ci/automation-migration/python-exceptions.json` are conditional, not approved
+exceptions, until task 22 proves isolation. Do not claim the required path is
+Python-free or remove legacy validation before its Rust replacement passes.
+
 ## Required procedure
 
 1. Inspect `git status`, applicable `AGENTS.md` files, the complete workflows,

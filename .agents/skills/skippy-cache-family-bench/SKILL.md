@@ -7,6 +7,13 @@ metadata:
 
 # skippy-cache-family-bench
 
+New benchmark orchestration and reporting follows `../manage-ci/SKILL.md`:
+do not add Python tooling, including skill-local helpers. Use typed
+`tools/xtask` commands behind thin Just recipes. From the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is a working alias example,
+not a benchmark replacement. Existing Python commands below are transitional
+until their Rust replacements pass parity checks.
+
 Use this skill for reproducible Skippy cache benchmark evidence. The goal is to
 compare production cache payloads only: `ResidentKv` for dense families and
 `KvRecurrent` for recurrent/hybrid families. Do not report `FullState` as a

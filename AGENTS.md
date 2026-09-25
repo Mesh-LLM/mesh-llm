@@ -103,6 +103,17 @@ Run Cargo commands serially. Do not run multiple Cargo commands in parallel: thi
 - For broad refactors, fall back to `cargo check --workspace` (serially).
 - Follow the owning product's additional test and compatibility guidance.
 
+For new repository automation, follow the Rust ownership rule in
+`.agents/skills/manage-ci/SKILL.md` and spec section 7.5: do not write new
+Python tooling, including temporary, inline, or skill-local helpers. Reuse or
+extend typed `tools/xtask` commands and call them from thin Just recipes;
+`cargo xtool repo-consistency ci-crate-lists` is an existing command from the
+repository root. Do not move generic policy into shell, PowerShell, or
+JavaScript. Existing Python validation and workflow entrypoints below remain
+transitional until their replacements have behavioral parity. The SDK Python
+ecosystem candidates in `ci/automation-migration/python-exceptions.json` are
+conditional, not approved, until task 22 proves their isolation.
+
 ## Pre-Commit Checklist
 
 Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
