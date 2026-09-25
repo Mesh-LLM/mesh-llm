@@ -1,0 +1,95 @@
+From b8660a6643e9e09ba86e39acb32444bd76932955 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sat, 26 Sep 2026 00:11:48 +1000
+Subject: [PATCH] fix(skippy): replay concurrent token generation
+
+---
+ src/skippy/stage_program_installation.cpp | 10 ++++++++--
+ src/skippy/tests/graph_build_inputs.cpp   | 14 ++++++++------
+ 2 files changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/src/skippy/stage_program_installation.cpp b/src/skippy/stage_program_installation.cpp
+index 97400d7e5..01aa79db4 100644
+--- a/src/skippy/stage_program_installation.cpp
++++ b/src/skippy/stage_program_installation.cpp
+@@ -20,13 +20,18 @@ bool skippy_stage_program::matches_control_flow_domain(
+     const bool token_input = params.ubatch.token != nullptr && (params.ubatch.embd == nullptr || hidden_input);
+     const bool embedding_input = params.ubatch.token == nullptr && params.ubatch.embd != nullptr;
+     const bool runtime_token_generation = params.ubatch.n_tokens == params.ubatch.n_seqs_unq;
++    // split_simple() represents one-token decode rows as independent sequence
++    // sets, so equal_seqs() is false even though every unique sequence advances
++    // by the same single token. That representation does not select a different
++    // model graph from the equal-sequence reserve used to capture the program.
++    const bool runtime_equal_sequences = params.ubatch.equal_seqs() || runtime_token_generation;
+     if (params.res == nullptr || static_cast<uint32_t>(params.arch) != model_arch ||
+             static_cast<uint32_t>(params.gtype) != graph_type ||
+             params.cparams.nextn_layer_offset != nextn_layer_offset ||
+             params.cparams.n_ctx != context_size || params.cparams.n_ctx_seq != context_sequence_size ||
+             params.cparams.n_seq_max != maximum_sequences || params.ubatch.n_seqs_unq == 0 ||
+             params.ubatch.n_seqs_unq > maximum_sequences ||
+-            (params.ubatch.n_seqs_unq > 1 && params.ubatch.equal_seqs() != equal_sequences) ||
++            (params.ubatch.n_seqs_unq > 1 && runtime_equal_sequences != equal_sequences) ||
+             params.cparams.causal_attn != causal_attention || params.cparams.flash_attn != flash_attention ||
+             params.cparams.kv_unified != unified_kv ||
+             (separates_token_generation && runtime_token_generation != token_generation) ||
+@@ -41,8 +46,9 @@ bool skippy_stage_program::matches_control_flow_domain(
+                 std::to_string(nextn_layer_offset) +
+                 " unique_seqs=" + std::to_string(params.ubatch.n_seqs_unq) + "/max=" +
+                 std::to_string(maximum_sequences) +
+-                " equal_seqs=" + std::to_string(params.ubatch.equal_seqs()) + "/" +
++                " equal_seqs=" + std::to_string(runtime_equal_sequences) + "/" +
+                 std::to_string(equal_sequences) +
++                " raw_equal_seqs=" + std::to_string(params.ubatch.equal_seqs()) +
+                 " token_generation=" + std::to_string(runtime_token_generation) + "/" +
+                 std::to_string(token_generation) +
+                 " token=" + std::to_string(token_input) + "/" + std::to_string(supports_token_inputs) +
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index d402f64fb..23087204f 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -1529,11 +1529,12 @@ static int check_stage_program_replay(const char * model_path) {
+     bool observed_zero_outputs = false;
+     bool observed_token_input = false;
+     bool observed_embedding_input = false;
+-    for (int step = 0; step < 4 && result == 0; ++step) {
++    bool observed_concurrent_token_generation = false;
++    for (int step = 0; step < 5 && result == 0; ++step) {
+         llama_batch & batch = step % 2 == 0 ? token_batch : embedding_batch;
+-        batch.n_tokens = step == 0 ? 4 : 1;
++        batch.n_tokens = step == 0 ? 4 : step == 4 ? 2 : 1;
+         for (int32_t row = 0; row < batch.n_tokens; ++row) {
+-            const llama_seq_id sequence = step == 0 && row >= 2 ? 1 : 0;
++            const llama_seq_id sequence = step == 0 && row >= 2 ? 1 : step == 4 ? row : 0;
+             if (batch.token != nullptr) batch.token[row] = (17 + step + row) % n_vocab;
+             if (batch.embd != nullptr) {
+                 for (int32_t column = 0; column < n_embd; ++column) {
+@@ -1544,14 +1545,15 @@ static int check_stage_program_replay(const char * model_path) {
+             batch.pos[row] = positions[sequence]++;
+             batch.n_seq_id[row] = 1;
+             batch.seq_id[row][0] = sequence;
+-            batch.logits[row] = step == 0 ? (row == 1 || row == 3) : step == 2;
++            batch.logits[row] = step == 0 ? (row == 1 || row == 3) : step == 2 || step == 4;
+         }
+-        const uint32_t runtime_sequences = step == 0 ? 2 : 1;
++        const uint32_t runtime_sequences = step == 0 || step == 4 ? 2 : 1;
+         observed_changed_sequences |= first_program.captured_sequences != runtime_sequences;
+         observed_partial_outputs |= step == 0;
+         observed_zero_outputs |= step == 1;
+         observed_token_input |= batch.token != nullptr;
+         observed_embedding_input |= batch.embd != nullptr;
++        observed_concurrent_token_generation |= step == 4;
+         if (reference->decode(batch, full_inputs)) { result = 117; break; }
+         std::vector<float> expected(static_cast<size_t>(batch.n_tokens)*n_vocab);
+         for (int32_t row = 0; row < batch.n_tokens; ++row) {
+@@ -1646,7 +1648,7 @@ static int check_stage_program_replay(const char * model_path) {
+         result = 189;
+     }
+     if (result == 0 && (!observed_changed_sequences || !observed_partial_outputs || !observed_zero_outputs ||
+-            !observed_token_input || !observed_embedding_input)) result = 125;
++            !observed_token_input || !observed_embedding_input || !observed_concurrent_token_generation)) result = 125;
+     set_reuse_environment(had_reuse_setting ? saved_reuse_setting.c_str() : nullptr);
+     llama_batch_free(token_batch);
+     llama_batch_free(embedding_batch);
+-- 
+2.54.0 (Apple Git-157)
+

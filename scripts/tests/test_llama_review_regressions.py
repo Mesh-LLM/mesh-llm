@@ -11,6 +11,18 @@ def patch_text(relative_path: str) -> str:
     return (PATCHES / relative_path).read_text(encoding="utf-8")
 
 
+def patch_text_matching(suffix: str) -> str:
+    """Read the one queued patch whose name ends with the given suffix.
+
+    The core queue is renumbered whenever a branch reconciles a second core
+    patch series, so these invariants are keyed by patch subject, not by slot.
+    """
+    matches = sorted(path.name for path in PATCHES.glob("*" + suffix))
+    if len(matches) != 1:
+        raise AssertionError("expected exactly one patch matching *" + suffix + ", found " + repr(matches))
+    return patch_text(matches[0])
+
+
 class LlamaReviewRegressionTests(unittest.TestCase):
     def test_generated_tensors_cannot_hide_an_empty_source_index(self):
         patch = patch_text("0004-models-expose-stage-independent-graph-semantics.patch")
@@ -55,7 +67,7 @@ class LlamaReviewRegressionTests(unittest.TestCase):
         self.assertIn("must cover the flattened label-token array exactly", patch)
 
     def test_pooled_session_detaches_backend_sampler_before_next_prefill(self):
-        patch = patch_text("0029-fix-skippy-detach-backend-sampler-before-pooled-pre.patch")
+        patch = patch_text_matching("-fix-skippy-detach-backend-sampler-before-pooled-pre.patch")
         self.assertIn(
             "session->sampling_backend_enabled || !skippy_reset_reusable_sampling(session)",
             patch,
