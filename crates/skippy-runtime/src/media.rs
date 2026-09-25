@@ -62,11 +62,17 @@ impl SpeechEmbeddingsGuard {
         let status =
             unsafe { skippy_ffi::skippy_session_begin_external_decode(self.session, &mut error) };
         ensure_ok(status, error).context("refresh stage program after speech synthesis")?;
+        // The begin has been issued, so this guard's restore is complete. The
+        // external-decode scope is now owned by the caller's ExternalDecodeGuard,
+        // which ends it. Clearing `active` here keeps Drop from re-entering
+        // begin after a failed end, which would report "another external decode
+        // session is already active on this thread" and skip the end, pinning
+        // the thread in external-decode state.
+        self.active = false;
         let mut error = ptr::null_mut();
         let status =
             unsafe { skippy_ffi::skippy_session_end_external_decode(self.session, &mut error) };
         ensure_ok(status, error).context("end stage-program refresh after speech synthesis")?;
-        self.active = false;
         Ok(())
     }
 }
