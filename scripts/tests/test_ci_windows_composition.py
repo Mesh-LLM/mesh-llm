@@ -79,7 +79,8 @@ WINDOWS_UNVERIFIED_CRATES = {
     "xtask",
 }
 
-CFG_OPEN = re.compile(r"\b(cfg!?|cfg_attr)\s*\(")
+# Rust allows whitespace between a macro name and its `!`: `cfg ! (unix)`.
+CFG_OPEN = re.compile(r"\b(cfg_attr|cfg(?:\s*!)?)\s*\(")
 BARE_PLATFORM = re.compile(r"\b(?:windows|unix)\b")
 PLATFORM_KEY = re.compile(r"\btarget_(?:os|family)\s*=\s*\"(\d+)\"")
 RAW_STRING = re.compile(r"b?r(#*)\"")
@@ -576,6 +577,7 @@ class CiWindowsCompositionTests(unittest.TestCase):
             "compound": "#[cfg(any(windows, unix))]\nfn platform() {}\n",
             "nested-first": "#[cfg(all(not(test), windows))]\nfn platform() {}\n",
             "nested-macro": "const UNIX: bool = cfg!(all(not(test), unix));\n",
+            "spaced-macro": "const WINDOWS: bool = cfg ! (windows);\n",
             "target-family": "#[cfg(target_family = \"unix\")]\nfn platform() {}\n",
         }
         portable = {
