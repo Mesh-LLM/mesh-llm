@@ -27,7 +27,7 @@ pub use domain::{
     DiagnosticEntry, DomainState, EventSystemHealthDomainState, ModelDomainState,
     NODE_CAPACITY_KEY_BOUND, NativeRuntimeDomainState, NodeAvailabilityDomainState,
     RequestDomainState, RequestGenerationState, RequestPrefillState, SessionRecentEntry,
-    StageDomainState,
+    StageDomainState, WARNING_CORRELATION_KEY,
 };
 pub use rebuild::{RebuildError, RebuildOutcome, rebuild};
 pub use state::{OperationState, ReducerSnapshot, RejectReason};

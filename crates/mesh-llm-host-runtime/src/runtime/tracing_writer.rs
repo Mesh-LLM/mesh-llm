@@ -318,12 +318,14 @@ pub(super) fn configure_lifecycle_log_parser(
 /// reducer as a `warning_raised` diagnostic, so `runtime_state.node.
 /// diagnostics` shows a disabled native family. The probe's messages are
 /// static text plus a family name and feature bit, never a path or an
-/// identifier. They share one `unsupported_capability` correlation key, so
-/// the active-warning view holds the latest probe message.
+/// identifier. Each message carries a stable correlation value derived from
+/// its text, so every disabled family keeps its own active warning.
 pub(super) fn submit_capability_probe_warnings(messages: &[String]) {
+    use crate::runtime_events::reducer::WARNING_CORRELATION_KEY;
     use mesh_llm_runtime_event_contracts::{
-        DiagnosticEventKind, DiagnosticFact, FactData, HumanSummary, OperationId, OperationScope,
-        ReasonCode, RuntimeEventIngress, RuntimeFact,
+        BoundedNumericSummaries, DiagnosticEventKind, DiagnosticFact, FactData, HumanSummary,
+        NumericSummary, NumericSummaryKey, NumericValue, OperationId, OperationScope, ReasonCode,
+        RuntimeEventIngress, RuntimeFact,
     };
 
     let Some(engine) = crate::runtime_events::runtime_event_engine() else {
@@ -335,6 +337,13 @@ pub(super) fn submit_capability_probe_warnings(messages: &[String]) {
             FactData {
                 reason: Some(ReasonCode::UnsupportedCapability),
                 summary: HumanSummary::new(message).ok(),
+                numeric_summaries: NumericSummaryKey::new(WARNING_CORRELATION_KEY)
+                    .ok()
+                    .map(|key| {
+                        NumericSummary::new(key, NumericValue::Unsigned(stable_message_id(message)))
+                    })
+                    .and_then(|summary| BoundedNumericSummaries::new(vec![summary]).ok())
+                    .unwrap_or_default(),
                 ..FactData::default()
             },
         ));
@@ -342,6 +351,14 @@ pub(super) fn submit_capability_probe_warnings(messages: &[String]) {
             .unreserved_ingress(OperationScope::root_only(OperationId::new()))
             .try_submit(fact);
     }
+}
+
+/// FNV-1a over the message bytes: deterministic across processes, unlike
+/// `DefaultHasher`, so the same disabled family always maps to one warning.
+fn stable_message_id(message: &str) -> u64 {
+    message.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 pub(super) fn bridge_skippy_native_logs(
@@ -461,6 +478,34 @@ mod capability_probe_warning_tests {
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0]["reason_code"], "unsupported_capability");
         assert_eq!(warnings[0]["summary"], message);
+        clear_runtime_event_engine();
+    }
+
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn each_disabled_family_keeps_its_own_active_warning() {
+        clear_runtime_event_engine();
+        let engine = RuntimeEventEngine::new();
+        install_runtime_event_engine(engine.clone());
+        let messages = [
+            "skippy capability probe: family 'kv_events' is missing a symbol".to_string(),
+            "skippy capability probe: family 'device_events' is missing a symbol".to_string(),
+        ];
+        submit_capability_probe_warnings(&messages);
+        submit_capability_probe_warnings(&messages[..1]);
+        engine.drain();
+
+        let node =
+            serde_json::to_value(&state_projection::build(&engine).node).expect("serializable");
+        let summaries: Vec<_> = node["diagnostics"]["active_warnings"]
+            .as_array()
+            .expect("active warnings")
+            .iter()
+            .map(|warning| warning["summary"].as_str().expect("summary").to_string())
+            .collect();
+        assert_eq!(summaries.len(), 2, "{summaries:?}");
+        assert!(summaries.contains(&messages[0]));
+        assert!(summaries.contains(&messages[1]));
         clear_runtime_event_engine();
     }
 

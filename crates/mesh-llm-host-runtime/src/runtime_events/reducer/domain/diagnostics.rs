@@ -9,9 +9,14 @@
 
 use std::collections::VecDeque;
 
-use mesh_llm_runtime_event_contracts::{DiagnosticEventKind, FactData};
+use mesh_llm_runtime_event_contracts::{DiagnosticEventKind, FactData, NumericValue};
 
 use super::{is_undelivered_terminal, reason_label};
+
+/// Numeric summary a producer sets when several warnings share a reason and
+/// scope but come from distinct sources (for example one per disabled native
+/// family). Its value joins the correlation key.
+pub const WARNING_CORRELATION_KEY: &str = "warning_correlation";
 
 /// Active warnings retained; raising a new key past the bound evicts the
 /// oldest-raised warning and counts it in `evicted_warnings`.
@@ -72,8 +77,20 @@ fn warning_key(data: &FactData) -> String {
             .device_id
             .as_ref()
             .map(|id| format!("device={}", id.as_str())),
+        warning_correlation(data).map(|value| format!("source={value:x}")),
     ];
     parts.into_iter().flatten().collect::<Vec<_>>().join("|")
+}
+
+fn warning_correlation(data: &FactData) -> Option<u64> {
+    data.numeric_summaries
+        .as_slice()
+        .iter()
+        .find(|summary| summary.key.as_str() == WARNING_CORRELATION_KEY)
+        .and_then(|summary| match summary.value {
+            NumericValue::Unsigned(value) => Some(value),
+            NumericValue::Signed(_) | NumericValue::Floating(_) => None,
+        })
 }
 
 fn entry(data: &FactData) -> DiagnosticEntry {

@@ -44,7 +44,9 @@ use mesh_llm_runtime_event_contracts::{
 
 pub use cache::CacheDomainState;
 pub use device::DeviceDomainState;
-pub use diagnostics::{ACTIVE_WARNING_BOUND, DiagnosticDomainState, DiagnosticEntry};
+pub use diagnostics::{
+    ACTIVE_WARNING_BOUND, DiagnosticDomainState, DiagnosticEntry, WARNING_CORRELATION_KEY,
+};
 pub use event_system::EventSystemHealthDomainState;
 pub use execution::{RequestGenerationState, RequestPrefillState};
 pub use model::ModelDomainState;
