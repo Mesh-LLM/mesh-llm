@@ -1,0 +1,2402 @@
+{
+  "workspace_root": "/workspace",
+  "workspace_members": [
+    "path+file:///workspace/crates/mesh-llm#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-cli#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-build-info#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-events#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-commands#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-config#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-native-runtime#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-types#0.76.1",
+    "path+file:///workspace/crates/skippy-protocol#0.76.1",
+    "path+file:///workspace/crates/skippy-tokenizer#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-identity#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-plugin-manager#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-skills#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-runtime-install#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-hardware-profile#0.76.1",
+    "path+file:///workspace/crates/skippy-ffi#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-system#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-gpu-bench#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-release-footer#0.76.1",
+    "path+file:///workspace/crates/skippy-runtime#0.76.1",
+    "path+file:///workspace/crates/model-ref#0.76.1",
+    "path+file:///workspace/crates/skippy-model#0.76.1",
+    "path+file:///workspace/crates/skippy-package-format#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-tui#0.76.1",
+    "path+file:///workspace/crates/model-artifact#0.76.1",
+    "path+file:///workspace/crates/model-hf#0.76.1",
+    "path+file:///workspace/crates/model-package#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-host-runtime#0.76.1",
+    "path+file:///workspace/crates/mesh-client#mesh-llm-client@0.76.1",
+    "path+file:///workspace/crates/mesh-llm-protocol#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-routing#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-guardrails#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-log-store#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-node#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-plugin#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-runtime-event-contracts#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-ui#0.76.1",
+    "path+file:///workspace/crates/mesh-mixture-of-agents#0.76.1",
+    "path+file:///workspace/crates/mesh-native-serving-plugin-host#0.76.1",
+    "path+file:///workspace/crates/mesh-native-serving-plugin-api#0.76.1",
+    "path+file:///workspace/crates/skippy-server#0.76.1",
+    "path+file:///workspace/crates/openai-frontend#0.76.1",
+    "path+file:///workspace/crates/skippy-cache#0.76.1",
+    "path+file:///workspace/crates/skippy-metrics#0.76.1",
+    "path+file:///workspace/crates/skippy-scheduler#0.76.1",
+    "path+file:///workspace/crates/model-resolver#0.76.1",
+    "path+file:///workspace/crates/skippy-coordinator#0.76.1",
+    "path+file:///workspace/crates/skippy-topology#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-sdk#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-api-client#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-api-server#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-console-server#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-embedded-runtime#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-ffi#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-nodejs#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-test-harness#0.76.1",
+    "path+file:///workspace/crates/metrics-server#0.76.1",
+    "path+file:///workspace/crates/skippy-model-package#0.76.1",
+    "path+file:///workspace/crates/skippy-quantize#0.76.1",
+    "path+file:///workspace/crates/llama-quant-ffi#0.76.1",
+    "path+file:///workspace/crates/skippy-correctness#0.76.1",
+    "path+file:///workspace/crates/llama-spec-bench#0.76.1",
+    "path+file:///workspace/crates/skippy-bench#0.76.1",
+    "path+file:///workspace/crates/skippy-prompt#0.76.1",
+    "path+file:///workspace/tools/xtask#0.76.1"
+  ],
+  "packages": [
+    {
+      "id": "path+file:///workspace/crates/mesh-llm#0.76.1",
+      "name": "mesh-llm",
+      "manifest_path": "/workspace/crates/mesh-llm/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "mesh-llm-cli"
+        },
+        {
+          "name": "mesh-llm-commands"
+        },
+        {
+          "name": "mesh-llm-events"
+        },
+        {
+          "name": "mesh-llm-host-runtime"
+        },
+        {
+          "name": "mesh-llm-plugin"
+        },
+        {
+          "name": "mesh-llm-plugin-manager"
+        },
+        {
+          "name": "mesh-llm-system"
+        },
+        {
+          "name": "mesh-llm-tui"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tabwriter"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "urlencoding"
+        },
+        {
+          "name": "axum"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "mesh-llm-client"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "serial_test"
+        },
+        {
+          "name": "tempfile"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-cli#0.76.1",
+      "name": "mesh-llm-cli",
+      "manifest_path": "/workspace/crates/mesh-llm-cli/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "mesh-llm-build-info"
+        },
+        {
+          "name": "mesh-llm-events"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-build-info#0.76.1",
+      "name": "mesh-llm-build-info",
+      "manifest_path": "/workspace/crates/mesh-llm-build-info/Cargo.toml",
+      "dependencies": []
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-events#0.76.1",
+      "name": "mesh-llm-events",
+      "manifest_path": "/workspace/crates/mesh-llm-events/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "crossterm"
+        },
+        {
+          "name": "libc"
+        },
+        {
+          "name": "ratatui"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tracing"
+        },
+        {
+          "name": "uuid"
+        },
+        {
+          "name": "tempfile"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-commands#0.76.1",
+      "name": "mesh-llm-commands",
+      "manifest_path": "/workspace/crates/mesh-llm-commands/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "fs2"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "mesh-llm-hf-hub"
+        },
+        {
+          "name": "iroh"
+        },
+        {
+          "name": "json5"
+        },
+        {
+          "name": "mesh-llm-build-info"
+        },
+        {
+          "name": "mesh-llm-cli"
+        },
+        {
+          "name": "mesh-llm-config"
+        },
+        {
+          "name": "mesh-llm-events"
+        },
+        {
+          "name": "mesh-llm-identity"
+        },
+        {
+          "name": "mesh-llm-native-runtime"
+        },
+        {
+          "name": "mesh-llm-plugin-manager"
+        },
+        {
+          "name": "mesh-llm-runtime-install"
+        },
+        {
+          "name": "mesh-llm-system"
+        },
+        {
+          "name": "mesh-llm-tui"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "model-hf"
+        },
+        {
+          "name": "model-package"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "nix"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "rpassword"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "serde_yaml_ng"
+        },
+        {
+          "name": "strum"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tokio-stream"
+        },
+        {
+          "name": "toml"
+        },
+        {
+          "name": "toml_edit"
+        },
+        {
+          "name": "url"
+        },
+        {
+          "name": "zeroize"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "rand"
+        },
+        {
+          "name": "serial_test"
+        },
+        {
+          "name": "tempfile"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-config#0.76.1",
+      "name": "mesh-llm-config",
+      "manifest_path": "/workspace/crates/mesh-llm-config/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "mesh-llm-native-runtime"
+        },
+        {
+          "name": "mesh-llm-types"
+        },
+        {
+          "name": "semver"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "skippy-protocol"
+        },
+        {
+          "name": "toml"
+        },
+        {
+          "name": "toml_edit"
+        },
+        {
+          "name": "url"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "serial_test"
+        },
+        {
+          "name": "tempfile"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-native-runtime#0.76.1",
+      "name": "mesh-llm-native-runtime",
+      "manifest_path": "/workspace/crates/mesh-llm-native-runtime/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "tempfile"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-types#0.76.1",
+      "name": "mesh-llm-types",
+      "manifest_path": "/workspace/crates/mesh-llm-types/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "hex"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-protocol#0.76.1",
+      "name": "skippy-protocol",
+      "manifest_path": "/workspace/crates/skippy-protocol/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "prost"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "skippy-tokenizer"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "prost-build"
+        },
+        {
+          "name": "protoc-bin-vendored"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-tokenizer#0.76.1",
+      "name": "skippy-tokenizer",
+      "manifest_path": "/workspace/crates/skippy-tokenizer/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-identity#0.76.1",
+      "name": "mesh-llm-identity",
+      "manifest_path": "/workspace/crates/mesh-llm-identity/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "argon2"
+        },
+        {
+          "name": "base64"
+        },
+        {
+          "name": "chacha20poly1305"
+        },
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "crypto_box"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "ed25519-dalek"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "keyring"
+        },
+        {
+          "name": "rand"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "thiserror"
+        },
+        {
+          "name": "zeroize"
+        },
+        {
+          "name": "serial_test"
+        },
+        {
+          "name": "apple-native-keyring-store"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-plugin-manager#0.76.1",
+      "name": "mesh-llm-plugin-manager",
+      "manifest_path": "/workspace/crates/mesh-llm-plugin-manager/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "flate2"
+        },
+        {
+          "name": "futures-util"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "mesh-llm-skills"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "tar"
+        },
+        {
+          "name": "tempfile"
+        },
+        {
+          "name": "zip"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-skills#0.76.1",
+      "name": "mesh-llm-skills",
+      "manifest_path": "/workspace/crates/mesh-llm-skills/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tempfile"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-runtime-install#0.76.1",
+      "name": "mesh-llm-runtime-install",
+      "manifest_path": "/workspace/crates/mesh-llm-runtime-install/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "flate2"
+        },
+        {
+          "name": "futures-util"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "mesh-llm-build-info"
+        },
+        {
+          "name": "mesh-llm-hardware-profile"
+        },
+        {
+          "name": "mesh-llm-native-runtime"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "skippy-ffi"
+        },
+        {
+          "name": "tar"
+        },
+        {
+          "name": "tempfile"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tracing"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-hardware-profile#0.76.1",
+      "name": "mesh-llm-hardware-profile",
+      "manifest_path": "/workspace/crates/mesh-llm-hardware-profile/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "mesh-llm-native-runtime"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-ffi#0.76.1",
+      "name": "skippy-ffi",
+      "manifest_path": "/workspace/crates/skippy-ffi/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "libloading"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-system#0.76.1",
+      "name": "mesh-llm-system",
+      "manifest_path": "/workspace/crates/mesh-llm-system/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "libc"
+        },
+        {
+          "name": "libloading"
+        },
+        {
+          "name": "mesh-llm-build-info"
+        },
+        {
+          "name": "mesh-llm-events"
+        },
+        {
+          "name": "mesh-llm-gpu-bench"
+        },
+        {
+          "name": "mesh-llm-native-runtime"
+        },
+        {
+          "name": "mesh-llm-release-footer"
+        },
+        {
+          "name": "mesh-llm-runtime-install"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "semver"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "skippy-runtime"
+        },
+        {
+          "name": "tracing"
+        },
+        {
+          "name": "zip"
+        },
+        {
+          "name": "serial_test"
+        },
+        {
+          "name": "windows-sys"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-gpu-bench#0.76.1",
+      "name": "mesh-llm-gpu-bench",
+      "manifest_path": "/workspace/crates/mesh-llm-gpu-bench/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tracing"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-release-footer#0.76.1",
+      "name": "mesh-llm-release-footer",
+      "manifest_path": "/workspace/crates/mesh-llm-release-footer/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "hex"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-runtime#0.76.1",
+      "name": "skippy-runtime",
+      "manifest_path": "/workspace/crates/skippy-runtime/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "crossbeam-queue"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "libc"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "skippy-ffi"
+        },
+        {
+          "name": "skippy-model"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tempfile"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/model-ref#0.76.1",
+      "name": "model-ref",
+      "manifest_path": "/workspace/crates/model-ref/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "serde"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-model#0.76.1",
+      "name": "skippy-model",
+      "manifest_path": "/workspace/crates/skippy-model/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "memmap2"
+        },
+        {
+          "name": "safetensors"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "skippy-package-format"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-package-format#0.76.1",
+      "name": "skippy-package-format",
+      "manifest_path": "/workspace/crates/skippy-package-format/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-tui#0.76.1",
+      "name": "mesh-llm-tui",
+      "manifest_path": "/workspace/crates/mesh-llm-tui/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "ansi-to-tui"
+        },
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "crossterm"
+        },
+        {
+          "name": "mesh-llm-events"
+        },
+        {
+          "name": "ratatui"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tracing"
+        },
+        {
+          "name": "rustix"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/model-artifact#0.76.1",
+      "name": "model-artifact",
+      "manifest_path": "/workspace/crates/model-artifact/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "async-trait"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "tokio"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/model-hf#0.76.1",
+      "name": "model-hf",
+      "manifest_path": "/workspace/crates/model-hf/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "async-trait"
+        },
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "mesh-llm-hf-hub"
+        },
+        {
+          "name": "libc"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "rustls"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tracing"
+        },
+        {
+          "name": "serial_test"
+        },
+        {
+          "name": "tempfile"
+        },
+        {
+          "name": "tokio"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/model-package#0.76.1",
+      "name": "model-package",
+      "manifest_path": "/workspace/crates/model-package/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "bytes"
+        },
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "futures"
+        },
+        {
+          "name": "mesh-llm-hf-hub"
+        },
+        {
+          "name": "model-hf"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "tempfile"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "sha2"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-host-runtime#0.76.1",
+      "name": "mesh-llm-host-runtime",
+      "manifest_path": "/workspace/crates/mesh-llm-host-runtime/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "async-trait"
+        },
+        {
+          "name": "axum"
+        },
+        {
+          "name": "base64"
+        },
+        {
+          "name": "bytes"
+        },
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "crossbeam-queue"
+        },
+        {
+          "name": "crossterm"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "ed25519-dalek"
+        },
+        {
+          "name": "futures-util"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "mesh-llm-hf-hub"
+        },
+        {
+          "name": "http"
+        },
+        {
+          "name": "http-body-util"
+        },
+        {
+          "name": "httparse"
+        },
+        {
+          "name": "iroh"
+        },
+        {
+          "name": "libc"
+        },
+        {
+          "name": "mdns-sd"
+        },
+        {
+          "name": "mesh-llm-client"
+        },
+        {
+          "name": "mesh-llm-build-info"
+        },
+        {
+          "name": "mesh-llm-config"
+        },
+        {
+          "name": "mesh-llm-events"
+        },
+        {
+          "name": "mesh-llm-guardrails"
+        },
+        {
+          "name": "mesh-llm-identity"
+        },
+        {
+          "name": "mesh-llm-log-store"
+        },
+        {
+          "name": "mesh-llm-native-runtime"
+        },
+        {
+          "name": "mesh-llm-node"
+        },
+        {
+          "name": "mesh-llm-plugin"
+        },
+        {
+          "name": "mesh-llm-plugin-manager"
+        },
+        {
+          "name": "mesh-llm-protocol"
+        },
+        {
+          "name": "mesh-llm-routing"
+        },
+        {
+          "name": "mesh-llm-runtime-event-contracts"
+        },
+        {
+          "name": "mesh-llm-runtime-install"
+        },
+        {
+          "name": "mesh-llm-system"
+        },
+        {
+          "name": "mesh-llm-types"
+        },
+        {
+          "name": "mesh-llm-ui"
+        },
+        {
+          "name": "mesh-mixture-of-agents"
+        },
+        {
+          "name": "mesh-native-serving-plugin-host"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "model-hf"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "model-resolver"
+        },
+        {
+          "name": "nostr-sdk"
+        },
+        {
+          "name": "openai-frontend"
+        },
+        {
+          "name": "opentelemetry"
+        },
+        {
+          "name": "opentelemetry-otlp"
+        },
+        {
+          "name": "opentelemetry_sdk"
+        },
+        {
+          "name": "prost"
+        },
+        {
+          "name": "rand"
+        },
+        {
+          "name": "regex-lite"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "rmcp"
+        },
+        {
+          "name": "rpassword"
+        },
+        {
+          "name": "rustls"
+        },
+        {
+          "name": "ryu"
+        },
+        {
+          "name": "same-file"
+        },
+        {
+          "name": "schemars"
+        },
+        {
+          "name": "semver"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "skippy-coordinator"
+        },
+        {
+          "name": "skippy-ffi"
+        },
+        {
+          "name": "skippy-model"
+        },
+        {
+          "name": "skippy-package-format"
+        },
+        {
+          "name": "skippy-protocol"
+        },
+        {
+          "name": "skippy-runtime"
+        },
+        {
+          "name": "skippy-server"
+        },
+        {
+          "name": "skippy-topology"
+        },
+        {
+          "name": "socket2"
+        },
+        {
+          "name": "tempfile"
+        },
+        {
+          "name": "thiserror"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tokio-stream"
+        },
+        {
+          "name": "toml"
+        },
+        {
+          "name": "tracing"
+        },
+        {
+          "name": "tracing-subscriber"
+        },
+        {
+          "name": "url"
+        },
+        {
+          "name": "urlencoding"
+        },
+        {
+          "name": "uuid"
+        },
+        {
+          "name": "zeroize"
+        },
+        {
+          "name": "iroh"
+        },
+        {
+          "name": "iroh-relay"
+        },
+        {
+          "name": "mesh-llm-client"
+        },
+        {
+          "name": "opentelemetry_sdk"
+        },
+        {
+          "name": "serial_test"
+        },
+        {
+          "name": "skippy-server"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "windows-sys"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-client#mesh-llm-client@0.76.1",
+      "name": "mesh-llm-client",
+      "manifest_path": "/workspace/crates/mesh-client/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "async-trait"
+        },
+        {
+          "name": "base64"
+        },
+        {
+          "name": "httparse"
+        },
+        {
+          "name": "iroh"
+        },
+        {
+          "name": "mesh-llm-identity"
+        },
+        {
+          "name": "mesh-llm-protocol"
+        },
+        {
+          "name": "mesh-llm-routing"
+        },
+        {
+          "name": "mesh-llm-types"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "nostr-sdk"
+        },
+        {
+          "name": "prost"
+        },
+        {
+          "name": "rustls"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "thiserror"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tracing"
+        },
+        {
+          "name": "uuid"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "tokio"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-protocol#0.76.1",
+      "name": "mesh-llm-protocol",
+      "manifest_path": "/workspace/crates/mesh-llm-protocol/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "iroh"
+        },
+        {
+          "name": "prost"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-routing#0.76.1",
+      "name": "mesh-llm-routing",
+      "manifest_path": "/workspace/crates/mesh-llm-routing/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "blake3"
+        },
+        {
+          "name": "iroh"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-guardrails#0.76.1",
+      "name": "mesh-llm-guardrails",
+      "manifest_path": "/workspace/crates/mesh-llm-guardrails/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "serde_json"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-log-store#0.76.1",
+      "name": "mesh-llm-log-store",
+      "manifest_path": "/workspace/crates/mesh-llm-log-store/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "chrono"
+        },
+        {
+          "name": "data-encoding"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "mesh-llm-events"
+        },
+        {
+          "name": "rusqlite"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "uuid"
+        },
+        {
+          "name": "tempfile"
+        },
+        {
+          "name": "windows-sys"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-node#0.76.1",
+      "name": "mesh-llm-node",
+      "manifest_path": "/workspace/crates/mesh-llm-node/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "mesh-llm-types"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "model-hf"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tokio"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-plugin#0.76.1",
+      "name": "mesh-llm-plugin",
+      "manifest_path": "/workspace/crates/mesh-llm-plugin/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "async-trait"
+        },
+        {
+          "name": "prost"
+        },
+        {
+          "name": "rmcp"
+        },
+        {
+          "name": "schemars"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "prost-build"
+        },
+        {
+          "name": "protoc-bin-vendored"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-runtime-event-contracts#0.76.1",
+      "name": "mesh-llm-runtime-event-contracts",
+      "manifest_path": "/workspace/crates/mesh-llm-runtime-event-contracts/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "uuid"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "toml"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-ui#0.76.1",
+      "name": "mesh-llm-ui",
+      "manifest_path": "/workspace/crates/mesh-llm-ui/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "include_dir"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-mixture-of-agents#0.76.1",
+      "name": "mesh-mixture-of-agents",
+      "manifest_path": "/workspace/crates/mesh-mixture-of-agents/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "async-trait"
+        },
+        {
+          "name": "mesh-llm-guardrails"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tracing"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-native-serving-plugin-host#0.76.1",
+      "name": "mesh-native-serving-plugin-host",
+      "manifest_path": "/workspace/crates/mesh-native-serving-plugin-host/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "libloading"
+        },
+        {
+          "name": "mesh-native-serving-plugin-api"
+        },
+        {
+          "name": "skippy-server"
+        },
+        {
+          "name": "skippy-tokenizer"
+        },
+        {
+          "name": "tracing"
+        },
+        {
+          "name": "skippy-server"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-native-serving-plugin-api#0.76.1",
+      "name": "mesh-native-serving-plugin-api",
+      "manifest_path": "/workspace/crates/mesh-native-serving-plugin-api/Cargo.toml",
+      "dependencies": []
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-server#0.76.1",
+      "name": "skippy-server",
+      "manifest_path": "/workspace/crates/skippy-server/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "ahash"
+        },
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "async-trait"
+        },
+        {
+          "name": "axum"
+        },
+        {
+          "name": "base64"
+        },
+        {
+          "name": "blake3"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "futures-util"
+        },
+        {
+          "name": "libc"
+        },
+        {
+          "name": "mesh-llm-events"
+        },
+        {
+          "name": "mesh-native-serving-plugin-api"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "openai-frontend"
+        },
+        {
+          "name": "opentelemetry-proto"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "skippy-cache"
+        },
+        {
+          "name": "skippy-metrics"
+        },
+        {
+          "name": "skippy-protocol"
+        },
+        {
+          "name": "skippy-runtime"
+        },
+        {
+          "name": "skippy-scheduler"
+        },
+        {
+          "name": "skippy-tokenizer"
+        },
+        {
+          "name": "socket2"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tonic"
+        },
+        {
+          "name": "tracing"
+        },
+        {
+          "name": "uuid"
+        },
+        {
+          "name": "skippy-package-format"
+        },
+        {
+          "name": "tempfile"
+        },
+        {
+          "name": "tower"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/openai-frontend#0.76.1",
+      "name": "openai-frontend",
+      "manifest_path": "/workspace/crates/openai-frontend/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "async-trait"
+        },
+        {
+          "name": "axum"
+        },
+        {
+          "name": "base64"
+        },
+        {
+          "name": "futures-core"
+        },
+        {
+          "name": "futures-util"
+        },
+        {
+          "name": "mesh-llm-events"
+        },
+        {
+          "name": "mesh-llm-guardrails"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tracing"
+        },
+        {
+          "name": "uuid"
+        },
+        {
+          "name": "http-body-util"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tower"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-cache#0.76.1",
+      "name": "skippy-cache",
+      "manifest_path": "/workspace/crates/skippy-cache/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "blake3"
+        },
+        {
+          "name": "skippy-protocol"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-metrics#0.76.1",
+      "name": "skippy-metrics",
+      "manifest_path": "/workspace/crates/skippy-metrics/Cargo.toml",
+      "dependencies": []
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-scheduler#0.76.1",
+      "name": "skippy-scheduler",
+      "manifest_path": "/workspace/crates/skippy-scheduler/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "skippy-runtime"
+        },
+        {
+          "name": "thiserror"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "skippy-cache"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/model-resolver#0.76.1",
+      "name": "model-resolver",
+      "manifest_path": "/workspace/crates/model-resolver/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tempfile"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-coordinator#0.76.1",
+      "name": "skippy-coordinator",
+      "manifest_path": "/workspace/crates/skippy-coordinator/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "thiserror"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-topology#0.76.1",
+      "name": "skippy-topology",
+      "manifest_path": "/workspace/crates/skippy-topology/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-sdk#0.76.1",
+      "name": "mesh-llm-sdk",
+      "manifest_path": "/workspace/crates/mesh-llm-sdk/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "mesh-llm-api-client"
+        },
+        {
+          "name": "mesh-llm-api-server"
+        },
+        {
+          "name": "mesh-llm-console-server"
+        },
+        {
+          "name": "mesh-llm-embedded-runtime"
+        },
+        {
+          "name": "mesh-llm-runtime-install"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-api-client#0.76.1",
+      "name": "mesh-llm-api-client",
+      "manifest_path": "/workspace/crates/mesh-llm-api-client/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "hex"
+        },
+        {
+          "name": "mesh-llm-client"
+        },
+        {
+          "name": "thiserror"
+        },
+        {
+          "name": "tokio"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-api-server#0.76.1",
+      "name": "mesh-llm-api-server",
+      "manifest_path": "/workspace/crates/mesh-llm-api-server/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "mesh-llm-api-client"
+        },
+        {
+          "name": "mesh-llm-node"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tokio"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-console-server#0.76.1",
+      "name": "mesh-llm-console-server",
+      "manifest_path": "/workspace/crates/mesh-llm-console-server/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "mesh-llm-ui"
+        },
+        {
+          "name": "tokio"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-embedded-runtime#0.76.1",
+      "name": "mesh-llm-embedded-runtime",
+      "manifest_path": "/workspace/crates/mesh-llm-embedded-runtime/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "mesh-llm-host-runtime"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-ffi#0.76.1",
+      "name": "mesh-llm-ffi",
+      "manifest_path": "/workspace/crates/mesh-llm-ffi/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "mesh-llm-sdk"
+        },
+        {
+          "name": "thiserror"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "uniffi"
+        },
+        {
+          "name": "mesh-llm-sdk"
+        },
+        {
+          "name": "uniffi"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-nodejs#0.76.1",
+      "name": "mesh-llm-nodejs",
+      "manifest_path": "/workspace/crates/mesh-llm-nodejs/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "mesh-llm-sdk"
+        },
+        {
+          "name": "napi"
+        },
+        {
+          "name": "napi-derive"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "napi-build"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-test-harness#0.76.1",
+      "name": "mesh-llm-test-harness",
+      "manifest_path": "/workspace/crates/mesh-llm-test-harness/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "thiserror"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/metrics-server#0.76.1",
+      "name": "metrics-server",
+      "manifest_path": "/workspace/crates/metrics-server/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "axum"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "opentelemetry-proto"
+        },
+        {
+          "name": "prost"
+        },
+        {
+          "name": "rusqlite"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "skippy-metrics"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tonic"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-model-package#0.76.1",
+      "name": "skippy-model-package",
+      "manifest_path": "/workspace/crates/skippy-model-package/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "model-hf"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "ratatui"
+        },
+        {
+          "name": "same-file"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "skippy-ffi"
+        },
+        {
+          "name": "skippy-model"
+        },
+        {
+          "name": "skippy-package-format"
+        },
+        {
+          "name": "skippy-runtime"
+        },
+        {
+          "name": "tokio"
+        },
+        {
+          "name": "tempfile"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-quantize#0.76.1",
+      "name": "skippy-quantize",
+      "manifest_path": "/workspace/crates/skippy-quantize/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "libc"
+        },
+        {
+          "name": "llama-quant-ffi"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "skippy-ffi"
+        },
+        {
+          "name": "skippy-model"
+        },
+        {
+          "name": "skippy-runtime"
+        },
+        {
+          "name": "regex-lite"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/llama-quant-ffi#0.76.1",
+      "name": "llama-quant-ffi",
+      "manifest_path": "/workspace/crates/llama-quant-ffi/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "libloading"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-correctness#0.76.1",
+      "name": "skippy-correctness",
+      "manifest_path": "/workspace/crates/skippy-correctness/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "model-hf"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "skippy-protocol"
+        },
+        {
+          "name": "skippy-runtime"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/llama-spec-bench#0.76.1",
+      "name": "llama-spec-bench",
+      "manifest_path": "/workspace/crates/llama-spec-bench/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "skippy-runtime"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-bench#0.76.1",
+      "name": "skippy-bench",
+      "manifest_path": "/workspace/crates/skippy-bench/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "csv"
+        },
+        {
+          "name": "dirs"
+        },
+        {
+          "name": "libc"
+        },
+        {
+          "name": "model-artifact"
+        },
+        {
+          "name": "model-hf"
+        },
+        {
+          "name": "model-ref"
+        },
+        {
+          "name": "reqwest"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "skippy-protocol"
+        },
+        {
+          "name": "skippy-runtime"
+        },
+        {
+          "name": "skippy-topology"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/skippy-prompt#0.76.1",
+      "name": "skippy-prompt",
+      "manifest_path": "/workspace/crates/skippy-prompt/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "anyhow"
+        },
+        {
+          "name": "blake3"
+        },
+        {
+          "name": "clap"
+        },
+        {
+          "name": "ctrlc"
+        },
+        {
+          "name": "mesh-llm-client"
+        },
+        {
+          "name": "openai-frontend"
+        },
+        {
+          "name": "rustyline"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "skippy-protocol"
+        },
+        {
+          "name": "skippy-runtime"
+        },
+        {
+          "name": "skippy-topology"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/tools/xtask#0.76.1",
+      "name": "xtask",
+      "manifest_path": "/workspace/tools/xtask/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "ed25519-dalek"
+        },
+        {
+          "name": "getrandom"
+        },
+        {
+          "name": "hex"
+        },
+        {
+          "name": "mesh-llm-release-footer"
+        },
+        {
+          "name": "proc-macro2"
+        },
+        {
+          "name": "serde"
+        },
+        {
+          "name": "serde_json"
+        },
+        {
+          "name": "sha2"
+        },
+        {
+          "name": "syn"
+        }
+      ]
+    }
+  ]
+}
