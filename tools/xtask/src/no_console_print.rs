@@ -425,13 +425,12 @@ fn read_source(repo_root: &Path, file: &str) -> DynResult<String> {
 }
 
 /// Entry point for `xtask repo-consistency no-console-print`.
-pub(crate) fn check_no_console_print_command(rest: &[String]) -> DynResult<()> {
+pub(crate) fn check_no_console_print_command(repo_root: &Path, rest: &[String]) -> DynResult<()> {
     if !rest.is_empty() {
         return Err("usage: cargo run -p xtask -- repo-consistency no-console-print".into());
     }
-    let repo_root = crate::repo_consistency::repo_root()?;
-    scope::check_exempt_crates(&repo_root)?;
-    check_no_console_prints(&repo_root)?;
+    scope::check_exempt_crates(repo_root)?;
+    check_no_console_prints(repo_root)?;
     println!("repo consistency checks passed: no-console-print");
     Ok(())
 }
@@ -602,7 +601,7 @@ fn f() {
 
     #[test]
     fn no_console_print_command_rejects_trailing_arguments() {
-        let error = check_no_console_print_command(&["--regen".to_owned()])
+        let error = check_no_console_print_command(Path::new("."), &["--regen".to_owned()])
             .unwrap_err()
             .to_string();
         assert_eq!(

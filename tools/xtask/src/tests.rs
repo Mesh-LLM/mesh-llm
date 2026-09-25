@@ -80,20 +80,23 @@ fn release_attestation_stamp_and_inspect_round_trip() -> DynResult<()> {
     fs::write(&binary_path, b"release-binary-v1")?;
     let (private_key_path, public_key_path) = write_test_keypair(&dir, 11)?;
 
-    stamp_release_attestation(&[
-        "--binary".to_string(),
-        binary_path.display().to_string(),
-        "--signing-key-file".to_string(),
-        private_key_path.display().to_string(),
-        "--node-version".to_string(),
-        "9.9.9".to_string(),
-        "--build-id".to_string(),
-        "build-123".to_string(),
-        "--commit".to_string(),
-        "abcdef".to_string(),
-        "--target-triple".to_string(),
-        "x86_64-unknown-linux-gnu".to_string(),
-    ])?;
+    stamp_release_attestation(
+        &[
+            "--binary".to_string(),
+            binary_path.display().to_string(),
+            "--signing-key-file".to_string(),
+            private_key_path.display().to_string(),
+            "--node-version".to_string(),
+            "9.9.9".to_string(),
+            "--build-id".to_string(),
+            "build-123".to_string(),
+            "--commit".to_string(),
+            "abcdef".to_string(),
+            "--target-triple".to_string(),
+            "x86_64-unknown-linux-gnu".to_string(),
+        ],
+        None,
+    )?;
 
     let summary = inspect_release_attestation_summary(&InspectArgs {
         binary: Some(binary_path.clone()),
@@ -139,12 +142,15 @@ fn release_attestation_inspect_reports_invalid_after_tamper() -> DynResult<()> {
     fs::write(&binary_path, b"release-binary-v1")?;
     let (private_key_path, public_key_path) = write_test_keypair(&dir, 13)?;
 
-    stamp_release_attestation(&[
-        "--binary".to_string(),
-        binary_path.display().to_string(),
-        "--signing-key-file".to_string(),
-        private_key_path.display().to_string(),
-    ])?;
+    stamp_release_attestation(
+        &[
+            "--binary".to_string(),
+            binary_path.display().to_string(),
+            "--signing-key-file".to_string(),
+            private_key_path.display().to_string(),
+        ],
+        None,
+    )?;
 
     let mut tampered = fs::read(&binary_path)?;
     tampered[0] ^= 0x01;

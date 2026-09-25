@@ -1,11 +1,20 @@
+mod artifact;
 mod attestation;
+mod automation_bootstrap;
+mod automation_parity;
+mod ci_plan;
+mod ci_validation;
+mod cli;
 mod command;
 mod installer_fixtures;
+mod migration_inventory;
+mod model_registry;
 mod no_console_print;
+mod prepared_input;
 mod publish_consistency;
 mod release_targets;
 mod repo_consistency;
-mod workflow_checks;
+mod repository;
 
 use command::DynResult;
 
@@ -21,41 +30,78 @@ fn main() {
 
 fn run() -> DynResult<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    match args.as_slice() {
-        [command, scope] if command == "repo-consistency" && scope == "release-targets" => {
-            repo_consistency::check_release_targets_command()
-        }
-        [command, scope] if command == "repo-consistency" && scope == "ci-crate-lists" => {
-            repo_consistency::check_ci_crate_lists_command()
-        }
-        [command, scope] if command == "repo-consistency" && scope == "publish-crates" => {
-            repo_consistency::check_publish_crates_command()
-        }
-        [command, scope] if command == "repo-consistency" && scope == "test-all-rust-crate-coverage" => {
-            repo_consistency::check_test_all_coverage_command()
-        }
-        [command, scope, rest @ ..]
-            if command == "repo-consistency" && scope == "no-console-print" =>
-        {
-            no_console_print::check_no_console_print_command(rest)
-        }
-        [command, scope, rest @ ..]
-            if command == "release-attestation" && scope == "generate-keypair" =>
-        {
+    let parsed = cli::Cli::parse(&args)?;
+    let explicit_root = parsed
+        .root
+        .as_deref()
+        .map(|path| repository::RepositoryRoot::resolve(Some(path)))
+        .transpose()?;
+    match parsed.command {
+        cli::CliCommand::GenerateKeypair(rest) => {
             attestation::generate_release_attestation_keypair(rest)
         }
-        [command, scope, rest @ ..] if command == "release-attestation" && scope == "stamp" => {
-            attestation::stamp_release_attestation(rest)
+        cli::CliCommand::Inspect(rest) => attestation::inspect_release_attestation(rest),
+        cli::CliCommand::Check(check, rest) => repository::run_check(check, rest, explicit_root),
+        cli::CliCommand::CiPlan(rest) => {
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
+            ci_plan::run(root.as_path(), rest)
         }
-        [command, scope, rest @ ..]
-            if command == "release-attestation" && scope == "inspect" =>
-        {
-            attestation::inspect_release_attestation(rest)
+        cli::CliCommand::CiValidate(verb, rest) => ci_validation::lane_results::run(verb, rest),
+        cli::CliCommand::AutomationParity(rest) => {
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
+            automation_parity::run(root.as_path(), rest)
         }
-        _ => Err(
-            "usage:\n  cargo run -p xtask -- repo-consistency release-targets\n  cargo run -p xtask -- repo-consistency ci-crate-lists\n  cargo run -p xtask -- repo-consistency publish-crates\n  cargo run -p xtask -- repo-consistency test-all-rust-crate-coverage\n  cargo run -p xtask -- repo-consistency no-console-print\n  cargo run -p xtask -- release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo run -p xtask -- release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo run -p xtask -- release-attestation inspect --binary <path> [--public-key-file <path>] [--json]"
-                .to_string()
-                .into(),
+        cli::CliCommand::PreparedInput(rest) => prepared_input::run(rest),
+        cli::CliCommand::Artifact(command, rest) => artifact::run(command, rest),
+        cli::CliCommand::Models(command, rest) => model_registry::run(command, rest, || {
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
+            Ok(root.as_path().to_path_buf())
+        }),
+        cli::CliCommand::Stamp(rest) => attestation::stamp_release_attestation(
+            rest,
+            explicit_root
+                .as_ref()
+                .map(repository::RepositoryRoot::as_path),
         ),
+        cli::CliCommand::Repository(command) => {
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
+            let root = root.as_path();
+            match command {
+                cli::RepositoryCommand::Automation(rest) => {
+                    std::env::set_current_dir(root)?;
+                    migration_inventory::run(rest)
+                }
+                cli::RepositoryCommand::AutomationBootstrap(rest) => {
+                    automation_bootstrap::run(root, rest)
+                }
+                cli::RepositoryCommand::ReleaseTargets => {
+                    repo_consistency::check_release_targets_command(root)
+                }
+                cli::RepositoryCommand::CiCrateLists => {
+                    repo_consistency::check_ci_crate_lists_command(root)
+                }
+                cli::RepositoryCommand::PublishCrates => {
+                    repo_consistency::check_publish_crates_command(root)
+                }
+                cli::RepositoryCommand::TestAllCoverage => {
+                    repo_consistency::check_test_all_coverage_command(root)
+                }
+                cli::RepositoryCommand::NoConsolePrint(rest) => {
+                    no_console_print::check_no_console_print_command(root, rest)
+                }
+            }
+        }
     }
 }

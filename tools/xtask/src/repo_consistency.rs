@@ -1,5 +1,5 @@
 use crate::command::{DynResult, ensure_eq, ensure_set_eq, run_command, trimmed_stderr_or_stdout};
-use crate::{publish_consistency, release_targets, workflow_checks};
+use crate::{ci_validation, publish_consistency, release_targets};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::fs;
@@ -16,8 +16,8 @@ pub(crate) fn check_attestation_default_version(repo_root: &Path) -> DynResult<(
     )
 }
 
-pub(crate) fn default_node_version() -> DynResult<String> {
-    host_runtime_package_version(&repo_root()?)
+pub(crate) fn default_node_version(repo_root: &Path) -> DynResult<String> {
+    host_runtime_package_version(repo_root)
 }
 
 fn resolve_runtime_version(repo_root: &Path) -> DynResult<String> {
@@ -97,12 +97,9 @@ pub(crate) fn host_supports_shell_parity_checks() -> bool {
 }
 
 pub(crate) fn repo_root() -> DynResult<PathBuf> {
-    // CARGO_MANIFEST_DIR is <repo>/tools/xtask; go up two levels to reach the repo root.
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .ok_or_else(|| "could not determine repo root from xtask manifest directory".into())
+    Ok(crate::repository::RepositoryRoot::resolve(None)?
+        .as_path()
+        .to_path_buf())
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,16 +230,15 @@ fn check_subset(
     .into())
 }
 
-pub(crate) fn check_release_targets_command() -> DynResult<()> {
-    release_targets::check_release_targets()
+pub(crate) fn check_release_targets_command(repo_root: &Path) -> DynResult<()> {
+    release_targets::check_release_targets(repo_root)
 }
 
-pub(crate) fn check_ci_crate_lists_command() -> DynResult<()> {
-    let repo_root = repo_root()?;
-    workflow_checks::check_ci_script_workspace_members(&repo_root)?;
-    workflow_checks::check_ci_crate_test_coverage_files(&repo_root)?;
-    check_attestation_default_version(&repo_root)?;
-    check_runtime_event_abi_mirror(&repo_root)?;
+pub(crate) fn check_ci_crate_lists_command(repo_root: &Path) -> DynResult<()> {
+    ci_validation::check_ci_script_workspace_members(repo_root)?;
+    ci_validation::check_ci_crate_test_coverage_files(repo_root)?;
+    check_attestation_default_version(repo_root)?;
+    check_runtime_event_abi_mirror(repo_root)?;
     println!("repo consistency checks passed: ci-crate-lists");
     Ok(())
 }
@@ -308,16 +304,14 @@ fn struct_field_names(source: &str, decl_marker: &str) -> DynResult<Vec<String>>
     Ok(fields)
 }
 
-pub(crate) fn check_publish_crates_command() -> DynResult<()> {
-    let repo_root = repo_root()?;
-    publish_consistency::check_publish_crates_consistency(&repo_root)?;
+pub(crate) fn check_publish_crates_command(repo_root: &Path) -> DynResult<()> {
+    publish_consistency::check_publish_crates_consistency(repo_root)?;
     println!("repo consistency checks passed: publish-crates");
     Ok(())
 }
 
-pub(crate) fn check_test_all_coverage_command() -> DynResult<()> {
-    let repo_root = repo_root()?;
-    let workspace_crates = workspace_package_names(&repo_root)?;
+pub(crate) fn check_test_all_coverage_command(repo_root: &Path) -> DynResult<()> {
+    let workspace_crates = workspace_package_names(repo_root)?;
     let test_all_source = fs::read_to_string(repo_root.join("just/ci.just"))?;
     let (dynamic_targets, excluded_targets, isolated_targets) =
         test_all_test_targets(&test_all_source)?;
