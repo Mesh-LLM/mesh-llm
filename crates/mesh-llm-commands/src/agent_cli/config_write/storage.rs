@@ -65,7 +65,7 @@ impl WriteLock {
             .open(&path)
             .with_context(|| format!("Cannot open config lock {}", path.display()))?;
         fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
+            if is_lock_contended(&error) {
                 anyhow::anyhow!(
                     "Another mesh-llm config write holds {}; retry",
                     path.display()
@@ -76,6 +76,14 @@ impl WriteLock {
         })?;
         Ok(Self { file })
     }
+}
+
+/// Whether a failed `try_lock_exclusive` means another holder. Unix reports
+/// `WouldBlock`; Windows reports `ERROR_LOCK_VIOLATION`, which has no
+/// `ErrorKind` of its own and which `fs2` exposes as its contended error.
+fn is_lock_contended(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
 }
 
 impl Drop for WriteLock {
