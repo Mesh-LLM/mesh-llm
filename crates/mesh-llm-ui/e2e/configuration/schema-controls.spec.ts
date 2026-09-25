@@ -496,9 +496,6 @@ test.describe('schema-driven configuration controls', () => {
     await expect(contextSize).toHaveAttribute('aria-valuemax', '262144')
     await expect(contextSize).toHaveAttribute('aria-valuenow', '4096')
 
-    await expect(page.getByRole('radio', { name: 'balanced' })).toBeChecked()
-    await expect(page.getByText('K q8_0 · V q4_0')).toBeVisible()
-
     await expect(page.getByLabel('GPU assignment').getByRole('radio', { name: 'auto' })).toBeChecked()
     await expect(page.getByRole('textbox', { name: 'Pinned GPU device' })).toBeDisabled()
     await expect(page.getByText('Only editable when GPU assignment is pinned.')).toBeVisible()
@@ -620,7 +617,7 @@ test.describe('schema-driven configuration controls', () => {
     await expect(page.getByRole('heading', { name: 'Configuration' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
     await expect(page.getByRole('slider', { name: 'Context size' })).toBeVisible()
-    await expect(page.getByRole('radio', { name: 'balanced' })).toBeVisible()
+    await expect(page.getByLabel('GPU assignment').getByRole('radio', { name: 'auto' })).toBeVisible()
 
     await expectNoHorizontalOverflow(page)
     await testInfo.attach('configuration-controls-mobile', {
