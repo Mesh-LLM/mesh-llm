@@ -7,6 +7,14 @@ metadata:
 
 # HF Quant And Layer Package Jobs
 
+New repository-side job planning and orchestration follows
+`../manage-ci/SKILL.md`: no new Python tooling; use typed `tools/xtask`
+commands behind thin Just recipes. From the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is a working alias example, not
+a quantization or packaging command. Existing Hugging Face Jobs examples
+remain transitional ecosystem invocations, not approval for new Python
+automation.
+
 Use this skill when a workflow should produce both a quantized GGUF repo and a
 Skippy layer package from an existing BF16/FP16 GGUF repo. The quantization
 phase must use `skippy-quantize`; do not use `llama-quantize`,

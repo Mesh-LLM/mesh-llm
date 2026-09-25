@@ -5,6 +5,13 @@ description: Use when creating, monitoring, validating, or documenting low-memor
 
 # HF GGUF Quant Jobs
 
+New repository-side job planning and orchestration follows
+`../manage-ci/SKILL.md`: no new Python tooling; use typed `tools/xtask`
+commands behind thin Just recipes. From the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is a working alias example, not
+a job planner. Existing Hugging Face Jobs examples remain transitional
+ecosystem invocations, not approval for new Python automation.
+
 Use this skill to turn an existing split BF16/FP16 GGUF model repo into a
 quantized GGUF model repo without requiring the host to hold the full model in
 memory or on local disk at once. The operational tool is `skippy-quantize`; do

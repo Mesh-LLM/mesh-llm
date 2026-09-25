@@ -5,6 +5,13 @@ description: Use this skill when validating a MeshLLM release candidate or curre
 
 # Release Validation
 
+New release inventory and evidence automation follows `../manage-ci/SKILL.md`:
+no new Python tooling, including skill-local helpers. Use typed `tools/xtask`
+commands behind thin Just recipes. From the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is an existing alias example,
+not a replacement for the inventory script below. Retain that transitional
+script until its Rust replacement passes behavioral parity.
+
 Validate the candidate as a product, not merely as source code. Every claimed
 change must have a disposition and direct evidence. Do not publish a release,
 push a tag, alter production, or use a host the user did not put in scope.
