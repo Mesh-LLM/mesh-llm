@@ -154,6 +154,108 @@ pub(crate) enum VirtualModelDispatchResult {
     Responded(proxy::RouteDispatchOutcome),
 }
 
+// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
+pub(crate) async fn route_virtual_model_or_passthrough(
+    node: &mesh::Node,
+    tcp_stream: ClientStream,
+    request: &mut proxy::BufferedHttpRequest,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> Result<ClientStream, proxy::RouteDispatchOutcome> {
+    if request.is_tokenize_request() {
+        return Ok(tcp_stream);
+    }
+    let Some(mut model_id) = request.model_name.clone() else {
+        return Ok(tcp_stream);
+    };
+    if super::automatic::is_directive(&model_id) {
+        super::automatic::warn_if_deprecated_alias(Some(&model_id));
+        request.ensure_body_json();
+        let Some(body) = request.body_json.as_ref() else {
+            return Ok(tcp_stream);
+        };
+        if matches!(
+            super::automatic::serving_mode(super::automatic::AutomaticRequest {
+                model: Some(&model_id),
+                path: &request.path,
+                body,
+            }),
+            super::automatic::ServingMode::SingleModel(_)
+        ) {
+            return Ok(tcp_stream);
+        }
+        model_id = super::automatic::DIRECTIVE.to_string();
+    }
+    let Some(plugin_manager) = node.plugin_manager().await else {
+        return Ok(tcp_stream);
+    };
+    if plugin_manager
+        .virtual_model_for_model(&model_id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return Ok(tcp_stream);
+    }
+    if super::ingress::mesh_routing_headers_requested(request) {
+        let write = proxy::send_error_observed(
+            tcp_stream,
+            409,
+            "x-mesh-target/x-mesh-exclude are not supported for virtual models",
+            route_observer,
+        )
+        .await;
+        return Err(if write.is_ok() {
+            proxy::RouteDispatchOutcome::Responded(409)
+        } else {
+            proxy::RouteDispatchOutcome::Dropped("virtual_model_response_write_failed")
+        });
+    }
+    request.ensure_body_json();
+    let Some(body) = request.body_json.clone() else {
+        let write = proxy::send_400_observed(
+            tcp_stream,
+            "virtual models require a JSON body",
+            route_observer,
+        )
+        .await;
+        return Err(if write.is_ok() {
+            proxy::RouteDispatchOutcome::Responded(400)
+        } else {
+            proxy::RouteDispatchOutcome::Dropped("virtual_model_response_write_failed")
+        });
+    };
+    let mut candidates = node.models_being_served().await;
+    candidates.extend(node.serving_models().await);
+    if let Ok(inference_models) = plugin_manager.inference_models().await {
+        candidates.extend(inference_models);
+    }
+    candidates.extend(
+        node.all_served_model_descriptors()
+            .await
+            .into_iter()
+            .map(|descriptor| descriptor.identity.model_name),
+    );
+    match try_handle_virtual_model(
+        &plugin_manager,
+        node,
+        tcp_stream,
+        &request.path,
+        &model_id,
+        body,
+        candidates,
+        request.response_adapter,
+        route_observer,
+    )
+    .await
+    {
+        VirtualModelDispatchResult::NotVirtual(stream) => Ok(stream),
+        VirtualModelDispatchResult::Responded(outcome) => Err(outcome),
+    }
+}
+
 fn validate_virtual_request(
     forwarded_path: &str,
     model_id: &str,
