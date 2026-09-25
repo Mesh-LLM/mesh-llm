@@ -12,6 +12,7 @@ Plugin-specific documentation:
 
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
+- [Virtual models](virtual-models.md) - request-orchestrating models backed by a plugin and host-routed inference
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
 
 The main goals are:
