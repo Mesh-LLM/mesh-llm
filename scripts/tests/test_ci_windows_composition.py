@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import tempfile
 import tomllib
 import unittest
 
@@ -47,6 +48,176 @@ def _unit_row_crates(platform: str) -> set[str]:
 def _windows_unit_row_crates() -> set[str]:
     """Crates the windows-unit row runs, across its shared and Windows inputs."""
     return _unit_row_crates("windows")
+
+
+# Crates whose `src/` selects Windows- or Unix-specific code that no Windows
+# job compiles yet. Their suites have never run on the Windows runner, so
+# switching them on together would risk a red main for reasons unrelated to the
+# change under test. A crate leaves this list, for a platform-windows* crate
+# rule and the windows-unit row, once its suite is confirmed green there.
+WINDOWS_UNVERIFIED_CRATES = {
+    "mesh-llm-analytics",
+    "mesh-llm-commands",
+    "mesh-llm-config",
+    "mesh-llm-events",
+    "mesh-llm-hardware-profile",
+    "mesh-llm-identity",
+    "mesh-llm-native-runtime",
+    "mesh-llm-payments",
+    "mesh-llm-plugin-manager",
+    "mesh-llm-system",
+    "mesh-llm-tui",
+    "mesh-llm-ui",
+    "mesh-llm-wallet",
+    "mesh-wallet-lexe",
+    "model-hf",
+    "skippy-bench",
+    "skippy-model-package",
+    "skippy-quantize",
+    "skippy-runtime",
+    "skippy-server",
+    "xtask",
+}
+
+# Rust allows whitespace between a macro name and its `!`: `cfg ! (unix)`.
+CFG_OPEN = re.compile(r"\b(cfg_attr|cfg(?:\s*!)?)\s*\(")
+BARE_PLATFORM = re.compile(r"\b(?:windows|unix)\b")
+TARGET_OS = re.compile(r"\btarget_os\s*=")
+TARGET_FAMILY = re.compile(r"\btarget_family\s*=\s*\"(\d+)\"")
+RAW_STRING = re.compile(r"b?r(#*)\"")
+CHAR_LITERAL = re.compile(r"'(?:\\(?:u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'")
+
+
+def _mask_rust_source(source: str) -> tuple[str, list[str]]:
+    """Drop comments and replace each string literal with `"<index>"`.
+
+    A cfg is then only found in code, never in a comment or a quoted example,
+    and a `target_os` value stays readable through the returned literals.
+    """
+    code: list[str] = []
+    literals: list[str] = []
+    index, length = 0, len(source)
+    while index < length:
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            index = length if end == -1 else end
+        elif source.startswith("/*", index):
+            depth, index = 1, index + 2
+            while index < length and depth:
+                if source.startswith("/*", index):
+                    depth, index = depth + 1, index + 2
+                elif source.startswith("*/", index):
+                    depth, index = depth - 1, index + 2
+                else:
+                    index += 1
+            code.append(" ")
+        elif (raw := RAW_STRING.match(source, index)) and (
+            index == 0 or not (source[index - 1].isalnum() or source[index - 1] == "_")
+        ):
+            closing = '"' + raw.group(1)
+            end = source.find(closing, raw.end())
+            end = length if end == -1 else end
+            literals.append(source[raw.end() : end])
+            code.append(f'"{len(literals) - 1}"')
+            index = end + len(closing)
+        elif source[index] == '"':
+            end = index + 1
+            while end < length and source[end] != '"':
+                end += 2 if source[end] == "\\" else 1
+            literals.append(source[index + 1 : end])
+            code.append(f'"{len(literals) - 1}"')
+            index = end + 1
+        elif (char := CHAR_LITERAL.match(source, index)) is not None:
+            code.append("' '")
+            index = char.end()
+        else:
+            code.append(source[index])
+            index += 1
+    return "".join(code), literals
+
+
+def _cfg_predicates(code: str) -> list[str]:
+    """The predicate of every `cfg(...)`, `cfg!(...)` and `cfg_attr(...)`.
+
+    Balanced, not up to the first `)`: in `cfg(all(not(test), windows))` the
+    platform predicate comes after a nested clause. For `cfg_attr` only the
+    part before the first top-level comma is a predicate; the rest is an
+    attribute such as `windows_subsystem = "windows"`.
+    """
+    predicates = []
+    for match in CFG_OPEN.finditer(code):
+        depth, index, cut = 1, match.end(), None
+        while index < len(code) and depth:
+            if code[index] == "(":
+                depth += 1
+            elif code[index] == ")":
+                depth -= 1
+            elif code[index] == "," and depth == 1 and cut is None:
+                cut = index
+            index += 1
+        end = index - 1
+        if match.group(1) == "cfg_attr" and cut is not None:
+            end = cut
+        predicates.append(code[match.end() : end])
+    return predicates
+
+
+def _selects_platform_code(source: str) -> bool:
+    """Whether a cfg predicate selects code by platform: a bare `windows` or
+    `unix`, any `target_os` (code for `linux` and `macos` alone may not build on
+    Windows), or a `target_family` of `windows` or `unix`. A
+    `feature = "windows"` is not a platform, and a cfg inside a comment or a
+    string is not code."""
+    code, literals = _mask_rust_source(source)
+    for predicate in _cfg_predicates(code):
+        if BARE_PLATFORM.search(predicate) or TARGET_OS.search(predicate):
+            return True
+        if any(literals[int(i)] in ("windows", "unix") for i in TARGET_FAMILY.findall(predicate)):
+            return True
+    return False
+
+
+def _workspace_crates(root: Path) -> dict[str, Path]:
+    """Package name to crate directory for every workspace member.
+
+    Reads the members from the root manifest rather than a fixed `crates/*`
+    layout, and the name from each crate's manifest, since a directory need
+    not match its package name.
+    """
+    workspace = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+    crates: dict[str, Path] = {}
+    for member in workspace["workspace"]["members"]:
+        for crate_dir in sorted(root.glob(member)):
+            manifest = tomllib.loads((crate_dir / "Cargo.toml").read_text(encoding="utf-8"))
+            crates[manifest["package"]["name"]] = crate_dir
+    return crates
+
+
+def _cfg_divergent_crates(root: Path) -> set[str]:
+    """Workspace crates whose `src/` selects Windows- or Unix-specific code."""
+    divergent = set()
+    for name, crate_dir in _workspace_crates(root).items():
+        source_root = crate_dir / "src"
+        if not source_root.is_dir():
+            continue
+        if any(
+            _selects_platform_code(source.read_text(encoding="utf-8", errors="ignore"))
+            for source in source_root.rglob("*.rs")
+        ):
+            divergent.add(name)
+    return divergent
+
+
+def _windows_routed_crates() -> set[str]:
+    """Crates a Windows job compiles: platform-windows* rules plus the unit row."""
+    ownership = json.loads((ROOT / "ci" / "ownership.yml").read_text(encoding="utf-8"))
+    routed = {
+        crate
+        for rule in ownership["crate_rules"]
+        if rule["domain"].startswith("platform-windows")
+        for crate in rule["crates"]
+    }
+    return routed | _windows_unit_row_crates()
 
 
 class CiWindowsCompositionTests(unittest.TestCase):
@@ -379,6 +550,84 @@ class CiWindowsCompositionTests(unittest.TestCase):
         source = PLATFORM_CHECKS_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("steps.windows_packages.outputs.crates", source)
         self.assertNotIn("foreach ($crate in 'model-artifact'", source)
+
+    def test_every_cfg_divergent_crate_is_routed_or_explicitly_unverified(self) -> None:
+        """Platform-divergent code must be compiled on Windows or declared not to be.
+
+        A crate whose `src/` holds `cfg(windows)` / `cfg(unix)` code can break
+        on Windows while every Linux job stays green; that is how #1978 shipped
+        a lib-test target that had never compiled there.
+        """
+        unaccounted = sorted(
+            _cfg_divergent_crates(ROOT) - _windows_routed_crates() - WINDOWS_UNVERIFIED_CRATES
+        )
+        self.assertEqual(
+            [],
+            unaccounted,
+            "these crates carry platform-divergent code but no Windows job "
+            "compiles them; route them to a Windows row or add them to "
+            "WINDOWS_UNVERIFIED_CRATES",
+        )
+
+    def test_cfg_detector_marks_every_platform_form_and_nothing_else(self) -> None:
+        sources = {
+            "direct-windows": "#[cfg(windows)]\nfn platform() {}\n",
+            "direct-unix": "#[cfg(unix)]\nfn platform() {}\n",
+            "negated": "#[cfg(not(windows))]\nfn platform() {}\n",
+            "target-os-windows": "#[cfg(target_os = \"windows\")]\nfn platform() {}\n",
+            "cfg-macro": "const WINDOWS: bool = cfg!(windows);\n",
+            "cfg-attr": "#[cfg_attr(unix, derive(Debug))]\nstruct Platform;\n",
+            "compound": "#[cfg(any(windows, unix))]\nfn platform() {}\n",
+            "nested-first": "#[cfg(all(not(test), windows))]\nfn platform() {}\n",
+            "nested-macro": "const UNIX: bool = cfg!(all(not(test), unix));\n",
+            "spaced-macro": "const WINDOWS: bool = cfg ! (windows);\n",
+            "target-os-linux": (
+                "#[cfg(target_os = \"linux\")]\nfn platform() {}\n"
+                "#[cfg(target_os = \"macos\")]\nfn platform() {}\n"
+            ),
+            "target-family": "#[cfg(target_family = \"unix\")]\nfn platform() {}\n",
+        }
+        portable = {
+            "test-and-features": (
+                "#[cfg(test)]\nmod tests {}\n"
+                "#[cfg(all(test, not(feature = \"slow\")))]\nmod slow {}\n"
+                "fn windows_path() {}\n"
+            ),
+            "feature-named-windows": "#[cfg(feature = \"windows\")]\nfn platform() {}\n",
+            "quoted-example": (
+                "const SAMPLE: &str = r#\"#[cfg(windows)]\"#;\n"
+                "const TARGET: &str = \"cfg(unix)\";\n"
+            ),
+            "commented": "// #[cfg(windows)]\n/* cfg!(unix) */\nfn platform() {}\n",
+            "cfg-attr-value": (
+                "#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")]\n"
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            members = []
+            for crate, source in {**sources, **portable}.items():
+                crate_dir = root / "crates" / crate
+                (crate_dir / "src").mkdir(parents=True)
+                (crate_dir / "Cargo.toml").write_text(
+                    f'[package]\nname = "{crate}"\nversion = "0.1.0"\n',
+                    encoding="utf-8",
+                )
+                (crate_dir / "src" / "lib.rs").write_text(source, encoding="utf-8")
+                members.append(f'"crates/{crate}"')
+            (root / "Cargo.toml").write_text(
+                f"[workspace]\nmembers = [{', '.join(members)}]\n", encoding="utf-8"
+            )
+
+            self.assertEqual(set(sources), _cfg_divergent_crates(root))
+
+    def test_windows_unverified_list_has_no_stale_entries(self) -> None:
+        # An entry must still name a workspace crate that carries divergent
+        # code and that no Windows job compiles yet.
+        self.assertEqual(set(), WINDOWS_UNVERIFIED_CRATES - set(_workspace_crates(ROOT)))
+        self.assertEqual(set(), WINDOWS_UNVERIFIED_CRATES - _cfg_divergent_crates(ROOT))
+        self.assertEqual(set(), WINDOWS_UNVERIFIED_CRATES & _windows_routed_crates())
 
 
 if __name__ == "__main__":
