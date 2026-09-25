@@ -1,0 +1,18 @@
+[
+  {
+    "databaseId": 1,
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "1970-01-01T00:00:00Z",
+    "jobs": [
+      {
+        "id": 1,
+        "name": "x",
+        "conclusion": "success",
+        "created_at": "1970-12-31T23:59:59Z",
+        "started_at": "2026-W27-3T10",
+        "completed_at": "20260701T1000+0100"
+      }
+    ]
+  }
+]

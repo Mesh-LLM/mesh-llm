@@ -1,0 +1,41 @@
+{
+  "args": [
+    "--workflow",
+    "PR Builds",
+    "--json-out",
+    "out/nested/metrics.json"
+  ],
+  "code": 2,
+  "gh_argv": [
+    [
+      "run",
+      "list",
+      "--repo",
+      "Mesh-LLM/mesh-llm",
+      "--workflow",
+      "PR Builds",
+      "--limit",
+      "20",
+      "--json",
+      "databaseId,attempt,workflowName,displayTitle,event,status,conclusion,createdAt,startedAt,updatedAt,url,headSha,headBranch",
+      "--status",
+      "success"
+    ],
+    [
+      "api",
+      "--method",
+      "GET",
+      "repos/Mesh-LLM/mesh-llm/actions/runs/501/jobs",
+      "-f",
+      "filter=latest",
+      "-f",
+      "per_page=100",
+      "-f",
+      "page=1"
+    ]
+  ],
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: gh api --method GET repos/Mesh-LLM/mesh-llm/actions/runs/501/jobs -f filter=latest -f per_page=100 -f page=1 failed: rate limited\n",
+  "stdout": ""
+}

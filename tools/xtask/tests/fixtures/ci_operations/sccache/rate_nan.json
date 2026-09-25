@@ -1,0 +1,7 @@
+{
+  "code": 1,
+  "github_output": null,
+  "stats": null,
+  "stderr": "ERROR: minimum hit rate must be between 0 and 1\n",
+  "stdout": ""
+}

@@ -52,7 +52,7 @@ fn number_repr(number: &Number) -> String {
 
 /// Python `float.__repr__`: shortest round-trip digits, positional between
 /// 1e-4 and 1e16, otherwise `d.ddde+XX` with a signed two-digit exponent.
-fn float_repr(value: f64) -> String {
+pub(crate) fn float_repr(value: f64) -> String {
     if value.is_nan() {
         return "nan".to_owned();
     }

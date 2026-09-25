@@ -2,6 +2,7 @@ mod artifact;
 mod attestation;
 mod automation_bootstrap;
 mod automation_parity;
+mod ci_operations;
 mod ci_plan;
 mod ci_validation;
 mod cli;
@@ -60,6 +61,13 @@ fn run() -> DynResult<()> {
         cli::CliCommand::PreparedInput(rest) => prepared_input::run(rest),
         cli::CliCommand::Artifact(command, rest) => artifact::run(command, rest),
         cli::CliCommand::Models(command, rest) => model_registry::run(command, rest, || {
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
+            Ok(root.as_path().to_path_buf())
+        }),
+        cli::CliCommand::CiOperations(command, rest) => ci_operations::run(command, rest, || {
             let root = match explicit_root {
                 Some(root) => root,
                 None => repository::RepositoryRoot::resolve(None)?,

@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--input",
+    "missing.json",
+    "--json-out",
+    "out/nested/metrics.json"
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: [Errno 2] No such file or directory: 'missing.json'\n",
+  "stdout": ""
+}
