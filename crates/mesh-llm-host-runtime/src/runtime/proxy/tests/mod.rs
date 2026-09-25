@@ -732,7 +732,23 @@ pub(crate) async fn start_standalone_virtual_model_plugin_manager(
     model_id: &'static str,
     response: serde_json::Value,
 ) -> plugin::PluginManager {
-    let mut spec = plugin::in_process_builtin_spec(STANDALONE_VIRTUAL_MODEL_PLUGIN_ID);
+    start_in_process_plugin_manager(
+        standalone_virtual_model_plugin(model_id, response),
+        mesh_llm_plugin::MeshVisibility::Private,
+    )
+    .await
+}
+
+/// Start an in-process plugin manager for one SDK plugin, with an explicit
+/// host mesh visibility so a test can exercise the initialize handshake.
+pub(crate) async fn start_in_process_plugin_manager(
+    built_plugin: mesh_llm_plugin::SimplePlugin,
+    mesh_visibility: mesh_llm_plugin::MeshVisibility,
+) -> plugin::PluginManager {
+    use mesh_llm_plugin::Plugin;
+
+    let plugin_id = built_plugin.plugin_id().to_string();
+    let mut spec = plugin::in_process_builtin_spec(&plugin_id);
     spec.startup.optional = false;
     let specs = plugin::ResolvedPlugins {
         externals: vec![spec],
@@ -741,25 +757,19 @@ pub(crate) async fn start_standalone_virtual_model_plugin_manager(
     let (mesh_tx, mut mesh_rx) = tokio::sync::mpsc::channel(8);
     tokio::spawn(async move { while mesh_rx.recv().await.is_some() {} });
     let runner: plugin::InProcessPluginRunner = Arc::new(move |stream| {
-        let response = response.clone();
+        let built_plugin = built_plugin.clone();
         Box::pin(async move {
-            mesh_llm_plugin::PluginRuntime::run_with_stream(
-                standalone_virtual_model_plugin(model_id, response),
-                stream,
-            )
-            .await
+            mesh_llm_plugin::PluginRuntime::run_with_stream(built_plugin, stream).await
         })
     });
     plugin::PluginManager::start_with_in_process(
         &specs,
-        plugin::PluginHostMode {
-            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
-        },
+        plugin::PluginHostMode { mesh_visibility },
         mesh_tx,
-        plugin::InProcessPlugins::default().with(STANDALONE_VIRTUAL_MODEL_PLUGIN_ID, runner),
+        plugin::InProcessPlugins::default().with(plugin_id, runner),
     )
     .await
-    .expect("start standalone virtual model plugin")
+    .expect("start in-process plugin")
 }
 
 include!("basic.rs");

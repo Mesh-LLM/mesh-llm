@@ -1,11 +1,12 @@
 use mesh_llm_plugin::{
-    HostInferenceRequest, PluginContext, PluginMetadata, PluginRuntime, SimplePlugin,
-    VirtualModelInvocation, VirtualModelResponse, VirtualModelRouter, operation_with_schema,
-    plugin_server_info, structured_tool_result, virtual_model,
+    HostInferenceRequest, MeshVisibility, PluginContext, PluginMetadata, PluginRuntime,
+    SimplePlugin, VirtualModelInvocation, VirtualModelResponse, VirtualModelRouter,
+    operation_with_schema, plugin_server_info, structured_tool_result, virtual_model,
 };
 use mesh_mixture_of_agents as moa;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const PLUGIN_ID: &str = "mesh-moa";
@@ -15,7 +16,42 @@ pub async fn run(stream: mesh_llm_plugin::LocalStream) -> anyhow::Result<()> {
     PluginRuntime::run_with_stream(plugin(), stream).await
 }
 
+/// How long a turn waits for better answers before shipping what it has.
+struct PatienceProfile {
+    first_answer_grace: Duration,
+    strong_patience: Duration,
+}
+
+/// Timing profile for the turn, tightened on a public mesh.
+///
+/// A public mesh is a pathological *availability* case (unknown peers, wider
+/// latency spread, more churn), not a trust case. Both knobs here are "how long
+/// do we hold a usable answer hoping for a better one" — exactly the wait that
+/// hurts most when the tail is long. The hard bounds are unchanged; only the
+/// optional waiting shrinks, so quality paths still run when peers are prompt.
+///
+/// The host used to choose this per turn from `node.public_mesh`; it now hands
+/// the plugin the same signal as `mesh_visibility` at init, so the policy stays
+/// identical.
+fn patience_profile(public_mesh: bool) -> PatienceProfile {
+    if public_mesh {
+        PatienceProfile {
+            // Ship a good answer sooner rather than wait out a long tail.
+            first_answer_grace: Duration::from_millis(1500),
+            // Still give a strong peer a real chance, but don't hold a usable
+            // small-tier answer for 20s against an unknown remote worker.
+            strong_patience: Duration::from_secs(8),
+        }
+    } else {
+        PatienceProfile {
+            first_answer_grace: Duration::from_secs(10),
+            strong_patience: Duration::from_secs(20),
+        }
+    }
+}
+
 pub fn plugin() -> SimplePlugin {
+    let public_mesh = Arc::new(AtomicBool::new(false));
     let manifest = mesh_llm_plugin::plugin_manifest![
         virtual_model(moa::VIRTUAL_MODEL_NAME, HANDLER)
             .supports_tools(true)
@@ -24,13 +60,16 @@ pub fn plugin() -> SimplePlugin {
             .input_modalities(["text", "image", "audio"])
     ];
     let mut router = VirtualModelRouter::new();
+    let turn_public_mesh = Arc::clone(&public_mesh);
     router.add_raw(
         operation_with_schema(HANDLER, "Run a Mesh MoA turn", serde_json::Map::new()),
-        |request, context| {
+        move |request, context| {
             let context = context.owned();
+            let public_mesh = Arc::clone(&turn_public_mesh);
             Box::pin(async move {
                 let invocation: VirtualModelInvocation = request.arguments()?;
-                let response = handle(invocation, context).await;
+                let response =
+                    handle(invocation, context, public_mesh.load(Ordering::Relaxed)).await;
                 structured_tool_result(response)
             })
         },
@@ -48,11 +87,19 @@ pub fn plugin() -> SimplePlugin {
     ))
     .with_manifest(manifest)
     .with_virtual_model_router(router)
+    .on_initialize(move |request, _context| {
+        public_mesh.store(
+            request.mesh_visibility == MeshVisibility::Public,
+            Ordering::Relaxed,
+        );
+        Box::pin(async { Ok(()) })
+    })
 }
 
 async fn handle(
     mut invocation: VirtualModelInvocation,
     context: PluginContext<'static>,
+    public_mesh: bool,
 ) -> VirtualModelResponse {
     // The MoA admission contract applied to every chat request before the
     // plugin owned `mesh`: `messages` must be a present, non-empty array.
@@ -114,14 +161,15 @@ async fn handle(
         );
     }
     let actor_candidates = actor_candidates(&models);
+    let patience = patience_profile(public_mesh);
     let config = moa::GatewayConfig {
         backends,
         models,
         worker_timeout: Duration::from_secs(60),
         reducer_timeout: Duration::from_secs(60),
         hedge_delay: Duration::from_secs(5),
-        first_answer_grace: Duration::from_secs(10),
-        strong_patience: Duration::from_secs(20),
+        first_answer_grace: patience.first_answer_grace,
+        strong_patience: patience.strong_patience,
         enable_thinking: Some(false),
         actor_candidates,
         reference_policy: moa::ReferencePolicy::Auto,
@@ -342,6 +390,24 @@ mod tests {
             })),
             None
         );
+    }
+
+    #[test]
+    fn public_mesh_waits_less_for_a_better_answer() {
+        let public = patience_profile(true);
+        let private = patience_profile(false);
+        assert!(
+            public.first_answer_grace < private.first_answer_grace,
+            "a public mesh must not hold a usable answer for the trusted-mesh grace"
+        );
+        assert!(
+            public.strong_patience < private.strong_patience,
+            "a public mesh must not wait out a long tail for a strong peer"
+        );
+        assert_eq!(public.first_answer_grace, Duration::from_millis(1500));
+        assert_eq!(public.strong_patience, Duration::from_secs(8));
+        assert_eq!(private.first_answer_grace, Duration::from_secs(10));
+        assert_eq!(private.strong_patience, Duration::from_secs(20));
     }
 
     #[test]

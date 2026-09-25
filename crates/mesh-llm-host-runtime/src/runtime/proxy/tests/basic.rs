@@ -443,6 +443,48 @@ async fn test_builtin_moa_rejects_malformed_messages_before_dispatch() {
 }
 
 #[tokio::test]
+async fn test_in_process_plugin_receives_mesh_visibility_at_init() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // The MoA plugin derives its public-mesh patience profile from the
+    // visibility the host hands it during initialize, so the handshake itself
+    // is the contract this test locks.
+    for (visibility, expected_public) in [
+        (mesh_llm_plugin::MeshVisibility::Public, true),
+        (mesh_llm_plugin::MeshVisibility::Private, false),
+    ] {
+        let observed = Arc::new(AtomicBool::new(false));
+        let hook = Arc::clone(&observed);
+        let plugin = mesh_llm_plugin::SimplePlugin::new(mesh_llm_plugin::PluginMetadata::new(
+            "test-mesh-visibility",
+            env!("CARGO_PKG_VERSION"),
+            mesh_llm_plugin::plugin_server_info(
+                "test-mesh-visibility",
+                env!("CARGO_PKG_VERSION"),
+                "Mesh visibility probe",
+                "Records the mesh visibility the host initializes it with",
+                None::<String>,
+            ),
+        ))
+        .on_initialize(move |request, _context| {
+            hook.store(
+                request.mesh_visibility == mesh_llm_plugin::MeshVisibility::Public,
+                Ordering::Relaxed,
+            );
+            Box::pin(async { Ok(()) })
+        });
+
+        let _manager = start_in_process_plugin_manager(plugin, visibility).await;
+
+        assert_eq!(
+            observed.load(Ordering::Relaxed),
+            expected_public,
+            "expected the plugin to observe {visibility:?} at initialize"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_builtin_moa_is_not_advertised_before_a_candidate_is_ready() {
     let plugin_manager = start_moa_plugin_manager().await;
     let (proxy_addr, proxy_handle) =
