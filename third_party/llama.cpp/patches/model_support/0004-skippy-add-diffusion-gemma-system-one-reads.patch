@@ -10,12 +10,12 @@ Co-authored-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 ---
  include/skippy.h            |   1 +
- include/skippy/common.h     |   1 +
+ include/skippy/common.h     |   3 ++-
  include/skippy/system_one.h |  60 +++++++++
  src/CMakeLists.txt          |   1 +
  src/skippy/abi.cpp          |   1 +
  src/skippy/system_one.cpp   | 243 ++++++++++++++++++++++++++++++++++++
- 6 files changed, 307 insertions(+)
+ 6 files changed, 308 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/system_one.h
  create mode 100644 src/skippy/system_one.cpp
 
@@ -31,9 +31,18 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index f2628a7da..649b98951 100644
+index f2628a7da..0ff24e80b 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 63
++#define SKIPPY_ABI_VERSION_PATCH 64
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 @@ -105,6 +105,7 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_UNLOAD_EVENTS          ((uint64_t)1 << 36)
  /** @brief Full-model embedding, reranking, and encoder-decoder execution. */
@@ -383,4 +392,3 @@ index 000000000..5044b13df
 +}
 -- 
 2.54.0 (Apple Git-157)
-
