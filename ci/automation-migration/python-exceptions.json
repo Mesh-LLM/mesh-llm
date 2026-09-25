@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "task": 3,
+  "policy": "Only exact existing paths with named callers, local dependency files, cadence, purpose, and isolation evidence qualify. Transitional generic automation is never an ecosystem exception.",
+  "exceptions": [
+    {
+      "path": "scripts/ci-openai-python-smoke.py",
+      "callers": [".github/workflows/smoke.yml: OpenAI Python SDK compatibility leg"],
+      "local_dependency_files": ["ci/python-sdk-compatibility/pyproject.toml", "ci/python-sdk-compatibility/uv.lock"],
+      "cadence": "advisory compatibility job only after task-22 approval; not a required product or CI gate",
+      "purpose": "Exercise the actual third-party OpenAI Python SDK request and response behavior against the mesh OpenAI-compatible endpoint.",
+      "isolation_test": "Task 22 contract must prove a separate advisory workflow/job with a dedicated locked environment, no shared scripts/tests dependency, no required status dependency, and no credentials beyond the local test endpoint. Until that test exists this is a proposed exception, not approved retention.",
+      "status": "conditional_unqualified"
+    },
+    {
+      "path": "scripts/ci-langchain-openai-smoke.py",
+      "callers": [".github/workflows/smoke.yml: LangChain OpenAI adapter compatibility leg"],
+      "local_dependency_files": ["ci/python-sdk-compatibility/pyproject.toml", "ci/python-sdk-compatibility/uv.lock"],
+      "cadence": "advisory compatibility job only after task-22 approval; not a required product or CI gate",
+      "purpose": "Exercise actual LangChain adapter integration with the external OpenAI client protocol.",
+      "isolation_test": "Task 22 must show isolated dependencies and advisory status, separate from required CI, with no import or caller edge into generic repository scripts or tests.",
+      "status": "conditional_unqualified"
+    },
+    {
+      "path": "scripts/ci-litellm-smoke.py",
+      "callers": [".github/workflows/smoke.yml: LiteLLM client compatibility leg"],
+      "local_dependency_files": ["ci/python-sdk-compatibility/pyproject.toml", "ci/python-sdk-compatibility/uv.lock"],
+      "cadence": "advisory compatibility job only after task-22 approval; not a required product or CI gate",
+      "purpose": "Exercise actual LiteLLM's client compatibility against the mesh OpenAI-compatible endpoint.",
+      "isolation_test": "Task 22 must show isolated dependencies and advisory status, separate from required CI, with no import or caller edge into generic repository scripts or tests.",
+      "status": "conditional_unqualified"
+    },
+    {
+      "path": "scripts/ci-openai-embeddings-smoke.py",
+      "callers": [".github/workflows/smoke.yml: OpenAI Python embeddings SDK compatibility leg"],
+      "local_dependency_files": ["ci/python-sdk-compatibility/pyproject.toml", "ci/python-sdk-compatibility/uv.lock"],
+      "cadence": "advisory compatibility job only after task-22 approval; not a required product or CI gate",
+      "purpose": "Exercise third-party OpenAI Python SDK embeddings behavior against the mesh endpoint.",
+      "isolation_test": "Task 22 must decide whether embeddings is in scope and demonstrate isolated dependencies, advisory workflow status and zero required-CI reachability.",
+      "status": "conditional_unqualified"
+    }
+  ],
+  "explicit_non_exceptions": [
+    {"path":"scripts/ci-openai-workload-smoke.py","reason":"Generic stdlib HTTP/protocol smoke; replacement is Rust QA/protocol tests or tools/xtask, not an external ecosystem implementation."},
+    {"path":"scripts/ci-client-readiness-process.py","reason":"Generic process/readiness supervision; must move to tools/xtask process owner."},
+    {"path":"scripts/reconcile-two-node-split-evidence.py","reason":"Generic evidence validation in required smoke closure; move to tools/xtask QA/evidence."},
+    {"path":"scripts/run-command-with-timeout.py","reason":"Generic process orchestration; no ecosystem behavior."},
+    {"path":"scripts/plan-ci.py","reason":"Required repository CI planner; migrate to tools/xtask, not retained as Python."},
+    {"path":"scripts/collect-ci-metrics.py","reason":"Generic read-only report/evidence processing; migrate to tools/xtask."},
+    {"path":"scripts/skippy-ocr-asr-oracle.py","reason":"Model oracle path is not yet qualified. Its named callers, cadence, local dependencies and separation from generic process/evidence logic remain unresolved."},
+    {"path":"scripts/skippy-tts-oracle.py","reason":"Model oracle path is not yet qualified. Its named callers, cadence, local dependencies and separation from generic process/evidence logic remain unresolved."},
+    {"path":"scripts/hf-skippy-convert-job.py","reason":"Remote job submission does not exempt generic planning, serialization, artifact or process logic; no exact isolated retained-path contract established."},
+    {"path":"scripts/hf-skippy-mtp-certify-job.py","reason":"Remote job adapter is not a blanket ecosystem exception; generic orchestration still migrates."},
+    {"path":"scripts/hf-skippy-mtp-compose-job.py","reason":"Remote job adapter is not a blanket ecosystem exception; generic artifact logic still migrates."},
+    {"path":".agents/skills/release-validation/scripts/collect-release-inventory.py","reason":"Skill-local generic release inventory automation is not an ecosystem dependency; task-5 owner is tools/xtask."}
+  ],
+  "instruction_examples": [
+    {"path":".agents/skills/skippy-cache-family-bench/SKILL.md","examples":["python3 evals/skippy-cache-production-bench.py ...","python3 evals/skippy-cache-family-report.py ..."],"owner":"tools/xtask benchmark/evidence commands","cutover_task":5,"status":"actionable_migration_example","task5_negative_fixture":true},
+    {"path":".agents/skills/skippy-bench/SKILL.md","examples":["uv tool install --python 3.12 terminal-bench","upstream SWE-Agent Python instance generation","standalone Python/SWE-Rex Docker runtime","python:3.11.9-slim-bookworm builder"],"owner":"tools/xtask owns repository planning/orchestration/evidence; upstream eval runtime may remain only as explicit external benchmark use","cutover_task":5,"status":"actionable_migration_and_external_runtime_reference"},
+    {"path":".agents/skills/kv-tool-loop-stability/SKILL.md","examples":["python3 -m unittest scripts.tests.test_qa_kv_tool_loop_stability","python3 -m py_compile scripts/qa-kv-tool-loop-stability.py scripts/tests/test_qa_kv_tool_loop_stability.py"],"owner":"tools/xtask test/QA command","cutover_task":5,"status":"actionable_migration_example"},
+    {"path":".agents/skills/llama-stage-patch-changes/SKILL.md","examples":["python3 scripts/generate-skippy-api-doc.py","python3 scripts/generate-skippy-api-doc.py --check"],"owner":"tools/xtask docs generation/check command","cutover_task":5,"status":"actionable_migration_example"},
+    {"path":".agents/skills/release-notes/SKILL.md","examples":["python3 scripts/release-notes-regroup.py ...","python3 scripts/release-notes-classify.py ..."],"owner":"tools/xtask release notes commands","cutover_task":5,"status":"actionable_migration_example"},
+    {"path":".agents/skills/deploy-macos/SKILL.md","examples":["python3 -m json.tool"],"owner":"jq or native mesh-llm JSON output","cutover_task":5,"status":"display_only_not_repository_automation"},
+    {"path":".agents/skills/deploy-linux-gpu/SKILL.md","examples":["python3 -m json.tool"],"owner":"jq or native mesh-llm JSON output","cutover_task":5,"status":"display_only_not_repository_automation"},
+    {"path":".agents/skills/mesh-join/SKILL.md","examples":["python3 -m json.tool"],"owner":"jq or native mesh-llm JSON output","cutover_task":5,"status":"display_only_not_repository_automation"},
+    {"path":".agents/skills/hf-bf16-gguf-conversion-jobs/SKILL.md","examples":["hf jobs uv run ..."],"owner":"tools/xtask planning plus Hugging Face job SDK entrypoint","cutover_task":5,"status":"actionable_remote_job_example"},
+    {"path":".agents/skills/hf-gguf-quant-jobs/SKILL.md","examples":["hf jobs uv run ..."],"owner":"tools/xtask planning plus Hugging Face job SDK entrypoint","cutover_task":5,"status":"actionable_remote_job_example"},
+    {"path":".agents/skills/hf-quant-and-layer-package-jobs/SKILL.md","examples":["hf jobs uv run ..."],"owner":"tools/xtask planning plus Hugging Face job SDK entrypoint","cutover_task":5,"status":"actionable_remote_job_example"},
+    {"path":".agents/skills/release-validation/references/evidence-and-gates.md","examples":[],"owner":"retain human evidence matrix and decision criteria; machine evidence commands belong to tools/xtask","cutover_task":5,"status":"reviewed_no_interpreter_automation"},
+    {"path":".agents/skills/release-validation/assets/release-validation-report-template.md","examples":[],"owner":"retain human-authored report template populated using tools/xtask outputs","cutover_task":5,"status":"reviewed_no_executable_examples"}
+  ],
+  "unresolved_qualification_count": 4,
+  "unresolved_note": "Exactly four external SDK candidates remain conditional and unqualified because Task 22's isolated advisory environment and isolation proof do not yet exist. They are not approved retained paths. All other tracked instruction assets have actionable/prose-only classifications and owner/cutover examples where applicable; full parser-backed command/caller/transitive closure remains assigned to Task 5, so this count is not an instruction coverage claim."
+}
