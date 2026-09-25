@@ -1,0 +1,17 @@
+[package]
+name = "mesh-llm-payments-types"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Pure payment data types (pricing, request terms, wire frames) shared by mesh core and mesh-llm-payments"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.76.1" }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["io-util"] }

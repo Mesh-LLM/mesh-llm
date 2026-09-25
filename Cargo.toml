@@ -6,6 +6,7 @@ members = [
     "crates/mesh-llm-commands",
     "crates/mesh-llm-config",
     "crates/mesh-llm-payments",
+    "crates/mesh-llm-payments-types",
     "crates/mesh-llm-wallet",
     "crates/mesh-wallet-lexe",
     "crates/mesh-llm-events",

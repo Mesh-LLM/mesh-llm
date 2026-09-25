@@ -146,7 +146,7 @@ pub(crate) struct LocalAnnouncementData {
     artifact_transfer_supported: bool,
     advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
     #[cfg(feature = "payments")]
-    lightning_offers: std::collections::BTreeMap<String, mesh_llm_payments::pricing::Pricing>,
+    lightning_offers: std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
     cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     gpu_mem_bandwidth_gbps: Option<String>,
     gpu_compute_tflops_fp32: Option<String>,

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use mesh_llm_payments::pricing::Pricing;
+use mesh_llm_payments_types::pricing::Pricing;
 
 use crate::proto::node::LightningOffer;
 

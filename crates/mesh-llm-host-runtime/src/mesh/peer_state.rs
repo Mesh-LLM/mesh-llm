@@ -161,7 +161,7 @@ pub struct PeerAnnouncement {
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
     #[cfg(feature = "payments")]
     pub(crate) lightning_offers:
-        std::collections::BTreeMap<String, mesh_llm_payments::pricing::Pricing>,
+        std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     pub(crate) latency_ms: Option<u32>,
@@ -288,7 +288,7 @@ pub struct PeerInfo {
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
     #[cfg(feature = "payments")]
     pub(crate) lightning_offers:
-        std::collections::BTreeMap<String, mesh_llm_payments::pricing::Pricing>,
+        std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     /// Most recent direct RTT sample for display purposes (refreshed periodically).

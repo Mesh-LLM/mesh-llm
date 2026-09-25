@@ -174,10 +174,9 @@ pub struct Node {
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
-    /// Shared activity policy guard for ingress admission checks.
     #[cfg(feature = "payments")]
-    pub(crate) payments:
-        Arc<tokio::sync::OnceCell<Arc<mesh_llm_payments::service::PaymentService>>>,
+    pub(crate) payments: crate::network::payments::PaymentsSlot,
+    /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
     pub(crate) public_mesh: bool,

@@ -4,7 +4,9 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::{invoice::Invoice, ledger::RequestTerms, pricing::Pricing};
+use mesh_llm_wallet::invoice::Invoice;
+
+use crate::{pricing::Pricing, terms::RequestTerms};
 
 pub const HTTP_UPGRADE: &[u8] =
     b"POST /mesh/payment/v1 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";

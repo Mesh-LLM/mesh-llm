@@ -9,11 +9,12 @@
 pub mod control;
 pub mod intent;
 pub mod ledger;
-pub mod lifetimes;
-pub mod pricing;
 pub mod provisioning;
 pub mod service;
-pub mod wire;
+
+// Pure data types live in `mesh-llm-payments-types` so mesh core can depend on
+// them without linking the ledger; re-exported here under their old paths.
+pub use mesh_llm_payments_types::{lifetimes, pricing, wire};
 
 /// Wallet types re-exported under their historical paths.
 pub mod invoice {

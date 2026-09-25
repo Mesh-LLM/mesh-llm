@@ -4485,6 +4485,7 @@ dependencies = [
  "mesh-llm-native-runtime",
  "mesh-llm-node",
  "mesh-llm-payments",
+ "mesh-llm-payments-types",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
  "mesh-llm-protocol",
@@ -4632,11 +4633,23 @@ dependencies = [
  "bitcoin",
  "fs2",
  "lightning-invoice",
+ "mesh-llm-payments-types",
  "mesh-llm-wallet",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "mesh-llm-payments-types"
+version = "0.76.1"
+dependencies = [
+ "anyhow",
+ "mesh-llm-wallet",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
