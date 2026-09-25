@@ -239,6 +239,85 @@ async fn test_api_proxy_lists_registered_inference_models() {
     proxy_handle.abort();
 }
 
+#[tokio::test]
+async fn test_builtin_moa_virtual_model_runs_end_to_end_through_plugin_api() {
+    let worker_response = json!({
+        "id": "chatcmpl-worker",
+        "object": "chat.completion",
+        "model": "worker-a",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "plugin end-to-end"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+    })
+    .to_string();
+    let (worker_a_port, worker_a_requests, worker_a_handle) =
+        spawn_repeating_upstream(&worker_response).await;
+    let (worker_b_port, worker_b_requests, worker_b_handle) =
+        spawn_repeating_upstream(&worker_response).await;
+    let plugin_manager = start_moa_plugin_manager().await;
+    let (proxy_addr, proxy_handle) = spawn_api_proxy_test_harness_with_plugin_manager(
+        local_targets(&[
+            ("worker-a", worker_a_port),
+            ("worker-b", worker_b_port),
+        ]),
+        plugin_manager.clone(),
+    )
+    .await;
+    crate::network::openai::virtual_model::install_inference_bridge(
+        &plugin_manager,
+        proxy_addr.port(),
+    )
+    .await;
+
+    let models_response = send_request_and_read_response(
+        proxy_addr,
+        vec![b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()],
+    )
+    .await;
+    let models_body = models_response.split("\r\n\r\n").nth(1).unwrap_or_default();
+    let models_json: serde_json::Value = serde_json::from_str(models_body).unwrap();
+    let mesh_model = models_json["data"]
+        .as_array()
+        .and_then(|models| models.iter().find(|model| model["id"] == "mesh"))
+        .unwrap_or_else(|| panic!("virtual model missing from /v1/models: {models_response}"));
+    assert_eq!(mesh_model["owned_by"], "plugin:mesh-moa");
+    assert_eq!(mesh_model["virtual_model"]["supports_tools"], true);
+    assert_eq!(mesh_model["virtual_model"]["supports_streaming"], true);
+
+    let body = json!({
+        "model": "mesh",
+        "messages": [{"role": "user", "content": "answer briefly"}],
+        "stream": false,
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected virtual-model response: {response}"
+    );
+    assert!(response.contains("plugin end-to-end"));
+    assert!(response.to_ascii_lowercase().contains("x-moa-turn:"));
+    assert!(
+        worker_a_requests.load(std::sync::atomic::Ordering::Relaxed)
+            + worker_b_requests.load(std::sync::atomic::Ordering::Relaxed)
+            >= 1,
+        "the MoA plugin must call at least one concrete model through host inference"
+    );
+
+    proxy_handle.abort();
+    worker_a_handle.abort();
+    worker_b_handle.abort();
+}
+
 #[test]
 fn test_callable_models_excludes_none_only_targets() {
     let mut targets = local_targets(&[("ready-model", 1234)]);

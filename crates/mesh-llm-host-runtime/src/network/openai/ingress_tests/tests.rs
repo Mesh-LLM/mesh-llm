@@ -196,143 +196,6 @@ fn parse_model_with_profile_multiple_hashes_uses_last() {
     assert_eq!(profile, "profile");
 }
 
-/// Regression: `model=mesh` stays in the Mesh gateway with one admitted worker.
-///
-/// Prompt heuristics may activate deterministic rescue inside the gateway, but
-/// they must never decide whether the virtual Mesh model enters the gateway.
-#[tokio::test]
-async fn moa_single_worker_stays_in_gateway() {
-    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
-        .await
-        .expect("test node");
-    node.set_hosted_models(vec!["local/only-model:Q4_K_M".to_string()])
-        .await;
-    let mut targets = election::ModelTargets::default();
-    targets.targets.insert(
-        "local/only-model:Q4_K_M".to_string(),
-        vec![election::InferenceTarget::Local(1)],
-    );
-    let affinity = affinity::AffinityRouter::new();
-
-    // The helper owns the connected stream while the gateway runs. With the
-    // fake worker endpoint unreachable, the turn may fail, but it must be
-    // handled by the gateway rather than rewritten into direct routing.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    let client = tokio::net::TcpStream::connect(addr);
-    let server = async { listener.accept().await.map(|(stream, _)| stream) };
-    let (_client_side, server_side) = tokio::join!(client, server);
-    let tcp_stream = server_side.expect("accept");
-
-    let body = br#"{"model":"mesh","messages":[{"role":"user","content":"hi"}]}"#;
-    let raw = format!(
-            "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        )
-        .into_bytes()
-        .into_iter()
-        .chain(body.iter().copied())
-        .collect::<Vec<u8>>();
-    let mut request = proxy::BufferedHttpRequest {
-        raw,
-        method: "POST".to_owned(),
-        path: "/v1/chat/completions".to_owned(),
-        client_path: "/v1/chat/completions".to_owned(),
-        request_id: RequestId::default(),
-        body_json: None,
-        body_json_attempted: false,
-        body_bytes: None,
-        body_len_bytes: body.len(),
-        completion_tokens: None,
-        stream: None,
-        model_name: Some("mesh".to_owned()),
-        request_object_request_ids: Vec::new(),
-        response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
-        correlation_id: None,
-    };
-    let decision = AutoRouteDecision {
-        effective_model: Some("mesh".to_owned()),
-        classification: None,
-        required_tokens: None,
-    };
-    let ctx = ProxyConnectionContext {
-        route: IngressRouteContext {
-            node: &node,
-            targets: &targets,
-            affinity: &affinity,
-            plugin_manager: None,
-            exchange_channel: None,
-        },
-    };
-    let lifecycle = OpenAiLifecycleAttachment::unowned();
-
-    let result = try_handle_moa_intercept(
-        tcp_stream.into(),
-        &mut request,
-        &ctx,
-        &decision,
-        lifecycle.route_observer(),
-    )
-    .await;
-
-    match result {
-        MoaInterceptResult::Handled(_) => {
-            assert_eq!(
-                request.model_name.as_deref(),
-                Some("mesh"),
-                "the gateway must preserve the virtual routing model"
-            );
-        }
-        MoaInterceptResult::NotMoa(_) => {
-            panic!("model=mesh fell through without entering the Mesh gateway");
-        }
-        MoaInterceptResult::Degraded { model, .. } => {
-            panic!("one-worker model=mesh degraded to direct routing as {model:?}");
-        }
-    }
-}
-
-#[test]
-fn moa_degraded_model_is_consumed_by_pipeline_dispatch() {
-    use crate::network::router::{Category, Classification, Complexity};
-
-    let request = proxy::BufferedHttpRequest {
-        raw: Vec::new(),
-        method: "POST".to_owned(),
-        path: "/v1/chat/completions".to_owned(),
-        client_path: "/v1/chat/completions".to_owned(),
-        request_id: RequestId::default(),
-        body_json: None,
-        body_json_attempted: false,
-        body_bytes: None,
-        body_len_bytes: 0,
-        completion_tokens: None,
-        stream: None,
-        model_name: Some("local/only-model:Q4_K_M".to_owned()),
-        request_object_request_ids: Vec::new(),
-        response_adapter: proxy::ResponseAdapter::None,
-        correlation_id: None,
-    };
-    let decision = AutoRouteDecision {
-        effective_model: Some("mesh".to_owned()),
-        classification: Some(Classification {
-            category: Category::Code,
-            complexity: Complexity::Deep,
-            needs_tools: true,
-            has_media_inputs: false,
-        }),
-        required_tokens: None,
-    };
-
-    assert_eq!(
-        pipeline_route_model(&request, &decision, request.model_name.as_deref(),),
-        Some("local/only-model:Q4_K_M"),
-        "pipeline dispatch must consume the post-degradation model, not stale 'mesh'"
-    );
-}
-
 fn dispatch_kind_request(
     model: Option<&str>,
     response_adapter: proxy::ResponseAdapter,
@@ -356,20 +219,13 @@ fn dispatch_kind_request(
     }
 }
 
-/// Regression (CodeRabbit, PR #1671 round 2 follow-up): `model: "mesh"` must
-/// NOT be flagged here -- whether the routing headers can be honored depends
-/// on whether `try_handle_moa` actually convenes a committee, which this
-/// pure, side-effect-free function cannot know. Rejecting eagerly here (the
-/// old behavior) blocked requests that MoA was about to degrade to a
-/// concrete model and route with the headers honored. See
-/// `moa_gateway::mesh_routing_tests` for the two outcomes this now defers
-/// to (`try_handle_moa` rejects only when a committee actually convenes).
+/// Virtual-model routing headers are rejected by the virtual-model dispatch
+/// stage, not by the generic pipeline/model-less pre-check.
 #[test]
-fn mesh_routing_unsupported_dispatch_kind_does_not_flag_moa_dispatch() {
-    let request =
-        dispatch_kind_request(Some(moa::VIRTUAL_MODEL_NAME), proxy::ResponseAdapter::None);
+fn mesh_routing_unsupported_dispatch_kind_does_not_flag_virtual_dispatch() {
+    let request = dispatch_kind_request(Some("mesh"), proxy::ResponseAdapter::None);
     let decision = AutoRouteDecision {
-        effective_model: Some(moa::VIRTUAL_MODEL_NAME.to_owned()),
+        effective_model: Some("mesh".to_owned()),
         classification: None,
         required_tokens: None,
     };
@@ -1082,14 +938,19 @@ fn streamed_moa_chat_and_responses_record_compatible_usage_lifecycle() {
             usage,
             output_digests: Default::default(),
         };
-        proxy::record_moa_stream_lifecycle(attachment.route_observer(), adapter, outcome);
+        proxy::record_virtual_model_stream_lifecycle(
+            attachment.route_observer(),
+            "mesh",
+            adapter,
+            outcome,
+        );
         attachment.terminal(terminal_outcome_for_dispatch(outcome));
 
         let events = recorded_lifecycle_events(&service);
         assert!(events.iter().any(|event| matches!(
             event,
             LifecycleEvent::StreamStarted { model }
-                if model.as_deref() == Some(moa::VIRTUAL_MODEL_NAME)
+                if model.as_deref() == Some("mesh")
         )));
         assert!(events.iter().any(|event| matches!(
             event,

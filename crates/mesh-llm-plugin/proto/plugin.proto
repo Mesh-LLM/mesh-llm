@@ -187,6 +187,16 @@ message PluginManifest {
   repeated MeshEventSubscriptionManifest mesh_event_subscriptions = 10;
   optional PluginConfigSchemaManifest config_schema = 11;
   optional PluginWebUiManifest web_ui = 12;
+  repeated VirtualModelManifest virtual_models = 13;
+}
+
+message VirtualModelManifest {
+  string model_id = 1;
+  string handler = 2;
+  repeated string input_modalities = 3;
+  repeated string output_modalities = 4;
+  bool supports_tools = 5;
+  bool supports_streaming = 6;
 }
 
 message PluginWebUiManifest {
@@ -450,6 +460,7 @@ enum ServiceKind {
   SERVICE_KIND_PROMPT = 2;
   SERVICE_KIND_RESOURCE = 3;
   SERVICE_KIND_COMPLETION = 4;
+  SERVICE_KIND_VIRTUAL_MODEL = 5;
 }
 
 message InvokeServiceRequest {

@@ -12,6 +12,7 @@ mod io;
 mod manifest;
 mod runtime;
 mod simple_plugin;
+mod virtual_model;
 
 pub use async_trait::async_trait;
 pub use context::PluginContext;
@@ -21,14 +22,15 @@ pub use helpers::{
     BulkTransferSequence, CompletionFuture, CompletionRouter, JsonOperationFuture, OperationFuture,
     OperationRequest, OperationRouter, PromptFuture, PromptRouter, ResourceFuture, ResourceRouter,
     SubscriptionSet, TaskCancelFuture, TaskGetFuture, TaskRecord, TaskRouter, TaskStore,
-    TaskUpdateFuture, accept_bulk_transfer_message, bulk_transfer_message, bulk_transfer_sequence,
-    channel_message, complete_result, empty_object_schema, get_prompt_result, get_task_result,
-    json_bytes, json_channel_message, json_reply_channel_message, json_response, json_schema_for,
-    json_schema_operation, json_string, list_prompts, list_resource_templates, list_resources,
-    list_tools, operation_error, operation_with_schema, parse_get_prompt_request,
-    parse_optional_json, parse_read_resource_request, parse_rpc_params, plugin_server_info,
-    plugin_server_info_full, prompt, prompt_argument, read_resource_result, resource_template,
-    structured_tool_result, task, text_resource,
+    TaskUpdateFuture, VirtualModelRouter, accept_bulk_transfer_message, bulk_transfer_message,
+    bulk_transfer_sequence, channel_message, complete_result, empty_object_schema,
+    get_prompt_result, get_task_result, json_bytes, json_channel_message,
+    json_reply_channel_message, json_response, json_schema_for, json_schema_operation, json_string,
+    list_prompts, list_resource_templates, list_resources, list_tools, operation_error,
+    operation_with_schema, parse_get_prompt_request, parse_optional_json,
+    parse_read_resource_request, parse_rpc_params, plugin_server_info, plugin_server_info_full,
+    prompt, prompt_argument, read_resource_result, resource_template, structured_tool_result, task,
+    text_resource,
 };
 pub use io::{
     LocalListener, LocalStream, bind_side_stream, connect_from_env, connect_side_stream,
@@ -55,16 +57,21 @@ pub use manifest::{
     PluginConfigObjectPropertyBuilder, PluginConfigSchemaBuilder, PluginConfigSettingBuilder,
     PluginManifestBuilder, PluginWebUiBuilder, PluginWebUiBundleBuilder,
     PluginWebUiConfigSectionBuilder, PluginWebUiPageBuilder, PromptBuilder, ResourceBuilder,
-    ResourceTemplateBuilder, capability, completion, config_array, config_boolean, config_enum,
-    config_float, config_integer, config_object, config_object_property, config_path,
-    config_schema, config_setting, config_string, config_url, constraint_allowed_values,
-    constraint_non_empty, constraint_positive, constraint_range, constraint_requires, http_binding,
-    http_delete, http_get, http_patch, http_post, http_put, mcp_http_endpoint, mcp_stdio_endpoint,
-    mcp_tcp_endpoint, mcp_unix_socket_endpoint, mesh_channel, mesh_event_local_accepting,
-    mesh_event_local_standby, mesh_event_mesh_id_updated, mesh_event_peer_down, mesh_event_peer_up,
-    mesh_event_peer_updated, mesh_event_subscription, openai_http_inference_endpoint, operation,
-    package_manifest_json, plugin_manifest, prompt_service, resource, resource_template_service,
-    web_ui, web_ui_bundle, web_ui_config_section, web_ui_page,
+    ResourceTemplateBuilder, VirtualModelBuilder, capability, completion, config_array,
+    config_boolean, config_enum, config_float, config_integer, config_object,
+    config_object_property, config_path, config_schema, config_setting, config_string, config_url,
+    constraint_allowed_values, constraint_non_empty, constraint_positive, constraint_range,
+    constraint_requires, http_binding, http_delete, http_get, http_patch, http_post, http_put,
+    mcp_http_endpoint, mcp_stdio_endpoint, mcp_tcp_endpoint, mcp_unix_socket_endpoint,
+    mesh_channel, mesh_event_local_accepting, mesh_event_local_standby, mesh_event_mesh_id_updated,
+    mesh_event_peer_down, mesh_event_peer_up, mesh_event_peer_updated, mesh_event_subscription,
+    openai_http_inference_endpoint, operation, package_manifest_json, plugin_manifest,
+    prompt_service, resource, resource_template_service, virtual_model, web_ui, web_ui_bundle,
+    web_ui_config_section, web_ui_page,
+};
+pub use virtual_model::{
+    HostInferenceRequest, HostInferenceResponse, VirtualModelCandidate, VirtualModelInvocation,
+    VirtualModelResponse,
 };
 pub mod mcp {
     pub use crate::dsl::mcp::{

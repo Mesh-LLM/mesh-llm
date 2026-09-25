@@ -23,7 +23,7 @@ async fn route_observer_fails_open_without_a_parent_or_proxy_record() {
 }
 
 #[test]
-fn passive_moa_chat_and_responses_streams_record_usage_lifecycle() {
+fn virtual_model_chat_and_responses_streams_record_usage_lifecycle() {
     let usage = TokenUsage {
         prompt_tokens: Some(8),
         cached_prompt_tokens: None,
@@ -48,14 +48,19 @@ fn passive_moa_chat_and_responses_streams_record_usage_lifecycle() {
             output_digests: Default::default(),
         };
 
-        record_moa_stream_lifecycle(attachment.route_observer(), adapter, outcome);
+        record_virtual_model_stream_lifecycle(
+            attachment.route_observer(),
+            "mesh",
+            adapter,
+            outcome,
+        );
         attachment.terminal(outcome.terminal_outcome());
 
         let events = recorded_lifecycle_events(&service);
         assert!(events.iter().any(|event| matches!(
             event,
             mesh_llm_events::logging::events::LifecycleEvent::StreamStarted { model }
-                if model.as_deref() == Some(mesh_mixture_of_agents::VIRTUAL_MODEL_NAME)
+                if model.as_deref() == Some("mesh")
         )));
         assert!(events.iter().any(|event| matches!(
             event,
@@ -76,7 +81,7 @@ fn passive_moa_chat_and_responses_streams_record_usage_lifecycle() {
 }
 
 #[test]
-fn passive_moa_stream_failure_records_stream_error_before_terminal_failure() {
+fn virtual_model_stream_failure_records_stream_error_before_terminal_failure() {
     let service = Arc::new(LoggingService::new_disabled(Default::default()));
     let parent = RawMeshRequestLifecycle::register(
         Arc::clone(&service),
@@ -90,8 +95,9 @@ fn passive_moa_stream_failure_records_stream_error_before_terminal_failure() {
         reason: "moa_turn_failed_after_commit",
     };
 
-    record_moa_stream_lifecycle(
+    record_virtual_model_stream_lifecycle(
         attachment.route_observer(),
+        "mesh",
         ResponseAdapter::OpenAiResponsesStream,
         outcome,
     );

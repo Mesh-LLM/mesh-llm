@@ -4,7 +4,6 @@ pub(crate) mod automatic;
 pub(crate) mod client_stream;
 mod forwarded_request;
 pub(crate) mod ingress;
-pub(crate) mod moa_gateway;
 mod model_names;
 mod parse_failure;
 mod request_normalize;
@@ -19,6 +18,7 @@ mod routing_rank;
 pub(crate) mod runtime_events;
 mod tool_call_ids;
 pub(crate) mod transport;
+pub(crate) mod virtual_model;
 
 mod payment_routing;
 

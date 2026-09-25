@@ -324,6 +324,61 @@ async fn start_inference_endpoint_plugin_manager(
     plugin_manager
 }
 
+async fn start_moa_plugin_manager() -> plugin::PluginManager {
+    let mut spec = plugin::in_process_builtin_spec(plugin::MOA_PLUGIN_ID);
+    spec.startup.optional = false;
+    let specs = plugin::ResolvedPlugins {
+        externals: vec![spec],
+        inactive: Vec::new(),
+    };
+    let (mesh_tx, mut mesh_rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move { while mesh_rx.recv().await.is_some() {} });
+    let runner: plugin::InProcessPluginRunner =
+        Arc::new(|stream| Box::pin(mesh_llm_moa_plugin::run(stream)));
+    plugin::PluginManager::start_with_in_process(
+        &specs,
+        plugin::PluginHostMode {
+            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+        },
+        mesh_tx,
+        plugin::InProcessPlugins::default().with(plugin::MOA_PLUGIN_ID, runner),
+    )
+    .await
+    .expect("start built-in MoA plugin")
+}
+
+async fn spawn_repeating_upstream(
+    response_body: &str,
+) -> (
+    u16,
+    Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let response = response_body.to_string();
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let request_count = Arc::clone(&requests);
+    let handle = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let response = response.clone();
+            let request_count = Arc::clone(&request_count);
+            tokio::spawn(async move {
+                let _ = read_raw_http_request(&mut stream).await;
+                request_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                );
+                let _ = stream.write_all(reply.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    (port, requests, handle)
+}
+
 async fn spawn_capturing_upstream(
     response_body: &str,
 ) -> (u16, oneshot::Receiver<Vec<u8>>, tokio::task::JoinHandle<()>) {

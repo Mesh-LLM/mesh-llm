@@ -412,10 +412,32 @@ pub trait Plugin: Send {
                     None => Ok(None),
                 }
             }
+            proto::ServiceKind::VirtualModel => {
+                let arguments = parse_service_input::<serde_json::Value>(&request.input_json)?;
+                let model_request = ToolCallRequest {
+                    name: request.service_name,
+                    arguments,
+                };
+                match self.invoke_virtual_model(model_request, context).await? {
+                    Some(result) => Ok(Some(proto::InvokeServiceResponse {
+                        output_json: normalize_call_tool_output(&result)?,
+                        is_error: result.is_error.unwrap_or(false),
+                    })),
+                    None => Ok(None),
+                }
+            }
             proto::ServiceKind::Unspecified => Err(PluginError::invalid_request(
                 "Service invocation kind is required",
             )),
         }
+    }
+
+    async fn invoke_virtual_model(
+        &mut self,
+        _request: ToolCallRequest,
+        _context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<CallToolResult>> {
+        Ok(None)
     }
 
     async fn handle_rpc(
@@ -1407,6 +1429,55 @@ mod tests {
             completion_result.completion.values,
             vec![String::from("alpha")]
         );
+    }
+
+    #[tokio::test]
+    async fn invoke_service_dispatches_virtual_model_handler() {
+        let mut router = crate::VirtualModelRouter::new();
+        router.add_json(
+            crate::operation_with_schema("chat", "Virtual chat", serde_json::Map::new()),
+            |request: serde_json::Value, _context| {
+                Box::pin(async move {
+                    Ok(crate::VirtualModelResponse {
+                        status_code: 200,
+                        body: json!({"echo": request["request"]}),
+                        headers: vec![("x-test".into(), "ok".into())],
+                        event_stream: false,
+                    })
+                })
+            },
+        );
+        let mut plugin = crate::SimplePlugin::new(PluginMetadata::new(
+            "virtual-demo",
+            "1.0.0",
+            plugin_server_info(
+                "virtual-demo",
+                "1.0.0",
+                "Virtual Demo",
+                "Virtual model test",
+                None::<String>,
+            ),
+        ))
+        .with_virtual_model_router(router);
+        let mut context = test_context();
+
+        let response = plugin
+            .invoke_service(
+                proto::InvokeServiceRequest {
+                    kind: proto::ServiceKind::VirtualModel as i32,
+                    service_name: "chat".into(),
+                    input_json: json!({"request": {"model": "virtual-demo"}}).to_string(),
+                },
+                &mut context,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let response: crate::VirtualModelResponse =
+            serde_json::from_str(&response.output_json).unwrap();
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.body["echo"]["model"], "virtual-demo");
+        assert_eq!(response.headers, [("x-test".into(), "ok".into())]);
     }
 
     // Unix only: this drives a real `UnixStream` pair, and `LocalStream` has no

@@ -33,7 +33,7 @@ use serde_json::Value;
 use crate::network::router;
 
 /// The one automatic routing directive clients should send.
-pub(crate) const DIRECTIVE: &str = mesh_mixture_of_agents::VIRTUAL_MODEL_NAME;
+pub(crate) const DIRECTIVE: &str = "mesh";
 
 /// Accepted spelling of [`DIRECTIVE`] retained for compatibility.
 ///

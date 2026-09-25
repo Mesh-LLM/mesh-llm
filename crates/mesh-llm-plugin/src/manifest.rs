@@ -31,6 +31,7 @@ pub enum ManifestEntry {
     Completion(proto::CompletionManifest),
     HttpBinding(proto::HttpBindingManifest),
     Endpoint(proto::EndpointManifest),
+    VirtualModel(proto::VirtualModelManifest),
     MeshChannel(proto::MeshChannelManifest),
     MeshEventSubscription(proto::MeshEventSubscriptionManifest),
     WebUi(proto::PluginWebUiManifest),
@@ -74,6 +75,7 @@ impl PluginManifestBuilder {
             }
             ManifestEntry::HttpBinding(binding) => self.manifest.http_bindings.push(binding),
             ManifestEntry::Endpoint(endpoint) => self.manifest.endpoints.push(endpoint),
+            ManifestEntry::VirtualModel(model) => self.manifest.virtual_models.push(model),
             ManifestEntry::MeshChannel(channel) => self.manifest.mesh_channels.push(channel),
             ManifestEntry::MeshEventSubscription(subscription) => {
                 self.manifest.mesh_event_subscriptions.push(subscription);
@@ -89,6 +91,63 @@ pub fn plugin_manifest() -> PluginManifestBuilder {
 
 pub fn capability(name: impl Into<String>) -> ManifestEntry {
     ManifestEntry::Capability(name.into())
+}
+
+#[derive(Clone, Debug)]
+pub struct VirtualModelBuilder {
+    inner: proto::VirtualModelManifest,
+}
+
+pub fn virtual_model(
+    model_id: impl Into<String>,
+    handler: impl Into<String>,
+) -> VirtualModelBuilder {
+    VirtualModelBuilder {
+        inner: proto::VirtualModelManifest {
+            model_id: model_id.into(),
+            handler: handler.into(),
+            input_modalities: vec!["text".into()],
+            output_modalities: vec!["text".into()],
+            supports_tools: false,
+            supports_streaming: false,
+        },
+    }
+}
+
+impl VirtualModelBuilder {
+    pub fn supports_tools(mut self, value: bool) -> Self {
+        self.inner.supports_tools = value;
+        self
+    }
+
+    pub fn supports_streaming(mut self, value: bool) -> Self {
+        self.inner.supports_streaming = value;
+        self
+    }
+
+    pub fn input_modalities<I, S>(mut self, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.inner.input_modalities = values.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn output_modalities<I, S>(mut self, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.inner.output_modalities = values.into_iter().map(Into::into).collect();
+        self
+    }
+}
+
+impl From<VirtualModelBuilder> for ManifestEntry {
+    fn from(value: VirtualModelBuilder) -> Self {
+        Self::VirtualModel(value.inner)
+    }
 }
 
 pub fn config_schema(plugin_name: impl Into<String>) -> PluginConfigSchemaBuilder {
@@ -1748,6 +1807,28 @@ mod tests {
 
         assert_eq!(decoded.capabilities, vec!["demo.v1"]);
         assert!(decoded.web_ui.is_none());
+    }
+
+    #[test]
+    fn virtual_model_builder_preserves_declared_contract() {
+        let manifest = plugin_manifest()
+            .item(
+                virtual_model("agent", "chat")
+                    .input_modalities(["text", "image"])
+                    .output_modalities(["text"])
+                    .supports_tools(true)
+                    .supports_streaming(true),
+            )
+            .build();
+
+        assert_eq!(manifest.virtual_models.len(), 1);
+        let model = &manifest.virtual_models[0];
+        assert_eq!(model.model_id, "agent");
+        assert_eq!(model.handler, "chat");
+        assert_eq!(model.input_modalities, ["text", "image"]);
+        assert_eq!(model.output_modalities, ["text"]);
+        assert!(model.supports_tools);
+        assert!(model.supports_streaming);
     }
 
     #[test]
