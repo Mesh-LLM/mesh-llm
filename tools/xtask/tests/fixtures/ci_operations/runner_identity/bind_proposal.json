@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stderr": "",
+  "stdout": "{\n  \"proposal\": \"proposal\",\n  \"scope\": \"reviewed_producer_admission\",\n  \"validation\": \"offline_binding_only\"\n}\n"
+}

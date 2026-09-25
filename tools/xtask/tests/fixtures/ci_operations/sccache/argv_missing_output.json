@@ -1,0 +1,7 @@
+{
+  "code": 2,
+  "github_output": null,
+  "stats": null,
+  "stderr": "usage: capture.py [-h] --artifact-name ARTIFACT_NAME --output OUTPUT\n                  [--github-output GITHUB_OUTPUT]\n                  [--cache-expectation {cold,warm,opportunistic}]\n                  [--minimum-hit-rate MINIMUM_HIT_RATE]\ncapture.py: error: the following arguments are required: --output\n",
+  "stdout": ""
+}

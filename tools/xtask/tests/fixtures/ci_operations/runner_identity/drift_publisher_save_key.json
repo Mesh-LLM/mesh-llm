@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: compiler seed publisher cache key drift\n",
+  "stdout": ""
+}

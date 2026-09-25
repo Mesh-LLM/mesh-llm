@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: runner evidence: cohort bytes differ from reviewed anchor\n",
+  "stdout": ""
+}

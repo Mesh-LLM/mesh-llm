@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: ci-web-slice.yml:website (website-quality): expected exactly one image declaration\n",
+  "stdout": ""
+}

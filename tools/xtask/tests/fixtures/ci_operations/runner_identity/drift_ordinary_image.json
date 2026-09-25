@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: ci-quality-slice.yml:rust_clippy (rust-clippy): image reference drift\n",
+  "stdout": ""
+}

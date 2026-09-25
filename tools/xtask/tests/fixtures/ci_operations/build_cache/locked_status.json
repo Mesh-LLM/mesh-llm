@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "ERROR: build-cache cleanup or a local build is already running\n",
+  "stdout": ""
+}

@@ -1,0 +1,7 @@
+{
+  "code": 0,
+  "github_output": null,
+  "stats": null,
+  "stderr": "",
+  "stdout": "usage: capture.py [-h] --artifact-name ARTIFACT_NAME --output OUTPUT\n                  [--github-output GITHUB_OUTPUT]\n                  [--cache-expectation {cold,warm,opportunistic}]\n                  [--minimum-hit-rate MINIMUM_HIT_RATE]\n\noptions:\n  -h, --help            show this help message and exit\n  --artifact-name ARTIFACT_NAME\n  --output OUTPUT\n  --github-output GITHUB_OUTPUT\n  --cache-expectation {cold,warm,opportunistic}\n  --minimum-hit-rate MINIMUM_HIT_RATE\n"
+}
