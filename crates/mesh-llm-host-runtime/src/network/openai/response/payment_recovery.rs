@@ -6,7 +6,7 @@ use mesh_llm_payments_types::{
 };
 
 use crate::mesh::Node;
-use crate::network::payments::client::{self, Payments};
+use crate::network::payments::client::Payments;
 
 /// Recover financial state only. Never regenerate or replay application output
 /// after a restart, and never infer failure just from invoice expiry.
@@ -14,12 +14,13 @@ pub(crate) async fn recover(node: &Node) -> Result<()> {
     let Some(plugins) = node.plugin_manager().await else {
         return Ok(());
     };
+    // Pin one provider for the whole pass, reconcile included: a request's
+    // trailing settlement must stay on the ledger that reported it, so a
+    // provider replaced mid-pass cannot split one request across two ledgers.
+    let payments = Payments::for_plugins(plugins).await;
     // The provider ignores individual uncertain charges so one cannot block
     // other debts; it returns the requests still owed by their sellers.
-    let pending: ReconcileResponse = client::call(&plugins, ops::RECONCILE, &Empty {}).await?;
-    // Pin one provider for the whole pass: a request's trailing settlement must
-    // not be split across two providers if the capability is replaced mid-run.
-    let payments = Payments::for_plugins(plugins).await;
+    let pending: ReconcileResponse = payments.call(ops::RECONCILE, &Empty {}).await?;
     for terms in pending.approved {
         // Bound each peer independently so one unavailable provider cannot stop
         // reconciliation of other requests.
