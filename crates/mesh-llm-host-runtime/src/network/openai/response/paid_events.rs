@@ -1,5 +1,6 @@
 //! Best-effort payer observations; never a ledger, replay service or payment authority.
-use mesh_llm_payments::{invoice::Invoice, ledger::RequestTerms, wallet::Transaction};
+use mesh_llm_payments_types::RequestTerms;
+use mesh_llm_wallet::{invoice::Invoice, provider::Transaction};
 use serde::Serialize;
 use tokio::sync::mpsc;
 
@@ -90,7 +91,7 @@ impl Observations {
     }
 
     pub(super) fn settled(&self, segment: u32, transaction: &Transaction) {
-        if transaction.status != mesh_llm_payments::wallet::PaymentStatus::Succeeded {
+        if transaction.status != mesh_llm_wallet::provider::PaymentStatus::Succeeded {
             return;
         }
         self.emit(
@@ -166,7 +167,7 @@ mod tests {
             peer: "private-peer".into(),
             payee: Some("payee".into()),
             model: "model".into(),
-            pricing: mesh_llm_payments::pricing::Pricing {
+            pricing: mesh_llm_payments_types::pricing::Pricing {
                 input_msat_per_million: 1000,
                 output_msat_per_million: 2000,
                 minimum_invoice_msat: 1,
@@ -234,17 +235,17 @@ mod tests {
             inbound: false,
             amount_msat: 10,
             fee_msat: 1,
-            status: mesh_llm_payments::wallet::PaymentStatus::Pending,
+            status: mesh_llm_wallet::provider::PaymentStatus::Pending,
             claiming: false,
             status_msg: None,
             created_at_ms: 0,
             settled_at_ms: None,
         };
         observations.settled(0, &payment);
-        payment.status = mesh_llm_payments::wallet::PaymentStatus::Failed;
+        payment.status = mesh_llm_wallet::provider::PaymentStatus::Failed;
         observations.settled(0, &payment);
         assert!(receiver.try_recv().is_err());
-        payment.status = mesh_llm_payments::wallet::PaymentStatus::Succeeded;
+        payment.status = mesh_llm_wallet::provider::PaymentStatus::Succeeded;
         observations.settled(0, &payment);
         let event = receiver.try_recv().unwrap();
         assert_eq!(event.phase, "input_settlement_observed");

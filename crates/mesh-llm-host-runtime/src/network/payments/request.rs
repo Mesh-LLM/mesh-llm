@@ -6,7 +6,7 @@ pub(crate) struct PaidRequest {
     pub max_tokens: Option<u32>,
     pub path: String,
     pub body: Value,
-    pub intent: Option<mesh_llm_payments::intent::PaymentIntent>,
+    pub intent: Option<mesh_llm_payments_types::intent::PaymentIntent>,
 }
 
 impl PaidRequest {
@@ -30,7 +30,7 @@ impl PaidRequest {
         let intent = body
             .as_object_mut()
             .and_then(|body| body.remove("mesh_payment"))
-            .map(serde_json::from_value::<mesh_llm_payments::intent::PaymentIntent>)
+            .map(serde_json::from_value::<mesh_llm_payments_types::intent::PaymentIntent>)
             .transpose()?;
         if let Some(intent) = &intent {
             intent.validate()?;
@@ -114,7 +114,7 @@ pub(crate) fn strip_intent(raw: &[u8]) -> Result<Vec<u8>> {
     else {
         return Ok(raw.to_vec());
     };
-    let intent: mesh_llm_payments::intent::PaymentIntent = serde_json::from_value(value)?;
+    let intent: mesh_llm_payments_types::intent::PaymentIntent = serde_json::from_value(value)?;
     intent.validate()?;
     let bytes = serde_json::to_vec(&body)?;
     let headers = std::str::from_utf8(&raw[..offset - 4])?;

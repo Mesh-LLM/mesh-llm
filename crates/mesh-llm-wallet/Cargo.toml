@@ -33,3 +33,4 @@ tokio = { version = "1", features = ["sync"], optional = true }
 [dev-dependencies]
 bitcoin = { version = "0.32", features = ["secp-recovery"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"

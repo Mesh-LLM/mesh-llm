@@ -1,50 +1,14 @@
 //! Local operator API. Never dispatch commands received from a mesh peer.
 
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::invoice::Invoice;
-use crate::ledger::{Charge, Policy, RequestTerms};
+use crate::ledger::{Charge, RequestTerms};
 use crate::pricing::Pricing;
 use crate::service::PaymentService;
 
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ControlCommand {
-    Balance,
-    InspectInvoice {
-        invoice: String,
-    },
-    Transactions {
-        limit: usize,
-    },
-    Fund {
-        #[serde(default)]
-        amount_msat: Option<u64>,
-    },
-    Send {
-        invoice: String,
-        amount_msat: Option<u64>,
-        max_fee_msat: u64,
-    },
-    Pending,
-    /// Peers refused paid inference for recorded debt. Ledger-only.
-    Blocked,
-    /// Forgive a blocked peer's recorded debt. `peer` is the full endpoint ID
-    /// or a unique prefix of at least eight characters. Ledger-only.
-    Unblock {
-        peer: String,
-    },
-    Policy {
-        value: Option<Policy>,
-    },
-    Pricing,
-    SetPricing {
-        model: String,
-        value: Option<Pricing>,
-    },
-}
+pub use mesh_llm_payments_types::control::ControlCommand;
 
 impl PaymentService {
     pub async fn control(&self, command: ControlCommand) -> Result<Value> {

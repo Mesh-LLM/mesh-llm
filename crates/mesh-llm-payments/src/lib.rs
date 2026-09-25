@@ -12,7 +12,7 @@ pub mod ledger;
 pub mod operations;
 #[cfg(feature = "plugin-server")]
 pub mod plugin_server;
-pub mod provisioning;
+pub use mesh_llm_wallet::provisioning;
 pub mod service;
 pub mod serving;
 

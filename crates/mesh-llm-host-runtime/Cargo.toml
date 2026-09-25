@@ -15,7 +15,7 @@ default = ["web-ui", "dynamic-native-runtime", "payments", "wallet-lexe"]
 # Consumers that reach host-runtime with `default-features = false` (e.g. via
 # the SDK serving path) stay payment-free and drop the rusqlite /
 # lightning-invoice / bitcoin stack unless they opt back in.
-payments = ["dep:mesh-llm-payments", "mesh-llm-payments/plugin-server", "dep:mesh-llm-payments-types", "dep:mesh-llm-wallet"]
+payments = ["dep:mesh-llm-payments-types", "mesh-llm-payments-types/engine", "dep:mesh-llm-wallet"]
 # The built-in Lexe wallet implementation, served blobstore-style as
 # `mesh-llm --plugin wallet-lexe`. This is the only feature that links the Lexe
 # SDK into the executable. The shipped CLI enables it; SDK consumers do not, so
@@ -40,7 +40,6 @@ serde_json = "1"
 sha2 = "0.11"
 
 [dependencies]
-mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.76.1", optional = true }
 mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.76.1", optional = true }
 mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.76.1", optional = true }
 mesh-wallet-lexe = { path = "../mesh-wallet-lexe", version = "0.76.1", optional = true }
@@ -137,6 +136,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.76.1", features = ["plugin-server"] }
 # start_paused test clocks for the probe cooldown regression tests.
 tokio = { version = "1", features = ["full", "test-util"] }
 bitcoin = { version = "0.32", features = ["secp-recovery"] }

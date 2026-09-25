@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use crate::wallet::WalletProvider;
+use crate::provider::WalletProvider;
 
 #[async_trait]
 pub trait WalletFactory: Send + Sync {

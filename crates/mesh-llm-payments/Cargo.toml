@@ -14,7 +14,7 @@ workspace = true
 default = []
 # Serve this engine as the in-process `payments.v1` builtin plugin. Enabled by
 # the shipped binary that registers it; the engine itself does not need it.
-plugin-server = ["dep:mesh-llm-plugin", "dep:rmcp"]
+plugin-server = ["dep:mesh-llm-plugin", "dep:rmcp", "mesh-llm-payments-types/engine"]
 
 [dependencies]
 anyhow.workspace = true

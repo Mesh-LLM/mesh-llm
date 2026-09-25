@@ -64,7 +64,7 @@ pub(super) async fn attach_prices(
 
 fn offer(
     provider: &str,
-    price: Option<&mesh_llm_payments::pricing::Pricing>,
+    price: Option<&mesh_llm_payments_types::pricing::Pricing>,
     age: Option<u64>,
     local: bool,
 ) -> Value {
@@ -95,7 +95,7 @@ mod tests {
             if charged {
                 announcement.lightning_offers.insert(
                     "test".into(),
-                    mesh_llm_payments::pricing::Pricing {
+                    mesh_llm_payments_types::pricing::Pricing {
                         input_msat_per_million: 10,
                         output_msat_per_million: 20,
                         minimum_invoice_msat: 1000,
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn same_model_can_describe_free_and_paid_providers() {
-        let price = mesh_llm_payments::pricing::Pricing {
+        let price = mesh_llm_payments_types::pricing::Pricing {
             input_msat_per_million: 10,
             output_msat_per_million: 20,
             minimum_invoice_msat: 1000,

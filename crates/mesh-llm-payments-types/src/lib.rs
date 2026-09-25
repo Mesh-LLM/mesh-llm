@@ -6,6 +6,9 @@
 #![forbid(unsafe_code)]
 
 pub mod contract;
+pub mod control;
+#[cfg(feature = "engine")]
+pub mod engine;
 pub mod intent;
 pub mod lifetimes;
 pub mod pricing;

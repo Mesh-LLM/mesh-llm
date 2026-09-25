@@ -20,13 +20,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
-use mesh_llm_payments::provisioning::{WalletFactory, WalletPin};
-use mesh_llm_payments::wallet::{Balance, PayError, Transaction, WalletProvider};
 use mesh_llm_wallet::contract::{
     self, CAPABILITY, Empty, LookupResponse, OpenRequest, OpenResponse, PayRequest,
     PaymentHashRequest, TransactionsRequest, WalletError, WalletErrorKind, ops,
 };
 use mesh_llm_wallet::invoice::Invoice;
+use mesh_llm_wallet::provider::{Balance, PayError, Transaction, WalletProvider};
+use mesh_llm_wallet::provisioning::{WalletFactory, WalletPin};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;

@@ -4192,6 +4192,7 @@ dependencies = [
  "mesh-llm-commands",
  "mesh-llm-events",
  "mesh-llm-host-runtime",
+ "mesh-llm-payments",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
  "mesh-llm-system",
@@ -4366,7 +4367,9 @@ dependencies = [
 name = "mesh-llm-embedded-runtime"
 version = "0.76.1"
 dependencies = [
+ "anyhow",
  "mesh-llm-host-runtime",
+ "mesh-llm-payments",
 ]
 
 [[package]]
@@ -4649,6 +4652,7 @@ name = "mesh-llm-payments-types"
 version = "0.76.1"
 dependencies = [
  "anyhow",
+ "mesh-llm-plugin",
  "mesh-llm-wallet",
  "serde",
  "serde_json",
@@ -4868,6 +4872,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "tokio",
 ]
 

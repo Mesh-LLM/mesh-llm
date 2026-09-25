@@ -288,7 +288,7 @@ impl InvoiceGate {
             let gave_up = if expires == 0 {
                 started.elapsed() >= max_pause
             } else {
-                mesh_llm_payments::now_ms()
+                mesh_llm_wallet::now_ms()
                     > expires.saturating_add(PRE_PAYMENT_PAUSE_SLACK.as_millis() as u64)
             };
             if gave_up {
@@ -439,7 +439,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         gate.invoice_expires_at_ms
-            .store(mesh_llm_payments::now_ms() + 60_000, Ordering::Release);
+            .store(mesh_llm_wallet::now_ms() + 60_000, Ordering::Release);
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert!(
             !task.is_finished(),
@@ -455,7 +455,7 @@ mod tests {
         let gate = gate().await;
         let slack = PRE_PAYMENT_PAUSE_SLACK.as_millis() as u64;
         gate.invoice_expires_at_ms.store(
-            mesh_llm_payments::now_ms().saturating_sub(slack) + 150,
+            mesh_llm_wallet::now_ms().saturating_sub(slack) + 150,
             Ordering::Release,
         );
         let decoding = gate.clone();

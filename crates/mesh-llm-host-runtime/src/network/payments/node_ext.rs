@@ -1,32 +1,31 @@
 //! The payments engine slot on [`Node`]. Lives here, not in `mesh/`, so mesh
-//! core only sees the pure types crate and never names `PaymentService`.
+//! core only sees the pure types crate and never names the engine.
 
 use std::sync::Arc;
 
-use mesh_llm_payments::service::PaymentService;
-
+use super::engine::PaymentsEngine;
 use crate::mesh::Node;
 
 /// Lazily opened payments engine, shared by every clone of a [`Node`].
-pub(crate) type PaymentsSlot = Arc<tokio::sync::OnceCell<Arc<PaymentService>>>;
+type EngineFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = anyhow::Result<Arc<dyn PaymentsEngine>>> + Send + 'a>,
+>;
+
+pub(crate) type PaymentsSlot = Arc<tokio::sync::OnceCell<Arc<dyn PaymentsEngine>>>;
 
 impl Node {
     pub(crate) async fn advertised_payment_offers(
         &self,
-    ) -> anyhow::Result<std::collections::BTreeMap<String, mesh_llm_payments::pricing::Pricing>>
+    ) -> anyhow::Result<std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>>
     {
         let directory = self.config_state.lock().await.payment_directory();
         if self.payments.get().is_none() && !directory.join("payments.sqlite3").exists() {
             return Ok(Default::default());
         }
-        self.payment_service().await?.ledger.pricing()
+        self.payment_engine().await?.pricing()
     }
 
-    pub(crate) fn payment_service(
-        &self,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<Arc<PaymentService>>> + Send + '_>,
-    > {
+    pub(crate) fn payment_engine(&self) -> EngineFuture<'_> {
         Box::pin(async move {
             let service = self
                 .payments
@@ -39,8 +38,9 @@ impl Node {
                     let factory = crate::network::payments::wallet_plugin::PluginWalletFactory::new(
                         Arc::clone(&self.plugin_manager),
                     );
-                    let service =
-                        Arc::new(PaymentService::with_factory(&directory, Arc::new(factory))?);
+                    let provider = super::engine::provider()
+                        .ok_or_else(|| anyhow::anyhow!("no payments engine installed"))?;
+                    let service = provider.open(&directory, Arc::new(factory))?;
                     let recovery_service = Arc::downgrade(&service);
                     let node = self.clone();
                     tokio::spawn(async move {
@@ -63,20 +63,21 @@ impl Node {
 /// In-process builtins this node supplies to its plugin manager: the payments
 /// engine as `payments.v1`, opened lazily through this node's slot.
 pub(crate) fn in_process_plugins(node: &Node) -> crate::plugin::InProcessPlugins {
+    let Some(provider) = super::engine::provider() else {
+        return crate::plugin::InProcessPlugins::default();
+    };
     let node = node.clone();
-    let source: mesh_llm_payments::plugin_server::ServiceSource = Arc::new(move || {
+    let source: super::engine::EngineSource = Arc::new(move || {
         let node = node.clone();
-        Box::pin(async move { node.payment_service().await })
+        Box::pin(async move { node.payment_engine().await })
     });
     let runner: crate::plugin::InProcessPluginRunner = Arc::new(move |stream| {
-        let plugin = mesh_llm_payments::plugin_server::payments_plugin(
+        provider.serve(
             crate::plugin::PAYMENTS_PLUGIN_ID,
             crate::VERSION,
             Arc::clone(&source),
-        );
-        Box::pin(mesh_llm_plugin::PluginRuntime::run_with_stream(
-            plugin, stream,
-        ))
+            stream,
+        )
     });
     crate::plugin::InProcessPlugins::default().with(crate::plugin::PAYMENTS_PLUGIN_ID, runner)
 }
@@ -87,6 +88,7 @@ pub(crate) fn in_process_plugins(node: &Node) -> crate::plugin::InProcessPlugins
 pub(crate) async fn attach_payments_plugin(
     node: &Node,
 ) -> anyhow::Result<crate::plugin::PluginManager> {
+    install_test_engine();
     let specs = crate::plugin::ResolvedPlugins {
         externals: vec![crate::plugin::in_process_builtin_spec(
             crate::plugin::PAYMENTS_PLUGIN_ID,
@@ -107,6 +109,14 @@ pub(crate) async fn attach_payments_plugin(
     Ok(manager)
 }
 
+/// Installs the real engine for tests, as the shipped binary does.
+#[cfg(test)]
+pub(crate) fn install_test_engine() {
+    super::engine::install_payments_engine(Arc::new(
+        mesh_llm_payments::plugin_server::EngineProvider,
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,8 +126,11 @@ mod tests {
     async fn payments_engine_is_served_in_process_by_capability() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        let service = Arc::new(mesh_llm_payments::service::PaymentService::open(
+            directory.path(),
+        )?);
         node.payments
-            .set(Arc::new(PaymentService::open(directory.path())?))
+            .set(service.clone())
             .map_err(|_| anyhow::anyhow!("already set"))?;
         let manager = attach_payments_plugin(&node).await?;
 
@@ -129,13 +142,8 @@ mod tests {
         let pricing: serde_json::Value = serde_json::from_str(&result.content_json)?;
         assert_eq!(pricing["m"]["output_msat_per_million"], 2);
         // Same engine the host holds: the plugin wraps the node's service.
-        assert!(
-            node.payment_service()
-                .await?
-                .ledger
-                .pricing()?
-                .contains_key("m")
-        );
+        assert!(service.ledger.pricing()?.contains_key("m"));
+        assert!(node.payment_engine().await?.pricing()?.contains_key("m"));
 
         let bad = manager
             .invoke_operation_by_capability(CAPABILITY, ops::CONTROL, r#"{"command":"nope"}"#)

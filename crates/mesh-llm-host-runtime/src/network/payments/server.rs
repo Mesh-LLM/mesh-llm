@@ -286,7 +286,7 @@ async fn stream_output(
 const MAX_BUFFERED_OUTPUT_BYTES: usize = 1024 * 1024;
 const _: () = assert!(
     MAX_BUFFERED_OUTPUT_BYTES as u64
-        >= 2048 * mesh_llm_payments::lifetimes::PRE_PAYMENT_OUTPUT_TOKENS
+        >= 2048 * mesh_llm_payments_types::lifetimes::PRE_PAYMENT_OUTPUT_TOKENS
 );
 
 async fn deliver_output(

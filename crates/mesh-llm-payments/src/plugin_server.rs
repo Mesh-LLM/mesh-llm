@@ -34,6 +34,61 @@ pub type ServiceSource = Arc<
         + Sync,
 >;
 
+impl mesh_llm_payments_types::engine::PaymentsEngine for PaymentService {
+    fn pricing(
+        &self,
+    ) -> anyhow::Result<std::collections::BTreeMap<String, crate::pricing::Pricing>> {
+        self.ledger.pricing()
+    }
+
+    fn has_wallet(&self) -> bool {
+        PaymentService::has_wallet(self)
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+}
+
+/// This engine as a host [`PaymentsEngineProvider`]: the shipped binary
+/// installs it; the host itself never links this crate.
+///
+/// [`PaymentsEngineProvider`]: mesh_llm_payments_types::engine::PaymentsEngineProvider
+pub struct EngineProvider;
+
+impl mesh_llm_payments_types::engine::PaymentsEngineProvider for EngineProvider {
+    fn open(
+        &self,
+        directory: &std::path::Path,
+        wallet: Arc<dyn crate::provisioning::WalletFactory>,
+    ) -> anyhow::Result<Arc<dyn mesh_llm_payments_types::engine::PaymentsEngine>> {
+        Ok(Arc::new(PaymentService::with_factory(directory, wallet)?))
+    }
+
+    fn serve(
+        &self,
+        plugin_name: &str,
+        version: &str,
+        source: mesh_llm_payments_types::engine::EngineSource,
+        stream: mesh_llm_plugin::LocalStream,
+    ) -> mesh_llm_payments_types::engine::BoxFuture<anyhow::Result<()>> {
+        let source: ServiceSource = Arc::new(move || {
+            let source = Arc::clone(&source);
+            Box::pin(async move {
+                source()
+                    .await?
+                    .into_any()
+                    .downcast::<PaymentService>()
+                    .map_err(|_| anyhow::anyhow!("payments engine is not this provider's"))
+            })
+        });
+        let plugin = payments_plugin(plugin_name, version, source);
+        Box::pin(mesh_llm_plugin::PluginRuntime::run_with_stream(
+            plugin, stream,
+        ))
+    }
+}
+
 /// Builds the `payments.v1` plugin over `source`.
 pub fn payments_plugin(
     plugin_name: impl Into<String>,

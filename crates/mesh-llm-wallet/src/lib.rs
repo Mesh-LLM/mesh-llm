@@ -18,6 +18,7 @@
 pub mod contract;
 pub mod invoice;
 pub mod provider;
+pub mod provisioning;
 
 #[cfg(feature = "plugin-server")]
 pub mod backend;

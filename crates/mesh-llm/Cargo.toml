@@ -12,7 +12,7 @@ web-ui = ["mesh-llm-host-runtime/web-ui"]
 dynamic-native-runtime = ["mesh-llm-host-runtime/dynamic-native-runtime"]
 # Paid-inference ledger, gates and the `wallet.v1` plugin adapter. Links no
 # wallet SDK by itself.
-payments = ["mesh-llm-host-runtime/payments"]
+payments = ["mesh-llm-host-runtime/payments", "dep:mesh-llm-payments"]
 # Built-in Lexe wallet, served as `mesh-llm --plugin wallet-lexe` like
 # blobstore. The only feature that links Lexe into this executable.
 wallet-lexe = ["payments", "mesh-llm-host-runtime/wallet-lexe"]
@@ -28,6 +28,7 @@ mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.76.1" }
 mesh-llm-commands = { path = "../mesh-llm-commands", version = "0.76.1" }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.1" }
 mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.76.1", default-features = false }
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.76.1", features = ["plugin-server"], optional = true }
 mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.1" }
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.76.1" }
 mesh-llm-system = { path = "../mesh-llm-system", version = "0.76.1", features = ["skippy-devices"] }
