@@ -48,6 +48,8 @@ pub(super) struct InvoiceGate {
     pub input_settlement: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
 }
 
+const CLOSE_SERVING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 impl InvoiceGate {
     /// Wait for the input payment the delivery gate opened on to settle.
     /// Between `claiming` and this point the provider carries the risk.
@@ -72,7 +74,15 @@ impl InvoiceGate {
     }
 
     /// Flush the watermark, then close serving accounting. Idempotent.
+    /// Bounded so a stuck engine or wallet cannot hold the response open;
+    /// on timeout the request fails and startup recovery reconciles it.
     pub(super) async fn close_serving(&self) -> Result<()> {
+        tokio::time::timeout(CLOSE_SERVING_TIMEOUT, self.close_serving_inner())
+            .await
+            .map_err(|_| anyhow::anyhow!("closing serving accounting timed out"))?
+    }
+
+    async fn close_serving_inner(&self) -> Result<()> {
         let flushed = self.flush_delivered().await;
         let _: Empty = self
             .payments
