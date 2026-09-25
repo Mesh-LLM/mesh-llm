@@ -1,0 +1,63 @@
+From 65fb0266b613aa1d25513763fd01405befaa7eee Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 18:46:59 +1000
+Subject: [PATCH] test(skippy): isolate invalidation boundary probe
+
+---
+ src/skippy/tests/stage_program_parity.h | 25 ++++++++++++++++++-------
+ 1 file changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/src/skippy/tests/stage_program_parity.h b/src/skippy/tests/stage_program_parity.h
+index f73ab0b34..2afa625ff 100644
+--- a/src/skippy/tests/stage_program_parity.h
++++ b/src/skippy/tests/stage_program_parity.h
+@@ -268,7 +268,7 @@ public:
+                 skippy_session_create(concurrent, &lanes[1], &error) == SKIPPY_STATUS_OK) {
+             served = boundary_probe_warmup(lanes[0], &error) &&
+                     boundary_probe_concurrent(lanes, &error) &&
+-                    boundary_probe_invalidated(concurrent, lanes[0], &error);
++                    boundary_probe_invalidated(concurrent, &lanes[0], &error);
+         } else {
+             std::fprintf(stderr, "boundary probe could not open two lanes\n");
+         }
+@@ -355,20 +355,31 @@ private:
+     // change below invalidates it, so the decode must report the mismatch
+     // instead of letting the exception escape.
+     static bool boundary_probe_invalidated(
+-            skippy_model * runtime, skippy_session * session, skippy_error ** error) {
++            skippy_model * runtime, skippy_session ** session, skippy_error ** error) {
++        if (skippy_session_free(*session, error) != SKIPPY_STATUS_OK) {
++            std::fprintf(stderr, "boundary probe could not retire the used invalidation lane: %s\n",
++                    *error != nullptr ? (*error)->message : "unknown");
++            return false;
++        }
++        *session = nullptr;
++        if (skippy_session_create(runtime, session, error) != SKIPPY_STATUS_OK || *session == nullptr) {
++            std::fprintf(stderr, "boundary probe could not open an invalidation lane: %s\n",
++                    *error != nullptr ? (*error)->message : "unknown");
++            return false;
++        }
+         runtime->ctx->set_embeddings(!runtime->ctx->get_cparams().embeddings);
+         llama_token predicted = -1;
+-        const skippy_status status = boundary_probe_request(session, 11, &predicted, error);
++        const skippy_status status = boundary_probe_request(*session, 11, &predicted, error);
+         const char * message = *error != nullptr ? (*error)->message : nullptr;
+-        if (status != SKIPPY_STATUS_RUNTIME_ERROR || message == nullptr ||
+-                std::strstr(message, "computation configuration changed after installation") == nullptr) {
++        const bool rejected = status == SKIPPY_STATUS_RUNTIME_ERROR && message != nullptr &&
++                std::strstr(message, "computation configuration changed after installation") != nullptr;
++        if (!rejected) {
+             std::fprintf(stderr, "boundary probe invalidated stage program did not report its rejection: %s\n",
+                     message != nullptr ? message : "unknown");
+-            return false;
+         }
+         skippy_error_free(*error);
+         *error = nullptr;
+-        return true;
++        return rejected;
+     }
+ 
+ };
+-- 
+2.54.0 (Apple Git-157)
+

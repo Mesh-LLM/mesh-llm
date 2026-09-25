@@ -1,0 +1,37 @@
+From 6b2d843410df48ad02b9b0352f3f681a883528fd Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 17:02:43 +1000
+Subject: [PATCH 30/35] fix(skippy): reject invalid replay row updates
+
+---
+ src/skippy/stage_program_replay.cpp | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
+index ba358c579..b35c2d7fe 100644
+--- a/src/skippy/stage_program_replay.cpp
++++ b/src/skippy/stage_program_replay.cpp
+@@ -374,6 +374,20 @@ ggml_tensor * replay_operation(
+                     strides[1], strides[2], strides[3], view_offset);
+             break;
+         case GGML_OP_SET_ROWS:
++            if (sources[0] == nullptr || sources[1] == nullptr || sources[2] == nullptr ||
++                    sources[0]->ne[1] != sources[1]->ne[0]) {
++                error = "stage program SET_ROWS geometry mismatch for " + operation.name +
++                        " (" + operation.value_id + ") rows=" +
++                        (sources[0] == nullptr ? std::string("<null>") :
++                            std::to_string(sources[0]->ne[0]) + "x" + std::to_string(sources[0]->ne[1])) +
++                        " indices=" +
++                        (sources[1] == nullptr ? std::string("<null>") :
++                            std::to_string(sources[1]->ne[0]) + "x" + std::to_string(sources[1]->ne[1])) +
++                        " destination=" +
++                        (sources[2] == nullptr ? std::string("<null>") :
++                            std::to_string(sources[2]->ne[0]) + "x" + std::to_string(sources[2]->ne[1]));
++                return nullptr;
++            }
+             tensor = ggml_set_rows(context, sources[2], sources[0], sources[1]);
+             break;
+         case GGML_OP_PERMUTE:
+-- 
+2.54.0 (Apple Git-157)
+
