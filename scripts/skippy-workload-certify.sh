@@ -221,7 +221,11 @@ env \
   LLAMA_STAGE_BACKEND="$BACKEND" \
   "${TEST_COMMAND[@]}"
 
-PORT="${SKIPPY_WORKLOAD_OPENAI_PORT:-19337}"
+PORT="${SKIPPY_WORKLOAD_OPENAI_PORT:-$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 1)}"
+if [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
+  echo "invalid candidate port: $PORT" >&2
+  exit 1
+fi
 CONFIG_PATH="$WORK_DIR/stage-openai.json"
 python3 - "$CONFIG_PATH" "$MODEL_ID" "$MODEL_PATH" "$MODEL_SHA256" "$LAYER_END" "$N_GPU_LAYERS" "$PROJECTOR_PATH" <<'PY'
 import json
@@ -311,7 +315,7 @@ python3 "$ROOT/scripts/ci-openai-workload-smoke.py" \
   --media-path "$MEDIA_PATH"
 
 if [[ -n "$ORACLE_SERVER" ]]; then
-  ORACLE_PORT="${SKIPPY_WORKLOAD_ORACLE_PORT:-19338}"
+  ORACLE_PORT="${SKIPPY_WORKLOAD_ORACLE_PORT:-$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 1)}"
   if [[ ! "$ORACLE_PORT" =~ ^[0-9]+$ ]] ||
      (( ORACLE_PORT < 1 || ORACLE_PORT > 65535 || ORACLE_PORT == PORT )); then
     echo "invalid or conflicting oracle port: $ORACLE_PORT" >&2

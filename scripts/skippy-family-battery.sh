@@ -428,20 +428,13 @@ scan_model() {
 
 preflight_environment() {
   local model_root="${HF_HOME:-$(dirname "$PREFLIGHT_FIRST_TARGET")}"
-  local candidate_port="${SKIPPY_WORKLOAD_OPENAI_PORT:-19337}"
-  local oracle_port="${SKIPPY_WORKLOAD_ORACLE_PORT:-19338}"
-  local required_ports
-  required_ports="$(python3 "$ROOT/scripts/lib/canary_family_ports.py" \
-    "$RESOLVED_MANIFEST" "$candidate_port" "$oracle_port")"
-  python3 - "$ARTIFACT_DIR" "$model_root" "$MIN_FREE_GIB" "$PREFLIGHT_ONLY" "$PREFLIGHT_DIR/environment.json" \
-    "$required_ports" <<'PY'
+  python3 - "$ARTIFACT_DIR" "$model_root" "$MIN_FREE_GIB" "$PREFLIGHT_DIR/environment.json" <<'PY'
 import json
 import shutil
-import socket
 import sys
 from pathlib import Path
 
-artifact_root, model_root, minimum_gib, preflight_only, output, required_ports = sys.argv[1:]
+artifact_root, model_root, minimum_gib, output = sys.argv[1:]
 minimum_bytes = int(minimum_gib) * 1024**3
 filesystems = []
 for label, path_text in (("artifacts", artifact_root), ("models", model_root)):
@@ -459,34 +452,12 @@ for label, path_text in (("artifacts", artifact_root), ("models", model_root)):
         }
     )
 
-busy_ports = []
-ports = [int(port) for port in required_ports.split(",")]
-if any(port < 1 or port > 65535 for port in ports) or len(ports) != len(set(ports)):
-    raise SystemExit("invalid or conflicting certification ports")
-if preflight_only == "0":
-    for port in ports:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.settimeout(0.01)
-            if sock.connect_ex(("127.0.0.1", port)) == 0:
-                busy_ports.append(port)
-        except OSError:
-            busy_ports.append(port)
-        finally:
-            sock.close()
-
 report = {
     "filesystems": filesystems,
-    "port_range": {
-        "start": min(ports),
-        "end": max(ports),
-        "ports_checked": ports,
-        "checked": preflight_only == "0",
-        "busy": busy_ports,
-    },
+    "ports": {"allocation": "os-assigned-at-launch"},
 }
 Path(output).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-if any(not item["sufficient"] for item in filesystems) or busy_ports:
+if any(not item["sufficient"] for item in filesystems):
     raise SystemExit(1)
 PY
 }
@@ -495,12 +466,11 @@ run_certify() {
   local family="$1" target="$2" model_id="$3" source_revision="$4" split_layer="$5" chain_splits="$6" layer_end="$7" native_mtp="$8"
   local startup_timeout="$9" model_size_bytes="${10}" activation_width="${11}"
   TOTAL=$((TOTAL + 1))
-  local cert_run_id cert_run_dir exit_code manifest_path cert_timeout port_base started_at elapsed_seconds
+  local cert_run_id cert_run_dir exit_code manifest_path cert_timeout started_at elapsed_seconds
   cert_run_id="$(printf '%03d-%s' "$TOTAL" "$(slugify "$family")")"
   cert_run_dir="$CERT_DIR/$cert_run_id"
   # The all-head lane opens the integrated model and then its clean baseline.
   cert_timeout="$(cert_timeout_for_startup "$startup_timeout" "$((2 * native_mtp))")"
-  port_base=$((19000 + ((TOTAL - 1) % 20) * 50))
   echo "==> family-certify: family=$family split=$split_layer chain=$chain_splits mtp=$native_mtp startup_timeout=${startup_timeout}s cert_timeout=${cert_timeout}s model=$(basename "$target")"
   local command=(
     "$ROOT/scripts/family-certify.sh"
@@ -514,7 +484,6 @@ run_certify() {
     --startup-timeout-secs "$startup_timeout"
     --cert-root "$cert_run_dir"
     --run-id certification
-    --port-base "$port_base"
     --require-lanes
     --skip-build
   )
@@ -534,9 +503,6 @@ run_certify() {
     --label "family certification $family split $split_layer" \
     -- "${command[@]}" || exit_code=$?
   elapsed_seconds=$(( $(date +%s) - started_at ))
-  if ! cleanup_certification_ports "$port_base"; then
-    exit_code=1
-  fi
   manifest_path=""
   if [[ -d "$cert_run_dir" ]]; then
     manifest_path="$(find "$cert_run_dir" -name manifest.json -type f -print -quit)"
@@ -577,27 +543,6 @@ run_certify() {
     FAILURES+=("$family@split=$split_layer")
     CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))
   fi
-}
-
-cleanup_certification_ports() {
-  local port_base="$1" port pid command
-  command -v lsof >/dev/null 2>&1 || return 0
-  for port in "$((port_base + 1))" "$((port_base + 11))" "$((port_base + 12))" "$((port_base + 31))" "$((port_base + 32))"; do
-    while IFS= read -r pid; do
-      [[ -n "$pid" ]] || continue
-      command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-      if [[ "$command" != *"$BIN_DIR/skippy-server"* ]]; then
-        echo "port $port remains owned by unexpected process $pid: $command" >&2
-        return 1
-      fi
-      kill -TERM "$pid" 2>/dev/null || true
-      for _ in 1 2 3 4 5; do
-        kill -0 "$pid" 2>/dev/null || break
-        sleep 1
-      done
-      kill -KILL "$pid" 2>/dev/null || true
-    done < <(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
-  done
 }
 
 preflight_manifest() {
@@ -822,19 +767,11 @@ preflight_manifest() {
     return 1
   fi
   if ! preflight_environment; then
-    local environment_failure_note="insufficient disk headroom; see preflight/environment.json"
-    if (( PREFLIGHT_ONLY == 0 )); then
-      environment_failure_note="insufficient disk headroom or occupied certification ports; see preflight/environment.json"
-    fi
-    record_preflight_outcome "environment-preflight" "battery" "environment" "fail" "harness" "$environment_failure_note"
+    record_preflight_outcome "environment-preflight" "battery" "environment" "fail" "harness" "insufficient disk headroom; see preflight/environment.json"
     PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
     return 1
   fi
-  local environment_note="disk headroom validated; certification ports not checked in preflight-only mode"
-  if (( PREFLIGHT_ONLY == 0 )); then
-    environment_note="disk headroom and required certification ports validated"
-  fi
-  record_preflight_outcome "environment-preflight" "battery" "environment" "pass" "pass" "$environment_note"
+  record_preflight_outcome "environment-preflight" "battery" "environment" "pass" "pass" "disk headroom validated; certification ports are OS-assigned at lane launch"
 
 }
 

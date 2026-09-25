@@ -64,7 +64,6 @@ Speculative options:
 Output options:
   --cert-root DIR             output root; default: target/family-certify
   --run-id ID                 output run id; default: timestamp
-  --port-base N               base port; default: 19000 + random offset
   -h, --help                  show this help
 
 Arguments after -- are currently ignored by the mesh-llm import.
@@ -140,7 +139,6 @@ RECURRENT_RANGES=""
 RECURRENT_ALL=0
 CERT_ROOT="target/family-certify"
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
-PORT_BASE="$((19000 + RANDOM % 1000))"
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -180,7 +178,6 @@ while [[ $# -gt 0 ]]; do
     --recurrent-all) RECURRENT_ALL=1; shift ;;
     --cert-root) CERT_ROOT="$2"; shift 2 ;;
     --run-id) RUN_ID="$2"; shift 2 ;;
-    --port-base) PORT_BASE="$2"; shift 2 ;;
     --) shift; EXTRA_ARGS=("$@"); break ;;
     -h|--help) usage; exit 2 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
@@ -409,15 +406,17 @@ else
       record_event "chain" "skipped" 0 "" "" "chain requires exactly two split indexes"
       printf 'core-parity: skipped (requires exactly two chain split indexes)\n'
     else
+      core_ports="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 3)"
+      IFS=',' read -r single_stage1_port chain_stage1_port chain_stage2_port <<< "$core_ports"
       core_args=(
       "$ROOT/target/debug/skippy-correctness"
       core-parity
       "${correctness_common[@]}"
       --split-layer "$SPLIT_LAYER"
       --splits "$SPLITS"
-      --single-stage1-bind-addr "127.0.0.1:$((PORT_BASE + 1))"
-      --chain-stage1-bind-addr "127.0.0.1:$((PORT_BASE + 11))"
-      --chain-stage2-bind-addr "127.0.0.1:$((PORT_BASE + 12))"
+      --single-stage1-bind-addr "127.0.0.1:$single_stage1_port"
+      --chain-stage1-bind-addr "127.0.0.1:$chain_stage1_port"
+      --chain-stage2-bind-addr "127.0.0.1:$chain_stage2_port"
       --single-report-out "$REPORT_DIR/single-step.json"
       --chain-report-out "$REPORT_DIR/chain.json"
       )
@@ -445,13 +444,15 @@ else
   if (( SKIP_STATE != 0 )); then
     record_event "state-handoff" "skipped" 0 "" "" "--skip-state"
   elif [[ -n "$ACTIVATION_WIDTH" && -n "$LAYER_END" ]]; then
+    state_ports="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 2)"
+    IFS=',' read -r source_port restore_port <<< "$state_ports"
     state_args=(
       "$ROOT/target/debug/skippy-correctness"
       state-handoff
       "${correctness_common[@]}"
       --activation-width "$ACTIVATION_WIDTH"
-      --source-bind-addr "127.0.0.1:$((PORT_BASE + 31))"
-      --restore-bind-addr "127.0.0.1:$((PORT_BASE + 32))"
+      --source-bind-addr "127.0.0.1:$source_port"
+      --restore-bind-addr "127.0.0.1:$restore_port"
       --state-payload-kind "$STATE_PAYLOAD_KIND"
       --cache-hit-repeats "$CACHE_HIT_REPEATS"
       --report-out "$REPORT_DIR/state-handoff.json"

@@ -206,8 +206,11 @@ cache. Existing `HF_TOKEN`/`HF_TOKEN_PATH` configuration is preserved, with toke
 masked before export. `HF_HUB_OFFLINE=1` is applied as certification policy rather
 than required in the machine environment. Compiler-cache and local-tool defaults
 use the runner account's home directory instead of a fixed username. Runner
-services sharing a physical certification machine serialize model loads and
-ports through the per-account host lock. There is no Actions model cache.
+services sharing a physical certification machine serialize model loads through
+a cross-account host lock in host-global `/tmp`.
+Certification endpoints use distinct OS-assigned loopback ports selected when
+each lane starts; the environment preflight owns disk headroom only. There is no
+Actions model cache.
 
 The aggregate requires every planned family exactly once, successful worker
 status, matching candidate/plan/build digests, and each family's required
@@ -1117,8 +1120,8 @@ These are explicit admission estimates for the current short-context harness,
 not measured peak guarantees; changes to concurrency/context require review.
 
 The worker recomputes placement from the digest-verified plan, waits for one
-local per-account host lock, checks actual physical capacity and available
-memory, and polls availability once per second while running the battery.
+cross-account physical-host lock in `/tmp`, checks actual physical capacity and
+available memory, and polls availability once per second while running the battery.
 Expected contention between runner services on one machine is serialized rather
 than reported as a family failure; the evidence records whether and how long the
 worker waited. Available memory is macOS free + inactive + speculative pages;
