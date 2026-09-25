@@ -298,6 +298,7 @@ runs:
                 or (.matrices.smoke | length) > 0
                 or (.matrices.sdk | length) > 0
                 or ((.required_slices | index("static-abi")) != null)
+                or ((.required_slices | index("native-tests")) != null)
               )
           ' ci-plan.json)"
           echo "macos_lane_plan=$(jq -c '

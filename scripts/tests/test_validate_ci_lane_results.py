@@ -54,6 +54,35 @@ class ValidateCiLaneResultsTests(unittest.TestCase):
         with self.assertRaisesRegex(VALIDATOR.LaneResultError, "runtime_product"):
             VALIDATOR.validate(plan, needs)
 
+    def test_linux_lane_requires_native_tests_only_when_planned(self) -> None:
+        plan = {
+            "lane": "linux",
+            "required": True,
+            "required_slices": ["static-abi", "native-tests"],
+            "matrices": {
+                "rust_tests": [],
+                "hosts": [],
+                "runtime_products": [],
+                "smoke": [],
+                "sdk": [],
+            },
+        }
+        expected = {"static_abi", "native_tests"}
+        self.assertEqual(VALIDATOR._required_jobs(plan), expected)
+        needs = {job: state("success") for job in expected}
+        VALIDATOR.validate(plan, needs)
+
+        needs["native_tests"] = state("skipped")
+        with self.assertRaisesRegex(VALIDATOR.LaneResultError, "native_tests"):
+            VALIDATOR.validate(plan, needs)
+
+        plan["required_slices"] = ["static-abi"]
+        self.assertEqual(VALIDATOR._required_jobs(plan), {"static_abi"})
+        with self.assertRaisesRegex(VALIDATOR.LaneResultError, "native_tests"):
+            VALIDATOR.validate(
+                plan, {"static_abi": state("success"), "native_tests": state("success")}
+            )
+
     def test_macos_lane_maps_swift_sdk_and_platform_jobs(self) -> None:
         plan = {
             "lane": "macos",

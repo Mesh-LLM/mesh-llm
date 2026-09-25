@@ -60,7 +60,7 @@ class RunnerImageIdentityTests(unittest.TestCase):
         paths = list((self.root / ".github/workflows").glob("*.yml")) + [self.root / "ci/slices.yml", self.root / "ci/ownership.yml"]
         before = {path: path.read_bytes() for path in paths}
         self.assertEqual(IDENTITY.check(self.catalog, self.root), {
-            "images": 9, "roles": 35, "workflow_bindings": 35,
+            "images": 9, "roles": 36, "workflow_bindings": 36,
             "runtime_rows": 4, "seed_consumers": 6,
         })
         self.assertEqual(before, {path: path.read_bytes() for path in paths})
@@ -167,7 +167,7 @@ class RunnerImageIdentityTests(unittest.TestCase):
             for binding in role["bindings"]:
                 if binding["workflow"] == original:
                     binding["workflow"] = renamed
-        self.assertEqual(IDENTITY.check(self.catalog, self.root)["workflow_bindings"], 35)
+        self.assertEqual(IDENTITY.check(self.catalog, self.root)["workflow_bindings"], 36)
         self.replace(".github/workflows/" + renamed, self.image("public-web"), self.image("public-cpu"))
         self.assert_drift("image reference drift")
 

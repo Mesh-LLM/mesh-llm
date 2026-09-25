@@ -372,6 +372,57 @@ class PlanCiTests(unittest.TestCase):
         self.assertEqual(plan["matrices"]["runtime_products"], [])
         self.assertEqual(plan["matrices"]["smoke"], [])
 
+    def test_native_patch_queue_changes_select_native_tests_on_ready_prs(self) -> None:
+        # The static-abi producer builds with LLAMA_STAGE_BUILD_TESTS=OFF, so the
+        # skippy_* CTest battery only runs through the dedicated native-tests
+        # slice. Any change to the patch queue or the staged-runtime crates must
+        # select it; a draft PR keeps the cheap control profile.
+        for changed, domain in (
+            (
+                "third_party/llama.cpp/patches/0027-skippy-replay-extracted-stage-programs.patch",
+                "native-abi",
+            ),
+            ("crates/skippy-runtime/src/media.rs", "split-serving"),
+        ):
+            with self.subTest(changed=changed):
+                payload = fixture("runtime.json")
+                payload.update(
+                    {
+                        "changed_files": [changed],
+                        "affected_crates": ["mesh-llm"],
+                    }
+                )
+
+                plan = PLANNER.build_plan(payload, root=ROOT)
+
+                self.assertIn(domain, plan["domains"])
+                self.assertIn("native-tests", plan["required_slices"])
+                self.assertIn(f"domain:{domain}", plan["reasons"]["native-tests"])
+                self.assertEqual(plan["runner_roles"]["native-tests"], "linux-native-16")
+                self.assertEqual(plan["cache_modes"]["native-tests"], "pr-isolated")
+
+        payload = fixture("runtime.json")
+        payload.update(
+            {
+                "profile": "pr-draft",
+                "changed_files": [
+                    "third_party/llama.cpp/patches/0027-skippy-replay-extracted-stage-programs.patch"
+                ],
+                "affected_crates": ["mesh-llm"],
+            }
+        )
+        plan = PLANNER.build_plan(payload, root=ROOT)
+        self.assertNotIn("native-tests", plan["required_slices"])
+
+    def test_host_runtime_only_changes_do_not_select_native_tests(self) -> None:
+        plan = PLANNER.build_plan(fixture("runtime.json"), root=ROOT)
+        self.assertNotIn("native-tests", plan["required_slices"])
+
+    def test_main_runs_native_tests_unconditionally(self) -> None:
+        plan = PLANNER.build_plan(fixture("main.json"), root=ROOT)
+        self.assertIn("native-tests", plan["required_slices"])
+        self.assertIn("profile:base", plan["reasons"]["native-tests"])
+
     def test_main_covers_every_workspace_crate_once(self) -> None:
         plan = PLANNER.build_plan(fixture("main.json"), root=ROOT)
 

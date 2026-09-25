@@ -542,6 +542,16 @@ runtime producers are not duplicated.
 - `ci-ui-artifact-slice.yml` — one immutable console `dist` producer.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.
+- `ci-native-tests-slice.yml` — the native Skippy test gate. It rebuilds the
+  patched llama.cpp static CPU ABI with `LLAMA_STAGE_BUILD_TESTS=ON` in a
+  separate `.deps/llama.cpp/build-stage-native-tests-static` directory and runs
+  the `skippy_*` CTest battery through `scripts/build-llama.sh`. The static ABI
+  producer deliberately builds without tests, so this slice is the only PR/main
+  job that executes staged-runtime native code (stage planning, stage-program
+  extraction/replay, package-v2 and synthetic graph fixtures). The planner
+  selects it for the `native-abi` (`third_party/llama.cpp/**`, `skippy-ffi`)
+  and `split-serving` (`crates/skippy-*`) domains on ready PRs and always on
+  main; it produces no artifact consumed by another job.
 - `ci-rust-tests-slice.yml` — deterministic affected or all-workspace Cargo
   test batches consuming the static ABI artifact and its producer-owned
   toolchain epoch. Batches that exercise Skippy correctness tests restore an

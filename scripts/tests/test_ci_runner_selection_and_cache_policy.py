@@ -114,10 +114,10 @@ class CiRunnerSelectionAndCachePolicyTests(RunnerSelectorMixin, unittest.TestCas
                 if "pr_approved_ref:" in block:
                     approved_policy_calls += 1
                     self.assertIn("pr_approved_sha:", block)
-        self.assertEqual(selector_calls, 19)
+        self.assertEqual(selector_calls, 20)
         # The release workflow selects a runner for a non-PR ref and does not
         # pass the pull-request approval inputs.
-        self.assertEqual(approved_policy_calls, 18)
+        self.assertEqual(approved_policy_calls, 19)
 
         cases = (
             (

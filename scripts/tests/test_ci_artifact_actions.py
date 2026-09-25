@@ -72,6 +72,7 @@ class CiArtifactActionTests(unittest.TestCase):
                         "ci-macos-host-slice.yml",
                         "ci-macos-product-slice.yml",
                         "ci-macos-runtime-slice.yml",
+                        "ci-native-tests-slice.yml",
                         "ci-platform-checks-slice.yml",
                         "ci-quality-slice.yml",
                         "ci-rust-tests-slice.yml",
@@ -2370,8 +2371,8 @@ class CiArtifactActionTests(unittest.TestCase):
                 if "pr_approved_ref:" in block:
                     approved_policy_calls += 1
                     self.assertIn("pr_approved_sha:", block)
-        self.assertEqual(selector_calls, 19)
-        self.assertEqual(approved_policy_calls, 18)
+        self.assertEqual(selector_calls, 20)
+        self.assertEqual(approved_policy_calls, 19)
 
         cases = (
             (

@@ -1,0 +1,215 @@
+name: Reusable Native Skippy Tests Slice
+
+# Builds the patched llama.cpp static ABI with the private Skippy application
+# probes enabled and runs the `skippy_*` CTest battery. This is the only PR
+# gate that executes native staged-runtime code (stage planning, stage-program
+# extraction/replay, package-v2 fixtures, synthetic graph contracts). The
+# static-abi producer intentionally builds without tests; this slice owns a
+# separate build directory so its test-enabled configure never contaminates
+# the packaged ABI input.
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: false
+        default: ''
+        type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: false
+        default: ''
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
+      backend:
+        description: Native backend to test (cpu only).
+        required: false
+        default: cpu
+        type: string
+      target:
+        description: Native target triple under test.
+        required: false
+        default: x86_64-unknown-linux-gnu
+        type: string
+      runner_size:
+        description: Eligible Linux runner size (default, 4, 8, or 16).
+        required: false
+        default: '16'
+        type: string
+      timeout_minutes:
+        description: Build-and-test timeout in minutes.
+        required: false
+        default: 90
+        type: number
+      use_depot:
+        description: Opt into the guarded main-only Depot canary.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+
+jobs:
+  runner_policy:
+    name: Select native test runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
+      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the native test role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
+          force_hosted: ${{ inputs.force_hosted }}
+          manual_use_depot: ${{ inputs.use_depot }}
+      - name: Resolve runner size and target
+        id: resolve
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          BACKEND: ${{ inputs.backend }}
+          RUNNER_SIZE: ${{ inputs.runner_size }}
+          RUNNER_DEFAULT: ${{ steps.policy.outputs.runner }}
+          RUNNER_4: ${{ steps.policy.outputs.runner_4 }}
+          RUNNER_8: ${{ steps.policy.outputs.runner_8 }}
+          RUNNER_16: ${{ steps.policy.outputs.runner_16 }}
+        run: |
+          set -euo pipefail
+          if [[ "$BACKEND" != "cpu" ]]; then
+            echo "native tests support only the cpu backend, got: $BACKEND" >&2
+            exit 1
+          fi
+          if [[ "$TARGET" != "x86_64-unknown-linux-gnu" ]]; then
+            echo "unsupported native test target: $TARGET" >&2
+            exit 1
+          fi
+          case "$RUNNER_SIZE" in
+            default) runner="$RUNNER_DEFAULT" ;;
+            4) runner="$RUNNER_4" ;;
+            8) runner="$RUNNER_8" ;;
+            16) runner="$RUNNER_16" ;;
+            *) echo "runner_size must be one of: default, 4, 8, 16" >&2; exit 1 ;;
+          esac
+          echo "runner=$runner" >> "$GITHUB_OUTPUT"
+
+  native_tests:
+    needs: runner_policy
+    name: Native Skippy tests (${{ inputs.target }}, ${{ inputs.backend }})
+    runs-on: ${{ needs.runner_policy.outputs.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BACKEND: ${{ inputs.backend }}
+      LLAMA_STAGE_LINK_MODE: static
+      LLAMA_STAGE_BUILD_TESTS: "ON"
+      # Distinct from the static-abi producer's directory: a test-enabled
+      # configure must never be mistaken for the packaged ABI input.
+      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-native-tests-static
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify prebuilt native environment
+        run: verify-runner-image public cpu
+
+      - name: Resolve native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: mesh-llm-cuda-runner-sha256-f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+
+      - name: Prepare patched llama.cpp checkout
+        run: scripts/prepare-llama.sh pinned
+
+      # build-llama.sh runs `ctest -R '^skippy_'` itself when
+      # LLAMA_STAGE_BUILD_TESTS=ON, after building the probe executables, so
+      # one invocation is both the build and the gate. It exits non-zero on
+      # any failing native test.
+      - name: Build test-enabled static ABI and run skippy_* CTest battery
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: "16"
+        run: scripts/build-llama.sh
+
+      - name: Summarise native test results
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          log="$(find "$LLAMA_STAGE_BUILD_DIR/Testing/Temporary" -name 'LastTest*.log' -print -quit 2>/dev/null || true)"
+          if [[ -z "$log" ]]; then
+            echo "::warning::no CTest log found under $LLAMA_STAGE_BUILD_DIR/Testing/Temporary"
+            exit 0
+          fi
+          {
+            echo '## Native Skippy tests'
+            echo
+            echo '```'
+            grep -E '^[0-9]+/[0-9]+ Test|tests passed|tests failed' "$log" | tail -n 40 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload native test logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: native-skippy-tests-${{ inputs.target }}-${{ inputs.backend }}-${{ github.run_attempt }}
+          path: ${{ env.LLAMA_STAGE_BUILD_DIR }}/Testing/Temporary/
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Capture native test sccache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-native-tests-${{ inputs.target }}-${{ inputs.backend }}-${{ github.run_attempt }}

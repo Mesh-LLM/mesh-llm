@@ -97,6 +97,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("ci-quality-slice.yml", "quality_contracts"): policy,
             ("ci-quality-slice.yml", "rust_clippy"): policy,
             ("ci-quality-slice.yml", "cli_docs_sync"): policy,
+            ("ci-native-tests-slice.yml", "native_tests"): policy,
             ("ci-rust-tests-slice.yml", "rust_tests"): policy,
             ("ci-rust-tests-slice.yml", "safetensors_runtime_smoke"): policy,
             ("ci-windows-host-slice.yml", "windows_host"): policy,

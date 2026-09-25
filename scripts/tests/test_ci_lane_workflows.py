@@ -136,7 +136,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
         lane_workflows = {
             "ci-quality-lane.yml": 3,
             "ci-website-lane.yml": 2,
-            "ci-linux-lane.yml": 10,
+            "ci-linux-lane.yml": 11,
             "ci-macos-lane.yml": 9,
             "ci-windows-lane.yml": 6,
         }
@@ -165,6 +165,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-windows-product-slice.yml",
             "ci-platform-checks-slice.yml",
             "static-abi-artifact.yml",
+            "ci-native-tests-slice.yml",
             "native-sdk-artifact.yml",
             "swift-sdk-artifact.yml",
             "smoke.yml",
@@ -416,7 +417,11 @@ class CiLaneWorkflowTests(unittest.TestCase):
         self.assertIn("DISPATCH_ORIGINAL_EVENT_NAME", selector)
         self.assertIn("pull_request|pull_request_target)", selector)
         self.assertIn("is_dispatched_pull_request=true", selector)
-        for name in ("static-abi-artifact.yml", "native-sdk-artifact.yml"):
+        for name in (
+            "static-abi-artifact.yml",
+            "ci-native-tests-slice.yml",
+            "native-sdk-artifact.yml",
+        ):
             workflow = self.workflow(name)
             self.assertIn(
                 "original_event_name: ${{ inputs.original_event_name }}",
@@ -493,12 +498,41 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-linux-host-slice.yml",
             "ci-linux-runtime-slice.yml",
             "static-abi-artifact.yml",
+            "ci-native-tests-slice.yml",
             "native-sdk-artifact.yml",
         ):
             with self.subTest(workflow=name):
                 workflow = self.workflow(name)
                 self.assertIn("use_depot:", workflow)
                 self.assertIn("${{ inputs.use_depot }}", workflow)
+
+    def test_linux_lane_gates_native_tests_on_its_planned_slice(self) -> None:
+        lane = self.workflow("ci-linux-lane.yml")
+        self.assertIn(
+            "if: ${{ contains(fromJson(inputs.lane_plan_json).required_slices, 'native-tests') }}",
+            lane,
+        )
+        self.assertIn("uses: ./.github/workflows/ci-native-tests-slice.yml", lane)
+        self.assertIn("      - native_tests\n", lane)
+
+        slice_workflow = self.workflow("ci-native-tests-slice.yml")
+        # A test-enabled configure must never share the packaged static ABI
+        # producer's build directory.
+        self.assertIn('LLAMA_STAGE_BUILD_TESTS: "ON"', slice_workflow)
+        self.assertIn(
+            "LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-native-tests-static",
+            slice_workflow,
+        )
+        self.assertNotIn("build-stage-abi-static", slice_workflow)
+        self.assertNotIn("secrets:", slice_workflow)
+        self.assertNotIn("actions: write", slice_workflow)
+
+        action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'or ((.required_slices | index("native-tests")) != null)', action
+        )
 
     def test_superseded_pr_runs_cancel_by_pull_request_identity(self) -> None:
         for lane in ("quality", "website", "linux", "macos", "windows"):

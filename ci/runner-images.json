@@ -364,6 +364,19 @@
         }
       ]
     },
+    "native-tests": {
+      "image_id": "public-cpu",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "ci-native-tests-slice.yml",
+          "job": "native_tests",
+          "matrix_selector": null,
+          "image_expression": "{image}",
+          "epoch_field": "pinned_epoch"
+        }
+      ]
+    },
     "native-sdk-linux": {
       "image_id": "public-cpu",
       "scope": "ordinary",

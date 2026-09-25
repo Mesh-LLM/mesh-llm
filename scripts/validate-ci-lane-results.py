@@ -62,6 +62,8 @@ def _required_jobs(lane_plan: dict[str, Any]) -> set[str]:
             jobs.update({"ui_artifact", "hosts"})
         if "static-abi" in selected:
             jobs.add("static_abi")
+        if "native-tests" in selected:
+            jobs.add("native_tests")
         if _ids(lane_plan, "rust_tests"):
             jobs.add("rust_tests")
         if runtimes:

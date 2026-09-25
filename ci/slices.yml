@@ -19,6 +19,7 @@
         "web",
         "ui-artifact",
         "static-abi",
+        "native-tests",
         "rust-tests",
         "runtime-product",
         "platform-checks",
@@ -41,6 +42,7 @@
         "web",
         "ui-artifact",
         "static-abi",
+        "native-tests",
         "rust-tests",
         "runtime-product",
         "platform-checks",
@@ -54,6 +56,7 @@
         "web",
         "ui-artifact",
         "static-abi",
+        "native-tests",
         "rust-tests",
         "runtime-product",
         "platform-checks",
@@ -76,6 +79,7 @@
         "web",
         "ui-artifact",
         "static-abi",
+        "native-tests",
         "rust-tests",
         "runtime-product",
         "platform-checks",
@@ -89,6 +93,7 @@
         "web",
         "ui-artifact",
         "static-abi",
+        "native-tests",
         "rust-tests",
         "runtime-product",
         "platform-checks",
@@ -123,7 +128,7 @@
     },
     {
       "domain": "native-abi",
-      "slices": ["static-abi", "runtime-product", "product-smoke", "rust-tests"]
+      "slices": ["static-abi", "native-tests", "runtime-product", "product-smoke", "rust-tests"]
     },
     {
       "domain": "protocol",
@@ -131,7 +136,7 @@
     },
     {
       "domain": "split-serving",
-      "slices": ["rust-tests", "runtime-product", "product-smoke"]
+      "slices": ["native-tests", "rust-tests", "runtime-product", "product-smoke"]
     },
     {
       "domain": "model-download",
@@ -238,6 +243,7 @@
     {"id": "web", "kind": "web", "depends_on": [], "runner_role": "linux-plan", "cache_mode": "pr-isolated"},
     {"id": "ui-artifact", "kind": "ui-artifact", "depends_on": [], "runner_role": "linux-build-4", "cache_mode": "pr-isolated"},
     {"id": "static-abi", "kind": "static-abi", "depends_on": [], "runner_role": "linux-native-16", "cache_mode": "pr-isolated"},
+    {"id": "native-tests", "kind": "native-tests", "depends_on": [], "runner_role": "linux-native-16", "cache_mode": "pr-isolated"},
     {"id": "rust-tests", "kind": "rust-tests", "depends_on": ["static-abi"], "runner_role": "linux-build-8", "cache_mode": "pr-isolated"},
     {"id": "runtime-product", "kind": "runtime-product", "depends_on": ["ui-artifact"], "runner_role": "linux-native-16", "cache_mode": "pr-isolated"},
     {"id": "platform-checks", "kind": "platform-checks", "depends_on": [], "runner_role": "platform-build", "cache_mode": "none"},
