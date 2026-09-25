@@ -1,0 +1,50 @@
+From d18cbc3d5f25fe857f0111a4c7c7d9eab7a1d933 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 17:27:11 +1000
+Subject: [PATCH 33/35] test(skippy): validate three-stage synthetic chains
+
+---
+ .../tests/renamed_multishard_planning.cpp     | 27 +++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
+index c1cc42e99..aeefadc70 100644
+--- a/src/skippy/tests/renamed_multishard_planning.cpp
++++ b/src/skippy/tests/renamed_multishard_planning.cpp
+@@ -990,6 +990,33 @@ bool check_public_stage_plan_abi(
+             skippy_stage_plan_free(cut_final);
+         }
+     }
++    if (layer_count >= 3) {
++        skippy_stage_plan * three_source = nullptr;
++        skippy_stage_plan * three_middle = nullptr;
++        skippy_stage_plan * three_final = nullptr;
++        if (skippy_stage_planner_realize_v1(planner, 0, 1, &three_source, &error) != SKIPPY_STATUS_OK ||
++                skippy_stage_planner_realize_v1(planner, 1, 2, &three_middle, &error) != SKIPPY_STATUS_OK ||
++                skippy_stage_planner_realize_v1(planner, 2, layer_count, &three_final, &error) != SKIPPY_STATUS_OK) {
++            std::fprintf(stderr, "public three-stage realization failed: %s\n",
++                    error == nullptr ? "" : error->message);
++            skippy_error_free(error);
++            skippy_stage_plan_free(three_source);
++            skippy_stage_plan_free(three_middle);
++            skippy_stage_plan_free(three_final);
++            return false;
++        }
++        const skippy_stage_plan * three_chain[] = {three_source, three_middle, three_final};
++        const skippy_status three_status = skippy_stage_plan_validate_chain_v1(three_chain, 3, &error);
++        skippy_stage_plan_free(three_source);
++        skippy_stage_plan_free(three_middle);
++        skippy_stage_plan_free(three_final);
++        if (three_status != SKIPPY_STATUS_OK) {
++            std::fprintf(stderr, "public three-stage chain failed: %s\n",
++                    error == nullptr ? "" : error->message);
++            skippy_error_free(error);
++            return false;
++        }
++    }
+     std::unique_ptr<skippy_stage_plan, decltype(&skippy_stage_plan_free)> source_owner(source, skippy_stage_plan_free);
+     std::unique_ptr<skippy_stage_plan, decltype(&skippy_stage_plan_free)> final_owner(final, skippy_stage_plan_free);
+     const skippy_stage_plan * chain[] = {source, final};
+-- 
+2.54.0 (Apple Git-157)
+

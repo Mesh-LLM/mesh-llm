@@ -1,0 +1,55 @@
+From b388722be1c0c391798972a487bf897638dd81a8 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 18:22:38 +1000
+Subject: [PATCH 34/35] test(skippy): repair DeepSeek4 graph fixture
+
+---
+ tests/test-graph-contract-fixture.h | 4 +++-
+ tests/test-llama-archs.cpp          | 6 ++++--
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/tests/test-graph-contract-fixture.h b/tests/test-graph-contract-fixture.h
+index a59d9f212..4afe275a1 100644
+--- a/tests/test-graph-contract-fixture.h
++++ b/tests/test-graph-contract-fixture.h
+@@ -78,8 +78,10 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
+     params.n_gpu_layers = 0;
+     llama_model_ptr model(llama_model_init_from_user(metadata.get(), [](ggml_tensor *, void *) {}, nullptr, params));
+     if (!model) { throw std::runtime_error("cannot construct synthetic graph contract model"); }
++    const uint32_t runtime_width = arch == LLM_ARCH_DEEPSEEK4
++            ? model->hparams.n_embd : model->hparams.n_embd_out();
+     if (model->hparams.n_layer() != layers || (model->hparams.router_layer >= 0 ? 0 : model->hparams.n_layer_nextn) != mtp_layers ||
+-            model->hparams.n_embd_out() != width) {
++            runtime_width != width) {
+         throw std::runtime_error("synthetic runtime dimensions differ from canary registry");
+     }
+     gguf_context_ptr output(gguf_init_empty());
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index d43c2448b..1d7a29756 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -217,7 +217,7 @@ static gguf_context_ptr get_gguf_ctx(
+     if (arch == LLM_ARCH_DEEPSEEK4) {
+         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   n_embd_head);
+         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
+-        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,   n_embd_head/2);
++        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,   std::min<uint32_t>(n_embd_head/2, 128));
+     } else if (arch == LLM_ARCH_DEEPSEEK2
+             || arch == LLM_ARCH_DEEPSEEK32
+             || arch == LLM_ARCH_GLM_DSA
+@@ -375,9 +375,11 @@ static gguf_context_ptr get_gguf_ctx(
+     }
+ 
+     if (arch == LLM_ARCH_DEEPSEEK4) {
++        std::vector<uint32_t> compress_ratios = {0, 0, 4, 128};
++        compress_ratios.resize(n_layer, 0);
+         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,         uint32_t(8));
+         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,           uint32_t(32));
+-        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            deepseek4_mtp ? std::vector<uint32_t>({0, 0, 4, 128, 0}) : std::vector<uint32_t>({0, 0, 4, 128}));
++        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            compress_ratios);
+         ms.add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,    160000.0f);
+         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(4));
+         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(2));
+-- 
+2.54.0 (Apple Git-157)
+
