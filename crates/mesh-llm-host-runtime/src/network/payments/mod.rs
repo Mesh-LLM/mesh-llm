@@ -8,6 +8,7 @@ mod gate;
 pub(crate) mod node_ext;
 pub(crate) mod request;
 mod server;
+pub(crate) mod strikes;
 pub(crate) mod wallet_plugin;
 
 pub(crate) use node_ext::{

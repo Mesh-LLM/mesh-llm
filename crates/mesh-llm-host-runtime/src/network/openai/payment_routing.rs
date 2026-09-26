@@ -25,6 +25,7 @@ pub(super) async fn rank(
     if prices.is_empty() {
         return Ok(false);
     }
+    drop_blocked_payees(node, &mut prices, candidates).await;
     // The provider never provisions an empty wallet merely because a paid
     // peer appeared, and reads the balance only when paid is permitted.
     let budget: RoutingBudgetResponse = crate::network::payments::client::call_node(
@@ -87,6 +88,41 @@ pub(super) async fn rank(
         .take_while(|target| key(target) == first)
         .count();
     Ok(true)
+}
+
+/// Remove paid providers this node has blocked for repeatedly taking the input
+/// charge and delivering nothing. Free and local targets are never affected.
+#[cfg(feature = "payments")]
+async fn drop_blocked_payees(
+    node: &Node,
+    prices: &mut std::collections::HashMap<
+        iroh::EndpointId,
+        mesh_llm_payments_types::pricing::Pricing,
+    >,
+    candidates: &mut RankedCandidates<InferenceTarget>,
+) {
+    let directory = node.config_state.lock().await.payment_directory();
+    let strikes = crate::network::payments::strikes::PayeeStrikes::load(&directory);
+    let now = mesh_llm_wallet::now_ms();
+    let blocked: Vec<_> = prices
+        .keys()
+        .filter(|peer| strikes.is_blocked(&peer.to_string(), now))
+        .copied()
+        .collect();
+    if blocked.is_empty() {
+        return;
+    }
+    let removed_prefix = candidates.ordered[..candidates.equivalent_prefix]
+        .iter()
+        .filter(|target| matches!(target, InferenceTarget::Remote(peer) if blocked.contains(peer)))
+        .count();
+    candidates.ordered.retain(
+        |target| !matches!(target, InferenceTarget::Remote(peer) if blocked.contains(peer)),
+    );
+    candidates.equivalent_prefix -= removed_prefix;
+    for peer in blocked {
+        prices.remove(&peer);
+    }
 }
 
 /// Wallets compiled out: no payment tiers exist, so candidate ordering is left
@@ -221,6 +257,45 @@ mod tests {
         ));
         node.endpoint.close().await;
         seller.endpoint.close().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn blocked_payee_is_dropped_before_price_ranking() -> anyhow::Result<()> {
+        use crate::network::payments::strikes::{PayeeStrikes, STRIKE_THRESHOLD};
+        let directory = tempfile::tempdir()?;
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        *node.config_state.lock().await =
+            crate::runtime::config_state::ConfigState::load(&directory.path().join("config.toml"))?;
+        let [bad, good, free] = [(); 3].map(|_| iroh::SecretKey::generate().public());
+        let mut strikes = PayeeStrikes::default();
+        let now = mesh_llm_wallet::now_ms();
+        for _ in 0..STRIKE_THRESHOLD {
+            strikes.record(&bad.to_string(), now);
+        }
+        strikes.save(&node.config_state.lock().await.payment_directory())?;
+        let price = Pricing {
+            input_msat_per_million: 1,
+            output_msat_per_million: 1,
+            minimum_invoice_msat: 1,
+        };
+        let mut prices = std::collections::HashMap::from([(bad, price.clone()), (good, price)]);
+        let mut candidates = RankedCandidates {
+            ordered: vec![
+                InferenceTarget::Remote(bad),
+                InferenceTarget::Remote(good),
+                InferenceTarget::Remote(free),
+            ],
+            equivalent_prefix: 2,
+        };
+        drop_blocked_payees(&node, &mut prices, &mut candidates).await;
+        assert_eq!(
+            candidates.ordered,
+            vec![InferenceTarget::Remote(good), InferenceTarget::Remote(free)]
+        );
+        assert_eq!(candidates.equivalent_prefix, 1);
+        assert!(!prices.contains_key(&bad) && prices.contains_key(&good));
+        node.endpoint.close().await;
         Ok(())
     }
 }
