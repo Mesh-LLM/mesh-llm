@@ -10,7 +10,9 @@ use crate::runtime_events::abi_features_bitmask;
 /// Highest feature bit this build's probe understands. A queried bitmask
 /// setting any bit above this is reserved to a future build, not tied to a
 /// specific family, and is reported once rather than disabling anything.
-const MAX_KNOWN_FEATURE_BIT: u32 = 37;
+/// It tracks the highest `FEATURE_*` bit `skippy_ffi` defines, family or
+/// not: a bit this build names is not reserved to a future one.
+const MAX_KNOWN_FEATURE_BIT: u32 = 39;
 
 struct FamilySpec {
     bit: u64,
@@ -217,11 +219,52 @@ mod tests {
     }
 
     #[test]
-    fn the_bit_after_workloads_remains_reserved() {
-        let report = build_report(FEATURE_NON_CHAT_WORKLOADS | (1 << 38), |_| true);
+    fn the_bit_after_the_highest_known_bit_remains_reserved() {
+        let report = build_report(
+            FEATURE_NON_CHAT_WORKLOADS | (1 << (MAX_KNOWN_FEATURE_BIT + 1)),
+            |_| true,
+        );
         assert!(report.family_confirmed(FEATURE_NON_CHAT_WORKLOADS));
         assert_eq!(report.health_messages.len(), 1);
         assert!(report.health_messages[0].contains("reserved"));
+    }
+
+    #[test]
+    fn named_non_family_bits_are_not_reported_as_reserved() {
+        let report = build_report(
+            FEATURE_KV_EVENTS
+                | skippy_ffi::FEATURE_SYSTEM_ONE
+                | skippy_ffi::FEATURE_CACHEGEN_KV_PAGE,
+            |_| true,
+        );
+        assert_eq!(report.confirmed, FEATURE_KV_EVENTS);
+        assert!(report.health_messages.is_empty());
+    }
+
+    #[test]
+    fn max_known_feature_bit_is_the_highest_bit_skippy_ffi_defines() {
+        let abi = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../skippy-ffi/src/abi.rs"
+        ))
+        .expect("skippy-ffi's abi.rs is in the workspace");
+        let highest = abi
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("pub const FEATURE_"))
+            .filter_map(|rest| rest.split_once(": u64 = 1 << "))
+            .map(|(_, shift)| {
+                shift
+                    .trim_end_matches(';')
+                    .parse::<u32>()
+                    .expect("feature bits are literal shifts")
+            })
+            .max()
+            .expect("skippy-ffi defines feature bits");
+        assert_eq!(
+            highest, MAX_KNOWN_FEATURE_BIT,
+            "a new FEATURE_* bit in skippy-ffi must raise MAX_KNOWN_FEATURE_BIT, \
+             or every runtime that sets it logs a reserved-bit warning"
+        );
     }
 
     #[test]
