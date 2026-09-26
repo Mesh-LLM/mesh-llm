@@ -20,9 +20,22 @@ matrix:
 - `rocm` with optional GFX targets
 - `vulkan`
 
-The hard compatibility boundary is exact Skippy ABI. `mesh_version` is still
-recorded and used for cache/prune layout, but a runtime is selected by
-`skippy_abi`, platform, and backend requirements.
+Selection is a hard match on four things, and failing any one of them is a
+rejection rather than a lower rank: `mesh_version`, `skippy_abi`, platform
+(OS, architecture, target triple, minimum glibc), and the backend
+requirements the host must satisfy. `resolver.rs` returns the reason as a
+structured `CandidateRejection`.
+
+`mesh_version` is not only cache layout. Installed runtimes live under
+`<cache-root>/<mesh_version>/<runtime-id>/`, `NativeRuntimeCache::install_manifest`
+writes the *manifest's* version into that path, and the prune policy removes
+non-active version directories. `mesh-llm-runtime-install` also treats
+`mesh_version` and `skippy_abi` together as the single "matches the current
+SDK" predicate. A runtime from a different MeshLLM release is therefore not
+selectable even when its Skippy ABI matches: it would be installed under a
+version directory the running host does not read. Expect a
+`MeshVersionMismatch` rejection (`MeshLLM version mismatch: expected X, found
+Y`) until the runtime is rebuilt or re-fetched for the host's own version.
 
 ## Artifact Manifest
 
