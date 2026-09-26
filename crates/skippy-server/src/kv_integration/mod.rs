@@ -648,6 +648,12 @@ impl KvStageIntegration {
         self.exact_state_payload().is_some()
     }
 
+    /// Whether the serving tier retains native resident prefixes independently
+    /// of any serialized exact-state payload used by durable tiers.
+    pub(crate) fn records_resident_prefixes(&self) -> bool {
+        self.payload == StagePrefixCachePayload::ResidentKv
+    }
+
     pub(crate) fn exact_state_payload(&self) -> Option<StagePrefixCachePayload> {
         self.payload
             .is_exact_state()
