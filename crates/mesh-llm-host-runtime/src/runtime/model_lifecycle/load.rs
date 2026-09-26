@@ -342,11 +342,14 @@ async fn finish_runtime_model_load(
     register_runtime_instance(
         ctx.runtime_instance_registry,
         ctx.node,
-        ctx.primary_model_name,
-        &loaded_name,
-        &instance_id,
-        Some(handle.context_length),
-        handle.capabilities,
+        RuntimeModelRegistration {
+            primary_model_name: ctx.primary_model_name,
+            model_name: &loaded_name,
+            instance_id: &instance_id,
+            context_length: Some(handle.context_length),
+            capabilities: handle.capabilities,
+            workload_class: handle.workload_class,
+        },
     )
     .await;
     ctx.node
@@ -542,6 +545,7 @@ pub(crate) async fn run_auto_load_runtime_model(
             local_source_required,
             allow_uncertified_split: false,
             split_topology_lock: None,
+            auto_balance: false,
             planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: skippy_telemetry_options(ctx.options),
@@ -653,9 +657,13 @@ mod tests {
             ..Default::default()
         };
 
+        // A spec that is an absolute path is used as-is. Built from the temp
+        // dir so the path is absolute on every platform: a leading slash is
+        // rooted but not absolute on Windows, and the helper rejects it there.
+        let requested = std::env::temp_dir().join("requested.gguf");
         assert_eq!(
-            local_required_runtime_model_path(&config, None, "/models/requested.gguf"),
-            Some("/models/requested.gguf".into())
+            local_required_runtime_model_path(&config, None, &requested.to_string_lossy()),
+            Some(requested)
         );
     }
 

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 import fnmatch
+import hashlib
 import json
-from pathlib import Path
 import re
 import subprocess
 import tempfile
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "ci" / "model-artifacts" / "registry.json"
@@ -18,6 +17,73 @@ RESOLVER = ROOT / "scripts" / "resolve-test-model-manifest.py"
 
 
 class ModelArtifactRegistryTests(unittest.TestCase):
+    def test_generator_rejects_invalid_minimum_runner_memory(self) -> None:
+        registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
+        row = next(row for row in registry["artifacts"] if "certification" in row)
+        for invalid in (192, 128.0, True, "256"):
+            with self.subTest(invalid=invalid):
+                row["certification"]["resources"]["minimum_runner_memory_gib"] = invalid
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    source = Path(temp_dir) / "registry.json"
+                    source.write_text(json.dumps(registry), encoding="utf-8")
+                    result = subprocess.run(
+                        [
+                            "python3",
+                            str(GENERATOR),
+                            "--registry",
+                            str(source),
+                            "--check",
+                        ],
+                        cwd=ROOT,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                self.assertEqual(2, result.returncode)
+                self.assertIn(
+                    "minimum_runner_memory_gib must be 128 or 256", result.stderr
+                )
+
+    def test_generator_rejects_incompatible_workload_class_and_profile(self) -> None:
+        """A recognized profile must also belong to the selected workload class."""
+        registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
+        for model_class, profile in (
+            ("embedding", "full"),
+            ("rerank", "graph-only"),
+            ("causal_generation", "workload-smoke"),
+            ("causal_generation", "workload-oracle"),
+        ):
+            with self.subTest(model_class=model_class, profile=profile):
+                row = next(row for row in registry["artifacts"] if "certification" in row)
+                row["certification"].update({"class": model_class, "profile": profile})
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    source = Path(temp_dir) / "registry.json"
+                    source.write_text(json.dumps(registry), encoding="utf-8")
+                    result = subprocess.run(
+                        ["python3", str(GENERATOR), "--registry", str(source), "--check"],
+                        cwd=ROOT, text=True, capture_output=True, check=False,
+                    )
+                self.assertEqual(2, result.returncode)
+                self.assertIn("class and profile are incompatible", result.stderr)
+
+    def test_family_schema_covers_every_registered_class_and_profile(self) -> None:
+        """Published schema enums and required fields must track the canonical workload roster."""
+        manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
+        schema = json.loads((ROOT / "ci/llama-canary/family-certified.schema.json").read_text())
+        model_schema = schema["$defs"]["model"]
+        self.assertIn("class", model_schema["required"])
+        self.assertIn("architecture", model_schema["required"])
+        for row in manifest["models"]:
+            self.assertRegex(row["architecture"], model_schema["properties"]["architecture"]["pattern"])
+        self.assertEqual({row["class"] for row in manifest["models"]},
+                         set(model_schema["properties"]["class"]["enum"]))
+        self.assertEqual(set(manifest["policy"]["profiles"]),
+                         set(model_schema["properties"]["profile"]["enum"]))
+        profiles = schema["properties"]["policy"]["properties"]["profiles"]
+        self.assertEqual(set(manifest["policy"]["profiles"]), set(profiles["required"]))
+        self.assertEqual({"fixture", "comparison"},
+                         set(model_schema["properties"]["evidence"]["required"]))
+
     def test_generated_manifests_are_current(self) -> None:
         subprocess.run(["python3", str(GENERATOR), "--check"], cwd=ROOT, check=True)
 
@@ -51,7 +117,6 @@ class ModelArtifactRegistryTests(unittest.TestCase):
     def test_suite_manifests_allow_every_executable_cadence(self) -> None:
         required = {
             "product-smoke": {"pull-request", "main", "release"},
-            "product-integration-smoke": {"pull-request", "main", "release"},
             "scripted-binary-smoke": {"pull-request", "main", "release"},
             "sdk-smoke": {"pull-request", "main", "release"},
             "hf-download-smoke": {"pull-request", "main", "manual"},
@@ -88,9 +153,9 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                     cwd=ROOT, check=True, capture_output=True, text=True,
                 )
 
-    def test_product_integration_manifest_is_the_pinned_dense_recurrent_pair(self) -> None:
+    def test_product_smoke_manifest_is_the_pinned_dense_recurrent_pair(self) -> None:
         manifest = json.loads(
-            (MANIFESTS / "product-integration-smoke.json").read_text(
+            (MANIFESTS / "product-smoke.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -114,6 +179,17 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                 artifact["sha256"], artifact["file_integrity"][artifact["file"]]["blob_id"]
             )
 
+    def test_paired_smoke_manifests_default_to_the_dense_fixture(self) -> None:
+        for name in ("product-smoke", "scripted-binary-smoke"):
+            with self.subTest(manifest=name):
+                manifest = json.loads(
+                    (MANIFESTS / f"{name}.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    manifest["default_artifact_id"],
+                    "smollm2-q8-inference",
+                )
+
     def test_family_manifest_is_generated_from_registry(self) -> None:
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
         family = json.loads(
@@ -128,6 +204,14 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         ]
         self.assertEqual([row["family"] for row in family["models"]], expected)
         self.assertEqual(family["policy"], registry["family_policy"])
+        certifications = {
+            row["family"]: row["certification"]
+            for row in registry["artifacts"]
+            if "llama-family-certification" in row["suites"]
+        }
+        for model in family["models"]:
+            for field in ("class", "architecture"):
+                self.assertEqual(model[field], certifications[model["family"]][field])
 
     def test_opt_in_suite_configs_reference_registered_variants(self) -> None:
         manifests = {}
@@ -186,7 +270,6 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         # that is where the invocation -- and the cadence -- must be.
         consumers = (
             ".github/actions/restore-test-model/action.yml",
-            ".github/actions/restore-product-integration-inputs/action.yml",
             ".github/workflows/ci-rust-tests-slice.yml",
             "scripts/ci-hf-download-smoke.sh",
             "scripts/materialize-competitive-inputs.sh",
@@ -208,7 +291,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         self.assertIn('"manual" not in artifact.get("cadences", [])', parity)
 
     def test_resolver_prefixes_github_outputs_for_multi_fixture_consumers(self) -> None:
-        manifest = MANIFESTS / "product-integration-smoke.json"
+        manifest = MANIFESTS / "product-smoke.json"
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "github-output"
             result = subprocess.run(
@@ -227,6 +310,46 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             )
             self.assertEqual(result.stderr, "")
             self.assertIn("dense_file=SmolLM2-135M-Instruct-Q8_0.gguf", output.read_text())
+
+    def test_resolver_uses_declared_default_for_multi_artifact_manifest(self) -> None:
+        result = subprocess.run(
+            [
+                "python3", str(RESOLVER), str(MANIFESTS / "product-smoke.json"),
+                "--cadence", "pull-request",
+                "--require-single-file",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        summary = json.loads(result.stdout)
+        self.assertEqual(summary["artifact_id"], "smollm2-q8-inference")
+
+    def test_resolver_rejects_ambiguous_manifest_without_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "manifest_kind": "test-model-artifacts",
+                        "artifacts": [{"id": "one"}, {"id": "two"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3", str(RESOLVER), str(manifest),
+                    "--cadence", "manual",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pass --artifact-id", result.stderr)
 
     def test_smoke_identity_overrides_require_nonempty_values(self) -> None:
         skippy = (ROOT / "scripts" / "skippy-ci-smoke.sh").read_text(
@@ -348,6 +471,8 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                 "python3",
                 str(RESOLVER),
                 str(manifest),
+                "--artifact-id",
+                "smollm2-q8-inference",
                 "--cadence",
                 "manual",
             ],

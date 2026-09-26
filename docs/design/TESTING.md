@@ -324,10 +324,11 @@ seed/step trace in its uploaded log. Repository variables
 set `MESH_NIGHTLY_KV_COVERAGE_ENABLED=0` to disable the scheduled run. Manual
 dispatch still executes trusted `main` on GitHub-hosted infrastructure.
 
-The unchanged-pin daily llama canary uses the `nightly` cadence in
-`ci/llama-canary/family-certified.json`: Qwen3 dense, Falcon-H1 hybrid,
-Qwen3Next composite, and Mamba recurrent. Llama bumps and explicit forced
-certification retain the full 33-family battery.
+The daily llama canary, pin advances, and explicit forced certification all
+use the complete `ci/llama-canary/family-certified.json` roster: 83 causal
+split targets plus six non-chat workloads. Trigger labels do not filter model
+coverage. Causal rows use product-approved topology cuts; non-chat rows require
+class-specific smoke and independent CPU oracle evidence, never split proof.
 
 ### 0g. Logging workflow certification
 
@@ -477,22 +478,21 @@ mesh-llm serve \
   response from the layer-package model.
 
 > **CI coverage:** `two_node_split_smoke` runs
-> `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary in two
-> model lanes: dense SmolLM2-135M and recurrent Qwen3.5-0.8B. Each lane starts
-> two serving nodes (the recurrent lane fixes a 4096-token context), waits for
-> a topology with stages on two distinct nodes, checks `/v1/models`, then sends
-> three progressively longer `/v1/chat/completions` prompts with one shared
-> prefix through stage 0. The smoke requires the reported cached-token count to
-> increase after each request so either model-state path cannot silently fall
-> back to cold prefill for prefix matches. A follow-up request that restores
-> nothing is the one outcome a loaded runner can produce without a regression,
-> because the host answers before the stage lane releases; the smoke retries the
-> whole sequence from a fresh cold prefix up to
-> `MESH_TWO_NODE_SPLIT_PREFIX_ATTEMPTS` times (3 by default) for that case only.
-> Reuse that is present but not growing fails immediately.
+> `scripts/ci-two-node-split-smoke.sh` against the Linux composed product in two
+> registry-pinned model legs: dense SmolLM2-135M Q8 and recurrent IBM Granite
+> 4.0 H 350M Q4. Each leg starts two serving nodes (the recurrent leg fixes a
+> 4096-token context), waits for matching two-observer topology evidence, checks
+> `/v1/models`, and sends three progressively longer shared-prefix prompts twice
+> through stage 0. Dense repeats must restore a near-full prefix; Granite repeats
+> must report exact `kv-recurrent` checkpoint restoration. The workflow uploads
+> strict identity/stage/model snapshots, reconciled split evidence, and logs on
+> success or failure.
 >
 > Other nearby CI coverage:
 >
+> - `.github/workflows/smoke.yml` — restores the same dense/recurrent pair once
+>   and runs both through standalone inference, OpenAI client compatibility,
+>   and constrained-stack restart on CPU, CUDA, and Metal product rows.
 > - `scripts/ci-two-node-client-serving-smoke.sh` — two nodes, but only tests
 >   `client` -> `serve` routing. The model is held entirely on one node.
 > - `scripts/skippy-ci-smoke.sh` — exercises 3-stage layer splits via
@@ -529,11 +529,11 @@ mesh-llm serve --model Qwen2.5-32B --split --join <TOKEN>
 
 #### Split-package preflight diagnostics
 
-Before starting a package-backed split run, preflight the local package
-directory and then certify the immutable published ref:
+Before starting a package-backed split run, verify the local package against
+its independent source and then certify the immutable published ref:
 
 ```bash
-skippy-model-package preflight ./model-package --stages 2 --verify-sha256
+skippy-model-package verify-package-v2 ./model-package --source ./model.gguf
 mesh-llm models certify hf://namespace/repo@revision --package-only --report-out target/skippy-preflight/cert.json
 ```
 
@@ -892,8 +892,8 @@ cached and a worker does not:
   to open `skippy-stage/2`, then Skippy artifact-transfer stream 0x03, to
   fetch only its assigned package files before the normal HF fallback path.
 - Current/released mixed mesh: a coordinator without the complete
-  `stage-generation-10` control/status/content-identity/admission bundle must not
-  be selected for a generation-10 split topology. Missing `artifact-transfer`
+  `stage-generation-11` control/status/content-identity/admission bundle must not
+  be selected for a generation-11 split topology. Missing `artifact-transfer`
   only prevents peer cache
   sourcing; the worker may still participate when local/HF package resolution
   provides an independent source.

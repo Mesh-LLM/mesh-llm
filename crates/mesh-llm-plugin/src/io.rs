@@ -7,6 +7,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::{PROTOCOL_VERSION, proto};
 
 pub enum LocalStream {
+    /// In-memory pipe to a host that runs this plugin as a task in its own process.
+    Memory(tokio::io::DuplexStream),
     #[cfg(unix)]
     Unix(tokio::net::UnixStream),
     #[cfg(windows)]
@@ -21,6 +23,10 @@ pub type LocalWriteHalf = Box<dyn AsyncWrite + Send + Unpin>;
 impl LocalStream {
     pub fn into_split(self) -> (LocalReadHalf, LocalWriteHalf) {
         match self {
+            LocalStream::Memory(stream) => {
+                let (read, write) = tokio::io::split(stream);
+                (Box::new(read), Box::new(write))
+            }
             #[cfg(unix)]
             LocalStream::Unix(stream) => {
                 let (read, write) = stream.into_split();
@@ -41,6 +47,7 @@ impl LocalStream {
 
     async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
         match self {
+            LocalStream::Memory(stream) => stream.write_all(bytes).await?,
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.write_all(bytes).await?,
             #[cfg(windows)]
@@ -53,6 +60,9 @@ impl LocalStream {
 
     async fn read_exact(&mut self, bytes: &mut [u8]) -> Result<()> {
         match self {
+            LocalStream::Memory(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
             #[cfg(unix)]
             LocalStream::Unix(stream) => {
                 let _ = stream.read_exact(bytes).await?;
@@ -202,7 +212,7 @@ pub async fn bind_side_stream(plugin_id: &str, stream_id: &str) -> Result<LocalL
         let server = tokio::net::windows::named_pipe::ServerOptions::new()
             .create(&endpoint)
             .with_context(|| format!("Failed to create side stream pipe {endpoint}"))?;
-        return Ok(LocalListener::Pipe(endpoint, server));
+        Ok(LocalListener::Pipe(endpoint, server))
     }
 }
 

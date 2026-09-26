@@ -180,10 +180,10 @@ build_target_by_name() {
         -DCMAKE_MODULE_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi
       ;;
     aarch64-apple-darwin)
-      build_apple_target "$RUST_TARGET" macosx arm64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+      build_apple_target "$RUST_TARGET" macosx arm64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
       ;;
     x86_64-apple-darwin)
-      build_apple_target "$RUST_TARGET" macosx x86_64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+      build_apple_target "$RUST_TARGET" macosx x86_64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
       ;;
     *)
       echo "ERROR: unsupported Apple Rust target: $RUST_TARGET" >&2

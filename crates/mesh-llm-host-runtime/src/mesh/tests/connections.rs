@@ -386,21 +386,7 @@ async fn make_test_node_with_requirements(
         relay_policy: RelayPolicy::DefaultPublic,
         owner_keypair: None,
         local_mesh_requirements,
-        state: Arc::new(Mutex::new(MeshState {
-            peers: HashMap::new(),
-            connections: HashMap::new(),
-            pending_connections: HashMap::new(),
-            next_pending_connection_attempt: 1,
-            remote_tunnel_maps: HashMap::new(),
-            dead_peers: HashMap::new(),
-            peer_down_rejections: HashMap::new(),
-            direct_path_request_last_at: HashMap::new(),
-            seen_plugin_messages: HashMap::new(),
-            seen_plugin_message_order: VecDeque::new(),
-            policy_rejected_peers: HashMap::new(),
-            requirement_rejected_peers: HashSet::new(),
-            recent_mesh_rejections: VecDeque::new(),
-        })),
+        state: Arc::new(Mutex::new(MeshState::new())),
         direct_rescue_endpoints: crate::mesh::direct_rescue::DirectRescueEndpoints::default(),
         role: Arc::new(Mutex::new(role)),
         host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
@@ -429,6 +415,7 @@ async fn make_test_node_with_requirements(
         )),
         vram_bytes: 64 * 1024 * 1024 * 1024,
         local_runtime_capacity_bytes: 64 * 1024 * 1024 * 1024,
+        host_ram_offload_gain_bytes: 0,
         peer_change_tx,
         peer_change_rx,
         inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -477,6 +464,10 @@ async fn make_test_node_with_requirements(
             let (tx, _rx) = tokio::sync::watch::channel(0u64);
             Arc::new(tx)
         },
+        #[cfg(feature = "payments")]
+        payments: Arc::new(tokio::sync::OnceCell::new()),
+        #[cfg(feature = "payments")]
+        payment_recovery: Arc::new(Mutex::new(None)),
         activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
             &mesh_llm_config::RuntimeActivityConfig::default(),
         ),

@@ -43,6 +43,9 @@ class CiArtifactActionTests(unittest.TestCase):
             f"Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main": f"pr_{lane}.yml"
             for lane in ("quality", "website", "linux", "macos", "windows")
         }
+        protected_pr_lanes[
+            "Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main"
+        ] = "pr_ci_canary.yml"
         protected_pre_checkout_action = (
             "Mesh-LLM/mesh-llm/.github/actions/"
             "audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16"
@@ -568,8 +571,8 @@ class CiArtifactActionTests(unittest.TestCase):
         cpu_routing = routing[: routing.index("WINDOWS_GPU_INPUTS=")]
         gpu_routing = routing[routing.index("WINDOWS_GPU_INPUTS=") :]
 
-        self.assertIn("^crates/mesh-llm-release-footer/", cpu_routing)
-        self.assertNotIn("^crates/mesh-llm-release-footer/", gpu_routing)
+        self.assertIn("^(mesh/|skippy/)?crates/mesh-llm-release-footer/", cpu_routing)
+        self.assertNotIn("^(mesh/|skippy/)?crates/mesh-llm-release-footer/", gpu_routing)
         self.assertIn("package-release", cpu_routing)
         self.assertIn("package-release", gpu_routing)
         for workflow in (
@@ -1721,7 +1724,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("max-parallel: ${{ inputs.max_parallel }}", producer)
         self.assertEqual(producer.count("- aarch64-apple-ios\n"), 1)
         self.assertIn(
-            'build-xcframework.sh --target "${{ matrix.target }}"',
+            'build-xcframework.sh" --target "${{ matrix.target }}"',
             producer,
         )
         self.assertIn(
@@ -1738,7 +1741,7 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn(
-            "build-xcframework.sh --assemble-from dist/swift-targets",
+            'build-xcframework.sh" --assemble-from dist/swift-targets',
             producer,
         )
         self.assertIn(
@@ -2230,6 +2233,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "model_url: ${{ inputs.model_url }}",
             "model_file: ${{ inputs.model_file }}",
             "model_manifest: ${{ inputs.model_manifest }}",
+            "model_artifact_id: ${{ inputs.model_artifact_id }}",
             "model_cadence: ${{ inputs.model_cadence }}",
             "model_cache_scope: ${{ inputs.model_cache_scope }}",
             "save_model_cache: ${{ inputs.save_model_cache }}",
@@ -2242,6 +2246,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "value: ${{ steps.resolve-model.outputs.model_file }}",
             "value: ${{ steps.resolve-model.outputs.model_sha256 }}",
             "value: ${{ steps.resolve-model.outputs.model_size_bytes }}",
+            "value: ${{ steps.resolve-model.outputs.model_path }}",
         ):
             self.assertIn(exported, action)
 

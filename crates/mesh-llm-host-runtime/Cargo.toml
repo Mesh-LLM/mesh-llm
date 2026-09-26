@@ -9,7 +9,19 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
 
 [features]
-default = ["web-ui", "dynamic-native-runtime"]
+default = ["web-ui", "dynamic-native-runtime", "payments", "wallet-lexe"]
+# Paid-inference ledger, gates and the `wallet.v1` plugin adapter. Never links
+# a wallet SDK: the wallet is a plugin process resolved by capability.
+# Consumers that reach host-runtime with `default-features = false` (e.g. via
+# the SDK serving path) stay payment-free and drop the rusqlite /
+# lightning-invoice / bitcoin stack unless they opt back in.
+payments = ["dep:mesh-llm-payments-types", "mesh-llm-payments-types/engine", "dep:mesh-llm-wallet"]
+# The built-in Lexe wallet implementation, served blobstore-style as
+# `mesh-llm --plugin wallet-lexe`. This is the only feature that links the Lexe
+# SDK into the executable. The shipped CLI enables it; SDK consumers do not, so
+# `payments` alone leaves the host wallet-free until an external `wallet.v1`
+# plugin is configured.
+wallet-lexe = ["payments", "dep:mesh-wallet-lexe"]
 # Embed the React web console into the binary. Default on; turn off for
 # lib-style / headless consumers that don't need the console assets.
 # Propagates to `mesh-llm-ui/embed-assets`.
@@ -28,6 +40,9 @@ serde_json = "1"
 sha2 = "0.11"
 
 [dependencies]
+mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.76.1", optional = true }
+mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.76.1", optional = true }
+mesh-wallet-lexe = { path = "../mesh-wallet-lexe", version = "0.76.1", optional = true }
 bytes = "1"
 mesh-llm-build-info.workspace = true
 mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.76.1"  }
@@ -82,6 +97,8 @@ opentelemetry = { version = "0.32.0", default-features = false, features = ["met
 opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics"] }
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["metrics", "http-proto", "reqwest-blocking-client"] }
 rustls = "0.23.36"
+mesh-llm-analytics = { path = "../mesh-llm-analytics", version = "0.76.1" }
+ryu = "1"
 reqwest = { version = "0.13", features = ["stream", "json"] }
 futures-util = "0.3"
 semver = "1"
@@ -119,6 +136,11 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.76.1", features = ["plugin-server"] }
+# start_paused test clocks for the probe cooldown regression tests.
+tokio = { version = "1", features = ["full", "test-util"] }
+bitcoin = { version = "0.32", features = ["secp-recovery"] }
+lightning-invoice = { version = "0.35.0-rc1", features = ["std"] }
 serial_test = "4"
 skippy-server = { path = "../skippy-server", version = "0.76.1", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics", "testing"] }

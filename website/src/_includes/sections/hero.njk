@@ -19,34 +19,50 @@
     <p class="sr-only">Run any model across nodes in your homelab, in your business, or on the internet. Large models get split into smaller pieces, memory-bound GPUs run smaller layer slices, and layers land on right-sized nodes.</p>
 
     <div class="hero-footer shell mx-auto flex w-[min(100%-1.5rem,75rem)] md:w-[min(100%-4rem,75rem)]" aria-label="Hero actions">
-      <div class="hero-footer-actions min-w-0">
-        <div class="hero-install flex min-h-12 min-w-0 items-center gap-2 overflow-hidden rounded-mesh border border-line-soft bg-void/80 px-3 shadow-terminal" aria-label="Install Mesh">
-          <code class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs sm:text-sm">
-            <span class="cmd">curl</span>
-            <span class="flag">-fsSL</span>
-            <span class="value">https://meshllm.cloud/install.sh</span>
-            <span class="pipe">|</span>
-            <span class="cmd">bash</span>
-          </code>
-          <button class="hero-copy inline-flex shrink-0 items-center justify-center p-0 text-muted hover:text-fg" type="button" data-copy-text="curl -fsSL https://meshllm.cloud/install.sh | bash" aria-label="Copy install command" title="Copy install command">
-            <i data-lucide="copy" aria-hidden="true"></i>
-          </button>
+      <div class="hero-entry-points">
+        <div class="hero-run">
+          <h2>Run Mesh</h2>
+          <div class="hero-footer-actions min-w-0">
+            <div class="hero-install flex min-h-12 min-w-0 items-center gap-2 overflow-hidden rounded-mesh border border-line-soft bg-void/80 px-3 shadow-terminal" aria-label="Install Mesh">
+              <code class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs sm:text-sm">
+                <span class="cmd">curl</span>
+                <span class="flag">-fsSL</span>
+                <span class="value">https://meshllm.cloud/install.sh</span>
+                <span class="pipe">|</span>
+                <span class="cmd">bash</span>
+              </code>
+              <button class="hero-copy inline-flex shrink-0 items-center justify-center p-0 text-muted hover:text-fg" type="button" data-copy-text="curl -fsSL https://meshllm.cloud/install.sh | bash" aria-label="Copy install command" title="Copy install command">
+                <i data-lucide="copy" aria-hidden="true"></i>
+              </button>
+            </div>
+            <div class="hero-setup flex min-h-12 min-w-0 items-center gap-2 overflow-hidden rounded-mesh border border-line-soft bg-void/80 px-3 shadow-terminal" aria-label="Finish setup">
+              <code class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs sm:text-sm">
+                <span class="prompt">$</span>
+                <span class="cmd">mesh-llm</span>
+                <span class="cmd">setup</span>
+              </code>
+            </div>
+            <a class="hero-public inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="{{ site.publicMeshUrl }}">
+              <span>Public mesh</span>
+              <i data-lucide="share-2" aria-hidden="true"></i>
+            </a>
+            <a class="hero-learn inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="#topology">
+              <span>Learn more</span>
+              <i data-lucide="arrow-down" aria-hidden="true"></i>
+            </a>
+          </div>
         </div>
-        <div class="hero-setup flex min-h-12 min-w-0 items-center gap-2 overflow-hidden rounded-mesh border border-line-soft bg-void/80 px-3 shadow-terminal" aria-label="Finish setup">
-          <code class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs sm:text-sm">
-            <span class="prompt">$</span>
-            <span class="cmd">mesh-llm</span>
-            <span class="cmd">setup</span>
-          </code>
+        <div class="hero-sdk" aria-labelledby="hero-sdk-title">
+          <h2 id="hero-sdk-title">Embed Mesh</h2>
+          <p><strong>Your app. Powered by Mesh.</strong> Connect to a mesh or embed a node with local model serving on supported platforms.</p>
+          <a class="hero-sdk-link" href="/docs/pages/sdk/">Embed in your app <span aria-hidden="true">→</span></a>
+          <nav class="hero-sdk-languages" aria-label="SDK language guides">
+            <a href="/docs/pages/sdk-rust/">Rust</a>
+            <a href="/docs/pages/sdk-node/">Node.js / Electron</a>
+            <a href="/docs/pages/sdk-swift/">Swift</a>
+            <a href="/docs/pages/sdk-kotlin/">Kotlin / Java</a>
+          </nav>
         </div>
-        <a class="hero-public inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="{{ site.publicMeshUrl }}">
-          <span>Public mesh</span>
-          <i data-lucide="share-2" aria-hidden="true"></i>
-        </a>
-        <a class="hero-learn inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="#topology">
-          <span>Learn more</span>
-          <i data-lucide="arrow-down" aria-hidden="true"></i>
-        </a>
       </div>
 
       <div class="hero-sponsor shrink-0 items-center gap-3 text-sm text-subtle" aria-label="Sponsor slot">

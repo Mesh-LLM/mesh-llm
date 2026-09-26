@@ -37,7 +37,7 @@ sequenceDiagram
     S0-->>D: PredictedToken
 ```
 
-Activation payloads dominate the wire path. Protocol generation 10 carries a
+Activation payloads dominate the wire path. Protocol generation 11 carries a
 versioned multipart directory with identity, dtype, dimensions, strides, and a
 token axis for every graph-frontier value. The selected frame codec applies to
 F32 parts; other typed parts remain byte-exact.

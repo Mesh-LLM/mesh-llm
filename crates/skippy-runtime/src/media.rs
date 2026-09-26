@@ -13,6 +13,91 @@ use crate::{
     SamplingConfig,
 };
 
+/// Audio encoding returned by the native speech generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeechOutputFormat {
+    Wav,
+    PcmS16Le,
+}
+
+/// Full-model speech inputs and deterministic sampling controls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeechSynthesisConfig {
+    pub prompt: String,
+    pub language: Option<String>,
+    pub top_k: i32,
+    pub top_p: f32,
+    pub seed: u32,
+    pub output_format: SpeechOutputFormat,
+    pub max_frames: usize,
+}
+
+/// Complete generated audio and its native frame count. Reaching the configured
+/// frame limit returns an error instead of this response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeechAudio {
+    pub bytes: Vec<u8>,
+    pub sample_rate: u32,
+    pub sample_count: u64,
+    pub generated_frames: usize,
+}
+
+/// Restore the session's generation mode on every speech exit, including
+/// failures before the external-decode guard can be acquired.
+struct SpeechEmbeddingsGuard {
+    session: *mut skippy_ffi::Session,
+    context: *mut skippy_ffi::Opaque,
+    active: bool,
+}
+
+impl SpeechEmbeddingsGuard {
+    fn restore(&mut self) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        // SAFETY: the borrowed StageSession outlives this guard and owns the
+        // context; speech generation holds exclusive access to the session.
+        unsafe { skippy_ffi::llama_set_embeddings(self.context, false) };
+        let mut error = ptr::null_mut();
+        let status =
+            unsafe { skippy_ffi::skippy_session_begin_external_decode(self.session, &mut error) };
+        ensure_ok(status, error).context("refresh stage program after speech synthesis")?;
+        // The begin has been issued, so this guard's restore is complete. The
+        // external-decode scope is now owned by the caller's ExternalDecodeGuard,
+        // which ends it. Clearing `active` here keeps Drop from re-entering
+        // begin after a failed end, which would report "another external decode
+        // session is already active on this thread" and skip the end, pinning
+        // the thread in external-decode state.
+        self.active = false;
+        let mut error = ptr::null_mut();
+        let status =
+            unsafe { skippy_ffi::skippy_session_end_external_decode(self.session, &mut error) };
+        ensure_ok(status, error).context("end stage-program refresh after speech synthesis")?;
+        Ok(())
+    }
+}
+
+impl Drop for SpeechEmbeddingsGuard {
+    /// Restore logits output even when speech setup or generation exits with an error.
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        // SAFETY: the borrowed StageSession outlives this guard and owns the
+        // context; speech generation holds exclusive access to the session.
+        let mut error = ptr::null_mut();
+        unsafe {
+            skippy_ffi::llama_set_embeddings(self.context, false);
+            if skippy_ffi::skippy_session_begin_external_decode(self.session, &mut error)
+                == skippy_ffi::Status::Ok
+            {
+                let _ = skippy_ffi::skippy_session_end_external_decode(self.session, &mut error);
+            }
+        }
+        free_error(error);
+    }
+}
+
 pub(crate) struct MediaProjector {
     pub(crate) raw: *mut skippy_ffi::MtmdContext,
     marker: String,
@@ -26,187 +111,10 @@ type MediaFrameEval = (
     Vec<MediaPrefillChunkFrame>,
 );
 
-fn aggregate_media_chunk_outputs(chunks: &[MediaPrefillChunkFrame]) -> Result<ActivationFrame> {
-    let first = chunks
-        .first()
-        .ok_or_else(|| anyhow!("multimodal prefill produced no activation output"))?;
-    let mut desc = first.output.desc;
-    let mut token_count = 0usize;
-
-    for (index, chunk) in chunks.iter().enumerate() {
-        let frame = &chunk.output;
-        if desc.version != frame.desc.version
-            || desc.producer_stage_index != frame.desc.producer_stage_index
-            || desc.layer_start != frame.desc.layer_start
-            || desc.layer_end != frame.desc.layer_end
-            || desc.sequence_count != frame.desc.sequence_count
-            || desc.frontier_identity != frame.desc.frontier_identity
-        {
-            return Err(anyhow!(
-                "multimodal chunk {index} produced incompatible activation descriptor"
-            ));
-        }
-        if chunk.token_count != frame.desc.token_count as usize {
-            return Err(anyhow!(
-                "multimodal chunk {index} token count does not match its activation descriptor"
-            ));
-        }
-        token_count = token_count
-            .checked_add(chunk.token_count)
-            .context("multimodal activation token count overflow")?;
-    }
-
-    for (chunk_index, chunk) in chunks.iter().enumerate() {
-        for part in chunk.output.desc.parts()? {
-            if !part.is_optional()
-                && chunks.iter().any(|candidate| {
-                    candidate.output.desc.parts().map_or(true, |parts| {
-                        !parts.iter().any(|item| item.identity == part.identity)
-                    })
-                })
-            {
-                return Err(anyhow!(
-                    "multimodal chunk {chunk_index} has a required activation part missing from another chunk"
-                ));
-            }
-        }
-    }
-
-    let mut payload = Vec::new();
-    let mut output_parts = [crate::ActivationPartDesc::default(); skippy_ffi::ACTIVATION_MAX_PARTS];
-    let first_parts = first.output.desc.parts()?;
-    let mut output_part_count = 0usize;
-    for first_part in first_parts {
-        let matching = chunks
-            .iter()
-            .map(|chunk| {
-                chunk
-                    .output
-                    .desc
-                    .parts()?
-                    .iter()
-                    .find(|part| part.identity == first_part.identity)
-                    .copied()
-                    .ok_or_else(|| anyhow!("optional activation part is not common to every chunk"))
-            })
-            .collect::<Result<Vec<_>>>();
-        let matching = match matching {
-            Ok(parts) => parts,
-            Err(_) if first_part.is_optional() => continue,
-            Err(error) => return Err(error),
-        };
-
-        for (chunk_index, part) in matching.iter().enumerate() {
-            let token_axis = usize::try_from(part.token_axis)
-                .context("activation part has a negative token axis")?;
-            let rank = usize::try_from(part.rank).context("activation part rank exceeds usize")?;
-            if rank == 0 || rank > part.dimensions.len() || token_axis >= rank {
-                return Err(anyhow!(
-                    "multimodal chunk {chunk_index} has an invalid activation part shape"
-                ));
-            }
-            if part.ggml_type != first_part.ggml_type
-                || part.rank != first_part.rank
-                || part.token_axis != first_part.token_axis
-                || part.flags != first_part.flags
-                || part.dimensions[..rank]
-                    .iter()
-                    .enumerate()
-                    .any(|(axis, dimension)| {
-                        axis != token_axis && *dimension != first_part.dimensions[axis]
-                    })
-                || part.byte_strides[..=token_axis] != first_part.byte_strides[..=token_axis]
-            {
-                return Err(anyhow!(
-                    "multimodal chunk {chunk_index} produced incompatible metadata for activation part"
-                ));
-            }
-            if part.dimensions[token_axis] != chunks[chunk_index].token_count as i64 {
-                return Err(anyhow!(
-                    "multimodal chunk {chunk_index} activation part token dimension does not match its chunk"
-                ));
-            }
-        }
-
-        let token_axis = first_part.token_axis as usize;
-        let inner_bytes = usize::try_from(first_part.byte_strides[token_axis])
-            .context("activation part inner stride exceeds usize")?;
-        if inner_bytes == 0 {
-            return Err(anyhow!("activation part has a zero token-axis stride"));
-        }
-        let mut slab_bytes = Vec::with_capacity(chunks.len());
-        let mut outer_count = None;
-        for (chunk_index, (chunk, part)) in chunks.iter().zip(&matching).enumerate() {
-            let slab = inner_bytes
-                .checked_mul(chunk.token_count)
-                .context("multimodal activation part slab size overflow")?;
-            let part_bytes = usize::try_from(part.payload_bytes)
-                .context("activation part payload size exceeds usize")?;
-            if slab == 0 || part_bytes % slab != 0 {
-                return Err(anyhow!(
-                    "multimodal chunk {chunk_index} activation part is not token-aligned"
-                ));
-            }
-            let current_outer_count = part_bytes / slab;
-            if outer_count
-                .replace(current_outer_count)
-                .is_some_and(|value| value != current_outer_count)
-            {
-                return Err(anyhow!(
-                    "multimodal activation parts have incompatible outer dimensions"
-                ));
-            }
-            slab_bytes.push(slab);
-        }
-
-        let output_offset = payload.len();
-        for outer_index in 0..outer_count.unwrap_or(0) {
-            for (chunk_index, (chunk, part)) in chunks.iter().zip(&matching).enumerate() {
-                let part_offset = usize::try_from(part.payload_offset)
-                    .context("activation part offset exceeds usize")?;
-                let start = part_offset
-                    .checked_add(
-                        outer_index
-                            .checked_mul(slab_bytes[chunk_index])
-                            .context("activation part offset overflow")?,
-                    )
-                    .context("activation part offset overflow")?;
-                let end = start
-                    .checked_add(slab_bytes[chunk_index])
-                    .context("activation part range overflow")?;
-                let bytes = chunk.output.payload.get(start..end).ok_or_else(|| {
-                    anyhow!("multimodal chunk {chunk_index} activation part exceeds its payload")
-                })?;
-                payload.extend_from_slice(bytes);
-            }
-        }
-
-        let mut output_part = *first_part;
-        output_part.dimensions[token_axis] =
-            i64::try_from(token_count).context("multimodal activation token count exceeds i64")?;
-        for axis in token_axis + 1..output_part.rank as usize {
-            let previous_dimension = u64::try_from(output_part.dimensions[axis - 1])
-                .context("activation part has an unresolved output dimension")?;
-            output_part.byte_strides[axis] = output_part.byte_strides[axis - 1]
-                .checked_mul(previous_dimension)
-                .context("activation part output stride overflow")?;
-        }
-        output_part.payload_offset = u64::try_from(output_offset)
-            .context("multimodal activation payload offset exceeds u64")?;
-        output_part.payload_bytes = u64::try_from(payload.len() - output_offset)
-            .context("multimodal activation part size exceeds u64")?;
-        output_parts[output_part_count] = output_part;
-        output_part_count += 1;
-    }
-
-    desc.token_count = u32::try_from(token_count).context("multimodal token count exceeds u32")?;
-    desc.part_count =
-        u32::try_from(output_part_count).context("activation part count exceeds u32")?;
-    desc.payload_bytes =
-        u64::try_from(payload.len()).context("multimodal activation payload length exceeds u64")?;
-    desc.parts = output_parts;
-    Ok(ActivationFrame { desc, payload })
-}
+mod chunk_aggregation;
+mod chunk_capture;
+use chunk_aggregation::aggregate_media_chunk_outputs;
+use chunk_capture::{ChunkCapture, capture_microbatch, split_chunk_frames};
 
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
@@ -290,6 +198,236 @@ impl StageModel {
 
     pub fn has_media_projector(&self) -> bool {
         self.media.is_some()
+    }
+
+    /// Report whether the configured projector supports native audio generation.
+    pub fn supports_speech_synthesis(&self) -> bool {
+        self.media.as_ref().is_some_and(|projector| {
+            let info = unsafe { skippy_ffi::mtmd_gen_audio_get_info(projector.raw) };
+            info.audio_type != skippy_ffi::MtmdGenAudioType::None
+        })
+    }
+
+    /// Generate bounded audio while restoring the session's normal decode mode
+    /// on success, cancellation, and native failure. Sessions remain exclusive.
+    pub fn synthesize_speech(
+        &self,
+        session: &mut StageSession,
+        config: &SpeechSynthesisConfig,
+        cancellation_requested: impl Fn() -> bool,
+    ) -> Result<SpeechAudio> {
+        let projector = self
+            .media
+            .as_ref()
+            .ok_or_else(|| anyhow!("speech synthesis requires a configured projector"))?;
+        let info = unsafe { skippy_ffi::mtmd_gen_audio_get_info(projector.raw) };
+        if info.audio_type == skippy_ffi::MtmdGenAudioType::None {
+            return Err(anyhow!(
+                "configured projector does not support speech synthesis"
+            ));
+        }
+        if config.prompt.is_empty() || config.max_frames == 0 {
+            return Err(anyhow!(
+                "speech prompt and max_frames must not be empty or zero"
+            ));
+        }
+        let prompt = CString::new(config.prompt.as_bytes())
+            .context("speech prompt contains an interior NUL byte")?;
+        let language = config
+            .language
+            .as_deref()
+            .map(CString::new)
+            .transpose()
+            .context("speech language contains an interior NUL byte")?;
+        let lctx = unsafe { skippy_ffi::skippy_session_llama_context(session.raw) };
+        if lctx.is_null() {
+            return Err(anyhow!("speech session did not expose a llama context"));
+        }
+
+        struct AudioGenerator(*mut skippy_ffi::MtmdHelperGenAudio);
+        impl Drop for AudioGenerator {
+            /// Release the native generator without taking ownership of its contexts.
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    unsafe { skippy_ffi::mtmd_helper_gen_audio_free(self.0) };
+                }
+            }
+        }
+        struct ExternalDecodeGuard {
+            session: *mut skippy_ffi::Session,
+            active: bool,
+        }
+        impl ExternalDecodeGuard {
+            fn finish(&mut self) -> Result<()> {
+                if !self.active {
+                    return Ok(());
+                }
+                let mut error = ptr::null_mut();
+                let status = unsafe {
+                    skippy_ffi::skippy_session_end_external_decode(self.session, &mut error)
+                };
+                ensure_ok(status, error).context("end speech external-decode scope")?;
+                self.active = false;
+                Ok(())
+            }
+        }
+        impl Drop for ExternalDecodeGuard {
+            /// End speech's external-decode scope and free any native cleanup error.
+            fn drop(&mut self) {
+                if !self.active {
+                    return;
+                }
+                let mut error = ptr::null_mut();
+                unsafe {
+                    let _ =
+                        skippy_ffi::skippy_session_end_external_decode(self.session, &mut error);
+                }
+                free_error(error);
+            }
+        }
+        session.reset()?;
+        unsafe { skippy_ffi::llama_set_embeddings(lctx, true) };
+        let mut embeddings_mode = SpeechEmbeddingsGuard {
+            session: session.raw,
+            context: lctx,
+            active: true,
+        };
+        let mut guard_error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_begin_external_decode(session.raw, &mut guard_error)
+        };
+        ensure_ok(status, guard_error)?;
+        let mut external_decode = ExternalDecodeGuard {
+            session: session.raw,
+            active: true,
+        };
+        let generator =
+            AudioGenerator(unsafe { skippy_ffi::mtmd_helper_gen_audio_init(lctx, projector.raw) });
+        if generator.0.is_null() {
+            return Err(anyhow!("failed to initialize speech synthesis pipeline"));
+        }
+        let output_type = match config.output_format {
+            SpeechOutputFormat::Wav => skippy_ffi::MtmdHelperGenAudioOutputType::Wav,
+            SpeechOutputFormat::PcmS16Le => skippy_ffi::MtmdHelperGenAudioOutputType::Pcm,
+        };
+        let input = skippy_ffi::MtmdHelperGenAudioInput {
+            seq_id: session.native_sequence_id()?,
+            prompt: prompt.as_ptr(),
+            prompt_len: config.prompt.len(),
+            speaker_ref: ptr::null_mut(),
+            lang: language
+                .as_ref()
+                .map_or(ptr::null(), |value| value.as_ptr()),
+            top_k: config.top_k,
+            top_p: config.top_p,
+            seed: config.seed,
+            out_type: output_type,
+        };
+        if unsafe { skippy_ffi::mtmd_helper_gen_audio_set_input(generator.0, &input) } != 0 {
+            return Err(anyhow!("speech synthesis rejected the input"));
+        }
+        let batch_size =
+            i32::try_from(session.batch_size()?).context("speech batch size exceeds i32")?;
+        loop {
+            if cancellation_requested() {
+                return Err(anyhow!("speech synthesis cancelled"));
+            }
+            let remaining =
+                unsafe { skippy_ffi::mtmd_helper_gen_audio_step_prompt(generator.0, batch_size) };
+            if remaining < 0 {
+                return Err(anyhow!("speech prompt evaluation failed"));
+            }
+            if remaining == 0 {
+                break;
+            }
+        }
+
+        let sampling = SamplingConfig {
+            enabled: true,
+            seed: config.seed,
+            top_k: config.top_k,
+            top_p: config.top_p,
+            ..SamplingConfig::default()
+        };
+        let mut sampled = session.sample_current(Some(&sampling))?;
+        let mut hidden_state =
+            unsafe { skippy_ffi::llama_get_embeddings_ith(lctx, -1) }.cast_const();
+        if hidden_state.is_null() {
+            return Err(anyhow!("speech backbone did not produce a hidden state"));
+        }
+        let mut generated_frames = 0usize;
+        let mut stopped = false;
+        while generated_frames < config.max_frames {
+            if cancellation_requested() {
+                return Err(anyhow!("speech synthesis cancelled"));
+            }
+            let mut next_hidden_state = ptr::null();
+            let mut stop = false;
+            let step = unsafe {
+                skippy_ffi::mtmd_helper_gen_audio_step_gen(
+                    generator.0,
+                    sampled,
+                    hidden_state,
+                    &mut next_hidden_state,
+                    &mut stop,
+                )
+            };
+            if step != 0 {
+                return Err(anyhow!(
+                    "speech synthesis failed at frame {generated_frames}"
+                ));
+            }
+            if stop || next_hidden_state.is_null() {
+                stopped = true;
+                break;
+            }
+            generated_frames += 1;
+            hidden_state = next_hidden_state;
+            // Only a further iteration consumes a sample: once the cap is
+            // reached the frame is never generated and the loop fails below.
+            if generated_frames < config.max_frames {
+                sampled = session.sample_current(Some(&sampling))?;
+            }
+        }
+        if !stopped {
+            return Err(anyhow!(
+                "speech synthesis exceeded the configured {} frame limit",
+                config.max_frames
+            ));
+        }
+
+        let mut sample_rate = 0_i32;
+        let mut data = ptr::null();
+        let mut data_len = 0usize;
+        let mut sample_count = 0_i64;
+        let output_status = unsafe {
+            skippy_ffi::mtmd_helper_gen_audio_get_output(
+                generator.0,
+                &mut sample_rate,
+                &mut data,
+                &mut data_len,
+                &mut sample_count,
+            )
+        };
+        if output_status != 0 || data.is_null() || data_len == 0 {
+            return Err(anyhow!("speech synthesis produced no audio"));
+        }
+        let native_bytes = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), data_len) };
+        let (sample_rate, sample_count) =
+            validated_speech_metadata(config.output_format, sample_rate, sample_count, data_len)?;
+        let bytes = match config.output_format {
+            SpeechOutputFormat::Wav => native_bytes.to_vec(),
+            SpeechOutputFormat::PcmS16Le => pcm_f32_to_s16le(native_bytes)?,
+        };
+        let audio = SpeechAudio {
+            bytes,
+            sample_rate,
+            sample_count,
+            generated_frames,
+        };
+        external_decode.finish()?;
+        embeddings_mode.restore()?;
+        Ok(audio)
     }
 
     fn eval_media(
@@ -626,11 +764,6 @@ impl StageModel {
             if chunk_tokens == 0 {
                 continue;
             }
-            if chunk_tokens > n_batch as usize {
-                return Err(anyhow!(
-                    "multimodal chunk {index} has {chunk_tokens} tokens, exceeding n_batch {n_batch}; increase n_batch for staged media prefill"
-                ));
-            }
             let chunk_token_ids = if chunk_type == skippy_ffi::MtmdInputChunkType::Text {
                 let mut text_token_count = 0usize;
                 let text_tokens = unsafe {
@@ -700,8 +833,9 @@ impl StageModel {
                 Vec::new()
             };
             let mut new_n_past = n_past;
+            let mut capture = ChunkCapture::new(session);
             let eval_status = unsafe {
-                skippy_ffi::mtmd_helper_eval_chunk_single(
+                skippy_ffi::mtmd_helper_eval_chunk_single_with_callback(
                     projector.raw,
                     lctx,
                     chunk,
@@ -710,23 +844,22 @@ impl StageModel {
                     n_batch,
                     false,
                     &mut new_n_past,
+                    Some(capture_microbatch),
+                    (&mut capture as *mut ChunkCapture<'_>).cast(),
                 )
             };
-            if eval_status != 0 {
-                return Err(anyhow!(
-                    "multimodal chunk {index} evaluation failed with status {eval_status}"
-                ));
-            }
-            let frame = session.copy_output_activation_frame(chunk_tokens, 0)?;
+            let frames = capture
+                .finish(eval_status)
+                .with_context(|| format!("capture multimodal chunk {index}"))?;
             copied_tokens = copied_tokens
                 .checked_add(chunk_tokens)
                 .context("multimodal activation token count overflow")?;
-            chunk_frames.push(MediaPrefillChunkFrame {
-                token_count: chunk_tokens,
-                tokens: chunk_token_ids,
-                positions: chunk_positions,
-                output: frame,
-            });
+            chunk_frames.extend(split_chunk_frames(
+                frames,
+                &chunk_token_ids,
+                &chunk_positions,
+                chunk_tokens,
+            )?);
             n_past = new_n_past;
         }
 
@@ -796,108 +929,140 @@ impl StageModel {
     }
 }
 
+/// Check native speech metadata against the payload it describes.
+///
+/// The reported rate and sample count describe the borrowed bytes, so reject
+/// values that cannot describe them rather than handing a consumer a
+/// structurally impossible result. The widths mirror the payloads: the `Pcm`
+/// encoding is f32 frames that [`pcm_f32_to_s16le`] re-encodes, and the `Wav`
+/// encoding wraps PCM16 samples in a container.
+fn validated_speech_metadata(
+    output_format: SpeechOutputFormat,
+    sample_rate: i32,
+    sample_count: i64,
+    data_len: usize,
+) -> Result<(u32, u64)> {
+    let sample_rate = u32::try_from(sample_rate).context("invalid speech sample rate")?;
+    if sample_rate == 0 {
+        return Err(anyhow!("speech synthesis reported a zero sample rate"));
+    }
+    let sample_count = u64::try_from(sample_count).context("invalid speech sample count")?;
+    if sample_count == 0 {
+        return Err(anyhow!("speech synthesis reported zero samples"));
+    }
+    let sample_bytes = match output_format {
+        SpeechOutputFormat::Wav => 2,
+        SpeechOutputFormat::PcmS16Le => std::mem::size_of::<f32>(),
+    };
+    let required_bytes = usize::try_from(sample_count)
+        .ok()
+        .and_then(|count| count.checked_mul(sample_bytes));
+    let payload_holds_samples = match output_format {
+        // The native WAV payload adds a container header around its samples.
+        SpeechOutputFormat::Wav => required_bytes.is_some_and(|bytes| data_len >= bytes),
+        // The native PCM payload is exactly the frames we re-encode.
+        SpeechOutputFormat::PcmS16Le => required_bytes == Some(data_len),
+    };
+    if !payload_holds_samples {
+        return Err(anyhow!(
+            "speech synthesis reported {sample_count} samples for a {data_len} byte payload"
+        ));
+    }
+    Ok((sample_rate, sample_count))
+}
+
+/// Validate and quantize native float32 PCM into clamped signed little-endian samples.
+fn pcm_f32_to_s16le(bytes: &[u8]) -> Result<Vec<u8>> {
+    if !bytes.len().is_multiple_of(std::mem::size_of::<f32>()) {
+        return Err(anyhow!("native PCM payload is not aligned to f32 samples"));
+    }
+    let mut output = Vec::with_capacity(bytes.len() / 2);
+    let (samples, remainder) = bytes.as_chunks::<4>();
+    debug_assert!(remainder.is_empty());
+    for sample in samples {
+        let sample = f32::from_ne_bytes(*sample);
+        let quantized = (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16;
+        output.extend_from_slice(&quantized.to_le_bytes());
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::aggregate_media_chunk_outputs;
-    use crate::{
-        ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES, ACTIVATION_MAX_PARTS,
-        ACTIVATION_PART_OPTIONAL, ActivationDesc, ActivationFrame, ActivationPartDesc,
-        GGML_TYPE_F32, MediaPrefillChunkFrame,
-    };
-
-    fn chunk(token_count: usize, parts: &[(u8, u32, Vec<u8>)]) -> MediaPrefillChunkFrame {
-        let mut payload = Vec::new();
-        let mut descriptors = [ActivationPartDesc::default(); ACTIVATION_MAX_PARTS];
-        for (index, (identity, flags, bytes)) in parts.iter().enumerate() {
-            descriptors[index] = ActivationPartDesc {
-                identity: [*identity; ACTIVATION_IDENTITY_BYTES],
-                ggml_type: GGML_TYPE_F32,
-                rank: 2,
-                token_axis: 1,
-                flags: *flags,
-                dimensions: [1, token_count as i64, 0, 0],
-                byte_strides: [4, 4, 0, 0],
-                payload_offset: payload.len() as u64,
-                payload_bytes: bytes.len() as u64,
-            };
-            payload.extend_from_slice(bytes);
-        }
-        MediaPrefillChunkFrame {
-            token_count,
-            tokens: Vec::new(),
-            positions: Vec::new(),
-            output: ActivationFrame {
-                desc: ActivationDesc {
-                    version: ACTIVATION_FRAME_VERSION,
-                    producer_stage_index: 0,
-                    layer_start: 0,
-                    layer_end: 1,
-                    token_count: token_count as u32,
-                    sequence_count: 1,
-                    part_count: parts.len() as u32,
-                    payload_bytes: payload.len() as u64,
-                    frontier_identity: [9; ACTIVATION_IDENTITY_BYTES],
-                    parts: descriptors,
-                },
-                payload,
-            },
-        }
-    }
+    use super::{SpeechOutputFormat, pcm_f32_to_s16le, validated_speech_metadata};
 
     #[test]
-    fn mixed_inkling_chunks_aggregate_the_common_hidden_plane() -> anyhow::Result<()> {
-        let chunks = vec![
-            chunk(1, &[(1, 0, vec![1, 2, 3, 4])]),
-            chunk(
-                2,
-                &[
-                    (1, 0, vec![5, 6, 7, 8, 9, 10, 11, 12]),
-                    (
-                        2,
-                        ACTIVATION_PART_OPTIONAL,
-                        vec![21, 22, 23, 24, 25, 26, 27, 28],
-                    ),
-                ],
-            ),
-        ];
+    /// Reject native speech metadata that cannot describe its payload.
+    fn speech_metadata_rejects_impossible_native_values() {
+        let pcm = SpeechOutputFormat::PcmS16Le;
+        let wav = SpeechOutputFormat::Wav;
 
-        let output = aggregate_media_chunk_outputs(&chunks)?;
-
-        assert_eq!(output.desc.token_count, 3);
-        assert_eq!(output.desc.part_count, 1);
-        assert_eq!(output.desc.payload_bytes, 12);
-        assert_eq!(output.payload, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-        Ok(())
-    }
-
-    #[test]
-    fn uniform_inkling_chunks_aggregate_each_plane_in_token_order() -> anyhow::Result<()> {
-        let chunks = vec![
-            chunk(
-                1,
-                &[
-                    (1, 0, vec![1, 2, 3, 4]),
-                    (2, ACTIVATION_PART_OPTIONAL, vec![11, 12, 13, 14]),
-                ],
-            ),
-            chunk(
-                1,
-                &[
-                    (1, 0, vec![5, 6, 7, 8]),
-                    (2, ACTIVATION_PART_OPTIONAL, vec![15, 16, 17, 18]),
-                ],
-            ),
-        ];
-
-        let output = aggregate_media_chunk_outputs(&chunks)?;
-
-        assert_eq!(output.desc.token_count, 2);
-        assert_eq!(output.desc.part_count, 2);
-        assert_eq!(output.desc.payload_bytes, 16);
+        // Four f32 frames, and the same four samples behind a WAV header.
         assert_eq!(
-            output.payload,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18]
+            validated_speech_metadata(pcm, 24_000, 4, 16).expect("consistent pcm"),
+            (24_000, 4)
         );
-        Ok(())
+        assert_eq!(
+            validated_speech_metadata(wav, 24_000, 4, 52).expect("consistent wav"),
+            (24_000, 4)
+        );
+
+        assert!(
+            validated_speech_metadata(pcm, 0, 4, 16).is_err(),
+            "zero rate"
+        );
+        assert!(
+            validated_speech_metadata(pcm, 24_000, 0, 16).is_err(),
+            "zero samples"
+        );
+        assert!(
+            validated_speech_metadata(pcm, 24_000, -1, 16).is_err(),
+            "negative samples"
+        );
+        assert!(
+            validated_speech_metadata(pcm, 24_000, 5, 16).is_err(),
+            "count exceeds native frames"
+        );
+        assert!(
+            validated_speech_metadata(pcm, 24_000, 4, 20).is_err(),
+            "trailing bytes are not samples"
+        );
+        assert!(
+            validated_speech_metadata(wav, 24_000, 9, 16).is_err(),
+            "wav payload cannot hold the declared samples"
+        );
+    }
+
+    #[test]
+    /// Verify clipping and quantization at signed PCM boundaries.
+    fn pcm_conversion_clamps_and_quantizes_native_float_samples() {
+        let samples = [-2.0_f32, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0];
+        let bytes = samples
+            .iter()
+            .flat_map(|sample| sample.to_ne_bytes())
+            .collect::<Vec<_>>();
+
+        let converted = pcm_f32_to_s16le(&bytes).expect("aligned native PCM");
+        let (converted_samples, remainder) = converted.as_chunks::<2>();
+        assert!(remainder.is_empty());
+        let actual = converted_samples
+            .iter()
+            .map(|sample| i16::from_le_bytes(*sample))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![-32_767, -32_767, -16_384, 0, 16_384, 32_767, 32_767]
+        );
+    }
+
+    #[test]
+    /// Reject PCM payloads without complete float32 samples.
+    fn pcm_conversion_rejects_misaligned_native_payload() {
+        assert!(pcm_f32_to_s16le(&[0, 1, 2]).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "media/speech_session_tests.rs"]
+mod speech_session_tests;

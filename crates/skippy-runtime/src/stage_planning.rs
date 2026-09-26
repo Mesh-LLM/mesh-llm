@@ -46,6 +46,7 @@ struct TensorDescriptor {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GgufStageRuntimePlan {
     pub resident_tensor_names: Vec<String>,
+    pub execution_contract: String,
     pub activation_import_identities: Vec<String>,
     pub activation_import_bindings: Vec<String>,
     pub activation_export_identities: Vec<String>,
@@ -56,6 +57,7 @@ impl GgufStageRuntimePlan {
     /// Install this planner result into the runtime configuration it describes.
     pub fn apply_to(self, config: &mut RuntimeConfig) {
         config.resident_tensor_names = self.resident_tensor_names;
+        config.execution_contract = self.execution_contract;
         config.activation_import_identities = self.activation_import_identities;
         config.activation_import_bindings = self.activation_import_bindings;
         config.activation_export_identities = self.activation_export_identities;
@@ -507,6 +509,7 @@ fn runtime_plan(plan: &Plan) -> Result<GgufStageRuntimePlan> {
     ) = frontier.expect("validated nonempty native stage profile set");
     Ok(GgufStageRuntimePlan {
         resident_tensor_names: resident_tensor_names(plan)?,
+        execution_contract: read_plan_string(plan.0, descriptor.execution_contract)?,
         activation_import_identities,
         activation_import_bindings,
         activation_export_identities,

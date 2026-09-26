@@ -48,6 +48,13 @@ printf 'CMAKE_GENERATOR:INTERNAL=%s\\n' "$generator" > "$target/CMakeCache.txt"
 """
 
 NINJA_STUB = "#!/usr/bin/env bash\nexit 0\n"
+NVCC_STUB = """\
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "Cuda compilation tools, release 12.9, V12.9.0"
+fi
+exit 0
+"""
 
 
 class BuildLlamaGeneratorGuardTests(unittest.TestCase):
@@ -76,6 +83,10 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
         require_existing: bool = False,
         ninja_on_path: bool = True,
         env_cmake_generator: str | None = None,
+        deployment_target: str | None = None,
+        host_os: str | None = None,
+        backend: str = "cpu",
+        extra_args: tuple[str, ...] = (),
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -92,12 +103,20 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
             )
         stubs = root / "stubs"
         stubs.mkdir()
-        for name, body in (("cmake", CMAKE_STUB), ("ninja", NINJA_STUB)):
+        for name, body in (
+            ("cmake", CMAKE_STUB),
+            ("ninja", NINJA_STUB),
+            ("nvcc", NVCC_STUB),
+        ):
             if name == "ninja" and not ninja_on_path:
                 continue
             path = stubs / name
             path.write_text(body)
             path.chmod(0o755)
+        if host_os is not None:
+            uname = stubs / "uname"
+            uname.write_text("#!/bin/sh\necho " + host_os + "\n")
+            uname.chmod(0o755)
         log = root / "cmake-stub.log"
         env = {
             key: value for key, value in os.environ.items()
@@ -107,6 +126,11 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
                 "MESH_LLM_LLAMA_BUILD_ROOT",
                 "CMAKE_STUB_LOG",
                 "CMAKE_GENERATOR",
+                "MACOSX_DEPLOYMENT_TARGET",
+                "CUDACXX",
+                "CMAKE_CUDA_COMPILER",
+                "NVCC",
+                "CUDAToolkit_ROOT",
             )
         }
         if env_cmake_generator is not None:
@@ -120,19 +144,79 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
             {
                 "LLAMA_WORKDIR": str(workdir),
                 "LLAMA_STAGE_BUILD_DIR": str(build),
-                "LLAMA_STAGE_BACKEND": "cpu",
+                "LLAMA_STAGE_BACKEND": backend,
                 "LLAMA_STAGE_LINK_MODE": "dynamic",
                 "CMAKE_STUB_LOG": str(log),
                 "PATH": path_value,
             }
         )
-        command = ["bash", str(BUILD_SCRIPT)]
+        if deployment_target is not None:
+            env["MACOSX_DEPLOYMENT_TARGET"] = deployment_target
+        self.build_env = env
+        command = ["bash", str(BUILD_SCRIPT), *extra_args]
         if require_existing:
             command.append("--require-existing")
         result = subprocess.run(
             command, cwd=ROOT, env=env, capture_output=True, text=True
         )
         return result, build, log
+
+    def test_macos_target_defaults_and_explicit_override_reach_cmake(self) -> None:
+        for target in (None, "14.0"):
+            with self.subTest(target=target):
+                result, build, log = self.run_build(host_os="Darwin", deployment_target=target)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                argument = f"-DCMAKE_OSX_DEPLOYMENT_TARGET={target or '13.3'}"
+                self.assertIn(argument, log.read_text())
+                self.assertIn(argument, (build / ".mesh-llm-build-stamp").read_text())
+
+    def test_target_change_rejects_existing_native_build(self) -> None:
+        result, build, log = self.run_build(host_os="Darwin", deployment_target="13.3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        workdir = self.build_env["LLAMA_WORKDIR"]
+        subprocess.run(["git", "init", "-q", workdir], check=True)
+        subprocess.run(["git", "-C", workdir, "add", "."], check=True)
+        subprocess.run([
+            "git", "-C", workdir, "-c", "user.name=Fixture",
+            "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "-qm", "fixture",
+        ], check=True)
+        command = ["bash", str(BUILD_SCRIPT), "--require-existing"]
+        warm = subprocess.run(command, cwd=ROOT, env=self.build_env, capture_output=True, text=True)
+        self.assertEqual(warm.returncode, 0, warm.stderr)
+        before = log.read_text()
+        self.build_env["MACOSX_DEPLOYMENT_TARGET"] = "14.0"
+        changed = subprocess.run(command, cwd=ROOT, env=self.build_env, capture_output=True, text=True)
+        self.assertNotEqual(changed.returncode, 0)
+        self.assertIn("refusing to rebuild", changed.stderr)
+        self.assertEqual(log.read_text(), before)
+        rebuilt = subprocess.run(command[:-1], cwd=ROOT, env=self.build_env, capture_output=True, text=True)
+        self.assertEqual(rebuilt.returncode, 0, rebuilt.stderr)
+        self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0", (build / ".mesh-llm-build-stamp").read_text())
+
+    def test_mobile_sdk_target_overrides_macos_native_default(self) -> None:
+        result, _, log = self.run_build(host_os="Darwin", extra_args=(
+            "-DCMAKE_SYSTEM_NAME=iOS", "-DCMAKE_OSX_SYSROOT=iphoneos",
+            "-DCMAKE_OSX_DEPLOYMENT_TARGET=16.0",
+        ))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        configure = log.read_text().splitlines()[0]
+        self.assertLess(configure.index("DEPLOYMENT_TARGET=13.3"), configure.index("DEPLOYMENT_TARGET=16.0"))
+
+    def test_linux_does_not_receive_macos_cmake_target(self) -> None:
+        result, _, log = self.run_build(host_os="Linux", deployment_target="14.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("CMAKE_OSX_DEPLOYMENT_TARGET", log.read_text())
+
+    def test_cuda_disables_unstable_graph_capture(self) -> None:
+        result, build, log = self.run_build(backend="cuda")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("-DGGML_CUDA=ON", log.read_text())
+        self.assertIn("-DGGML_CUDA_GRAPHS=OFF", log.read_text())
+        self.assertIn(
+            "cmake-arg=-DGGML_CUDA_GRAPHS=OFF",
+            (build / ".mesh-llm-build-stamp").read_text(),
+        )
 
     def test_stale_makefiles_cache_is_cleared_when_ninja_is_selected(self) -> None:
         result, build, log = self.run_build(cache_generator="Unix Makefiles")

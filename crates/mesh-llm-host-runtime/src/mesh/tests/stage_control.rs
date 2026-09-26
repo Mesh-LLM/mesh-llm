@@ -42,6 +42,8 @@ fn test_stage_status(
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
         error: None,
         shutdown_generation: 1,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -152,7 +154,10 @@ async fn stage_control_bundle_gate_rejects_legacy_peer() -> Result<()> {
     assert!(
         error
             .to_string()
-            .contains("does not advertise the required generation-10 control bundle"),
+            .contains(&format!(
+                "does not advertise the required generation-{} control bundle",
+                skippy_protocol::STAGE_PROTOCOL_GENERATION
+            )),
         "unexpected error: {error:#}"
     );
 

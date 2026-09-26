@@ -9,8 +9,20 @@ pub async fn send_models_list_with_descriptors(
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
     runtimes: &[mesh::ModelRuntimeDescriptor],
+    node: Option<&mesh::Node>,
 ) -> std::io::Result<()> {
-    let body = models_list_json(models, descriptors, runtimes).to_string();
+    let body = models_list_json(models, descriptors, runtimes);
+    #[cfg(feature = "payments")]
+    let body = {
+        let mut body = body;
+        if let Some(node) = node {
+            super::model_prices::attach_prices(&mut body, models, descriptors, node).await;
+        }
+        body
+    };
+    #[cfg(not(feature = "payments"))]
+    let _ = node;
+    let body = body.to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
         body.len(),
@@ -142,6 +154,9 @@ fn model_metadata_json(
 ) -> Option<serde_json::Value> {
     let mut metadata = serde_json::Map::new();
     let descriptor_metadata = descriptor.and_then(|descriptor| descriptor.metadata.as_ref());
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.workload_class) {
+        metadata.insert("workload_class".to_string(), serde_json::json!(value));
+    }
     if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.architecture.as_ref()) {
         metadata.insert("architecture".to_string(), serde_json::json!(value));
     }
@@ -477,6 +492,7 @@ mod tests {
             std::slice::from_ref(&alias),
             &[local_gguf_descriptor(&alias)],
             &[],
+            None,
         )
         .await
         .expect("models response succeeds");
@@ -492,6 +508,7 @@ mod tests {
         let models = vec!["Qwen3-32B-Q4_K_M".to_string()];
         let mut descriptor = local_gguf_descriptor(&models[0]);
         descriptor.metadata = Some(mesh::ServedModelMetadata {
+            workload_class: Some(mesh::ModelWorkloadClass::CausalGeneration),
             architecture: Some("qwen3".to_string()),
             parameter_size: Some("32B".to_string()),
             parameter_count_b: Some(32.0),
@@ -514,6 +531,7 @@ mod tests {
 
         let body = models_list_json(&models, &[descriptor], &runtimes);
         let metadata = &body["data"][0]["metadata"];
+        assert_eq!(metadata["workload_class"], "causal_generation");
 
         assert_eq!(metadata["architecture"], "qwen3");
         assert_eq!(metadata["parameter_size"], "32B");

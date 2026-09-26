@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::output::{print_info, print_json_pretty, print_success, print_warn};
 
 const SKIPPY_FEATURE_MODEL_INTROSPECTION: u64 = 1 << 3;
-const SKIPPY_FEATURE_GGUF_SLICE_WRITE: u64 = 1 << 4;
 
 #[derive(Debug, Parser)]
 pub struct BackendArgs {
@@ -48,7 +47,6 @@ pub struct SkippyAbiCapabilities {
     pub runtime_loaded: bool,
     pub feature_mask: Option<u64>,
     pub model_introspection: bool,
-    pub gguf_slice_write: bool,
     pub load_error: Option<String>,
     pub reason: String,
 }
@@ -106,9 +104,8 @@ pub fn run_backends(args: BackendArgs) -> Result<()> {
             print_warn("skippy-abi runtime not loaded");
         }
         print_info(format!(
-            "skippy-abi: model_introspection={} gguf_slice_write={} feature_mask={}",
+            "skippy-abi: model_introspection={} feature_mask={}",
             capabilities.skippy_abi.model_introspection,
-            capabilities.skippy_abi.gguf_slice_write,
             capabilities
                 .skippy_abi
                 .feature_mask
@@ -136,18 +133,14 @@ fn skippy_abi_capabilities(skippy_runtime_libraries: &[PathBuf]) -> SkippyAbiCap
     let model_introspection = feature_mask.is_some_and(|mask| {
         mask & SKIPPY_FEATURE_MODEL_INTROSPECTION == SKIPPY_FEATURE_MODEL_INTROSPECTION
     });
-    let gguf_slice_write = feature_mask.is_some_and(|mask| {
-        mask & SKIPPY_FEATURE_GGUF_SLICE_WRITE == SKIPPY_FEATURE_GGUF_SLICE_WRITE
-    });
     SkippyAbiCapabilities {
         convert_hf_to_gguf: false,
         llama_quantize: runtime_loaded,
         runtime_loaded,
         feature_mask,
         model_introspection,
-        gguf_slice_write,
         load_error,
-        reason: skippy_abi_reason(runtime_loaded, feature_mask, gguf_slice_write),
+        reason: skippy_abi_reason(runtime_loaded, feature_mask),
     }
 }
 
@@ -161,19 +154,12 @@ fn load_skippy_runtime_for_probe(skippy_runtime_libraries: &[PathBuf]) -> Option
     result.err().map(|err| err.to_string())
 }
 
-fn skippy_abi_reason(
-    runtime_loaded: bool,
-    feature_mask: Option<u64>,
-    gguf_slice_write: bool,
-) -> String {
+fn skippy_abi_reason(runtime_loaded: bool, feature_mask: Option<u64>) -> String {
     if !runtime_loaded {
         return "no Skippy native runtime library was loaded for ABI probing".to_string();
     }
     if feature_mask.is_none() {
         return "loaded Skippy runtime does not expose abi_features".to_string();
-    }
-    if gguf_slice_write {
-        return "loaded Skippy ABI exposes GGUF slice writing and the linked llama symbols can be used for GGUF quantization, but not HF checkpoint conversion".to_string();
     }
     "loaded Skippy ABI exposes staged inference/runtime entry points and linked llama symbols can be used for GGUF quantization, but not HF checkpoint conversion".to_string()
 }
@@ -261,7 +247,6 @@ mod tests {
         assert!(!capabilities.skippy_abi.runtime_loaded);
         assert_eq!(capabilities.skippy_abi.feature_mask, None);
         assert!(!capabilities.skippy_abi.model_introspection);
-        assert!(!capabilities.skippy_abi.gguf_slice_write);
         assert_eq!(capabilities.skippy_abi.load_error, None);
         assert!(capabilities.skippy_abi.reason.contains("Skippy"));
     }

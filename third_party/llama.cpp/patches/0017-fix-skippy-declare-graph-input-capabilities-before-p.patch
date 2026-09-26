@@ -1,0 +1,314 @@
+From d31940dfb1e58720fc35b076254cb3a33c8064a1 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Tue, 22 Sep 2026 18:12:59 +1000
+Subject: [PATCH] fix(skippy): declare graph input capabilities before profile
+ planning
+
+---
+ src/CMakeLists.txt                      | 31 ++++++++++
+ src/llama-graph.cpp                     | 17 ++++--
+ src/llama-graph.h                       |  6 +-
+ src/models/glm4-moe.cpp                 |  9 +--
+ src/models/glm4.cpp                     |  9 +--
+ src/skippy/tests/input_capabilities.cpp | 78 +++++++++++++++++++++++++
+ tests/test-llama-archs.cpp              | 14 ++++-
+ 7 files changed, 142 insertions(+), 22 deletions(-)
+ create mode 100644 src/skippy/tests/input_capabilities.cpp
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 69e05396a..815fce61b 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -204,6 +204,37 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     target_link_libraries(skippy-renamed-multishard-planning PRIVATE llama)
+     add_dependencies(skippy-noalloc-graph-planning skippy-renamed-multishard-planning)
+ 
++    add_executable(skippy-input-capabilities skippy/tests/input_capabilities.cpp)
++    target_compile_features(skippy-input-capabilities PRIVATE cxx_std_17)
++    target_link_libraries(skippy-input-capabilities PRIVATE llama)
++    add_dependencies(skippy-noalloc-graph-planning skippy-input-capabilities)
++    foreach(arch glm4 glm4moe)
++        set(text_fixture_dir "${SKIPPY_MODEL_FIXTURE_DIR}/text-only-${arch}")
++        file(MAKE_DIRECTORY "${text_fixture_dir}")
++        add_test(NAME skippy_generate_text_only_${arch}
++            COMMAND skippy-model-fixture-generator --arch ${arch} --seed 1 --text-only --out "${text_fixture_dir}")
++        set_tests_properties(skippy_generate_text_only_${arch} PROPERTIES FIXTURES_SETUP text-only-${arch})
++        if(arch STREQUAL "glm4moe")
++            set(model_kind moe)
++        else()
++            set(model_kind dense)
++        endif()
++        add_test(NAME skippy_input_capabilities_${arch}
++            COMMAND skippy-input-capabilities "${text_fixture_dir}/${arch}-${model_kind}.gguf" 1)
++        set_tests_properties(skippy_input_capabilities_${arch} PROPERTIES FIXTURES_REQUIRED text-only-${arch})
++        set(embedding_fixture_dir "${SKIPPY_MODEL_FIXTURE_DIR}/embedding-${arch}")
++        file(MAKE_DIRECTORY "${embedding_fixture_dir}")
++        add_test(NAME skippy_generate_embedding_${arch}
++            COMMAND skippy-model-fixture-generator --arch ${arch} --seed 1 --out "${embedding_fixture_dir}")
++        set_tests_properties(skippy_generate_embedding_${arch} PROPERTIES FIXTURES_SETUP embedding-${arch})
++        add_test(NAME skippy_input_capabilities_embedding_${arch}
++            COMMAND skippy-input-capabilities "${embedding_fixture_dir}/${arch}-${model_kind}.gguf" 2)
++        set_tests_properties(skippy_input_capabilities_embedding_${arch} PROPERTIES FIXTURES_REQUIRED embedding-${arch})
++    endforeach()
++    add_test(NAME skippy_input_capabilities_embeddings
++        COMMAND skippy-input-capabilities "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf" 2)
++    set_tests_properties(skippy_input_capabilities_embeddings PROPERTIES FIXTURES_REQUIRED skippy-model-loader-fixtures)
++
+     add_executable(skippy-stage-plan-header-c
+         skippy/tests/stage_plan_header.c)
+     target_compile_features(skippy-stage-plan-header-c PRIVATE c_std_11)
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index b17e99e9a..53b287d48 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -1771,7 +1771,9 @@ llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
+     // every graph exposes the same semantic input contract to stage planning.
+     if (auto * embd = dynamic_cast<llm_graph_input_embd *>(input.get())) {
+         request_input(embd->tokens, "tokens");
+-        request_input(embd->embd, "embeddings");
++        if (embd->allow_embeddings) {
++            request_input(embd->embd, "embeddings");
++        }
+     }
+     if (auto * mtp = dynamic_cast<llm_graph_input_embd_h *>(input.get())) {
+         request_input(mtp->tokens, "tokens");
+@@ -2844,13 +2846,16 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+ }
+ 
+ // input embeddings with optional lora
+-ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
++ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, bool allow_embeddings) const {
++    if (ubatch.embd && !allow_embeddings) {
++        GGML_ABORT("This GGUF does not support multimodal. Please reconvert it.");
++    }
+     const int64_t n_embd_inp = hparams.n_embd_inp();
+     const int64_t n_embd     = hparams.n_embd;
+ 
+     assert(n_embd_inp >= n_embd);
+ 
+-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
++    auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp, allow_embeddings);
+ 
+     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
+     cb(inp->tokens, "inp_tokens", -1);
+@@ -2861,7 +2866,11 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+     inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
+     cb(inp->embd, "inp_embd", -1);
+     ggml_set_input(inp->embd);
+-    request_input(inp->embd, "embeddings");
++    // Advertise only input modes this graph can execute. Planning uses these
++    // declarations to discover additional profiles without probing invalid modes.
++    if (allow_embeddings) {
++        request_input(inp->embd, "embeddings");
++    }
+ 
+     // select one of the 2 inputs, based on the batch contents
+     // ref: https://github.com/ggml-org/llama.cpp/pull/18550
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 732af4c7b..5caccd48f 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -196,7 +196,9 @@ using llm_graph_input_ptr = std::unique_ptr<llm_graph_input_i>;
+ 
+ class llm_graph_input_embd : public llm_graph_input_i {
+ public:
+-    llm_graph_input_embd(int64_t n_embd) : n_embd(n_embd) {}
++    llm_graph_input_embd(int64_t n_embd, bool allow_embeddings = true)
++        : allow_embeddings(allow_embeddings), n_embd(n_embd) {}
++    const bool allow_embeddings;
+     virtual ~llm_graph_input_embd() = default;
+ 
+     void set_input(const llama_ubatch * ubatch) override;
+@@ -1413,7 +1415,7 @@ struct llm_graph_context {
+     // inputs
+     //
+ 
+-    ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
++    ggml_tensor * build_inp_embd(ggml_tensor * tok_embd, bool allow_embeddings = true) const;
+     ggml_tensor * build_inp_pos() const;
+     ggml_tensor * build_inp_attn_scale() const;
+     ggml_tensor * build_inp_out_ids() const;
+diff --git a/src/models/glm4-moe.cpp b/src/models/glm4-moe.cpp
+index d6ae5783c..d5372e160 100644
+--- a/src/models/glm4-moe.cpp
++++ b/src/models/glm4-moe.cpp
+@@ -299,13 +299,8 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
+-
+-    bool use_mrope = hparams.use_mrope();
+-    if (ubatch.embd && !use_mrope) {
+-        // unfortunately, we need to forcefully stop here, to avoid users complaining about wrong results
+-        GGML_ABORT("This GGUF does not support multimodal. Please reconvert it.");
+-    }
++    const bool use_mrope = hparams.use_mrope();
++    inpL = build_inp_embd(model.tok_embd, use_mrope);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+diff --git a/src/models/glm4.cpp b/src/models/glm4.cpp
+index 463be809d..1fac79766 100644
+--- a/src/models/glm4.cpp
++++ b/src/models/glm4.cpp
+@@ -76,13 +76,8 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
+     ggml_tensor * cur;
+     ggml_tensor * inpL;
+ 
+-    inpL = build_inp_embd(model.tok_embd);
+-
+-    bool use_mrope = hparams.use_mrope();
+-    if (ubatch.embd && !use_mrope) {
+-        // unfortunately, we need to forcefully stop here, to avoid users complaining about wrong results
+-        GGML_ABORT("This GGUF does not support multimodal. Please reconvert it.");
+-    }
++    const bool use_mrope = hparams.use_mrope();
++    inpL = build_inp_embd(model.tok_embd, use_mrope);
+ 
+     // inp_pos - contains the positions
+     ggml_tensor * inp_pos = build_inp_pos();
+diff --git a/src/skippy/tests/input_capabilities.cpp b/src/skippy/tests/input_capabilities.cpp
+new file mode 100644
+index 000000000..a87425e96
+--- /dev/null
++++ b/src/skippy/tests/input_capabilities.cpp
+@@ -0,0 +1,78 @@
++#include "ggml.h"
++#include "gguf.h"
++#include "skippy/stage_plan.h"
++
++#include <algorithm>
++#include <cstdio>
++#include <cstdlib>
++#include <memory>
++#include <string>
++#include <vector>
++
++// Realize a stage from a synthetic GGUF without reading any weight payloads.
++// The expected profile count distinguishes token-only from embedding-capable graphs.
++int main(int argc, char ** argv) {
++    if (argc != 3) {
++        std::fprintf(stderr, "usage: %s model.gguf expected-profiles\n", argv[0]);
++        return 1;
++    }
++    ggml_context * raw_context = nullptr;
++    gguf_init_params params{true, &raw_context};
++    std::unique_ptr<gguf_context, decltype(&gguf_free)> metadata(
++            gguf_init_from_file(argv[1], params), gguf_free);
++    std::unique_ptr<ggml_context, decltype(&ggml_free)> context(raw_context, ggml_free);
++    if (!metadata || !context) {
++        return 1;
++    }
++    const auto * arch = gguf_get_val_str(metadata.get(), gguf_find_key(metadata.get(), "general.architecture"));
++    const std::string layers_key = std::string(arch) + ".block_count";
++    const int32_t layers = gguf_get_val_u32(metadata.get(), gguf_find_key(metadata.get(), layers_key.c_str()));
++    std::vector<skippy_stage_planner_tensor_v1> tensors;
++    for (int64_t index = 0; index < gguf_get_n_tensors(metadata.get()); ++index) {
++        const char * name = gguf_get_tensor_name(metadata.get(), index);
++        const auto * source = ggml_get_tensor(context.get(), name);
++        skippy_stage_planner_tensor_v1 tensor{};
++        tensor.abi_version = 1;
++        tensor.struct_size = sizeof(tensor);
++        tensor.tensor_id = name;
++        tensor.native_name = name;
++        tensor.ggml_type = source->type;
++        tensor.dimension_count = ggml_n_dims(source);
++        std::copy(source->ne, source->ne + 4, tensor.dimensions);
++        tensor.data_offset = gguf_get_data_offset(metadata.get()) + gguf_get_tensor_offset(metadata.get(), index);
++        tensor.stored_length = ggml_nbytes(source);
++        tensors.push_back(tensor);
++    }
++    std::sort(tensors.begin(), tensors.end(), [](const auto & left, const auto & right) {
++        return std::string(left.tensor_id) < std::string(right.tensor_id);
++    });
++    const skippy_stage_planner_profile_v1 profile{1, sizeof(profile), "prefill", 8, 1, 8, 0};
++    const char * paths[] = {argv[1]};
++    const std::string package_id = "sha256:" + std::string(64, 'a');
++    skippy_stage_planner_config_v1 config{1, sizeof(config), package_id.c_str(),
++        paths, 1, tensors.data(), tensors.size(), &profile, 1, "test.graph", "test.cpu"};
++    skippy_error * error = nullptr;
++    skippy_stage_planner * planner = nullptr;
++    auto status = skippy_stage_planner_create_v1(&config, &planner, &error);
++    std::unique_ptr<skippy_stage_planner, decltype(&skippy_stage_planner_free)> owner(planner, skippy_stage_planner_free);
++    skippy_stage_plan * plan = nullptr;
++    if (status == SKIPPY_STATUS_OK) {
++        status = skippy_stage_planner_realize_v1(planner, 0, layers, &plan, &error);
++    }
++    std::unique_ptr<skippy_stage_plan, decltype(&skippy_stage_plan_free)> plan_owner(plan, skippy_stage_plan_free);
++    skippy_stage_plan_desc_v1 descriptor{};
++    if (status == SKIPPY_STATUS_OK) {
++        status = skippy_stage_plan_describe_v1(plan, &descriptor, &error);
++    }
++    if (status != SKIPPY_STATUS_OK) {
++        std::fprintf(stderr, "planning failed: %s\n", error ? error->message : "unknown");
++        skippy_error_free(error);
++        return 1;
++    }
++    const size_t expected = std::strtoul(argv[2], nullptr, 10);
++    if (descriptor.profile_count != expected) {
++        std::fprintf(stderr, "expected %zu profiles, got %zu\n", expected, descriptor.profile_count);
++        return 1;
++    }
++    return 0;
++}
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index d640cf5c9..90cf83e08 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -95,6 +95,7 @@ static void usage(char ** argv) {
+     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
+     LOG("  -v <N>                   Set log verbosity level\n");
+     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
++    LOG("  -t, --text-only          Save models with empty rope dimension sections (text-only fixtures)\n");
+     LOG("  -h, --help               Show this help message\n\n");
+     LOG("Examples:\n");
+     LOG("  %s\n", argv[0]);
+@@ -776,7 +777,7 @@ static bool glm_dsa_backend_config_supported(const std::vector<ggml_backend_dev_
+     return true;
+ }
+ 
+-static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir) {
++static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir, bool text_only = false) {
+     struct user_data_t {
+         struct {
+             ggml_log_callback callback;
+@@ -824,6 +825,11 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+                 continue;
+             }
+             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
++            if (text_only) {
++                const uint32_t sections[4] = {};
++                const std::string key = std::string(llm_arch_name(arch)) + ".rope.dimension_sections";
++                gguf_set_arr_data(gguf_ctx.get(), key.c_str(), GGUF_TYPE_UINT32, sections, 4);
++            }
+             auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
+             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
+             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
+@@ -1051,10 +1057,14 @@ int main(int argc, char ** argv) {
+     std::string out;
+     const char * target_backend = nullptr;
+     bool deepseek4_mtp = false;
++    bool text_only = false;
+     std::string mtp_model;
+     int verbosity = LOG_LEVEL_ERROR;
+ 
+     for (int i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
++            text_only = true;
++        }
+         if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
+             deepseek4_mtp = true;
+         }
+@@ -1160,7 +1170,7 @@ int main(int argc, char ** argv) {
+             return 0;
+         }
+         if (!out.empty()) {
+-            return save_models(arch_filter, seed, stdev, verbosity, out);
++            return save_models(arch_filter, seed, stdev, verbosity, out, text_only);
+         }
+         return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
+     } catch (const std::exception & err) {
+-- 
+2.54.0 (Apple Git-157)
+

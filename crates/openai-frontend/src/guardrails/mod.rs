@@ -3,12 +3,18 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::{
+    audio::{
+        AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
+    },
     backend::{
         ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext, OpenAiResult,
     },
     chat::{ChatCompletionRequest, ChatCompletionResponse},
     completions::{CompletionRequest, CompletionResponse},
+    embeddings::{EmbeddingResponse, EmbeddingsRequest},
     models::ModelObject,
+    rerank::{RerankRequest, RerankResponse},
+    system_one::{SystemOneRequest, SystemOneResponse},
 };
 
 mod compact;
@@ -310,6 +316,10 @@ impl OpenAiBackend for GuardedOpenAiBackend {
         self.backend.models().await
     }
 
+    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+        self.backend.system_one(request).await
+    }
+
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
@@ -353,6 +363,51 @@ impl OpenAiBackend for GuardedOpenAiBackend {
         context: OpenAiRequestContext,
     ) -> OpenAiResult<CompletionStream> {
         self.backend.completion_stream(request, context).await
+    }
+
+    /// Forward embeddings and request context without chat processing.
+    async fn embeddings(
+        &self,
+        request: EmbeddingsRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<EmbeddingResponse> {
+        self.backend.embeddings(request, context).await
+    }
+
+    /// Forward reranking and request context without chat processing.
+    async fn rerank(
+        &self,
+        request: RerankRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<RerankResponse> {
+        self.backend.rerank(request, context).await
+    }
+
+    /// Forward speech generation and request context unchanged.
+    async fn audio_speech(
+        &self,
+        request: AudioSpeechRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioResponse> {
+        self.backend.audio_speech(request, context).await
+    }
+
+    /// Forward multipart transcription and request context unchanged.
+    async fn audio_transcription(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.backend.audio_transcription(request, context).await
+    }
+
+    /// Forward multipart translation and request context unchanged.
+    async fn audio_translation(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.backend.audio_translation(request, context).await
     }
 }
 

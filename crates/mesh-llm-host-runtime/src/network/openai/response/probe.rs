@@ -43,6 +43,96 @@ pub(in crate::network::openai::response) fn append_capsule_nonce_headers(
     }
 }
 
+/// The header the routing node echoes the resolved `x-mesh-target` peer back
+/// on, so the client can seal which peer answered without parsing
+/// provenance. See `ingress.rs`'s remote-mesh routing.
+pub(in crate::network::openai::response) const MESH_SERVED_BY_HEADER: &str = "x-mesh-served-by";
+
+/// Append the `x-mesh-served-by` header (when present) to a hand-built
+/// response header string. Sibling of `append_capsule_nonce_headers` for
+/// response adapters that rebuild headers instead of relaying them raw.
+pub(in crate::network::openai::response) fn append_mesh_served_by_header(
+    header: &mut String,
+    served_by: Option<&str>,
+) {
+    if let Some(served_by) = served_by {
+        header.push_str(&format!("{MESH_SERVED_BY_HEADER}: {served_by}\r\n"));
+    }
+}
+
+/// Remove an existing `name: ...` header line (case-insensitive) from the
+/// header block `buf[..header_end]`, if one is present, and return how many
+/// bytes were removed (0 if none matched).
+///
+/// Belt-and-braces for [`insert_header_before_body`]: a value this codebase
+/// already meant to be single-valued (e.g. `x-mesh-served-by`) must never
+/// appear twice just because some upstream response already carried one —
+/// canonicalize to one value instead of appending a second.
+fn remove_existing_header(buf: &mut Vec<u8>, header_end: usize, name: &str) -> usize {
+    let mut offset = 0usize;
+    let mut total_removed = 0usize;
+    while offset < header_end.saturating_sub(total_removed) {
+        let remaining_end = header_end - total_removed;
+        let Some(rel) = buf[offset..remaining_end]
+            .windows(2)
+            .position(|w| w == b"\r\n")
+        else {
+            break;
+        };
+        let line_end = offset + rel + 2;
+        let is_match = buf[offset..line_end]
+            .iter()
+            .position(|&b| b == b':')
+            .is_some_and(|colon| buf[offset..offset + colon].eq_ignore_ascii_case(name.as_bytes()));
+        if is_match {
+            let removed = line_end - offset;
+            buf.drain(offset..line_end);
+            total_removed += removed;
+            // don't advance offset — the next line now starts at the same offset
+        } else {
+            offset = line_end;
+        }
+    }
+    total_removed
+}
+
+/// Splice a `name: value` header line into an already-buffered raw HTTP
+/// response, immediately before the blank line that terminates the header
+/// block, replacing any existing header of the same name (case-insensitive)
+/// rather than appending a duplicate. Returns the net change in buffer
+/// length (new line inserted minus any old line removed) so callers can
+/// adjust byte offsets computed against the pre-splice buffer. Used by relay
+/// paths that forward upstream response bytes verbatim and have no other
+/// rebuild step.
+///
+/// `header_end` must be the byte offset of the first body byte (the
+/// convention `httparse::Status::Complete` and `ParsedResponseHeaders`
+/// already use) — i.e. it points just past the terminating `\r\n\r\n`.
+pub(in crate::network::openai::response) fn insert_header_before_body(
+    buf: &mut Vec<u8>,
+    header_end: usize,
+    name: &str,
+    value: &str,
+) -> isize {
+    if header_end < 2 || header_end > buf.len() {
+        return 0;
+    }
+    let removed = remove_existing_header(buf, header_end, name);
+    let header_end = header_end - removed;
+    let mut line = Vec::with_capacity(name.len() + value.len() + 4);
+    line.extend_from_slice(name.as_bytes());
+    line.extend_from_slice(b": ");
+    line.extend(
+        value
+            .bytes()
+            .filter(|byte| *byte != b'\r' && *byte != b'\n'),
+    );
+    line.extend_from_slice(b"\r\n");
+    let inserted = line.len();
+    buf.splice(header_end - 2..header_end - 2, line);
+    inserted as isize - removed as isize
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::network::openai::response) struct ResponseBodyReadLimits {
     pub(in crate::network::openai::response) max_body_bytes: usize,
@@ -55,6 +145,36 @@ pub(in crate::network::openai::response) struct ResponseProbe {
     pub(in crate::network::openai::response) header_end: usize,
     pub(in crate::network::openai::response) status_code: u16,
     pub(in crate::network::openai::response) retryable_context_overflow: bool,
+}
+
+/// The rung-ladder response-leg header a SERVED node's own frontend stamps
+/// on its response (`openai-frontend::router::X_CAPSULE_ID_HEADER`). On a
+/// `RemoteMesh` dispatch this node did not serve the exchange, so any value
+/// here is the PEER's own header, relayed byte-for-byte — see
+/// `peer_response_header_value` and `ingress.rs`'s remote-mesh routing.
+pub(in crate::network::openai::response) const PEER_CAPSULE_ID_HEADER: &str = "x-capsule-id";
+
+/// Case-insensitive lookup of a single response header's value, scanning
+/// only the already-buffered, untouched header block the peer/upstream sent
+/// (`probe.buffered[..probe.header_end]`) — i.e. before any relay/adapter
+/// rewrite runs. Returns the first occurrence; `None` when absent or the
+/// header block fails to parse.
+pub(in crate::network::openai::response) fn peer_response_header_value(
+    buf: &[u8],
+    header_end: usize,
+    name: &str,
+) -> Option<String> {
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut response = httparse::Response::new(&mut headers_buf);
+    if response.parse(&buf[..header_end.min(buf.len())]).is_err() {
+        return None;
+    }
+    response
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case(name))
+        .and_then(|header| std::str::from_utf8(header.value).ok())
+        .map(|value| value.trim().to_string())
 }
 
 /// Remote first-byte timeout: 5 minutes. This covers the full round trip
@@ -335,6 +455,159 @@ mod tests {
     use super::*;
     use crate::network::openai::response::common::is_timeout_error;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn insert_header_before_body_splices_before_the_blank_line() {
+        let body = b"{}";
+        let header = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n";
+        let mut buf = header.to_vec();
+        buf.extend_from_slice(body);
+        let header_end = header.len();
+
+        let inserted = insert_header_before_body(&mut buf, header_end, "x-mesh-served-by", "ab12");
+
+        let expected = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nx-mesh-served-by: ab12\r\n\r\n{}";
+        assert_eq!(buf, expected);
+        assert_eq!(
+            inserted,
+            (expected.len() - (header.len() + body.len())) as isize
+        );
+        // The body bytes themselves must be untouched, just shifted.
+        assert_eq!(&buf[buf.len() - body.len()..], body);
+    }
+
+    /// Regression (erlich review, 2026-09-07 round 2 / ndizazzo P2c): a
+    /// response that already carries the header (e.g. echoed back verbatim
+    /// from a peer) must end up with exactly one value, not two appended
+    /// copies that a client combining repeated fields would read as `id, id`.
+    #[test]
+    fn insert_header_before_body_replaces_an_existing_value_instead_of_duplicating() {
+        let body = b"{}";
+        let header = b"HTTP/1.1 200 OK\r\nx-mesh-served-by: stale\r\nContent-Length: 2\r\n\r\n";
+        let mut buf = header.to_vec();
+        buf.extend_from_slice(body);
+        let header_end = header.len();
+
+        insert_header_before_body(&mut buf, header_end, "x-mesh-served-by", "fresh");
+
+        let text = String::from_utf8_lossy(&buf);
+        assert_eq!(
+            text.matches("x-mesh-served-by:").count(),
+            1,
+            "expected exactly one served-by header, got: {text}"
+        );
+        assert!(
+            text.contains("x-mesh-served-by: fresh\r\n"),
+            "expected the new value to win: {text}"
+        );
+        assert!(!text.contains("stale"), "stale value must be gone: {text}");
+        assert!(buf.ends_with(body), "body must survive the replace: {text}");
+    }
+
+    /// Regression (CodeRabbit, PR #1671: "the header-removal loop stops
+    /// after the first case-insensitive match"): a response carrying TWO
+    /// pre-existing `x-mesh-served-by` occurrences (mixed case, as an
+    /// upstream that itself failed to canonicalize might produce) must end
+    /// up with exactly one value after the splice, not one stale duplicate
+    /// left behind by a loop that returns after its first removal.
+    #[test]
+    fn insert_header_before_body_removes_every_duplicate_not_just_the_first() {
+        let body = b"{}";
+        let header = b"HTTP/1.1 200 OK\r\nx-mesh-served-by: first\r\nContent-Length: 2\r\nX-Mesh-Served-By: second\r\n\r\n";
+        let mut buf = header.to_vec();
+        buf.extend_from_slice(body);
+        let header_end = header.len();
+
+        insert_header_before_body(&mut buf, header_end, "x-mesh-served-by", "fresh");
+
+        let text = String::from_utf8_lossy(&buf);
+        assert_eq!(
+            text.to_ascii_lowercase()
+                .matches("x-mesh-served-by:")
+                .count(),
+            1,
+            "expected every duplicate collapsed to one header, got: {text}"
+        );
+        assert!(
+            text.contains("x-mesh-served-by: fresh\r\n"),
+            "expected the new value to win: {text}"
+        );
+        assert!(
+            !text.contains("first"),
+            "first duplicate must be gone: {text}"
+        );
+        assert!(
+            !text.contains("second"),
+            "second duplicate must be gone: {text}"
+        );
+        assert!(buf.ends_with(body), "body must survive the replace: {text}");
+    }
+
+    #[test]
+    fn insert_header_before_body_replace_is_case_insensitive() {
+        let header = b"HTTP/1.1 200 OK\r\nX-Mesh-Served-By: stale\r\n\r\n";
+        let mut buf = header.to_vec();
+        let header_end = header.len();
+
+        insert_header_before_body(&mut buf, header_end, "x-mesh-served-by", "fresh");
+
+        let text = String::from_utf8_lossy(&buf);
+        assert_eq!(
+            text.to_ascii_lowercase()
+                .matches("x-mesh-served-by:")
+                .count(),
+            1,
+            "expected exactly one served-by header regardless of case, got: {text}"
+        );
+        assert!(text.contains("fresh"));
+    }
+
+    #[test]
+    fn insert_header_before_body_strips_crlf_from_the_value() {
+        let header = b"HTTP/1.1 200 OK\r\n\r\n";
+        let mut buf = header.to_vec();
+        let header_end = header.len();
+
+        insert_header_before_body(&mut buf, header_end, "x-mesh-served-by", "ab\r\n12");
+
+        assert!(
+            String::from_utf8_lossy(&buf).contains("x-mesh-served-by: ab12\r\n"),
+            "CR/LF in the value must not let it smuggle extra header lines: {}",
+            String::from_utf8_lossy(&buf)
+        );
+    }
+
+    #[test]
+    fn peer_response_header_value_reads_case_insensitively() {
+        let header = b"HTTP/1.1 200 OK\r\nX-Capsule-Id: cap-123\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(
+            peer_response_header_value(header, header.len(), "x-capsule-id"),
+            Some("cap-123".to_string())
+        );
+    }
+
+    #[test]
+    fn peer_response_header_value_absent_is_none() {
+        let header = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(
+            peer_response_header_value(header, header.len(), PEER_CAPSULE_ID_HEADER),
+            None
+        );
+    }
+
+    /// The header value is recorded verbatim regardless of whether it is
+    /// genuinely the peer's own id or something else entirely — this layer
+    /// performs no verification, only observation (see
+    /// `CapsuleIdProvenance::PeerAsserted`).
+    #[test]
+    fn peer_response_header_value_never_validates_the_value() {
+        let header =
+            b"HTTP/1.1 200 OK\r\nX-Capsule-Id: not-a-real-capsule-id\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(
+            peer_response_header_value(header, header.len(), PEER_CAPSULE_ID_HEADER),
+            Some("not-a-real-capsule-id".to_string())
+        );
+    }
 
     #[tokio::test]
     async fn transformed_response_rejects_oversized_content_length_before_reading() {

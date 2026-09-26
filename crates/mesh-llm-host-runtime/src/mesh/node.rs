@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 mod routing_telemetry;
 mod startup;
 
-pub use startup::detect_vram_bytes_capped;
+pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
 use startup::{
@@ -114,6 +114,8 @@ pub struct Node {
     pub(crate) vram_bytes: u64,
     /// Local fit budget, which may additionally include CPU offload memory.
     pub(crate) local_runtime_capacity_bytes: u64,
+    /// What `gpu.host_ram_offload = true` would add to the local fit budget.
+    pub(crate) host_ram_offload_gain_bytes: u64,
     pub(crate) peer_change_tx: watch::Sender<usize>,
     pub peer_change_rx: watch::Receiver<usize>,
     pub(crate) inflight_requests: Arc<std::sync::atomic::AtomicUsize>,
@@ -172,6 +174,11 @@ pub struct Node {
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    #[cfg(feature = "payments")]
+    pub(crate) payments: crate::network::payments::PaymentsSlot,
+    /// Stops the payment-recovery loop, which holds a `Node` clone.
+    #[cfg(feature = "payments")]
+    pub(crate) payment_recovery: crate::network::payments::PaymentRecoverySlot,
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
@@ -641,6 +648,8 @@ impl Node {
             close_endpoint_gracefully(&lifecycle.endpoint, "owner-control").await;
         }
         self.shutdown_stage_control().await;
+        #[cfg(feature = "payments")]
+        self.shutdown_payment_recovery().await;
     }
 
     async fn shutdown_stage_control(&self) {
@@ -806,21 +815,7 @@ impl Node {
             relay_policy: relay.policy,
             owner_keypair,
             local_mesh_requirements,
-            state: Arc::new(Mutex::new(MeshState {
-                peers: HashMap::new(),
-                connections: HashMap::new(),
-                pending_connections: HashMap::new(),
-                next_pending_connection_attempt: 1,
-                remote_tunnel_maps: HashMap::new(),
-                dead_peers: HashMap::new(),
-                peer_down_rejections: HashMap::new(),
-                direct_path_request_last_at: HashMap::new(),
-                seen_plugin_messages: HashMap::new(),
-                seen_plugin_message_order: VecDeque::new(),
-                policy_rejected_peers: HashMap::new(),
-                requirement_rejected_peers: HashSet::new(),
-                recent_mesh_rejections: VecDeque::new(),
-            })),
+            state: Arc::new(Mutex::new(MeshState::new())),
             direct_rescue_endpoints: super::direct_rescue::DirectRescueEndpoints::default(),
             role: Arc::new(Mutex::new(role)),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
@@ -851,6 +846,7 @@ impl Node {
             )),
             vram_bytes: hardware.vram_bytes,
             local_runtime_capacity_bytes: hardware.local_runtime_capacity_bytes,
+            host_ram_offload_gain_bytes: hardware.host_ram_offload_gain_bytes,
             peer_change_tx,
             peer_change_rx,
             inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -897,6 +893,10 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
             },
+            #[cfg(feature = "payments")]
+            payments: Arc::new(tokio::sync::OnceCell::new()),
+            #[cfg(feature = "payments")]
+            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &activity_policy_config,
             ),
@@ -920,10 +920,7 @@ impl Node {
 
         // Accept loop starts but waits for start_accepting() before processing connections.
         // This lets a node exist before it is ready to accept mesh traffic.
-        let node2 = node.clone();
-        tokio::spawn(async move {
-            node2.accept_loop().await;
-        });
+        node.spawn_accept_loop();
 
         Ok((
             node,
@@ -933,6 +930,13 @@ impl Node {
                 stage: stage_transport_rx,
             },
         ))
+    }
+
+    fn spawn_accept_loop(&self) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            node.accept_loop().await;
+        });
     }
 
     #[cfg(test)]
@@ -991,21 +995,7 @@ impl Node {
             relay_policy: RelayPolicy::Disabled,
             owner_keypair: None,
             local_mesh_requirements: crate::MeshRequirements::unrestricted(),
-            state: Arc::new(Mutex::new(MeshState {
-                peers: HashMap::new(),
-                connections: HashMap::new(),
-                pending_connections: HashMap::new(),
-                next_pending_connection_attempt: 1,
-                remote_tunnel_maps: HashMap::new(),
-                dead_peers: HashMap::new(),
-                peer_down_rejections: HashMap::new(),
-                direct_path_request_last_at: HashMap::new(),
-                seen_plugin_messages: HashMap::new(),
-                seen_plugin_message_order: VecDeque::new(),
-                policy_rejected_peers: HashMap::new(),
-                requirement_rejected_peers: HashSet::new(),
-                recent_mesh_rejections: VecDeque::new(),
-            })),
+            state: Arc::new(Mutex::new(MeshState::new())),
             direct_rescue_endpoints: super::direct_rescue::DirectRescueEndpoints::default(),
             role: Arc::new(Mutex::new(role)),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
@@ -1036,6 +1026,7 @@ impl Node {
             )),
             vram_bytes: 0,
             local_runtime_capacity_bytes: 0,
+            host_ram_offload_gain_bytes: 0,
             advertised_memory: AdvertisedMemory::default(),
             peer_change_tx,
             peer_change_rx,
@@ -1084,6 +1075,10 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)
             },
+            #[cfg(feature = "payments")]
+            payments: Arc::new(tokio::sync::OnceCell::new()),
+            #[cfg(feature = "payments")]
+            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &mesh_llm_config::RuntimeActivityConfig::default(),
             ),
@@ -1455,7 +1450,15 @@ impl Node {
         })
     }
 
-    #[cfg(test)]
+    /// Locally served descriptors only -- unlike [`Self::all_served_model_descriptors`],
+    /// never includes a peer's gossiped copy, so a caller matching on
+    /// `model_name` cannot be handed a peer's descriptor for a same-named
+    /// model. `network/openai/ingress.rs`'s serving-provenance lookup relies
+    /// on that: gossip strips `weights_digest` before it crosses the wire
+    /// (see `protocol/convert.rs`), so a peer descriptor would silently read
+    /// back `None` even when this host's own load-time digest is known.
+    /// Endpoint-local workload admission also snapshots only this node's
+    /// models, never a peer's copy.
     pub async fn served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
         self.served_model_descriptors.lock().await.clone()
     }

@@ -5,12 +5,13 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use skippy_model::gguf_catalog::read_gguf_metadata_catalog;
 use skippy_model::package_carrier::resolve_package_carrier;
 use skippy_package_format::{
-    Artifact, ArtifactCatalog, PACKAGE_SCHEMA_VERSION, PackageManifest, Sidecar, SidecarKind,
-    SourceModel, Tensor, TensorCatalog,
+    Artifact, ArtifactCatalog, Generation, GenerationRequestDefaults, PACKAGE_SCHEMA_VERSION,
+    PackageManifest, Sidecar, SidecarKind, SourceModel, SpeculativeDecoding, StrategyKind,
+    StrategySpec, Tensor, TensorCatalog, WindowPolicy,
 };
 use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_metadata_from_parts};
 
@@ -18,38 +19,56 @@ use crate::hash::file_sha256;
 use crate::package::{
     ArtifactHook, ExplicitSourceIdentity, PackageInput, resolve_package_input, run_artifact_hook,
 };
-use crate::plan::StagePlan;
 use crate::progress::{PackageProgress, format_bytes};
 use crate::source_inventory::{SourceInventory, inspect, normalized_model_metadata};
 use crate::tensor_payload::{TensorLocation, compare_tensor_payload};
-use crate::write::{ModelSource, create_parent_dir, write_json_file, write_stage_artifact};
+use crate::write::{ModelSource, create_parent_dir, write_json_file};
 
 mod layout;
 
 use layout::{PlannedArtifact, PlannedArtifactKind, plan_artifacts_with_budget};
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct PackageWriteOptions {
+    pub explicit: ExplicitSourceIdentity,
+    pub generation_defaults: Option<PathBuf>,
+    pub resume_existing_artifacts: bool,
+    pub max_artifact_bytes: Option<u64>,
+}
+
 pub(crate) fn write_package(
     model: String,
     out_dir: PathBuf,
     projectors: Vec<PathBuf>,
     artifact_hook: ArtifactHook,
     artifact_transform: ArtifactHook,
-    explicit: ExplicitSourceIdentity,
-    resume_existing_artifacts: bool,
-    max_artifact_bytes: Option<u64>,
+    options: PackageWriteOptions,
 ) -> Result<()> {
     ensure!(
         artifact_transform.command.is_none(),
         "v2 creation preserves source bytes; transform the independent source before packaging, not package artifacts"
     );
-    let input = resolve_package_input(model, explicit)?;
+    let input = resolve_package_input(model, options.explicit)?;
     let inventory = SourceInventory::read(&input)?;
     let source = ModelSource::open(&input.model_path)?;
     ensure_native_inventory_matches(&inventory, &source)?;
-    let budget = max_artifact_bytes.unwrap_or(layout::DEFAULT_MAX_ARTIFACT_BYTES);
+    let budget = options
+        .max_artifact_bytes
+        .unwrap_or(layout::DEFAULT_MAX_ARTIFACT_BYTES);
     let planned = plan_artifacts_with_budget(&source.tensors, budget)?;
     let mut manifest = manifest_from_source(&input, &inventory)?;
+    if let Some(path) = options.generation_defaults {
+        let bytes = fs::read(&path)
+            .with_context(|| format!("read generation defaults {}", path.display()))?;
+        let request_defaults: GenerationRequestDefaults = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse generation defaults {}", path.display()))?;
+        request_defaults.validate().map_err(|error| {
+            anyhow::anyhow!("validate generation defaults {}: {error}", path.display())
+        })?;
+        manifest.generation = Some(Generation {
+            request_defaults: Some(request_defaults),
+            speculative_decoding: None,
+        });
+    }
     fs::create_dir_all(&out_dir)?;
     ensure!(
         !out_dir.join("model-package.json").exists(),
@@ -57,11 +76,6 @@ pub(crate) fn write_package(
     );
     let mut progress = PackageProgress::new(planned.len() + projectors.len() + 2);
     let source_tensors = source_tensors_by_name(&inventory)?;
-    let common_names = planned
-        .iter()
-        .find(|artifact| artifact.kind == PlannedArtifactKind::Common)
-        .map(|artifact| artifact.tensor_names.iter().cloned().collect())
-        .unwrap_or_default();
     let mut catalog = Vec::with_capacity(source_tensors.len());
     let no_hook = ArtifactHook { command: None };
     // Payload artifacts may be uploaded and locally deleted by their hook as
@@ -73,19 +87,16 @@ pub(crate) fn write_package(
     let headers_dir = out_dir.join(".headers");
     fs::create_dir_all(&headers_dir)?;
     let mut header_stubs = Vec::with_capacity(planned.len());
-    for (stage_index, artifact_plan) in planned.iter().enumerate() {
+    for artifact_plan in &planned {
         progress.start_step(&artifact_plan.path)?;
         let (artifact, mut tensors) = emit_payload_artifact(
             &source,
             &source_tensors,
             &inventory,
             artifact_plan,
-            &common_names,
-            inventory.layer_count,
-            stage_index,
             &out_dir,
             &no_hook,
-            resume_existing_artifacts,
+            options.resume_existing_artifacts,
         )?;
         let path = out_dir.join(&artifact.path);
         // Capture the header stub before the upload hook can delete the part.
@@ -122,7 +133,7 @@ pub(crate) fn write_package(
         &manifest,
         &out_dir,
         &header_stubs,
-        resume_existing_artifacts,
+        options.resume_existing_artifacts,
     )?;
     progress.finish_step(&format!(
         "{} {}",
@@ -162,7 +173,12 @@ pub(crate) fn write_package(
         let _ = fs::remove_dir_all(&headers_dir);
     }
     for (index, projector) in projectors.iter().enumerate() {
-        let artifact = copy_projector(projector, index, &out_dir, resume_existing_artifacts)?;
+        let artifact = copy_projector(
+            projector,
+            index,
+            &out_dir,
+            options.resume_existing_artifacts,
+        )?;
         progress.start_step(&artifact.path)?;
         run_artifact_hook(
             &artifact_hook,
@@ -247,7 +263,7 @@ fn manifest_from_source(
             entries: Vec::new(),
         },
         sidecars: Vec::new(),
-        generation: None,
+        generation: infer_native_mtp_generation(inventory)?,
         native_abi_version: format!(
             "{}.{}.{}",
             skippy_ffi::ABI_VERSION_MAJOR,
@@ -260,6 +276,117 @@ fn manifest_from_source(
             .context("system clock before Unix epoch")?
             .as_secs(),
     })
+}
+
+/// Infers the native MTP generation declaration from the source GGUF
+/// evidence. Fail-closed: emitted only when `{arch}.nextn_predict_layers` and
+/// the `blk.<layer>.nextn.*` tensor names agree exactly — a wrong declaration
+/// silently breaks speculative decoding for every consuming runtime.
+fn infer_native_mtp_generation(inventory: &SourceInventory) -> Result<Option<Generation>> {
+    let metadata = &inventory.shards[0].directory.metadata;
+    let arch = metadata
+        .get("general.architecture")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let key = format!("{arch}.nextn_predict_layers");
+    let declared = metadata.contains_key(&key);
+    let depth = metadata.get(&key).and_then(|value| value.as_u64());
+
+    let mut unparseable = Vec::new();
+    let indices = mtp_layer_indices(inventory, &mut unparseable);
+    if !unparseable.is_empty() {
+        bail!(
+            "native MTP tensor names without a parseable `blk.<layer>.nextn.` prefix: {unparseable:?}"
+        );
+    }
+    if declared && depth.is_none() {
+        bail!("`{key}` is present in the source metadata but is not an integer");
+    }
+    match depth {
+        None if indices.is_empty() => Ok(None),
+        Some(0) if indices.is_empty() => Ok(None),
+        Some(depth) if depth > 1 => bail!(
+            "source declares {depth}-step native MTP prediction; the runtime executes depth 1 \
+             only, so a correct `generation.speculative_decoding` declaration cannot be emitted"
+        ),
+        Some(1) => {
+            let Some(expected_layer) = inventory.layer_count.checked_sub(1) else {
+                bail!("source declares native MTP but has no transformer layers");
+            };
+            let expected = vec![expected_layer];
+            if indices != expected {
+                bail!(
+                    "native MTP evidence is inconsistent: `{key} = 1` but `.nextn.` tensors are \
+                     at layers {indices:?}, expected {expected:?}"
+                );
+            }
+            Ok(Some(native_mtp_generation(&indices)))
+        }
+        _ => bail!(
+            "native MTP evidence is inconsistent: `.nextn.` tensors are present at layers \
+             {indices:?} but `{key}` is {}",
+            if declared { "0" } else { "absent" }
+        ),
+    }
+}
+
+fn mtp_layer_indices(inventory: &SourceInventory, unparseable: &mut Vec<String>) -> Vec<u32> {
+    let mut indices = BTreeSet::new();
+    for shard in &inventory.shards {
+        for tensor in &shard.tensors.entries {
+            let name = &tensor.name;
+            if !name.contains(".nextn.") {
+                continue;
+            }
+            match parse_mtp_layer_index(name) {
+                Some(layer) => {
+                    indices.insert(layer);
+                }
+                None => unparseable.push(name.clone()),
+            }
+        }
+    }
+    indices.into_iter().collect()
+}
+
+fn parse_mtp_layer_index(name: &str) -> Option<u32> {
+    let after = name.strip_prefix("blk.")?;
+    let (number, rest) = after.split_once('.')?;
+    let layer: u32 = number.parse().ok()?;
+    rest.starts_with("nextn.").then_some(layer)
+}
+
+/// The exact native-MTP generation declaration the host-runtime resolver
+/// (`inference/skippy/resolver/speculative.rs`) executes for `strategy=auto`
+/// and `strategy=mtp`: a single `mtp` strategy with the inline 1-step
+/// `NativeMtp` form and a fixed window of 1.
+fn native_mtp_generation(layer_indices: &[u32]) -> Generation {
+    Generation {
+        // The native-MTP declaration is target-only by contract; publisher request
+        // defaults are applied by the host resolver, not by this battery.
+        request_defaults: None,
+        speculative_decoding: Some(SpeculativeDecoding {
+            default: "mtp".to_string(),
+            proposers: BTreeMap::new(),
+            strategies: BTreeMap::from([(
+                "mtp".to_string(),
+                StrategySpec {
+                    kind: StrategyKind::NativeMtp {
+                        proposer: None,
+                        prediction_depth: Some(1),
+                        layer_indices: layer_indices.to_vec(),
+                        window_policy: Some(WindowPolicy {
+                            default: "fixed".to_string(),
+                            initial_window: 1,
+                            min_window: 1,
+                            max_window: 1,
+                            pipeline_depth: None,
+                        }),
+                    },
+                },
+            )]),
+        }),
+    }
 }
 
 fn ensure_native_inventory_matches(
@@ -386,9 +513,6 @@ fn emit_payload_artifact(
     source_tensors: &BTreeMap<String, TensorLocation>,
     inventory: &SourceInventory,
     planned: &PlannedArtifact,
-    common_names: &BTreeSet<String>,
-    layer_count: u32,
-    stage_index: usize,
     out_dir: &Path,
     artifact_hook: &ArtifactHook,
     resume: bool,
@@ -396,12 +520,7 @@ fn emit_payload_artifact(
     let path = out_dir.join(&planned.path);
     ensure_not_source_file(source, &path)?;
     if !path.exists() {
-        if planned.is_part() {
-            crate::part_writer::write_part(inventory, &planned.tensor_names, &path)?;
-        } else {
-            let stage = stage_plan(planned, stage_index, layer_count);
-            write_stage_artifact(source, &stage, &path)?;
-        }
+        crate::part_writer::write_part(inventory, &planned.tensor_names, &path)?;
     } else {
         ensure!(
             resume,
@@ -427,37 +546,23 @@ fn emit_payload_artifact(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let expected_physical = if planned.is_part() {
-        // Part artifacts are written by the Rust part writer and hold exactly
-        // their planned tensors; unlike native stage slices they carry no
-        // duplicated common tensors.
-        planned
-            .tensor_names
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-    } else {
-        planned
-            .tensor_names
-            .iter()
-            .chain(common_names)
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-    };
+    let expected_physical = planned
+        .tensor_names
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
     ensure!(
         emitted_by_name
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>()
             == expected_physical,
-        "written artifact {:?} differs from its native role plan",
+        "written artifact {:?} differs from its exact inventory plan",
         planned.id
     );
     let layer_ordinal = match planned.kind {
         PlannedArtifactKind::Layer { ordinal } => Some(ordinal),
-        PlannedArtifactKind::Common
-        | PlannedArtifactKind::Embeddings
-        | PlannedArtifactKind::Output => None,
+        PlannedArtifactKind::Common => None,
     };
     let mut bound = Vec::with_capacity(planned.tensor_names.len());
     for name in &planned.tensor_names {
@@ -518,28 +623,6 @@ fn write_header_stub(path: &Path, header: &Path, byte_size: u64) -> Result<()> {
     .with_context(|| format!("copy header stub {}", header.display()))?;
     output.sync_all()?;
     Ok(())
-}
-
-fn stage_plan(planned: &PlannedArtifact, stage_index: usize, layer_count: u32) -> StagePlan {
-    let (layer_start, layer_end, includes_embeddings, includes_output) = match planned.kind {
-        PlannedArtifactKind::Common => (0, 0, false, false),
-        PlannedArtifactKind::Embeddings => (0, 0, true, false),
-        PlannedArtifactKind::Output => (layer_count, layer_count, false, true),
-        PlannedArtifactKind::Layer { ordinal } => (ordinal, ordinal + 1, false, false),
-    };
-    StagePlan {
-        stage_index,
-        layer_start,
-        layer_end,
-        includes_embeddings,
-        includes_output,
-        includes_per_layer_token_embd: planned
-            .tensor_names
-            .iter()
-            .any(|name| name == crate::plan::PER_LAYER_TOKEN_EMBD),
-        tensor_count: planned.tensor_names.len(),
-        tensor_bytes: 0,
-    }
 }
 
 fn artifact_record(id: &str, relative: &str, path: &Path) -> Result<Artifact> {

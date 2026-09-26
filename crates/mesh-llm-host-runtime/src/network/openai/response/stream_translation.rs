@@ -1,15 +1,166 @@
 use super::cache_cost::{CacheCostObservation, parse_cache_cost_from_json_body};
-use super::common::{ResponseRetryPolicy, RouteAttemptResult};
-use super::probe::{ResponseProbe, append_capsule_nonce_headers, try_parse_response_headers};
-use super::relay::relay_error_response;
+use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body};
+use super::probe::{
+    ResponseProbe, append_capsule_nonce_headers, append_mesh_served_by_header,
+    response_is_event_stream, try_parse_response_headers,
+};
+use super::relay::{relay_error_response, relay_success_response};
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response::common::sse_data_frame_is_openai_error;
 use crate::network::openai::response_adapter;
-
+use crate::network::openai::tool_call_ids::ChatStreamNormalizationState;
+use crate::plugin::openai_exchange::ExchangeOutputDigests;
 use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+
+/// One tool call's deltas folded across `chat.completion.chunk` frames,
+/// keyed by the `index` OpenAI streaming clients use to tell concurrent tool
+/// calls apart.
+#[derive(Debug, Default)]
+struct AssembledStreamToolCall {
+    id: Option<String>,
+    kind: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+/// Folds a raw chat-completions SSE stream's `choices[0].delta` chunks into
+/// the single served message a non-streamed response would have carried, so
+/// [`ExchangeOutputDigests`] can be computed over it with the SAME
+/// construction used for a buffered (non-streamed) response — this is what
+/// "the digest covers the assembled response the host actually returned"
+/// means for a streamed delivery: not a per-chunk partial, but the full
+/// content/tool_calls/reasoning folded across every chunk actually sent to
+/// the client.
+#[derive(Debug, Default)]
+struct StreamedChatAssembly {
+    content: String,
+    saw_content: bool,
+    reasoning_content: String,
+    saw_reasoning: bool,
+    tool_calls: std::collections::BTreeMap<u64, AssembledStreamToolCall>,
+    /// Set when a chunk carried more than one choice, or a choice whose
+    /// `index` is not 0 — a stream that asked for `n > 1` choices. The
+    /// assembly folds `choices[0]` only (there is one served message to fold
+    /// into), so a multi-choice stream would digest choice 0 and silently
+    /// omit every later choice: a *wrong* digest, which is worse than an
+    /// absent one. No digest is published for such a stream at all.
+    multi_choice: bool,
+}
+
+impl StreamedChatAssembly {
+    /// Fold one (already client-facing, i.e. post-normalization) SSE data
+    /// frame's `choices[0].delta` into the running assembly. A frame that
+    /// isn't a recognizable chat-completion chunk, or carries no delta (an
+    /// error frame, a bare `[DONE]`), is silently skipped — best-effort over
+    /// whatever the client actually saw, never a guess.
+    fn ingest_chunk(&mut self, data: &str) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+            return;
+        };
+        let Some(choices) = value.get("choices").and_then(|choices| choices.as_array()) else {
+            return;
+        };
+        if choices.len() > 1
+            || choices.first().is_some_and(|choice| {
+                choice
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|index| index != 0)
+            })
+        {
+            self.multi_choice = true;
+        }
+        let Some(delta) = choices.first().and_then(|choice| choice.get("delta")) else {
+            return;
+        };
+        if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+            self.content.push_str(content);
+            self.saw_content = true;
+        }
+        if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str()) {
+            self.reasoning_content.push_str(reasoning);
+            self.saw_reasoning = true;
+        }
+        let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) else {
+            return;
+        };
+        for (position, tool_call) in tool_calls.iter().enumerate() {
+            let index = tool_call
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(position as u64);
+            let entry = self.tool_calls.entry(index).or_default();
+            if let Some(id) = tool_call.get("id").and_then(|v| v.as_str()) {
+                entry.id = Some(id.to_string());
+            }
+            if let Some(kind) = tool_call.get("type").and_then(|v| v.as_str()) {
+                entry.kind = Some(kind.to_string());
+            }
+            let Some(function) = tool_call.get("function") else {
+                continue;
+            };
+            if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
+                entry.name = Some(name.to_string());
+            }
+            if let Some(arguments) = function.get("arguments").and_then(|v| v.as_str()) {
+                entry.arguments.push_str(arguments);
+            }
+        }
+    }
+
+    /// Render the accumulated deltas as the single served message a
+    /// non-streamed response would have carried, in the same
+    /// `choices[].message.*` shape [`ExchangeOutputDigests::from_response_value`]
+    /// expects. `None` when the stream carried no content, tool_calls, or
+    /// reasoning to assemble at all — never a fabricated empty message.
+    fn assembled_response(&self) -> Option<serde_json::Value> {
+        if !self.saw_content && !self.saw_reasoning && self.tool_calls.is_empty() {
+            return None;
+        }
+        let mut message = serde_json::Map::new();
+        message.insert("role".into(), serde_json::json!("assistant"));
+        message.insert("content".into(), serde_json::json!(self.content));
+        if !self.tool_calls.is_empty() {
+            let tool_calls: Vec<serde_json::Value> = self
+                .tool_calls
+                .values()
+                .map(|call| {
+                    serde_json::json!({
+                        "id": call.id,
+                        "type": call.kind,
+                        "function": {"name": call.name, "arguments": call.arguments},
+                    })
+                })
+                .collect();
+            message.insert("tool_calls".into(), serde_json::Value::Array(tool_calls));
+        }
+        if self.saw_reasoning {
+            message.insert(
+                "reasoning_content".into(),
+                serde_json::json!(self.reasoning_content),
+            );
+        }
+        Some(serde_json::json!({
+            "choices": [{"index": 0, "message": serde_json::Value::Object(message)}]
+        }))
+    }
+
+    /// Compute the response/tool_calls/reasoning digests over the assembled
+    /// result, or an all-`None` bundle when nothing was assembled — or when
+    /// the stream carried more than one choice, which this fold cannot
+    /// honestly cover (see [`Self::multi_choice`]).
+    fn output_digests(&self) -> ExchangeOutputDigests {
+        if self.multi_choice {
+            return ExchangeOutputDigests::default();
+        }
+        self.assembled_response()
+            .map(|value| ExchangeOutputDigests::from_response_value(&value))
+            .unwrap_or_default()
+    }
+}
 
 pub(super) async fn write_captured_sse_event(
     tcp_stream: &mut ClientStream,
@@ -64,6 +215,163 @@ impl ResponsesStreamRelayState {
     }
 }
 
+/// Relay a streaming chat-completions upstream response, normalizing tool-call ids.
+pub(in crate::network::openai::response) async fn relay_normalized_chat_completion_stream<
+    R: AsyncRead + Unpin,
+>(
+    tcp_stream: &mut ClientStream,
+    reader: &mut R,
+    probe: ResponseProbe,
+    retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> Result<RouteAttemptResult> {
+    if retry_policy.context_overflow && probe.retryable_context_overflow {
+        return Ok(RouteAttemptResult::RetryableContextOverflow);
+    }
+
+    if !(200..300).contains(&probe.status_code) {
+        route_observer.stream_error("upstream_status");
+        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
+    }
+
+    let parsed = try_parse_response_headers(&probe.buffered)?
+        .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
+    if !response_is_event_stream(&parsed) {
+        return relay_success_response(
+            tcp_stream,
+            reader,
+            probe,
+            parsed,
+            retry_policy,
+            served_by,
+            route_observer,
+        )
+        .await;
+    }
+
+    let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
+    let mut state = ChatStreamNormalizationState::default();
+    let mut assembly = StreamedChatAssembly::default();
+    let mut observed_usage = None;
+    let mut observed_cache_cost = None;
+    let mut header = String::from(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
+    );
+    append_capsule_nonce_headers(
+        &mut header,
+        parsed.client_nonce.as_deref(),
+        parsed.nonce_origin.as_deref(),
+    );
+    append_mesh_served_by_header(&mut header, served_by);
+    header.push_str("Connection: close\r\n\r\n");
+    tcp_stream.write_all(header.as_bytes()).await?;
+    let mut response_capture = route_observer.begin_stream_response_capture();
+    route_observer.stream_started(None);
+
+    let mut done_seen = false;
+    let mut first_chunk_seen = false;
+    let mut upstream_error_seen = false;
+    loop {
+        let mut processed = 0usize;
+        while let Some(frame_end_rel) = carry[processed..].find("\n\n") {
+            let frame_end = processed + frame_end_rel;
+            let frame = &carry[processed..frame_end];
+            processed = frame_end + 2;
+            let data_lines = frame
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .map(str::trim_start)
+                .collect::<Vec<_>>();
+            if data_lines.is_empty() {
+                continue;
+            }
+            let data = data_lines.join("\n");
+            if data == "[DONE]" {
+                done_seen = true;
+                write_captured_sse_event(tcp_stream, &mut response_capture, None, "[DONE]").await?;
+                break;
+            }
+
+            if !upstream_error_seen && sse_data_frame_is_openai_error(&data) {
+                // The upstream backend frames failures as OpenAI error bodies
+                // inside a 200 stream. Relay the frame untouched, but do not
+                // let it count as stream progress or terminal success.
+                upstream_error_seen = true;
+            }
+            if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
+                observed_usage = Some(usage);
+            }
+            observed_cache_cost =
+                observed_cache_cost.or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
+            let normalized = state.normalize_data(&data);
+            assembly.ingest_chunk(&normalized);
+            write_captured_sse_event(tcp_stream, &mut response_capture, None, &normalized).await?;
+            if upstream_error_seen {
+                continue;
+            }
+            if first_chunk_seen {
+                route_observer.stream_chunk();
+            } else {
+                route_observer.stream_first_token();
+                first_chunk_seen = true;
+            }
+        }
+        if processed > 0 {
+            carry = carry[processed..].to_string();
+        }
+
+        if done_seen {
+            break;
+        }
+
+        let mut chunk = [0u8; 8192];
+        let n = reader.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        let new_data = String::from_utf8_lossy(&chunk[..n]);
+        carry.push_str(&new_data);
+        if carry.contains('\r') {
+            carry = carry.replace("\r\n", "\n");
+        }
+    }
+
+    let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
+    let _ = tcp_stream.shutdown().await;
+    if upstream_error_seen {
+        // An embedded upstream error frame is terminal even when the upstream
+        // never sent [DONE]: report the failure reason it carried rather than
+        // a generic incomplete-stream truncation.
+        route_observer.stream_error("upstream_stream_error");
+        return Ok(RouteAttemptResult::Delivered {
+            status_code: 200,
+            usage: None,
+            cache_cost: None,
+            // The stream ended in a mid-stream error frame rather than a
+            // clean [DONE] — whatever was assembled up to that point is a
+            // truncated partial, not the response the host actually
+            // returned, so no output digest is reported for it.
+            output_digests: Default::default(),
+        });
+    }
+    if !done_seen {
+        route_observer.stream_error("upstream_stream_incomplete");
+        return Err(anyhow!("upstream chat stream ended before [DONE]"));
+    }
+    route_observer.complete_stream_response_capture(response_capture);
+    route_observer.stream_completed(observed_usage);
+    Ok(RouteAttemptResult::Delivered {
+        status_code: 200,
+        usage: observed_usage,
+        cache_cost: observed_cache_cost,
+        // The stream completed cleanly ([DONE] seen): digest the response
+        // assembled from every chunk actually sent to the client.
+        output_digests: assembly.output_digests(),
+    })
+}
+
+/// Relay a streaming chat-completions upstream response translated into Responses-API SSE.
 pub(in crate::network::openai::response) async fn relay_translated_responses_stream<
     R: AsyncRead + Unpin,
 >(
@@ -71,6 +379,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     fn should_parse_stream_chunk(data: &str, model_missing: bool, usage_missing: bool) -> bool {
@@ -131,7 +440,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
 
     if !(200..300).contains(&probe.status_code) {
         route_observer.stream_error("upstream_status");
-        return relay_error_response(tcp_stream, reader, probe, route_observer).await;
+        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
     }
 
     let parsed = try_parse_response_headers(&probe.buffered)?
@@ -146,6 +455,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         parsed.client_nonce.as_deref(),
         parsed.nonce_origin.as_deref(),
     );
+    append_mesh_served_by_header(&mut header, served_by);
     header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     let mut response_capture = route_observer.begin_stream_response_capture();
@@ -210,6 +520,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
             status_code: 200,
             usage: None,
             cache_cost: None,
+            output_digests: Default::default(),
         });
     }
     if !progress.done_seen {
@@ -226,6 +537,14 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         status_code: 200,
         usage: state.observed_usage,
         cache_cost: state.observed_cache_cost,
+        // The Responses-API stream reshapes each typed upstream chunk through
+        // `openai_frontend`'s incremental emitters rather than folding raw
+        // deltas the way the chat-completions stream above does; assembling
+        // an equivalent response to digest would mean extending that typed
+        // chunk model. Left absent (never fabricated) as a documented
+        // follow-up; the chat-completions stream path already provides real
+        // streaming assembly.
+        output_digests: Default::default(),
     })
 }
 
@@ -580,6 +899,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -627,6 +947,7 @@ mod tests {
                     total_tokens: Some(18),
                 }),
                 cache_cost: None,
+                output_digests: Default::default(),
             }
         );
 
@@ -669,6 +990,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::capture_test_observer(RequestId::new(), &observer_capture),
             )
             .await
@@ -693,23 +1015,51 @@ mod tests {
 
         assert!(output.starts_with(b"HTTP/1.1 200 OK\r\n"));
 
+        // Destructure rather than compare the whole `Delivered` literal: this
+        // relay now also assembles real `output_digests` across the streamed
+        // chunks, so assert status/usage/cache_cost as before AND that the
+        // assembled response digest is present (the stream carried real
+        // content: "hello") while tool_calls/reasoning stay absent (the
+        // stream carried neither).
+        let RouteAttemptResult::Delivered {
+            status_code,
+            usage,
+            cache_cost,
+            output_digests,
+        } = route_result
+        else {
+            panic!("expected Delivered, got {route_result:?}");
+        };
+        assert_eq!(status_code, 200);
         assert_eq!(
-            route_result,
-            RouteAttemptResult::Delivered {
-                status_code: 200,
-                usage: Some(TokenUsage {
-                    prompt_tokens: Some(2),
-                    cached_prompt_tokens: None,
-                    completion_tokens: Some(7),
-                    total_tokens: Some(9),
-                }),
-                cache_cost: Some(CacheCostObservation {
-                    queue_delay_micros: 1_000,
-                    restore_micros: 2_000,
-                    prefill_micros_per_token: Some(2_000),
-                }),
-            }
+            usage,
+            Some(TokenUsage {
+                prompt_tokens: Some(2),
+                cached_prompt_tokens: None,
+                completion_tokens: Some(7),
+                total_tokens: Some(9),
+            })
         );
+        assert_eq!(
+            cache_cost,
+            Some(CacheCostObservation {
+                queue_delay_micros: 1_000,
+                restore_micros: 2_000,
+                prefill_micros_per_token: Some(2_000),
+            })
+        );
+        assert_eq!(
+            output_digests.response.map(hex::encode),
+            crate::plugin::openai_exchange::request_body_digest(
+                &serde_json::json!({"choices": [{"index": 0, "message": {
+                    "role": "assistant", "content": "hello"
+                }}]}),
+                None
+            ),
+            "the assembled response over the streamed \"hello\" delta must digest the same as the equivalent non-streamed body"
+        );
+        assert!(output_digests.tool_calls.is_none());
+        assert!(output_digests.reasoning.is_none());
         assert!(String::from_utf8_lossy(&output).contains("hello"));
         let captured = capture.0.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -744,6 +1094,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -798,6 +1149,7 @@ mod tests {
                     request_id: RequestId::new(),
                     disconnect_message: "test client disconnected",
                     commit_message: "test stream relay failed",
+                    served_by: None,
                     route_observer: OpenAiRouteObserver::default(),
                 },
                 ResponseRetryPolicy::next_target_available(false),
@@ -848,6 +1200,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -891,6 +1244,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -925,6 +1279,7 @@ mod tests {
                 status_code: 200,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }
         );
     }
@@ -950,6 +1305,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -981,6 +1337,7 @@ mod tests {
                 status_code: 200,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }
         );
     }
@@ -1008,6 +1365,7 @@ mod tests {
                 &mut upstream_reader,
                 probe,
                 ResponseRetryPolicy::next_target_available(false),
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -1034,7 +1392,87 @@ mod tests {
                 status_code: 200,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }
+        );
+    }
+
+    /// A streamed tool call's `function.arguments` arrives fragmented across
+    /// many `delta.tool_calls` chunks (the normal OpenAI streaming shape for
+    /// a long argument string). The assembled digest must fold every
+    /// fragment, not just the most recent one -- mutating `ingest_chunk` to
+    /// overwrite rather than append must turn this test red.
+    #[test]
+    fn assembled_tool_call_arguments_fold_every_streamed_fragment() {
+        let mut assembly = StreamedChatAssembly::default();
+        assembly.ingest_chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":"}}]}}]}"#,
+        );
+        assembly.ingest_chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"berlin\"}"}}]}}]}"#,
+        );
+
+        let assembled = assembly
+            .assembled_response()
+            .expect("tool call deltas were ingested");
+        let arguments =
+            assembled["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+                .as_str()
+                .expect("assembled arguments string");
+        assert_eq!(
+            arguments, r#"{"city":"berlin"}"#,
+            "arguments must be the fold of every fragment, not just the last chunk"
+        );
+
+        // The digest over the folded result must differ from a digest of the
+        // last fragment alone -- pins the fold, not just the presence of a digest.
+        let digests = assembly.output_digests();
+        let last_fragment_only = ExchangeOutputDigests::from_response_value(&serde_json::json!({
+            "choices": [{"index": 0, "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "type": "function",
+                    "function": {"name": "get_weather", "arguments": "\"berlin\"}"}}]
+            }}]
+        }));
+        assert_ne!(digests.tool_calls, last_fragment_only.tool_calls);
+    }
+
+    /// A stream the client asked for with `n > 1` delivers several choices per
+    /// chunk. The fold covers `choices[0]`, so digesting it would publish a
+    /// response digest that silently omits every later choice — wrong, not
+    /// merely incomplete. Such a stream publishes no digest at all, and the
+    /// single-choice stream the host normally serves still does.
+    #[test]
+    fn multi_choice_streams_publish_no_digest() {
+        let single = r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#;
+        let mut assembly = StreamedChatAssembly::default();
+        assembly.ingest_chunk(single);
+        assert!(
+            assembly.output_digests().response.is_some(),
+            "the normal single-choice stream still digests"
+        );
+
+        // Two choices in one chunk.
+        let mut assembly = StreamedChatAssembly::default();
+        assembly.ingest_chunk(single);
+        assembly.ingest_chunk(
+            r#"{"choices":[{"index":0,"delta":{"content":" a"}},{"index":1,"delta":{"content":" b"}}]}"#,
+        );
+        assert_eq!(
+            assembly.output_digests(),
+            ExchangeOutputDigests::default(),
+            "a chunk carrying two choices must not yield a digest over choice 0 alone"
+        );
+
+        // One choice per chunk, but the chunk is choice 1 — the fold covers
+        // choice 0, so this is still a stream it cannot honestly digest.
+        let mut assembly = StreamedChatAssembly::default();
+        assembly.ingest_chunk(r#"{"choices":[{"index":1,"delta":{"content":"only choice 1"}}]}"#);
+        assert_eq!(
+            assembly.output_digests(),
+            ExchangeOutputDigests::default(),
+            "a non-zero choice index means the fold is not looking at the whole response"
         );
     }
 

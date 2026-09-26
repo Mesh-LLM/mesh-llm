@@ -245,12 +245,18 @@ if [[ -z "$TARGET_TRIPLE" ]]; then
     exit 1
 fi
 
+# Same ordering constraint as package-native-runtime.sh: the build directory is
+# keyed by the checkout's pin stamp, so the pin must be prepared before it can be
+# resolved, or the new pin builds into the previous stamp's directory.
+if [[ "$BUILD" == "1" ]]; then
+    "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
+fi
+
 if [[ -z "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
     LLAMA_STAGE_BUILD_DIR="$(LLAMA_STAGE_BACKEND="$(build_backend)" "$SCRIPT_DIR/build-llama.sh" --print-build-dir)"
 fi
 
 if [[ "$BUILD" == "1" ]]; then
-    "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
     llama_build_dir="$LLAMA_STAGE_BUILD_DIR"
     if [[ "$REQUIRE_PREBUILT_LLAMA" == "1" ]]; then
         LLAMA_STAGE_BACKEND="$(build_backend)" \

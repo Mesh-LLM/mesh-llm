@@ -25,10 +25,51 @@ pub(in crate::network::openai::response) fn sse_data_frame_is_openai_error(data:
 
 #[derive(Clone, Copy)]
 pub(in crate::network::openai) struct RouteAttemptLoggingContext<'a> {
+    // Populated for observability on every route attempt but only consumed by
+    // the paid-settlement path. Gating the field would cascade cfgs through
+    // ~30 ingress/transport call sites, so it stays present and is simply
+    // unread when wallets are compiled out.
+    #[cfg_attr(not(feature = "payments"), allow(dead_code))]
+    pub(in crate::network::openai) exchange_id: Option<&'a str>,
     pub(in crate::network::openai) request_id: RequestId,
     pub(in crate::network::openai) retry_policy: ResponseRetryPolicy,
     pub(in crate::network::openai) response_adapter: ResponseAdapter,
     pub(in crate::network::openai) route_observer: OpenAiRouteObserver<'a>,
+    /// Hex-encoded `EndpointId` to echo back as `x-mesh-served-by` on
+    /// delivery. See `RouteModelRequestContext::served_by_header`.
+    pub(in crate::network::openai) served_by: Option<&'a str>,
+    /// Where to record a peer's `X-Capsule-Id` response header, when this
+    /// attempt targets a remote peer this node is routing to (not serving).
+    /// `None` on every attempt that isn't the `RemoteMesh` dispatch path.
+    pub(in crate::network::openai) peer_capsule_id: Option<&'a PeerCapsuleIdSink>,
+}
+
+/// A single-slot, write-once-per-attempt side channel for the peer's
+/// `X-Capsule-Id` response header, threaded through
+/// [`RouteAttemptLoggingContext`] rather than added to [`RouteAttemptResult`]
+/// — the latter is constructed at call sites across local, remote, and
+/// adapted-response paths that have nothing to do with the `RemoteMesh`
+/// dispatch path this exists for.
+///
+/// A plain `std::sync::Mutex` (not `RefCell`): route attempts run inside a
+/// per-connection tokio task, and a type reachable from an `.await` point
+/// must stay `Send`, which `RefCell` is not. The lock is never held across
+/// an `.await`.
+#[derive(Default)]
+pub(crate) struct PeerCapsuleIdSink(std::sync::Mutex<Option<String>>);
+
+impl PeerCapsuleIdSink {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(in crate::network::openai) fn set(&self, value: String) {
+        *self.0.lock().unwrap() = Some(value);
+    }
+
+    pub(crate) fn take(&self) -> Option<String> {
+        self.0.lock().unwrap().take()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +78,14 @@ pub(in crate::network::openai) enum RouteAttemptResult {
         status_code: u16,
         usage: Option<TokenUsage>,
         cache_cost: Option<CacheCostObservation>,
+        /// Digests over the REAL served response body (response body /
+        /// tool_calls / reasoning), captured at the JSON-relay delivery point
+        /// where the whole body — or, on a streamed delivery, the assembled
+        /// result of the chunks actually sent to the client — is in hand.
+        /// `Copy` (raw sha-256 bytes) so this variant stays `Copy`. Default
+        /// (all-`None`) wherever no such body was assembled, so the terminal
+        /// event simply omits those digests rather than fabricating any.
+        output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
     },
     RetryableTimeout,
     RetryableUnavailable,
@@ -308,6 +357,7 @@ mod tests {
                 status_code: 200,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }),
             "delivered"
         );
@@ -342,6 +392,7 @@ mod tests {
                 status_code: 200,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }),
             TargetHealthOutcome::Success
         );
@@ -350,6 +401,7 @@ mod tests {
                 status_code: 503,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }),
             TargetHealthOutcome::Unavailable
         );
@@ -358,6 +410,7 @@ mod tests {
                 status_code: 400,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }),
             TargetHealthOutcome::Rejected
         );

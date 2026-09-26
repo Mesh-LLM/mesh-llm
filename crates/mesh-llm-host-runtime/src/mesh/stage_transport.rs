@@ -465,6 +465,9 @@ pub struct StageRuntimeStatus {
     pub flash_attn_type: skippy_protocol::FlashAttentionType,
     pub error: Option<String>,
     pub shutdown_generation: u64,
+    /// Cumulative runtime compute-busy time reported by the stage.
+    pub compute_busy_nanos: u64,
+    pub compute_operations: u64,
 }
 
 /// Classifies a stage status-refresh failure so that only a definitive
@@ -1114,6 +1117,19 @@ impl Node {
             .reserve_stage_transport_bridge(key.clone(), &label)
             .await?;
 
+        // The emulated link delay applies on this (initiating) side only, so
+        // a stage exchange gains exactly one delay no matter how many nodes
+        // export the variable. A misconfigured value fails the bridge here
+        // rather than silently running an unshaped sweep.
+        let link_delay = match crate::network::tunnel::stage_link_delay() {
+            Ok(delay) => delay,
+            Err(error) => {
+                self.remove_stage_transport_bridge_if_owner(&key, &owner)
+                    .await;
+                return Err(error);
+            }
+        };
+
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,
             Err(error) => {
@@ -1131,16 +1147,37 @@ impl Node {
             }
         };
         let node = self.clone();
-        let cleanup_node = self.clone();
         let cleanup_key = key.clone();
-        let cleanup_owner = owner.clone();
         let topology_for_task = topology_id.clone();
         let run_for_task = run_id.clone();
         let stage_for_task = stage_id.clone();
         let handle = tokio::spawn(async move {
+            // Back off exponentially on accept errors (capped at 1s) so a
+            // permanently failing accept cannot warn every 100ms forever;
+            // each successful accept restores the fast retry.
+            let mut accept_backoff = std::time::Duration::from_millis(100);
             loop {
-                let Ok((tcp_stream, _)) = listener.accept().await else {
-                    break;
+                // An accept error (EMFILE under load, an aborted handshake)
+                // must not end the bridge: once this loop exits the local
+                // listener closes and every stage-0 lane to this peer is
+                // refused for the rest of the generation.
+                let tcp_stream = match listener.accept().await {
+                    Ok((tcp_stream, _)) => {
+                        accept_backoff = std::time::Duration::from_millis(100);
+                        tcp_stream
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            key = %cleanup_key.replace('\n', "/"),
+                            peer = %peer_id.fmt_short(),
+                            error = %err,
+                            "stage transport bridge accept failed; retrying"
+                        );
+                        tokio::time::sleep(accept_backoff).await;
+                        accept_backoff =
+                            (accept_backoff * 2).min(std::time::Duration::from_secs(1));
+                        continue;
+                    }
                 };
                 let node = node.clone();
                 let topology_id = topology_for_task.clone();
@@ -1153,8 +1190,10 @@ impl Node {
                             .open_stage_transport_stream(peer_id, topology_id, run_id, stage_id)
                             .await?;
                         let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-                        crate::network::tunnel::relay_bidirectional(tcp_read, tcp_write, send, recv)
-                            .await
+                        crate::network::tunnel::relay_bidirectional(
+                            tcp_read, tcp_write, send, recv, link_delay,
+                        )
+                        .await
                     }
                     .await
                     {
@@ -1165,9 +1204,6 @@ impl Node {
                     }
                 });
             }
-            cleanup_node
-                .remove_stage_transport_bridge_if_owner(&cleanup_key, &cleanup_owner)
-                .await;
         });
         if self
             .publish_stage_transport_bridge(key, owner, handle)

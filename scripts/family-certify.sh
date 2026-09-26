@@ -387,6 +387,21 @@ maybe_build
 if (( SKIP_CORRECTNESS != 0 )); then
   record_event "correctness" "skipped" 0 "" "" "--skip-correctness"
 else
+  if (( REQUIRE_NATIVE_MTP_DRAFT != 0 )); then
+    head_args=(
+      "$ROOT/target/debug/skippy-correctness" native-mtp-heads
+      --model "$TARGET_MODEL_PATH"
+      --layer-end "${LAYER_END:-30}"
+      --ctx-size "$CTX_SIZE"
+      --n-gpu-layers "$N_GPU_LAYERS"
+      --prompt "$PROMPT"
+      --report-out "$REPORT_DIR/native-mtp-heads.json"
+    )
+    if [[ -n "$MODEL_ID" ]]; then
+      head_args+=(--model-id "$MODEL_ID")
+    fi
+    run_logged "native-mtp-heads" "$REPORT_DIR/native-mtp-heads.json" "${head_args[@]}"
+  fi
   if [[ -n "$SPLIT_LAYER" && -n "$SPLITS" && -n "$LAYER_END" ]]; then
     IFS=',' read -r -a chain_split_parts <<< "$SPLITS"
     if (( ${#chain_split_parts[@]} != 2 )); then

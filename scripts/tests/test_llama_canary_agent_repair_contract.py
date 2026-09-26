@@ -32,7 +32,7 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         ]
         self.assertIn("while remaining_repair_seconds", repair)
         self.assertLess(repair.index("agent_session_step"), repair.index("run_candidate_gates"))
-        self.assertIn('AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}"', self.wrapper)
+        self.assertIn('AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}-${PASS_ID}"', self.wrapper)
         self.assertIn('goose_args+=(--resume)', self.wrapper)
         self.assertIn('--name "$AGENT_SESSION_NAME"', self.wrapper)
         self.assertLess(gates.index("run_prepare"), gates.index("validate_agent_manifest_changes"))
@@ -48,6 +48,41 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
             "while true",
         ):
             self.assertNotIn(obsolete, self.wrapper)
+
+    def test_certification_rejects_failed_or_empty_producer_environment(self) -> None:
+        """A failed print-env must not fall through to certification on default binaries."""
+        function = self.wrapper.split("run_certification() {", 1)[1].split("run_candidate_gates() {", 1)[0]
+        for output, status, accepted in (("PARTIAL=1", 9, False), ("", 0, False), ("PRODUCER=1", 0, True)):
+            with self.subTest(output=output, status=status):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    fixture = "\n".join([
+                        "set -euo pipefail",
+                        "LLAMA_STAGE_BUILD_DIR=native HF_CACHE=cache PLAN_PATH=plan FAMILY_BATTERY_RUN_ID=fixture",
+                        f'CERTIFY_LOG="{temp_dir}/certify.log"',
+                        f"bash() {{ printf '%s' '{output}'; return {status}; }}",
+                        "run_verification_logged() { printf 'gate:%s\\n' \"$*\"; }",
+                        "run_certification() {" + function,
+                        "run_certification",
+                    ])
+                    result = subprocess.run(["bash", "-c", fixture], text=True, capture_output=True, check=False)
+                self.assertEqual(0 if accepted else 1, result.returncode, result.stderr)
+                self.assertEqual(3 if accepted else 0, sum(line.startswith("gate:") for line in result.stdout.splitlines()))
+                if accepted:
+                    self.assertIn("PRODUCER=1", result.stdout)
+
+    def test_pinned_build_checks_pin_without_rewriting_it(self) -> None:
+        function = self.wrapper.split("write_repair_pin() {", 1)[1].split("verify_repair_pin() {", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            scripts = Path(directory) / 'scripts'
+            scripts.mkdir()
+            (scripts / 'update-llama-pin.sh').write_text('#!/bin/sh\nexit 99\n')
+            (scripts / 'update-llama-pin.sh').chmod(0o755)
+            for pin_status in (0, 1):
+                body = (f'set -euo pipefail\nHARNESS_MODE=pinned-build\nUPSTREAM_SHA=unused\n'
+                        f'verify_repair_pin() {{ return {pin_status}; }}\n'
+                        'write_repair_pin() {' + function + '\nwrite_repair_pin')
+                result = subprocess.run(['bash', '-c', body], cwd=directory)
+                self.assertEqual(result.returncode, pin_status)
 
     def test_wrapper_reexecs_natively_before_state_initialization(self) -> None:
         reexec = self.wrapper.index('exec arch -arm64 "${BASH_SOURCE[0]}" "$@"')
@@ -88,6 +123,61 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         )
         self.assertEqual(124, result.returncode)
         self.assertIn("agent developer task timed out after 1s", result.stderr)
+
+    def test_each_returned_candidate_gets_a_full_verification_window(self) -> None:
+        # Exercise the actual shell loop with a deterministic clock. The first
+        # failed pass consumes most of the repair window; the second must still
+        # get all 200 seconds and may finish after coding admission closes.
+        for second_pass_succeeds in (True, False):
+            with self.subTest(second_pass_succeeds=second_pass_succeeds):
+                result = self.run_repair_clock_fixture(second_pass_succeeds)
+                self.assertEqual(0 if second_pass_succeeds else 124, result.returncode,
+                                 result.stdout + result.stderr)
+                self.assertEqual(2, result.stdout.count("agent turn"))
+                self.assertEqual(2, result.stdout.count("gate budget=200"))
+                self.assertNotIn("gate budget=10", result.stdout)
+
+    def run_repair_clock_fixture(self, second_pass_succeeds: bool) -> subprocess.CompletedProcess[str]:
+        remaining = self.wrapper.split("remaining_verification_seconds() {", 1)[1]
+        remaining = "remaining_verification_seconds() {" + remaining.split("run_verification_logged() {", 1)[0]
+        loop = self.wrapper.split("repair_candidate_until_green() {", 1)[1]
+        loop = "repair_candidate_until_green() {" + loop.split("write_upstream_summary() {", 1)[0]
+        fixture = r"""
+set -euo pipefail
+now=1000
+AGENT_TIMEOUT_SECONDS=100
+VERIFICATION_TIMEOUT_SECONDS=200
+turns=0
+date() { echo "$now"; }
+agent_prompt() { echo initial; }
+agent_feedback_prompt() { echo feedback; }
+assert_agent_control_unchanged() { :; }
+validate_agent_manifest_changes() { :; }
+agent_session_step() {
+  turns=$((turns + 1))
+  echo "agent turn $turns"
+  now=$((now + 10))
+}
+run_candidate_gates() {
+  local budget
+  budget="$(remaining_verification_seconds)" || return 124
+  echo "gate budget=$budget"
+  if (( turns == 1 )); then
+    now=$((now + 80))
+    return 1
+  fi
+  if (( budget < 150 )); then
+    now=$((now + budget))
+    return 124
+  fi
+  now=$((now + 150))
+  return SECOND_STATUS
+}
+""".replace("SECOND_STATUS", "0" if second_pass_succeeds else "1")
+        return subprocess.run(
+            ["bash", "-c", fixture + remaining + loop + "\nrepair_candidate_until_green\n"],
+            text=True, capture_output=True, check=False, timeout=10,
+        )
 
     def test_prepare_owns_pin_and_exact_prepared_upstream(self) -> None:
         prepare = self.wrapper[
@@ -224,13 +314,17 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
 
         main = self.wrapper[self.wrapper.index("write_repair_pin\n") :]
         self.assertLess(main.index("snapshot_candidate_tree"), main.index("materialize_verification_tree"))
-        self.assertLess(main.index("materialize_verification_tree"), main.index("run_candidate_gates"))
+        verify_main = main[main.index("materialize_verification_tree"): ]
+        self.assertLess(verify_main.index("materialize_verification_tree"), verify_main.index("run_candidate_gates"))
         self.assertLess(main.index("run_candidate_gates"), main.index("finalize_certified_tree"))
 
     def test_verify_mode_restores_tree_identity_from_candidate_commit(self) -> None:
         loader = self.wrapper[
             self.wrapper.index("load_candidate_bundle() {") : self.wrapper.index("cleanup_verification_worktree() {")
         ]
+        self.assertIn('candidate_branch="${CANARY_CANDIDATE_BRANCH:', loader)
+        self.assertIn('"refs/heads/${candidate_branch}"', loader)
+        self.assertNotIn('"refs/heads/${BRANCH}"', loader)
         self.assertIn('CERTIFIED_SHA="$expected_head"', loader)
         self.assertIn('VERIFICATION_TREE="$(git rev-parse "${CERTIFIED_SHA}^{tree}")"', loader)
         self.assertLess(loader.index('CERTIFIED_SHA="$expected_head"'), loader.index("VERIFICATION_TREE="))
@@ -313,7 +407,7 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
 
     def test_persistent_runner_scratch_is_scoped_and_pruned(self) -> None:
-        self.assertIn('STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}"', self.wrapper)
+        self.assertIn('STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}-${PASS_ID}"', self.wrapper)
         self.assertIn('TARGET_SHA_FILE="$ROOT/.deps/llama-canary-target-sha"', self.wrapper)
         self.assertIn('git -C "$ROOT/.deps/llama.cpp" worktree prune', self.wrapper)
         self.assertIn("rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-*", self.wrapper)

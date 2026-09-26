@@ -78,10 +78,10 @@ export default [
   },
   {
     title: "Meshes",
-    description: "Join the public mesh, create private meshes, and publish your own mesh.",
+    description: "Join the public mesh, connect your own machines, and understand admission policy.",
     links: [
       ["Join the public mesh", "/docs/pages/public-mesh/"],
-      ["Private meshes", "/docs/pages/private-meshes/"],
+      ["Your own mesh", "/docs/pages/private-meshes/"],
       ["Publish mesh", "/docs/pages/publish-mesh/"]
     ]
   },
@@ -124,7 +124,8 @@ export default [
     description: "Common questions, troubleshooting, and operational checks.",
     links: [
       ["FAQ", "/docs/pages/faq/"],
-      ["Troubleshooting", "/docs/pages/troubleshooting/"]
+      ["Troubleshooting", "/docs/pages/troubleshooting/"],
+      ["Anonymous analytics", "/docs/pages/analytics/"]
     ]
   },
   {

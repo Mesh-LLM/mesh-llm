@@ -360,6 +360,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             context_length: spec.ctx_size,
             slots: spec.slots,
             capabilities,
+            workload_class: mesh::ModelWorkloadClass::CausalGeneration,
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: handle,
                 http,
@@ -478,7 +479,6 @@ pub(super) async fn stage0_runtime_options(
     runtime_options.config.lane_count = spec.slots as u32;
     runtime_options.config.activation_codec = spec.generation.activation_codec;
     runtime_options.config.activation_codec_policy = spec.generation.activation_codec_policy;
-    runtime_options.config.filter_tensors_on_load = true;
     runtime_options.config.resident_tensor_names = skippy::admitted_resident_tensor_names(
         verified_stage0_load.as_ref().unwrap_or(&stage0_load),
         resolved_stage0_package.as_ref(),
@@ -505,6 +505,7 @@ pub(super) fn apply_admitted_activation_frontier(
     load: &skippy::StageLoadRequest,
 ) -> Result<()> {
     let frontier_profile = skippy::admitted_activation_frontier(load)?;
+    config.execution_contract = load.admission.execution_contract.clone();
     config.activation_import_identities = frontier_profile.activation_imports.clone();
     config.activation_import_bindings = frontier_profile.activation_import_bindings.clone();
     config.activation_export_identities = frontier_profile.activation_exports.clone();
@@ -1360,7 +1361,7 @@ mod activation_boundary_tests {
     #[test]
     fn missing_graph_boundary_is_not_reconstructed_from_manifest_width() {
         let error = required_boundary(None, "stage-1", "input")
-            .expect_err("generation 10 requires graph-observed boundary descriptors");
+            .expect_err("generation 11 requires graph-observed boundary descriptors");
         assert!(
             error
                 .to_string()

@@ -19,7 +19,21 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRUSTED_ROOT="$ROOT"
+
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/macos-deployment-target.sh"
 HARNESS_MODE="${CANARY_HARNESS_MODE:-repair}"
+if [[ -n "${CANARY_MESH_SOURCE:-}" ]]; then
+  if [[ "$HARNESS_MODE" != pinned-build ]]; then
+    echo "selected MeshLLM source requires certify-only pinned-build mode" >&2
+    exit 1
+  fi
+  ROOT="${CANARY_SOURCE_ROOT:?selected source checkout required}"
+  if [[ "$(git -C "$ROOT" rev-parse HEAD)" != "$CANARY_MESH_SOURCE" ]]; then
+    echo "selected MeshLLM checkout does not match frozen revision" >&2
+    exit 1
+  fi
+fi
 UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
 if [[ "$UPSTREAM_SHA" == "latest" || -z "$UPSTREAM_SHA" ]]; then
   UPSTREAM_SHA="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
@@ -33,16 +47,17 @@ cd "$ROOT"
 
 OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
 PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
-AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-custom_z_ai_coding_plan}"
+AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-zai_coding_plan}"
 AGENT_MODEL="${CANARY_AGENT_MODEL:-glm-5.3-flash}"
 AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-41400}"
 VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-43200}"
 RUN_ID="${GITHUB_RUN_ID:-manual-$(date +%s)}"
 RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 RUN_KEY="${RUN_ID}-${RUN_ATTEMPT}"
+PASS_ID="${CANARY_PASS_ID:-local}"
 BRANCH="llama-canary/repair-${RUN_KEY}-${UPSTREAM_SHA:0:10}"
 VERIFY_ROOT="/tmp/mesh-llm-canary-verify-${RUN_KEY}"
-STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}"
+STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}-${PASS_ID}"
 TARGET_SHA_FILE="$ROOT/.deps/llama-canary-target-sha"
 AGENT_LOG="$STATE_DIR/agent.log"
 PREPARE_LOG="$STATE_DIR/prepare.log"
@@ -53,6 +68,7 @@ PR_BODY="$STATE_DIR/pr-body.md"
 UPSTREAM_SUMMARY="$STATE_DIR/upstream-summary.md"
 BUNDLE="$STATE_DIR/candidate.bundle"
 EVIDENCE_DIR="$STATE_DIR/verification-evidence"
+SYSTEMONE_SMOKE_DIR="$ROOT/target/skippy-system-one-smoke"
 FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID:-${RUN_KEY}}"
 PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
 BASE_HEAD="$(git rev-parse HEAD)"
@@ -63,11 +79,11 @@ CERTIFIED_SHA=""
 VERIFICATION_TREE=""
 VERIFICATION_DEADLINE_AT=0
 REPAIR_DEADLINE_AT=0
-AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}"
+AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}-${PASS_ID}"
 AGENT_SESSION_STARTED=false
 
-if [[ "$HARNESS_MODE" != "repair" && "$HARNESS_MODE" != "verify" ]]; then
-  echo "CANARY_HARNESS_MODE must be repair or verify" >&2
+if [[ ! "$HARNESS_MODE" =~ ^(repair|verify|repair-build|verify-build|pinned-build)$ ]]; then
+  echo "CANARY_HARNESS_MODE must be repair, verify, repair-build, verify-build, or pinned-build" >&2
   exit 1
 fi
 
@@ -87,15 +103,15 @@ if [[ -n "$(git status --porcelain)" ]]; then
   echo "changed-pin canary requires a clean trusted-main checkout" >&2
   exit 1
 fi
-if [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
+if [[ "$HARNESS_MODE" != pinned-build ]] && [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
   echo "git user.name and user.email must be configured before canary repair" >&2
   exit 1
 fi
-if [[ "$HARNESS_MODE" == "repair" ]] && ! command -v goose >/dev/null 2>&1; then
+if [[ "$HARNESS_MODE" == repair* ]] && ! command -v goose >/dev/null 2>&1; then
   echo "Goose CLI not found on runner; install it at /Users/lab/.local/bin/goose on the family-certify image" >&2
   exit 1
 fi
-if [[ "$HARNESS_MODE" == "repair" ]]; then
+if [[ "$HARNESS_MODE" == repair* ]]; then
   goose_check_status=0
   goose_check="$(
     GOOSE_PROVIDER="$AGENT_PROVIDER" GOOSE_MODEL="$AGENT_MODEL" \
@@ -124,8 +140,12 @@ rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || t
 run_for() {
   local label="$1" seconds="$2"
   shift 2
+  local cleanup=()
+  if [[ "$label" == "agent developer task" ]]; then
+    cleanup+=(--cleanup-on-exit)
+  fi
   python3 scripts/run-command-with-timeout.py \
-    --seconds "$seconds" --label "$label" -- "$@"
+    --seconds "$seconds" --label "$label" "${cleanup[@]}" -- "$@"
 }
 
 remaining_verification_seconds() {
@@ -153,6 +173,10 @@ run_verification_logged() {
 }
 
 write_repair_pin() {
+  if [[ "$HARNESS_MODE" == pinned-build ]]; then
+    verify_repair_pin
+    return
+  fi
   scripts/update-llama-pin.sh "$UPSTREAM_SHA"
 }
 
@@ -271,6 +295,13 @@ snapshot_candidate_tree() {
   assert_agent_control_unchanged || return 1
   verify_repair_pin || return 1
   validate_agent_manifest_changes || return 1
+  # Verify the dirty-tree producer before snapshotting changes its source identity.
+  local closure="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
+  python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
+    --candidate-binary "$closure/cargo/debug/skippy-server" \
+    --native-build-dir "$closure/native" --producer-manifest "$closure/producer.json"
+  CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')"
+  export CANARY_VERIFIED_WORKLOAD_PRODUCER
   git add -A
   if git diff --cached --quiet; then
     echo "agent produced no candidate changes to verify" >&2
@@ -280,13 +311,13 @@ snapshot_candidate_tree() {
   CERTIFIED_SHA="$(
     printf '%s\n\n%s\n' \
       "fix(llama): certify upstream ${UPSTREAM_SHA:0:10}" \
-      "A single agent completed the upstream repair and the trusted harness independently passed the full changed-pin verification." \
+      "Prepared upstream candidate; certification evidence is recorded separately before publication." \
       | git commit-tree "$VERIFICATION_TREE" -p "$BASE_HEAD"
   )"
 }
 
 write_candidate_bundle() {
-  git -c core.hooksPath=/dev/null branch "$BRANCH" "$CERTIFIED_SHA"
+  git -c core.hooksPath=/dev/null branch -f "$BRANCH" "$CERTIFIED_SHA"
   git bundle create "$BUNDLE" "$BRANCH" "^${BASE_HEAD}"
   git bundle verify "$BUNDLE" >/dev/null
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -300,20 +331,26 @@ write_candidate_bundle() {
 }
 
 load_candidate_bundle() {
-  local input_bundle expected_head bundle_head
+  local input_bundle expected_head candidate_branch bundle_head
   input_bundle="${CANARY_INPUT_BUNDLE:?CANARY_INPUT_BUNDLE is required in verify mode}"
   expected_head="${CANARY_CANDIDATE_SHA:?CANARY_CANDIDATE_SHA is required in verify mode}"
+  candidate_branch="${CANARY_CANDIDATE_BRANCH:?CANARY_CANDIDATE_BRANCH is required in verify mode}"
   if [[ ! "$expected_head" =~ ^[0-9a-f]{40}$ || ! -s "$input_bundle" ]]; then
     echo "verification requires a non-empty candidate bundle and 40-hex head" >&2
     return 1
   fi
+  if [[ "$candidate_branch" != llama-canary/repair-* ]] ||
+      ! git check-ref-format "refs/heads/${candidate_branch}"; then
+    echo "verification requires a valid identity-bound candidate branch" >&2
+    return 1
+  fi
   git bundle verify "$input_bundle" >/dev/null
-  bundle_head="$(git bundle list-heads "$input_bundle" "refs/heads/${BRANCH}" | awk '{print $1}')"
+  bundle_head="$(git bundle list-heads "$input_bundle" "refs/heads/${candidate_branch}" | awk '{print $1}')"
   if [[ "$bundle_head" != "$expected_head" ]]; then
     echo "candidate bundle head does not match the repair job output" >&2
     return 1
   fi
-  git fetch "$input_bundle" "refs/heads/${BRANCH}"
+  git fetch "$input_bundle" "refs/heads/${candidate_branch}"
   CERTIFIED_SHA="$expected_head"
   CANDIDATE_BASE_HEAD="$(git rev-parse "${CERTIFIED_SHA}^")"
   VERIFICATION_TREE="$(git rev-parse "${CERTIFIED_SHA}^{tree}")"
@@ -325,7 +362,8 @@ cleanup_verification_worktree() {
     mkdir -p "$EVIDENCE_DIR"
     for source in \
         "$VERIFY_ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
-        "$VERIFY_ROOT/target/skippy-stage-rewriter-check"; do
+        "$VERIFY_ROOT/target/skippy-stage-rewriter-check" \
+        "$VERIFY_ROOT/target/skippy-system-one-smoke"; do
       if [[ -e "$source" ]]; then
         cp -R "$source" "$EVIDENCE_DIR/" || true
       fi
@@ -350,7 +388,13 @@ materialize_verification_tree() {
   rm -rf "$LLAMA_STAGE_BUILD_DIR" \
     "$ROOT/.deps/llama.cpp" \
     "$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
-    "$ROOT/target/skippy-stage-rewriter-check"
+    "$ROOT/target/skippy-stage-rewriter-check" \
+    "$ROOT/target/skippy-system-one-smoke"
+  # Re-derive the System One smoke work dir under the verification ROOT: the
+  # top-level assignment still points at the trusted checkout, and verifier
+  # evidence must stay inside the candidate worktree that
+  # cleanup_verification_worktree copies into EVIDENCE_DIR.
+  SYSTEMONE_SMOKE_DIR="$ROOT/target/skippy-system-one-smoke"
   mkdir -p "$(dirname "$PLAN_PATH")"
   cd "$ROOT"
   verify_repair_pin
@@ -377,7 +421,7 @@ run_full_build() {
   echo "trusted candidate gate: build" | tee -a "$BUILD_LOG"
   run_verification_logged "complete patched llama.cpp build" "$BUILD_LOG" env \
     LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- \
-    arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64 -DGGML_METAL_EMBED_LIBRARY=ON \
     || return 1
   archive="$LLAMA_STAGE_BUILD_DIR/src/libllama.a"
   arches="$(lipo -archs "$archive" 2>/dev/null || true)"
@@ -392,9 +436,38 @@ run_full_build() {
     || return 1
   run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
     scripts/skippy-ci-smoke.sh || return 1
+  # Run-scoped CPU workload oracle closure for the non-chat certification
+  # lanes; packed into the executable handoff for family workers.
+  run_verification_logged "pinned CPU workload oracles and candidate" "$BUILD_LOG" \
+    just skippy-workload-oracles-build "${LLAMA_STAGE_BUILD_DIR:?}-workloads" || return 1
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    # The nested shell expands its positional argument, not this shell.
+    # shellcheck disable=SC2016
+    run_verification_logged "build transferable multimodal test executable" "$BUILD_LOG" \
+      bash -c 'cargo test -p skippy-server --lib --no-run --message-format=json > "$1"' \
+      build-mm "$STATE_DIR/mm-build.jsonl" || return 1
+  fi
+  # The System One smoke exit code is 0 for a NOT CERTIFIED full-model read and
+  # non-zero for a red contract part or a red declared-qualified read, so this
+  # gate blocks publication exactly when the lane is qualified to decide.
+  run_verification_logged "System One smoke" "$BUILD_LOG" env \
+    WORK_DIR="$SYSTEMONE_SMOKE_DIR" \
+    SYSTEMONE_SMOKE_CADENCE=llama-bump \
+    scripts/skippy-system-one-smoke.sh || return 1
 }
 
+# Local CLI compatibility path. CI uses *-build modes and separate family jobs.
 run_certification() {
+  local setting workload_settings
+  local workload_env=()
+  workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
+  if [[ -z "$workload_settings" ]]; then
+    echo "workload producer returned no certification environment" >&2
+    return 1
+  fi
+  while IFS= read -r setting; do
+    workload_env+=("$setting")
+  done <<< "$workload_settings"
   : > "$CERTIFY_LOG"
   echo "trusted candidate gate: certify" | tee -a "$CERTIFY_LOG"
   run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
@@ -410,6 +483,7 @@ run_certification() {
     || return 1
   run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
+    "${workload_env[@]}" \
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
 }
 
@@ -431,8 +505,18 @@ run_candidate_gates() {
     write_split_certification_roster || return 1
   fi
   validate_agent_manifest_changes || return 1
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    run_verification_logged "validate family cache before compilation" "$CERTIFY_LOG" \
+      python3 scripts/plan-family-battery.py --shard-count 256 \
+        --check-cache --cache-root "$HF_CACHE" --output "$PLAN_PATH" || return 1
+  fi
   run_full_build || return 1
-  run_certification
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
+      python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate
+  else
+    run_certification
+  fi
 }
 
 write_split_certification_roster() {
@@ -446,12 +530,18 @@ check_split_certification_roster() {
 repair_candidate_until_green() {
   local prompt
   REPAIR_DEADLINE_AT="$(( $(date +%s) + AGENT_TIMEOUT_SECONDS ))"
-  VERIFICATION_DEADLINE_AT="$REPAIR_DEADLINE_AT"
   prompt="$(agent_prompt)"
+  if [[ -n "${CANARY_FEEDBACK_DIR:-}" ]]; then
+    prompt+=" Prior distributed family evidence is at $CANARY_FEEDBACK_DIR. Read its receipt.json and failure logs before repairing the candidate."
+  fi
 
   while remaining_repair_seconds >/dev/null; do
     agent_session_step "$prompt" || return 1
     assert_agent_control_unchanged || return 1
+    # Coding turns may start only within the repair window. Once a turn
+    # returns, give its complete gate sequence a fresh bounded pass, even
+    # when earlier gates have consumed most of the repair window.
+    VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
     if run_candidate_gates refresh; then
       assert_agent_control_unchanged || return 1
       validate_agent_manifest_changes || return 1
@@ -492,7 +582,7 @@ write_pr_body() {
     echo "- Workflow run: \`${RUN_KEY}\`"
     echo "- Certified commit: \`${CERTIFIED_SHA}\`"
     echo
-    echo "One agent completed the pin and patch-queue task. The trusted harness then independently passed prepare, the complete patched llama.cpp and Rust build, Skippy smoke tests, and the full supported-family certification on this exact commit."
+    echo "One agent completed the pin and patch-queue task. The trusted harness then independently passed prepare, the complete patched llama.cpp and Rust build, Skippy smoke tests, the System One (OpenJEV) smoke, and the full supported-family certification on this exact commit."
     echo
     cat "$UPSTREAM_SUMMARY"
   } > "$PR_BODY"
@@ -524,16 +614,49 @@ finalize_certified_tree() {
   echo "certified local canary commit: branch=$BRANCH head=$CERTIFIED_SHA"
 }
 
-if [[ "$HARNESS_MODE" == "repair" ]]; then
+export_family_inputs() {
+  local destination="${CANARY_EXPORT_DIR:?CANARY_EXPORT_DIR required}"
+  write_upstream_summary
+  python3 "$TRUSTED_ROOT/scripts/llama-canary-family-evidence.py" pack \
+    --root "$ROOT" --output "$destination" --candidate "$CERTIFIED_SHA" \
+    --base "$CANDIDATE_BASE_HEAD" --branch "$BRANCH" --pass-id "$PASS_ID" \
+    --test-build "$STATE_DIR/mm-build.jsonl" --bundle "$BUNDLE" --summary "$UPSTREAM_SUMMARY" \
+    --workload-oracles "${LLAMA_STAGE_BUILD_DIR:?}-workloads"
+}
+
+if [[ "$HARNESS_MODE" == repair* ]]; then
+  # A previous distributed pass failed. Restore only its candidate source;
+  # orchestration stays at the frozen trusted base and logs are feedback.
+  if [[ -n "${CANARY_INPUT_BUNDLE:-}" ]]; then
+    load_candidate_bundle
+    git diff --binary "$BASE_HEAD" "$CERTIFIED_SHA" > "$STATE_DIR/previous.patch"
+    git apply "$STATE_DIR/previous.patch"
+    assert_agent_control_unchanged
+  fi
   write_repair_pin
   verify_repair_pin
-  echo "starting one agent developer session with a ${AGENT_TIMEOUT_SECONDS}s repair-and-test budget..."
+  if [[ -n "${CANARY_FEEDBACK_DIR:-}" ]]; then
+    find "$CANARY_FEEDBACK_DIR" -name receipt.json -exec cat {} \; > "$CERTIFY_LOG"
+  fi
+  echo "starting agent repair/build gates; distributed families follow in separate jobs"
   if ! repair_candidate_until_green; then
     echo "agent task failed or timed out; no canary branch or pull request was published" >&2
     exit 1
   fi
   snapshot_candidate_tree
   write_candidate_bundle
+  if [[ "$HARNESS_MODE" == "repair-build" ]]; then
+    export_family_inputs
+  fi
+  exit 0
+fi
+
+if [[ "$HARNESS_MODE" == "pinned-build" ]]; then
+  CERTIFIED_SHA="$BASE_HEAD"
+  VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
+  run_candidate_gates
+  check_split_certification_roster
+  export_family_inputs
   exit 0
 fi
 
@@ -541,10 +664,15 @@ load_candidate_bundle
 trap cleanup_verification_worktree EXIT
 materialize_verification_tree
 VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
-echo "starting one independent ${VERIFICATION_TIMEOUT_SECONDS}s verification pass..."
+echo "starting independent verification build of the exact candidate"
 if ! run_candidate_gates; then
   echo "final canary verification failed; no canary branch or pull request was published" >&2
   exit 1
 fi
 check_split_certification_roster
-finalize_certified_tree
+if [[ "$HARNESS_MODE" == "verify-build" ]]; then
+  cp "$CANARY_INPUT_BUNDLE" "$BUNDLE"
+  export_family_inputs
+else
+  finalize_certified_tree
+fi

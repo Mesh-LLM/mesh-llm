@@ -6,6 +6,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/macos-deployment-target.sh"
 UI_DIR="$REPO_ROOT/crates/mesh-llm-ui"
 BUILD_PROFILE="${MESH_LLM_BUILD_PROFILE:-debug}"
 
@@ -97,6 +100,17 @@ if [[ "${MESH_LLM_DYNAMIC_NATIVE_RUNTIME:-1}" != "1" ]]; then
     exit 1
 fi
 
+report_analytics_key() {
+    # Report presence only. The key itself must never reach build logs.
+    if [[ -n "${MESH_LLM_POSTHOG_KEY:-}" ]]; then
+        echo "Built-in analytics key present: releases from this build report anonymous usage."
+    else
+        echo "No built-in analytics key: this build reports nothing unless MESH_LLM_POSTHOG_KEY is set at runtime."
+    fi
+}
+
+report_analytics_key
+
 echo "Building backend-neutral MeshLLM host (profile: $BUILD_PROFILE)."
 if [[ "${MESH_LLM_SKIP_UI:-0}" != "1" ]]; then
     MESH_LLM_BUILD_PROFILE="$BUILD_PROFILE" "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
@@ -106,11 +120,15 @@ fi
 
 stamp_build_version
 
+# `payments` is the ledger + `wallet.v1` plugin adapter; `wallet-lexe` is the
+# built-in Lexe wallet served as `mesh-llm --plugin wallet-lexe` (like
+# blobstore). Neither adds a backend library to the host import surface.
+host_features="web-ui,dynamic-native-runtime,payments,wallet-lexe"
 cargo_args=(build --locked -p mesh-llm --bin mesh-llm --no-default-features \
-    --features "web-ui,dynamic-native-runtime")
+    --features "$host_features")
 if [[ "$BUILD_PROFILE" == "release" ]]; then
     cargo_args=(build --release --locked -p mesh-llm --bin mesh-llm --no-default-features \
-        --features "web-ui,dynamic-native-runtime")
+        --features "$host_features")
 fi
 (cd "$REPO_ROOT" && cargo "${cargo_args[@]}")
 

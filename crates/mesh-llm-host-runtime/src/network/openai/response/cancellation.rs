@@ -40,6 +40,12 @@ pub(in crate::network::openai::response) trait CancelUpstream {
     async fn cancel(&mut self);
 }
 
+impl CancelUpstream for tokio::io::DuplexStream {
+    async fn cancel(&mut self) {
+        let _ = self.shutdown().await;
+    }
+}
+
 impl CancelUpstream for TcpStream {
     async fn cancel(&mut self) {
         let _ = self.shutdown().await;
@@ -122,6 +128,7 @@ mod tests {
                 status_code: 200,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             },
             RouteAttemptResult::RetryableTimeout,
             RouteAttemptResult::RetryableUnavailable,

@@ -53,7 +53,7 @@ fn rendered_templates_match_existing_unix_service_behavior() {
 
     assert_eq!(
         render_service_env_file(),
-        "# Optional environment variables for mesh-llm.\n# Use plain KEY=value lines.\n# Example:\n# RUST_LOG=mesh_inference=debug\n"
+        "# Optional environment variables for mesh-llm.\n# Use plain KEY=value lines.\n# Example:\n# RUST_LOG=mesh_inference=debug\n\n# Join a private mesh without editing the generated unit.\n# The token file is re-read on every rejoin, so rotating the invite\n# token is just replacing the file's contents.\n# A token at the default location needs no line here at all: an\n# invite.token beside the resolved config file, which is\n# ~/.mesh-llm/invite.token for the default config path.\n# MESH_LLM_JOIN_FILE=/home/you/.mesh-llm/invite.token\n# MESH_LLM_JOIN=<complete invite token>\n"
     );
     assert_eq!(
         render_service_runner(&binary_path, &env_file),

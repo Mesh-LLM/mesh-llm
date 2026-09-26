@@ -1,0 +1,26 @@
+From d6f3224f7435caf5b7311163318a4e3018c13e8d Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Wed, 23 Sep 2026 06:32:24 +1000
+Subject: [PATCH] fix(llama): preserve HRM looped graph capacity
+
+---
+ src/llama-context.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 3703cdcb2..d24d1ef36 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2482,6 +2482,9 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
+     if (model.arch == LLM_ARCH_KIMI_K3) {
+         // the n_tokens*40 budget below is exhausted at ubatch 3840
+         res = std::max<uint32_t>(n_tokens * 160, 64u * model.n_tensors());
++    } else if (model.arch == LLM_ARCH_HRM_TEXT) {
++        // Preserve upstream's budget for the 128-slot looped graph.
++        res = std::max<uint32_t>(n_tokens * 80, 64u * model.n_tensors());
+     } else {
+         res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+     }
+-- 
+2.54.0 (Apple Git-157)
+

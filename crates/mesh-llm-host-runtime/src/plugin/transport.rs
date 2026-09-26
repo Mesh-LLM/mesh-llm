@@ -43,6 +43,8 @@ fn plugin_mesh_stream_error(message: impl Into<String>) -> super::proto::ErrorRe
 pub(crate) enum LocalStream {
     #[cfg(test)]
     Tcp(tokio::net::TcpStream),
+    /// In-memory pipe to a builtin plugin running as a task in this process.
+    Memory(tokio::io::DuplexStream),
     #[cfg(unix)]
     Unix(tokio::net::UnixStream),
     #[cfg(windows)]
@@ -257,6 +259,7 @@ impl LocalStream {
         match self {
             #[cfg(test)]
             LocalStream::Tcp(stream) => stream.write_all(bytes).await?,
+            LocalStream::Memory(stream) => stream.write_all(bytes).await?,
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.write_all(bytes).await?,
             #[cfg(windows)]
@@ -271,6 +274,7 @@ impl LocalStream {
         match self {
             #[cfg(test)]
             LocalStream::Tcp(stream) => stream.shutdown().await?,
+            LocalStream::Memory(stream) => stream.shutdown().await?,
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.shutdown().await?,
             #[cfg(windows)]
@@ -285,6 +289,7 @@ impl LocalStream {
         let read = match self {
             #[cfg(test)]
             LocalStream::Tcp(stream) => stream.read(bytes).await?,
+            LocalStream::Memory(stream) => stream.read(bytes).await?,
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.read(bytes).await?,
             #[cfg(windows)]
@@ -299,6 +304,9 @@ impl LocalStream {
         match self {
             #[cfg(test)]
             LocalStream::Tcp(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
+            LocalStream::Memory(stream) => {
                 let _ = stream.read_exact(bytes).await?;
             }
             #[cfg(unix)]
@@ -358,7 +366,7 @@ pub(crate) async fn bind_local_listener(instance_id: &str, name: &str) -> Result
         let server = tokio::net::windows::named_pipe::ServerOptions::new()
             .create(&endpoint)
             .with_context(|| format!("Failed to create plugin pipe {endpoint}"))?;
-        return Ok(LocalListener::Pipe(endpoint, server));
+        Ok(LocalListener::Pipe(endpoint, server))
     }
 }
 

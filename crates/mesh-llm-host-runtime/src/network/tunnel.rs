@@ -13,6 +13,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 mod inbound_http;
+mod remote_origin;
+#[cfg(feature = "payments")]
+pub(crate) use remote_origin::is_remote_bridge;
 
 /// Global byte counter for tunnel traffic
 static BYTES_TRANSFERRED: AtomicU64 = AtomicU64::new(0);
@@ -148,7 +151,10 @@ async fn handle_inbound_stage_transport(
         bind_addr
     );
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+    // The link delay, when configured, is applied by the outbound bridge
+    // that initiates a stage exchange; the inbound side forwards immediately
+    // so the response leg is not delayed a second time.
+    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv, None).await
 }
 
 async fn resolve_stage_transport_bind_addr(
@@ -225,8 +231,10 @@ pub async fn relay_bidirectional(
     tcp_write: tokio::io::WriteHalf<TcpStream>,
     quic_send: iroh::endpoint::SendStream,
     quic_recv: iroh::endpoint::RecvStream,
+    link_delay: Option<Duration>,
 ) -> Result<()> {
-    let mut t1 = tokio::spawn(async move { relay_tcp_to_quic(tcp_read, quic_send).await });
+    let mut t1 =
+        tokio::spawn(async move { relay_tcp_to_quic(tcp_read, quic_send, link_delay).await });
     let mut t2 = tokio::spawn(async move { relay_quic_to_tcp(quic_recv, tcp_write).await });
     // Either direction may finish first:
     //   - tcp→quic finishes when the TCP side closes after responding
@@ -259,10 +267,116 @@ async fn finish_relay_pair(
     first.and(second)
 }
 
+/// Emulated one-way link delay for stage traffic, from
+/// `MESH_LLM_STAGE_LINK_DELAY_MS`.
+///
+/// Splitting a model across a wide-area link is bounded by round-trip time,
+/// not bandwidth: activations measured ~0.7 MB/s on gigabit, while a real
+/// Sydney-Melbourne hop cost 30 ms against ~6 ms of compute per token. This
+/// knob makes that variable sweepable on co-located hardware so parity can be
+/// measured against RTT with everything else held fixed.
+///
+/// Only the outbound stage-transport bridge consults it — the side that
+/// initiates a stage exchange. A request-response pair therefore gains
+/// exactly `delay` even when every node in the sweep exports the variable,
+/// and relayed HTTP traffic is never delayed. Shaping the interface instead
+/// would also delay the benchmark harness's own liveness traffic, and a node
+/// that misses heartbeats gets declared dead mid-run.
+///
+/// Unset disables the delay. A present but empty, non-numeric, or zero value
+/// is an error: silently falling through to "disabled" would turn a
+/// misconfigured sweep into results that look valid but measure nothing.
+pub(crate) fn stage_link_delay() -> Result<Option<Duration>> {
+    let parsed = parse_stage_link_delay(
+        std::env::var("MESH_LLM_STAGE_LINK_DELAY_MS")
+            .ok()
+            .as_deref(),
+    )?;
+    if parsed.is_some() {
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if WARNED.set(()).is_ok() {
+            tracing::warn!(
+                "emulating stage link delay; throughput figures are not from an unshaped link"
+            );
+        }
+    }
+    Ok(parsed)
+}
+
+/// Parse [`stage_link_delay`]'s environment value: unset is disabled, a
+/// positive whole number of milliseconds is the delay, and any other present
+/// value is an error.
+fn parse_stage_link_delay(raw: Option<&str>) -> Result<Option<Duration>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let millis = raw.trim().parse::<u64>().map_err(|_| {
+        anyhow::anyhow!(
+            "MESH_LLM_STAGE_LINK_DELAY_MS must be a whole number of milliseconds, got {raw:?}"
+        )
+    })?;
+    if millis == 0 {
+        anyhow::bail!(
+            "MESH_LLM_STAGE_LINK_DELAY_MS must be greater than zero; unset the variable to disable the delay"
+        );
+    }
+    Ok(Some(Duration::from_millis(millis)))
+}
+
+/// Forward TCP to QUIC holding every chunk for `delay` before release.
+///
+/// The reader keeps reading while queued chunks wait, so only latency changes.
+/// Sleeping in the read loop instead would also cap throughput at one chunk
+/// per `delay` and quietly turn a latency sweep into a bandwidth sweep.
+///
+/// The caller applies this to exactly one TCP→QUIC leg per stage exchange —
+/// the outbound bridge that initiates it — so a request-response pair gains
+/// exactly `delay`, which is the round trip the pipeline actually pays per
+/// token.
+async fn relay_tcp_to_quic_delayed(
+    mut tcp_read: tokio::io::ReadHalf<TcpStream>,
+    mut quic_send: iroh::endpoint::SendStream,
+    delay: Duration,
+) -> Result<()> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(tokio::time::Instant, Vec<u8>)>(1024);
+    let writer = tokio::spawn(async move {
+        let mut total: u64 = 0;
+        while let Some((release_at, chunk)) = rx.recv().await {
+            tokio::time::sleep_until(release_at).await;
+            quic_send.write_all(&chunk).await?;
+            total += chunk.len() as u64;
+            BYTES_TRANSFERRED.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        }
+        quic_send.finish()?;
+        tracing::info!("TCP→QUIC (delayed): {total} bytes");
+        Ok::<(), anyhow::Error>(())
+    });
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = tcp_read.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        if tx
+            .send((tokio::time::Instant::now() + delay, buf[..n].to_vec()))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+    drop(tx);
+    writer.await?
+}
+
 async fn relay_tcp_to_quic(
     mut tcp_read: tokio::io::ReadHalf<TcpStream>,
     mut quic_send: iroh::endpoint::SendStream,
+    link_delay: Option<Duration>,
 ) -> Result<()> {
+    if let Some(delay) = link_delay {
+        return relay_tcp_to_quic_delayed(tcp_read, quic_send, delay).await;
+    }
     let mut buf = vec![0u8; 64 * 1024];
     let mut total: u64 = 0;
     loop {
@@ -584,5 +698,99 @@ mod tests {
             forwarded,
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
         );
+    }
+}
+
+#[cfg(test)]
+mod stage_link_delay_tests {
+    use super::*;
+
+    /// The delay line must hold each chunk without serialising the stream:
+    /// many chunks sent back to back should all arrive about one delay late,
+    /// not one delay apart. That difference is exactly the bandwidth artifact
+    /// a naive sleep-in-the-read-loop would introduce.
+    #[tokio::test(start_paused = true)]
+    async fn queued_chunks_keep_their_pipelining() {
+        let delay = Duration::from_millis(50);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(tokio::time::Instant, Vec<u8>)>(64);
+        let start = tokio::time::Instant::now();
+        for _ in 0..10 {
+            tx.send((tokio::time::Instant::now() + delay, vec![0u8; 8]))
+                .await
+                .unwrap();
+        }
+        drop(tx);
+
+        let mut released = Vec::new();
+        while let Some((release_at, chunk)) = rx.recv().await {
+            tokio::time::sleep_until(release_at).await;
+            released.push((tokio::time::Instant::now() - start, chunk.len()));
+        }
+
+        assert_eq!(released.len(), 10);
+        // Every chunk lands one delay after it was queued, and the last one is
+        // not 10 delays late.
+        let last = released.last().unwrap().0;
+        assert!(
+            last < delay * 2,
+            "last chunk released after {last:?}, expected about {delay:?}"
+        );
+    }
+
+    /// A delayed relay still forwards every byte in order.
+    #[tokio::test]
+    async fn the_delayed_relay_forwards_the_whole_stream() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let payload: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+        let expected = payload.clone();
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(&payload).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let (server, _) = listener.accept().await.unwrap();
+        let (mut read_half, _write_half) = tokio::io::split(server);
+        let mut got = Vec::new();
+        let mut buf = vec![0u8; 1024];
+        loop {
+            let n = read_half.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            got.extend_from_slice(&buf[..n]);
+        }
+        client.await.unwrap();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn an_unset_delay_is_disabled() {
+        assert_eq!(parse_stage_link_delay(None).unwrap(), None);
+    }
+
+    #[test]
+    fn a_positive_delay_parses_to_a_duration() {
+        assert_eq!(
+            parse_stage_link_delay(Some("30")).unwrap(),
+            Some(Duration::from_millis(30))
+        );
+        assert_eq!(
+            parse_stage_link_delay(Some(" 30 ")).unwrap(),
+            Some(Duration::from_millis(30))
+        );
+    }
+
+    #[test]
+    fn present_but_invalid_delay_values_are_errors() {
+        // Empty, non-numeric, zero, negative, and fractional values must
+        // fail loudly: silently treating them as "disabled" would turn a
+        // misconfigured latency sweep into results that look valid.
+        for raw in ["", "   ", "abc", "0", "-5", "1.5"] {
+            assert!(
+                parse_stage_link_delay(Some(raw)).is_err(),
+                "{raw:?} must be rejected"
+            );
+        }
     }
 }

@@ -181,7 +181,12 @@ impl StageOpenAiBackend {
         ) {
             let base = self.local_kv_message_base(session_id, ids);
             let exact_identity = kv.prefill_identity(&self.config, &base, 0, prefill_tokens);
-            if let Ok(Some(record)) = kv.record_exact_state(runtime, session_id, &exact_identity) {
+            if let Ok(Some(record)) = kv.record_exact_state(
+                runtime,
+                session_id,
+                &exact_identity,
+                crate::kv_integration::CaptureAdmission::BestEffort,
+            ) {
                 resident_recorded_pages = resident_recorded_pages.saturating_add(1);
                 let mut attrs = self.openai_attrs(ids);
                 attrs.insert(

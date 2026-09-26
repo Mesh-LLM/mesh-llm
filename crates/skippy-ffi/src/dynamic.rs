@@ -7,14 +7,16 @@ use std::{
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
-    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap,
-    MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdHelperBitmapWrapper, MtmdHelperInitOpt,
-    MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft,
-    NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session,
-    SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1,
-    SlicePlan, StagePlan, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1,
-    StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind, StagePlanner,
-    StagePlannerConfigV1, Status, TensorInfo, TokenSignal, runtime_abi_supported,
+    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo,
+    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
+    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
+    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig,
+    Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
+    SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
+    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
+    WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -164,6 +166,8 @@ macro_rules! dynamic_symbols {
 }
 
 dynamic_symbols! {
+    llama_get_embeddings_ith(ctx: *mut Opaque, index: i32) -> *mut f32;
+    llama_set_embeddings(ctx: *mut Opaque, embeddings: bool);
     llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
     ggml_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
     llama_model_quantize_default_params() -> LlamaModelQuantizeParams;
@@ -183,6 +187,9 @@ dynamic_symbols! {
     skippy_model_llama_model(model: *const Model) -> *const Opaque;
     skippy_model_output_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
     skippy_model_input_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
+    skippy_system_one_canvas_length(model: *mut Model, out_canvas_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_system_one_read(model: *mut Model, prompt_tokens: *const i32, prompt_token_count: usize, canvas_tokens: *const i32, canvas_token_count: usize, label_token_ids: *const i32, label_token_count: usize, slots: *const SystemOneSlot, slot_count: usize, out_probabilities: *mut f32, output_capacity: usize, out_output_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_model_workload_info_v1(model: *const Model, out_info: *mut WorkloadInfoV1, out_error: *mut *mut Error) -> Status;
     skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_create_from_resident_prefix(model: *mut Model, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
@@ -194,6 +201,9 @@ dynamic_symbols! {
     skippy_session_set_position(session: *mut Session, n_past: i32, out_error: *mut *mut Error) -> Status;
     skippy_session_sample_current(session: *mut Session, sampling: *const SamplingConfig, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
     skippy_session_configure_chat_sampling(session: *mut Session, sampling: *const SamplingConfig, metadata_json: *const c_char, prompt_token_count: u64, out_error: *mut *mut Error) -> Status;
+    skippy_session_embed(session: *mut Session, token_ids: *const i32, token_count: usize, output: *mut f32, output_capacity: usize, out_dimensions: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_rerank(session: *mut Session, query: *const c_char, document: *const c_char, out_score: *mut f32, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_encode_prompt(session: *mut Session, token_ids: *const i32, token_count: usize, out_decoder_start_token: *mut i32, out_error: *mut *mut Error) -> Status;
     skippy_session_reset(session: *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_free(session: *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_prefill_chunk(session: *mut Session, token_ids: *const i32, token_count: usize, input_activations: *const c_void, input_activation_bytes: usize, output_activations: *mut c_void, output_activation_capacity: usize, out_output_activation_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
@@ -233,10 +243,6 @@ dynamic_symbols! {
     skippy_model_info_free(info: *mut ModelInfo, out_error: *mut *mut Error) -> Status;
     skippy_model_info_tensor_count(info: *mut ModelInfo, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_model_info_tensor_at(info: *mut ModelInfo, index: usize, out_tensor: *mut TensorInfo, out_error: *mut *mut Error) -> Status;
-    skippy_slice_plan_create(info: *mut ModelInfo, out_plan: *mut *mut SlicePlan, out_error: *mut *mut Error) -> Status;
-    skippy_slice_plan_free(plan: *mut SlicePlan, out_error: *mut *mut Error) -> Status;
-    skippy_slice_plan_add_layer_range(plan: *mut SlicePlan, stage_index: i32, layer_start: i32, layer_end: i32, include_embeddings: bool, include_output: bool, include_per_layer_token_embd: bool, out_error: *mut *mut Error) -> Status;
-    skippy_write_slice_gguf(info: *mut ModelInfo, plan: *const SlicePlan, stage_index: i32, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_write_gguf_metadata_from_parts(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_write_gguf_from_parts(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_write_gguf_from_parts_consuming(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
@@ -254,6 +260,14 @@ dynamic_symbols! {
     mtmd_default_marker() -> *const c_char;
     mtmd_helper_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
     mtmd_context_params_default() -> MtmdContextParams;
+    mtmd_gen_audio_get_info(ctx: *const MtmdContext) -> MtmdGenAudioInfo;
+    mtmd_helper_gen_audio_init(lctx: *mut Opaque, mctx: *mut MtmdContext) -> *mut MtmdHelperGenAudio;
+    mtmd_helper_gen_audio_free(ctx: *mut MtmdHelperGenAudio);
+    mtmd_helper_gen_audio_reset(ctx: *mut MtmdHelperGenAudio);
+    mtmd_helper_gen_audio_set_input(ctx: *mut MtmdHelperGenAudio, input: *const MtmdHelperGenAudioInput) -> i32;
+    mtmd_helper_gen_audio_step_prompt(ctx: *mut MtmdHelperGenAudio, n_batch: i32) -> i32;
+    mtmd_helper_gen_audio_step_gen(ctx: *mut MtmdHelperGenAudio, sampled: i32, h_state_in: *const f32, h_state_out: *mut *const f32, out_stop: *mut bool) -> i32;
+    mtmd_helper_gen_audio_get_output(ctx: *mut MtmdHelperGenAudio, out_sample_rate: *mut i32, out_data: *mut *const c_char, out_data_len: *mut usize, out_n_samples: *mut i64) -> i32;
     mtmd_init_from_file(mmproj_fname: *const c_char, text_model: *const Opaque, ctx_params: MtmdContextParams) -> *mut MtmdContext;
     mtmd_free(ctx: *mut MtmdContext);
     mtmd_helper_init_opt_default() -> MtmdHelperInitOpt;
@@ -275,6 +289,7 @@ dynamic_symbols! {
     mtmd_helper_image_get_decoder_pos(image: *const Opaque, pos_0: i32, out_pos: *mut MtmdDecoderPos);
     mtmd_helper_eval_chunks(ctx: *mut MtmdContext, lctx: *mut Opaque, chunks: *const MtmdInputChunks, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32) -> c_int;
     mtmd_helper_eval_chunk_single(ctx: *mut MtmdContext, lctx: *mut Opaque, chunk: *const Opaque, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32) -> c_int;
+    mtmd_helper_eval_chunk_single_with_callback(ctx: *mut MtmdContext, lctx: *mut Opaque, chunk: *const Opaque, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32, callback: Option<unsafe extern "C" fn(i32, *mut c_void) -> c_int>, user_data: *mut c_void) -> c_int;
 }
 
 // -----------------------------------------------------------------------
@@ -399,6 +414,13 @@ pub fn skippy_abi_features_optional() -> Option<SkippyAbiFeaturesFn> {
         .get_or_init(|| symbols().lookup_optional::<SkippyAbiFeaturesFn>(b"skippy_abi_features\0"))
 }
 
+/// Graph reuse counters. Optional: a runtime that predates this symbol must
+/// still load, since the counters are telemetry and never a correctness input.
+pub fn llama_perf_context_optional() -> Option<LlamaPerfContextFn> {
+    static CACHE: OnceLock<Option<LlamaPerfContextFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| symbols().lookup_optional::<LlamaPerfContextFn>(b"llama_perf_context\0"))
+}
+
 pub(crate) fn llama_model_is_recurrent_fn() -> Option<LlamaModelStateFn> {
     static CACHE: OnceLock<Option<LlamaModelStateFn>> = OnceLock::new();
     *CACHE.get_or_init(|| {
@@ -416,6 +438,20 @@ pub(crate) fn llama_model_is_diffusion_fn() -> Option<LlamaModelStateFn> {
     static CACHE: OnceLock<Option<LlamaModelStateFn>> = OnceLock::new();
     *CACHE.get_or_init(|| {
         symbols().lookup_optional::<LlamaModelStateFn>(b"llama_model_is_diffusion\0")
+    })
+}
+
+type LlamaModelMetaValStrFn = unsafe extern "C" fn(
+    model: *const Opaque,
+    key: *const c_char,
+    buf: *mut c_char,
+    buf_size: usize,
+) -> c_int;
+
+pub(crate) fn llama_model_meta_val_str_fn() -> Option<LlamaModelMetaValStrFn> {
+    static CACHE: OnceLock<Option<LlamaModelMetaValStrFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<LlamaModelMetaValStrFn>(b"llama_model_meta_val_str\0")
     })
 }
 

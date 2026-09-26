@@ -1,6 +1,7 @@
 mod channel_broadcast;
 mod config;
 mod health;
+mod in_process;
 mod installed;
 pub(crate) mod mcp;
 pub mod openai_exchange;
@@ -67,7 +68,7 @@ pub use self::config::{
     ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginHostMode,
     PluginStartupConfig, PluginWebUiPreference, ResolvedPlugins, SpeculativeConfig,
     TelemetryConfig, TelemetryMetricsConfig, bundled_cli_plugin_spec, config_path, config_to_toml,
-    load_config, parse_config_toml, resolve_plugins, validate_config_file,
+    in_process_builtin_spec, load_config, parse_config_toml, resolve_plugins, validate_config_file,
 };
 #[cfg(test)]
 pub(crate) use self::config::{
@@ -82,6 +83,7 @@ pub(crate) use self::config::{
 use self::health::EndpointHealthState;
 #[cfg(test)]
 use self::health::{endpoint_declared_capabilities, endpoint_record_from_plugin_status};
+pub use self::in_process::{InProcessPluginRunner, InProcessPlugins};
 use self::runtime::ExternalPlugin;
 pub use self::startup::{PluginStartupOptions, PluginStartupSummary};
 pub(crate) use self::support::parse_optional_json;
@@ -99,6 +101,13 @@ use mesh_llm_plugin::MeshVisibility;
 use mesh_llm_plugin_manager::store::InstalledPluginWebUiValidationStatus;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
+/// Built-in Lexe wallet plugin, served like blobstore from this executable as
+/// `mesh-llm --plugin wallet-lexe`. Compiled in only with the `wallet-lexe`
+/// feature; the name stays defined so config validation is feature-independent.
+pub const WALLET_LEXE_PLUGIN_ID: &str = "wallet-lexe";
+/// Built-in payments engine, served in-process as the `payments.v1`
+/// capability. Registered only with the `payments` feature.
+pub const PAYMENTS_PLUGIN_ID: &str = "payments";
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 #[cfg(test)]
@@ -136,6 +145,17 @@ impl PluginManager {
         host_mode: PluginHostMode,
         mesh_tx: mpsc::Sender<PluginMeshEvent>,
     ) -> Result<Self> {
+        Self::start_with_in_process(specs, host_mode, mesh_tx, InProcessPlugins::default()).await
+    }
+
+    /// Like [`Self::start`], serving command-less specs named in `in_process`
+    /// as tasks in this process.
+    pub async fn start_with_in_process(
+        specs: &ResolvedPlugins,
+        host_mode: PluginHostMode,
+        mesh_tx: mpsc::Sender<PluginMeshEvent>,
+        in_process: InProcessPlugins,
+    ) -> Result<Self> {
         Self::log_startup_plan(specs);
 
         let rpc_bridge = Arc::new(Mutex::new(None));
@@ -148,6 +168,7 @@ impl PluginManager {
             instance_id,
             rpc_bridge.clone(),
             &runtime_data,
+            &in_process,
         )
         .await?;
         let manager = Self {
@@ -235,6 +256,7 @@ impl PluginManager {
         instance_id: String,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
         runtime_data: &RuntimeDataCollector,
+        in_process: &InProcessPlugins,
     ) -> Result<(BTreeMap<String, ExternalPlugin>, Vec<PluginSummary>)> {
         let mut plugins = BTreeMap::new();
         let mut failed = Vec::new();
@@ -246,6 +268,7 @@ impl PluginManager {
                 instance_id.clone(),
                 rpc_bridge.clone(),
                 runtime_data,
+                in_process.get(&spec.name),
             )
             .await
             {
@@ -276,6 +299,7 @@ impl PluginManager {
         instance_id: String,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
         runtime_data: &RuntimeDataCollector,
+        in_process: Option<InProcessPluginRunner>,
     ) -> Result<ExternalPlugin> {
         tracing::info!(
             plugin = %spec.name,
@@ -290,6 +314,7 @@ impl PluginManager {
             mesh_tx,
             rpc_bridge,
             runtime_data.producer(Self::summary_runtime_source(spec.name.clone())),
+            in_process,
         )
         .await
         .map_err(|err| {
@@ -773,6 +798,19 @@ impl PluginManager {
         tool_name: &str,
         arguments_json: &str,
     ) -> Result<ToolCallResult> {
+        self.call_tool_with_timeout(plugin_name, tool_name, arguments_json, None)
+            .await
+    }
+
+    /// Invoke an operation with an explicit deadline. `None` waits until the
+    /// plugin answers or its connection drops; the caller owns cancellation.
+    pub async fn call_tool_with_timeout(
+        &self,
+        plugin_name: &str,
+        tool_name: &str,
+        arguments_json: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<ToolCallResult> {
         if self.is_test_bridge_enabled(plugin_name) {
             return self.call_tool(plugin_name, tool_name, arguments_json).await;
         }
@@ -789,7 +827,7 @@ impl PluginManager {
             .get(plugin_name)
             .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
         plugin
-            .call_tool_without_timeout(tool_name, arguments_json)
+            .call_tool_with_timeout(tool_name, arguments_json, timeout)
             .await
     }
 
@@ -810,6 +848,17 @@ impl PluginManager {
         input_json: &str,
     ) -> Result<ToolCallResult> {
         self.call_tool_without_timeout(plugin_name, operation_name, input_json)
+            .await
+    }
+
+    pub async fn invoke_operation_with_timeout(
+        &self,
+        plugin_name: &str,
+        operation_name: &str,
+        input_json: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<ToolCallResult> {
+        self.call_tool_with_timeout(plugin_name, operation_name, input_json, timeout)
             .await
     }
 
@@ -1153,6 +1202,7 @@ impl PluginManager {
         *self.inner.rpc_bridge.lock().await = bridge;
     }
 
+    #[cfg(unix)]
     #[cfg(test)]
     pub(crate) async fn set_test_stream_handler<F>(&self, plugin_name: &str, handler: F)
     where
@@ -1329,6 +1379,7 @@ impl PluginManager {
     }
 }
 
+#[cfg(unix)]
 #[cfg(test)]
 pub(crate) async fn connect_test_side_stream(
     endpoint: &str,
@@ -1504,368 +1555,11 @@ fn normalize_test_tool_result_content(result: &rmcp::model::CallToolResult) -> R
 pub async fn run_plugin_process(name: String) -> Result<()> {
     match name.as_str() {
         BLOBSTORE_PLUGIN_ID => crate::plugins::blobstore::run_plugin(name).await,
+        #[cfg(feature = "wallet-lexe")]
+        WALLET_LEXE_PLUGIN_ID => mesh_wallet_lexe::run_plugin(name).await,
         _ => bail!("Unknown built-in plugin '{}'", name),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::config::{MeshConfig, PluginConfigEntry};
-    use super::*;
-
-    fn private_host_mode() -> PluginHostMode {
-        PluginHostMode {
-            mesh_visibility: MeshVisibility::Private,
-        }
-    }
-
-    fn web_ui_manifest() -> proto::PluginWebUiManifest {
-        proto::PluginWebUiManifest {
-            pages: vec![proto::PluginWebUiPageManifest {
-                id: "home".into(),
-                label: "Home".into(),
-                icon: Some("icons/home.svg".into()),
-                route: "index.html".into(),
-                bundle_id: "main".into(),
-                entry_script: "assets/app.js".into(),
-            }],
-            config_sections: vec![proto::PluginWebUiConfigSectionManifest {
-                id: "settings".into(),
-                title: "Settings".into(),
-                entry_script: "assets/settings.js".into(),
-                parent_tab: Some("integrations".into()),
-                bundle_id: "main".into(),
-            }],
-            bundles: vec![proto::PluginWebUiBundleManifest {
-                id: "main".into(),
-                root_path: "web".into(),
-            }],
-        }
-    }
-
-    #[test]
-    fn plugin_manifest_overview_includes_web_ui_declaration() {
-        let manifest = proto::PluginManifest {
-            web_ui: Some(web_ui_manifest()),
-            ..proto::PluginManifest::default()
-        };
-
-        let overview = plugin_manifest_overview(&manifest);
-
-        let web_ui = overview.web_ui.expect("web UI overview should be present");
-        assert_eq!(web_ui.pages[0].id, "home");
-        assert_eq!(web_ui.config_sections[0].id, "settings");
-    }
-
-    #[test]
-    fn resolves_default_builtin_plugins() {
-        let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 1);
-        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
-        assert!(resolved.externals[0].startup.optional);
-        assert!(resolved.inactive.is_empty());
-    }
-
-    #[test]
-    fn external_plugin_can_be_configured() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: "demo".into(),
-                enabled: Some(true),
-                web_ui_enabled: None,
-                command: Some("mesh-llm-plugin-demo".into()),
-                args: vec!["--stdio".into()],
-                url: None,
-                settings: Default::default(),
-                startup: Default::default(),
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, "demo");
-        assert_eq!(resolved.externals[0].command, "mesh-llm-plugin-demo");
-        assert_eq!(resolved.externals[0].args, ["--stdio"]);
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
-        assert!(resolved.inactive.is_empty());
-    }
-
-    #[test]
-    fn failed_plugin_summary_redacts_urls_before_serialization() {
-        let spec = ExternalPluginSpec {
-            name: "remote".into(),
-            command: "mesh-llm-plugin-remote".into(),
-            args: Vec::new(),
-            url: Some("https://plugin.example.test/v1".into()),
-            env: BTreeMap::new(),
-            startup: PluginStartupOptions {
-                optional: true,
-                ..PluginStartupOptions::default()
-            },
-            web_ui_enabled: None,
-            installed_metadata: None,
-        };
-        let error = anyhow::anyhow!(
-            "connection to tcp://user:secret@127.0.0.1:19091/control?token=private failed"
-        );
-
-        let summary = PluginManager::plugin_load_failure_summary(&spec, &error);
-        let serialized = serde_json::to_string(&summary).expect("summary serializes");
-
-        assert!(!serialized.contains("user"));
-        assert!(!serialized.contains("secret"));
-        assert!(!serialized.contains("private"));
-    }
-
-    #[test]
-    fn blobstore_can_be_disabled() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: BLOBSTORE_PLUGIN_ID.into(),
-                enabled: Some(false),
-                web_ui_enabled: None,
-                command: None,
-                args: Vec::new(),
-                url: None,
-                settings: Default::default(),
-                startup: Default::default(),
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert!(resolved.externals.is_empty());
-        assert!(resolved.inactive.is_empty());
-    }
-
-    #[test]
-    fn external_plugin_can_be_enabled_with_url() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: "endpoint-plugin".into(),
-                enabled: Some(true),
-                web_ui_enabled: None,
-                command: Some("endpoint-plugin".into()),
-                args: Vec::new(),
-                url: Some("http://gpu-box:8000/v1".into()),
-                settings: Default::default(),
-                startup: Default::default(),
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, "endpoint-plugin");
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
-        let spec = &resolved.externals[0];
-        assert_eq!(spec.command, "endpoint-plugin");
-        assert!(spec.args.is_empty());
-        assert_eq!(spec.url.as_deref(), Some("http://gpu-box:8000/v1"));
-    }
-
-    #[test]
-    fn external_plugin_rejects_url_that_is_empty_after_normalization() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: "endpoint-plugin".into(),
-                enabled: Some(true),
-                web_ui_enabled: None,
-                command: Some("endpoint-plugin".into()),
-                args: Vec::new(),
-                url: Some("\u{2003}\t\n".into()),
-                settings: Default::default(),
-                startup: Default::default(),
-            }],
-            ..MeshConfig::default()
-        };
-
-        let error = resolve_plugins(&config, private_host_mode())
-            .expect_err("normalized plugin URL must not be empty");
-        assert!(error.to_string().contains("plugin URL must not be empty"));
-    }
-
-    #[test]
-    fn remote_plugin_control_url_is_rejected_without_authentication() {
-        let raw_url = "\u{2003}tcp://user:secret@127.0.0.1:19091/control?token=private\u{2003}";
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: "remote-plugin".into(),
-                enabled: Some(true),
-                web_ui_enabled: None,
-                command: None,
-                args: Vec::new(),
-                url: Some(raw_url.into()),
-                settings: Default::default(),
-                startup: Default::default(),
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-
-        let error = resolve_plugins(&config, private_host_mode())
-            .expect_err("unauthenticated remote plugin control must be rejected");
-        let diagnostic = error.to_string();
-        assert!(diagnostic.contains("authenticated capability handshake"));
-        assert!(!diagnostic.contains("user"));
-        assert!(!diagnostic.contains("secret"));
-        assert!(!diagnostic.contains("private"));
-        assert!(!diagnostic.contains(raw_url));
-    }
-
-    #[test]
-    fn external_plugin_can_be_enabled_with_command_args() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: "endpoint-plugin".into(),
-                enabled: Some(true),
-                web_ui_enabled: None,
-                command: Some("/opt/plugins/endpoint-plugin".into()),
-                args: vec!["--verbose".into()],
-                url: None,
-                settings: Default::default(),
-                startup: Default::default(),
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, "endpoint-plugin");
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
-        let spec = &resolved.externals[0];
-        assert_eq!(spec.command, "/opt/plugins/endpoint-plugin");
-        assert_eq!(spec.args, vec!["--verbose"]);
-    }
-
-    #[test]
-    fn external_plugin_ignores_disabled_entry_without_install() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: "endpoint-plugin".into(),
-                enabled: Some(false),
-                web_ui_enabled: None,
-                command: None,
-                args: Vec::new(),
-                url: Some("http://gpu-box:8000/v1".into()),
-                settings: Default::default(),
-                startup: Default::default(),
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 1);
-        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
-    }
-
-    #[test]
-    fn default_builtins_are_resolved_on_public_meshes() {
-        let resolved = resolve_plugins(
-            &MeshConfig::default(),
-            PluginHostMode {
-                mesh_visibility: MeshVisibility::Public,
-            },
-        )
-        .unwrap();
-        assert_eq!(resolved.externals.len(), 1);
-        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
-        assert!(resolved.inactive.is_empty());
-    }
-
-    #[test]
-    fn resolves_external_plugin() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: "demo".into(),
-                enabled: Some(true),
-                web_ui_enabled: None,
-                command: Some("/tmp/demo".into()),
-                args: vec!["--flag".into()],
-                url: None,
-                settings: Default::default(),
-                startup: Default::default(),
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, "demo");
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
-        assert!(resolved.inactive.is_empty());
-    }
-
-    #[tokio::test]
-    async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
-        let specs = ResolvedPlugins {
-            externals: vec![ExternalPluginSpec {
-                name: "demo".into(),
-                command: "mesh-llm-definitely-missing-plugin-binary".into(),
-                args: Vec::new(),
-                url: None,
-                env: BTreeMap::new(),
-                startup: PluginStartupOptions {
-                    optional: true,
-                    ..PluginStartupOptions::default()
-                },
-                web_ui_enabled: None,
-                installed_metadata: Some(installed_metadata_with_web_ui(
-                    InstalledPluginWebUiValidationStatus::Valid,
-                    Some("web"),
-                )),
-            }],
-            inactive: Vec::new(),
-        };
-        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
-
-        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
-            .await
-            .expect("broken plugin should not stop manager startup");
-        let summaries = manager.list().await;
-        manager.shutdown().await;
-
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].name, "demo");
-        assert_eq!(summaries[0].status, "error");
-        assert_eq!(
-            summaries[0].web_ui.state,
-            PluginWebUiStateKind::PluginNotRunning
-        );
-        assert_eq!(summaries[0].web_ui.pages.len(), 1);
-        assert_eq!(summaries[0].web_ui.config_sections.len(), 1);
-    }
-
-    #[test]
-    fn instance_ids_include_pid_and_random_suffix() {
-        let instance_id = make_instance_id();
-        let prefix = format!("p{}-", std::process::id());
-        assert!(instance_id.starts_with(&prefix));
-        assert_eq!(instance_id.len(), prefix.len() + 8);
-        assert!(
-            instance_id[prefix.len()..]
-                .chars()
-                .all(|ch| ch.is_ascii_hexdigit())
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn unix_socket_path_is_namespaced_by_instance_id() {
-        let path = unix_socket_path("p1234-deadbeef", "Pipes").unwrap();
-        assert_eq!(
-            path.file_name().and_then(|value| value.to_str()),
-            Some("p1234-deadbeef-Pipes.sock")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_pipe_name_is_namespaced_by_instance_id() {
-        assert_eq!(
-            windows_pipe_name("p1234-deadbeef", "Pipes"),
-            r"\\.\pipe\mesh-llm-p1234-deadbeef-Pipes"
-        );
-    }
-}
+mod tests;

@@ -10,16 +10,11 @@ mod inspect;
 mod package;
 mod package_v2;
 mod part_writer;
-mod plan;
-mod preflight;
 mod progress;
 mod source_inventory;
 mod tensor_payload;
 #[cfg(test)]
 mod test_gguf;
-#[cfg(test)]
-mod tests;
-mod validate;
 mod verify_v2;
 mod write;
 
@@ -52,7 +47,11 @@ const MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if !matches!(args.command, Command::VerifyPackageV2 { .. }) {
+    // Local inspection and verification must not touch download caches.
+    if !matches!(
+        args.command,
+        Command::Inspect { .. } | Command::VerifyPackageV2 { .. }
+    ) {
         prepare_model_download_directories();
     }
 
@@ -68,32 +67,6 @@ fn main() -> Result<()> {
 fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Inspect { model } => inspect::inspect(model),
-        Command::Plan { model, stages } => plan::build_plan(&model, stages).and_then(|output| {
-            println!("{}", serde_json::to_string_pretty(&output)?);
-            Ok(())
-        }),
-        Command::Write {
-            model,
-            layers,
-            out,
-            stage_index,
-            include_embeddings,
-            include_output,
-            manifest,
-        } => write::write_one(
-            model,
-            layers,
-            out,
-            stage_index,
-            include_embeddings,
-            include_output,
-            manifest,
-        ),
-        Command::WriteStages {
-            model,
-            stages,
-            out_dir,
-        } => write::write_stages(model, stages, out_dir),
         Command::WritePackage {
             model,
             out_dir,
@@ -104,6 +77,7 @@ fn run(args: Args) -> Result<()> {
             source_repo,
             source_revision,
             source_file,
+            generation_defaults,
             resume_existing_artifacts,
             max_artifact_bytes,
         } => package_v2::write_package(
@@ -116,14 +90,17 @@ fn run(args: Args) -> Result<()> {
             ArtifactHook {
                 command: transform_artifact_command,
             },
-            ExplicitSourceIdentity {
-                model_id,
-                source_repo,
-                source_revision,
-                source_file,
+            package_v2::PackageWriteOptions {
+                explicit: ExplicitSourceIdentity {
+                    model_id,
+                    source_repo,
+                    source_revision,
+                    source_file,
+                },
+                generation_defaults,
+                resume_existing_artifacts,
+                max_artifact_bytes,
             },
-            resume_existing_artifacts,
-            max_artifact_bytes,
         ),
         Command::VerifyPackageV2 {
             package,
@@ -140,13 +117,6 @@ fn run(args: Args) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
-        Command::Validate { full, slices } => validate::validate(full, slices),
-        Command::ValidatePackage { full, package } => validate::validate_package(full, package),
-        Command::Preflight {
-            package,
-            stages,
-            verify_sha256,
-        } => validate::run_preflight(package, stages, verify_sha256),
         Command::ValidateGlmDsaContract {
             package,
             require_generation_policy,

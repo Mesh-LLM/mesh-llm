@@ -42,6 +42,13 @@ use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sampl
 use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
 
 mod exact_state_recording;
+// Test-only: lets iteration_scheduler tests exercise the real outstanding-
+// capture accounting through the real channel/command types.
+#[cfg(test)]
+pub(crate) use exact_state_recording::CaptureTaskOutstandingGuard;
+
+#[cfg(test)]
+pub(crate) mod capture_trace;
 mod kv_restore;
 
 pub(in crate::frontend) fn resident_capacity_admission_error(
@@ -338,6 +345,11 @@ fn deferred_suffix_split(
     (suffix_start, checkpoint)
 }
 
+/// Pick the deferred-prefill checkpoint boundary. A valid EXPLICIT chat
+/// boundary wins: it is the reusable message-history prefix a follow-up
+/// request shares token-for-token, so it is the checkpoint most likely to be
+/// on a future request's path. The shared-grid checkpoint is the fallback for
+/// absent, invalid, or already-restored chat boundaries.
 fn select_deferred_checkpoint_boundary(
     shared_checkpoint: Option<usize>,
     chat_checkpoint: Option<usize>,
@@ -346,9 +358,9 @@ fn select_deferred_checkpoint_boundary(
 ) -> Option<usize> {
     let valid =
         |boundary: &usize| *boundary > restored_prefill_tokens && *boundary < prompt_token_count;
-    shared_checkpoint
+    chat_checkpoint
         .filter(valid)
-        .or_else(|| chat_checkpoint.filter(valid))
+        .or_else(|| shared_checkpoint.filter(valid))
 }
 
 impl StageOpenAiBackend {
@@ -357,6 +369,7 @@ impl StageOpenAiBackend {
         mut request: LocalGeneration<'_>,
         mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<GenerationCacheStats> {
+        let payment_gate = crate::frontend::generation_gate::find(request.ids.frontend_request_id)?;
         let session_id = request.ids.session_label.clone();
         let receipt_request_id = request.ids.request_id;
         let receipt_session_id = request.ids.session_id;
@@ -393,7 +406,20 @@ impl StageOpenAiBackend {
             receipt_request_id,
             receipt_session_id,
         );
+        let paid_input_tokens = request.prompt_token_ids.len();
+        let paid_max_output_tokens = request.max_tokens;
+        let mut authorization_started = false;
         let mut emit_token = |token_id| {
+            if let Some(gate) = payment_gate.as_ref() {
+                // The first canonical token proves the native step that
+                // consumed the final prompt token succeeded, so the whole
+                // prompt is processed before authorization starts.
+                if !authorization_started {
+                    gate.after_prefill(paid_input_tokens, paid_max_output_tokens)?;
+                    authorization_started = true;
+                }
+                gate.before_token()?;
+            }
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
@@ -420,7 +446,7 @@ impl StageOpenAiBackend {
             {
                 return Err(OpenAiError::backend("request cancelled"));
             }
-            if self.uses_scheduler_builtin_driver(&request) {
+            if payment_gate.is_none() && self.uses_scheduler_builtin_driver(&request) {
                 let model_generation_elapsed = self.run_scheduled_generation(
                     &request,
                     &session_id,
@@ -1255,8 +1281,13 @@ impl StageOpenAiBackend {
                         cache_operation,
                     )?;
                     ensure_cache_operation_active(runtime, session_id, cache_operation)?;
-                    kv.record_exact_state(runtime, session_id, &identity)
-                        .map_err(openai_backend_error)?;
+                    kv.record_exact_state(
+                        runtime,
+                        session_id,
+                        &identity,
+                        crate::kv_integration::CaptureAdmission::BestEffort,
+                    )
+                    .map_err(openai_backend_error)?;
                     prefill_cache_chunks(
                         runtime,
                         session_id,
@@ -1695,18 +1726,47 @@ fn deferred_suffix_split_respects_restore_and_prompt_boundaries() {
 
 #[cfg(test)]
 #[test]
-fn deferred_checkpoint_prefers_shared_grid_boundary_over_chat_boundary() {
+fn deferred_checkpoint_prefers_chat_boundary_with_shared_grid_fallback() {
+    let prompt = 10;
+    // Both valid: the explicit chat boundary wins over the shared grid.
     assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), Some(6), 0, 10),
+        select_deferred_checkpoint_boundary(Some(8), Some(6), 0, prompt),
+        Some(6)
+    );
+    // Chat absent or None: shared grid is the fallback.
+    assert_eq!(
+        select_deferred_checkpoint_boundary(Some(8), None, 0, prompt),
         Some(8)
     );
+    // Chat already restored (equal to the restored prefix): shared fallback.
     assert_eq!(
-        select_deferred_checkpoint_boundary(None, Some(6), 0, 10),
+        select_deferred_checkpoint_boundary(Some(8), Some(4), 4, prompt),
+        Some(8)
+    );
+    // Chat at the prompt end: invalid, shared fallback.
+    assert_eq!(
+        select_deferred_checkpoint_boundary(Some(8), Some(10), 0, prompt),
+        Some(8)
+    );
+    // Chat beyond the prompt: invalid, shared fallback.
+    assert_eq!(
+        select_deferred_checkpoint_boundary(Some(8), Some(99), 0, prompt),
+        Some(8)
+    );
+    // Shared already restored but chat valid: chat wins.
+    assert_eq!(
+        select_deferred_checkpoint_boundary(Some(4), Some(6), 4, prompt),
         Some(6)
     );
+    // Both invalid: nothing selected.
     assert_eq!(
-        select_deferred_checkpoint_boundary(Some(4), Some(6), 4, 10),
-        Some(6)
+        select_deferred_checkpoint_boundary(Some(4), Some(10), 4, prompt),
+        None
+    );
+    // Neither candidate exists: nothing selected.
+    assert_eq!(
+        select_deferred_checkpoint_boundary(None, None, 0, prompt),
+        None
     );
 }
 

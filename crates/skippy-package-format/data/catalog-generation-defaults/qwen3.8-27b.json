@@ -1,0 +1,47 @@
+{
+  "selection": {
+    "default": "thinking",
+    "reasoning_enabled": "thinking",
+    "reasoning_disabled": "direct"
+  },
+  "profiles": {
+    "thinking": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0,
+      "presence_penalty": 0,
+      "repeat_penalty": 1,
+      "reasoning": {
+        "enabled": "on",
+        "budget": "auto"
+      },
+      "provenance": {
+        "source_repo": "Qwen/Qwen3.8-27B",
+        "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+        "file": "README.md",
+        "section": "Best Practices",
+        "url": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/README.md"
+      }
+    },
+    "direct": {
+      "temperature": 0.7,
+      "top_p": 0.8,
+      "top_k": 20,
+      "min_p": 0,
+      "presence_penalty": 1.5,
+      "repeat_penalty": 1,
+      "reasoning": {
+        "enabled": "off",
+        "budget": 0
+      },
+      "provenance": {
+        "source_repo": "Qwen/Qwen3.8-27B",
+        "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+        "file": "README.md",
+        "section": "Best Practices",
+        "url": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/README.md"
+      }
+    }
+  }
+}

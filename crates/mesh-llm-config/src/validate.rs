@@ -545,7 +545,7 @@ fn validate_logging_config(config: &crate::LoggingConfig) -> Vec<ConfigDiagnosti
 }
 
 fn validate_application_state_root(
-    root: &std::path::PathBuf,
+    root: &std::path::Path,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) {
     if root.as_os_str().is_empty() {

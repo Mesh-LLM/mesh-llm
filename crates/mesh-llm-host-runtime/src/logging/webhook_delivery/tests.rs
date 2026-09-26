@@ -10,6 +10,8 @@ use super::*;
 use crate::logging::operator_audit::OperatorAuditWriter;
 
 const NOW: &str = "2026-08-04T12:00:00Z";
+/// Largest transport timeout `WebhookDeliveryWorker::from_config` accepts.
+const MAX_WEBHOOK_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Clone)]
 struct FixedClock;
@@ -63,142 +65,9 @@ impl StoreClock for AdjustableClock {
     }
 }
 
-#[derive(Clone, Copy)]
-enum LocalHttpReply {
-    Status(u16),
-    Stall,
-}
+mod fake_http_server;
 
-struct LocalFakeHttpServer {
-    endpoint: String,
-    requests: Arc<Mutex<Vec<String>>>,
-    received: Arc<Notify>,
-    shutdown_tx: watch::Sender<bool>,
-    task: tokio::task::JoinHandle<()>,
-}
-
-impl LocalFakeHttpServer {
-    async fn start(replies: impl IntoIterator<Item = LocalHttpReply>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind local fake webhook server");
-        let endpoint = format!(
-            "http://{}/webhook",
-            listener.local_addr().expect("local server address")
-        );
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let received = Arc::new(Notify::new());
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let task = tokio::spawn(run_local_fake_http_server(
-            listener,
-            replies.into_iter().collect(),
-            Arc::clone(&requests),
-            Arc::clone(&received),
-            shutdown_rx,
-        ));
-        Self {
-            endpoint,
-            requests,
-            received,
-            shutdown_tx,
-            task,
-        }
-    }
-
-    async fn wait_for_requests(&self, expected: usize) {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if self.requests.lock().expect("request lock").len() >= expected {
-                    return;
-                }
-                self.received.notified().await;
-            }
-        })
-        .await
-        .expect("fake server received expected requests");
-    }
-
-    fn requests(&self) -> Vec<String> {
-        self.requests.lock().expect("request lock").clone()
-    }
-
-    async fn shutdown(self) {
-        let _ = self.shutdown_tx.send(true);
-        self.task.abort();
-        let _ = self.task.await;
-    }
-}
-
-async fn run_local_fake_http_server(
-    listener: TcpListener,
-    mut replies: VecDeque<LocalHttpReply>,
-    requests: Arc<Mutex<Vec<String>>>,
-    received: Arc<Notify>,
-    mut shutdown_rx: watch::Receiver<bool>,
-) {
-    loop {
-        let accepted = tokio::select! {
-            changed = shutdown_rx.changed() => {
-                if changed.is_err() || *shutdown_rx.borrow() {
-                    return;
-                }
-                continue;
-            }
-            accepted = listener.accept() => accepted,
-        };
-        let (mut stream, _) = accepted.expect("accept fake webhook request");
-        let request = read_fake_http_request(&mut stream).await;
-        requests.lock().expect("request lock").push(request);
-        received.notify_one();
-        match replies.pop_front().unwrap_or(LocalHttpReply::Status(500)) {
-            LocalHttpReply::Status(status) => write_fake_http_response(&mut stream, status).await,
-            LocalHttpReply::Stall => {
-                let _ = shutdown_rx.changed().await;
-                return;
-            }
-        }
-    }
-}
-
-async fn read_fake_http_request(stream: &mut TcpStream) -> String {
-    const MAX_REQUEST_BYTES: usize = 16 * 1024;
-    let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    loop {
-        let read = stream.read(&mut chunk).await.expect("read webhook request");
-        assert!(read > 0, "webhook client closed before sending a request");
-        bytes.extend_from_slice(&chunk[..read]);
-        assert!(
-            bytes.len() <= MAX_REQUEST_BYTES,
-            "fake request exceeded bound"
-        );
-        let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
-            continue;
-        };
-        let headers = std::str::from_utf8(&bytes[..header_end]).expect("request headers utf-8");
-        let content_length = headers
-            .lines()
-            .find_map(|line| {
-                line.strip_prefix("content-length: ")
-                    .or_else(|| line.strip_prefix("Content-Length: "))
-            })
-            .and_then(|value| value.parse::<usize>().ok())
-            .expect("webhook request content length");
-        if bytes.len() >= header_end + 4 + content_length {
-            return String::from_utf8(bytes).expect("request utf-8");
-        }
-    }
-}
-
-async fn write_fake_http_response(stream: &mut TcpStream, status: u16) {
-    stream
-        .write_all(
-            format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
-        .await
-        .expect("write fake webhook response");
-}
+use fake_http_server::{LocalFakeHttpServer, LocalHttpReply};
 
 #[derive(Clone, Copy)]
 enum FakeReply {
@@ -436,6 +305,15 @@ fn real_http_worker(
     endpoint: String,
     clock: AdjustableClock,
 ) -> WebhookDeliveryWorker {
+    real_http_worker_with_timeout(store, endpoint, clock, 1)
+}
+
+fn real_http_worker_with_timeout(
+    store: Arc<LogStore>,
+    endpoint: String,
+    clock: AdjustableClock,
+    timeout_secs: u64,
+) -> WebhookDeliveryWorker {
     let transport: Arc<dyn WebhookTransport> =
         Arc::new(ReqwestWebhookTransport::new().expect("real webhook transport"));
     WebhookDeliveryWorker::from_config(
@@ -444,7 +322,7 @@ fn real_http_worker(
             enabled: true,
             url: Some(endpoint),
             max_attempts: 3,
-            timeout_secs: 1,
+            timeout_secs,
             dead_letter_retention_secs: 3_600,
         },
         transport,
@@ -641,26 +519,63 @@ async fn real_http_timeout_keeps_terminal_persistence_off_the_delivery_path() {
     let (store, _root) = open_adjustable_store(&clock);
     let server = LocalFakeHttpServer::start([LocalHttpReply::Stall]).await;
     seed_terminal_delivery_with_private_event(&store, "real-timeout", NOW, 2);
-    let worker = real_http_worker(Arc::clone(&store), server.endpoint.clone(), clock.clone());
+    // The maximum permitted transport timeout keeps the in-flight delivery
+    // unresolved for the whole test, so "persistence finished while HTTP was
+    // still pending" is an ordering fact observed from the worker task rather
+    // than a wall-clock deadline that a loaded CI runner can miss.
+    let worker = real_http_worker_with_timeout(
+        Arc::clone(&store),
+        server.endpoint.clone(),
+        clock.clone(),
+        MAX_WEBHOOK_TIMEOUT_SECS,
+    );
     let worker_task = tokio::spawn(async move { worker.process_next().await });
 
     server.wait_for_requests(1).await;
-    tokio::time::timeout(Duration::from_millis(250), {
+    tokio::task::spawn_blocking({
         let store = Arc::clone(&store);
-        tokio::task::spawn_blocking(move || {
+        move || {
             seed_terminal_delivery_with_private_event(&store, "terminal-while-http-stalls", NOW, 1)
-        })
+        }
     })
     .await
-    .expect("terminal persistence is not delayed by HTTP")
     .expect("terminal persistence task");
 
+    // The stalled connection is never answered, so the first delivery is still
+    // claimed and unresolved. Reading that from the store is a durable fact,
+    // unlike polling the worker task, which only reports scheduler progress.
+    let in_flight = store.webhook_delivery("real-timeout").unwrap().unwrap();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), worker_task)
-            .await
-            .expect("HTTP timeout is bounded")
-            .expect("worker task")
-            .expect("timeout worker result"),
+        in_flight.state,
+        WebhookDeliveryState::InFlight,
+        "the first delivery is still in flight while the second one persisted"
+    );
+    assert_eq!(in_flight.last_error_code, None);
+    assert_eq!(in_flight.response_status_code, None);
+    assert!(
+        store
+            .webhook_delivery("terminal-while-http-stalls")
+            .unwrap()
+            .is_some(),
+        "terminal persistence remains durable while HTTP is pending"
+    );
+    assert_private_delivery_storage(&store, "terminal-while-http-stalls");
+
+    worker_task.abort();
+    let _ = worker_task.await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn real_http_timeout_schedules_a_bounded_retry_without_error_text() {
+    let clock = AdjustableClock::new(NOW);
+    let (store, _root) = open_adjustable_store(&clock);
+    let server = LocalFakeHttpServer::start([LocalHttpReply::Stall]).await;
+    seed_terminal_delivery_with_private_event(&store, "real-timeout", NOW, 2);
+    let worker = real_http_worker(Arc::clone(&store), server.endpoint.clone(), clock.clone());
+
+    assert_eq!(
+        worker.process_next().await.expect("timeout worker result"),
         WebhookWorkerOutcome::RetryScheduled {
             delivery_id: "real-timeout".to_owned(),
         }
@@ -670,13 +585,6 @@ async fn real_http_timeout_keeps_terminal_persistence_off_the_delivery_path() {
     assert_eq!(
         timeout_record.last_error_code,
         Some(WebhookDeliveryErrorCode::Timeout)
-    );
-    assert!(
-        store
-            .webhook_delivery("terminal-while-http-stalls")
-            .unwrap()
-            .is_some(),
-        "terminal persistence remains durable while HTTP is pending"
     );
     assert_private_delivery_storage(&store, "real-timeout");
     server.shutdown().await;

@@ -215,7 +215,6 @@ fn multimodal_stage_config(
         kv_unified: None,
         swa_full: None,
         cache_idle_slots: None,
-        filter_tensors_on_load: layer_start != 0 || layer_end != fixture.layer_end,
         resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: None,
@@ -228,53 +227,13 @@ fn multimodal_stage_config(
     };
     if let Some(plan) = runtime_plan {
         config.resident_tensor_names = plan.resident_tensor_names;
+        config.execution_contract = plan.execution_contract;
         config.activation_import_identities = plan.activation_import_identities;
         config.activation_import_bindings = plan.activation_import_bindings;
         config.activation_export_identities = plan.activation_export_identities;
         config.activation_export_bindings = plan.activation_export_bindings;
     }
     config
-}
-
-fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
-    let runtime = load_runtime(&config)?.context("load smoke runtime")?;
-    let ctx_size = usize::try_from(config.ctx_size).unwrap_or(usize::MAX);
-    let telemetry = Telemetry::new(
-        None,
-        1,
-        config.clone(),
-        crate::telemetry::TelemetryLevel::Off,
-    );
-    let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
-    Ok(StageOpenAiBackend {
-        runtime,
-        telemetry,
-        config,
-        model_id: "mm-smoke".to_string(),
-        default_max_tokens: 16,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
-        ctx_size,
-        mode: OpenAiBackendMode::LocalRuntime,
-        draft: None,
-        speculative_window: 0,
-        adaptive_speculative_window: false,
-        ngram_max: 0,
-        speculative: SpeculativeDecodeConfig::default(),
-        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
-        generation_queue_depth: Arc::new(AtomicUsize::new(0)),
-        generation_queue_limit: 1,
-        generation_admission_timeout: std::time::Duration::from_secs(10),
-        generation_service_estimator: Arc::new(crate::frontend::GenerationServiceEstimator::new(1)),
-        generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
-        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
-        hook_policy: None,
-        generation_receipt: None,
-        generation_lifecycle: None,
-        linear_proposal_ingress: None,
-        kv: None,
-        iteration_scheduler,
-    })
 }
 
 fn multimodal_chat_request(fixture: &MultimodalSmokeFixture) -> Result<ChatCompletionRequest> {
@@ -384,7 +343,7 @@ async fn real_multimodal_local_smoke_when_fixture_is_set() -> Result<()> {
         fixture.layer_end,
         available_loopback_addr()?,
     );
-    let backend = local_openai_backend(config)?;
+    let backend = support::local_openai_backend(config, "mm-smoke")?;
     let response = backend
         .chat_completion(multimodal_chat_request(&fixture)?)
         .await?;
@@ -406,7 +365,7 @@ async fn real_multimodal_local_prefill_failure_releases_lane_when_fixture_is_set
         fixture.layer_end,
         available_loopback_addr()?,
     );
-    let backend = local_openai_backend(config)?;
+    let backend = support::local_openai_backend(config, "mm-smoke")?;
 
     for attempt in 0..2 {
         let result = backend
@@ -449,7 +408,7 @@ async fn real_multimodal_length_limit_then_next_image_uses_clean_lane_when_fixtu
         available_loopback_addr()?,
     );
     config.lane_count = 2;
-    let backend = local_openai_backend(config)?;
+    let backend = support::local_openai_backend(config, "mm-smoke")?;
     backend
         .runtime
         .lock()
@@ -497,6 +456,10 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     });
     let mut stage0_config =
         multimodal_stage_config(&fixture, "stage-0", 0, 0, split_layer, stage0_addr);
+    // Force media/text chunks to cross native microbatch boundaries. Every
+    // activation row must be captured before the next graph replaces it.
+    stage0_config.n_batch = Some(256);
+    stage0_config.n_ubatch = Some(32);
     stage0_config.downstream = Some(skippy_protocol::PeerConfig {
         stage_id: "stage-1".to_string(),
         stage_index: 1,
@@ -518,6 +481,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             downstream_connect_timeout_secs: 5,
             native_mtp_enabled: true,
             continuous_batching: true,
+            compute_meter: None,
             openai: None,
         });
     // Large filtered GGUF slices can take several minutes to materialize on
@@ -569,6 +533,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         IterationScheduler::new(runtime.clone(), &stage0_config, 1, true, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime,
+        workload: Default::default(),
         telemetry,
         config: stage0_config.clone(),
         model_id: "mm-smoke".to_string(),

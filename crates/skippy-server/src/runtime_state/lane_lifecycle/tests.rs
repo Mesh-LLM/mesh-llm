@@ -17,6 +17,27 @@ impl crate::runtime_state::SessionLifecycleObserver for RecordingSessionObserver
 }
 
 #[test]
+/// Both model-loading paths share this constructor; admission must retain the
+/// observer supplied by the host instead of silently dropping lifecycle events.
+fn admitted_runtime_preserves_session_lifecycle_observer() -> Result<()> {
+    let observer = Arc::new(RecordingSessionObserver::default());
+    let runtime = crate::runtime_state::runtime_from_loaded_model(
+        &skippy_protocol::StageConfig::default(),
+        skippy_runtime::StageModel::new_dummy(),
+        Some(observer.clone()),
+    )?;
+    runtime
+        .lock()
+        .unwrap()
+        .notify_session_lifecycle(crate::runtime_state::SessionLifecycleEvent::SessionReclaimed);
+    assert_eq!(
+        *observer.0.lock().unwrap(),
+        vec![crate::runtime_state::SessionLifecycleEvent::SessionReclaimed,]
+    );
+    Ok(())
+}
+
+#[test]
 fn dropping_an_absent_session_notifies_nothing() {
     let observer = Arc::new(RecordingSessionObserver::default());
     let runtime =

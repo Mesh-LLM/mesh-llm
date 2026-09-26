@@ -2,9 +2,9 @@
 //! and peer list management (add/remove/update).
 
 use super::{
-    DEAD_PEER_TTL, InviteTokenMaterial, MeshOperationalEvent, MeshPeerRemovalReason,
-    MeshPolicyRejectionReason, Node, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS,
-    PeerAnnouncement, PeerInfo, connect_mesh, elapsed_ms_u64, emit_mesh_info,
+    DEAD_PEER_TTL, DEPARTED_PEER_TRANSITIVE_BLOCK_TTL, InviteTokenMaterial, MeshOperationalEvent,
+    MeshPeerRemovalReason, MeshPolicyRejectionReason, Node, PEER_CONNECT_AND_GOSSIP_TIMEOUT,
+    PEER_STALE_SECS, PeerAnnouncement, PeerInfo, connect_mesh, elapsed_ms_u64, emit_mesh_info,
     mesh_peer_operational_context, parse_invite_token, record_mesh_operational_event,
     record_mesh_operational_event_with_context,
 };
@@ -180,6 +180,7 @@ impl Node {
         let (recovered_from_dead, prior_state) = {
             let mut state = self.state.lock().await;
             let recovered_from_dead = state.dead_peers.remove(&context.remote).is_some();
+            state.departed_peers.remove(&context.remote);
             let prior_state = state
                 .peers
                 .get(&context.remote)
@@ -542,6 +543,10 @@ impl Node {
         existing.stage_status_list_supported = ann.stage_status_list_supported;
         existing.local_gguf_content_id_supported = ann.local_gguf_content_id_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+        #[cfg(feature = "payments")]
+        {
+            existing.lightning_offers = ann.lightning_offers.clone();
+        }
         cache_affinity_gossip::merge_advertisement(
             &mut existing.cache_affinity,
             ann.cache_affinity.as_ref(),
@@ -934,6 +939,7 @@ impl Node {
         {
             let mut state = self.state.lock().await;
             state.dead_peers.remove(&peer_id);
+            state.departed_peers.remove(&peer_id);
             state.connections.insert(peer_id, conn.clone());
         }
         let node_for_dispatch = self.clone();
@@ -1219,6 +1225,7 @@ impl Node {
         // If this peer was previously dead, clear it — add_peer is only called
         // after a successful gossip exchange, which is proof of life.
         let recovered = state.dead_peers.remove(&id).is_some();
+        state.departed_peers.remove(&id);
         if recovered {
             super::emit_mesh_info(format!(
                 "🔄 Peer {} back from the dead (successful gossip)",
@@ -1331,6 +1338,17 @@ impl Node {
         {
             return;
         }
+        // Issue #1756: even after DEAD_PEER_TTL expires, a departed id stays
+        // barred from transitive re-admission so a bridge's stale
+        // announcement cannot resurrect a ghost `state: serving` entry for a
+        // genuinely gone peer. Only direct proof of life clears this early.
+        if state
+            .departed_peers
+            .get(&id)
+            .is_some_and(|t| t.elapsed() < DEPARTED_PEER_TRANSITIVE_BLOCK_TTL)
+        {
+            return;
+        }
         if let Some(existing) = state.peers.get_mut(&id) {
             let old_peer = existing.clone();
             let serving_changed = apply_transitive_ann(existing, addr, ann, bridge_id);
@@ -1388,8 +1406,10 @@ impl Node {
             // last_mentioned = now keeps the peer alive for the prune window.
             let mut peer = PeerInfo::from_announcement(id, addr.clone(), ann, owner_summary);
             // Capability provenance must be direct. A bridge can report that a
-            // peer exists, but it cannot make that peer eligible for strict
-            // local-GGUF election on the peer's behalf.
+            // peer exists, but it cannot make that peer eligible for the
+            // current stage protocol or strict local-GGUF election on the
+            // peer's behalf.
+            peer.stage_protocol_generation_supported = false;
             peer.local_gguf_content_id_supported = false;
             // Mark as never directly seen — only transitively mentioned.
             peer.admitted = false;

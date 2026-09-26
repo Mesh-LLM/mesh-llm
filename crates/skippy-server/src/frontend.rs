@@ -8,11 +8,16 @@ mod embedded_generation;
 mod generation;
 mod generation_commit_batcher;
 mod generation_flow;
+pub mod generation_gate;
 mod generation_receipt;
 mod guardrails;
 pub(crate) mod iteration_scheduler;
 mod linear_proposal;
 mod local_generation;
+// Test-only visibility chain for the exact-state capture counters (see
+// local_generation::capture_trace).
+#[cfg(test)]
+pub(crate) use local_generation::capture_trace;
 mod native_mtp;
 mod prefill;
 mod prefix_cache;
@@ -21,6 +26,7 @@ mod request;
 mod sampling_cache_key;
 mod speculative;
 mod token_counting;
+mod system_one;
 mod tool_emulation;
 mod util;
 

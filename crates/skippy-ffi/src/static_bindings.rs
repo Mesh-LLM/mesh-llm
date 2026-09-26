@@ -2,16 +2,25 @@ use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
     ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
-    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo,
-    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
-    MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType,
+    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData,
+    Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams,
+    MtmdDecoderPos, MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio,
+    MtmdHelperGenAudioInput, MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType,
     MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache, Opaque, RuntimeConfig,
-    SamplingConfig, Session, SlicePlan, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
+    SamplingConfig, Session, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
     StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
-    StagePlanner, StagePlannerConfigV1, Status, TensorInfo, TokenSignal,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
+    WorkloadInfoV1,
 };
 
 unsafe extern "C" {
+    /// Borrow a token embedding; negative indices count from the last output.
+    /// Invalid output indices return null.
+    pub fn llama_get_embeddings_ith(ctx: *mut Opaque, index: i32) -> *mut f32;
+
+    /// Select embedding output instead of logits for subsequent context evaluation.
+    pub fn llama_set_embeddings(ctx: *mut Opaque, embeddings: bool);
+
     pub fn llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
 
     pub fn ggml_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
@@ -113,6 +122,13 @@ unsafe extern "C" {
 
     pub fn llama_model_is_diffusion(model: *const Opaque) -> bool;
 
+    pub fn llama_model_meta_val_str(
+        model: *const Opaque,
+        key: *const c_char,
+        buf: *mut c_char,
+        buf_size: usize,
+    ) -> c_int;
+
     pub fn skippy_model_output_activation_boundary(
         model: *const Model,
         out_desc: *mut ActivationBoundaryDesc,
@@ -122,6 +138,35 @@ unsafe extern "C" {
         model: *const Model,
         out_desc: *mut ActivationBoundaryDesc,
     ) -> bool;
+
+    pub fn skippy_system_one_read(
+        model: *mut Model,
+        prompt_tokens: *const i32,
+        prompt_token_count: usize,
+        canvas_tokens: *const i32,
+        canvas_token_count: usize,
+        label_token_ids: *const i32,
+        label_token_count: usize,
+        slots: *const SystemOneSlot,
+        slot_count: usize,
+        out_probabilities: *mut f32,
+        output_capacity: usize,
+        out_output_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_system_one_canvas_length(
+        model: *mut Model,
+        out_canvas_token_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    /// Query an opened model's workload class, pooling, and full-model constraints.
+    pub fn skippy_model_workload_info_v1(
+        model: *const Model,
+        out_info: *mut WorkloadInfoV1,
+        out_error: *mut *mut Error,
+    ) -> Status;
 
     pub fn skippy_session_create(
         model: *mut Model,
@@ -139,6 +184,7 @@ unsafe extern "C" {
     ) -> Status;
 
     pub fn skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
+    pub fn llama_perf_context(ctx: *mut Opaque) -> LlamaPerfContextData;
 
     pub fn skippy_session_position(session: *const Session) -> i32;
 
@@ -174,6 +220,41 @@ unsafe extern "C" {
         sampling: *const SamplingConfig,
         metadata_json: *const c_char,
         prompt_token_count: u64,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    /// Compute one normalized token-input embedding into a caller-owned buffer.
+    ///
+    /// `out_dimensions` always receives the required embedding length before the
+    /// call can fail on capacity: when `output_capacity` is smaller it holds that
+    /// length while `Status::BufferTooSmall` is returned, so a caller can size its
+    /// buffer from the value and retry. It stays zero on every earlier failure.
+    pub fn skippy_session_embed(
+        session: *mut Session,
+        token_ids: *const i32,
+        token_count: usize,
+        output: *mut f32,
+        output_capacity: usize,
+        out_dimensions: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    /// Score a NUL-terminated query/document pair and report its token usage.
+    pub fn skippy_session_rerank(
+        session: *mut Session,
+        query: *const c_char,
+        document: *const c_char,
+        out_score: *mut f32,
+        out_token_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    /// Encode source tokens and return the encoder-decoder model's first decoder token.
+    pub fn skippy_session_encode_prompt(
+        session: *mut Session,
+        token_ids: *const i32,
+        token_count: usize,
+        out_decoder_start_token: *mut i32,
         out_error: *mut *mut Error,
     ) -> Status;
 
@@ -595,33 +676,6 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
-    pub fn skippy_slice_plan_create(
-        info: *mut ModelInfo,
-        out_plan: *mut *mut SlicePlan,
-        out_error: *mut *mut Error,
-    ) -> Status;
-
-    pub fn skippy_slice_plan_free(plan: *mut SlicePlan, out_error: *mut *mut Error) -> Status;
-
-    pub fn skippy_slice_plan_add_layer_range(
-        plan: *mut SlicePlan,
-        stage_index: i32,
-        layer_start: i32,
-        layer_end: i32,
-        include_embeddings: bool,
-        include_output: bool,
-        include_per_layer_token_embd: bool,
-        out_error: *mut *mut Error,
-    ) -> Status;
-
-    pub fn skippy_write_slice_gguf(
-        info: *mut ModelInfo,
-        plan: *const SlicePlan,
-        stage_index: i32,
-        output_path: *const c_char,
-        out_error: *mut *mut Error,
-    ) -> Status;
-
     pub fn skippy_write_gguf_metadata_from_parts(
         input_paths: *const *const c_char,
         input_count: usize,
@@ -718,6 +772,49 @@ unsafe extern "C" {
 
     pub fn mtmd_context_params_default() -> MtmdContextParams;
 
+    /// Inspect the projector's audio-generation requirements and output metadata.
+    pub fn mtmd_gen_audio_get_info(ctx: *const MtmdContext) -> MtmdGenAudioInfo;
+
+    /// Allocate an audio generator borrowing the supplied llama and projector contexts.
+    pub fn mtmd_helper_gen_audio_init(
+        lctx: *mut Opaque,
+        mctx: *mut MtmdContext,
+    ) -> *mut MtmdHelperGenAudio;
+
+    /// Release the generator allocated by `mtmd_helper_gen_audio_init`.
+    pub fn mtmd_helper_gen_audio_free(ctx: *mut MtmdHelperGenAudio);
+
+    /// Clear generation state and invalidate previously borrowed audio output.
+    pub fn mtmd_helper_gen_audio_reset(ctx: *mut MtmdHelperGenAudio);
+
+    /// Configure the speech prompt, sampling controls, and output encoding.
+    pub fn mtmd_helper_gen_audio_set_input(
+        ctx: *mut MtmdHelperGenAudio,
+        input: *const MtmdHelperGenAudioInput,
+    ) -> i32;
+
+    /// Process at most `n_batch` prompt tokens; return remaining tokens, zero, or an error.
+    pub fn mtmd_helper_gen_audio_step_prompt(ctx: *mut MtmdHelperGenAudio, n_batch: i32) -> i32;
+
+    /// Generate one frame after prompt completion and report end-of-speech.
+    /// The returned hidden state is borrowed until the next generation step or reset.
+    pub fn mtmd_helper_gen_audio_step_gen(
+        ctx: *mut MtmdHelperGenAudio,
+        sampled: i32,
+        h_state_in: *const f32,
+        h_state_out: *mut *const f32,
+        out_stop: *mut bool,
+    ) -> i32;
+
+    /// Borrow encoded audio until the next output query or reset, with sample metadata.
+    pub fn mtmd_helper_gen_audio_get_output(
+        ctx: *mut MtmdHelperGenAudio,
+        out_sample_rate: *mut i32,
+        out_data: *mut *const c_char,
+        out_data_len: *mut usize,
+        out_n_samples: *mut i64,
+    ) -> i32;
+
     pub fn mtmd_init_from_file(
         mmproj_fname: *const c_char,
         text_model: *const Opaque,
@@ -799,5 +896,18 @@ unsafe extern "C" {
         n_batch: i32,
         logits_last: bool,
         new_n_past: *mut i32,
+    ) -> c_int;
+
+    pub fn mtmd_helper_eval_chunk_single_with_callback(
+        ctx: *mut MtmdContext,
+        lctx: *mut Opaque,
+        chunk: *const Opaque,
+        n_past: i32,
+        seq_id: i32,
+        n_batch: i32,
+        logits_last: bool,
+        new_n_past: *mut i32,
+        callback: Option<unsafe extern "C" fn(i32, *mut c_void) -> c_int>,
+        user_data: *mut c_void,
     ) -> c_int;
 }

@@ -27,7 +27,12 @@ class BuildReleaseScriptTests(unittest.TestCase):
     def test_dynamic_native_runtime_feature_is_required(self) -> None:
         script = HOST_SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn('"web-ui,dynamic-native-runtime"', script)
+        cargo_args = self.run_build_release_with_backend("cpu").split()
+        features = set(cargo_args[cargo_args.index("--features") + 1].split(","))
+        self.assertEqual(
+            features,
+            {"web-ui", "dynamic-native-runtime", "payments", "wallet-lexe"},
+        )
         self.assertIn("--no-default-features", script)
         self.assertIn("MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 is unsupported", script)
 
@@ -80,6 +85,8 @@ class BuildReleaseScriptTests(unittest.TestCase):
         lib_dir = scripts_dir / "lib"
         lib_dir.mkdir(exist_ok=True)
         shutil.copy(LLD_LIB, lib_dir / "lld.sh")
+        for name in ("macos-deployment-target.sh", "macos-deployment-target.txt"):
+            shutil.copy(ROOT / "scripts/lib" / name, lib_dir / name)
         self.write_executable(
             bin_dir / "cc",
             """

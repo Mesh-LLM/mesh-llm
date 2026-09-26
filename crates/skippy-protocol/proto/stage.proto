@@ -242,6 +242,10 @@ message StageStatus {
     StageAdmissionAdmitted admitted = 35;
   }
   optional string split_certification = 36;
+  // Cumulative runtime compute-busy time on this stage and the operations it
+  // covers, for auto-balance split placement. Zero when not reported.
+  uint64 compute_busy_nanos = 37;
+  uint64 compute_operations = 38;
 }
 
 message StageStatusList {
@@ -297,6 +301,7 @@ message StageAdmissionDescriptor {
   repeated string resident_tensor_ids = 6;
   repeated StageAdmissionSidecar sidecars = 7;
   repeated StageAdmissionProfile profiles = 8;
+  string execution_contract = 9;
 }
 
 message StageAdmissionSidecar {

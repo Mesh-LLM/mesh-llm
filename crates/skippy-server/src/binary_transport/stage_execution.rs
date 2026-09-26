@@ -740,12 +740,29 @@ fn stage_native_mtp_draft(draft: NativeMtpDraft) -> StageNativeMtpDraft {
     }
 }
 
+/// Environment switch: let the final stage batch single-token decode across
+/// lanes. The batched path does not produce native MTP drafts, so the final
+/// stage stays unbatched whenever native MTP is enabled.
+pub(in crate::binary_transport) const LAST_STAGE_DECODE_BATCH_ENV: &str =
+    "SKIPPY_LAST_STAGE_DECODE_BATCH";
+
+pub(in crate::binary_transport) fn last_stage_decode_batch_enabled() -> bool {
+    std::env::var(LAST_STAGE_DECODE_BATCH_ENV).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
 pub(in crate::binary_transport) fn is_decode_frame_batch_candidate(
     config: &StageConfig,
     message: &StageWireMessage,
     token_ids: &[i32],
+    native_mtp_enabled: bool,
+    last_stage_batching: bool,
 ) -> bool {
-    if config.downstream.is_none() {
+    if config.downstream.is_none() && (native_mtp_enabled || !last_stage_batching) {
         return false;
     }
 
@@ -795,6 +812,9 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         mirostat_entropy: sampling.mirostat_entropy,
         mirostat_learning_rate: sampling.mirostat_learning_rate,
         samplers: sampling.samplers.clone(),
+        reasoning_budget: skippy_runtime::ReasoningBudget::Resolved(
+            sampling.reasoning_budget_tokens,
+        ),
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling
@@ -971,7 +991,6 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         kv_unified: None,
         swa_full: None,
         cache_idle_slots: None,
-        filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {
@@ -1306,15 +1325,46 @@ mod tests {
         let config = prefix_cache_test_config();
         let message = first_decode_message_with_full_prompt_sideband();
 
-        assert!(is_decode_frame_batch_candidate(&config, &message, &[104]));
+        assert!(is_decode_frame_batch_candidate(
+            &config,
+            &message,
+            &[104],
+            false,
+            false
+        ));
     }
 
     #[test]
-    fn decode_frame_batch_candidate_skips_final_output_stage() {
+    fn decode_frame_batch_candidate_skips_final_output_stage_by_default() {
         let mut config = prefix_cache_test_config();
         config.downstream = None;
         let message = first_decode_message_with_full_prompt_sideband();
 
-        assert!(!is_decode_frame_batch_candidate(&config, &message, &[104]));
+        assert!(!is_decode_frame_batch_candidate(
+            &config,
+            &message,
+            &[104],
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn final_output_stage_batches_decode_when_enabled_without_native_mtp() {
+        let mut config = prefix_cache_test_config();
+        config.downstream = None;
+        let message = first_decode_message_with_full_prompt_sideband();
+
+        assert!(is_decode_frame_batch_candidate(
+            &config,
+            &message,
+            &[104],
+            false,
+            true
+        ));
+        assert!(
+            !is_decode_frame_batch_candidate(&config, &message, &[104], true, true),
+            "native MTP drafts only come from the unbatched final-stage path"
+        );
     }
 }

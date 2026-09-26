@@ -140,6 +140,7 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         Command::Update { .. } | Command::Setup { .. } | Command::Uninstall { .. } => {
             CliCommandFamily::Installation
         }
+        Command::Wallet { .. } => CliCommandFamily::Wallet,
         Command::Gpus { .. } => CliCommandFamily::Hardware,
         Command::Serve
         | Command::Client
@@ -148,12 +149,14 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         | Command::Unload { .. }
         | Command::Status { .. }
         | Command::Stop => CliCommandFamily::Runtime,
-        Command::Config { .. } => CliCommandFamily::Configuration,
+        Command::Config { .. } | Command::Analytics { .. } => CliCommandFamily::Configuration,
         Command::Doctor { .. } => CliCommandFamily::Diagnostics,
         Command::Discover { .. } => CliCommandFamily::Discovery,
         Command::RotateKey | Command::Auth { .. } => CliCommandFamily::Identity,
         Command::Goose { .. }
         | Command::Claude { .. }
+        | Command::Hermes(_)
+        | Command::Openclaw(_)
         | Command::Pi { .. }
         | Command::Opencode { .. } => CliCommandFamily::Agent,
         Command::Plugin { .. } | Command::ExternalPlugin(_) => CliCommandFamily::Plugin,

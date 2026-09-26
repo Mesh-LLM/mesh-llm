@@ -34,5 +34,8 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 skippy-devices = ["dep:skippy-runtime"]
 dynamic-native-runtime = ["skippy-devices", "skippy-runtime/dynamic-native-runtime"]
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [dev-dependencies]
 serial_test = "4"

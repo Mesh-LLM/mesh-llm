@@ -1,3 +1,4 @@
+mod encoder_decoder;
 mod text_generation;
 
 use crate::binary_transport::forwarded_stage_message_timed;
@@ -71,6 +72,9 @@ impl<F: FnOnce()> Drop for LocalSessionCleanupGuard<F> {
     }
 }
 
+/// Emit graph reuse counters every N decode steps.
+const GRAPH_REUSE_LOG_STRIDE: usize = 256;
+
 impl StageOpenAiBackend {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn generate_multimodal_text(
@@ -78,7 +82,7 @@ impl StageOpenAiBackend {
         prompt: PreparedGenerationPrompt,
         max_tokens: GenerationTokenLimit,
         stop: Option<&openai_frontend::StopSequence>,
-        sampling: SamplingConfig,
+        mut sampling: SamplingConfig,
         hook_request: Option<ChatCompletionRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&openai_frontend::CancellationToken>,
@@ -148,6 +152,10 @@ impl StageOpenAiBackend {
             .map(|_| self.tokenize(&prompt.text))
             .transpose()?
             .unwrap_or_default();
+        let reasoning_budget = sampling.reasoning_budget;
+        let provisional_max_tokens =
+            max_tokens.resolve(lifecycle_prompt_token_ids.len(), self.ctx_size)?;
+        sampling.resolve_reasoning_budget(provisional_max_tokens);
         let mut lifecycle = GenerationLifecycleState::new(
             self.generation_lifecycle.as_ref(),
             ids.request_id,
@@ -260,6 +268,8 @@ impl StageOpenAiBackend {
                 };
                 prefill_token_count = prefill.token_count;
                 let max_tokens = max_tokens.resolve(prefill.position as usize, self.ctx_size)?;
+                sampling.reasoning_budget = reasoning_budget;
+                sampling.resolve_reasoning_budget(max_tokens);
                 receipt_observation = self.generation_receipt.as_ref().map(|config| {
                     config.observation(
                         usize::try_from(max_tokens)
@@ -555,7 +565,7 @@ impl StageOpenAiBackend {
 
     pub(super) fn generate_split_multimodal_text(
         &self,
-        request: SplitMultimodalGeneration<'_>,
+        mut request: SplitMultimodalGeneration<'_>,
         on_text_chunk: impl FnMut(&str) -> OpenAiResult<()>,
     ) -> OpenAiResult<GeneratedText> {
         let stop_value_storage =
@@ -568,7 +578,6 @@ impl StageOpenAiBackend {
             TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
                 .with_emulation_stop(request.emulation_active)
                 .with_ignore_eos(request.sampling.ignore_eos);
-        let wire_sampling = wire_sampling_config(&request.sampling);
         let session_id = request.ids.session_id;
         let request_id = request.ids.request_id;
         let session_key = session_id.to_string();
@@ -681,6 +690,8 @@ impl StageOpenAiBackend {
             let max_tokens = request
                 .max_tokens
                 .resolve(prefill.position as usize, self.ctx_size)?;
+            request.sampling.resolve_reasoning_budget(max_tokens);
+            let wire_sampling = wire_sampling_config(&request.sampling);
             receipt_observation = self.generation_receipt.as_ref().map(|config| {
                 config.observation(
                     usize::try_from(max_tokens)
@@ -922,6 +933,25 @@ impl StageOpenAiBackend {
                 let downstream_wait_ms = wait_timer.elapsed_ms();
                 decode_downstream_wait_ms += downstream_wait_ms;
                 current = reply.predicted;
+                // Graph reuse drives split decode throughput, and the benchmark
+                // harness already greps the serve log for `n_reused=`. Emit it on
+                // a stride so the rate is observable without a debug build or a
+                // telemetry sink: phase spans only reach a job artifact, and
+                // SKIPPY_GRAPH_TRACE emits nothing here.
+                if decode_input_index.is_multiple_of(GRAPH_REUSE_LOG_STRIDE)
+                    && let Ok(runtime) = self.runtime.lock()
+                {
+                    let stats = runtime.session_stats();
+                    if stats.tokens_evaluated > 0 {
+                        tracing::info!(
+                            target: "skippy::graph_reuse",
+                            "GRAPH-REUSE n_reused={} n_eval={} reuse_rate={:.4}",
+                            stats.graphs_reused,
+                            stats.tokens_evaluated,
+                            stats.graphs_reused as f64 / stats.tokens_evaluated as f64,
+                        );
+                    }
+                }
                 if self.telemetry.is_debug_enabled() {
                     let mut token_attrs = self.openai_attrs(&request.ids);
                     token_attrs.insert(

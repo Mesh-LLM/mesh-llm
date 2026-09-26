@@ -6,11 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import struct
 import sys
+from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
@@ -37,13 +36,44 @@ def _frame(hasher: Any, value: bytes) -> None:
     hasher.update(value)
 
 
+def _series_patches(directory: Path) -> list[Path]:
+    # Keep this series validation and ordering contract in lockstep with
+    # crates/mesh-llm-host-runtime/build.rs::series_patches. Together they
+    # define the v2 patch_queue_sha256 embedded in the generated roster.
+    if not directory.exists():
+        return []
+    series = directory / "series"
+    if not series.is_file():
+        raise RosterError(f"patch directory is missing its series file: {directory}")
+    names = [line.rstrip("\r") for line in series.read_text(encoding="utf-8").splitlines()]
+    if not names or any(not name for name in names):
+        raise RosterError(f"patch series is empty or contains blank entries: {series}")
+    if len(set(names)) != len(names) or any(Path(name).name != name for name in names):
+        raise RosterError(f"patch series contains duplicate or unsafe entries: {series}")
+    patches = [directory / name for name in names]
+    if any(not path.is_file() for path in patches):
+        raise RosterError(f"patch series lists a missing patch: {series}")
+    actual = {path.name for path in directory.glob("*.patch")}
+    if actual != set(names):
+        raise RosterError(f"patch series does not exactly cover its directory: {series}")
+    return patches
+
+
+def ordered_patch_queue() -> list[Path]:
+    return [
+        *sorted(PATCH_DIR.glob("*.patch")),
+        *_series_patches(PATCH_DIR / "model_support"),
+        *_series_patches(PATCH_DIR / "generated"),
+    ]
+
+
 def patch_queue_sha256() -> str:
     hasher = hashlib.sha256()
-    hasher.update(b"mesh-llm-skippy-patch-queue-v1\0")
-    patches = sorted(PATCH_DIR.glob("*.patch"))
+    hasher.update(b"mesh-llm-skippy-patch-queue-v2\0")
+    patches = ordered_patch_queue()
     hasher.update(struct.pack("<Q", len(patches)))
     for path in patches:
-        _frame(hasher, path.name.encode())
+        _frame(hasher, path.relative_to(PATCH_DIR).as_posix().encode())
         _frame(hasher, path.read_bytes())
     return hasher.hexdigest()
 
@@ -61,6 +91,7 @@ def skippy_abi() -> str:
 
 
 def build_roster(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Bind only causal split-certified architectures to this exact native recipe."""
     policy = manifest.get("policy")
     models = manifest.get("models")
     if not isinstance(policy, dict) or not isinstance(models, list):
@@ -74,6 +105,18 @@ def build_roster(manifest: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(model, dict):
             raise RosterError("family certification model row must be an object")
         profile_name = model.get("profile")
+        model_class = model.get("class")
+        if model_class in (
+            "embedding", "rerank", "encoder_decoder", "ocr",
+            "speech_synthesis", "speech_recognition",
+        ):
+            if profile_name not in ("workload-smoke", "workload-oracle"):
+                raise RosterError("non-chat model cannot claim a split-certified profile")
+            continue
+        if model_class != "causal_generation":
+            raise RosterError("family certification row has a missing or unknown workload class")
+        if profile_name in ("workload-smoke", "workload-oracle"):
+            raise RosterError("causal model cannot use a non-chat workload profile")
         profile = profiles.get(profile_name)
         if not isinstance(profile, dict) or profile.get("status") != "certified":
             continue

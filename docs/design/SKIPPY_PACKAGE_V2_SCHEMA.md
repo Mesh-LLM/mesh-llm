@@ -125,6 +125,101 @@ Multiple projectors therefore require stable distinct names; the package writer
 uses each projector's deterministic artifact id as its name. Generation remains
 a typed manifest field rather than a generic sidecar.
 
+## Generation
+
+`generation` is an optional typed manifest field, not a sidecar. It sits at the
+manifest root, participates in the canonical package identity, and is rejected
+if it appears in the sidecar list. When the source has no native
+speculative-decoding support the field is omitted entirely (it is not
+serialized as `null`), so a non-MTP package carries no `generation` key.
+
+The authoritative type is `Generation` in `crates/skippy-package-format`. It is
+`deny_unknown_fields` with two sub-fields: `speculative_decoding` and the
+optional `request_defaults` publisher profile set described below. `policy` and
+`thresholds` are not part of this manifest field and are rejected at parse time;
+they belong to the packaging policy manifest, and the writer must not emit them
+here.
+
+`speculative_decoding` is a `SpeculativeDecoding` value:
+
+- `default`: the strategy name used when a caller does not name one;
+- `proposers`: an optional map of standalone proposers (omitted when empty);
+- `strategies`: a map of named strategies. Each entry is an internally-tagged
+  enum (`#[serde(tag = "type")]`, kebab-case variants) that carries a `"type"`
+  discriminator plus the kind-specific fields inlined beside it.
+
+The writer emits a single `native-mtp` strategy, and only when the source GGUF
+declares 1-step native MTP support (`{arch}.nextn_predict_layers == 1` and the
+`blk.<layer>.nextn.*` tensor names agree). The MTP layer index and window policy
+are derived from the source metadata; the exact emitted shape is:
+
+```json
+{
+  "generation": {
+    "speculative_decoding": {
+      "default": "mtp",
+      "strategies": {
+        "mtp": {
+          "type": "native-mtp",
+          "prediction_depth": 1,
+          "layer_indices": [0],
+          "window_policy": {
+            "default": "fixed",
+            "initial_window": 1,
+            "min_window": 1,
+            "max_window": 1
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`layer_indices` is the single MTP/nextn layer (`layer_count - 1`); `proposers`,
+the strategy `proposer`, and `window_policy.pipeline_depth` are omitted when
+empty or absent. Unknown `"type"` values and unknown fields inside a strategy,
+proposer, or `window_policy` are rejected (`deny_unknown_fields`), as are the
+`policy` and `thresholds` keys. Because `generation` is hashed into the package
+identity, adding or changing it changes the `package_id`.
+
+## Generation request defaults
+
+`generation.request_defaults` carries reviewed publisher recommendations for
+the package's exact model revision. It contains named profiles plus a selection
+record with a default profile and optional reasoning-enabled and
+reasoning-disabled profiles. A profile may declare the portable sampling fields
+supported by Mesh, `max_tokens`, and reasoning enablement, output format, and a
+numeric or semantic budget. Unknown values are omitted.
+
+Every profile includes provenance: official source repository, immutable
+40-character Git commit SHA, file, section, and a URL containing that exact SHA
+as a distinct path or query segment. The runtime consumes this typed package
+data and never downloads or parses model cards.
+
+Request fields resolve independently in this order:
+
+1. explicit request value;
+2. deployment or operator model default;
+3. selected package profile;
+4. Mesh fallback.
+
+When all higher layers omit limits, total output is capped at the lesser of
+8,192 tokens and the context remaining after the prompt. Reasoning receives the
+lesser of 4,096 tokens and half the effective output cap. Semantic reasoning
+levels map to 1,024 (`low`), 4,096 (`medium`), and 8,192 (`high`), then clamp to
+half the output cap. Numeric values are explicit and may exceed those
+interactive fallbacks. `auto` selects the Mesh fallback, so enabled reasoning
+resolves to the lesser of 4,096 tokens and half the effective output cap. Zero
+closes reasoning immediately; `unrestricted` disables the reasoning-only cap
+while retaining the total-output limit.
+
+The resolved numeric budget travels through the public Skippy sampling ABI.
+When the chat parser recognizes thinking start and end markers, llama.cpp forces
+a valid terminator at the cap and generation continues with the visible answer.
+Without recognized boundaries, Mesh skips the reasoning sampler and still
+enforces the finite total-output cap.
+
 ## Loading Rule
 
 The runtime validates the JSON root, fetches and verifies its declared metadata

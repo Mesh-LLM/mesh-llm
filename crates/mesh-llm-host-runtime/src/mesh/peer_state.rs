@@ -159,6 +159,9 @@ pub struct PeerAnnouncement {
     pub(crate) stage_status_list_supported: bool,
     pub(crate) local_gguf_content_id_supported: bool,
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
+    #[cfg(feature = "payments")]
+    pub(crate) lightning_offers:
+        std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     pub(crate) latency_ms: Option<u32>,
@@ -166,6 +169,26 @@ pub struct PeerAnnouncement {
     pub(crate) latency_age_ms: Option<u64>,
     pub(crate) latency_observer_id: Option<EndpointId>,
     pub(crate) inference_admission_state: Option<crate::proto::node::InferenceAdmissionState>,
+    /// An optional, self-reported claim this peer MAY advertise about the
+    /// head of its own append-only history. Carried opaquely; never verified
+    /// by mesh-llm.
+    pub(crate) claimed_log_head: Option<ClaimedLogHead>,
+}
+
+/// A peer's latest self-reported claim about the head of its append-only log
+/// — see `ClaimedLogHead` in `node.proto` for the wire shape and the
+/// signing-scope note. Carried opaquely: mesh-llm never verifies
+/// `claimed_signature` itself, hence the name — a consumer that does verify
+/// it may define its own `VerifiedLogHead` type; none exists here. `pub(crate)`
+/// to match `PeerAnnouncement::claimed_log_head`, which is also `pub(crate)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClaimedLogHead {
+    pub(crate) log_id: String,
+    pub(crate) size: u64,
+    pub(crate) root: Vec<u8>,
+    pub(crate) timestamp_unix_ms: u64,
+    pub(crate) claimed_signature: Vec<u8>,
+    pub(crate) signature_algorithm: String,
 }
 
 /// A single direct RTT measurement (e.g. from gossip exchange).
@@ -263,6 +286,9 @@ pub struct PeerInfo {
     pub stage_status_list_supported: bool,
     pub local_gguf_content_id_supported: bool,
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
+    #[cfg(feature = "payments")]
+    pub(crate) lightning_offers:
+        std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     /// Most recent direct RTT sample for display purposes (refreshed periodically).
@@ -355,6 +381,8 @@ impl PeerInfo {
             stage_status_list_supported: ann.stage_status_list_supported,
             local_gguf_content_id_supported: ann.local_gguf_content_id_supported,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
+            #[cfg(feature = "payments")]
+            lightning_offers: ann.lightning_offers.clone(),
             cache_affinity: ann.cache_affinity.clone(),
             display_rtt: None,
             selected_path: None,
@@ -492,44 +520,6 @@ impl PeerInfo {
     }
 }
 
-pub(crate) fn public_model_id_from_identity(identity: &ServedModelIdentity) -> Option<String> {
-    match identity.source_kind {
-        ModelSourceKind::HuggingFace => identity
-            .repository
-            .as_deref()
-            .map(|repo| {
-                let selector = identity
-                    .artifact
-                    .as_deref()
-                    .and_then(model_ref::quant_selector_from_gguf_file)
-                    .or_else(|| identity.artifact.clone());
-                model_ref::format_model_ref(repo, identity.revision.as_deref(), selector.as_deref())
-            })
-            .or_else(|| {
-                identity
-                    .canonical_ref
-                    .as_deref()
-                    .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-                    .map(|model_ref| model_ref.display_id())
-            }),
-        ModelSourceKind::Catalog => identity
-            .canonical_ref
-            .as_deref()
-            .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-            .map(|model_ref| model_ref.display_id()),
-        ModelSourceKind::LocalGguf | ModelSourceKind::DirectUrl | ModelSourceKind::Unknown => None,
-    }
-}
-
-pub(crate) fn canonical_demand_model_ref(model: &str) -> String {
-    if let Ok(model_ref) = model_ref::ModelRef::parse(model) {
-        return model_ref.display_id();
-    }
-    crate::models::find_loaded_remote_catalog_model_exact(model)
-        .map(|remote_model| crate::models::remote_catalog_model_ref(&remote_model))
-        .unwrap_or_else(|| model.to_string())
-}
-
 /// Peers not directly verified within this window are considered stale
 /// and excluded from gossip propagation. After 2x this duration they're removed entirely.
 pub(crate) const PEER_STALE_SECS: u64 = 180; // 3 minutes
@@ -539,6 +529,16 @@ pub(crate) const PEER_STALE_SECS: u64 = 180; // 3 minutes
 /// can be re-discovered through normal gossip propagation. If the peer is
 /// genuinely gone, no bridge peer will mention it and it stays forgotten.
 pub(crate) const DEAD_PEER_TTL: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
+
+/// How long a confirmed-departed peer id stays barred from transitive
+/// re-admission. [`DEAD_PEER_TTL`] expires quickly so reconnection attempts
+/// can resume, but gossip bridges can keep carrying the departed id's final
+/// announcement long after that (issue #1756): re-admitting it transitively
+/// resurrects a ghost `state: serving` entry with no direct connection.
+/// Only direct proof of life (a gossip exchange or connection with the id
+/// itself) clears this record early; otherwise it expires silently.
+pub(crate) const DEPARTED_PEER_TRANSITIVE_BLOCK_TTL: std::time::Duration =
+    std::time::Duration::from_secs(3600); // 1 hour
 pub(crate) const PEER_DOWN_REPORTER_COOLDOWN_SECS: u64 = 600; // 10 minutes
 
 pub(crate) struct MeshState {
@@ -550,9 +550,16 @@ pub(crate) struct MeshState {
     pub(crate) remote_tunnel_maps: HashMap<EndpointId, HashMap<EndpointId, u16>>,
     /// Peers confirmed dead — don't reconnect from gossip discovery.
     /// Cleared when the peer successfully reconnects via rejoin/join.
-    /// Entries expire after [`DEAD_PEER_TTL`] so that peers recovered
-    /// on other paths can be re-learned transitively through gossip.
+    /// Entries expire after [`DEAD_PEER_TTL`] so that reconnection attempts
+    /// resume. Transitive re-admission of the id stays blocked for
+    /// [`DEPARTED_PEER_TRANSITIVE_BLOCK_TTL`] via [`MeshState::departed_peers`]
+    /// so stale bridge announcements cannot resurrect it (issue #1756).
     pub(crate) dead_peers: HashMap<EndpointId, std::time::Instant>,
+    /// Peer ids whose departure was confirmed (heartbeat failure or accepted
+    /// PeerDown), with the instant of confirmation. Direct proof of life
+    /// clears this wherever [`MeshState::dead_peers`] is cleared; otherwise
+    /// entries expire after [`DEPARTED_PEER_TRANSITIVE_BLOCK_TTL`].
+    pub(crate) departed_peers: HashMap<EndpointId, std::time::Instant>,
     /// Tracks (reporter, target) pairs where a PeerDown claim was rejected
     /// (target was still reachable). Used to suppress repeated false reports
     /// from unreliable reporters (e.g. relay-partitioned nodes).
@@ -569,6 +576,29 @@ pub(crate) struct MeshState {
     /// streams from disclosing topology after a deterministic requirement reject.
     pub(crate) requirement_rejected_peers: HashSet<EndpointId>,
     pub(crate) recent_mesh_rejections: VecDeque<MeshRequirementRejectionEvent>,
+}
+
+impl MeshState {
+    /// The initial empty mesh state. `next_pending_connection_attempt` starts
+    /// at 1 so a zero attempt counter can mean "unset".
+    pub(crate) fn new() -> Self {
+        Self {
+            peers: HashMap::new(),
+            connections: HashMap::new(),
+            pending_connections: HashMap::new(),
+            next_pending_connection_attempt: 1,
+            remote_tunnel_maps: HashMap::new(),
+            dead_peers: HashMap::new(),
+            departed_peers: HashMap::new(),
+            peer_down_rejections: HashMap::new(),
+            direct_path_request_last_at: HashMap::new(),
+            seen_plugin_messages: HashMap::new(),
+            seen_plugin_message_order: VecDeque::new(),
+            policy_rejected_peers: HashMap::new(),
+            requirement_rejected_peers: HashSet::new(),
+            recent_mesh_rejections: VecDeque::new(),
+        }
+    }
 }
 
 /// Returns `true` if the given peer has completed gossip validation and is
@@ -1312,6 +1342,7 @@ impl Node {
         ));
         let mut state = self.state.lock().await;
         state.dead_peers.insert(id, std::time::Instant::now());
+        state.departed_peers.insert(id, std::time::Instant::now());
         state.connections.remove(&id);
         drop(state);
         self.remove_peer(id, MeshPeerRemovalReason::PeerDownProbeFailed)

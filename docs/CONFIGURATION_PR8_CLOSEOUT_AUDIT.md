@@ -28,7 +28,7 @@ The reverse audit covers every canonical manifest origin. The tables below
 call out changed sinks in detail; this inventory prevents an undocumented
 schema row or stale manifest row from passing review:
 
-`version`, `gpu.assignment`, `gpu.parallel`,
+`version`, `gpu.assignment`, `gpu.parallel`, `gpu.host_ram_offload`,
 `mesh_requirements.min_node_version`, `mesh_requirements.max_node_version`,
 `mesh_requirements.min_protocol_version`, `mesh_requirements.max_protocol_version`,
 `mesh_requirements.require_release_attestation`, `mesh_requirements.release_signer_keys`,
@@ -36,6 +36,7 @@ schema row or stale manifest row from passing review:
 `telemetry.service_name`, `telemetry.endpoint`, `telemetry.headers`,
 `telemetry.export_interval_secs`, `telemetry.queue_size`,
 `telemetry.prompt_shape_metrics`, `telemetry.metrics.endpoint`,
+`analytics.enabled`,
 `logging.audit.enabled`, `logging.audit.log_path`, `logging.audit.log_format`,
 `logging.audit.log_level`, `logging.audit.max_file_size_mb`,
 `logging.audit.max_files`, `logging.enabled`, `logging.application_state_root`,
@@ -97,7 +98,8 @@ schema row or stale manifest row from passing review:
 `speculative.draft_device`, `speculative.draft_threads`,
 `speculative.draft_cache_type_k`, `speculative.draft_cache_type_v`,
 `speculative.ngram_min`, `speculative.ngram_max`, `speculative.ngram_proposer`,
-`speculative.ngram_max_proposal_tokens`, `speculative.extension_max_tokens`,
+`speculative.ngram_max_proposal_tokens`, `speculative.ngram_fallback`,
+`speculative.extension_max_tokens`,
 `speculative.native_mtp_reject_cooldown_tokens`,
 `speculative.native_mtp_suppress_cooldown_drafts`,
 `speculative.native_mtp_suppress_cooldown_draft_limit`,

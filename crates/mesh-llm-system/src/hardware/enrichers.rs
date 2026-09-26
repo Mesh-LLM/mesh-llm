@@ -1,10 +1,6 @@
-use super::GpuFacts;
-
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::GpuFacts;
-    use libc::{c_char, c_int, c_uint, c_void};
-    use std::ffi::CStr;
+    use super::super::GpuFacts;
 
     #[derive(Clone, Debug, Default, PartialEq)]
     struct NvidiaDeviceInfo {
@@ -15,110 +11,319 @@ mod linux {
         uuid: Option<String>,
     }
 
-    struct DlLibrary(*mut c_void);
+    /// Driver-backed device discovery.
+    ///
+    /// Every item here needs a real `libcuda` or `libnvidia-ml`, and all of it is
+    /// reachable only from the `skippy-devices` probe in `super::skippy_devices`.
+    /// Gating the module keeps those symbols out of a plain `cargo test` build,
+    /// which never loads a native runtime and so never calls them.
+    ///
+    /// The identity join this feeds -- `merge_device_infos`, `match_nvidia_device`
+    /// and their tests -- is pure and deliberately stays outside this module.
+    #[cfg(feature = "skippy-devices")]
+    mod ffi {
+        use super::{
+            GpuFacts, NvidiaDeviceInfo, enrich_nvidia_gpu_facts, merge_device_infos,
+            normalize_pci_bdf, round_up_to_mib,
+        };
+        use libc::{c_char, c_int, c_uint, c_void};
+        use std::ffi::CStr;
 
-    impl DlLibrary {
-        fn open(name: &'static [u8]) -> Option<Self> {
-            let handle = unsafe { libc::dlopen(name.as_ptr().cast(), libc::RTLD_LAZY) };
-            if handle.is_null() {
-                None
-            } else {
-                Some(Self(handle))
+        struct DlLibrary(*mut c_void);
+
+        impl DlLibrary {
+            fn open(name: &'static [u8]) -> Option<Self> {
+                let handle = unsafe { libc::dlopen(name.as_ptr().cast(), libc::RTLD_LAZY) };
+                if handle.is_null() {
+                    None
+                } else {
+                    Some(Self(handle))
+                }
+            }
+
+            unsafe fn symbol<T: Copy>(&self, name: &'static [u8]) -> Option<T> {
+                let symbol = unsafe { libc::dlsym(self.0, name.as_ptr().cast()) };
+                if symbol.is_null() {
+                    None
+                } else {
+                    Some(unsafe { std::mem::transmute_copy(&symbol) })
+                }
             }
         }
 
-        unsafe fn symbol<T: Copy>(&self, name: &'static [u8]) -> Option<T> {
-            let symbol = unsafe { libc::dlsym(self.0, name.as_ptr().cast()) };
-            if symbol.is_null() {
-                None
-            } else {
-                Some(unsafe { std::mem::transmute_copy(&symbol) })
+        impl Drop for DlLibrary {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::dlclose(self.0);
+                }
             }
         }
-    }
 
-    impl Drop for DlLibrary {
-        fn drop(&mut self) {
-            unsafe {
-                libc::dlclose(self.0);
+        type CuDevice = c_int;
+        type CuResult = c_int;
+        type CuInit = unsafe extern "C" fn(c_uint) -> CuResult;
+        type CuDeviceGetCount = unsafe extern "C" fn(*mut c_int) -> CuResult;
+        type CuDeviceGet = unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult;
+        type CuDeviceGetName = unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult;
+        type CuDeviceTotalMem = unsafe extern "C" fn(*mut usize, CuDevice) -> CuResult;
+        type CuDeviceGetPciBusId = unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult;
+
+        type NvmlDevice = *mut c_void;
+        type NvmlReturn = c_int;
+        type NvmlInit = unsafe extern "C" fn() -> NvmlReturn;
+        type NvmlShutdown = unsafe extern "C" fn() -> NvmlReturn;
+        type NvmlDeviceGetCount = unsafe extern "C" fn(*mut c_uint) -> NvmlReturn;
+        type NvmlDeviceGetHandleByIndex =
+            unsafe extern "C" fn(c_uint, *mut NvmlDevice) -> NvmlReturn;
+        type NvmlDeviceGetUuid =
+            unsafe extern "C" fn(NvmlDevice, *mut c_char, c_uint) -> NvmlReturn;
+        type NvmlDeviceGetName =
+            unsafe extern "C" fn(NvmlDevice, *mut c_char, c_uint) -> NvmlReturn;
+        type NvmlDeviceGetPciInfo =
+            unsafe extern "C" fn(NvmlDevice, *mut NvmlPciInfo) -> NvmlReturn;
+        type NvmlDeviceGetMemoryInfo =
+            unsafe extern "C" fn(NvmlDevice, *mut NvmlMemory) -> NvmlReturn;
+        type NvmlDeviceGetMemoryInfoV2 =
+            unsafe extern "C" fn(NvmlDevice, *mut NvmlMemoryV2) -> NvmlReturn;
+
+        #[repr(C)]
+        #[derive(Default)]
+        struct NvmlMemory {
+            total: u64,
+            free: u64,
+            used: u64,
+        }
+
+        #[repr(C)]
+        #[derive(Default)]
+        struct NvmlMemoryV2 {
+            version: c_uint,
+            total: u64,
+            reserved: u64,
+            free: u64,
+            used: u64,
+        }
+
+        /// `nvmlPciInfo_t` as `nvmlDeviceGetPciInfo_v3` writes it. `_reserved` is
+        /// slack, not a field: a driver whose struct grew past the v3 layout still
+        /// writes inside this allocation instead of past the end of it.
+        #[repr(C)]
+        struct NvmlPciInfo {
+            bus_id_legacy: [c_char; 16],
+            domain: c_uint,
+            bus: c_uint,
+            device: c_uint,
+            pci_device_id: c_uint,
+            pci_sub_system_id: c_uint,
+            bus_id: [c_char; 32],
+            _reserved: [u8; 64],
+        }
+
+        const NVML_SUCCESS: NvmlReturn = 0;
+        const CUDA_SUCCESS: CuResult = 0;
+
+        pub(crate) fn enrich_gpu_facts(gpus: &mut [GpuFacts]) {
+            let mut infos = cuda_device_infos();
+            merge_device_infos(&mut infos, &nvml_device_infos());
+            if infos.is_empty() {
+                return;
+            }
+
+            let unidentified = enrich_nvidia_gpu_facts(gpus, &infos);
+            if !unidentified.is_empty() {
+                tracing::warn!(
+                    devices = ?unidentified,
+                    "no NVIDIA driver device matched by PCI address or UUID; \
+                     reporting backend VRAM without driver enrichment"
+                );
             }
         }
-    }
 
-    type CuDevice = c_int;
-    type CuResult = c_int;
-    type CuInit = unsafe extern "C" fn(c_uint) -> CuResult;
-    type CuDeviceGetCount = unsafe extern "C" fn(*mut c_int) -> CuResult;
-    type CuDeviceGet = unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult;
-    type CuDeviceGetName = unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult;
-    type CuDeviceTotalMem = unsafe extern "C" fn(*mut usize, CuDevice) -> CuResult;
-    type CuDeviceGetPciBusId = unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult;
+        fn cuda_device_infos() -> Vec<NvidiaDeviceInfo> {
+            let Some(lib) = DlLibrary::open(b"libcuda.so.1\0") else {
+                return Vec::new();
+            };
+            let Some(cu_init) = (unsafe { lib.symbol::<CuInit>(b"cuInit\0") }) else {
+                return Vec::new();
+            };
+            let Some(cu_device_get_count) =
+                (unsafe { lib.symbol::<CuDeviceGetCount>(b"cuDeviceGetCount\0") })
+            else {
+                return Vec::new();
+            };
+            let Some(cu_device_get) = (unsafe { lib.symbol::<CuDeviceGet>(b"cuDeviceGet\0") })
+            else {
+                return Vec::new();
+            };
+            let cu_device_total_mem =
+                unsafe { lib.symbol::<CuDeviceTotalMem>(b"cuDeviceTotalMem_v2\0") };
+            let cu_device_get_name = unsafe { lib.symbol::<CuDeviceGetName>(b"cuDeviceGetName\0") };
+            let cu_device_get_pci_bus_id =
+                unsafe { lib.symbol::<CuDeviceGetPciBusId>(b"cuDeviceGetPCIBusId\0") };
 
-    type NvmlDevice = *mut c_void;
-    type NvmlReturn = c_int;
-    type NvmlInit = unsafe extern "C" fn() -> NvmlReturn;
-    type NvmlShutdown = unsafe extern "C" fn() -> NvmlReturn;
-    type NvmlDeviceGetCount = unsafe extern "C" fn(*mut c_uint) -> NvmlReturn;
-    type NvmlDeviceGetHandleByIndex = unsafe extern "C" fn(c_uint, *mut NvmlDevice) -> NvmlReturn;
-    type NvmlDeviceGetUuid = unsafe extern "C" fn(NvmlDevice, *mut c_char, c_uint) -> NvmlReturn;
-    type NvmlDeviceGetName = unsafe extern "C" fn(NvmlDevice, *mut c_char, c_uint) -> NvmlReturn;
-    type NvmlDeviceGetPciInfo = unsafe extern "C" fn(NvmlDevice, *mut NvmlPciInfo) -> NvmlReturn;
-    type NvmlDeviceGetMemoryInfo = unsafe extern "C" fn(NvmlDevice, *mut NvmlMemory) -> NvmlReturn;
-    type NvmlDeviceGetMemoryInfoV2 =
-        unsafe extern "C" fn(NvmlDevice, *mut NvmlMemoryV2) -> NvmlReturn;
+            if unsafe { cu_init(0) } != CUDA_SUCCESS {
+                return Vec::new();
+            }
 
-    #[repr(C)]
-    #[derive(Default)]
-    struct NvmlMemory {
-        total: u64,
-        free: u64,
-        used: u64,
-    }
+            let mut count = 0;
+            if unsafe { cu_device_get_count(&mut count) } != CUDA_SUCCESS || count <= 0 {
+                return Vec::new();
+            }
 
-    #[repr(C)]
-    #[derive(Default)]
-    struct NvmlMemoryV2 {
-        version: c_uint,
-        total: u64,
-        reserved: u64,
-        free: u64,
-        used: u64,
-    }
+            let mut infos = Vec::new();
+            for index in 0..count {
+                let mut device = 0;
+                if unsafe { cu_device_get(&mut device, index) } != CUDA_SUCCESS {
+                    continue;
+                }
 
-    /// `nvmlPciInfo_t` as `nvmlDeviceGetPciInfo_v3` writes it. `_reserved` is
-    /// slack, not a field: a driver whose struct grew past the v3 layout still
-    /// writes inside this allocation instead of past the end of it.
-    #[repr(C)]
-    struct NvmlPciInfo {
-        bus_id_legacy: [c_char; 16],
-        domain: c_uint,
-        bus: c_uint,
-        device: c_uint,
-        pci_device_id: c_uint,
-        pci_sub_system_id: c_uint,
-        bus_id: [c_char; 32],
-        _reserved: [u8; 64],
-    }
+                let mut info = NvidiaDeviceInfo::default();
+                if let Some(device_name) = cu_device_get_name {
+                    let mut buf = [0 as c_char; 256];
+                    if unsafe { device_name(buf.as_mut_ptr(), buf.len() as c_int, device) }
+                        == CUDA_SUCCESS
+                    {
+                        info.name = unsafe { c_string(buf.as_ptr()) };
+                    }
+                }
+                if let Some(total_mem) = cu_device_total_mem {
+                    let mut total = 0usize;
+                    if unsafe { total_mem(&mut total, device) } == CUDA_SUCCESS {
+                        info.total_bytes = Some(total as u64);
+                    }
+                }
+                if let Some(pci_bus_id) = cu_device_get_pci_bus_id {
+                    let mut buf = [0 as c_char; 32];
+                    if unsafe { pci_bus_id(buf.as_mut_ptr(), buf.len() as c_int, device) }
+                        == CUDA_SUCCESS
+                    {
+                        info.pci_bdf = unsafe { c_string(buf.as_ptr()) }
+                            .as_deref()
+                            .and_then(normalize_pci_bdf);
+                    }
+                }
+                infos.push(info);
+            }
 
-    const NVML_SUCCESS: NvmlReturn = 0;
-    const CUDA_SUCCESS: CuResult = 0;
-
-    pub(crate) fn enrich_gpu_facts(gpus: &mut [GpuFacts]) {
-        let mut infos = cuda_device_infos();
-        merge_device_infos(&mut infos, &nvml_device_infos());
-        if infos.is_empty() {
-            return;
+            infos
         }
 
-        let unidentified = enrich_nvidia_gpu_facts(gpus, &infos);
-        if !unidentified.is_empty() {
-            tracing::warn!(
-                devices = ?unidentified,
-                "no NVIDIA driver device matched by PCI address or UUID; \
-                 reporting backend VRAM without driver enrichment"
-            );
+        fn nvml_device_infos() -> Vec<NvidiaDeviceInfo> {
+            let Some(lib) = DlLibrary::open(b"libnvidia-ml.so.1\0") else {
+                return Vec::new();
+            };
+            let Some(nvml_init) = (unsafe { lib.symbol::<NvmlInit>(b"nvmlInit_v2\0") }) else {
+                return Vec::new();
+            };
+            let Some(nvml_device_get_count) =
+                (unsafe { lib.symbol::<NvmlDeviceGetCount>(b"nvmlDeviceGetCount_v2\0") })
+            else {
+                return Vec::new();
+            };
+            let Some(nvml_device_get_handle_by_index) = (unsafe {
+                lib.symbol::<NvmlDeviceGetHandleByIndex>(b"nvmlDeviceGetHandleByIndex_v2\0")
+            }) else {
+                return Vec::new();
+            };
+            let nvml_shutdown = unsafe { lib.symbol::<NvmlShutdown>(b"nvmlShutdown\0") };
+            let nvml_device_get_uuid =
+                unsafe { lib.symbol::<NvmlDeviceGetUuid>(b"nvmlDeviceGetUUID\0") };
+            let nvml_device_get_name =
+                unsafe { lib.symbol::<NvmlDeviceGetName>(b"nvmlDeviceGetName\0") };
+            let nvml_device_get_pci_info =
+                unsafe { lib.symbol::<NvmlDeviceGetPciInfo>(b"nvmlDeviceGetPciInfo_v3\0") };
+            let nvml_device_get_memory_info =
+                unsafe { lib.symbol::<NvmlDeviceGetMemoryInfo>(b"nvmlDeviceGetMemoryInfo\0") };
+            let nvml_device_get_memory_info_v2 =
+                unsafe { lib.symbol::<NvmlDeviceGetMemoryInfoV2>(b"nvmlDeviceGetMemoryInfo_v2\0") };
+
+            if unsafe { nvml_init() } != NVML_SUCCESS {
+                return Vec::new();
+            }
+
+            let mut infos = Vec::new();
+            let mut count = 0;
+            if unsafe { nvml_device_get_count(&mut count) } == NVML_SUCCESS {
+                for index in 0..count {
+                    let mut device = std::ptr::null_mut();
+                    if unsafe { nvml_device_get_handle_by_index(index, &mut device) }
+                        != NVML_SUCCESS
+                    {
+                        continue;
+                    }
+
+                    let mut info = NvidiaDeviceInfo::default();
+                    if let Some(get_uuid) = nvml_device_get_uuid {
+                        let mut buf = [0 as c_char; 96];
+                        if unsafe { get_uuid(device, buf.as_mut_ptr(), buf.len() as c_uint) }
+                            == NVML_SUCCESS
+                        {
+                            info.uuid = unsafe { c_string(buf.as_ptr()) };
+                        }
+                    }
+                    if let Some(get_name) = nvml_device_get_name {
+                        let mut buf = [0 as c_char; 96];
+                        if unsafe { get_name(device, buf.as_mut_ptr(), buf.len() as c_uint) }
+                            == NVML_SUCCESS
+                        {
+                            info.name = unsafe { c_string(buf.as_ptr()) };
+                        }
+                    }
+                    if let Some(get_pci_info) = nvml_device_get_pci_info {
+                        let mut pci: NvmlPciInfo = unsafe { std::mem::zeroed() };
+                        if unsafe { get_pci_info(device, &mut pci) } == NVML_SUCCESS {
+                            info.pci_bdf = unsafe { c_string(pci.bus_id.as_ptr()) }
+                                .or_else(|| unsafe { c_string(pci.bus_id_legacy.as_ptr()) })
+                                .as_deref()
+                                .and_then(normalize_pci_bdf);
+                        }
+                    }
+                    if let Some(get_memory_v2) = nvml_device_get_memory_info_v2 {
+                        let mut memory = NvmlMemoryV2 {
+                            version: (std::mem::size_of::<NvmlMemoryV2>() as c_uint) | (2 << 24),
+                            ..NvmlMemoryV2::default()
+                        };
+                        if unsafe { get_memory_v2(device, &mut memory) } == NVML_SUCCESS {
+                            info.total_bytes = Some(memory.total);
+                            info.reserved_bytes = Some(round_up_to_mib(memory.reserved));
+                        }
+                    } else if let Some(get_memory) = nvml_device_get_memory_info {
+                        let mut memory = NvmlMemory::default();
+                        if unsafe { get_memory(device, &mut memory) } == NVML_SUCCESS {
+                            info.total_bytes = Some(memory.total);
+                        }
+                    }
+
+                    infos.push(info);
+                }
+            }
+
+            if let Some(shutdown) = nvml_shutdown {
+                unsafe {
+                    shutdown();
+                }
+            }
+
+            infos
+        }
+
+        unsafe fn c_string(ptr: *const c_char) -> Option<String> {
+            if ptr.is_null() {
+                return None;
+            }
+            let value = unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .trim()
+                .to_string();
+            if value.is_empty() { None } else { Some(value) }
         }
     }
+
+    // Re-exported at `crate` visibility, not `super`: the file-level shim below
+    // widens this further, to the `hardware` module, and a narrower inner
+    // re-export would make that widening a private re-export.
+    #[cfg(feature = "skippy-devices")]
+    pub(crate) use ffi::enrich_gpu_facts;
 
     /// Applies driver facts to every GPU whose identity is present in `infos`.
     /// Returns the display names of the NVIDIA GPUs that matched nothing, so
@@ -207,74 +412,6 @@ mod linux {
             .and_then(|uuid| infos.iter().find(|info| info.uuid.as_deref() == Some(uuid)))
     }
 
-    fn cuda_device_infos() -> Vec<NvidiaDeviceInfo> {
-        let Some(lib) = DlLibrary::open(b"libcuda.so.1\0") else {
-            return Vec::new();
-        };
-        let Some(cu_init) = (unsafe { lib.symbol::<CuInit>(b"cuInit\0") }) else {
-            return Vec::new();
-        };
-        let Some(cu_device_get_count) =
-            (unsafe { lib.symbol::<CuDeviceGetCount>(b"cuDeviceGetCount\0") })
-        else {
-            return Vec::new();
-        };
-        let Some(cu_device_get) = (unsafe { lib.symbol::<CuDeviceGet>(b"cuDeviceGet\0") }) else {
-            return Vec::new();
-        };
-        let cu_device_total_mem =
-            unsafe { lib.symbol::<CuDeviceTotalMem>(b"cuDeviceTotalMem_v2\0") };
-        let cu_device_get_name = unsafe { lib.symbol::<CuDeviceGetName>(b"cuDeviceGetName\0") };
-        let cu_device_get_pci_bus_id =
-            unsafe { lib.symbol::<CuDeviceGetPciBusId>(b"cuDeviceGetPCIBusId\0") };
-
-        if unsafe { cu_init(0) } != CUDA_SUCCESS {
-            return Vec::new();
-        }
-
-        let mut count = 0;
-        if unsafe { cu_device_get_count(&mut count) } != CUDA_SUCCESS || count <= 0 {
-            return Vec::new();
-        }
-
-        let mut infos = Vec::new();
-        for index in 0..count {
-            let mut device = 0;
-            if unsafe { cu_device_get(&mut device, index) } != CUDA_SUCCESS {
-                continue;
-            }
-
-            let mut info = NvidiaDeviceInfo::default();
-            if let Some(device_name) = cu_device_get_name {
-                let mut buf = [0 as c_char; 256];
-                if unsafe { device_name(buf.as_mut_ptr(), buf.len() as c_int, device) }
-                    == CUDA_SUCCESS
-                {
-                    info.name = unsafe { c_string(buf.as_ptr()) };
-                }
-            }
-            if let Some(total_mem) = cu_device_total_mem {
-                let mut total = 0usize;
-                if unsafe { total_mem(&mut total, device) } == CUDA_SUCCESS {
-                    info.total_bytes = Some(total as u64);
-                }
-            }
-            if let Some(pci_bus_id) = cu_device_get_pci_bus_id {
-                let mut buf = [0 as c_char; 32];
-                if unsafe { pci_bus_id(buf.as_mut_ptr(), buf.len() as c_int, device) }
-                    == CUDA_SUCCESS
-                {
-                    info.pci_bdf = unsafe { c_string(buf.as_ptr()) }
-                        .as_deref()
-                        .and_then(normalize_pci_bdf);
-                }
-            }
-            infos.push(info);
-        }
-
-        infos
-    }
-
     /// Joins driver facts onto the CUDA-visible device list by identity.
     ///
     /// NVML ignores `CUDA_VISIBLE_DEVICES` and libcuda honours it, so the two
@@ -323,114 +460,6 @@ mod linux {
         if target.pci_bdf.is_none() {
             target.pci_bdf = source.pci_bdf.clone();
         }
-    }
-
-    fn nvml_device_infos() -> Vec<NvidiaDeviceInfo> {
-        let Some(lib) = DlLibrary::open(b"libnvidia-ml.so.1\0") else {
-            return Vec::new();
-        };
-        let Some(nvml_init) = (unsafe { lib.symbol::<NvmlInit>(b"nvmlInit_v2\0") }) else {
-            return Vec::new();
-        };
-        let Some(nvml_device_get_count) =
-            (unsafe { lib.symbol::<NvmlDeviceGetCount>(b"nvmlDeviceGetCount_v2\0") })
-        else {
-            return Vec::new();
-        };
-        let Some(nvml_device_get_handle_by_index) = (unsafe {
-            lib.symbol::<NvmlDeviceGetHandleByIndex>(b"nvmlDeviceGetHandleByIndex_v2\0")
-        }) else {
-            return Vec::new();
-        };
-        let nvml_shutdown = unsafe { lib.symbol::<NvmlShutdown>(b"nvmlShutdown\0") };
-        let nvml_device_get_uuid =
-            unsafe { lib.symbol::<NvmlDeviceGetUuid>(b"nvmlDeviceGetUUID\0") };
-        let nvml_device_get_name =
-            unsafe { lib.symbol::<NvmlDeviceGetName>(b"nvmlDeviceGetName\0") };
-        let nvml_device_get_pci_info =
-            unsafe { lib.symbol::<NvmlDeviceGetPciInfo>(b"nvmlDeviceGetPciInfo_v3\0") };
-        let nvml_device_get_memory_info =
-            unsafe { lib.symbol::<NvmlDeviceGetMemoryInfo>(b"nvmlDeviceGetMemoryInfo\0") };
-        let nvml_device_get_memory_info_v2 =
-            unsafe { lib.symbol::<NvmlDeviceGetMemoryInfoV2>(b"nvmlDeviceGetMemoryInfo_v2\0") };
-
-        if unsafe { nvml_init() } != NVML_SUCCESS {
-            return Vec::new();
-        }
-
-        let mut infos = Vec::new();
-        let mut count = 0;
-        if unsafe { nvml_device_get_count(&mut count) } == NVML_SUCCESS {
-            for index in 0..count {
-                let mut device = std::ptr::null_mut();
-                if unsafe { nvml_device_get_handle_by_index(index, &mut device) } != NVML_SUCCESS {
-                    continue;
-                }
-
-                let mut info = NvidiaDeviceInfo::default();
-                if let Some(get_uuid) = nvml_device_get_uuid {
-                    let mut buf = [0 as c_char; 96];
-                    if unsafe { get_uuid(device, buf.as_mut_ptr(), buf.len() as c_uint) }
-                        == NVML_SUCCESS
-                    {
-                        info.uuid = unsafe { c_string(buf.as_ptr()) };
-                    }
-                }
-                if let Some(get_name) = nvml_device_get_name {
-                    let mut buf = [0 as c_char; 96];
-                    if unsafe { get_name(device, buf.as_mut_ptr(), buf.len() as c_uint) }
-                        == NVML_SUCCESS
-                    {
-                        info.name = unsafe { c_string(buf.as_ptr()) };
-                    }
-                }
-                if let Some(get_pci_info) = nvml_device_get_pci_info {
-                    let mut pci: NvmlPciInfo = unsafe { std::mem::zeroed() };
-                    if unsafe { get_pci_info(device, &mut pci) } == NVML_SUCCESS {
-                        info.pci_bdf = unsafe { c_string(pci.bus_id.as_ptr()) }
-                            .or_else(|| unsafe { c_string(pci.bus_id_legacy.as_ptr()) })
-                            .as_deref()
-                            .and_then(normalize_pci_bdf);
-                    }
-                }
-                if let Some(get_memory_v2) = nvml_device_get_memory_info_v2 {
-                    let mut memory = NvmlMemoryV2 {
-                        version: (std::mem::size_of::<NvmlMemoryV2>() as c_uint) | (2 << 24),
-                        ..NvmlMemoryV2::default()
-                    };
-                    if unsafe { get_memory_v2(device, &mut memory) } == NVML_SUCCESS {
-                        info.total_bytes = Some(memory.total);
-                        info.reserved_bytes = Some(round_up_to_mib(memory.reserved));
-                    }
-                } else if let Some(get_memory) = nvml_device_get_memory_info {
-                    let mut memory = NvmlMemory::default();
-                    if unsafe { get_memory(device, &mut memory) } == NVML_SUCCESS {
-                        info.total_bytes = Some(memory.total);
-                    }
-                }
-
-                infos.push(info);
-            }
-        }
-
-        if let Some(shutdown) = nvml_shutdown {
-            unsafe {
-                shutdown();
-            }
-        }
-
-        infos
-    }
-
-    unsafe fn c_string(ptr: *const c_char) -> Option<String> {
-        if ptr.is_null() {
-            return None;
-        }
-        let value = unsafe { CStr::from_ptr(ptr) }
-            .to_string_lossy()
-            .trim()
-            .to_string();
-        if value.is_empty() { None } else { Some(value) }
     }
 
     /// Canonicalises a PCI address to lowercase `00000000:bb:dd.f`.
@@ -800,11 +829,29 @@ mod linux {
                 Some(format!("pci:{HEX_BDF_CANONICAL}").as_str())
             );
         }
+
+        #[test]
+        fn reserved_bytes_are_rounded_up_to_a_whole_mib() {
+            // The 5090's raw NVML `reserved` on carrack was 514_719_744, and the
+            // figure the issue reported — 514_850_816 — is exactly that rounded
+            // up to a MiB. That arithmetic is what identified the hidden card as
+            // the source of the leaked memory, so it is worth pinning: a change
+            // in rounding would quietly move every reported `reserved_bytes`.
+            assert_eq!(round_up_to_mib(514_719_744), RTX_5090_NVML_RESERVED);
+            assert_eq!(round_up_to_mib(0), 0);
+            assert_eq!(round_up_to_mib(1), 1024 * 1024);
+            assert_eq!(round_up_to_mib(1024 * 1024), 1024 * 1024);
+            assert_eq!(round_up_to_mib(1024 * 1024 + 1), 2 * 1024 * 1024);
+        }
     }
 }
 
-#[cfg(target_os = "linux")]
-pub(super) use linux::enrich_gpu_facts;
+// The file-level shims exist only for `skippy_devices`, which is itself behind the
+// `skippy-devices` feature, so they carry the same gate.
+#[cfg(all(not(target_os = "linux"), feature = "skippy-devices"))]
+use super::GpuFacts;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(target_os = "linux", feature = "skippy-devices"))]
+pub(super) use linux::enrich_gpu_facts;
+#[cfg(all(not(target_os = "linux"), feature = "skippy-devices"))]
 pub(super) fn enrich_gpu_facts(_gpus: &mut [GpuFacts]) {}

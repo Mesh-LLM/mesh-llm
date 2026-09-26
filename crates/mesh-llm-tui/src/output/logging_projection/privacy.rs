@@ -30,7 +30,12 @@ pub(super) fn sanitize_map(mut fields: Map<String, Value>) -> Map<String, Value>
 }
 
 pub(super) fn sanitize_text(input: &str) -> String {
-    let normalized = redact_sensitive_fragments(&redact_url_query_values(input));
+    sanitize_text_with_home(input, operator_home().as_deref())
+}
+
+fn sanitize_text_with_home(input: &str, home: Option<&str>) -> String {
+    let input = mask_operator_home(input, home);
+    let normalized = redact_sensitive_fragments(&redact_url_query_values(&input));
     if normalized.chars().count() <= MAX_PRESENTATION_CHARS {
         normalized
     } else {
@@ -183,9 +188,45 @@ fn is_private_absolute_path(word: &str) -> bool {
     word.starts_with('/')
         || word.to_ascii_lowercase().starts_with("file://")
         || is_windows_absolute_path(word)
-        || std::env::var("HOME")
-            .ok()
-            .is_some_and(|home| !home.is_empty() && word.contains(&home))
+        || word.contains(HOME_SENTINEL)
+}
+
+/// Stands in for the operator's home directory from before the text is split
+/// into words until the word that held it is redacted whole, so a home with a
+/// space (`C:\Users\Jane Doe`) cannot fall across two words. A private-use
+/// character: log text does not carry it, and punctuation trimming keeps it.
+const HOME_SENTINEL: &str = "\u{E000}";
+
+fn mask_operator_home(input: &str, home: Option<&str>) -> String {
+    let Some(home) = home.filter(|home| !home.is_empty()) else {
+        return input.to_owned();
+    };
+    // Windows paths compare regardless of case. ASCII folding keeps every
+    // byte offset, so matches found in the folded text map back to `input`.
+    let (text, needle) = if cfg!(windows) {
+        (input.to_ascii_lowercase(), home.to_ascii_lowercase())
+    } else {
+        (input.to_owned(), home.to_owned())
+    };
+    let mut masked = String::with_capacity(input.len());
+    let mut copied = 0;
+    for (start, _) in text.match_indices(&needle) {
+        masked.push_str(&input[copied..start]);
+        masked.push_str(HOME_SENTINEL);
+        copied = start + needle.len();
+    }
+    masked.push_str(&input[copied..]);
+    masked
+}
+
+/// The operator's home directory: `HOME`, or `USERPROFILE` on Windows, where
+/// `HOME` is usually unset. Only an absolute path counts, so a Git Bash
+/// `HOME` such as `/c/Users/name` falls through to `USERPROFILE`.
+fn operator_home() -> Option<String> {
+    ["HOME", "USERPROFILE"].into_iter().find_map(|variable| {
+        let home = std::env::var(variable).ok()?;
+        (!home.is_empty() && std::path::Path::new(&home).is_absolute()).then_some(home)
+    })
 }
 
 fn is_windows_absolute_path(value: &str) -> bool {
@@ -316,14 +357,52 @@ fn is_credential_value(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{safe_native_params, sanitize_text};
+    use super::{operator_home, safe_native_params, sanitize_text, sanitize_text_with_home};
     use serde_json::json;
 
-    fn operator_home() -> Option<String> {
-        ["HOME", "USERPROFILE"].into_iter().find_map(|variable| {
-            let home = std::env::var(variable).ok()?;
-            (!home.is_empty() && std::path::Path::new(&home).is_absolute()).then_some(home)
-        })
+    #[test]
+    fn redacts_a_home_directory_that_contains_a_space() {
+        let home = r"C:\Users\Jane Doe";
+        for input in [
+            format!(r"path={home}\models\model.gguf"),
+            format!(r"failed to open {home}\cache\index.json"),
+        ] {
+            let sanitized = sanitize_text_with_home(&input, Some(home));
+            assert!(
+                !sanitized.contains("Jane") && !sanitized.contains("Doe"),
+                "sanitized output leaked part of the home directory: {sanitized:?}"
+            );
+            assert!(sanitized.contains("[REDACTED_PATH]"), "{sanitized:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn redacts_the_home_directory_in_any_case_on_windows() {
+        let sanitized = sanitize_text_with_home(
+            r"path=c:\users\jane\models\model.gguf",
+            Some(r"C:\Users\Jane"),
+        );
+        assert!(!sanitized.contains("jane"), "{sanitized:?}");
+    }
+
+    #[test]
+    fn redacts_the_operator_home_inside_a_word() {
+        // A home path at the start of a word is caught as an absolute path;
+        // after `key=` or `key:` only the home check sees it. On Windows that
+        // check has to read USERPROFILE, since HOME is usually unset there.
+        let home = operator_home().expect("HOME or USERPROFILE should be set");
+        let separator = std::path::MAIN_SEPARATOR;
+        for input in [
+            format!("path={home}{separator}models{separator}model.gguf"),
+            format!("cache dir:{home}{separator}cache"),
+        ] {
+            let sanitized = sanitize_text(&input);
+            assert!(
+                !sanitized.contains(&home),
+                "sanitized output leaked the home directory: {sanitized:?}"
+            );
+        }
     }
 
     #[test]

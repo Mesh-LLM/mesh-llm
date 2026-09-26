@@ -58,6 +58,7 @@ def build_cohorts(
     frameworks: Sequence[str],
     trajectories_per_framework: int,
     min_assistant_turns: int = 1,
+    sessions_per_cohort: int | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     if (
         not cohort_names
@@ -68,14 +69,23 @@ def build_cohorts(
         raise ValueError("cohorts, frameworks, and trajectory count must be positive")
     cohorts = {name: [] for name in cohort_names}
     by_framework = {framework: [] for framework in frameworks}
-    required = len(cohort_names) * trajectories_per_framework
+    allocation = {f: trajectories_per_framework for f in frameworks}
+    if sessions_per_cohort is not None:
+        if sessions_per_cohort < len(frameworks):
+            raise ValueError("session count must cover every framework")
+        allocation = {
+            f: sessions_per_cohort // len(frameworks)
+            + (i < sessions_per_cohort % len(frameworks))
+            for i, f in enumerate(frameworks)
+        }
+    required = {f: len(cohort_names) * count for f, count in allocation.items()}
     seen: set[str] = set()
     for row in rows:
         session_id = row["session_id"]
         framework = row["agent_framework"]
         if (
             framework not in by_framework
-            or len(by_framework[framework]) >= required
+            or len(by_framework[framework]) >= required[framework]
             or session_id in seen
         ):
             continue
@@ -97,18 +107,18 @@ def build_cohorts(
                 "messages": messages,
             }
         )
-        if all(len(by_framework[item]) >= required for item in frameworks):
+        if all(len(by_framework[item]) >= required[item] for item in frameworks):
             break
     for framework in frameworks:
         available = by_framework[framework]
-        if len(available) < required:
+        if len(available) < required[framework]:
             raise ValueError(
                 f"framework {framework} has {len(available)} eligible trajectories, "
-                f"but {required} are required"
+                f"but {required[framework]} are required"
             )
         for cohort_index, cohort in enumerate(cohort_names):
-            start = cohort_index * trajectories_per_framework
-            end = start + trajectories_per_framework
+            start = cohort_index * allocation[framework]
+            end = start + allocation[framework]
             cohorts[cohort].extend(available[start:end])
     return cohorts
 
@@ -216,14 +226,22 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cohort", action="append", required=True)
     parser.add_argument("--framework", action="append", required=True)
-    parser.add_argument("--trajectories-per-framework", type=int, required=True)
+    counts = parser.add_mutually_exclusive_group(required=True)
+    counts.add_argument("--trajectories-per-framework", type=int)
+    counts.add_argument("--sessions-per-cohort", type=int)
     parser.add_argument("--min-isl", type=int, default=8192)
     parser.add_argument("--max-isl", type=int, default=65536)
     parser.add_argument("--min-turns", type=int, default=5)
     parser.add_argument("--source-dataset", action="append", dest="sources", default=[])
     args = parser.parse_args()
-    if args.trajectories_per_framework <= 0 or args.min_isl <= 0 or args.min_turns <= 0:
-        parser.error("trajectory count, minimum ISL, and minimum turns must be positive")
+    if (
+        (args.trajectories_per_framework or args.sessions_per_cohort or 0) <= 0
+        or args.min_isl <= 0
+        or args.min_turns <= 0
+    ):
+        parser.error(
+            "trajectory count, minimum ISL, and minimum turns must be positive"
+        )
     if args.max_isl <= args.min_isl:
         parser.error("maximum ISL must exceed minimum ISL")
     if len(set(args.cohort)) != len(args.cohort) or len(set(args.framework)) != len(
@@ -245,8 +263,9 @@ def main() -> int:
         ),
         args.cohort,
         args.framework,
-        args.trajectories_per_framework,
+        args.trajectories_per_framework or 1,
         args.min_turns,
+        args.sessions_per_cohort,
     )
     document = manifest_document(
         cohorts,
@@ -257,6 +276,9 @@ def main() -> int:
                 "sources": args.sources,
                 "frameworks": args.framework,
                 "trajectories_per_framework_per_cohort": args.trajectories_per_framework,
+                "sessions_per_cohort": args.sessions_per_cohort,
+                "allocation": "quotient/remainder in declared framework order",
+                "algorithm_version": "balanced-md5-v2",
                 "min_isl": args.min_isl,
                 "max_isl_exclusive": args.max_isl,
                 "min_assistant_turns": args.min_turns,

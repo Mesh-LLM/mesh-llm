@@ -7,7 +7,8 @@
 
 pub use mesh_llm_system::capacity::AdvertisedMemory;
 pub(super) use mesh_llm_system::capacity::{
-    advertised_capacity_bytes, advertised_memory, capped_capacity_bytes,
+    advertised_capacity_bytes, advertised_memory, host_ram_offload_gain_bytes,
+    local_fit_capacity_bytes,
 };
 
 #[cfg(test)]
@@ -34,10 +35,32 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 0);
+        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 0, true);
 
         assert_eq!(snapshot.vram_bytes, 39_000_000_000);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 491_000_000_000);
+    }
+
+    #[test]
+    fn local_runtime_capacity_stays_on_the_device_without_host_ram_offload() {
+        // Same host as above with the default `gpu.host_ram_offload` unset:
+        // the local fit plans on what the GPU holds, like the announcement.
+        let hw = HardwareSurvey {
+            vram_bytes: 491_000_000_000,
+            gpu_vram: vec![40_000_000_000],
+            gpu_reserved: vec![Some(1_000_000_000)],
+            gpus: vec![gpu(40_000_000_000, Some(1_000_000_000), false)],
+            ram_offload_bytes: 451_000_000_000,
+            ..HardwareSurvey::default()
+        };
+
+        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 0, false);
+
+        assert_eq!(snapshot.vram_bytes, 39_000_000_000);
+        assert_eq!(snapshot.local_runtime_capacity_bytes, 39_000_000_000);
+        assert_eq!(snapshot.memory.ram_offload_bytes, 0);
+        // What the fallback message can offer: opting in would add the rest.
+        assert_eq!(snapshot.host_ram_offload_gain_bytes, 452_000_000_000);
     }
 
     #[test]
@@ -51,7 +74,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 0);
+        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 0, true);
 
         assert_eq!(snapshot.vram_bytes, 96_000_000_000);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 96_000_000_000);
@@ -65,7 +88,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 0);
+        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 0, true);
 
         assert_eq!(snapshot.vram_bytes, 0);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 491_000_000_000);
@@ -79,7 +102,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, Some(1.0), 0);
+        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, Some(1.0), 0, true);
 
         assert_eq!(snapshot.vram_bytes, 1_000_000_000);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 1_000_000_000);
@@ -95,7 +118,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, Some(32.0), 0);
+        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, Some(32.0), 0, true);
 
         assert_eq!(snapshot.vram_bytes, 32_000_000_000);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 32_000_000_000);
@@ -111,7 +134,8 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 2_000_000_000);
+        let snapshot =
+            hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 2_000_000_000, true);
 
         assert_eq!(snapshot.vram_bytes, 11_500_000_000);
         assert_eq!(snapshot.memory.total_bytes, 12_000_000_000);

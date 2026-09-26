@@ -28,7 +28,9 @@ use crate::{
     cli::ServeArgs,
     config::{load_json, validate_config},
     kv_integration::KvStageIntegration,
-    runtime_state::{RuntimeState, load_runtime, loaded_model_state_kind},
+    runtime_state::{
+        RuntimeState, load_runtime, loaded_model_has_indexer_memory, loaded_model_state_kind,
+    },
     telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
     tokenizer::tokenizer_identity_from_stage,
 };
@@ -52,6 +54,13 @@ pub(crate) fn bind_serve_listener(bind_addr: SocketAddr) -> Result<TcpListener> 
     };
     let socket = socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))
         .with_context(|| format!("create serving socket for {bind_addr}"))?;
+    // Match Tokio's Unix listener semantics: a stopped server may rebind while
+    // its closed connections are in TIME_WAIT. Do not enable SO_REUSEPORT or
+    // Windows SO_REUSEADDR, which can permit sharing a live listener's port.
+    #[cfg(unix)]
+    socket
+        .set_reuse_address(true)
+        .context("enable serving listener address reuse")?;
     socket
         .bind(&bind_addr.into())
         .with_context(|| format!("bind serving socket to {bind_addr}"))?;
@@ -249,6 +258,7 @@ pub fn stage_http_router(options: StageHttpOptions) -> Result<Router> {
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         loaded_model_state_kind(runtime.as_ref()),
+        loaded_model_has_indexer_memory(runtime.as_ref()),
         None,
     )?
     .map(Arc::new);
@@ -812,6 +822,44 @@ mod tests {
 
     use super::*;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    /// Verify a completed server can immediately reuse its listening address.
+    async fn serving_listener_can_rebind_after_server_closes_connection() -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let listener = bind_serve_listener("127.0.0.1:0".parse()?)?;
+            let addr = listener.local_addr()?;
+            let mut client = tokio::net::TcpStream::connect(addr).await?;
+            let (mut accepted, _) = listener.accept().await?;
+            // The server actively closes, leaving its connection in TIME_WAIT.
+            accepted.shutdown().await?;
+            client.read_to_end(&mut Vec::new()).await?;
+            drop(accepted);
+            drop(client);
+            drop(listener);
+            let replacement = bind_serve_listener(addr)?;
+            assert_eq!(replacement.local_addr()?, addr);
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("serving listener restart timed out")?
+    }
+
+    #[tokio::test]
+    /// Preserve exclusive address ownership while the first listener remains live.
+    async fn serving_listener_rejects_another_live_listener() -> Result<()> {
+        let listener = bind_serve_listener("127.0.0.1:0".parse()?)?;
+        let error = bind_serve_listener(listener.local_addr()?)
+            .expect_err("a second listener must not share the live port");
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::AddrInUse
+        );
+        Ok(())
+    }
+
     fn stage_config_without_runtime() -> StageConfig {
         StageConfig {
             run_id: "run".to_owned(),
@@ -851,7 +899,6 @@ mod tests {
             kv_unified: None,
             swa_full: None,
             cache_idle_slots: None,
-            filter_tensors_on_load: false,
             resident_tensor_names: Vec::new(),
             selected_device: None,
             kv_cache: None,

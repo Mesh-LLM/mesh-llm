@@ -179,6 +179,8 @@ pub(super) fn split_test_peer(
         stage_status_list_supported: false,
         local_gguf_content_id_supported: stage_protocol_generation_supported,
         advertised_model_throughput: vec![],
+        #[cfg(feature = "payments")]
+        lightning_offers: Default::default(),
         cache_affinity: None,
 
         display_rtt: None,
@@ -363,6 +365,8 @@ pub(super) fn runtime_status_for_stage(
         flash_attn_type: FlashAttentionType::Auto,
         error: None,
         shutdown_generation: generation.generation,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -759,7 +763,7 @@ max_tokens = 222
     assert_eq!(resolved.model_id, "runtime/served-name");
     assert_eq!(resolved.throughput.threads, Some(9));
     assert_eq!(resolved.throughput.threads_batch, Some(5));
-    assert_eq!(resolved.request_defaults.max_tokens, 222);
+    assert_eq!(resolved.request_defaults.max_tokens, Some(222));
     assert_eq!(resolved.model_fit.ctx_size, 4096);
     assert_eq!(resolved.throughput.parallel, 3);
     assert_eq!(resolved.hardware.device.as_deref(), Some("CPU"));
@@ -807,10 +811,7 @@ max_tokens = 222
     assert_eq!(cli_resolved.hardware.resolved_model_path, cli_model_path);
     assert_eq!(cli_resolved.throughput.threads, None);
     assert_eq!(cli_resolved.throughput.threads_batch, None);
-    assert_eq!(
-        cli_resolved.request_defaults.max_tokens,
-        skippy_server::CONTEXT_BUDGET_MAX_TOKENS
-    );
+    assert_eq!(cli_resolved.request_defaults.max_tokens, None);
 }
 
 #[test]
@@ -822,6 +823,7 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
             source_kind: mesh::ModelSourceKind::HuggingFace,
             repository: Some("Qwen/Qwen3-VL-2B-Instruct-GGUF".into()),
             artifact: Some("Qwen3VL-2B-Instruct-Q4_K_M.gguf".into()),
+            weights_digest: Some("sha256:verified-weights".into()),
             ..Default::default()
         },
         capabilities_known: false,
@@ -840,6 +842,7 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
         "Qwen3VL-2B-Instruct-Q4_K_M",
         "Qwen3VL-2B-Instruct-Q4_K_M",
         capabilities,
+        mesh::ModelWorkloadClass::CausalGeneration,
     );
 
     assert_eq!(
@@ -853,6 +856,14 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
     assert!(descriptor.identity.is_primary);
     assert!(descriptor.capabilities_known);
     assert_eq!(descriptor.capabilities, capabilities);
+    assert_eq!(
+        descriptor.identity.weights_digest.as_deref(),
+        Some("sha256:verified-weights")
+    );
+    assert_eq!(
+        descriptor.metadata.unwrap().workload_class,
+        Some(mesh::ModelWorkloadClass::CausalGeneration)
+    );
 }
 
 #[test]
@@ -862,6 +873,7 @@ fn runtime_verified_served_model_descriptor_builds_fallback_identity() {
         "Primary",
         "Runtime",
         models::ModelCapabilities::default(),
+        mesh::ModelWorkloadClass::Embedding,
     );
 
     assert_eq!(descriptor.identity.model_name, "Runtime");
@@ -938,6 +950,8 @@ pub(super) fn test_stage_status_from_load(
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -990,6 +1004,8 @@ pub(super) fn test_stage_status_from_stop(
         coordinator_term: stop.coordinator_term,
         coordinator_id: None,
         lease_until_unix_ms: 0,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 

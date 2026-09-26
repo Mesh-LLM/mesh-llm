@@ -29,7 +29,7 @@ use crate::http::bind_serve_listener;
 use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::load_runtime;
-use crate::runtime_state::loaded_model_state_kind;
+use crate::runtime_state::{loaded_model_has_indexer_memory, loaded_model_state_kind};
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -145,6 +145,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         loaded_model_state_kind(Some(&runtime)),
+        loaded_model_has_indexer_memory(Some(&runtime)),
         None,
     )?
     .map(Arc::new);
@@ -160,6 +161,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         .context("construct stage-0 tokenizer capability for OpenAI serving")?;
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime,
+        workload: Default::default(),
         config,
         telemetry: telemetry.clone(),
         model_id: model_id.clone(),
@@ -257,6 +259,11 @@ pub struct EmbeddedOpenAiArgs {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EmbeddedOpenAiRequestDefaults {
+    /// Deployment/operator output limit. Package profile limits are resolved
+    /// below this field and above the server fallback.
+    pub max_tokens: Option<u32>,
+    /// Publisher-reviewed profiles carried by model-package v2.
+    pub package_request_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
     pub stop: Option<Vec<String>>,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
@@ -312,6 +319,7 @@ pub enum EmbeddedReasoningEnabled {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EmbeddedReasoningBudget {
     Auto,
+    Unrestricted,
     Tokens(u32),
     Effort(ReasoningEffort),
 }
@@ -509,6 +517,7 @@ fn embedded_openai_backend_with_scheduler(
     let kv = KvStageIntegration::from_loaded_model(
         &args.config,
         loaded_model_state_kind(Some(&args.runtime)),
+        loaded_model_has_indexer_memory(Some(&args.runtime)),
         args.kv_lifecycle_observer.clone(),
     )?
     .map(Arc::new);
@@ -525,6 +534,7 @@ fn embedded_openai_backend_with_scheduler(
     };
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
+        workload: Default::default(),
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),
         model_id: model_id.clone(),

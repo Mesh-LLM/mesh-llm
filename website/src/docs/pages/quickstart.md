@@ -4,7 +4,7 @@ title: Quickstart
 
 # Quickstart
 
-The easiest way to try Mesh is to create your own private mesh. Start one node on this machine, finish setup, send a chat message, then try an agent. Later, you can add more machines or invite other people to join the same private mesh.
+The easiest way to try Mesh is to create a mesh for your own machines. Start one node on this machine, finish setup, send a chat message, then try an agent. Later, you can add more machines or invite other people to join the same mesh.
 
 ## 1. Install the executable
 
@@ -52,18 +52,24 @@ mesh-llm.exe setup
 
 On interactive macOS and Linux terminals, setup can offer to install and enable the background service. The GitHub star prompt only appears when interactive and eligible, and it defaults to Yes.
 
-## 3. Start one private node
+<a id="3-start-one-private-node"></a>
+
+## 3. Start one node
+
+The commands below use named Nostr discovery, not a private-mesh setup.
+The discovery name is not an access-control credential. See
+[discovery, join tokens, and admission policy](/docs/pages/private-meshes/#discovery-and-admission).
 
 Use this model first on a 12GB+ machine:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 On Windows PowerShell:
 
 ```powershell
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 Keep this terminal open. A ready node exposes:
@@ -111,7 +117,7 @@ The model-first command above remains the easiest first run. You can also start
 the daemon with no local model:
 
 ```sh
-mesh-llm serve --discover my-private-mesh
+mesh-llm serve --discover my-mesh
 ```
 
 The console, API, mesh, plugins, and owner-control surfaces start independently
@@ -158,7 +164,7 @@ Traffic between the two Mesh nodes is end-to-end encrypted by QUIC, whether iroh
 connects them directly or forwards the encrypted packets through a relay:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
-Mesh nodes using the same private mesh name find each other and advertise their models to the same local API.
+Mesh nodes using the same mesh name find each other and advertise their models to the same local API.

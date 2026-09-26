@@ -141,10 +141,10 @@ fn validate_tools_value(value: &Value) -> Result<(), String> {
         let Some(function) = tool.get("function").and_then(Value::as_object) else {
             return Err(format!("tools[{index}].function must be an object"));
         };
-        if !function
+        if function
             .get("name")
             .and_then(Value::as_str)
-            .is_some_and(|name| !name.trim().is_empty())
+            .is_none_or(|name| name.trim().is_empty())
         {
             return Err(format!(
                 "tools[{index}].function.name must be a non-empty string"

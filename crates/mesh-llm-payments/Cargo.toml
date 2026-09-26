@@ -1,0 +1,36 @@
+[package]
+name = "mesh-llm-payments"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Durable inference settlement: ledger, pricing, budgets and payment gates over a pluggable wallet"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Serve this engine as the in-process `payments.v1` builtin plugin. Enabled by
+# the shipped binary that registers it; the engine itself does not need it.
+plugin-server = ["dep:mesh-llm-plugin", "dep:rmcp", "mesh-llm-payments-types/engine"]
+
+[dependencies]
+anyhow.workspace = true
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.1", optional = true }
+rmcp = { version = "3", features = ["server"], optional = true }
+async-trait = "0.1"
+fs2 = "0.4"
+mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.76.1" }
+mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.76.1" }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["sync", "time", "rt", "io-util"] }
+
+[dev-dependencies]
+bitcoin = { version = "0.32", features = ["secp-recovery"] }
+lightning-invoice = { version = "0.35.0-rc1", features = ["std"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }

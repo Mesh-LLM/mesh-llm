@@ -922,7 +922,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
     fn validate_pid_matches_rejects_wrong_comm() {
         let pid = std::process::id();
         assert!(
@@ -932,7 +931,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
     fn validate_pid_matches_rejects_wrong_start_time() {
         let pid = std::process::id();
         let comm = match validate::process_comm(pid).ok().flatten() {

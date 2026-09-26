@@ -75,7 +75,7 @@ owning source, and update the inventory and topology in the same change.
 
 ### PR workflow visibility and split invariant
 
-- PR validation has exactly five event entrypoints:
+- Required PR validation has exactly five event entrypoints:
   `pr_quality.yml`, `pr_website.yml`, `pr_linux.yml`, `pr_macos.yml`, and
   `pr_windows.yml`. Keep this topic/platform split unless a maintainer
   explicitly changes the architecture contract.
@@ -101,6 +101,59 @@ owning source, and update the inventory and topology in the same change.
   must be created for every relevant PR synchronization; the checked planner
   makes an unselected lane skip its expensive work and lets its stable result
   succeed. This prevents required checks from remaining absent or pending.
+
+### Optional PR CI canary exception
+
+- `pr_ci_canary.yml` is an optional, non-required diagnostic entrypoint. It is
+  outside the five-workflow required-check census and the sibling-failure
+  monitor's cancellation target list. It must never replace, merge into, or
+  add required status to the Quality, Website, Linux, macOS, or Windows PR
+  entrypoints.
+- When preparing or reviewing a PR that changes workflow YAML, local actions,
+  planner contracts, runner selection, or other CI plumbing, recommend adding
+  `ci:canary` for pre-merge pipeline evidence. Explain that it covers only one
+  hosted Linux amd64 CPU UI/host/native-runtime/product chain (including the
+  native runtime-event gate), not the five lane orchestrators, macOS, Windows,
+  GPU, SDK, smoke, or release paths.
+- The canary uses `pull_request` only and has no path filters. The `ci:canary`
+  label opts a PR into a bounded run on `opened`, `synchronize`, `reopened`,
+  and `ready_for_review`, plus the matching label event. Unrelated label events
+  use a unique concurrency group and must not cancel an active canary. Removing
+  `ci:canary` starts a no-op run in the active group so concurrency cancels the
+  prior run without executing PR code.
+- The entrypoint must call the protected default-branch reusable canary lane
+  with a protected branch reference:
+  `Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main`. The lane
+  and its runner-owning nested workflows/actions therefore resolve from the
+  protected branch. Pass the merge SHA only as the product source being built;
+  leave `policy_source_sha` unset so runner policy cannot come from the PR.
+  The PR head SHA remains separate identity evidence and must not be
+  substituted for the merge source.
+- The canary planner may inspect the merge source and must reject changes to
+  protected ownership/slice catalogs unless the base already contains the same
+  catalog. The fixed canary graph, not PR-controlled routing data, owns its
+  bounded matrix and artifact names. Runner-policy jobs must keep their policy
+  checkout on the protected default branch; the merge source is a build input,
+  not runner-policy authority.
+- The canary's only real build graph is one Linux amd64 CPU production chain:
+  console UI artifact, release host, native CPU runtime, and immutable product
+  composition. It may call those existing typed slices, but must not copy their
+  build commands or call the all-platform Linux lane. macOS, Windows, GPU,
+  SDK, smoke, detached dispatch, and release paths are outside its coverage.
+- The canary caller and every canary summary use read-only `contents` and
+  `packages` permissions as needed to pull the pinned runner image. No
+  `checks: write`, secrets, `secrets: inherit`, environments, OIDC, Depot, or
+  persistent self-hosted runner is allowed. Its final `Canary / CI` result is a
+  plain step summary and is non-required. A read-only caller must not reach a
+  nested reusable summary that requests `checks: write`, even when that job is
+  conditionally skipped, because GitHub validates the permission union at run
+  creation.
+- The protected default-branch workflow and policy checkout keep PR-controlled
+  workflow/action changes out of runner-owning jobs. Hosted placement and a
+  read-only token remain containment controls for this diagnostic, not a
+  reason to relax that boundary. Do not use the canary to justify access to a
+  persistent self-hosted runner; any future rollout still requires runner-group
+  restrictions to protected main-owned workflow references.
 
 ### Main workflow visibility and split invariant
 
@@ -332,6 +385,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Product and artifact contract
 
+- macOS builds default to the pinned llama.cpp release baseline recorded in
+  `scripts/lib/macos-deployment-target.txt` (currently 13.3). Just, direct
+  host/native build entry points, and both canary jobs must use the same
+  resolved Rust/CMake deployment target. Preserve explicit SDK/cross-platform
+  overrides; include the native target in build/cache identity.
+
 - Model every executable product as a backend-neutral host, one separately
   packaged native runtime per OS/architecture/backend, and a composition-only
   product. A backend matrix belongs to runtime/product rows, never host rows.
@@ -372,13 +431,36 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Operational safety
 
+- Self-hosted jobs must finish with bounded cleanup of their own generated
+  files after artifact uploads and explicit cache saves. Preserve shared model,
+  compiler and package caches, source checkouts, and local recovery artifacts
+  whose upload failed. Cleanup must run on success, failure and cancellation,
+  validate deletion boundaries, and never sweep another job's directories.
+  Runner loss or force termination may prevent the final step from running.
+
+- Agentic replay executes complete recorded sessions only on trusted main.
+  Long-context qualification is currently manual-only; restore the daily
+  schedule only after reviewed calibration of all model/concurrency cells.
+  Require at least 128K model/runtime context, complete turn evidence, and
+  actual recurrent restores for the recurrent lane. Never substitute shorter
+  sessions or checkpoint sampling to make a failing cohort pass. The persistent micstudio runner must execute natively as arm64
+  before checkout. Its shared model cache is writable and permits pinned model
+  and trajectory downloads. Repair uses Goose with the llama canary's provider
+  and model defaults. Only a complete, gated performance
+  regression may start repair; infrastructure failures retain evidence without
+  invoking the agent. Repair failures or an unchanged tree publish no PR.
+
 - Changed-pin llama canary agents use focused reproductions while repairing
   source. They return control after those checks pass instead of running an
   additional full family battery. The trusted repair wrapper still runs every
   candidate gate over the complete roster, feeds failures back to the same
   agent, and requires success before snapshotting. The separate verifier still
   repeats all gates on the exact candidate in a fresh checkout. Agent test
-  results must never replace either trusted full pass.
+  results must never replace either trusted full pass. Coding turns are admitted
+  only within a bounded repair window. Each returned candidate receives a full,
+  separately bounded verification pass; earlier repairs and failed gates must
+  not shorten that pass. Outer workflow limits must cover the repair window
+  plus one final verification pass and leave time to upload evidence.
 
 - Inspection, log reads, syntax validation, and dry-run planning are read-only.
   Dispatching, rerunning, cancelling, approving, deleting, changing variables
@@ -392,6 +474,77 @@ checked-in expiry are the maintainer-controlled approval boundary.
   deterministic failure.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
+
+## Llama canary family fan-out
+
+The trusted-main canary releases its build runner before scheduling one job
+per certified family. Every worker consumes the exact source, plan, manifest,
+and executable handoff from its producer; family workers never rebuild.
+The immutable model cache remains offline and read-only. One workflow-level
+non-cancelling concurrency group prevents overlapping canary runs, while
+family jobs have no shared concurrency group and use at most eight runners.
+
+Manual `mesh_ref` is an explicitly authorized trusted-code path, not a PR
+runner exception. Keep the workflow/controller on protected main, resolve only
+same-repository branch-reachable commits once, and bind the controller and
+selected source independently in every handoff. Certify the selected revision's
+existing pin and patches without repair or publication. Selected build scripts
+and battery code execute on persistent lab runners, so operators must choose
+trusted revisions; a main controller does not sandbox that source.
+
+Changed pins have at most three distributed repair attempts. Within each
+attempt, prepare/build failures return to the same bounded Goose session.
+Family or independent-verification failures feed the preserved candidate and
+all available worker/build evidence into a new session in the next attempt.
+Every edit invalidates all family results. A complete green repair pass must
+be followed by a fresh independent build and complete per-family pass on the
+same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
+or mismatched results. Only the final hosted publisher receives the repair
+credential, and exhausted attempts publish no branch or PR.
+
+The family plan must require executable coverage for every integrated MTP head
+declared by immutable GGUF metadata. A single draft token cannot certify a
+multi-head model. Check the declared head count against the cached GGUF before
+building, exercise every head, and compare target state with an independent
+MTP-disabled baseline. Rejected draft tokens are valid; missing head coverage
+or target-state divergence must fail the family receipt.
+
+Native-head certification budgets include two additional startup allowances
+for the integrated model and independent baseline loads, retaining the existing
+absolute timeout cap. Dry-run planning reflects the declared native-head lane;
+actual execution still requires the immutable metadata and tensor scans.
+
+Canary scheduling reserves 10% of physical memory. The controller projects
+source-owned plans onto the existing `accelerator-memory-128plus` and
+`accelerator-memory-256plus` labels (115.2 and 230.4 GiB workload budgets).
+Never add scheduling fields to a historical source's canonical plan. A current
+source plan may declare `minimum_runner_memory_gib` as 128 or 256; it may promote
+an estimate-selected row to the larger tier but never demote it. Plans that omit
+the field retain estimate-only placement. Estimates include pinned artifact
+bytes, concurrent workload copies, and explicit runtime allowances; they are
+admission estimates, not measured peak guarantees. Workers recompute the tier
+from the verified handoff, check physical and available memory, and stop their
+own process group if available memory falls below the reserve.
+One certification per runner account/host holds a local lock. Oversized families
+fail closed rather than silently skipping certification. The embedding SDK uses
+a locked controller-owned Python project, including with historical sources.
+
+The family matrix is submitted in ascending estimated model bytes, with family
+name breaking ties. Balanced shard membership remains unchanged. This puts
+small models first in the canary's one-family-per-job matrix; parallel runner
+availability can still change actual start and completion order.
+
+Partial GitHub reruns may reuse an earlier producer attempt from the same run
+only through the exact dependency-provided identity digest. Producer provenance
+and all source/plan/executable checks remain immutable. Family artifacts are
+namespaced by that identity and worker attempt. Aggregation chooses the newest
+receipt per family, rejects duplicate same-attempt receipts and invalid attempt
+bounds, and never falls back from a newer failure to an older success. The
+family job-result gate remains mandatory so missing uploads cannot hide failures.
+Failed certifications upload their evidence and then fail the family job, so
+GitHub's failed-job rerun can select them instead of only retrying aggregation.
+Repair feedback retains attempt-labelled history; it is diagnostic input, never
+certification authority. Rebuilding a producer invalidates its prior receipts.
 
 ## Validation contract
 

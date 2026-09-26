@@ -13,7 +13,7 @@ use skippy_runtime::{
 };
 
 use crate::{
-    cli::{StageLoadMode, StateHandoffArgs, StatePayloadKind},
+    cli::{StateHandoffArgs, StatePayloadKind},
     report::{
         StageModelReport, StateHandoffReport, StatePayloadBlockDigestReport,
         StatePayloadDigestReport,
@@ -71,6 +71,23 @@ struct BinaryStateHandoffResult {
     pub(in crate::runner) suffix_prefill_matches: Option<bool>,
     pub(in crate::runner) cache_hit_matches: bool,
     pub(in crate::runner) stage_models: Vec<StageModelReport>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StateTokenizerSource {
+    LocalStage,
+    SeparateModel,
+}
+
+fn state_tokenizer_source(
+    use_binary_control: bool,
+    include_embeddings: bool,
+) -> StateTokenizerSource {
+    if !use_binary_control && include_embeddings {
+        StateTokenizerSource::LocalStage
+    } else {
+        StateTokenizerSource::SeparateModel
+    }
 }
 
 #[derive(Clone)]
@@ -317,14 +334,40 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         args.ctx_size,
         lane_count,
     )?;
-    let (tokenizer_path, tokenizer_config) = tokenizer_model_for_state_handoff(&args)?;
-    let tokenizer = StageModel::open(&tokenizer_path, &tokenizer_config).with_context(|| {
-        format!(
-            "failed to open tokenizer model {}",
-            tokenizer_path.display()
+    let use_binary_control = args.binary_control
+        && include_output
+        && args.state_payload_kind == StatePayloadKind::FullState;
+    let tokenizer_source = state_tokenizer_source(use_binary_control, include_embeddings);
+    // A local source stage already owns the vocabulary. Reopening the same
+    // large model only for tokenization can leave its Metal mapping resident
+    // long enough to overlap the source-stage load and exhaust host memory.
+    let local_model = if tokenizer_source == StateTokenizerSource::LocalStage {
+        Some(open_local_state_model(
+            &args,
+            &stage_resolution,
+            runtime_plan.clone(),
+        )?)
+    } else {
+        None
+    };
+    let separate_tokenizer = if tokenizer_source == StateTokenizerSource::SeparateModel {
+        let (tokenizer_path, tokenizer_config) = tokenizer_model_for_state_handoff(&args)?;
+        Some(
+            StageModel::open(&tokenizer_path, &tokenizer_config).with_context(|| {
+                format!(
+                    "failed to open tokenizer model {}",
+                    tokenizer_path.display()
+                )
+            })?,
         )
-    })?;
-    let tokens = state_handoff_tokens(&tokenizer, &args.prompt, args.prefix_token_count)
+    } else {
+        None
+    };
+    let tokenizer = local_model
+        .as_ref()
+        .or(separate_tokenizer.as_ref())
+        .expect("state handoff always selects a tokenizer source");
+    let tokens = state_handoff_tokens(tokenizer, &args.prompt, args.prefix_token_count)
         .context("failed to tokenize state handoff prompt")?;
     let split = args.prefix_token_count.unwrap_or(tokens.len() - 1);
     let prefix = tokens[..split].to_vec();
@@ -332,7 +375,7 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
     let benchmark_prompt_text = tokenizer
         .detokenize(&tokens[..=split])
         .context("failed to detokenize state handoff benchmark prompt")?;
-    drop(tokenizer);
+    drop(separate_tokenizer);
     let tokenize_ms = elapsed_ms(tokenize_started);
     let input_started = Instant::now();
     let input_resolution = if args.state_layer_start == 0 || args.synthetic_input_activation {
@@ -358,14 +401,12 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         build_state_handoff_inputs(&args, input_resolution.as_ref(), &prefix, continuation)
             .context("build state handoff input activations")?;
     let input_build_ms = elapsed_ms(input_started);
-    let use_binary_control = args.binary_control
-        && include_output
-        && args.state_payload_kind == StatePayloadKind::FullState;
     if !use_binary_control {
         return run_local_state_handoff(
             &args,
             stage_resolution,
             input_resolution,
+            local_model,
             prefix,
             continuation,
             benchmark_prompt_text,
@@ -402,8 +443,8 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_ubatch": args.n_ubatch,
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
-        "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
         "resident_tensor_names": runtime_plan.resident_tensor_names.clone(),
+        "execution_contract": runtime_plan.execution_contract.clone(),
         "activation_import_identities": runtime_plan.activation_import_identities.clone(),
         "activation_import_bindings": runtime_plan.activation_import_bindings.clone(),
         "activation_export_identities": runtime_plan.activation_export_identities.clone(),
@@ -436,8 +477,8 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_ubatch": args.n_ubatch,
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
-        "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
         "resident_tensor_names": runtime_plan.resident_tensor_names,
+        "execution_contract": runtime_plan.execution_contract,
         "activation_import_identities": runtime_plan.activation_import_identities,
         "activation_import_bindings": runtime_plan.activation_import_bindings,
         "activation_export_identities": runtime_plan.activation_export_identities,
@@ -661,6 +702,7 @@ fn run_local_state_handoff(
     args: &BinaryStateHandoffConfig,
     stage_resolution: StageModelResolution,
     input_resolution: Option<StageModelResolution>,
+    local_model: Option<StageModel>,
     prefix: Vec<i32>,
     continuation: i32,
     benchmark_prompt_text: String,
@@ -672,57 +714,10 @@ fn run_local_state_handoff(
     include_output: bool,
     runtime_plan: GgufStageRuntimePlan,
 ) -> Result<BinaryStateHandoffResult> {
-    let lane_count = effective_state_handoff_lane_count(args);
-    let runtime_config = RuntimeConfig {
-        stage_index: args.state_stage_index,
-        layer_start: args.state_layer_start,
-        layer_end: args.state_layer_end,
-        ctx_size: args.ctx_size,
-        lane_count,
-        n_batch: args.n_batch,
-        n_ubatch: args.n_ubatch,
-        n_threads: None,
-        n_threads_batch: None,
-        n_gpu_layers: args.n_gpu_layers,
-        mmap: None,
-        mlock: false,
-        repack: false,
-        op_offload: None,
-        no_host_buffer: false,
-        check_tensors: false,
-        direct_io: false,
-        main_gpu: None,
-        split_mode: skippy_runtime::SplitMode::Auto,
-        selected_backend_device: None,
-        load_mode: runtime_load_mode(args.stage_load_mode),
-        projector_path: None,
-        projector_use_gpu: None,
-        media_marker: None,
-        image_min_tokens: None,
-        image_max_tokens: None,
-        batch_max_tokens: None,
-        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings,
-        include_output,
-        mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: should_filter_state_handoff_tensors(args),
-        resident_tensor_names: runtime_plan.resident_tensor_names,
-        activation_import_identities: runtime_plan.activation_import_identities,
-        activation_import_bindings: runtime_plan.activation_import_bindings,
-        activation_export_identities: runtime_plan.activation_export_identities,
-        activation_export_bindings: runtime_plan.activation_export_bindings,
-        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
-        checkpoint_imatrix: None,
-        checkpoint_imatrix_sha256: None,
-        cache_type_k: GGML_TYPE_F16,
-        cache_type_v: GGML_TYPE_F16,
-        flash_attn_type: runtime_flash_attn(args.flash_attn),
-        kv_offload: None,
-        kv_unified: None,
-        swa_full: None,
+    let model = match local_model {
+        Some(model) => model,
+        None => open_local_state_model(args, &stage_resolution, runtime_plan)?,
     };
-    let model = StageModel::open(&stage_resolution.path, &runtime_config)
-        .context("failed to open local state handoff stage")?;
 
     if args.borrow_resident_hits && args.state_payload_kind == StatePayloadKind::ResidentKv {
         return run_local_resident_slot_handoff(
@@ -920,6 +915,62 @@ fn run_local_state_handoff(
         cache_hit_matches,
         stage_models,
     })
+}
+
+fn open_local_state_model(
+    args: &BinaryStateHandoffConfig,
+    stage_resolution: &StageModelResolution,
+    runtime_plan: GgufStageRuntimePlan,
+) -> Result<StageModel> {
+    let lane_count = effective_state_handoff_lane_count(args);
+    let runtime_config = RuntimeConfig {
+        stage_index: args.state_stage_index,
+        layer_start: args.state_layer_start,
+        layer_end: args.state_layer_end,
+        ctx_size: args.ctx_size,
+        lane_count,
+        n_batch: args.n_batch,
+        n_ubatch: args.n_ubatch,
+        n_threads: None,
+        n_threads_batch: None,
+        n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
+        selected_backend_device: None,
+        load_mode: runtime_load_mode(args.stage_load_mode),
+        projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
+        mtp_source: MtpSource::Disabled,
+        resident_tensor_names: runtime_plan.resident_tensor_names,
+        execution_contract: runtime_plan.execution_contract,
+        activation_import_identities: runtime_plan.activation_import_identities,
+        activation_import_bindings: runtime_plan.activation_import_bindings,
+        activation_export_identities: runtime_plan.activation_export_identities,
+        activation_export_bindings: runtime_plan.activation_export_bindings,
+        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
+        cache_type_k: GGML_TYPE_F16,
+        cache_type_v: GGML_TYPE_F16,
+        flash_attn_type: runtime_flash_attn(args.flash_attn),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+    };
+    StageModel::open(&stage_resolution.path, &runtime_config)
+        .context("failed to open local state handoff stage")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1417,12 +1468,6 @@ fn hex_sha256_finish(hasher: Sha256) -> String {
     out
 }
 
-fn should_filter_state_handoff_tensors(args: &BinaryStateHandoffConfig) -> bool {
-    args.stage_load_mode != StageLoadMode::RuntimeSlice
-        || args.state_layer_start != 0
-        || args.state_layer_end != args.layer_end
-}
-
 fn build_state_handoff_inputs(
     args: &BinaryStateHandoffConfig,
     input_resolution: Option<&StageModelResolution>,
@@ -1482,11 +1527,9 @@ fn build_state_handoff_inputs(
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: false,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: runtime_plan.resident_tensor_names,
+        execution_contract: runtime_plan.execution_contract,
         activation_import_identities: runtime_plan.activation_import_identities,
         activation_import_bindings: runtime_plan.activation_import_bindings,
         activation_export_identities: runtime_plan.activation_export_identities,
@@ -1729,4 +1772,29 @@ fn encode_handoff_activation(
     let _ = (token_count, activation_width);
     crate::support::encode_runtime_activation(codec, input)
         .context("failed to encode state handoff input activation")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StateTokenizerSource, state_tokenizer_source};
+
+    #[test]
+    fn local_embedding_stage_reuses_loaded_model_for_tokenization() {
+        assert_eq!(
+            state_tokenizer_source(false, true),
+            StateTokenizerSource::LocalStage
+        );
+    }
+
+    #[test]
+    fn binary_and_interior_stages_keep_a_separate_tokenizer_model() {
+        assert_eq!(
+            state_tokenizer_source(true, true),
+            StateTokenizerSource::SeparateModel
+        );
+        assert_eq!(
+            state_tokenizer_source(false, false),
+            StateTokenizerSource::SeparateModel
+        );
+    }
 }

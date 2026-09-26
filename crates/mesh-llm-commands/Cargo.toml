@@ -15,16 +15,20 @@ publish = false
 workspace = true
 
 [dependencies]
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.76.1" }
 anyhow.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6.0.0"
+fs2 = "0.4"
 hf_hub = { package = "mesh-llm-hf-hub", version = "1.0.2", default-features = false, features = ["blocking"] }
 hex = "0.4.3"
 iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
 json5 = "1.3.1"
 nix = { version = "0.31", default-features = false, features = ["signal"] }
 mesh-llm-build-info.workspace = true
+mesh-llm-analytics = { path = "../mesh-llm-analytics", version = "0.76.1" }
 mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.76.1" }
+mesh-llm-hardware-profile = { path = "../mesh-llm-hardware-profile", version = "0.76.1" }
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.76.1" }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.1" }
 mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.1" }
@@ -37,6 +41,7 @@ model-artifact = { path = "../model-artifact", version = "0.76.1" }
 model-hf = { path = "../model-hf", version = "0.76.1" }
 model-package = { path = "../model-package", version = "0.76.1" }
 model-ref = { path = "../model-ref", version = "0.76.1" }
+skippy-package-format = { path = "../skippy-package-format", version = "0.76.1" }
 rpassword = "7.5"
 reqwest = { version = "0.13", features = ["blocking", "json"] }
 serde.workspace = true

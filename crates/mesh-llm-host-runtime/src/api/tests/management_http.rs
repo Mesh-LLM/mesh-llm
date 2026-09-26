@@ -90,7 +90,7 @@ async fn trusted_local_management_mutation_persists_the_tcp_caller_address() {
     let address = listener.local_addr().expect("management listener address");
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept management caller");
-        handle_request(stream, &state).await
+        Box::pin(handle_request(stream, &state)).await
     });
     let request_id = mesh_llm_events::logging::identifiers::RequestId::new();
     let body = r#""active""#;
@@ -512,6 +512,8 @@ fn health_test_stage_status(
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
         error: None,
         shutdown_generation: 1,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 

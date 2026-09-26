@@ -30,6 +30,24 @@ pub(super) fn format_config(command: &mesh_llm_cli::ConfigCommand, assembly: &mu
     assembly.flag("json", *json);
 }
 
+pub(super) fn format_analytics(
+    command: &mesh_llm_cli::AnalyticsCommand,
+    assembly: &mut SummaryAssembly,
+) {
+    match command {
+        mesh_llm_cli::AnalyticsCommand::Status { json } => {
+            assembly.command.push_str(" analytics status");
+            assembly.flag("json", *json);
+        }
+        mesh_llm_cli::AnalyticsCommand::Enable => {
+            assembly.command.push_str(" analytics enable");
+        }
+        mesh_llm_cli::AnalyticsCommand::Disable => {
+            assembly.command.push_str(" analytics disable");
+        }
+    }
+}
+
 pub(super) fn format_doctor(
     command: Option<&mesh_llm_cli::DoctorCommand>,
     json: bool,

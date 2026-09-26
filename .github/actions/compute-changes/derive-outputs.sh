@@ -24,7 +24,7 @@ RUNNER_CONTRACT_REQUIRED="false"
 if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
   RUNNER_CONTRACT_REQUIRED="true"
 elif [[ -n "$CHANGED_FILES" ]]; then
-  RUNNER_CONTRACT_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^\.github/cache-version\.txt$|^\.github/actionlint\.yaml$|^\.github/actions/(capture-sccache-stats|configure-sccache-gha|restore-sccache-seed|resolve-native-toolchain-epoch|select-ci-runners)/|^\.github/workflows/(cache-warm-sccache|ci|ci-control|ci-.*-(lane|slice)|depot-canary|main_[a-z]+|native-sdk-artifact|pr_[a-z]+|release|sdk-smoke|static-abi-artifact|swift-sdk-artifact)\.yml$)' || true)
+  RUNNER_CONTRACT_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^\.github/cache-version\.txt$|^\.github/actionlint\.yaml$|^\.github/actions/(capture-sccache-stats|configure-sccache-gha|restore-sccache-seed|resolve-native-toolchain-epoch|select-ci-runners)/|^\.github/workflows/(cache-warm-sccache|ci|ci-control|ci-.*-(lane|slice)|depot-canary|main_[a-z]+|native-sdk-artifact|pr_[a-z]+|pr_ci_canary|release|sdk-smoke|static-abi-artifact|swift-sdk-artifact)\.yml$)' || true)
   if [[ -n "$RUNNER_CONTRACT_INPUTS" ]]; then
     RUNNER_CONTRACT_REQUIRED="true"
   fi
@@ -57,7 +57,7 @@ fi
 # same validation path as the top-level command definitions.
 CLI_SURFACE_CHANGED="false"
 if [[ -n "$CHANGED_FILES" ]]; then
-  CLI_SURFACE_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^crates/mesh-llm-cli/' || true)
+  CLI_SURFACE_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^(mesh/|skippy/)?crates/mesh-llm-cli/' || true)
   if [[ -n "$CLI_SURFACE_INPUTS" ]]; then
     CLI_SURFACE_CHANGED="true"
   fi
@@ -65,7 +65,7 @@ fi
 
 WEBSITE_DOCS_CHANGED="false"
 if [[ -n "$CHANGED_FILES" ]]; then
-  WEBSITE_DOC_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^website/src/(docs/pages/|_includes/)' || true)
+  WEBSITE_DOC_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^(mesh/)?website/src/(docs/pages/|_includes/)' || true)
   if [[ -n "$WEBSITE_DOC_INPUTS" ]]; then
     WEBSITE_DOCS_CHANGED="true"
   fi
@@ -349,7 +349,7 @@ BACKEND_CHANGED="false"
 if [[ "$ALL_RUST" == "true" ]]; then
   BACKEND_CHANGED="true"
 elif [[ -n "$CHANGED_FILES" ]]; then
-  BACKEND_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^third_party/llama\.cpp/|^crates/skippy-ffi/|^scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|install-windows-sdk|build-host|build-release|package-release|package-native-runtime|verify-native-runtime-package|verify-checksum-sidecar|safe-extract-tar|compose-product-bundle|ci-compose-product-input|ci-client-readiness-smoke)\.|^\.github/actions/(prepare-host-input|prepare-windows-host-input|prepare-native-runtime-input|compose-product-input|resolve-native-toolchain-epoch|restore-smoke-inputs|restore-windows-abi-cache|save-and-verify-actions-cache|setup-windows-rocm-sdk|setup-windows-short-paths)/|^\.github/workflows/(ci|main_[a-z]+|pr_[a-z]+|release|sdk-smoke|smoke)\.yml$|^\.github/cache-version\.txt$)' || true)
+  BACKEND_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^(skippy/)?third_party/llama\.cpp/|^(mesh/|skippy/)?crates/skippy-ffi/|^(mesh/|skippy/)?scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|install-windows-sdk|build-host|build-release|package-release|package-native-runtime|verify-native-runtime-package|verify-checksum-sidecar|safe-extract-tar|compose-product-bundle|ci-compose-product-input|ci-client-readiness-smoke)\.|^\.github/actions/(prepare-host-input|prepare-windows-host-input|prepare-native-runtime-input|compose-product-input|resolve-native-toolchain-epoch|restore-smoke-inputs|restore-windows-abi-cache|save-and-verify-actions-cache|setup-windows-rocm-sdk|setup-windows-short-paths)/|^\.github/workflows/(ci|main_[a-z]+|pr_[a-z]+|pr_ci_canary|release|sdk-smoke|smoke)\.yml$|^\.github/cache-version\.txt$)' || true)
   if [[ -n "$BACKEND_INPUTS" ]] || [[ "$BACKEND_RECIPE_CHANGED" == "true" ]]; then
     BACKEND_CHANGED="true"
   fi
@@ -361,9 +361,9 @@ if [[ "$FORCE_ALL" == "true" ]]; then
   WINDOWS_CPU_BUILD_REQUIRED="true"
   WINDOWS_GPU_BUILD_REQUIRED="true"
 elif [[ -n "$CHANGED_FILES" ]]; then
-  WINDOWS_CPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/mesh-llm-release-footer/|^crates/mesh-llm-nodejs/|^crates/skippy-ffi/|^scripts/(build-windows|package-release)\.ps1$|^scripts/verify-host-dependencies\.py$|^scripts/(package-native-runtime|verify-native-runtime-package|verify-checksum-sidecar|safe-extract-tar|compose-product-bundle|ci-compose-product-input|ci-client-readiness-smoke)\.|^third_party/llama\.cpp/|^Cargo\.toml$|^Cargo\.lock$|^\.github/cache-version\.txt$|^\.github/workflows/(ci|main_[a-z]+|pr_[a-z]+|release|windows-warm-caches)\.yml$|^\.github/actions/(compute-changes/|prepare-windows-host-input/|prepare-native-runtime-input/|compose-product-input/|resolve-native-toolchain-epoch/|restore-windows-abi-cache/|save-and-verify-actions-cache/|setup-windows-short-paths/))' || true)
-  WINDOWS_GPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/skippy-ffi/|^scripts/(build-windows|install-windows-sdk|package-release)\.ps1$|^scripts/verify-host-dependencies\.py$|^scripts/(package-native-runtime|verify-native-runtime-package|verify-checksum-sidecar|safe-extract-tar|compose-product-bundle|ci-compose-product-input|ci-client-readiness-smoke)\.|^scripts/windows-native-runtime-deps\.py$|^scripts/tests/test_windows_native_runtime_deps\.py$|^third_party/llama\.cpp/|^\.github/cache-version\.txt$|^\.github/workflows/(ci|main_[a-z]+|pr_[a-z]+|release|windows-warm-caches)\.yml$|^\.github/actions/(compute-changes/|prepare-windows-host-input/|prepare-native-runtime-input/|compose-product-input/|resolve-native-toolchain-epoch/|restore-windows-abi-cache/|save-and-verify-actions-cache/|setup-windows-rocm-sdk/|setup-windows-short-paths/))' || true)
-  if echo "$CHANGED_FILES" | grep -Eq '^\.github/workflows/(main|pr)_[a-z]+\.yml$'; then
+  WINDOWS_CPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^(mesh/|skippy/)?crates/mesh-llm-release-footer/|^(mesh/|skippy/)?crates/mesh-llm-nodejs/|^(mesh/|skippy/)?crates/skippy-ffi/|^(mesh/|skippy/)?scripts/(build-windows|package-release)\.ps1$|^(mesh/|skippy/)?scripts/verify-host-dependencies\.py$|^(mesh/|skippy/)?scripts/(package-native-runtime|verify-native-runtime-package|verify-checksum-sidecar|safe-extract-tar|compose-product-bundle|ci-compose-product-input|ci-client-readiness-smoke)\.|^(skippy/)?third_party/llama\.cpp/|^Cargo\.toml$|^Cargo\.lock$|^\.github/cache-version\.txt$|^\.github/workflows/(ci|main_[a-z]+|pr_[a-z]+|pr_ci_canary|release|windows-warm-caches)\.yml$|^\.github/actions/(compute-changes/|prepare-windows-host-input/|prepare-native-runtime-input/|compose-product-input/|resolve-native-toolchain-epoch/|restore-windows-abi-cache/|save-and-verify-actions-cache/|setup-windows-short-paths/))' || true)
+  WINDOWS_GPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^(mesh/|skippy/)?crates/skippy-ffi/|^(mesh/|skippy/)?scripts/(build-windows|install-windows-sdk|package-release)\.ps1$|^(mesh/|skippy/)?scripts/verify-host-dependencies\.py$|^(mesh/|skippy/)?scripts/(package-native-runtime|verify-native-runtime-package|verify-checksum-sidecar|safe-extract-tar|compose-product-bundle|ci-compose-product-input|ci-client-readiness-smoke)\.|^(mesh/|skippy/)?scripts/windows-native-runtime-deps\.py$|^(mesh/|skippy/)?scripts/tests/test_windows_native_runtime_deps\.py$|^(skippy/)?third_party/llama\.cpp/|^\.github/cache-version\.txt$|^\.github/workflows/(ci|main_[a-z]+|pr_[a-z]+|pr_ci_canary|release|windows-warm-caches)\.yml$|^\.github/actions/(compute-changes/|prepare-windows-host-input/|prepare-native-runtime-input/|compose-product-input/|resolve-native-toolchain-epoch/|restore-windows-abi-cache/|save-and-verify-actions-cache/|setup-windows-rocm-sdk/|setup-windows-short-paths/))' || true)
+  if echo "$CHANGED_FILES" | grep -Eq '^\.github/workflows/((main|pr)_[a-z]+|pr_ci_canary)\.yml$'; then
     WINDOWS_CPU_INPUTS="ci-entry-workflow"
     WINDOWS_GPU_INPUTS="ci-entry-workflow"
   fi
@@ -381,13 +381,13 @@ SDK_SMOKE_REQUIRED="false"
 if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
   SDK_SMOKE_REQUIRED="true"
 elif [[ -n "$CHANGED_FILES" ]]; then
-  DIRECT_SDK_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^sdk/|^Package\.swift$|^scripts/ci-(rust|kotlin|swift)-sdk-smoke\.sh$|^scripts/ci-prepare-native-runtime\.sh$|^scripts/ci-sdk-fixture\.sh$|^scripts/(check-sdk-contract|package-sdk-console-assets|restore-native-sdk-input|restore-static-abi-input|verify-sdk-console-assets|verify-swift-privacy-manifest|verify-swift-release-artifact|prepare-llama|build-llama)\.sh$|^scripts/(package-native-sdk|package-native-sdk-crate|verify-native-sdk-package|verify-checksum-sidecar|verify-static-abi-build-stamp|safe-extract-(tar|zip)|verify-swift-xcframework)\.(sh|py)$|^\.github/actions/(compute-changes|prepare-native-sdk-input|prepare-static-abi-input|resolve-native-toolchain-epoch|restore-smoke-inputs)/|^\.github/workflows/(ci|main_[a-z]+|native-sdk-artifact|pr_[a-z]+|release|sdk-smoke|static-abi-artifact|swift-sdk-artifact)\.yml$)' || true)
-  if echo "$CHANGED_FILES" | grep -Eq '^\.github/workflows/(main|pr)_[a-z]+\.yml$'; then
+  DIRECT_SDK_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^(mesh/)?sdk/|^Package\.swift$|^(mesh/|skippy/)?scripts/ci-(rust|kotlin|swift)-sdk-smoke\.sh$|^(mesh/|skippy/)?scripts/ci-prepare-native-runtime\.sh$|^(mesh/|skippy/)?scripts/ci-sdk-fixture\.sh$|^(mesh/|skippy/)?scripts/(check-sdk-contract|package-sdk-console-assets|restore-native-sdk-input|restore-static-abi-input|verify-sdk-console-assets|verify-swift-privacy-manifest|verify-swift-release-artifact|prepare-llama|build-llama)\.sh$|^(mesh/|skippy/)?scripts/(package-native-sdk|package-native-sdk-crate|verify-native-sdk-package|verify-checksum-sidecar|verify-static-abi-build-stamp|safe-extract-(tar|zip)|verify-swift-xcframework)\.(sh|py)$|^\.github/actions/(compute-changes|prepare-native-sdk-input|prepare-static-abi-input|resolve-native-toolchain-epoch|restore-smoke-inputs)/|^\.github/workflows/(ci|main_[a-z]+|native-sdk-artifact|pr_[a-z]+|pr_ci_canary|release|sdk-smoke|static-abi-artifact|swift-sdk-artifact)\.yml$)' || true)
+  if echo "$CHANGED_FILES" | grep -Eq '^\.github/workflows/((main|pr)_[a-z]+|pr_ci_canary)\.yml$'; then
     DIRECT_SDK_INPUTS="ci-entry-workflow"
   fi
   if [[ -n "$DIRECT_SDK_INPUTS" ]]; then
     SDK_SMOKE_REQUIRED="true"
-  elif echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm-client") or index("mesh-llm-api-client") or index("mesh-llm-api-server") or index("mesh-llm-config") or index("mesh-llm-console-server") or index("mesh-llm-ffi") or index("mesh-llm-native-runtime") or index("mesh-llm-protocol") or index("mesh-llm-routing") or index("mesh-llm-types")' >/dev/null; then
+  elif echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm-client") or index("mesh-llm-api-client") or index("mesh-llm-api-server") or index("mesh-llm-config") or index("mesh-llm-console-server") or index("mesh-llm-ffi") or index("mesh-llm-native-runtime") or index("skippy-native-runtime") or index("mesh-llm-protocol") or index("mesh-llm-routing") or index("mesh-llm-types")' >/dev/null; then
     SDK_SMOKE_REQUIRED="true"
   fi
 fi
@@ -399,7 +399,7 @@ fi
 INFERENCE_ARTIFACT_REQUIRED="false"
 if [[ "$ALL_RUST" == "true" ]] || [[ "$UI_CHANGED" == "true" ]] || [[ "$BACKEND_CHANGED" == "true" ]] || [[ "$SDK_SMOKE_REQUIRED" == "true" ]]; then
   INFERENCE_ARTIFACT_REQUIRED="true"
-elif echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm") or index("mesh-llm-host-runtime") or index("mesh-llm-client") or index("openai-frontend") or index("skippy-server") or index("skippy-runtime") or index("model-artifact")' >/dev/null; then
+elif echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm") or index("mesh-llm-host-runtime") or index("mesh-llm-client") or index("openai-frontend") or index("skippy-server") or index("skippy-runtime") or index("skippy-native-runtime") or index("model-artifact")' >/dev/null; then
   INFERENCE_ARTIFACT_REQUIRED="true"
 fi
 

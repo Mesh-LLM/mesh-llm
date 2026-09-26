@@ -34,6 +34,7 @@ const UPDATE_CONFLICTS: &[&[&str]] = &[&["--flavor", "--detect-flavor"]];
 const SKILLS_INSTALL_CONFLICTS: &[&[&str]] = &[&["--agent", "--all"]];
 
 pub(super) const DESCRIPTORS: &[Descriptor] = &[
+    descriptor(&["mesh-llm", "wallet"], NONE, NONE, false, RawKind::None),
     descriptor_with_conflicts(
         &["mesh-llm", "setup"],
         SETUP_FLAGS,
@@ -167,6 +168,27 @@ pub(super) const DESCRIPTORS: &[Descriptor] = &[
         &["mesh-llm", "config", "validate"],
         JSON,
         &["--config-path"],
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "analytics", "status"],
+        JSON,
+        NONE,
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "analytics", "enable"],
+        NONE,
+        NONE,
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "analytics", "disable"],
+        NONE,
+        NONE,
         false,
         RawKind::None,
     ),

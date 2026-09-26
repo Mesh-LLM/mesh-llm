@@ -85,6 +85,8 @@ pub(super) fn stage_runtime_status_from_snapshot(
         flash_attn_type: status.flash_attn_type,
         error: status.error,
         shutdown_generation: status.shutdown_generation,
+        compute_busy_nanos: status.compute_busy_nanos,
+        compute_operations: status.compute_operations,
     }
 }
 
@@ -133,6 +135,8 @@ pub(crate) fn stage_snapshot_from_runtime_status(
         coordinator_term: 0,
         coordinator_id: None,
         lease_until_unix_ms: 0,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -636,7 +640,7 @@ pub(super) fn stage_load_mode_from_proto(value: i32) -> anyhow::Result<skippy_pr
             Ok(skippy_protocol::LoadMode::ArtifactSlice)
         }
         Ok(skippy_stage_proto::StageLoadMode::Unspecified) | Err(_) => {
-            anyhow::bail!("unsupported generation-10 stage load mode {value}")
+            anyhow::bail!("unsupported generation-11 stage load mode {value}")
         }
     }
 }
@@ -676,7 +680,7 @@ fn stage_activation_codec_from_proto(
         Ok(skippy_stage_proto::StageActivationCodec::S8RowF32RneV1) => {
             Ok(skippy_protocol::StageActivationCodec::S8RowF32RneV1)
         }
-        _ => anyhow::bail!("unsupported generation-10 activation codec {value}"),
+        _ => anyhow::bail!("unsupported generation-11 activation codec {value}"),
     }
 }
 
@@ -698,7 +702,7 @@ fn stage_activation_codec_policy_from_proto(
 ) -> anyhow::Result<skippy_protocol::StageActivationCodecPolicy> {
     match skippy_stage_proto::StageActivationCodecPolicy::try_from(value) {
         Ok(skippy_stage_proto::StageActivationCodecPolicy::Unspecified) => {
-            anyhow::bail!("generation-10 activation codec policy must be explicit")
+            anyhow::bail!("generation-11 activation codec policy must be explicit")
         }
         Ok(skippy_stage_proto::StageActivationCodecPolicy::FixedV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::Fixed)
@@ -706,7 +710,7 @@ fn stage_activation_codec_policy_from_proto(
         Ok(skippy_stage_proto::StageActivationCodecPolicy::AutoLosslessV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1)
         }
-        _ => anyhow::bail!("unsupported generation-10 activation codec policy {value}"),
+        _ => anyhow::bail!("unsupported generation-11 activation codec policy {value}"),
     }
 }
 
@@ -766,6 +770,8 @@ pub(super) fn stage_control_unavailable_response(
                 coordinator_term: stop.coordinator_term,
                 coordinator_id: None,
                 lease_until_unix_ms: 0,
+                compute_busy_nanos: 0,
+                compute_operations: 0,
             }
         }
         crate::inference::skippy::StageControlRequest::Status(_) => {
@@ -845,6 +851,8 @@ pub(crate) fn stage_status_from_load(
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -1013,7 +1021,7 @@ fn source_resolution_policy_from_proto(value: i32) -> anyhow::Result<bool> {
         Ok(skippy_stage_proto::SourceResolutionPolicy::Fallback) => Ok(false),
         Ok(skippy_stage_proto::SourceResolutionPolicy::LocalRequired) => Ok(true),
         Ok(skippy_stage_proto::SourceResolutionPolicy::Unspecified) | Err(_) => {
-            anyhow::bail!("unsupported generation-10 stage source resolution policy {value}")
+            anyhow::bail!("unsupported generation-11 stage source resolution policy {value}")
         }
     }
 }
@@ -1130,6 +1138,8 @@ pub(super) fn stage_status_to_proto(
         activation_codec_policy: stage_activation_codec_policy_to_proto(
             status.activation_codec_policy,
         ) as i32,
+        compute_busy_nanos: status.compute_busy_nanos,
+        compute_operations: status.compute_operations,
     }
 }
 
@@ -1207,6 +1217,8 @@ pub(super) fn stage_status_from_proto(
             .transpose()
             .context("invalid stage status coordinator_id")?,
         lease_until_unix_ms: status.lease_until_unix_ms,
+        compute_busy_nanos: status.compute_busy_nanos,
+        compute_operations: status.compute_operations,
     })
 }
 

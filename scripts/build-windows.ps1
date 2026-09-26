@@ -11,7 +11,10 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
-$llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { $env:MESH_LLM_LLAMA_DIR } else { Join-Path $repoRoot ".deps\llama.cpp" }
+# A relative MESH_LLM_LLAMA_DIR is relative to the repository root, as in the
+# Justfile, wherever the script runs from. Resolve it once: .NET path calls
+# resolve against the process directory, cmdlets against the current location.
+$llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:MESH_LLM_LLAMA_DIR)) } else { Join-Path $repoRoot ".deps\llama.cpp" }
 $llamaBuildRoot = if ($env:MESH_LLM_LLAMA_BUILD_ROOT) { $env:MESH_LLM_LLAMA_BUILD_ROOT } else { Join-Path $repoRoot ".deps\llama-build" }
 $buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi" }
 # Git never activates a committed hook on clone, so enable the repository hooks
@@ -46,82 +49,90 @@ switch ($buildProfile) {
     default { throw "Unsupported MESH_LLM_BUILD_PROFILE/BuildProfile '$buildProfile'. Expected debug, dev, or release." }
 }
 
+# The default stage build directory is keyed by the first 12 characters of the
+# patched llama sha, as scripts/build-llama.sh does, so two pins built on one
+# machine never share a directory whose leftover DLLs the runtime packaging
+# would collect. Before any prepare there is no stamp and the unkeyed name is
+# kept. An explicit LLAMA_STAGE_BUILD_DIR always wins.
+function Resolve-StageBuildDir {
+    param([string]$BackendName)
+
+    if ($env:LLAMA_STAGE_BUILD_DIR) {
+        return $env:LLAMA_STAGE_BUILD_DIR
+    }
+    $name = "build-stage-abi-$BackendName"
+    $stamp = Join-Path $llamaDir ".mesh-llm-patched-sha"
+    if (Test-Path -LiteralPath $stamp -PathType Leaf) {
+        $raw = Get-Content -LiteralPath $stamp -Raw
+        $pin = if ($raw) { $raw.Trim() } else { "" }
+        if ($pin) {
+            $name = "$name-$($pin.Substring(0, [Math]::Min(12, $pin.Length)))"
+        }
+    }
+    return Join-Path $llamaBuildRoot $name
+}
+
+# A path bash can use from the repository root: relative when it lies inside
+# the repository, which Git Bash and WSL bash both accept. Outside it, the
+# absolute form the running bash reads: Git Bash takes a drive-letter path,
+# WSL bash needs /mnt/<drive>, since it reads `E:/...` as a relative path.
+function ConvertTo-BashRepoPath {
+    param(
+        [string]$Path,
+        [switch]$Wsl
+    )
+
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\"
+    if ($full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $full.Substring($root.Length).Replace("\", "/")
+    }
+    if ($full -notmatch '^[A-Za-z]:\\') {
+        throw "MESH_LLM_LLAMA_DIR must be inside the repository or on a drive-letter path: $Path"
+    }
+    if ($Wsl) {
+        return "/mnt/" + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
+    }
+    return $full.Replace("\", "/")
+}
+
+# WSL bash reports a Linux kernel; Git Bash and Cygwin report their own.
+function Test-BashIsWsl {
+    $kernel = (& bash -c "uname -s" 2>$null | Out-String).Trim()
+    return $kernel -eq "Linux"
+}
+
 function Prepare-Llama {
-    $pinFile = Join-Path $repoRoot "third_party\llama.cpp\upstream.txt"
-    $patchDir = Join-Path $repoRoot "third_party\llama.cpp\patches"
-    $upstreamUrl = if ($env:LLAMA_UPSTREAM_URL) { $env:LLAMA_UPSTREAM_URL } else { "https://github.com/ggml-org/llama.cpp.git" }
-    $targetSha = if ($env:MESH_LLM_LLAMA_PIN_SHA) { $env:MESH_LLM_LLAMA_PIN_SHA } else { (Get-Content $pinFile -Raw).Trim() }
-
-    if (-not (Test-Path $pinFile)) {
-        throw "Missing llama.cpp upstream pin: $pinFile"
+    # Prepare through scripts/prepare-llama.sh, the patch queue Linux, macOS
+    # and CI apply: the main series, the model_support series in its series
+    # order and the generated family patches, plus the prepare stamps. A
+    # PowerShell copy of that logic only applied the main series, so Windows
+    # source builds silently lacked the other two and stopped compiling once a
+    # main patch came to rely on the Inkling family support.
+    $mode = if ($env:MESH_LLM_LLAMA_PIN_SHA) { $env:MESH_LLM_LLAMA_PIN_SHA } else { "pinned" }
+    $previousWorkdir = $env:LLAMA_WORKDIR
+    # prepare-llama.sh defaults to .deps/llama.cpp under the repository, which
+    # Git Bash and WSL bash both resolve, so only an override is passed, and
+    # relative to the repository root when it lies inside it: WSL bash reads a
+    # drive-letter path as a relative one. A stray LLAMA_WORKDIR is cleared so
+    # the prepared tree is always the one CMake builds.
+    if ($env:MESH_LLM_LLAMA_DIR) {
+        $insideRepo = [System.IO.Path]::GetFullPath($llamaDir).StartsWith(
+            [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\",
+            [System.StringComparison]::OrdinalIgnoreCase)
+        $wsl = if ($insideRepo) { $false } else { Test-BashIsWsl }
+        $env:LLAMA_WORKDIR = ConvertTo-BashRepoPath $llamaDir -Wsl:$wsl
+    } else {
+        Remove-Item Env:LLAMA_WORKDIR -ErrorAction SilentlyContinue
     }
-    if (-not (Test-Path $patchDir)) {
-        throw "Missing llama.cpp patch directory: $patchDir"
-    }
-
-    $llamaParent = Split-Path -Parent $llamaDir
-    New-Item -ItemType Directory -Force -Path $llamaParent | Out-Null
-    if (-not (Test-Path (Join-Path $llamaDir ".git"))) {
-        Invoke-GitCloneWithRetry $upstreamUrl $llamaDir
-    }
-
-    Push-Location $llamaDir
     try {
-        Invoke-NativeCommand "git" @("config", "user.name", "Mesh-LLM CI")
-        Invoke-NativeCommand "git" @("config", "user.email", "ci@mesh-llm.local")
-        try {
-            & git am --abort *> $null
-        } catch {
-        }
-        Invoke-NativeCommand "git" @("remote", "set-url", "origin", $upstreamUrl)
-        Invoke-NativeCommandWithRetry "git" @("fetch", "origin", "master", "--tags") "fetch llama.cpp"
-        Invoke-NativeCommand "git" @("-c", "advice.detachedHead=false", "checkout", "--detach", "--quiet", $targetSha)
-        Invoke-NativeCommand "git" @("reset", "--hard", "--quiet", $targetSha)
-        Invoke-NativeCommand "git" @("clean", "-fdx", "-e", "build/")
-
-        $patches = Get-ChildItem -Path $patchDir -Filter "*.patch" | Sort-Object Name
-        $gitIdentityVariables = @(
-            "GIT_AUTHOR_DATE",
-            "GIT_AUTHOR_EMAIL",
-            "GIT_AUTHOR_NAME",
-            "GIT_COMMITTER_DATE",
-            "GIT_COMMITTER_EMAIL",
-            "GIT_COMMITTER_NAME"
-        )
-        $savedGitIdentity = @{}
-        foreach ($variable in $gitIdentityVariables) {
-            if (Test-Path "Env:$variable") {
-                $savedGitIdentity[$variable] = (Get-Item "Env:$variable").Value
-            }
-            Remove-Item "Env:$variable" -ErrorAction SilentlyContinue
-        }
-        try {
-            foreach ($patch in $patches) {
-                Invoke-NativeCommand "git" @(
-                    "am",
-                    "--3way",
-                    "--committer-date-is-author-date",
-                    "--no-gpg-sign",
-                    "--no-verify",
-                    $patch.FullName
-                )
-            }
-        } finally {
-            foreach ($variable in $gitIdentityVariables) {
-                Remove-Item "Env:$variable" -ErrorAction SilentlyContinue
-            }
-            foreach ($entry in $savedGitIdentity.GetEnumerator()) {
-                Set-Item "Env:$($entry.Key)" $entry.Value
-            }
-        }
-
-        $patchedSha = (& git rev-parse HEAD).Trim()
-        Write-Host "prepared llama.cpp"
-        Write-Host "  upstream: $targetSha"
-        Write-Host "  patched:  $patchedSha"
-        Write-Host "  workdir:  $llamaDir"
+        Invoke-NativeCommand "bash" @("scripts/prepare-llama.sh", $mode)
     } finally {
-        Pop-Location
+        if ($null -eq $previousWorkdir) {
+            Remove-Item Env:LLAMA_WORKDIR -ErrorAction SilentlyContinue
+        } else {
+            $env:LLAMA_WORKDIR = $previousWorkdir
+        }
     }
 }
 
@@ -453,64 +464,6 @@ function Invoke-NativeCommand {
     if ($LASTEXITCODE -ne 0) {
         $argString = if ($Arguments.Count -gt 0) { " " + ($Arguments -join " ") } else { "" }
         throw "Command failed with exit code ${LASTEXITCODE}: $Command$argString"
-    }
-}
-
-function Invoke-NativeCommandWithRetry {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Command,
-        [string[]]$Arguments = @(),
-        [string]$Description = "command",
-        [int]$MaxAttempts = $(if ($env:LLAMA_GIT_MAX_ATTEMPTS) { [int]$env:LLAMA_GIT_MAX_ATTEMPTS } else { 4 }),
-        [int]$DelaySeconds = $(if ($env:LLAMA_GIT_RETRY_DELAY_SECONDS) { [int]$env:LLAMA_GIT_RETRY_DELAY_SECONDS } else { 10 })
-    )
-
-    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        & $Command @Arguments
-        if ($LASTEXITCODE -eq 0) {
-            return
-        }
-
-        if ($attempt -eq $MaxAttempts) {
-            $argString = if ($Arguments.Count -gt 0) { " " + ($Arguments -join " ") } else { "" }
-            throw "Command failed with exit code ${LASTEXITCODE}: $Command$argString"
-        }
-
-        Write-Warning "$Description failed (attempt $attempt/$MaxAttempts); retrying in ${DelaySeconds}s"
-        Start-Sleep -Seconds $DelaySeconds
-        $DelaySeconds = $DelaySeconds * 2
-    }
-}
-
-function Invoke-GitCloneWithRetry {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$RepositoryUrl,
-        [Parameter(Mandatory = $true)]
-        [string]$Destination
-    )
-
-    $maxAttempts = if ($env:LLAMA_GIT_MAX_ATTEMPTS) { [int]$env:LLAMA_GIT_MAX_ATTEMPTS } else { 4 }
-    $delaySeconds = if ($env:LLAMA_GIT_RETRY_DELAY_SECONDS) { [int]$env:LLAMA_GIT_RETRY_DELAY_SECONDS } else { 10 }
-
-    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-        if (Test-Path $Destination) {
-            Remove-Item -Recurse -Force $Destination
-        }
-
-        & git clone --filter=blob:none $RepositoryUrl $Destination
-        if ($LASTEXITCODE -eq 0) {
-            return
-        }
-
-        if ($attempt -eq $maxAttempts) {
-            throw "Command failed with exit code ${LASTEXITCODE}: git clone --filter=blob:none $RepositoryUrl $Destination"
-        }
-
-        Write-Warning "llama.cpp clone failed (attempt $attempt/$maxAttempts); retrying in ${delaySeconds}s"
-        Start-Sleep -Seconds $delaySeconds
-        $delaySeconds = $delaySeconds * 2
     }
 }
 
@@ -1043,7 +996,7 @@ $CudaArch = Normalize-RecipeArgument $CudaArch @("cuda_arch", "cudaarch")
 $RocmArch = Normalize-RecipeArgument $RocmArch @("rocm_arch", "rocmarch", "amd_arch", "amdarch")
 
 $backendName = Resolve-Backend $Backend
-$buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi-$backendName" }
+$buildDir = Resolve-StageBuildDir $backendName
 Write-Host "Using Windows backend: $backendName"
 
 Ensure-MsvcToolchain
@@ -1080,7 +1033,7 @@ if ($HostOnly) {
             $hostArgs += "--release"
             $hostOutputProfile = "release"
         }
-        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime")
+        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments,wallet-lexe")
         Invoke-NativeCommand "cargo" $hostArgs
         Write-Host "Mesh backend-neutral host: target\\$hostOutputProfile\\mesh-llm.exe"
     }
@@ -1115,6 +1068,9 @@ switch ($backendName) {
 
 Invoke-InRepo {
     Prepare-Llama
+    # Resolve after preparing, so a pin switch builds into the new pin's
+    # directory rather than the one the previous stamp named.
+    $script:buildDir = Resolve-StageBuildDir $backendName
 
     $pathMaxDefine = if ($backendName -eq "rocm") { "-DPATH_MAX=4096" } else { "/DPATH_MAX=4096" }
     Reset-SccacheStats
@@ -1264,7 +1220,7 @@ Invoke-InRepo {
 
     Write-Host "Building mesh-llm..."
     $env:LLAMA_STAGE_BUILD_DIR = $buildDir
-    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime")
+    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments,wallet-lexe")
     Set-BuildVersionStamp
     switch ($buildProfile) {
         "dev" {

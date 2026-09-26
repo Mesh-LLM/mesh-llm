@@ -8,12 +8,14 @@ fn config_sync_full_config_roundtrip() {
     let config = crate::plugin::MeshConfig {
         version: Some(1),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Pinned,
             parallel: None,
         },
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
         telemetry: Default::default(),
+        analytics: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {

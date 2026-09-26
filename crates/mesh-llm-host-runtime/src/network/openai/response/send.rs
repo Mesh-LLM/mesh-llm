@@ -124,7 +124,9 @@ pub async fn send_400(stream: ClientStream, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, 400, msg, None).await
 }
 
-#[cfg(test)]
+// Currently reached only by the paid-ingress rejection path; compiled out with
+// wallets. Ungate if a wallet-free caller needs a bare error response.
+#[cfg(feature = "payments")]
 pub async fn send_error(stream: ClientStream, code: u16, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, code, msg, None).await
 }
@@ -147,6 +149,14 @@ pub(crate) async fn send_400_observed(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> std::io::Result<()> {
     send_error_observed(stream, 400, msg, route_observer).await
+}
+
+pub(crate) async fn send_409_observed(
+    stream: ClientStream,
+    msg: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<()> {
+    send_error_observed(stream, 409, msg, route_observer).await
 }
 
 pub(crate) async fn send_503_observed(
@@ -310,6 +320,7 @@ mod tests {
         assert_eq!(buf.matches("\r\n").count(), 1);
     }
 
+    #[cfg(feature = "payments")]
     #[tokio::test]
     async fn test_send_error_429_includes_retry_after() {
         let response = capture_proxy_error_response(|stream| async move {
