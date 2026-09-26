@@ -495,6 +495,21 @@ impl KvStageIntegration {
         admission: CaptureAdmission,
         l3_cost: Option<skippy_cache::policy::CostSample>,
     ) -> Result<Option<ExactStateRecord>> {
+        self.record_exact_state_with_cost_and_durability(
+            runtime, session_id, identity, admission, l3_cost, true,
+        )
+    }
+
+    /// Records an exact state in L1 and optionally forwards it to durable L3.
+    pub(crate) fn record_exact_state_with_cost_and_durability(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        admission: CaptureAdmission,
+        l3_cost: Option<skippy_cache::policy::CostSample>,
+        write_through_l3: bool,
+    ) -> Result<Option<ExactStateRecord>> {
         let Some(exact_state_payload) = self.exact_state_payload() else {
             return Ok(None);
         };
@@ -637,7 +652,7 @@ impl KvStageIntegration {
             namespace: identity.namespace.clone(),
             token_ids: identity.token_ids.clone(),
             l3_fill_claim: None,
-            write_through_l3: true,
+            write_through_l3,
             l2_promotion_digest: None,
             l3_cost,
             admission_credit,

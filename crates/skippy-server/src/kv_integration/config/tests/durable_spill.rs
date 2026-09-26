@@ -110,6 +110,34 @@ fn l3_refusal_preserves_l1_record() {
 }
 
 #[test]
+fn resident_only_exact_record_does_not_spill_to_l3() {
+    let radix = Mutex::new(UnifiedRadixCache::new());
+    let blobs = Mutex::new(CacheBlobStore::new(4));
+    let (root, tier) = test_l3("resident-only");
+    let budget = StorageBudget::new();
+    let mut record = pending("full-prompt", &[1, 2], b"full-prompt-state", &budget);
+    record.write_through_l3 = false;
+
+    store_exact_radix_record(&radix, &blobs, 1, limits(0, 0), None, Some(&tier), record).unwrap();
+
+    assert_eq!(
+        radix
+            .lock()
+            .unwrap()
+            .lookup_recurrent("model", &[1, 2])
+            .expect("resident-only exact state must remain available in L1")
+            .value
+            .page_id,
+        "full-prompt"
+    );
+    assert!(
+        tier.locate_longest("model", &[1, 2], 2).unwrap().is_none(),
+        "resident-only exact state must not create a durable manifest"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn blocked_l3_spill_does_not_head_of_line_block_later_l1_records() {
     struct SpillPauseGuard(Arc<std::sync::atomic::AtomicBool>);
 

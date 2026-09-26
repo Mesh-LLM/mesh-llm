@@ -165,6 +165,17 @@ impl KvStageIntegration {
             None => candidate_token_count == prompt_token_count,
         }
     }
+
+    /// Whether a full-prompt exact state is also a durable checkpoint.
+    ///
+    /// Off-checkpoint full states remain useful in resident L1, but spilling
+    /// them would let this stage reopen farther ahead than downstream stages
+    /// that only persist the shared checkpoint.
+    pub(crate) fn full_exact_state_writes_through_l3(&self, token_count: usize) -> bool {
+        u64::try_from(token_count).ok().is_some_and(|token_count| {
+            self.exact_state_record_token_count_allowed(token_count, token_count)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -413,5 +424,7 @@ mod tests {
         assert!(!kv.exact_state_record_token_count_allowed(970, 969));
         assert!(!kv.exact_state_record_token_count_allowed(970, 970));
         assert!(kv.exact_state_record_token_count_allowed(200, 200));
+        assert!(!kv.full_exact_state_writes_through_l3(970));
+        assert!(kv.full_exact_state_writes_through_l3(200));
     }
 }
