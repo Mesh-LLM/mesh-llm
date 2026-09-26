@@ -1,0 +1,19 @@
+{
+  "selection": {
+    "default": "recommended"
+  },
+  "profiles": {
+    "recommended": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 64,
+      "provenance": {
+        "source_repo": "google/gemma-4-26B-A4B-it-qat-q4_0-unquantized",
+        "revision": "f1e06dc520982d9b9edd76859fdb7ab209449949",
+        "file": "README.md",
+        "section": "Best Practices / Sampling Parameters",
+        "url": "https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-unquantized/blob/f1e06dc520982d9b9edd76859fdb7ab209449949/README.md"
+      }
+    }
+  }
+}

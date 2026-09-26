@@ -82,7 +82,7 @@ impl StageOpenAiBackend {
         prompt: PreparedGenerationPrompt,
         max_tokens: GenerationTokenLimit,
         stop: Option<&openai_frontend::StopSequence>,
-        sampling: SamplingConfig,
+        mut sampling: SamplingConfig,
         hook_request: Option<ChatCompletionRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&openai_frontend::CancellationToken>,
@@ -152,6 +152,10 @@ impl StageOpenAiBackend {
             .map(|_| self.tokenize(&prompt.text))
             .transpose()?
             .unwrap_or_default();
+        let reasoning_budget = sampling.reasoning_budget;
+        let provisional_max_tokens =
+            max_tokens.resolve(lifecycle_prompt_token_ids.len(), self.ctx_size)?;
+        sampling.resolve_reasoning_budget(provisional_max_tokens);
         let mut lifecycle = GenerationLifecycleState::new(
             self.generation_lifecycle.as_ref(),
             ids.request_id,
@@ -264,6 +268,8 @@ impl StageOpenAiBackend {
                 };
                 prefill_token_count = prefill.token_count;
                 let max_tokens = max_tokens.resolve(prefill.position as usize, self.ctx_size)?;
+                sampling.reasoning_budget = reasoning_budget;
+                sampling.resolve_reasoning_budget(max_tokens);
                 receipt_observation = self.generation_receipt.as_ref().map(|config| {
                     config.observation(
                         usize::try_from(max_tokens)
@@ -559,7 +565,7 @@ impl StageOpenAiBackend {
 
     pub(super) fn generate_split_multimodal_text(
         &self,
-        request: SplitMultimodalGeneration<'_>,
+        mut request: SplitMultimodalGeneration<'_>,
         on_text_chunk: impl FnMut(&str) -> OpenAiResult<()>,
     ) -> OpenAiResult<GeneratedText> {
         let stop_value_storage =
@@ -572,7 +578,6 @@ impl StageOpenAiBackend {
             TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
                 .with_emulation_stop(request.emulation_active)
                 .with_ignore_eos(request.sampling.ignore_eos);
-        let wire_sampling = wire_sampling_config(&request.sampling);
         let session_id = request.ids.session_id;
         let request_id = request.ids.request_id;
         let session_key = session_id.to_string();
@@ -685,6 +690,8 @@ impl StageOpenAiBackend {
             let max_tokens = request
                 .max_tokens
                 .resolve(prefill.position as usize, self.ctx_size)?;
+            request.sampling.resolve_reasoning_budget(max_tokens);
+            let wire_sampling = wire_sampling_config(&request.sampling);
             receipt_observation = self.generation_receipt.as_ref().map(|config| {
                 config.observation(
                     usize::try_from(max_tokens)

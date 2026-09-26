@@ -4325,6 +4325,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serial_test",
+ "skippy-package-format",
  "strum 0.28.0",
  "tempfile",
  "tokio",
@@ -5032,6 +5033,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "skippy-package-format",
  "tempfile",
  "tokio",
 ]
@@ -8213,6 +8215,7 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-ffi",
  "skippy-model",
+ "skippy-package-format",
  "tempfile",
  "tokio",
 ]
