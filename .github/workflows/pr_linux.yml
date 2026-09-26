@@ -76,6 +76,7 @@ jobs:
         env:
           CARGO_INCREMENTAL: '0'
           MESH_LLM_SKIP_UI: '1'
+          RUSTC_WRAPPER: ''
         run: |
           cargo test --locked -p openai-frontend
           cargo test --locked -p mesh-llm-host-runtime --no-default-features \
