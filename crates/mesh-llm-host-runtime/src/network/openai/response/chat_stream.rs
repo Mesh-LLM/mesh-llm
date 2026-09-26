@@ -1,4 +1,4 @@
-use super::cache_cost::parse_cache_cost_from_json_body;
+use super::cache_cost::{CacheCostObservation, parse_cache_cost_from_json_body};
 use super::common::{
     ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body,
     sse_data_frame_is_openai_error,
@@ -14,6 +14,7 @@ use crate::network::openai::{
     client_stream::ClientStream, tool_call_ids::ChatStreamNormalizationState,
 };
 use anyhow::{Result, anyhow};
+use mesh_llm_events::logging::events::TokenUsage;
 use tokio::io::{AsyncRead, AsyncWriteExt};
 
 pub(in crate::network::openai::response) async fn relay_translated_messages_stream<
@@ -58,6 +59,80 @@ async fn write_chat_protocol_event(
         write_captured_sse_event(tcp_stream, capture, None, data).await?;
     }
     Ok(())
+}
+
+struct ChatProtocolRelayState {
+    normalization: ChatStreamNormalizationState,
+    messages: Option<openai_frontend::anthropic::MessagesWireStream>,
+    observed_usage: Option<TokenUsage>,
+    observed_cache_cost: Option<CacheCostObservation>,
+    done_seen: bool,
+    first_chunk_seen: bool,
+    upstream_error_seen: bool,
+}
+
+impl ChatProtocolRelayState {
+    fn new(anthropic: bool) -> Self {
+        Self {
+            normalization: ChatStreamNormalizationState::default(),
+            messages: anthropic.then(openai_frontend::anthropic::MessagesWireStream::new),
+            observed_usage: None,
+            observed_cache_cost: None,
+            done_seen: false,
+            first_chunk_seen: false,
+            upstream_error_seen: false,
+        }
+    }
+
+    async fn relay_data(
+        &mut self,
+        tcp_stream: &mut ClientStream,
+        response_capture: &mut Option<OpenAiStreamArtifactCapture>,
+        route_observer: &OpenAiRouteObserver<'_>,
+        data: &str,
+    ) -> Result<()> {
+        if data == "[DONE]" {
+            self.done_seen = true;
+            return write_chat_protocol_event(
+                tcp_stream,
+                response_capture,
+                &mut self.messages,
+                "[DONE]",
+            )
+            .await;
+        }
+
+        if !self.upstream_error_seen && sse_data_frame_is_openai_error(data) {
+            // The upstream backend frames failures as OpenAI error bodies
+            // inside a 200 stream. Relay the frame untouched, but do not
+            // let it count as stream progress or terminal success.
+            self.upstream_error_seen = true;
+        }
+        if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
+            self.observed_usage = Some(usage);
+        }
+        self.observed_cache_cost = self
+            .observed_cache_cost
+            .or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
+        let normalized = self.normalization.normalize_data(data);
+        write_chat_protocol_event(
+            tcp_stream,
+            response_capture,
+            &mut self.messages,
+            &normalized,
+        )
+        .await?;
+        if self.upstream_error_seen {
+            return Ok(());
+        }
+        if self.first_chunk_seen {
+            route_observer.stream_chunk();
+        } else {
+            route_observer.stream_first_token();
+            self.first_chunk_seen = true;
+        }
+        Ok(())
+    }
 }
 
 pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
@@ -125,10 +200,7 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
         parsed.content_length,
     );
     let mut carry = Vec::new();
-    let mut state = ChatStreamNormalizationState::default();
-    let mut messages = anthropic.then(openai_frontend::anthropic::MessagesWireStream::new);
-    let mut observed_usage = None;
-    let mut observed_cache_cost = None;
+    let mut state = ChatProtocolRelayState::new(anthropic);
     let mut header = String::from(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
     );
@@ -143,9 +215,6 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
     let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
 
-    let mut done_seen = false;
-    let mut first_chunk_seen = false;
-    let mut upstream_error_seen = false;
     loop {
         let mut processed = 0usize;
         while let Some((frame_end_rel, delimiter)) = carry[processed..]
@@ -173,52 +242,18 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
                 continue;
             }
             let data = data_lines.join("\n");
-            if data == "[DONE]" {
-                done_seen = true;
-                write_chat_protocol_event(
-                    tcp_stream,
-                    &mut response_capture,
-                    &mut messages,
-                    "[DONE]",
-                )
+            state
+                .relay_data(tcp_stream, &mut response_capture, &route_observer, &data)
                 .await?;
+            if state.done_seen {
                 break;
-            }
-
-            if !upstream_error_seen && sse_data_frame_is_openai_error(&data) {
-                // The upstream backend frames failures as OpenAI error bodies
-                // inside a 200 stream. Relay the frame untouched, but do not
-                // let it count as stream progress or terminal success.
-                upstream_error_seen = true;
-            }
-            if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
-                observed_usage = Some(usage);
-            }
-            observed_cache_cost =
-                observed_cache_cost.or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
-            let normalized = state.normalize_data(&data);
-            write_chat_protocol_event(
-                tcp_stream,
-                &mut response_capture,
-                &mut messages,
-                &normalized,
-            )
-            .await?;
-            if upstream_error_seen {
-                continue;
-            }
-            if first_chunk_seen {
-                route_observer.stream_chunk();
-            } else {
-                route_observer.stream_first_token();
-                first_chunk_seen = true;
             }
         }
         if processed > 0 {
             carry.drain(..processed);
         }
 
-        if done_seen {
+        if state.done_seen {
             break;
         }
 
@@ -234,13 +269,13 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
     write_truncated_message(
         tcp_stream,
         &mut response_capture,
-        messages.as_mut(),
-        done_seen,
+        state.messages.as_mut(),
+        state.done_seen,
     )
     .await?;
     let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
     let _ = tcp_stream.shutdown().await;
-    if upstream_error_seen {
+    if state.upstream_error_seen {
         // An embedded upstream error frame is terminal even when the upstream
         // never sent [DONE]: report the failure reason it carried rather than
         // a generic incomplete-stream truncation.
@@ -252,16 +287,16 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
             output_digests: Default::default(),
         });
     }
-    if !done_seen {
+    if !state.done_seen {
         route_observer.stream_error("upstream_stream_incomplete");
         return Err(anyhow!("upstream chat stream ended before [DONE]"));
     }
     route_observer.complete_stream_response_capture(response_capture);
-    route_observer.stream_completed(observed_usage);
+    route_observer.stream_completed(state.observed_usage);
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
-        usage: observed_usage,
-        cache_cost: observed_cache_cost,
+        usage: state.observed_usage,
+        cache_cost: state.observed_cache_cost,
         output_digests: Default::default(),
     })
 }
