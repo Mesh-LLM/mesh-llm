@@ -31,6 +31,11 @@ dynamic-native-runtime = [
     "skippy-runtime/dynamic-native-runtime",
     "skippy-server/dynamic-native-runtime",
 ]
+# Runs the installed Claude Code executable through the real host ingress.
+# CI pins and installs the client before enabling this feature.
+claude-code-integration = []
+# Extends the real-client smoke through a credentialed Anthropic Claude model.
+claude-live-model-integration = ["claude-code-integration"]
 
 [lints]
 workspace = true

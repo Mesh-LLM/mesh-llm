@@ -14,8 +14,14 @@ async fn legacy_lifecycle_paths_are_gone_from_openai_ingress() {
             body.len()
         );
         let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
-        assert!(response.starts_with("HTTP/1.1 410 Gone"), "response: {response}");
-        assert!(response.contains("legacy_route_gone"), "response: {response}");
+        assert!(
+            response.starts_with("HTTP/1.1 410 Gone"),
+            "response: {response}"
+        );
+        assert!(
+            response.contains("legacy_route_gone"),
+            "response: {response}"
+        );
     }
 
     assert!(
@@ -891,11 +897,11 @@ async fn test_api_proxy_integration_pipeline_streaming_response_arrives_incremen
         vec![
             (
                 Duration::ZERO,
-                br#"data: {"delta":"chunk-one"}\n\n"#.to_vec(),
+                b"data: {\"delta\":\"chunk-one\"}\n\n".to_vec(),
             ),
             (
                 Duration::from_millis(1000),
-                br#"data: {"delta":"chunk-two"}\n\n"#.to_vec(),
+                b"data: {\"delta\":\"chunk-two\"}\n\n".to_vec(),
             ),
         ],
     )
@@ -917,14 +923,14 @@ async fn test_api_proxy_integration_pipeline_streaming_response_arrives_incremen
 
     let full = read_until_contains(
         &mut stream,
-        br#"data: {"delta":"chunk-two"}\n\n"#,
+        b"\"delta\":\"chunk-two\"",
         Duration::from_secs(5),
     )
     .await;
     let full_text = String::from_utf8_lossy(&full);
     assert!(full_text.contains("HTTP/1.1 200 OK"));
-    assert!(full_text.contains(r#"data: {"delta":"chunk-one"}\n\n"#));
-    assert!(full_text.contains(r#"data: {"delta":"chunk-two"}\n\n"#));
+    assert!(full_text.contains(r#""delta":"chunk-one""#));
+    assert!(full_text.contains(r#""delta":"chunk-two""#));
 
     proxy_handle.abort();
     let _ = handle.await;
@@ -969,10 +975,10 @@ async fn test_api_proxy_integration_streaming_client_disconnect_does_not_hang() 
     let (upstream_port, upstream_rx, upstream_handle) = spawn_streaming_upstream(
         "text/event-stream",
         vec![
-            (Duration::ZERO, br#"data: {"delta":"hello"}\n\n"#.to_vec()),
+            (Duration::ZERO, b"data: {\"delta\":\"hello\"}\n\n".to_vec()),
             (
                 Duration::from_millis(150),
-                br#"data: {"delta":"after-disconnect"}\n\n"#.to_vec(),
+                b"data: {\"delta\":\"after-disconnect\"}\n\n".to_vec(),
             ),
         ],
     )
@@ -996,13 +1002,9 @@ async fn test_api_proxy_integration_streaming_client_disconnect_does_not_hang() 
     stream.write_all(request.as_bytes()).await.unwrap();
     stream.shutdown().await.unwrap();
 
-    let first = read_until_contains(
-        &mut stream,
-        br#"data: {"delta":"hello"}\n\n"#,
-        Duration::from_secs(2),
-    )
-    .await;
-    assert!(String::from_utf8_lossy(&first).contains(r#"data: {"delta":"hello"}\n\n"#));
+    let first =
+        read_until_contains(&mut stream, b"\"delta\":\"hello\"", Duration::from_secs(2)).await;
+    assert!(String::from_utf8_lossy(&first).contains(r#""delta":"hello""#));
     drop(stream);
 
     let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
@@ -1013,4 +1015,94 @@ async fn test_api_proxy_integration_streaming_client_disconnect_does_not_hang() 
         .unwrap();
 
     proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn anthropic_ingress_normalizes_before_dispatch_and_adapts_response() {
+    for model in ["test", "auto", "mesh"] {
+        let reply = json!({"id":"chat-test","model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}).to_string();
+        let (port, received, upstream) = spawn_capturing_upstream(&reply).await;
+        let (addr, proxy) = spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
+        let body = json!({"model":model,"max_tokens":32,"system":"system marker","metadata":{"user_id":"session-marker"},"mesh_hooks":true,"messages":[{"role":"user","content":"hello"}]}).to_string();
+        let request = format!(
+            "POST /v1/messages HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let response = send_request_and_read_response(addr, vec![request.into_bytes()]).await;
+        let raw = String::from_utf8(received.await.unwrap()).unwrap();
+        assert!(raw.starts_with("POST /v1/chat/completions "), "{raw}");
+        let forwarded: serde_json::Value =
+            serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            forwarded["messages"][0],
+            json!({"role":"system","content":"system marker"})
+        );
+        assert_eq!(forwarded["user"], "session-marker");
+        assert_eq!(forwarded["mesh_hooks"], true);
+        assert_eq!(forwarded["max_completion_tokens"], 32);
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        let translated: serde_json::Value =
+            serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(translated["type"], "message");
+        assert_eq!(translated["content"][0]["text"], "hello");
+        assert_eq!(translated["usage"]["input_tokens"], 7);
+        proxy.abort();
+        upstream.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn anthropic_ingress_rejects_unsupported_fields_with_anthropic_error() {
+    let (addr, proxy) = spawn_api_proxy_test_harness(local_targets(&[])).await;
+    let body = json!({"model":"test","max_tokens":32,"unsupported_field":true,"messages":[{"role":"user","content":"hello"}]}).to_string();
+    let request = format!(
+        "POST /v1/messages HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let response = send_request_and_read_response(addr, vec![request.into_bytes()]).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    let body: serde_json::Value =
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    proxy.abort();
+}
+
+#[tokio::test]
+async fn anthropic_upstream_empty_error_keeps_status_and_error_envelope() {
+    let (port, _request, upstream) = spawn_status_upstream("502 Bad Gateway", "").await;
+    let (addr, proxy) = spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
+    let body =
+        json!({"model":"test","max_tokens":32,"messages":[{"role":"user","content":"hello"}]})
+            .to_string();
+    let request = format!(
+        "POST /v1/messages HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let response = send_request_and_read_response(addr, vec![request.into_bytes()]).await;
+    assert!(response.starts_with("HTTP/1.1 502"), "{response}");
+    let error: serde_json::Value =
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["error"]["type"], "api_error");
+    proxy.abort();
+    upstream.await.unwrap();
+}
+
+#[tokio::test]
+async fn anthropic_count_upstream_error_uses_anthropic_envelope() {
+    let (port, _request, upstream) = spawn_status_upstream("404 Not Found", "{}").await;
+    let (addr, proxy) = spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
+    let body = json!({"model":"test","messages":[{"role":"user","content":"hello"}]}).to_string();
+    let request = format!(
+        "POST /v1/messages/count_tokens HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let response = send_request_and_read_response(addr, vec![request.into_bytes()]).await;
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    let error: serde_json::Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["error"]["type"], "api_error");
+    proxy.abort();
+    upstream.await.unwrap();
 }

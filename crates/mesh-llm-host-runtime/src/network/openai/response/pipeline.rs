@@ -53,7 +53,7 @@ pub struct PipelineCapsuleNonce {
 // planner/strong ports and model, and node handle; the capsule nonce is one
 // more borrowed value on that established plumbing rather than a new grouping.
 #[allow(clippy::too_many_arguments)]
-pub async fn pipeline_proxy_local(
+pub(crate) async fn pipeline_proxy_local(
     client_stream: &mut ClientStream,
     request_path: &str,
     mut body: serde_json::Value,
@@ -62,6 +62,7 @@ pub async fn pipeline_proxy_local(
     strong_port: u16,
     node: &mesh::Node,
     capsule_nonce: &PipelineCapsuleNonce,
+    logging: super::common::RouteAttemptLoggingContext<'_>,
 ) -> PipelineProxyResult {
     if !pipeline_request_supported(request_path, &body) {
         tracing::debug!("pipeline: request path/body not eligible, falling back to direct proxy");
@@ -76,6 +77,22 @@ pub async fn pipeline_proxy_local(
 
     let strong_url = format!("http://127.0.0.1:{strong_port}/v1/chat/completions");
     let _inflight = node.begin_inflight_request();
+    if matches!(
+        logging.response_adapter,
+        crate::network::openai::request_normalize::ResponseAdapter::OpenAiChatCompletionsJson
+            | crate::network::openai::request_normalize::ResponseAdapter::OpenAiChatCompletionsStream
+            | crate::network::openai::request_normalize::ResponseAdapter::AnthropicMessagesJson
+            | crate::network::openai::request_normalize::ResponseAdapter::AnthropicMessagesStream
+    ) {
+        return super::pipeline_adapter::relay_planned_request(
+            client_stream,
+            strong_port,
+            &body,
+            capsule_nonce,
+            logging,
+        )
+        .await;
+    }
     let is_streaming = pipeline_streaming_requested(&body);
     if is_streaming {
         pipeline_proxy_streaming(
