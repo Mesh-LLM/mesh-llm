@@ -278,6 +278,8 @@ impl KvStageIntegration {
                                 DurableRecordTarget {
                                     l3: worker_l3.as_deref(),
                                     cachegen_enabled: worker_cachegen,
+                                    #[cfg(test)]
+                                    before_l3_spill: None,
                                 },
                                 pending,
                             )
@@ -615,6 +617,7 @@ fn store_exact_radix_record(
         DurableRecordTarget {
             l3,
             cachegen_enabled: false,
+            before_l3_spill: None,
         },
         pending,
     )
@@ -624,6 +627,8 @@ fn store_exact_radix_record(
 struct DurableRecordTarget<'a> {
     l3: Option<&'a L3Tier>,
     cachegen_enabled: bool,
+    #[cfg(test)]
+    before_l3_spill: Option<&'a dyn Fn()>,
 }
 
 fn store_exact_radix_record_with_codec(
@@ -638,127 +643,43 @@ fn store_exact_radix_record_with_codec(
     let DurableRecordTarget {
         l3,
         cachegen_enabled,
+        #[cfg(test)]
+        before_l3_spill,
     } = durable;
-    #[cfg(test)]
-    let stored_namespace = pending.namespace.clone();
-    // Write through to the durable tier before the payload is deduplicated
-    // into blocks, while its bytes are still contiguous. Best-effort: a full
-    // or failing disk must not fail the in-memory record. The refusal reason
-    // lands in the tier's status; one warning per process keeps a full disk
-    // from flooding the log.
-    if pending.write_through_l3
-        && let Some(l3) = l3
-    {
-        let kv_desc_json = pending
-            .extra
-            .kv_desc
-            .as_ref()
-            .and_then(|desc| serde_json::to_string(desc).ok());
-        let geometry = pending
-            .extra
-            .kv_desc
-            .as_ref()
-            .and_then(|desc| kv_page_geometry(desc, pending.payload.byte_len()));
-        let cachegen_spill = if cachegen_enabled {
-            match (
-                pending.extra.kv_desc.as_ref(),
-                pending.payload.kv_bytes().ok().flatten(),
-            ) {
-                (Some(desc), Some(kv))
-                    if !kv.is_empty() && cachegen_descriptor_is_qualified(desc) =>
-                {
-                    match skippy_runtime::encode_cachegen_kv_page(desc, kv.as_ref()) {
-                        Ok(archive) if archive.bytes.len() < kv.len() => {
-                            let calibration_digest = skippy_cache::segment_digest(&archive.bytes);
-                            Some(l3.spill_cachegen_with_cost(
-                                &pending.namespace,
-                                &pending.token_ids,
-                                &pending.payload,
-                                kv_desc_json.clone().unwrap_or_default(),
-                                skippy_cache::CacheGenKvPayload {
-                                    archive: archive.bytes,
-                                    decoded_len: desc.payload_bytes,
-                                    calibration_digest,
-                                },
-                                pending.l3_cost,
-                            ))
-                        }
-                        Ok(_) => None,
-                        Err(error) => {
-                            static WARNED_CACHEGEN: std::sync::atomic::AtomicBool =
-                                std::sync::atomic::AtomicBool::new(false);
-                            if !WARNED_CACHEGEN.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                                let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
-                                    message: "CacheGen encode declined; storing native KV page"
-                                        .to_string(),
-                                    context: Some(format!(
-                                        "page_id={} reason={error:#}",
-                                        pending.page_id
-                                    )),
-                                });
-                            }
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let spill = cachegen_spill.unwrap_or_else(|| {
-            l3.spill_with_cost(
-                &pending.namespace,
-                &pending.token_ids,
-                &pending.payload,
-                kv_desc_json,
-                geometry.as_ref(),
-                pending.l3_cost,
-            )
-        });
-        emit_l3_state_transitions(l3);
-        if let Err(error) = spill {
-            static WARNED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
-                    message: "Skippy L3 disk cache write refused; see kv-cache status".to_string(),
-                    context: Some(format!("page_id={} reason={error:#}", pending.page_id)),
-                });
-            }
-        }
-    }
-    if let (Some(l2), Some(payload_digest)) = (l2, pending.l2_promotion_digest.as_deref()) {
-        let _ = l2.promote(
-            &pending.namespace,
-            &pending.token_ids,
-            payload_digest,
-            &pending.payload,
-            &pending.extra,
-        );
-    }
-    let logical_bytes = pending.payload.byte_len();
-    let (payload, _) = pending.payload.dedupe_into(
+    let PendingExactStateRecord {
+        page_id,
+        payload,
+        extra,
+        namespace,
+        token_ids,
+        l3_fill_claim: _,
+        write_through_l3,
+        l2_promotion_digest,
+        l3_cost,
+        admission_credit: _admission_credit,
+    } = pending;
+    let logical_bytes = payload.byte_len();
+    let (payload, _) = payload.dedupe_into(
         &mut blobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     );
-    // Cloning retains the Arc-backed blocks without changing blob-store
-    // accounting, leaving `payload` available to roll that accounting back if
-    // the radix rejects the insert.
+    // Publish the serving tier before optional lower-tier work. `payload` and
+    // the radix value share Arc-backed blocks, so L2/L3 can retain the exact
+    // bytes without delaying an immediate repeat request's L1 lookup.
     let mut released = Vec::new();
     let insert_result = {
         let mut radix = radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let insert_result = radix.insert_recurrent(
-            pending.namespace,
-            &pending.token_ids,
+            namespace.clone(),
+            &token_ids,
             logical_bytes,
             RadixExactEntry {
-                page_id: pending.page_id,
+                page_id: page_id.clone(),
                 payload: payload.clone(),
-                extra: pending.extra,
+                extra: extra.clone(),
             },
         );
         match insert_result {
@@ -810,7 +731,91 @@ fn store_exact_radix_record_with_codec(
     )?;
     evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1)?;
     #[cfg(test)]
-    crate::frontend::capture_trace::log_stored_identity(&stored_namespace, &pending.token_ids);
+    crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
+
+    if let (Some(l2), Some(payload_digest)) = (l2, l2_promotion_digest.as_deref()) {
+        let _ = l2.promote(&namespace, &token_ids, payload_digest, &payload, &extra);
+    }
+    // Durable write-through is best-effort after L1 publication: a slow, full,
+    // or failing disk must not delay or invalidate the in-memory record. The
+    // refusal reason lands in the tier's status; one warning per process keeps
+    // a full disk from flooding the log.
+    if write_through_l3 && let Some(l3) = l3 {
+        #[cfg(test)]
+        if let Some(before_l3_spill) = before_l3_spill {
+            before_l3_spill();
+        }
+        let kv_desc_json = extra
+            .kv_desc
+            .as_ref()
+            .and_then(|desc| serde_json::to_string(desc).ok());
+        let geometry = extra
+            .kv_desc
+            .as_ref()
+            .and_then(|desc| kv_page_geometry(desc, payload.byte_len()));
+        let cachegen_spill = if cachegen_enabled {
+            match (extra.kv_desc.as_ref(), payload.kv_bytes().ok().flatten()) {
+                (Some(desc), Some(kv))
+                    if !kv.is_empty() && cachegen_descriptor_is_qualified(desc) =>
+                {
+                    match skippy_runtime::encode_cachegen_kv_page(desc, kv.as_ref()) {
+                        Ok(archive) if archive.bytes.len() < kv.len() => {
+                            let calibration_digest = skippy_cache::segment_digest(&archive.bytes);
+                            Some(l3.spill_cachegen_with_cost(
+                                &namespace,
+                                &token_ids,
+                                &payload,
+                                kv_desc_json.clone().unwrap_or_default(),
+                                skippy_cache::CacheGenKvPayload {
+                                    archive: archive.bytes,
+                                    decoded_len: desc.payload_bytes,
+                                    calibration_digest,
+                                },
+                                l3_cost,
+                            ))
+                        }
+                        Ok(_) => None,
+                        Err(error) => {
+                            static WARNED_CACHEGEN: std::sync::atomic::AtomicBool =
+                                std::sync::atomic::AtomicBool::new(false);
+                            if !WARNED_CACHEGEN.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                                let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+                                    message: "CacheGen encode declined; storing native KV page"
+                                        .to_string(),
+                                    context: Some(format!("page_id={} reason={error:#}", page_id)),
+                                });
+                            }
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let spill = cachegen_spill.unwrap_or_else(|| {
+            l3.spill_with_cost(
+                &namespace,
+                &token_ids,
+                &payload,
+                kv_desc_json,
+                geometry.as_ref(),
+                l3_cost,
+            )
+        });
+        emit_l3_state_transitions(l3);
+        if let Err(error) = spill {
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+                    message: "Skippy L3 disk cache write refused; see kv-cache status".to_string(),
+                    context: Some(format!("page_id={page_id} reason={error:#}")),
+                });
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1178,6 +1183,7 @@ mod tests {
             DurableRecordTarget {
                 l3: Some(&tier),
                 cachegen_enabled: true,
+                before_l3_spill: None,
             },
             pending_kv("cachegen", &tokens, desc.clone(), &budget),
         )
@@ -1224,6 +1230,7 @@ mod tests {
             DurableRecordTarget {
                 l3: Some(&tier),
                 cachegen_enabled: true,
+                before_l3_spill: None,
             },
             pending_kv("native", &tokens, desc, &budget),
         )
@@ -1365,6 +1372,116 @@ mod tests {
         );
         assert_eq!(blobs.lock().unwrap().physical_bytes(), 0);
         assert_eq!(radix.lock().unwrap().stats().recurrent_entries, 0);
+    }
+
+    #[test]
+    fn l1_is_visible_while_l3_spill_is_blocked() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let (root, tier) = test_l3("l1-before-l3");
+        let budget = StorageBudget::new();
+        let spill_gate = (Mutex::new((false, false)), std::sync::Condvar::new());
+
+        std::thread::scope(|scope| {
+            let spill_gate_ref = &spill_gate;
+            let before_l3_spill = move || {
+                let (state, ready) = spill_gate_ref;
+                let mut state = state.lock().unwrap();
+                state.0 = true;
+                ready.notify_one();
+                while !state.1 {
+                    state = ready.wait(state).unwrap();
+                }
+            };
+            let worker_radix = &radix;
+            let worker_blobs = &blobs;
+            let worker_tier = &tier;
+            let worker_budget = &budget;
+            let worker = scope.spawn(move || {
+                store_exact_radix_record_with_codec(
+                    worker_radix,
+                    worker_blobs,
+                    1,
+                    limits(0, 0),
+                    None,
+                    DurableRecordTarget {
+                        l3: Some(worker_tier),
+                        cachegen_enabled: false,
+                        before_l3_spill: Some(&before_l3_spill),
+                    },
+                    pending("first", &[1, 2], b"first-exact-state", worker_budget),
+                )
+            });
+
+            let (state, ready) = &spill_gate;
+            let mut state = state.lock().unwrap();
+            while !state.0 {
+                state = ready.wait(state).unwrap();
+            }
+            drop(state);
+
+            assert_eq!(
+                radix
+                    .lock()
+                    .unwrap()
+                    .lookup_recurrent("model", &[1, 2])
+                    .expect("L1 entry must be visible before durable spill")
+                    .value
+                    .page_id,
+                "first"
+            );
+
+            let mut state = spill_gate.0.lock().unwrap();
+            state.1 = true;
+            ready.notify_one();
+            drop(state);
+            worker.join().unwrap().unwrap();
+        });
+
+        assert!(
+            tier.locate_longest("model", &[1, 2], 2).unwrap().is_some(),
+            "released spill must still persist the durable entry"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn l3_refusal_preserves_l1_record() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let root = std::env::temp_dir()
+            .join("skippy-server-l3-tests")
+            .join(format!("refusal-preserves-l1-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let tier = L3Tier::open(&root, 4, "blake3:test-tier".to_string(), 4096).unwrap();
+        let budget = StorageBudget::new();
+
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            1,
+            limits(0, 0),
+            None,
+            Some(&tier),
+            pending("first", &[1, 2], b"first-exact-state", &budget),
+        )
+        .unwrap();
+
+        assert_eq!(
+            radix
+                .lock()
+                .unwrap()
+                .lookup_recurrent("model", &[1, 2])
+                .expect("L3 refusal must leave the L1 entry usable")
+                .value
+                .page_id,
+            "first"
+        );
+        assert!(
+            tier.locate_longest("model", &[1, 2], 2).unwrap().is_none(),
+            "refused durable entry must not be published in L3"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
