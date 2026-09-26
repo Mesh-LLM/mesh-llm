@@ -53,7 +53,7 @@ pub struct PipelineCapsuleNonce {
 // planner/strong ports and model, and node handle; the capsule nonce is one
 // more borrowed value on that established plumbing rather than a new grouping.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::network::openai) async fn pipeline_proxy_local(
+pub(crate) async fn pipeline_proxy_local(
     client_stream: &mut ClientStream,
     request_path: &str,
     mut body: serde_json::Value,

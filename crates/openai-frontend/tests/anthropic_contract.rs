@@ -699,11 +699,7 @@ async fn anthropic_and_chat_share_hooks_and_terminal_usage() {
 
 #[tokio::test]
 async fn unsupported_semantics_are_rejected_before_backend_dispatch() {
-    for (key, value) in [
-        ("thinking", json!({"type":"enabled","budget_tokens":16})),
-        ("context_management", json!({"edits":[]})),
-        ("service_tier", json!("priority")),
-    ] {
+    for (key, value) in [("service_tier", json!("priority"))] {
         let mut body = json!({"model":MODEL_ID,"max_tokens":32,"messages":[{"role":"user","content":"hello"}]});
         body[key] = value;
         let (status, error) = post_json("/v1/messages", body).await;
@@ -711,6 +707,37 @@ async fn unsupported_semantics_are_rejected_before_backend_dispatch() {
         assert_eq!(error["error"]["type"], "invalid_request_error");
         assert!(error["error"]["message"].as_str().unwrap().contains(key));
     }
+}
+
+#[tokio::test]
+async fn claude_code_thinking_cache_and_context_defaults_are_accepted() {
+    let body = json!({
+        "model": MODEL_ID,
+        "max_tokens": 32000,
+        "stream": true,
+        "thinking": {"type": "adaptive", "display": "omitted"},
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+        "output_config": {"effort": "high"},
+        "system": [{
+            "type": "text",
+            "text": "You are Claude Code.",
+            "cache_control": {"type": "ephemeral"}
+        }],
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "hello",
+                "cache_control": {"type": "ephemeral"}
+            }]
+        }]
+    });
+    let (status, wire) = post_stream_with("/v1/messages?beta=true", body, app()).await;
+    assert_eq!(status, StatusCode::OK, "{wire}");
+    assert!(wire.contains("event: message_start"), "{wire}");
+    assert!(wire.contains("event: message_stop"), "{wire}");
 }
 
 #[test]

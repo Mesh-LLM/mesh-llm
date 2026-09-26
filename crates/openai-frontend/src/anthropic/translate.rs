@@ -27,6 +27,7 @@ use crate::chat::{
     MessageContent, MessageContentPart,
 };
 use crate::common::{FinishReason, Usage};
+use crate::common::{PromptCacheRetention, ReasoningConfig, ReasoningEffort};
 use crate::errors::OpenAiError;
 
 /// Anthropic stop reasons. `refusal` maps from the OpenAI content-filter
@@ -61,12 +62,25 @@ pub fn messages_request_to_chat_request(
         .and_then(Value::as_bool)
         .map(|disabled| !disabled);
     let output_config = request.extra.remove("output_config").unwrap_or(json!({}));
-    let reasoning_effort = output_config
+    let mut reasoning_effort = output_config
         .get("effort")
         .cloned()
         .map(serde_json::from_value)
         .transpose()
         .map_err(|_| OpenAiError::invalid_request("unsupported output_config.effort"))?;
+    let reasoning = request
+        .extra
+        .remove("thinking")
+        .map(|thinking| reasoning_from_thinking(&thinking))
+        .transpose()?;
+    if reasoning_effort.is_none()
+        && reasoning
+            .as_ref()
+            .is_some_and(|reasoning| reasoning.enabled == Some(true))
+    {
+        reasoning_effort = Some(ReasoningEffort::High);
+    }
+    request.extra.remove("context_management");
     let response_format = match output_config.get("format") {
         None => None,
         Some(format)
@@ -92,12 +106,14 @@ pub fn messages_request_to_chat_request(
         .map(serde_json::from_value)
         .transpose()
         .map_err(|_| OpenAiError::invalid_request("prompt_cache_key must be a string"))?;
-    let prompt_cache_retention = request
+    let explicit_prompt_cache_retention = request
         .extra
         .remove("prompt_cache_retention")
         .map(serde_json::from_value)
         .transpose()
         .map_err(|_| OpenAiError::invalid_request("unsupported prompt_cache_retention"))?;
+    let prompt_cache_retention = explicit_prompt_cache_retention
+        .or_else(|| request_uses_cache_control(&request).then_some(PromptCacheRetention::InMemory));
     let mut messages = Vec::new();
     if let Some(system) = request.system.as_ref() {
         let text = system_text(system);
@@ -152,7 +168,7 @@ pub fn messages_request_to_chat_request(
             }
         }),
         seed: None,
-        reasoning: None,
+        reasoning,
         reasoning_effort,
         prompt_cache_key,
         prompt_cache_retention,
@@ -162,6 +178,54 @@ pub fn messages_request_to_chat_request(
         }),
         extra: request.extra,
     })
+}
+
+fn reasoning_from_thinking(value: &Value) -> Result<ReasoningConfig, OpenAiError> {
+    let kind = value["type"]
+        .as_str()
+        .ok_or_else(|| OpenAiError::invalid_request("thinking.type is required"))?;
+    Ok(match kind {
+        "adaptive" => ReasoningConfig {
+            enabled: Some(true),
+            ..Default::default()
+        },
+        "enabled" => ReasoningConfig {
+            enabled: Some(true),
+            max_tokens: value["budget_tokens"].as_u64().map(|budget| budget as u32),
+            ..Default::default()
+        },
+        "disabled" => ReasoningConfig {
+            enabled: Some(false),
+            effort: Some(ReasoningEffort::None),
+            ..Default::default()
+        },
+        _ => return Err(OpenAiError::invalid_request("unsupported thinking.type")),
+    })
+}
+
+fn request_uses_cache_control(request: &AnthropicMessagesRequest) -> bool {
+    let system = request.system.as_ref().is_some_and(|system| match system {
+        AnthropicSystemPrompt::Text(_) => false,
+        AnthropicSystemPrompt::Blocks(blocks) => blocks
+            .iter()
+            .any(|block| block.extra.contains_key("cache_control")),
+    });
+    let messages = request
+        .messages
+        .iter()
+        .any(|message| match &message.content {
+            AnthropicMessageContent::Text(_) => false,
+            AnthropicMessageContent::Blocks(blocks) => blocks.iter().any(|block| match block {
+                AnthropicContentBlock::Text(text) => text.extra.contains_key("cache_control"),
+                _ => false,
+            }),
+        });
+    let tools = request.tools.as_ref().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool.extra.contains_key("cache_control"))
+    });
+    system || messages || tools
 }
 
 fn system_text(system: &AnthropicSystemPrompt) -> String {
@@ -232,6 +296,14 @@ fn expand_message(
                         });
                     }
                     AnthropicContentBlock::Other(value) => {
+                        if role == "assistant"
+                            && matches!(
+                                value.get("type").and_then(Value::as_str),
+                                Some("thinking" | "redacted_thinking")
+                            )
+                        {
+                            continue;
+                        }
                         media_parts.push(image_part(value)?);
                     }
                 }

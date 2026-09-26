@@ -27,6 +27,105 @@ fn minimal_request_maps_to_chat_shape() {
 }
 
 #[test]
+fn claude_code_default_request_surface_translates() {
+    let chat = chat_request_from(json!({
+        "model": "test",
+        "messages": [
+            {"role": "user", "content": "Read marker.txt."},
+            {"role": "system", "content": [
+                {"type": "text", "text": "Today's date is 2026-09-26.",
+                 "cache_control": {"type": "ephemeral"}}
+            ]}
+        ],
+        "system": [
+            {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.273.1e4; cc_entrypoint=sdk-cli;"},
+            {"type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+             "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "Use Read to read marker.txt, then report its contents.",
+             "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+        ],
+        "tools": [{
+            "name": "Read",
+            "description": "Read a file",
+            "input_schema": {
+                "type": "object",
+                "properties": {"file_path": {"type": "string"}},
+                "required": ["file_path"]
+            }
+        }],
+        "metadata": {"user_id": "{\"device_id\":\"device\",\"session_id\":\"session\"}"},
+        "max_tokens": 32000,
+        "thinking": {"type": "adaptive", "display": "omitted"},
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+        "output_config": {"effort": "high"},
+        "stream": true
+    }));
+
+    assert_eq!(chat.reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        chat.reasoning.as_ref().and_then(|value| value.enabled),
+        Some(true)
+    );
+    assert_eq!(
+        chat.prompt_cache_retention,
+        Some(PromptCacheRetention::InMemory)
+    );
+    assert!(!chat.extra.contains_key("thinking"));
+    assert!(!chat.extra.contains_key("context_management"));
+    assert_eq!(
+        chat.messages
+            .iter()
+            .map(|message| message.role.as_str())
+            .collect::<Vec<_>>(),
+        vec!["system", "user", "system"]
+    );
+}
+
+#[test]
+fn assistant_thinking_blocks_are_accepted_but_not_forwarded_as_prompt_text() {
+    let chat = chat_request_from(json!({
+        "model": "m",
+        "max_tokens": 32,
+        "messages": [
+            {"role": "user", "content": "work"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "private", "signature": "signed"},
+                {"type": "redacted_thinking", "data": "encrypted"},
+                {"type": "text", "text": "visible"}
+            ]},
+            {"role": "user", "content": "continue"}
+        ]
+    }));
+    let assistant = &chat.messages[1];
+    assert_eq!(assistant.role, "assistant");
+    assert_eq!(
+        assistant
+            .content
+            .as_ref()
+            .and_then(crate::message_content_to_text)
+            .as_deref(),
+        Some("visible")
+    );
+}
+
+#[test]
+fn tool_input_schema_is_required_and_must_be_an_object() {
+    for schema in [Value::Null, json!("not-an-object")] {
+        let request: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "m",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "read"}],
+            "tools": [{"name": "Read", "input_schema": schema}]
+        }))
+        .expect("request parses");
+        let error = messages_request_to_chat_request(request).expect_err("schema rejected");
+        assert!(error.to_string().contains("input_schema"), "{error}");
+    }
+}
+
+#[test]
 fn system_prompt_and_multi_turn_map_in_order() {
     let chat = chat_request_from(json!({
         "model": "m",

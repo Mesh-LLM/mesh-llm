@@ -4,6 +4,8 @@ use super::pipeline::{PipelineCapsuleNonce, PipelineProxyResult};
 use crate::network::openai::client_stream::ClientStream;
 use tokio::io::AsyncWriteExt;
 
+const PLANNED_REQUEST_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 pub(super) async fn relay_planned_request(
     client: &mut ClientStream,
     port: u16,
@@ -25,9 +27,12 @@ pub(super) async fn relay_planned_request(
         nonce.nonce_origin.as_deref(),
     );
     header.push_str("\r\n");
-    if upstream.write_all(header.as_bytes()).await.is_err()
-        || upstream.write_all(body.as_bytes()).await.is_err()
-    {
+    let write_result = tokio::time::timeout(PLANNED_REQUEST_WRITE_TIMEOUT, async {
+        upstream.write_all(header.as_bytes()).await?;
+        upstream.write_all(body.as_bytes()).await
+    })
+    .await;
+    if !matches!(write_result, Ok(Ok(()))) {
         return PipelineProxyResult::FallbackToDirect;
     }
     let Ok(probe) = super::probe::probe_http_response_local(&mut upstream).await else {
@@ -40,6 +45,7 @@ pub(super) async fn relay_planned_request(
         logging.request_id,
         logging.retry_policy,
         logging.response_adapter,
+        logging.served_by,
         logging.route_observer,
     )
     .await

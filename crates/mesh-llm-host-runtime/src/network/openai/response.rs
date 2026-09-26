@@ -27,8 +27,7 @@ pub(super) use common::{
 };
 pub(super) use external_endpoint::route_http_endpoint_attempt;
 pub(crate) use models::send_models_list_with_descriptors;
-pub(super) use pipeline::pipeline_proxy_local;
-pub use pipeline::{PipelineCapsuleNonce, PipelineProxyResult};
+pub(crate) use pipeline::{PipelineCapsuleNonce, PipelineProxyResult, pipeline_proxy_local};
 pub(super) use routing::{route_local_attempt, route_remote_attempt};
 #[cfg(feature = "payments")]
 pub(crate) use send::send_error;

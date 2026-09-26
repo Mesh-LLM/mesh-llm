@@ -187,7 +187,10 @@ async fn streaming_messages(
                     .lock()
                     .map(|mut assembler| assembler.finish(None))
                     .unwrap_or_default();
-                if !tail.is_empty() {
+                if tail
+                    .iter()
+                    .any(|event| matches!(event, AnthropicMessagesStreamEvent::MessageStop {}))
+                {
                     completion_lifecycle.mark_protocol_complete();
                 }
                 stream::iter(

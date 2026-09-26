@@ -60,7 +60,13 @@ impl MessagesWireStream {
         }
         if data == "[DONE]" {
             self.ended = true;
-            return Ok(self.assembler.finish(None));
+            let mut events = Vec::new();
+            if !self.started {
+                events.push(message_start_event("upstream", ""));
+                self.started = true;
+            }
+            events.extend(self.assembler.finish(None));
+            return Ok(events);
         }
         let value: Value =
             serde_json::from_str(data).map_err(|error| OpenAiError::internal(error.to_string()))?;
@@ -132,4 +138,22 @@ pub fn completion_events(value: &Value) -> Result<Vec<AnthropicMessagesStreamEve
     let mut events = stream.push(&chunk.to_string())?;
     events.extend(stream.push("[DONE]")?);
     Ok(events)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_done_still_emits_a_complete_anthropic_stream() {
+        let events = MessagesWireStream::new().push("[DONE]").unwrap();
+        assert!(matches!(
+            events.first(),
+            Some(AnthropicMessagesStreamEvent::MessageStart { .. })
+        ));
+        assert!(matches!(
+            events.last(),
+            Some(AnthropicMessagesStreamEvent::MessageStop {})
+        ));
+    }
 }

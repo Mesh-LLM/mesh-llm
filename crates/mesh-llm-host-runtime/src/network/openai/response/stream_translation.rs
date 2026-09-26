@@ -831,7 +831,6 @@ async fn emit_translated_stream_done_event(
 
 #[cfg(test)]
 mod tests {
-    use super::super::chat_stream::relay_normalized_chat_completion_stream;
     use super::*;
     use crate::logging::{ArtifactUnavailableReason, OpenAiArtifactCapture};
     use crate::network::openai::response::common::sse_data_frame_is_openai_error;

@@ -776,10 +776,13 @@ async fn try_pipeline_proxy(
         node,
         &capsule_nonce,
         super::response::RouteAttemptLoggingContext {
+            exchange_id: None,
             request_id: request.request_id,
             response_adapter: request.response_adapter,
             retry_policy: super::response::ResponseRetryPolicy::next_target_available(false),
             route_observer,
+            served_by: None,
+            peer_capsule_id: None,
         },
     )
     .await;

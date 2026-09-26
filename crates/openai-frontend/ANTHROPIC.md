@@ -13,9 +13,12 @@ The embedded router uses the same backend, hook wrappers, guardrails, request co
 - Tool choice auto, any, tool and none; `disable_parallel_tool_use` maps to the shared parallel-tool setting.
 - `metadata.user_id` maps to the shared user/affinity input.
 - `output_config.effort` maps to the existing reasoning-effort control. JSON schema output maps to the existing response-format control. Backend capability checks still apply.
+- Claude Code's adaptive/enabled/disabled `thinking` controls map to the shared reasoning settings. Signed `thinking` and `redacted_thinking` replay blocks are accepted on assistant turns and omitted from the OpenAI-shaped prompt because provider-specific signatures cannot be forwarded to a different backend.
+- Claude Code's `clear_thinking_20251015` context-management edit is accepted as a compatibility no-op: the shared prompt already omits provider-specific thinking blocks.
+- Ephemeral prompt-cache markers on system/message text and tools are validated, removed from the OpenAI-shaped content blocks, and enable in-memory prompt retention. Both the default five-minute marker and explicit one-hour TTL are accepted.
 - Existing mesh hooks/guardrails extensions and explicit prompt-cache keys/retention are retained.
 
-Unsupported fields and content kinds return a 400 error, rather than silently changing their meaning. This includes Anthropic-specific thinking blocks/signatures, server tools, prompt-cache control/TTL, documents, context-management edits and service tiers. This is a supported Messages subset, not the entire Anthropic platform API (for example, batches and file storage).
+Unsupported fields and content kinds return a 400 error, rather than silently changing their meaning. Server tools, documents, unsupported context-management edits and service tiers remain outside this adapter. This surface targets complete Claude Code client interoperability, not every separate Anthropic platform API (for example, batches and file storage).
 
 `/v1/messages/count_tokens` has an independent request schema: it does not require `max_tokens`. Local staged serving renders the same chat template and uses the loaded tokenizer without generation. A backend without this capability, or a media prompt whose token count cannot be determined by that path, returns an explicit unsupported error. It does not substitute a character estimate.
 
@@ -23,8 +26,8 @@ Unsupported fields and content kinds return a 400 error, rather than silently ch
 
 `tests/anthropic_contract.rs` covers protocol translation, hooks, terminal usage, multiple streamed tools, images, error termination and token counting. These are deterministic frontend tests, not a Claude process.
 
-The host's `runtime::proxy::tests::claude_cli_executes_read_tool_through_host_ingress` launches a real installed Claude CLI against host ingress and a deterministic OpenAI upstream. It verifies a streamed Read invocation and the tool-result round trip. It is ignored in ordinary unit runs because it requires the external CLI. Run the full host package suite, then explicitly run this harness with `MESH_CLAUDE_BIN` pointing to the installed executable.
+The host's `runtime::proxy::tests::claude_cli_executes_read_tool_through_host_ingress` launches the pinned real Claude Code executable against host ingress and a deterministic OpenAI upstream. It verifies the client's default prompt caching, adaptive thinking, streamed Read invocation and tool-result round trip. The test is enabled by the `claude-code-integration` feature; the Linux Rust-test lane installs Claude Code 2.1.273 and runs it whenever `mesh-llm-host-runtime` is in the affected package batch.
 
-The harness uses a temporary fixture, a separate `CLAUDE_CONFIG_DIR`, `--bare`, a dummy local API key and only the Read tool. It never bypasses permissions or calls the Anthropic service. Compatibility settings `DISABLE_PROMPT_CACHING=1` and `CLAUDE_CODE_DISABLE_THINKING=1` select the supported surface; see the [Claude environment-variable reference](https://code.claude.com/docs/en/env-vars).
+The harness uses a temporary fixture, a separate `CLAUDE_CONFIG_DIR`, `--bare`, a dummy local API key and only the Read tool. It never bypasses permissions. Prompt caching and thinking remain enabled so the test exercises Claude Code's real default request shape.
 
-This deterministic test proves client/host interoperability. Model quality, live remote model execution and real plugin-provider support require their own deployment evidence.
+This deterministic test proves client/host interoperability. A live Claude-model smoke still requires an Anthropic credential and is a separate pre-merge deployment gate; the deterministic CI test cannot substitute for it.

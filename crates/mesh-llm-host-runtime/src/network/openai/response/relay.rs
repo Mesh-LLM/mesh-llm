@@ -452,6 +452,7 @@ mod tests {
             status_code: 200,
             content_length: Some(body.len()),
             content_type: Some("application/json".to_owned()),
+            chunked: false,
             client_nonce: None,
             nonce_origin: None,
         };
@@ -472,6 +473,7 @@ mod tests {
             status_code: parsed.status_code,
             content_length: parsed.content_length,
             content_type: parsed.content_type.clone(),
+            chunked: parsed.chunked,
             client_nonce: None,
             nonce_origin: None,
         };

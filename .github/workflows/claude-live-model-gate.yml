@@ -1,0 +1,50 @@
+name: Claude live-model gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Immutable 40-character commit SHA to test
+        required: true
+        type: string
+      model:
+        description: Anthropic Claude model ID
+        required: true
+        default: claude-sonnet-4-6
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  live_claude:
+    name: Claude Code → Mesh → live Claude
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: claude-live-model
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CARGO_INCREMENTAL: '0'
+      MESH_LIVE_CLAUDE_MODEL: ${{ inputs.model }}
+      MESH_LLM_SKIP_UI: '1'
+    steps:
+      - name: Validate immutable source identity
+        env:
+          SOURCE_SHA: ${{ inputs.ref }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Require live Anthropic credential
+        run: test -n "$ANTHROPIC_API_KEY"
+      - name: Install pinned Claude Code client
+        run: |
+          npm install --global @anthropic-ai/claude-code@2.1.273
+          test "$(claude --version | awk '{print $1}')" = "2.1.273"
+      - name: Run live Claude model round trip through Mesh
+        run: |
+          cargo test --locked -p mesh-llm-host-runtime --no-default-features \
+            --features claude-live-model-integration \
+            claude_cli_round_trips_through_host_ingress_and_live_claude_model

@@ -155,6 +155,13 @@ impl BufferedHttpRequest {
         is_tokenize_request(&self.method, &self.path)
     }
 
+    /// Token counting is a capability request, not generation, so its wire
+    /// size must not be treated as model context admission.
+    pub fn is_anthropic_count_tokens_request(&self) -> bool {
+        self.method == "POST"
+            && self.client_path.split('?').next() == Some("/v1/messages/count_tokens")
+    }
+
     /// Multipart audio bytes are encoded media, not prompt text. The proxy
     /// cannot infer their eventual model context size from the wire length.
     pub fn is_audio_upload_request(&self) -> bool {
