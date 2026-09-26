@@ -48,9 +48,10 @@ export default [
   },
   {
     title: "SDKs",
-    description: "Embed mesh clients and local serving into Rust, Node.js, JVM/Android, and Swift apps.",
+    description: "Embed mesh clients and local serving into Python, Rust, Node.js, JVM/Android, and Swift apps.",
     links: [
       ["SDK overview", "/docs/pages/sdk/"],
+      ["Python", "/docs/pages/sdk-python/"],
       ["Rust", "/docs/pages/sdk-rust/"],
       ["Node.js & Electron", "/docs/pages/sdk-node/"],
       ["Java / Kotlin / Android", "/docs/pages/sdk-kotlin/"],

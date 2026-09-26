@@ -69,6 +69,7 @@ enum FfiError {
     "ServingUnsupported",
     "ConsoleFailed",
     "NativeRuntimeFailed",
+    "OpenAiRequestFailed",
 };
 
 dictionary ConsoleOptionsNative {
@@ -99,6 +100,9 @@ interface MeshClientHandle {
     sequence<ModelNative> inference_list_models();
 
     [Throws=FfiError]
+    OpenAiResponseNative openai_request(string path, string body_json);
+
+    [Throws=FfiError]
     string chat(ChatRequestNative request, EventListener listener);
 
     [Throws=FfiError]
@@ -121,6 +125,9 @@ interface MeshNodeHandle {
 
     [Throws=FfiError]
     sequence<ModelNative> inference_list_models();
+
+    [Throws=FfiError]
+    OpenAiResponseNative openai_request(string path, string body_json);
 
     [Throws=FfiError]
     string chat(ChatRequestNative request, EventListener listener);
@@ -239,6 +246,12 @@ dictionary ChatMessageNative {
 dictionary ResponsesRequestNative {
     string model;
     string input;
+};
+
+dictionary OpenAiResponseNative {
+    u16 status_code;
+    string? content_type;
+    string body;
 };
 
 [Enum]

@@ -359,6 +359,19 @@ impl MeshInference {
         self.inner.client.lock().await.list_models().await
     }
 
+    pub async fn openai_request(
+        &self,
+        path: &str,
+        body_json: String,
+    ) -> Result<crate::OpenAiResponse, MeshApiError> {
+        self.inner
+            .client
+            .lock()
+            .await
+            .openai_request(path, body_json)
+            .await
+    }
+
     pub async fn chat(
         &self,
         request: ChatRequest,

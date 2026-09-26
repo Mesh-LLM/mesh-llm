@@ -157,6 +157,33 @@ impl MeshClient {
             .collect())
     }
 
+    /// Send an OpenAI-compatible JSON request without projecting it into a
+    /// language-specific SDK type.
+    ///
+    /// This is the forward-compatible path for agent payloads. Tool schemas,
+    /// tool calls, multimodal content, structured-output settings, usage, and
+    /// future OpenAI fields are preserved in the JSON body and response.
+    pub async fn openai_request(
+        &self,
+        path: &str,
+        body_json: String,
+    ) -> Result<OpenAiResponse, ClientError> {
+        validate_openai_path(path).map_err(ClientError::Endpoint)?;
+        let body = serde_json::from_str::<serde_json::Value>(&body_json).map_err(|error| {
+            ClientError::Endpoint(format!("invalid JSON request body: {error}"))
+        })?;
+        if !body.is_object() {
+            return Err(ClientError::Endpoint(
+                "OpenAI request body must be a JSON object".to_string(),
+            ));
+        }
+
+        let response = request_post_bytes(&self.config, path, body_json)
+            .await
+            .map_err(ClientError::Endpoint)?;
+        parse_openai_response(&response).map_err(ClientError::Endpoint)
+    }
+
     /// Start a chat completion request. Sync — returns a `RequestId` immediately.
     /// Streaming tokens are delivered via `listener.on_event()` on the runtime thread.
     pub fn chat(
@@ -357,6 +384,13 @@ pub struct ChatMessage {
 pub struct ResponsesRequest {
     pub model: String,
     pub input: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenAiResponse {
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
 }
 
 #[derive(Debug, Clone)]
@@ -601,21 +635,95 @@ async fn http_request(base_url: &str, request: String) -> Result<Vec<u8>, String
 }
 
 fn parse_json_response<T: for<'de> Deserialize<'de>>(response: &[u8]) -> Result<T, String> {
+    let response = parse_openai_response(response)?;
+    if !(200..300).contains(&response.status_code) {
+        return Err(format!(
+            "HTTP request failed with status {}: {}",
+            response.status_code, response.body
+        ));
+    }
+    serde_json::from_str(&response.body).map_err(|err| format!("decode JSON: {err}"))
+}
+
+fn validate_openai_path(path: &str) -> Result<(), String> {
+    if !path.starts_with("/v1/") {
+        return Err("OpenAI request path must start with /v1/".to_string());
+    }
+    if path.contains("..")
+        || path
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b' ')
+    {
+        return Err("OpenAI request path contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
+fn parse_openai_response(response: &[u8]) -> Result<OpenAiResponse, String> {
     let header_end = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
         .ok_or_else(|| "malformed HTTP response".to_string())?;
-    let status_line_end = response
-        .windows(2)
-        .position(|window| window == b"\r\n")
-        .ok_or_else(|| "missing HTTP status line".to_string())?;
-    let status_line = std::str::from_utf8(&response[..status_line_end])
-        .map_err(|err| format!("invalid HTTP status line: {err}"))?;
-    if !status_line.contains(" 200 ") {
-        let body = String::from_utf8_lossy(&response[header_end + 4..]).to_string();
-        return Err(format!("HTTP request failed: {status_line}: {body}"));
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut parsed = httparse::Response::new(&mut headers);
+    let status = parsed
+        .parse(&response[..header_end + 4])
+        .map_err(|error| format!("parse HTTP response: {error}"))?;
+    if !status.is_complete() {
+        return Err("incomplete HTTP response headers".to_string());
     }
-    serde_json::from_slice(&response[header_end + 4..]).map_err(|err| format!("decode JSON: {err}"))
+    let status_code = parsed
+        .code
+        .ok_or_else(|| "HTTP response is missing a status code".to_string())?;
+    let content_type = parsed
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("content-type"))
+        .map(|header| String::from_utf8_lossy(header.value).trim().to_string());
+    let is_chunked = parsed.headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("transfer-encoding")
+            && String::from_utf8_lossy(header.value)
+                .split(',')
+                .any(|value| value.trim().eq_ignore_ascii_case("chunked"))
+    });
+    let body_bytes = &response[header_end + 4..];
+    let body_bytes = if is_chunked {
+        decode_chunked_body(body_bytes)?
+    } else {
+        body_bytes.to_vec()
+    };
+    let body = String::from_utf8(body_bytes)
+        .map_err(|error| format!("OpenAI response body is not UTF-8: {error}"))?;
+    Ok(OpenAiResponse {
+        status_code,
+        content_type,
+        body,
+    })
+}
+
+fn decode_chunked_body(mut input: &[u8]) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    loop {
+        let line_end = input
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .ok_or_else(|| "malformed chunked response: missing size terminator".to_string())?;
+        let size_text = std::str::from_utf8(&input[..line_end])
+            .map_err(|error| format!("invalid chunk size: {error}"))?;
+        let size_text = size_text.split(';').next().unwrap_or(size_text).trim();
+        let size = usize::from_str_radix(size_text, 16)
+            .map_err(|error| format!("invalid chunk size '{size_text}': {error}"))?;
+        input = &input[line_end + 2..];
+        if size == 0 {
+            break;
+        }
+        if input.len() < size + 2 || &input[size..size + 2] != b"\r\n" {
+            return Err("malformed chunked response: incomplete chunk".to_string());
+        }
+        output.extend_from_slice(&input[..size]);
+        input = &input[size + 2..];
+    }
+    Ok(output)
 }
 
 fn host_header(base_url: &str) -> Result<String, String> {
@@ -723,6 +831,46 @@ mod socket_addr_tests {
     fn rejects_empty_authority() {
         assert!(socket_addr("http://").is_err());
         assert!(socket_addr("").is_err());
+    }
+}
+
+#[cfg(test)]
+mod openai_response_tests {
+    use super::{decode_chunked_body, parse_openai_response, validate_openai_path};
+
+    #[test]
+    fn parses_json_response_without_projecting_agent_fields() {
+        let body = r#"{"choices":[{"message":{"tool_calls":[{"id":"call_1","function":{"name":"search","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"total_tokens":12}}"#;
+        let wire = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = parse_openai_response(wire.as_bytes()).expect("response parses");
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.content_type.as_deref(), Some("application/json"));
+        assert_eq!(response.body, body);
+    }
+
+    #[test]
+    fn decodes_chunked_sse_without_losing_tool_call_deltas() {
+        let chunk = b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\"}]}}]}\n\n";
+        let mut encoded = format!("{:X}\r\n", chunk.len()).into_bytes();
+        encoded.extend_from_slice(chunk);
+        encoded.extend_from_slice(b"\r\n0\r\n\r\n");
+
+        assert_eq!(decode_chunked_body(&encoded).expect("chunks decode"), chunk);
+    }
+
+    #[test]
+    fn rejects_paths_that_can_escape_or_inject_headers() {
+        assert!(validate_openai_path("/v1/chat/completions").is_ok());
+        assert!(validate_openai_path("/v1/responses").is_ok());
+        assert!(validate_openai_path("/admin").is_err());
+        assert!(validate_openai_path("/v1/../admin").is_err());
+        assert!(validate_openai_path("/v1/models\r\nX-Evil: yes").is_err());
     }
 }
 

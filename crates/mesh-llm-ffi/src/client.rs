@@ -4,11 +4,12 @@ use mesh_llm_sdk::{
     ClientBuilder, InviteToken, RequestId, create_auto_client as sdk_create_auto_client,
 };
 
-use crate::errors::{FfiError, map_mesh_api_error};
+use crate::errors::{FfiError, map_mesh_api_error, map_openai_error};
 use crate::events::EventListenerBridge;
 use crate::identity::parse_owner_keypair;
 use crate::request_types::{
-    ChatRequestNative, ClientStatus, ModelNative, PublicMeshQuery, ResponsesRequestNative,
+    ChatRequestNative, ClientStatus, ModelNative, OpenAiResponseNative, PublicMeshQuery,
+    ResponsesRequestNative,
 };
 use crate::runtime_blocking::block_on;
 use crate::{EventListener, MeshClientHandle};
@@ -89,6 +90,22 @@ impl MeshClientHandle {
                     .collect()
             })
             .map_err(|error| FfiError::DiscoveryFailed(error.to_string()))
+    }
+
+    pub fn openai_request(
+        &self,
+        path: String,
+        body_json: String,
+    ) -> Result<OpenAiResponseNative, FfiError> {
+        block_on(async {
+            self.client
+                .lock()
+                .await
+                .openai_request(&path, body_json)
+                .await
+        })
+        .map(OpenAiResponseNative::from)
+        .map_err(map_openai_error)
     }
 
     pub fn chat(

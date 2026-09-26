@@ -1,6 +1,6 @@
 # MeshLLM SDK Usage Guide
 
-MeshLLM exposes two SDK roles across Rust, Swift, Kotlin, and Node.js:
+MeshLLM exposes two SDK roles across Python, Rust, Swift, Kotlin, and Node.js:
 
 - `Client` connects to an existing mesh and runs inference.
 - `Node` includes the client role and adds local model management plus serving
@@ -8,8 +8,9 @@ MeshLLM exposes two SDK roles across Rust, Swift, Kotlin, and Node.js:
 
 The SDK is split into two parts:
 
-- **Language SDKs** provide the public API: Rust `mesh-llm-sdk`, Swift
-  `MeshLLM`, Kotlin `ai.meshllm`, and Node.js `@mesh-llm/sdk`.
+- **Language SDKs** provide the public API: Python `mesh-llm`, Rust
+  `mesh-llm-sdk`, Swift `MeshLLM`, Kotlin `ai.meshllm`, and Node.js
+  `@mesh-llm/sdk`.
 - **Native runtime artifacts** provide local serving for a specific
   platform/runtime flavor, such as macOS Metal or Linux CUDA.
 
@@ -24,6 +25,7 @@ run inference but cannot currently serve local models.
 
 | Platform/package | Mesh inference | Model management | Local serving |
 |---|---:|---:|---:|
+| Python macOS/Linux/Windows | yes | native bridge available | requires an embedded-runtime wheel and matching native runtime artifact |
 | Rust SDK on macOS | yes | yes | requires an attached `ServingController` |
 | Rust SDK on Linux | yes | yes | requires an attached `ServingController` |
 | Swift macOS | yes | yes | yes with a matching native runtime artifact |
@@ -42,6 +44,7 @@ The SDK packages are published from MeshLLM releases:
 
 | SDK | Package source |
 |---|---|
+| Python | PyPI package `mesh-llm` |
 | Rust | crates.io package `mesh-llm-sdk` |
 | Node.js | npm package `@mesh-llm/sdk` |
 | Swift | GitHub Swift package from tagged `Mesh-LLM/mesh-llm` releases |
@@ -49,6 +52,21 @@ The SDK packages are published from MeshLLM releases:
 | Native runtimes | GitHub release artifacts plus `native-runtimes.json` |
 
 ## Install
+
+### Python
+
+Install the Python package:
+
+```bash
+pip install mesh-llm
+```
+
+Python agent integrations should use `client.inference.chat_completions(body)`
+or `responses(body)`. These methods preserve the complete OpenAI-compatible
+JSON request and response—including tools, multipart content, structured-output
+fields, finish reasons, and usage—instead of narrowing it to text.
+
+See [Python SDK examples](sdk/python.md).
 
 ### Rust
 
@@ -182,6 +200,7 @@ private mesh modes:
 
 | SDK | Examples |
 |---|---|
+| Python | [docs/sdk/python.md](sdk/python.md) |
 | Rust | [docs/sdk/rust.md](sdk/rust.md) |
 | Node.js | [docs/sdk/node.md](sdk/node.md) |
 | Swift | [docs/sdk/swift.md](sdk/swift.md) |

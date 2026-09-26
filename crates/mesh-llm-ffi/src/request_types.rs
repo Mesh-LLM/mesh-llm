@@ -61,3 +61,10 @@ pub struct ResponsesRequestNative {
     pub model: String,
     pub input: String,
 }
+
+#[derive(uniffi::Record)]
+pub struct OpenAiResponseNative {
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+}

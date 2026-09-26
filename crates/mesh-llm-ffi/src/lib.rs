@@ -51,5 +51,5 @@ pub use node::{create_auto_node, create_node};
 pub use public_mesh::discover_public_meshes;
 pub use request_types::{
     ChatMessageNative, ChatRequestNative, ClientStatus, ConsoleOptionsNative, ModelNative,
-    PublicMesh, PublicMeshQuery, ResponsesRequestNative,
+    OpenAiResponseNative, PublicMesh, PublicMeshQuery, ResponsesRequestNative,
 };

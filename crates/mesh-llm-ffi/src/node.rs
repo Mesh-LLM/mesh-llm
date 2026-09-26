@@ -8,7 +8,8 @@ use mesh_llm_sdk::{InviteToken, RequestId};
 use mesh_llm_sdk::embedded_runtime::{EmbeddedChatMessage, EmbeddedServingController};
 
 use crate::errors::{
-    FfiError, map_mesh_api_error, map_model_error, map_serving_error, map_stream_error,
+    FfiError, map_mesh_api_error, map_model_error, map_openai_error, map_serving_error,
+    map_stream_error,
 };
 #[cfg(feature = "embedded-runtime")]
 use crate::events::ClientEvent;
@@ -23,8 +24,8 @@ use crate::model_types::{
 };
 use crate::native_runtime_types::EventListener;
 use crate::request_types::{
-    ChatRequestNative, ClientStatus, ConsoleOptionsNative, ModelNative, PublicMeshQuery,
-    ResponsesRequestNative,
+    ChatRequestNative, ClientStatus, ConsoleOptionsNative, ModelNative, OpenAiResponseNative,
+    PublicMeshQuery, ResponsesRequestNative,
 };
 use crate::runtime_blocking::block_on;
 
@@ -148,6 +149,16 @@ impl MeshNodeHandle {
                     .collect()
             })
             .map_err(|error| FfiError::DiscoveryFailed(error.to_string()))
+    }
+
+    pub fn openai_request(
+        &self,
+        path: String,
+        body_json: String,
+    ) -> Result<OpenAiResponseNative, FfiError> {
+        block_on(self.node.inference().openai_request(&path, body_json))
+            .map(OpenAiResponseNative::from)
+            .map_err(map_openai_error)
     }
 
     pub fn chat(

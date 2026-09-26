@@ -9,6 +9,8 @@ SWIFT_STREAM="$ROOT/sdk/swift/Sources/MeshLLM/EventStream.swift"
 KOTLIN_NODE="$ROOT/sdk/kotlin/src/main/kotlin/ai/meshllm/Node.kt"
 NODE_SDK="$ROOT/sdk/node/index.js"
 NODE_TYPES="$ROOT/sdk/node/index.d.ts"
+PYTHON_SDK="$ROOT/sdk/python/src/meshllm/client.py"
+PYTHON_TYPES="$ROOT/sdk/python/src/meshllm/types.py"
 
 missing=0
 
@@ -152,6 +154,38 @@ node_type_patterns=(
 
 for pattern in "${node_type_patterns[@]}"; do
     require "$NODE_TYPES" "$pattern" "node types: $pattern"
+done
+
+python_patterns=(
+    "class Client"
+    "class Node"
+    "class Inference"
+    "async def start(self)"
+    "async def stop(self)"
+    "async def reconnect(self)"
+    "async def status(self)"
+    "async def list_models(self)"
+    "async def chat_completions(self"
+    "async def responses(self"
+    "async def request("
+    "async def chat("
+    "async def text_response("
+)
+
+for pattern in "${python_patterns[@]}"; do
+    require "$PYTHON_SDK" "$pattern" "python: $pattern"
+done
+
+python_type_patterns=(
+    "class MeshError"
+    "class OpenAIRequestError"
+    "class OpenAIResponse"
+    "class TextDelta"
+    "class RequestCompleted"
+)
+
+for pattern in "${python_type_patterns[@]}"; do
+    require "$PYTHON_TYPES" "$pattern" "python types: $pattern"
 done
 
 if [[ "$missing" != "0" ]]; then

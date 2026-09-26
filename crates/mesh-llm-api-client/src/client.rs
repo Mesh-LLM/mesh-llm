@@ -116,6 +116,20 @@ impl MeshClient {
             .collect())
     }
 
+    /// Send a protocol-preserving OpenAI-compatible request.
+    ///
+    /// Prefer this path for agent payloads whose shape evolves faster than the
+    /// typed convenience API, including tool calling and structured outputs.
+    pub async fn openai_request(
+        &self,
+        path: &str,
+        body_json: String,
+    ) -> Result<OpenAiResponse, MeshApiError> {
+        Ok(OpenAiResponse::from(
+            self.inner.openai_request(path, body_json).await?,
+        ))
+    }
+
     pub fn chat(&self, request: ChatRequest, listener: Arc<dyn EventListener>) -> RequestId {
         let request_id = self.inner.chat(
             mesh_client::ChatRequest::from(request),
@@ -197,6 +211,23 @@ impl From<ChatMessage> for mesh_client::ChatMessage {
 pub struct ResponsesRequest {
     pub model: String,
     pub input: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenAiResponse {
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+}
+
+impl From<mesh_client::OpenAiResponse> for OpenAiResponse {
+    fn from(value: mesh_client::OpenAiResponse) -> Self {
+        Self {
+            status_code: value.status_code,
+            content_type: value.content_type,
+            body: value.body,
+        }
+    }
 }
 
 impl From<ResponsesRequest> for mesh_client::ResponsesRequest {
