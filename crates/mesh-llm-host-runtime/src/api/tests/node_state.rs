@@ -159,7 +159,7 @@ fn derive_peer_state_prefers_client_role() {
         ready: true,
     }];
 
-    assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Client);
+    assert_eq!(MeshApi::derive_peer_state(&peer, true), NodeState::Client);
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn derive_peer_state_returns_serving_for_ready_runtime() {
         ready: true,
     }];
 
-    assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Serving);
+    assert_eq!(MeshApi::derive_peer_state(&peer, true), NodeState::Serving);
 }
 
 #[test]
@@ -189,14 +189,14 @@ fn derive_peer_state_returns_loading_for_assigned_but_unready_peer() {
         ready: false,
     }];
 
-    assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Loading);
+    assert_eq!(MeshApi::derive_peer_state(&peer, true), NodeState::Loading);
 }
 
 #[test]
 fn derive_peer_state_returns_standby_for_connected_idle_peer() {
     let peer = make_test_state_peer(4, mesh::NodeRole::Worker);
 
-    assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Standby);
+    assert_eq!(MeshApi::derive_peer_state(&peer, true), NodeState::Standby);
 }
 
 #[test]
@@ -204,7 +204,28 @@ fn derive_peer_state_falls_back_to_legacy_serving_models() {
     let mut peer = make_test_state_peer(5, mesh::NodeRole::Worker);
     peer.serving_models = vec!["Qwen".into()];
 
-    assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Serving);
+    assert_eq!(MeshApi::derive_peer_state(&peer, true), NodeState::Serving);
+}
+
+/// RED test for issue #1756 Layer 2: a transitively relearned peer carries a
+/// populated `serving_models`/`hosted_models` announcement (a legacy serving
+/// signal) but has neither a live connection nor any observed RTT. Reporting
+/// must not call this `Serving` — that is exactly the phantom-capacity shape
+/// the issue reports.
+#[test]
+fn derive_peer_state_returns_standby_for_serving_signal_without_connection_or_rtt() {
+    let mut peer = make_test_state_peer(8, mesh::NodeRole::Worker);
+    peer.serving_models = vec!["GhostModel".into()];
+    peer.hosted_models = vec!["GhostModel".into()];
+    peer.hosted_models_known = true;
+    peer.rtt_ms = None;
+    peer.display_rtt = None;
+
+    assert_eq!(
+        MeshApi::derive_peer_state(&peer, false),
+        NodeState::Standby,
+        "a serving-signal peer with no connection and no observed RTT must not report as Serving"
+    );
 }
 
 #[test]
@@ -214,11 +235,11 @@ fn legacy_peer_fixture_uses_backend_state_fallback() {
     let standby_peer = make_legacy_peer_fixture(7, mesh::NodeRole::Worker, vec![]);
 
     assert_eq!(
-        MeshApi::derive_peer_state(&serving_peer),
+        MeshApi::derive_peer_state(&serving_peer, true),
         NodeState::Serving
     );
     assert_eq!(
-        MeshApi::derive_peer_state(&standby_peer),
+        MeshApi::derive_peer_state(&standby_peer, true),
         NodeState::Standby
     );
 }

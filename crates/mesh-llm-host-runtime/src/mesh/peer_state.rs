@@ -576,6 +576,12 @@ pub(crate) struct MeshState {
     /// streams from disclosing topology after a deterministic requirement reject.
     pub(crate) requirement_rejected_peers: HashSet<EndpointId>,
     pub(crate) recent_mesh_rejections: VecDeque<MeshRequirementRejectionEvent>,
+    /// Test-only seam. `state.connections` holds an opaque `iroh::Connection`,
+    /// which a unit test cannot fabricate, so test fixtures that mean to model
+    /// a *healthy* admitted peer register the id here instead. Production never
+    /// populates this set: liveness truth stays derived from `connections`.
+    #[cfg(test)]
+    pub(crate) test_peer_liveness: HashSet<EndpointId>,
 }
 
 impl MeshState {
@@ -597,7 +603,40 @@ impl MeshState {
             policy_rejected_peers: HashMap::new(),
             requirement_rejected_peers: HashSet::new(),
             recent_mesh_rejections: VecDeque::new(),
+            #[cfg(test)]
+            test_peer_liveness: HashSet::new(),
         }
+    }
+
+    /// Returns `true` while an active departure record still covers `id`:
+    /// either `dead_peers` (short tombstone, [`DEAD_PEER_TTL`]) or
+    /// `departed_peers` (longer transitive-readmission block,
+    /// [`DEPARTED_PEER_TRANSITIVE_BLOCK_TTL`]) has an unexpired entry for it.
+    /// Issue #1756: a bridge's stale mention of a departed id must not be
+    /// treated as proof of life while either record is active — this holds
+    /// even for an already-admitted peer, so a genuinely-departed ADMITTED
+    /// entry cannot have its `last_mentioned` kept fresh forever by gossip
+    /// that only carries its last-known (now stale) announcement. Only
+    /// direct proof of life (an actual gossip exchange or connection with
+    /// the id itself) clears these records early.
+    pub(crate) fn departure_record_blocks_mention(&self, id: &EndpointId) -> bool {
+        self.dead_peers
+            .get(id)
+            .is_some_and(|t| t.elapsed() < DEAD_PEER_TTL)
+            || self
+                .departed_peers
+                .get(id)
+                .is_some_and(|t| t.elapsed() < DEPARTED_PEER_TRANSITIVE_BLOCK_TTL)
+    }
+
+    /// Whether this node has observed `peer` actually being reachable. See
+    /// [`peer_has_observed_liveness`] for why the connection term alone is
+    /// neither necessary nor sufficient (issue #1756).
+    pub(crate) fn peer_has_observed_liveness(&self, peer: &PeerInfo) -> bool {
+        let has_connection = self.connections.contains_key(&peer.id);
+        #[cfg(test)]
+        let has_connection = has_connection || self.test_peer_liveness.contains(&peer.id);
+        peer_has_observed_liveness(peer, has_connection)
     }
 }
 
@@ -607,6 +646,47 @@ impl MeshState {
 #[cfg(test)]
 pub(crate) fn is_peer_admitted(peers: &HashMap<EndpointId, PeerInfo>, id: &EndpointId) -> bool {
     peers.get(id).is_some_and(PeerInfo::is_admitted)
+}
+
+/// The single definition of "we have evidence this peer is actually
+/// reachable right now" (issue #1756).
+///
+/// Announcement content is *not* evidence of reachability: a bridge peer can
+/// keep rebroadcasting a departed peer's last-known model list long after the
+/// peer is gone, so a peer whose only "proof" is its own announcement can look
+/// indefinitely healthy. We therefore require at least one observation that can
+/// only come from a real exchange: a live connection, a measured RTT, or a
+/// direct-latency observation.
+///
+/// The RTT terms are load-bearing rather than redundant with `has_connection`:
+/// [`update_peer_rtt`](crate::mesh::Node::update_peer_rtt) refuses to record a
+/// zero-millisecond sample, and relay- or loopback-only peers can therefore
+/// legitimately have no observed RTT while still being perfectly routable.
+/// A connection alone is likewise too strict on its own, because a reconnect
+/// in progress or a tunnel teardown briefly removes the connection entry while
+/// the peer remains a valid target. The conjunction is what both routing and
+/// status reporting must agree on.
+///
+/// This is deliberately one function so the two consumers cannot drift: the
+/// routing eligibility gate below, and `derive_peer_state` in
+/// `runtime_data::collector` (mirrored under `#[cfg(test)]` in `api`), which
+/// decides whether a peer is reported as `serving`.
+pub fn peer_has_observed_liveness(peer: &PeerInfo, has_connection: bool) -> bool {
+    has_connection || peer.rtt_ms.is_some() || peer.display_rtt.is_some()
+}
+
+/// Returns `true` if `peer` is eligible to receive routed requests: admitted
+/// through gossip AND showing signs of life per [`peer_has_observed_liveness`].
+///
+/// Issue #1756: a peer re-learned only through stale transitive gossip must
+/// not be routed to. This is the single definition consulted by
+/// `hosts_for_model`, `any_host`, and `routing_table`; it intentionally does
+/// not touch the pure announcement-formatting helpers on `PeerInfo`
+/// (`routable_models`, `routes_model`, `http_routable_models`,
+/// `routes_http_model`), which are also used to describe what a peer once
+/// advertised.
+pub(crate) fn is_routing_eligible(peer: &PeerInfo, state: &MeshState) -> bool {
+    peer.is_admitted() && state.peer_has_observed_liveness(peer)
 }
 
 /// Returns `true` if the given stream type is permitted before a peer has
@@ -821,7 +901,7 @@ impl Node {
         let mut hosts: Vec<(EndpointId, bool)> = state
             .peers
             .values()
-            .filter(|p| p.is_admitted())
+            .filter(|p| is_routing_eligible(p, &state))
             .filter(|p| p.routes_http_model(model))
             .filter_map(|p| {
                 use crate::proto::node::InferenceAdmissionState;
@@ -870,7 +950,7 @@ impl Node {
         state
             .peers
             .values()
-            .filter(|p| p.is_admitted())
+            .filter(|p| is_routing_eligible(p, &state))
             .find(|p| !p.http_routable_models().is_empty())
             .cloned()
     }
@@ -884,7 +964,7 @@ impl Node {
             state
                 .peers
                 .values()
-                .filter(|peer| peer.is_admitted())
+                .filter(|peer| is_routing_eligible(peer, &state))
                 .cloned()
                 .collect()
         };
