@@ -240,11 +240,40 @@ impl KvStageIntegration {
         let exact_state_worker_pause = Arc::new(std::sync::atomic::AtomicBool::new(false));
         #[cfg(test)]
         let worker_exact_state_pause = exact_state_worker_pause.clone();
+        #[cfg(test)]
+        let l3_spill_worker_received = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        #[cfg(test)]
+        let worker_l3_spill_received = l3_spill_worker_received.clone();
+        #[cfg(test)]
+        let l3_spill_worker_pause = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(test)]
+        let worker_l3_spill_pause = l3_spill_worker_pause.clone();
         let exact_state_record_worker_healthy = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let worker_exact_state_record_worker_healthy = exact_state_record_worker_healthy.clone();
         let exact_state_record_worker_panics = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_exact_state_record_worker_panics = exact_state_record_worker_panics.clone();
         let worker_observer = observer.clone();
+        let (durable_spill_tx, durable_spill_task) = if let Some(l3) = worker_l3.clone() {
+            let (tx, rx) =
+                std::sync::mpsc::sync_channel::<PendingDurableSpill>(EXACT_STATE_RECORD_CAPACITY);
+            let task = std::thread::Builder::new()
+                .name(format!("skippy-l3-spill-{}", config.stage_id))
+                .spawn(move || {
+                    while let Ok(pending) = rx.recv() {
+                        #[cfg(test)]
+                        worker_l3_spill_received.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                        #[cfg(test)]
+                        while worker_l3_spill_pause.load(std::sync::atomic::Ordering::Acquire) {
+                            std::thread::sleep(std::time::Duration::from_millis(2));
+                        }
+                        spill_exact_record_to_l3(&l3, worker_cachegen, pending);
+                    }
+                })?;
+            (Some(tx), Some(task))
+        } else {
+            (None, None)
+        };
+        let worker_durable_spill_tx = durable_spill_tx.clone();
         let exact_state_record_task = std::thread::Builder::new()
             .name(format!("skippy-exact-cache-{}", config.stage_id))
             .spawn(move || {
@@ -268,7 +297,21 @@ impl KvStageIntegration {
                         },
                         worker_observer.as_ref(),
                         pending,
-                        |pending| {
+                        |mut pending| {
+                            let durable_spill =
+                                pending.write_through_l3.then(|| PendingDurableSpill {
+                                    page_id: pending.page_id.clone(),
+                                    payload: pending.payload.clone(),
+                                    extra: pending.extra.clone(),
+                                    namespace: pending.namespace.clone(),
+                                    token_ids: pending.token_ids.clone(),
+                                    l3_cost: pending.l3_cost,
+                                });
+                            // The serving worker owns only L1/L2 publication.
+                            // Durable I/O runs on its own bounded fail-open
+                            // worker so an early page spill cannot head-of-line
+                            // block later page records needed by a repeat.
+                            pending.write_through_l3 = false;
                             store_exact_radix_record_with_codec(
                                 &worker_radix,
                                 &worker_exact_blobs,
@@ -276,13 +319,22 @@ impl KvStageIntegration {
                                 exact_byte_limits,
                                 worker_l2.as_ref(),
                                 DurableRecordTarget {
-                                    l3: worker_l3.as_deref(),
+                                    l3: None,
                                     cachegen_enabled: worker_cachegen,
                                     #[cfg(test)]
                                     before_l3_spill: None,
                                 },
                                 pending,
-                            )
+                            )?;
+                            if let (Some(tx), Some(durable_spill)) =
+                                (worker_durable_spill_tx.as_ref(), durable_spill)
+                            {
+                                // L3 is a durability floor, not a serving
+                                // dependency. A saturated or stopped spill
+                                // worker must leave the valid L1 record alone.
+                                let _ = tx.try_send(durable_spill);
+                            }
+                            Ok(())
                         },
                     );
                     if let Some(fill_claim) = fill_claim {
@@ -308,6 +360,7 @@ impl KvStageIntegration {
         let exact_state_record_worker = Arc::new(super::ExactStateRecordWorker::new(
             exact_state_record_tx,
             exact_state_record_task,
+            durable_spill_task,
         ));
         Ok(Some(Self {
             mode,
@@ -339,6 +392,10 @@ impl KvStageIntegration {
             exact_state_worker_received,
             #[cfg(test)]
             exact_state_worker_pause,
+            #[cfg(test)]
+            l3_spill_worker_received,
+            #[cfg(test)]
+            l3_spill_worker_pause,
             exact_state_record_worker_healthy,
             exact_state_record_worker_panics,
             cache_healthy: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -631,6 +688,16 @@ struct DurableRecordTarget<'a> {
     before_l3_spill: Option<&'a dyn Fn()>,
 }
 
+#[derive(Debug)]
+struct PendingDurableSpill {
+    page_id: String,
+    payload: skippy_cache::ExactStatePayload,
+    extra: super::ExactStateExtra,
+    namespace: String,
+    token_ids: Vec<i32>,
+    l3_cost: Option<skippy_cache::policy::CostSample>,
+}
+
 fn store_exact_radix_record_with_codec(
     radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
     blobs: &Mutex<CacheBlobStore>,
@@ -745,78 +812,98 @@ fn store_exact_radix_record_with_codec(
         if let Some(before_l3_spill) = before_l3_spill {
             before_l3_spill();
         }
-        let kv_desc_json = extra
-            .kv_desc
-            .as_ref()
-            .and_then(|desc| serde_json::to_string(desc).ok());
-        let geometry = extra
-            .kv_desc
-            .as_ref()
-            .and_then(|desc| kv_page_geometry(desc, payload.byte_len()));
-        let cachegen_spill = if cachegen_enabled {
-            match (extra.kv_desc.as_ref(), payload.kv_bytes().ok().flatten()) {
-                (Some(desc), Some(kv))
-                    if !kv.is_empty() && cachegen_descriptor_is_qualified(desc) =>
-                {
-                    match skippy_runtime::encode_cachegen_kv_page(desc, kv.as_ref()) {
-                        Ok(archive) if archive.bytes.len() < kv.len() => {
-                            let calibration_digest = skippy_cache::segment_digest(&archive.bytes);
-                            Some(l3.spill_cachegen_with_cost(
-                                &namespace,
-                                &token_ids,
-                                &payload,
-                                kv_desc_json.clone().unwrap_or_default(),
-                                skippy_cache::CacheGenKvPayload {
-                                    archive: archive.bytes,
-                                    decoded_len: desc.payload_bytes,
-                                    calibration_digest,
-                                },
-                                l3_cost,
-                            ))
-                        }
-                        Ok(_) => None,
-                        Err(error) => {
-                            static WARNED_CACHEGEN: std::sync::atomic::AtomicBool =
-                                std::sync::atomic::AtomicBool::new(false);
-                            if !WARNED_CACHEGEN.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                                let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
-                                    message: "CacheGen encode declined; storing native KV page"
-                                        .to_string(),
-                                    context: Some(format!("page_id={} reason={error:#}", page_id)),
-                                });
-                            }
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let spill = cachegen_spill.unwrap_or_else(|| {
-            l3.spill_with_cost(
-                &namespace,
-                &token_ids,
-                &payload,
-                kv_desc_json,
-                geometry.as_ref(),
+        spill_exact_record_to_l3(
+            l3,
+            cachegen_enabled,
+            PendingDurableSpill {
+                page_id,
+                payload,
+                extra,
+                namespace,
+                token_ids,
                 l3_cost,
-            )
-        });
-        emit_l3_state_transitions(l3);
-        if let Err(error) = spill {
-            static WARNED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
-                    message: "Skippy L3 disk cache write refused; see kv-cache status".to_string(),
-                    context: Some(format!("page_id={page_id} reason={error:#}")),
-                });
-            }
-        }
+            },
+        );
     }
     Ok(())
+}
+
+fn spill_exact_record_to_l3(l3: &L3Tier, cachegen_enabled: bool, pending: PendingDurableSpill) {
+    let PendingDurableSpill {
+        page_id,
+        payload,
+        extra,
+        namespace,
+        token_ids,
+        l3_cost,
+    } = pending;
+    let kv_desc_json = extra
+        .kv_desc
+        .as_ref()
+        .and_then(|desc| serde_json::to_string(desc).ok());
+    let geometry = extra
+        .kv_desc
+        .as_ref()
+        .and_then(|desc| kv_page_geometry(desc, payload.byte_len()));
+    let cachegen_spill = if cachegen_enabled {
+        match (extra.kv_desc.as_ref(), payload.kv_bytes().ok().flatten()) {
+            (Some(desc), Some(kv)) if !kv.is_empty() && cachegen_descriptor_is_qualified(desc) => {
+                match skippy_runtime::encode_cachegen_kv_page(desc, kv.as_ref()) {
+                    Ok(archive) if archive.bytes.len() < kv.len() => {
+                        let calibration_digest = skippy_cache::segment_digest(&archive.bytes);
+                        Some(l3.spill_cachegen_with_cost(
+                            &namespace,
+                            &token_ids,
+                            &payload,
+                            kv_desc_json.clone().unwrap_or_default(),
+                            skippy_cache::CacheGenKvPayload {
+                                archive: archive.bytes,
+                                decoded_len: desc.payload_bytes,
+                                calibration_digest,
+                            },
+                            l3_cost,
+                        ))
+                    }
+                    Ok(_) => None,
+                    Err(error) => {
+                        static WARNED_CACHEGEN: std::sync::atomic::AtomicBool =
+                            std::sync::atomic::AtomicBool::new(false);
+                        if !WARNED_CACHEGEN.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                            let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+                                message: "CacheGen encode declined; storing native KV page"
+                                    .to_string(),
+                                context: Some(format!("page_id={} reason={error:#}", page_id)),
+                            });
+                        }
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let spill = cachegen_spill.unwrap_or_else(|| {
+        l3.spill_with_cost(
+            &namespace,
+            &token_ids,
+            &payload,
+            kv_desc_json,
+            geometry.as_ref(),
+            l3_cost,
+        )
+    });
+    emit_l3_state_transitions(l3);
+    if let Err(error) = spill {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+                message: "Skippy L3 disk cache write refused; see kv-cache status".to_string(),
+                context: Some(format!("page_id={page_id} reason={error:#}")),
+            });
+        }
+    }
 }
 
 fn cachegen_serving_enabled(config: &StageConfig, codec: StageKvCacheCodec) -> bool {
@@ -1420,22 +1507,19 @@ mod tests {
             }
             drop(state);
 
-            assert_eq!(
-                radix
-                    .lock()
-                    .unwrap()
-                    .lookup_recurrent("model", &[1, 2])
-                    .expect("L1 entry must be visible before durable spill")
-                    .value
-                    .page_id,
-                "first"
-            );
+            let visible_page_id = radix
+                .lock()
+                .unwrap()
+                .lookup_recurrent("model", &[1, 2])
+                .map(|lookup| lookup.value.page_id);
 
             let mut state = spill_gate.0.lock().unwrap();
             state.1 = true;
             ready.notify_one();
             drop(state);
             worker.join().unwrap().unwrap();
+
+            assert_eq!(visible_page_id.as_deref(), Some("first"));
         });
 
         assert!(
@@ -2107,6 +2191,83 @@ mod tests {
         invalid.payload = StagePrefixCachePayload::Disabled;
         invalid.durable_payload = Some(StagePrefixCachePayload::ResidentKv);
         assert_eq!(invalid.exact_state_payload(), None);
+    }
+
+    #[test]
+    fn blocked_l3_spill_does_not_head_of_line_block_later_l1_records() {
+        use crate::kv_integration::ExactStateRecordAdmission;
+        use std::sync::atomic::Ordering;
+
+        struct SpillPauseGuard(Arc<std::sync::atomic::AtomicBool>);
+
+        impl Drop for SpillPauseGuard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+
+        let root = std::env::temp_dir()
+            .join("skippy-server-l3-manager-tests")
+            .join(format!("l1-while-l3-blocked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
+        let mut config = enabled_auto_config("future/model");
+        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::FullState;
+        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &config,
+            Some(ModelStateKind::Dense),
+            None,
+            Some(manager),
+            None,
+        )
+        .unwrap()
+        .expect("disk-backed exact cache should be enabled");
+        let budget = StorageBudget::new();
+        let wait = std::time::Duration::from_secs(30);
+
+        kv.l3_spill_worker_pause.store(true, Ordering::Release);
+        let spill_pause_guard = SpillPauseGuard(kv.l3_spill_worker_pause.clone());
+        assert_eq!(
+            kv.enqueue_exact_state_record(
+                pending("first", &[1, 2], b"first-exact-state", &budget,)
+            ),
+            ExactStateRecordAdmission::Queued,
+        );
+        kv.wait_for_exact_state_recording(wait)
+            .expect("first L1 record should publish");
+        let deadline = std::time::Instant::now() + wait;
+        while kv.l3_spill_worker_received.load(Ordering::Acquire) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "durable worker did not receive the first spill"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        assert_eq!(
+            kv.enqueue_exact_state_record(pending(
+                "second",
+                &[1, 2, 3],
+                b"second-exact-state",
+                &budget,
+            )),
+            ExactStateRecordAdmission::Queued,
+        );
+        kv.wait_for_exact_state_recording(wait)
+            .expect("second L1 record must not wait for the first L3 spill");
+        let both_visible = {
+            let mut radix = kv.radix.lock().unwrap();
+            radix.recurrent_exact("model", &[1, 2]).is_some()
+                && radix.recurrent_exact("model", &[1, 2, 3]).is_some()
+        };
+        drop(spill_pause_guard);
+
+        assert!(
+            both_visible,
+            "both L1 records must be visible while the first durable spill is blocked"
+        );
+        drop(kv);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
