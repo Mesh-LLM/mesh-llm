@@ -3,13 +3,14 @@
   "native_recipe": {
     "llama_upstream_sha": "8212c7802455255460ab8e18fc34754560031b34",
     "skippy_abi": "0.1.64",
-    "patch_queue_sha256": "8a94fd3d75f240870cc858fca9ef4d3ec222d5d7ffaa06ba21f563c31689e904"
+    "patch_queue_sha256": "75103921489bb5429dceac9ca267e7328578458d564700733cd9e19a9b6b967c"
   },
   "architectures": [
     "afmoe",
     "apertus",
     "arcee",
     "arwkv7",
+    "bailingmoe2",
     "bailingmoe3",
     "bloom",
     "chameleon",
@@ -17,6 +18,7 @@
     "cohere2",
     "deepseek2",
     "deepseek32",
+    "deepseek4",
     "dots1",
     "ernie4_5",
     "ernie4_5-moe",
@@ -58,10 +60,14 @@
     "mimo2",
     "minicpm",
     "minicpm3",
+    "minimax-m2",
     "minimax-m3",
+    "mistral3",
     "mistral4",
     "mpt",
+    "muse-glimmer",
     "nemotron",
+    "nemotron_h",
     "nemotron_h_moe",
     "olmo2",
     "phi2",
