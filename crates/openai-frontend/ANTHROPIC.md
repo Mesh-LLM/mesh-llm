@@ -15,7 +15,7 @@ The embedded router uses the same backend, hook wrappers, guardrails, request co
 - `output_config.effort` maps to the existing reasoning-effort control. JSON schema output maps to the existing response-format control. Backend capability checks still apply.
 - Claude Code's adaptive/enabled/disabled `thinking` controls map to the shared reasoning settings. Signed `thinking` and `redacted_thinking` replay blocks are accepted on assistant turns and omitted from the OpenAI-shaped prompt because provider-specific signatures cannot be forwarded to a different backend.
 - Claude Code's `clear_thinking_20251015` context-management edit is accepted as a compatibility no-op: the shared prompt already omits provider-specific thinking blocks.
-- Ephemeral prompt-cache markers on system/message text and tools are validated, removed from the OpenAI-shaped content blocks, and enable in-memory prompt retention. Both the default five-minute marker and explicit one-hour TTL are accepted.
+- Ephemeral prompt-cache markers on system/message text, tool results and tools are validated, removed from the OpenAI-shaped content blocks, and enable in-memory prompt retention. Both the default five-minute marker and explicit one-hour TTL are accepted.
 - Existing mesh hooks/guardrails extensions and explicit prompt-cache keys/retention are retained.
 
 Unsupported fields and content kinds return a 400 error, rather than silently changing their meaning. Server tools, documents, unsupported context-management edits and service tiers remain outside this adapter. This surface targets complete Claude Code client interoperability, not every separate Anthropic platform API (for example, batches and file storage).

@@ -121,7 +121,7 @@ pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(),
                         }
                     }
                     AnthropicContentBlock::ToolResult(result) => {
-                        reject_fields(&result.extra, &[], "tool_result")?;
+                        validate_cache_control_fields(&result.extra, "tool_result")?;
                         if message.role != "user" || result.tool_use_id.is_empty() {
                             return Err(OpenAiError::invalid_request(
                                 "tool_result requires user role and tool_use_id",

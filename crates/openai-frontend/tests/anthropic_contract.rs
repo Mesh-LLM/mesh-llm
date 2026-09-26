@@ -522,6 +522,7 @@ async fn simulated_agent_tool_use_loop_round_trips_over_streaming_messages() {
             ]},
             {"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": "toolu_01",
+                 "cache_control": {"type": "ephemeral"},
                  "content": [{"type": "text", "text": "sunny, 12C"}]}
             ]}
         ]

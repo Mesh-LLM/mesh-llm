@@ -205,6 +205,7 @@ fn tool_result_user_turn_expands_to_tool_messages() {
             ]},
             {"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": "toolu_1",
+                 "cache_control": {"type": "ephemeral"},
                  "content": [{"type": "text", "text": "sunny, 21C"}]}
             ]}
         ]
