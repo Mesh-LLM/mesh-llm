@@ -174,9 +174,9 @@ impl RuntimeEventEngine {
             batch.push(entry, DeliveryClass::Progress);
         }
 
-        for _ in 0..batch.superseded_progress {
-            self.health.bump_dropped_progress();
-        }
+        self.health.bump_coalesced_progress_by(
+            u64::try_from(batch.superseded_progress).unwrap_or(u64::MAX),
+        );
 
         let mut applied = 0;
         for pending in batch.drain() {

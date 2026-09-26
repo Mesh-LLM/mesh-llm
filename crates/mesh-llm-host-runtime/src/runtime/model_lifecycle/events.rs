@@ -60,7 +60,7 @@ fn emit_available_model_set_changed(model: &str) {
 /// path-shaped and passes through unchanged. An over-length model name
 /// (bounded by `LogicalModelId`) still degrades to no scope rather than
 /// failing the emission.
-fn model_scope(model: &str) -> FactData {
+pub(crate) fn model_scope(model: &str) -> FactData {
     let mut data = FactData::default();
     if let Ok(id) = LogicalModelId::new(redact_local_path(model).as_ref()) {
         data.scope = ScopeIdentities {

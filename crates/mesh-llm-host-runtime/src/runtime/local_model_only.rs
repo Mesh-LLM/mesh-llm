@@ -123,6 +123,8 @@ pub(super) async fn run_local_model_only(options: RuntimeOptions) -> Result<()> 
     } else {
         let engine = crate::runtime_events::engine::RuntimeEventEngine::new();
         crate::runtime_events::install_runtime_event_engine(engine.clone());
+        #[cfg(feature = "dynamic-native-runtime")]
+        crate::system::native_runtime_events::replay_deferred_resolution(&engine);
         Some(engine)
     };
     // Task 3: same engine-owned driver as the mesh-serve path in

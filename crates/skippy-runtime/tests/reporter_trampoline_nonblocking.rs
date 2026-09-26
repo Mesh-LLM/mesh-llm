@@ -215,3 +215,108 @@ fn concurrent_native_threads_do_not_serialize_on_each_other() {
     );
     let _ = drain_all();
 }
+
+// Per-call model-open queue: same two properties, same measurements. Each
+// queue is owned by its test, so no ring guard is needed.
+
+fn model_open_event(detail: &[u8]) -> SkippyRuntimeEventV1 {
+    SkippyRuntimeEventV1 {
+        category: SkippyRuntimeEventCategory::MODEL_OPEN,
+        kind: SkippyRuntimeEventKind::MODEL_OPEN_PROGRESS,
+        ..raw_event(detail)
+    }
+}
+
+#[test]
+fn the_model_open_callback_allocates_nothing_even_with_long_detail() {
+    let queue = skippy_runtime::ModelOpenEventQueue::new(skippy_runtime::OperationId(1));
+    let detail = vec![b'd'; 64 * 1024];
+    let event = model_open_event(&detail);
+    let mut malformed = model_open_event(&detail);
+    malformed.abi_version = 2;
+
+    let before = total_alloc_calls();
+    for _ in 0..128 {
+        unsafe {
+            queue.deliver_for_test(&event);
+            queue.deliver_for_test(&malformed);
+        }
+    }
+    let after = total_alloc_calls();
+
+    assert_eq!(
+        after,
+        before,
+        "the model-open callback performed {} allocation calls across 256 \
+         events; it must validate, copy, and push, nothing more",
+        after - before
+    );
+    assert_eq!(queue.len(), 128);
+    assert_eq!(queue.rejected(), 128);
+}
+
+#[test]
+fn the_model_open_callback_returns_immediately_when_the_queue_is_full() {
+    const EVENTS: usize = skippy_runtime::MODEL_OPEN_RECORD_CAPACITY * 16;
+    const BUDGET: Duration = Duration::from_millis(200);
+
+    let queue = skippy_runtime::ModelOpenEventQueue::new(skippy_runtime::OperationId(1));
+    let detail = vec![b'd'; 4096];
+    let event = model_open_event(&detail);
+
+    let started = Instant::now();
+    for _ in 0..EVENTS {
+        unsafe { queue.deliver_for_test(&event) };
+    }
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < BUDGET,
+        "{EVENTS} model-open callbacks with no consumer took {elapsed:?}"
+    );
+    assert_eq!(queue.len(), skippy_runtime::MODEL_OPEN_RECORD_CAPACITY);
+    assert_eq!(
+        queue.dropped(),
+        (EVENTS - skippy_runtime::MODEL_OPEN_RECORD_CAPACITY) as u64
+    );
+}
+
+#[test]
+fn concurrent_model_open_callbacks_do_not_serialize_on_each_other() {
+    const THREADS: usize = 8;
+    const PER_THREAD: usize = 2_000;
+    const BUDGET: Duration = Duration::from_millis(500);
+
+    let queue = skippy_runtime::ModelOpenEventQueue::new(skippy_runtime::OperationId(1));
+    let slowest = AtomicUsize::new(0);
+
+    std::thread::scope(|threads| {
+        for _ in 0..THREADS {
+            let queue = &queue;
+            let slowest = &slowest;
+            threads.spawn(move || {
+                let detail = vec![b'd'; 1024];
+                let event = model_open_event(&detail);
+                let started = Instant::now();
+                for _ in 0..PER_THREAD {
+                    unsafe { queue.deliver_for_test(&event) };
+                }
+                slowest.fetch_max(
+                    usize::try_from(started.elapsed().as_micros()).unwrap_or(usize::MAX),
+                    Ordering::Relaxed,
+                );
+            });
+        }
+    });
+
+    let slowest = Duration::from_micros(slowest.load(Ordering::Relaxed) as u64);
+    assert!(
+        slowest < BUDGET,
+        "the slowest of {THREADS} threads took {slowest:?} for {PER_THREAD} \
+         model-open callbacks; concurrent callbacks must not serialize"
+    );
+    assert_eq!(
+        queue.len() as u64 + queue.dropped(),
+        (THREADS * PER_THREAD) as u64
+    );
+}

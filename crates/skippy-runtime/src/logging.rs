@@ -12,6 +12,10 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
+use skippy_ffi::{
+    FEATURE_DEVICE_EVENTS, FEATURE_KV_EVENTS, FEATURE_MODEL_LOAD_EVENTS_V2,
+    FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS,
+};
 use tokio::sync::mpsc;
 
 /// GGML_LLAMA_LOG_LEVEL values (set before llama_backend_init).
@@ -49,17 +53,21 @@ pub struct NativeLogParserPolicy {
 }
 
 impl NativeLogParserPolicy {
-    pub fn new(mode: NativeLogParserMode, _capabilities: &crate::CapabilityReport) -> Self {
+    /// Selects which parsed native-log categories are forwarded as
+    /// `NativeLogEvent`s.
+    ///
+    /// `Enabled` forwards every category as an explicit debug aid and
+    /// `Disabled` forwards none. `Auto` is structured-first: a category is
+    /// forwarded only when the loaded runtime cannot report it through a
+    /// confirmed structured event family, so a legacy runtime keeps the full
+    /// compatibility fallback and a fully covered runtime forwards nothing.
+    pub fn new(mode: NativeLogParserMode, capabilities: &crate::CapabilityReport) -> Self {
         let forwarding_mask = match mode {
             NativeLogParserMode::Enabled => ALL_PRESENTATION_CATEGORIES,
             NativeLogParserMode::Disabled => 0,
-            // A bit, a callable symbol, or one observed event proves only
-            // that one native path is observable. It does not prove that
-            // every category in a family has a production transition. Keep
-            // fallback enabled in Auto; callers may explicitly choose
-            // Disabled only after they have a complete, version-specific
-            // coverage proof.
-            NativeLogParserMode::Auto => ALL_PRESENTATION_CATEGORIES,
+            NativeLogParserMode::Auto => {
+                ALL_PRESENTATION_CATEGORIES & !structured_coverage(capabilities)
+            }
         };
         Self { forwarding_mask }
     }
@@ -67,6 +75,30 @@ impl NativeLogParserPolicy {
     pub fn forwards(self, category: &str) -> bool {
         category_mask(category).is_some_and(|mask| self.forwarding_mask & mask != 0)
     }
+}
+
+/// Presentation categories the loaded runtime reports through confirmed
+/// structured event families. Structured facts reach the host only through
+/// the runtime-scoped reporter, so nothing counts as covered unless that
+/// family is confirmed too.
+fn structured_coverage(capabilities: &crate::CapabilityReport) -> u8 {
+    if !capabilities.family_confirmed(FEATURE_RUNTIME_EVENT_REPORTER) {
+        return 0;
+    }
+    let mut covered = 0;
+    if capabilities.family_confirmed(FEATURE_DEVICE_EVENTS) {
+        covered |= BACKEND_CATEGORY;
+    }
+    if capabilities.family_confirmed(FEATURE_KV_EVENTS) {
+        covered |= KV_CACHE_CATEGORY;
+    }
+    if capabilities.family_confirmed(FEATURE_MODEL_LOAD_EVENTS_V2) {
+        covered |= MEMORY_CATEGORY | TOKENIZER_CATEGORY;
+        if capabilities.family_confirmed(FEATURE_RUNTIME_EVENTS) {
+            covered |= MODEL_CATEGORY;
+        }
+    }
+    covered
 }
 
 fn category_mask(category: &str) -> Option<u8> {
@@ -855,7 +887,6 @@ unsafe extern "C" fn discard_native_log(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skippy_ffi::{FEATURE_DEVICE_EVENTS, FEATURE_KV_EVENTS, FEATURE_MODEL_LOAD_EVENTS_V2};
     use std::{
         env,
         ffi::CString,
@@ -867,80 +898,143 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    #[test]
-    fn parser_mode_runtime_events_keeps_auto_fallback_until_coverage() {
+    const CATEGORIES: [&str; 5] = ["backend", "model", "memory", "kv_cache", "tokenizer"];
+    const FULL_STRUCTURED_COVERAGE: u64 = FEATURE_RUNTIME_EVENT_REPORTER
+        | FEATURE_RUNTIME_EVENTS
+        | FEATURE_MODEL_LOAD_EVENTS_V2
+        | FEATURE_KV_EVENTS
+        | FEATURE_DEVICE_EVENTS;
+
+    fn forwarded_categories(mode: NativeLogParserMode, confirmed: u64) -> Vec<&'static str> {
         let report = crate::CapabilityReport {
-            confirmed: FEATURE_DEVICE_EVENTS | FEATURE_KV_EVENTS,
+            confirmed,
             health_messages: Vec::new(),
         };
-        let policy = NativeLogParserPolicy::new(NativeLogParserMode::Auto, &report);
-
-        assert!(policy.forwards("backend"));
-        assert!(policy.forwards("model"));
-        assert!(policy.forwards("memory"));
-        assert!(policy.forwards("kv_cache"));
-        assert!(policy.forwards("tokenizer"));
+        let policy = NativeLogParserPolicy::new(mode, &report);
+        CATEGORIES
+            .into_iter()
+            .filter(|category| policy.forwards(category))
+            .collect()
     }
 
     #[test]
-    fn parser_mode_runtime_events_keeps_model_fallback_until_coverage() {
-        let report = crate::CapabilityReport {
-            confirmed: FEATURE_MODEL_LOAD_EVENTS_V2,
-            health_messages: Vec::new(),
-        };
-        let policy = NativeLogParserPolicy::new(NativeLogParserMode::Auto, &report);
-
-        assert!(policy.forwards("model"));
-        assert!(policy.forwards("memory"));
-        assert!(policy.forwards("tokenizer"));
-        assert!(policy.forwards("backend"));
-        assert!(policy.forwards("kv_cache"));
+    fn auto_disables_backend_when_device_events_confirmed() {
+        assert_eq!(
+            forwarded_categories(
+                NativeLogParserMode::Auto,
+                FEATURE_RUNTIME_EVENT_REPORTER | FEATURE_DEVICE_EVENTS
+            ),
+            vec!["model", "memory", "kv_cache", "tokenizer"]
+        );
     }
 
     #[test]
-    fn auto_parser_retains_fallback_when_one_family_is_observable() {
+    fn auto_disables_model_memory_tokenizer_when_model_load_v2_confirmed() {
+        assert_eq!(
+            forwarded_categories(
+                NativeLogParserMode::Auto,
+                FEATURE_RUNTIME_EVENT_REPORTER
+                    | FEATURE_MODEL_LOAD_EVENTS_V2
+                    | FEATURE_RUNTIME_EVENTS
+            ),
+            vec!["backend", "kv_cache"]
+        );
+    }
+
+    #[test]
+    fn auto_keeps_model_fallback_when_model_open_events_are_missing() {
+        assert_eq!(
+            forwarded_categories(
+                NativeLogParserMode::Auto,
+                FEATURE_RUNTIME_EVENT_REPORTER | FEATURE_MODEL_LOAD_EVENTS_V2
+            ),
+            vec!["backend", "model", "kv_cache"]
+        );
+    }
+
+    #[test]
+    fn auto_disables_kv_cache_when_kv_events_confirmed() {
+        assert_eq!(
+            forwarded_categories(
+                NativeLogParserMode::Auto,
+                FEATURE_RUNTIME_EVENT_REPORTER | FEATURE_KV_EVENTS
+            ),
+            vec!["backend", "model", "memory", "tokenizer"]
+        );
+    }
+
+    #[test]
+    fn auto_forwards_nothing_with_full_structured_coverage() {
+        assert!(
+            forwarded_categories(NativeLogParserMode::Auto, FULL_STRUCTURED_COVERAGE).is_empty()
+        );
+    }
+
+    #[test]
+    fn auto_forwards_everything_without_reporter_family() {
+        assert_eq!(
+            forwarded_categories(
+                NativeLogParserMode::Auto,
+                FULL_STRUCTURED_COVERAGE & !FEATURE_RUNTIME_EVENT_REPORTER
+            ),
+            CATEGORIES.to_vec()
+        );
+    }
+
+    #[test]
+    fn auto_forwards_everything_on_legacy_runtime() {
+        assert_eq!(
+            forwarded_categories(NativeLogParserMode::Auto, 0),
+            CATEGORIES.to_vec()
+        );
+    }
+
+    #[test]
+    fn enabled_and_disabled_ignore_capabilities() {
+        for confirmed in [0, FULL_STRUCTURED_COVERAGE, u64::MAX] {
+            assert_eq!(
+                forwarded_categories(NativeLogParserMode::Enabled, confirmed),
+                CATEGORIES.to_vec()
+            );
+            assert!(forwarded_categories(NativeLogParserMode::Disabled, confirmed).is_empty());
+        }
+    }
+
+    #[test]
+    fn auto_with_full_coverage_drops_parsed_native_lines() {
         let _native_log_guard = native_log_test_guard();
-        let report = crate::CapabilityReport {
-            confirmed: FEATURE_DEVICE_EVENTS | FEATURE_KV_EVENTS,
-            health_messages: Vec::new(),
-        };
+        struct ResetForwarding;
+        impl Drop for ResetForwarding {
+            fn drop(&mut self) {
+                unregister_filtered_native_logs();
+                set_filtered_native_logs_enabled(false);
+            }
+        }
+        let _reset = ResetForwarding;
+        let mut receiver = register_filtered_native_logs();
+        let line =
+            CString::new("init_tokenizer: initializing tokenizer for type 2\n").expect("cstring");
+
         configure_native_log_parser(NativeLogParserPolicy::new(
             NativeLogParserMode::Auto,
-            &report,
+            &crate::CapabilityReport {
+                confirmed: FULL_STRUCTURED_COVERAGE,
+                health_messages: Vec::new(),
+            },
         ));
-        // Capability bits and a live event from one family do not prove
-        // coverage for the other transitions in that family. Auto therefore
-        // keeps every parser fallback available until a version-specific
-        // complete coverage policy exists.
-        let mask = NATIVE_LOG_FORWARDING_MASK.load(Ordering::Relaxed);
-        assert_ne!(mask & BACKEND_CATEGORY, 0);
-        assert_ne!(mask & MODEL_CATEGORY, 0);
-        assert_ne!(mask & MEMORY_CATEGORY, 0);
-        assert_ne!(mask & KV_CACHE_CATEGORY, 0);
-        assert_ne!(mask & TOKENIZER_CATEGORY, 0);
+        unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
+        write_native_log_note("covered runtime note");
+        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+
         configure_native_log_parser(NativeLogParserPolicy::new(
-            NativeLogParserMode::Disabled,
+            NativeLogParserMode::Auto,
             &crate::CapabilityReport::default(),
         ));
-    }
-
-    #[test]
-    fn parser_mode_runtime_events_enabled_and_disabled_ignore_capabilities() {
-        let report = crate::CapabilityReport {
-            confirmed: u64::MAX,
-            health_messages: Vec::new(),
-        };
-
-        for category in ["backend", "model", "memory", "kv_cache", "tokenizer"] {
-            assert!(
-                NativeLogParserPolicy::new(NativeLogParserMode::Enabled, &report)
-                    .forwards(category)
-            );
-            assert!(
-                !NativeLogParserPolicy::new(NativeLogParserMode::Disabled, &report)
-                    .forwards(category)
-            );
-        }
+        unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
+        assert_eq!(
+            receiver.try_recv().map(|event| event.category),
+            Ok("tokenizer")
+        );
     }
 
     #[test]

@@ -442,6 +442,7 @@ pub(crate) mod tests {
                 capabilities: None,
                 lifecycle_instances: vec![],
                 intent_summary: None,
+                runtime_events: None,
             },
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],

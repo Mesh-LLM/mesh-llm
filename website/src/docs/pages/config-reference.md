@@ -115,7 +115,7 @@ produces a clear startup error rather than a partial start.
 | `runtime.listen_all` | boolean | `false` | node-level | process restart | wired | none |
 | `runtime.mode` | enum | `serve` (default), `on_demand`, `client` | node-level | process restart | wired | none |
 | `runtime.startup_failure_policy` | enum | `best_effort` (default), `fail_fast` | node-level | process restart | wired | none |
-| `runtime.lifecycle_log_parser` | enum | `auto` (default), `enabled`, `disabled`; `auto` keeps only parser categories without equivalent native lifecycle events | node-level | process restart | wired | none |
+| `runtime.lifecycle_log_parser` | enum | `auto` (default), `enabled`, `disabled`; see [Lifecycle log parser](#lifecycle-log-parser) | node-level | process restart | wired | none |
 | `runtime.drain_timeout_secs` | integer | `30`; 1–3600, must not exceed the max | node-level | process restart | wired | none |
 | `runtime.drain_timeout_max_secs` | integer | `300`; 1–3600 | node-level | process restart | wired | none |
 | `runtime.activity.enabled` | boolean | `false` | node-level | process restart | wired | none |
@@ -134,6 +134,31 @@ produces a clear startup error rather than a partial start.
 See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/#runtime-modes) for mode
 behavior and [Activity-aware admission](/docs/pages/runtime-lifecycle/#activity-aware-admission)
 for the activity policy and privacy boundary.
+
+### Lifecycle log parser
+
+Model loading, KV cache, device, and readiness state come from structured
+runtime events. The CLI, TUI, JSON log, management API, and node state never
+depend on parsed llama.cpp log text. `runtime.lifecycle_log_parser` (or
+`MESH_LLM_LIFECYCLE_LOG_PARSER`) controls whether parsed native log summaries
+are forwarded as debug-level `LlamaNativeLog` output as well:
+
+- `auto` (default) is structured-first. A parsed category is forwarded only
+  when the loaded native runtime cannot report it through a confirmed
+  structured event family. `backend` needs device events, `kv_cache` needs KV
+  events, `memory` and `tokenizer` need model-load events v2, and `model`
+  needs model-load events v2 plus model-open events. None of these count
+  unless the runtime event reporter family is also confirmed and the event
+  system is on. A current runtime forwards nothing. An older runtime without
+  structured coverage keeps the parser as a compatibility fallback.
+- `enabled` forwards every parsed category regardless of runtime
+  capabilities. Use it for debugging; the output is debug-only.
+- `disabled` forwards no parsed categories.
+
+Raw native output always goes to `<runtime-root>/<pid>/logs/skippy-native.log`
+whatever this setting is. Capability-probe problems, such as a family that
+advertises a feature bit but is missing a required symbol, are reported as
+normal warnings in every mode.
 
 ## Group 3: model sources, context, KV cache, memory, and prompt caching
 

@@ -15,6 +15,7 @@ pub(crate) mod drain_hold;
 pub mod driver;
 pub mod engine;
 pub mod health;
+pub mod health_facts;
 pub mod ingress;
 mod ingress_latency;
 pub(crate) mod lock_audit;

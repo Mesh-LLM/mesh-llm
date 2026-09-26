@@ -621,6 +621,35 @@ derivation = "frozen literal from the plan's Frozen additions and amendments tab
 task = "13"
 reason = "The minimum number of recorded ingress-latency samples before ingress_p99_us reports Some instead of null. Reused as EngineHealth::bump_for_ingress_latency_milestone's cadence: RuntimeEventEngine::submit bumps the shared health_version once per this many newly recorded samples (via IngressLatencyReservoir::record's milestone return), so a genuinely-changed p99 is periodically observable through the existing change-gated health-delivery contract without bumping -- and so gating delivery -- on every single submission."
 
+# Issue #1167 (native model-open callback boundary): disclosure record for
+# two ADDITIVE runtime_health wire fields. Descriptive only, exactly like
+# the amendment tables above -- read by neither
+# `scripts/generate-runtime-event-inventory.py` nor the Rust `Inventory`
+# struct, so it cannot perturb the generated manifest/TS fixture. The
+# byte-exact `sample_frames.runtime_health` fixture in
+# `fixtures/runtime_events_v1/frames.json` was regenerated in the same
+# change. Older consumers ignore unknown health keys.
+[[health_projection_amendments]]
+field = "dropped_native"
+shape = "number (u64, monotonic)"
+source = "EngineHealth::bump_dropped_native_by"
+issue = "1167"
+reason = "Native runtime-event records lost because a bounded native-facing queue was full when a native thread pushed: the process-global record ring (folded as deltas of skippy_runtime::dropped_runtime_events() on every driver pre-drain ingest) and each per-call ModelOpenEventQueue (credited by the host after the blocking model open returns). Also appended to the event_system_health log line."
+
+[[health_projection_amendments]]
+field = "rejected_native"
+shape = "number (u64, monotonic)"
+source = "EngineHealth::bump_rejected_native_by"
+issue = "1167"
+reason = "Native runtime events refused at the callback boundary (null pointer, short struct, wrong ABI version, oversized detail), from the same two sources as dropped_native. Kept separate from dropped_native because a rejection signals an ABI/producer defect while a drop signals consumer backpressure. Also appended to the event_system_health log line."
+
+[[health_projection_amendments]]
+field = "coalesced_progress"
+shape = "number (u64, monotonic)"
+source = "EngineHealth::bump_coalesced_progress_by"
+issue = "1167"
+reason = "Progress snapshots superseded by a newer snapshot for the same operation scope inside the progress lane before their PROGRESS_EXPORT_INTERVAL window came due. This is the progress lane's rate limit working as designed, not loss: the newest value still publishes. Previously counted as dropped_progress, which now counts only progress that never reaches any consumer (stale reservation at drain, missing/dead reservation or full ring at admission, event-disabled class bypass). Also appended to the event_system_health log line."
+
 [[event_projection_overrides]]
 profile = "progress"
 event_ids = [

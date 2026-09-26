@@ -73,9 +73,9 @@ use self::state::ApiInner;
 use self::status::{
     IntentSummary, LifecycleInstancePayload, LoggingStatusPayload, MeshModelPayload,
     OpenAiGuardrailsPayload, RUNTIME_EVENTS_CAPABILITY, RuntimeCapabilityFlags,
-    RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload,
-    build_runtime_processes_payload, build_runtime_stage_payloads, build_runtime_status_payload,
-    derive_daemon_state, runtime_stage_state_label,
+    RuntimeEventsStatusSummary, RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload,
+    StatusPayload, build_runtime_processes_payload, build_runtime_stage_payloads,
+    build_runtime_status_payload, derive_daemon_state, runtime_stage_state_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
@@ -985,6 +985,7 @@ impl MeshApi {
         runtime.capabilities = Some(capabilities);
         runtime.lifecycle_instances = lifecycle_instances;
         runtime.intent_summary = Some(intent_summary);
+        runtime.runtime_events = RuntimeEventsStatusSummary::current();
 
         let mut payload = runtime_data::status_payload(runtime_data_collector.build_status_view(
             runtime_data::StatusViewInput {

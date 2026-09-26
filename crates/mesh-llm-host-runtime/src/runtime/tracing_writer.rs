@@ -252,6 +252,115 @@ impl Drop for SkippyNativeLogForwardingGuard {
     }
 }
 
+pub(super) fn native_log_parser_mode(
+    mode: mesh_llm_config::LifecycleLogParserMode,
+) -> skippy_runtime::NativeLogParserMode {
+    match mode {
+        mesh_llm_config::LifecycleLogParserMode::Auto => skippy_runtime::NativeLogParserMode::Auto,
+        mesh_llm_config::LifecycleLogParserMode::Enabled => {
+            skippy_runtime::NativeLogParserMode::Enabled
+        }
+        mesh_llm_config::LifecycleLogParserMode::Disabled => {
+            skippy_runtime::NativeLogParserMode::Disabled
+        }
+    }
+}
+
+/// Without an installed runtime-scoped reporter (event system off, or the
+/// native setter refused it) no structured family can reach the host, so the
+/// parser fallback must stay available for every category.
+pub(super) fn structured_event_capabilities(
+    mut capabilities: skippy_runtime::CapabilityReport,
+    event_system_off: bool,
+    reporter_installed: bool,
+) -> skippy_runtime::CapabilityReport {
+    if event_system_off || !reporter_installed {
+        capabilities.confirmed &= !skippy_ffi::FEATURE_RUNTIME_EVENT_REPORTER;
+    }
+    capabilities
+}
+
+/// Startup entry point: probes the loaded runtime, drops the reporter family
+/// when no reporter is installed, and applies the configured parser mode.
+pub(super) fn configure_startup_lifecycle_log_parser(
+    mode: mesh_llm_config::LifecycleLogParserMode,
+    source: &str,
+) {
+    let capabilities = structured_event_capabilities(
+        skippy_runtime::probe_capabilities(),
+        mesh_llm_config::event_system_off().unwrap_or(false),
+        skippy_runtime::runtime_event_reporter_installed(),
+    );
+    configure_lifecycle_log_parser(mode, &capabilities);
+    tracing::info!(source, "configured lifecycle native-log parser");
+}
+
+/// Applies the parser policy and reports capability-probe health as normal
+/// warnings, so probe problems stay visible whatever the parser mode is.
+pub(super) fn configure_lifecycle_log_parser(
+    mode: mesh_llm_config::LifecycleLogParserMode,
+    capabilities: &skippy_runtime::CapabilityReport,
+) -> skippy_runtime::NativeLogParserPolicy {
+    for message in &capabilities.health_messages {
+        let _ = emit_event(OutputEvent::Warning {
+            message: message.clone(),
+            context: Some("native runtime capability probe".to_string()),
+        });
+    }
+    submit_capability_probe_warnings(&capabilities.health_messages);
+    let policy =
+        skippy_runtime::NativeLogParserPolicy::new(native_log_parser_mode(mode), capabilities);
+    skippy_runtime::configure_native_log_parser(policy);
+    policy
+}
+
+/// Mirror each capability-probe health message into the runtime-event
+/// reducer as a `warning_raised` diagnostic, so `runtime_state.node.
+/// diagnostics` shows a disabled native family. The probe's messages are
+/// static text plus a family name and feature bit, never a path or an
+/// identifier. Each message carries a stable correlation value derived from
+/// its text, so every disabled family keeps its own active warning.
+pub(super) fn submit_capability_probe_warnings(messages: &[String]) {
+    use crate::runtime_events::reducer::WARNING_CORRELATION_KEY;
+    use mesh_llm_runtime_event_contracts::{
+        BoundedNumericSummaries, DiagnosticEventKind, DiagnosticFact, FactData, HumanSummary,
+        NumericSummary, NumericSummaryKey, NumericValue, OperationId, OperationScope, ReasonCode,
+        RuntimeEventIngress, RuntimeFact,
+    };
+
+    let Some(engine) = crate::runtime_events::runtime_event_engine() else {
+        return;
+    };
+    for message in messages {
+        let fact = RuntimeFact::Diagnostic(DiagnosticFact::with_data(
+            DiagnosticEventKind::WarningRaised,
+            FactData {
+                reason: Some(ReasonCode::UnsupportedCapability),
+                summary: HumanSummary::new(message).ok(),
+                numeric_summaries: NumericSummaryKey::new(WARNING_CORRELATION_KEY)
+                    .ok()
+                    .map(|key| {
+                        NumericSummary::new(key, NumericValue::Unsigned(stable_message_id(message)))
+                    })
+                    .and_then(|summary| BoundedNumericSummaries::new(vec![summary]).ok())
+                    .unwrap_or_default(),
+                ..FactData::default()
+            },
+        ));
+        let _ = engine
+            .unreserved_ingress(OperationScope::root_only(OperationId::new()))
+            .try_submit(fact);
+    }
+}
+
+/// FNV-1a over the message bytes: deterministic across processes, unlike
+/// `DefaultHasher`, so the same disabled family always maps to one warning.
+fn stable_message_id(message: &str) -> u64 {
+    message.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
 pub(super) fn bridge_skippy_native_logs(
     mut native_log_rx: tokio::sync::mpsc::UnboundedReceiver<skippy_runtime::NativeLogEvent>,
 ) {
@@ -340,4 +449,77 @@ pub(super) fn initialize_runtime_entrypoint() -> Result<()> {
 pub(super) fn initialize_embedded_runtime_entrypoint() -> Result<()> {
     crate::system::backend::clear_runtime_shutting_down();
     init_embedded_runtime_tracing()
+}
+
+#[cfg(test)]
+mod capability_probe_warning_tests {
+    use super::submit_capability_probe_warnings;
+    use crate::runtime_event_api::state_projection;
+    use crate::runtime_events::engine::RuntimeEventEngine;
+    use crate::runtime_events::{clear_runtime_event_engine, install_runtime_event_engine};
+
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn probe_health_messages_become_active_capability_warnings() {
+        clear_runtime_event_engine();
+        let engine = RuntimeEventEngine::new();
+        install_runtime_event_engine(engine.clone());
+        let message = "skippy capability probe: family 'kv_events' advertised feature bit \
+                       0x200000000 but a required symbol is missing; disabling this family only";
+
+        submit_capability_probe_warnings(&[message.to_string()]);
+        engine.drain();
+
+        let node =
+            serde_json::to_value(&state_projection::build(&engine).node).expect("serializable");
+        let warnings = node["diagnostics"]["active_warnings"]
+            .as_array()
+            .expect("active warnings");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0]["reason_code"], "unsupported_capability");
+        assert_eq!(warnings[0]["summary"], message);
+        clear_runtime_event_engine();
+    }
+
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn each_disabled_family_keeps_its_own_active_warning() {
+        clear_runtime_event_engine();
+        let engine = RuntimeEventEngine::new();
+        install_runtime_event_engine(engine.clone());
+        let messages = [
+            "skippy capability probe: family 'kv_events' is missing a symbol".to_string(),
+            "skippy capability probe: family 'device_events' is missing a symbol".to_string(),
+        ];
+        submit_capability_probe_warnings(&messages);
+        submit_capability_probe_warnings(&messages[..1]);
+        engine.drain();
+
+        let node =
+            serde_json::to_value(&state_projection::build(&engine).node).expect("serializable");
+        let summaries: Vec<_> = node["diagnostics"]["active_warnings"]
+            .as_array()
+            .expect("active warnings")
+            .iter()
+            .map(|warning| warning["summary"].as_str().expect("summary").to_string())
+            .collect();
+        assert_eq!(summaries.len(), 2, "{summaries:?}");
+        assert!(summaries.contains(&messages[0]));
+        assert!(summaries.contains(&messages[1]));
+        clear_runtime_event_engine();
+    }
+
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn no_engine_or_no_message_submits_nothing() {
+        clear_runtime_event_engine();
+        submit_capability_probe_warnings(&["ignored".to_string()]);
+
+        let engine = RuntimeEventEngine::new();
+        install_runtime_event_engine(engine.clone());
+        submit_capability_probe_warnings(&[]);
+        engine.drain();
+        assert!(engine.replay().is_empty());
+        clear_runtime_event_engine();
+    }
 }

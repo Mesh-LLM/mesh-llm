@@ -25,7 +25,7 @@ wrong and needs fixing.
 | State pressure | Preserve retained accepted transitions. Capacity exhaustion reports loss and degraded observability explicitly; it cannot silently evict another operation's state. | More than 4,096 distinct pending keys; same-key coalescing; recovery and health. |
 | Request lifetime | Only the request root terminal removes its in-flight row. | Backend child finishes while the frontend root continues streaming. |
 | Subscriber bounds | Enforce actual queued bytes, frame count, and age, including connection catch-up. Bound reconnect keys without evicting active rate limits to admit new keys. | Mixed-size frames, slow writes, initial replay/state, and many distinct client keys. |
-| Native coverage | Emit observations from actual lifecycle paths. Optional API availability alone is not proof of category coverage and must not suppress uncovered fallback observations. | Tests execute native lifecycle call sites; independent optional family and legacy-runtime behavior. |
+| Native coverage | Emit observations from actual lifecycle paths. Normal presentation and state never depend on parsed native log text. Parsed fallback stays on only for categories whose structured family is not confirmed (see "Parser retirement"). | Tests execute native lifecycle call sites; independent optional family and legacy-runtime behavior; parser policy per family. |
 | Provenance | Preserve producer, severity, source sequence/time, and typed identities through ingress, reduction, and safe public projection. Native facts share their established operation identity. | Native/Rust production adapters feed the real reducer and stream; gap and correlation checks. |
 
 The implementation workers own engine lifecycle, stream recovery, and native
@@ -41,6 +41,50 @@ These additive Rust contract changes require exhaustive consumers to handle
 both outcomes. They do not change the native ABI or SSE version.
 Degraded state remains explicit until authoritative reconciliation can restore
 it; incrementing a rebuild generation alone is not evidence of recovery.
+
+### Parser retirement
+
+Normal CLI, TUI, JSON, API, and node state come from structured runtime
+events and Rust-owned lifecycle edges. Parsed llama.cpp log text is now a
+debug surface and a compatibility fallback. It is not a state source.
+
+- **No state consumer.** `OutputEvent::LlamaNativeLog` is emitted only by
+  `bridge_skippy_native_logs` at `OutputLevel::Debug`. The TUI dashboard
+  reducer ignores it for lifecycle, progress, and rows; it appears only as a
+  row in the events panel and in JSON/pretty log output. No host code feeds
+  `NativeLogEvent` or aggregator output into node state, `/api/status`, the
+  runtime-events reducer, or lifecycle decisions.
+- **Auto is structured-first.** `NativeLogParserPolicy::new` computes
+  `structured_coverage(capabilities)` and forwards `ALL & !covered`.
+  `backend` is covered by `FEATURE_DEVICE_EVENTS`, `kv_cache` by
+  `FEATURE_KV_EVENTS`, and `memory` and `tokenizer` by
+  `FEATURE_MODEL_LOAD_EVENTS_V2`. `model` also needs `FEATURE_RUNTIME_EVENTS`.
+  Nothing counts as covered unless `FEATURE_RUNTIME_EVENT_REPORTER` is
+  confirmed, because structured family facts reach the host only through that
+  reporter. The host also treats the reporter as absent when the event system
+  is off, since no reporter is installed then.
+- **Compatibility fallback.** A legacy runtime with no confirmed families
+  keeps the full parser fallback in Auto. `enabled` forwards every category as
+  explicit debug output. `disabled` forwards none. Both ignore capabilities.
+- **Probe health is independent of the parser.** `probe_capabilities` still
+  writes health messages to the native log file as a debug artifact. The host
+  also emits each one once as `OutputEvent::Warning` when it configures the
+  parser, so a missing-symbol family stays visible even when every parser
+  category is off.
+
+Trade-off: a confirmed family bit plus its resolved symbols is treated as
+coverage for its categories. An earlier revision kept every fallback on in
+Auto because a symbol does not prove that every transition in a family has a
+production emitter. Because no state depends on parsed text, a gap in one
+family's native emitters now costs debug visibility, not correctness. Use
+`enabled` to recover the parsed output while investigating one.
+
+Evidence: `skippy-runtime` `logging::tests::auto_*` and
+`enabled_and_disabled_ignore_capabilities`; host
+`runtime::tests::startup_models::parser_auto_with_full_coverage_forwards_nothing`,
+`parser_auto_keeps_fallback_when_event_system_is_off`, and
+`probe_health_messages_reach_output_without_parser`; TUI
+`output::tests::native_visibility::*_is_identical_with_and_without_native_logs`.
 
 ## Validation limits
 
@@ -89,32 +133,141 @@ before citing any performance number from this subsystem.
   source-shape test requires every production mutex in `runtime_events/` to
   declare a class so the audit cannot be sidestepped.
 
+### Current-tree measurements (issue #1167 completion)
+
+All figures below come from one Apple Silicon Mac (macOS, aarch64, Metal
+runtime built from this tree), release build of branch
+`task/issue-1167-runtime-events` at `a8cc87fca` (binary sha256
+`f48a77a0...`), with the machine otherwise idle. They are single-machine
+numbers and are not a certification.
+
+- **Total cost of the event system (comparison A0).**
+  `scripts/run-event-benchmark-matrix.py --mode production --mode off`
+  on one binary, model Qwen2.5-0.5B-Instruct Q8_0, seed 1167, 30 primary
+  pairs plus 5 `streaming` scenario pairs, a fresh process per trial, one
+  warm-up and one measured 64-token streaming request. Relative degradation
+  of `production` against `off` (positive means production is slower), 95%
+  bootstrap CI, primary group n=30:
+
+  | Metric | Mean | 95% CI | MDD |
+  | --- | --- | --- | --- |
+  | `decode_tok_s` | +0.51% | [-0.94%, +2.07%] | 2.16% |
+  | `decode_only_tok_s` | +0.71% | [-0.93%, +2.50%] | 2.45% |
+  | `ttft_ms` | -0.29% | [-2.01%, +1.52%] | 2.52% |
+
+  Medians over 35 trials per side: production 248.4 decode tok/s, 24.10 ms
+  TTFT; off 249.9 decode tok/s, 24.38 ms TTFT. No metric shows a
+  degradation distinguishable from zero inside the 3% bound. The 5-pair
+  `streaming` scenario is underpowered by construction (MDD 3.5% to 9.2%).
+  A reasoning model (Qwen3-0.6B) cannot be used for TTFT: it emits only
+  `reasoning_content` in 64 tokens, and the trial parser times the first
+  `content` delta.
+- **Callback ingress p99 under the mixed trial load.** 3 us in the
+  production trials (budget 100 us). `off` has no engine, so it has no p99.
+  `cargo test -p mesh-llm-host-runtime --release --test ingress_budget`
+  passes (3 tests).
+- **Health counters in the production trials.** `dropped_native=0`,
+  `rejected_native=0`, `terminal_delivery_failed=0`,
+  `reservation_exhausted=0`. `dropped_progress` was nonzero (52 in the final
+  trial) when these numbers were recorded. The counter was zero after model
+  load and grew during generation, because the drain pass counted
+  generation progress superseded inside one batch as dropped. All 52 were
+  progress coalescing, not loss: the newest progress value still
+  published. The drain pass now counts supersession in its own
+  `coalesced_progress` health counter (on `runtime_health`, the
+  `event_system_health` log line, and the benchmark matrix's health
+  fields). `dropped_progress` counts only progress that never reaches a
+  consumer: a stale reservation at drain, a missing or dead reservation or a
+  full ring at admission, and the `event-disabled` class bypass. The
+  comparator's production expectation (`dropped_progress == 0`) is therefore
+  correct and unchanged. The numbers above are left as recorded; a rerun
+  would show the same 52 under `coalesced_progress`.
+- **Caller-side cost of the Skippy generation adapter.**
+  `inference/skippy/runtime_events/tests/lock_cost.rs` runs 8 producer
+  threads, 2,000 `Committed` submissions each, against a live engine.
+  Release: p50 1.5 to 3.2 us, p99 92 to 96 us, max 0.2 to 0.9 ms across two
+  runs. Debug: p99 227 us. The adapter mutex is the only caller-side lock
+  left on the decode path, and under 8-way contention its p99 sits just
+  under the 100 us budget. The test asserts the budget in release builds
+  only. Sharding the adapter's tracked-generation map by request id is the
+  obvious follow-up if the margin matters.
+- **Model-open native callbacks.** The per-call trampoline copies into a
+  256-record queue and returns; a Rust drainer thread translates records.
+  Against the real runtime, a Qwen3-0.6B open produced 202 records with
+  `dropped=0`, `rejected=0`, strictly increasing sequences, and no record
+  after the native call returned.
+
 ### What is not measured
 
-- **Caller-side cost before `submit`.** `ingress_p99_us` times
-  `RuntimeEventEngine::submit` end to end -- the metadata fill, the class
-  decision, the reservation reads, the ring push, and the telemetry tail.
-  That is what a producer thread pays to emit one event through the engine.
-  It does not include a caller's own locking before it gets there. One
-  such caller remains: the skippy generation adapter takes its own mutex
-  before calling `submit`. (The native reporter's sink mutex is gone -- its
-  callback now only copies a record into a ring.)
-- **Total cost of the event system, as of this writing.** The
-  measurement is now *possible*: `MESH_LLM_EVENT_SYSTEM_TRIAL_MODE=off`
-  installs no engine, and therefore no driver, no presentation subscriber,
-  no telemetry consumer, and no native reporter, so emitting an event is
-  one `Option` check. `scripts/run-event-benchmark-matrix.py` accepts
-  `--mode off`, and `production` versus `off` is comparison A0.
-  What is not here is a *result*: no A0 run has been performed, so this
-  document still carries no number for the event system's total cost.
+- **Anything in CI.** There is no performance gate on any CI lane. The
+  numbers above are single-machine and shared CI runners would not
+  reproduce them within a 3% bound, so no gate is added here.
+- **Comparison B** (this tree against the pre-rework baseline binary) was not
+  rerun.
 
-  `event-disabled` remains what it always was -- a class bypass that still
-  reserves slots, writes terminals and state transitions, and runs the
-  reducer, the replay buffer, and subscriber fan-out. Comparison A bounds
-  the cost of progress and diagnostic facts, and nothing more. Do not cite
-  it as a total-cost figure.
-- **Anything in CI.** There is no performance gate on any CI lane. All
-  performance numbers above come from local runs on a single machine.
+### Reducer families without a live producer
+
+The reducer owns bounded state for every family, but some kinds have no
+producer on this tree.
+
+`EventSystemHealth` now has a producer. `runtime_events/health_facts.rs`
+runs on every engine-driver pass, in every serving mode. It compares engine
+health with the totals it last reported and submits at most one fact per
+kind per second, and only when that kind's counters grew:
+
+| Kind | Source counters |
+| --- | --- |
+| `events_coalesced` | `coalesced_progress` |
+| `events_dropped_by_class` | `dropped_progress`, `dropped_diagnostic`, `dropped_native` |
+| `subscriber_disconnected` | `subscriber_disconnected` |
+| `reducer_error` | `reducer_rejected`, `state_transition_rejected` |
+| `unknown_native_event_received` | `rejected_native` |
+
+Each fact carries only static numeric summaries: `delta` (growth since the
+previous fact of that kind), `total`, and a per-source delta when a kind
+has several sources. It carries no identifiers and no free text. The reducer
+adds `delta` to `node.event_system.counts_by_kind`, so each count
+equals its engine counter, whatever the emission cadence. `dropped_native` maps to
+`events_dropped_by_class`, not `ingress_queue_pressure`. The counter records
+loss that already happened, and the reducer keeps pressure as a sticky
+latest-wins state with no clear, so pressure would never reset. The
+producer's own refused submission (`state_transition_rejected` on a full
+ring) is credited to its baseline and never reported as new growth. The
+presentation subscriber does not print these facts: they would duplicate the
+`event_system_health` log line under the same context. `runtime_health`
+frames still carry the authoritative counters.
+
+Kinds that still have no producer, and why:
+
+- `EventSystemHealth`: `ingress_queue_pressure`, `events_sampled`,
+  `subscriber_lagging`, `telemetry_exporter_degraded`/`_recovered`,
+  `event_schema_incompatibility`. The engine does not sample events, keeps
+  no occupancy-pressure state, and marks lag only at the point it
+  disconnects the subscriber. The OTLP exporter reports no health to the
+  engine. Schema compatibility is not negotiated at runtime.
+- `NativeRuntime`: `native_library_rejected`,
+  `abi_feature_compatibility_established`/`_failed`, `runtime_stopping`,
+  `runtime_stopped`, `runtime_crashed`. Candidate rejection happens inside
+  runtime selection, which reports a combined error, not a per-library
+  rejection. Shutdown tears down models, not the loaded native library,
+  which stays mapped until the process exits. A crash of the in-process
+  runtime is a crash of the host.
+- `NodeAvailability`: `session_capacity_changed` (session capacity is not
+  tracked per node). `node_degraded` and `node_unavailable` come only from
+  the local split topology observer. On a `--local-model-only` startup
+  failure the cleanup path stops the driver without a final drain, so a fact
+  submitted there would never publish.
+- `Diagnostic`: `warning_cleared`, `fallback_applied`,
+  `degraded_operation_entered`/`_exited` have no host-side producer. Only
+  `warning_cleared` reaches the host, and only from a native runtime that
+  emits it (it has a native family mapping). The capability
+  probe now raises `warning_raised` (reason `unsupported_capability`) for
+  each health message, alongside the existing `OutputEvent::Warning`. The
+  probe runs once at startup and has no clearing condition, so it never
+  raises `warning_cleared`.
+- A native runtime loaded lazily after the parser policy is configured keeps
+  the full parsed-log fallback, because the policy was fixed before that
+  runtime's capabilities were known. This is safe but noisier.
 
 ### Where the spec's performance and ingress requirements are exercised
 
@@ -133,7 +286,7 @@ performance claim, only set requirements.
 | §17.2 sampling and drop accounting | the same tests, asserted on `runtime_health` counters rather than on published-sequence gaps |
 | §17.5 callback ingress latency measured | `crates/mesh-llm-host-runtime/tests/ingress_budget.rs`, against `CALLBACK_INGRESS_P99_BUDGET` |
 | §17.5 events disabled versus enabled | `scripts/run-event-benchmark-matrix.py --mode production --mode event-disabled` for the class bypass; `--mode off` for total cost |
-| §17.5 must not materially regress decode throughput or TTFT | measured for the class bypass only; see "What is not measured" |
+| §17.5 must not materially regress decode throughput or TTFT | comparison A0 (production versus `off`) on the current tree; see "Current-tree measurements" |
 
 ### Historical corrections
 

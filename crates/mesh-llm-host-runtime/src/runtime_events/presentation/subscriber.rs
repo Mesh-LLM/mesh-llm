@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use mesh_llm_events::OutputEvent;
-use mesh_llm_runtime_event_contracts::DeliveryClass;
+use mesh_llm_runtime_event_contracts::{DeliveryClass, RuntimeFact};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::MissedTickBehavior;
 
@@ -77,6 +77,13 @@ pub(super) fn route_fact(
     sink: &dyn PresentationSink,
     frame: &ReplayFrame,
 ) {
+    // `EventSystemHealth` facts restate counters the `event_system_health`
+    // log line already carries, and would share its context string: log
+    // consumers (the benchmark matrix's final-health parser) read the last
+    // line with that context as the counter snapshot.
+    if matches!(frame.fact.as_ref(), RuntimeFact::EventSystemHealth(_)) {
+        return;
+    }
     match frame.fact.delivery_class() {
         DeliveryClass::Progress => coalescer.submit(frame.scope, (*frame.fact).clone()),
         DeliveryClass::Terminal | DeliveryClass::StateTransition | DeliveryClass::Diagnostic => {

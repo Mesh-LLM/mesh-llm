@@ -57,12 +57,12 @@ pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};
 pub use runtime_event_reporter::{
     RECORD_RING_CAPACITY, buffered_runtime_events, clear_runtime_event_reporter,
     deliver_runtime_event_for_test, drain_runtime_events, dropped_runtime_events,
-    install_runtime_event_reporter,
+    install_runtime_event_reporter, rejected_runtime_events, runtime_event_reporter_installed,
 };
 pub use runtime_events::{
-    INLINE_DETAIL_BYTES, NativeEventRecord, OperationId, RuntimeEvent, RuntimeEventCategory,
-    RuntimeEventEmitterKind, RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit,
-    next_operation_id,
+    INLINE_DETAIL_BYTES, MODEL_OPEN_RECORD_CAPACITY, ModelOpenEventQueue, NativeEventRecord,
+    OperationId, RecordRejection, RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind,
+    RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit, next_operation_id,
 };
 pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;

@@ -82,12 +82,6 @@ pub struct EmbeddedRuntimeOptions {
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: TelemetryLevel,
-    /// Correlates this model-open call's runtime events with the caller's
-    /// own operation identity. `None` falls back to
-    /// `skippy_runtime::next_operation_id()` at the point of use -- task 9's
-    /// caller-supplied `OperationId` seam, see
-    /// `skippy_runtime::runtime_events::OperationId`'s doc.
-    pub operation_id: Option<skippy_runtime::OperationId>,
     /// Optional session-lifecycle observer, attached to the loaded
     /// `RuntimeState` at construction (plan task 12, §8.7).
     pub session_lifecycle_observer: Option<Arc<dyn crate::runtime_state::SessionLifecycleObserver>>,
@@ -228,9 +222,12 @@ impl SkippyRuntimeHandle {
         ))
     }
 
+    /// Loads the runtime with native model-open events delivered into
+    /// `model_open_events`. The caller owns and drains the queue, whose
+    /// operation id correlates every record.
     pub fn load_with_open_events(
         options: EmbeddedRuntimeOptions,
-        mut model_open_event_reporter: Option<Box<dyn FnMut(skippy_runtime::RuntimeEvent) + Send>>,
+        model_open_events: Option<Arc<skippy_runtime::ModelOpenEventQueue>>,
     ) -> Result<Self> {
         validate_config(&options.config, options.topology.as_ref())?;
         let telemetry = Telemetry::new(
@@ -243,9 +240,6 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_load_start",
             lifecycle_attrs(&options.config),
         );
-        let operation_id = options
-            .operation_id
-            .unwrap_or_else(skippy_runtime::next_operation_id);
         let runtime = load_runtime_with_overrides_and_open_events(
             &options.config,
             &RuntimeLaunchOverrides {
@@ -253,10 +247,7 @@ impl SkippyRuntimeHandle {
                 n_threads_batch: options.n_threads_batch,
                 mtp_source: options.mtp_source,
             },
-            operation_id,
-            model_open_event_reporter.as_mut().map(|reporter| {
-                reporter.as_mut() as &mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)
-            }),
+            model_open_events.as_ref(),
             options.session_lifecycle_observer.clone(),
         )?
         .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;

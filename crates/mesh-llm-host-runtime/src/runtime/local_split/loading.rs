@@ -9,7 +9,7 @@ use crate::inference::skippy;
 use crate::mesh;
 use crate::models;
 use crate::plugin;
-use crate::runtime::local::skippy_native_model_open_event_reporter;
+use crate::runtime::local::skippy_native_model_open_events;
 use crate::runtime::local_package::{
     split_node_labels, split_participant_set_hash, split_topology_hash,
 };
@@ -293,10 +293,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             // their own (event-system-fixes deferral D2 scopes
             // `ModelLoadProgress` to the single-node runtime-load path) --
             // degrade rather than fabricate an uncorrelated root.
-            Some(skippy_native_model_open_event_reporter(
-                reporter_model_ref,
-                None,
-            )),
+            Some(skippy_native_model_open_events(reporter_model_ref, None)),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
             serving_hooks_factory,
         )
