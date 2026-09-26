@@ -71,12 +71,14 @@ jobs:
         run: |
           npm install --global @anthropic-ai/claude-code@2.1.273
           test "$(claude --version | awk '{print $1}')" = "2.1.273"
+      - name: Install repository build accelerator
+        if: ${{ contains(steps.changes.outputs.affected_crates, 'openai-frontend') || contains(steps.changes.outputs.affected_crates, 'mesh-llm-host-runtime') }}
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Run Claude Code protocol and real-client integration
         if: ${{ contains(steps.changes.outputs.affected_crates, 'openai-frontend') || contains(steps.changes.outputs.affected_crates, 'mesh-llm-host-runtime') }}
         env:
           CARGO_INCREMENTAL: '0'
           MESH_LLM_SKIP_UI: '1'
-          RUSTC_WRAPPER: ''
         run: |
           cargo test --locked -p openai-frontend
           cargo test --locked -p mesh-llm-host-runtime --no-default-features \

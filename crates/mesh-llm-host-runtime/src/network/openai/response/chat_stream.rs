@@ -94,17 +94,28 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
     let parsed = try_parse_response_headers(&probe.buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
     if !response_is_event_stream(&parsed) {
-        return relay_non_streaming_reply(
-            tcp_stream,
-            reader,
-            probe,
-            parsed,
-            retry_policy,
-            served_by,
-            route_observer,
-            anthropic,
-        )
-        .await;
+        return if anthropic {
+            super::json_adaptation::relay_translated_messages_json(
+                tcp_stream,
+                reader,
+                probe,
+                retry_policy,
+                served_by,
+                route_observer,
+            )
+            .await
+        } else {
+            relay_success_response(
+                tcp_stream,
+                reader,
+                probe,
+                parsed,
+                retry_policy,
+                served_by,
+                route_observer,
+            )
+            .await
+        };
     }
 
     let mut body_reader = super::body_reader::BodyReader::new(
@@ -273,38 +284,4 @@ async fn write_truncated_message(
         }
     }
     Ok(())
-}
-
-async fn relay_non_streaming_reply<R: AsyncRead + Unpin>(
-    tcp_stream: &mut ClientStream,
-    reader: &mut R,
-    probe: ResponseProbe,
-    parsed: super::probe::ParsedResponseHeaders,
-    retry_policy: ResponseRetryPolicy,
-    served_by: Option<&str>,
-    route_observer: OpenAiRouteObserver<'_>,
-    anthropic: bool,
-) -> Result<RouteAttemptResult> {
-    if anthropic {
-        super::json_adaptation::relay_translated_messages_json(
-            tcp_stream,
-            reader,
-            probe,
-            retry_policy,
-            served_by,
-            route_observer,
-        )
-        .await
-    } else {
-        relay_success_response(
-            tcp_stream,
-            reader,
-            probe,
-            parsed,
-            retry_policy,
-            served_by,
-            route_observer,
-        )
-        .await
-    }
 }
