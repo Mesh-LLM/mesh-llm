@@ -409,6 +409,7 @@ pub(crate) mod tests {
             publication_state: "public".into(),
             local_processes: vec![],
             peers: vec![],
+            connected_peer_ids: HashSet::new(),
             wakeable_nodes: vec![],
             routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
             hardware,
@@ -495,6 +496,144 @@ pub(crate) mod tests {
         assert_eq!(
             serde_json::to_value(&payload).unwrap(),
             serde_json::to_value(&expected).unwrap()
+        );
+    }
+
+    /// Issue #1756: covers the production `collector::derive_peer_state`, which
+    /// the sibling RED test in `api/tests/node_state.rs` misses because it
+    /// only reaches the `#[cfg(test)]` duplicate of that function.
+    #[test]
+    fn status_view_does_not_report_a_connectionless_serving_signal_peer_as_serving() {
+        let collector = RuntimeDataCollector::new();
+        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x6B; 32]).public());
+        let peer = PeerInfo {
+            id: peer_id,
+            addr: EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            },
+            mesh_id: None,
+            mesh_policy_hash: None,
+            genesis_policy: None,
+            role: NodeRole::Host { http_port: 9337 },
+            first_joined_mesh_ts: Some(456),
+            models: vec!["PhantomModel-Q4_K_M".into()],
+            vram_bytes: 32_000_000_000,
+            rtt_ms: None,
+            model_source: None,
+            admitted: true,
+            serving_models: vec!["PhantomModel-Q4_K_M".into()],
+            hosted_models: vec!["PhantomModel-Q4_K_M".into()],
+            hosted_models_known: true,
+            available_models: vec!["PhantomModel-Q4_K_M".into()],
+            requested_models: vec![],
+            explicit_model_interests: vec![],
+            last_seen: std::time::Instant::now(),
+            last_mentioned: std::time::Instant::now(),
+            version: Some("0.76.1".into()),
+            gpu_name: None,
+            hostname: Some("departed-peer.local".into()),
+            is_soc: Some(false),
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            memory: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+            release_attestation_summary: ReleaseAttestationSummary::default(),
+            artifact_transfer_supported: false,
+            stage_protocol_generation_supported: false,
+            stage_status_list_supported: false,
+            local_gguf_content_id_supported: false,
+            advertised_model_throughput: vec![],
+            #[cfg(feature = "payments")]
+            lightning_offers: Default::default(),
+            cache_affinity: None,
+            display_rtt: None,
+            selected_path: None,
+            propagated_latency: None,
+            owner_summary: crate::crypto::OwnershipSummary::default(),
+            inference_admission_state: None,
+        };
+        let hardware = collector.build_hardware_view(HardwareViewInput {
+            gpu_name: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            memory: crate::mesh::AdvertisedMemory::default(),
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            my_hostname: Some("node.local".into()),
+            my_is_soc: Some(false),
+            my_vram_gb: 24.0,
+            model_size_gb: 8.0,
+            first_joined_mesh_ts: Some(123),
+        });
+        let status_input = |connected_peer_ids: HashSet<EndpointId>| StatusViewInput {
+            version: "0.76.1".into(),
+            latest_version: Some("0.76.1".into()),
+            node_id: "node-1".into(),
+            owner: crate::crypto::OwnershipSummary::default(),
+            release_attestation: ReleaseAttestationSummary::default(),
+            token: "invite-token".into(),
+            is_host: true,
+            is_client: false,
+            llama_ready: true,
+            model_name: "Self-Model".into(),
+            models: vec!["Self-Model".into()],
+            available_models: vec!["Self-Model".into()],
+            requested_models: vec![],
+            serving_models: vec!["Self-Model".into()],
+            hosted_models: vec!["Self-Model".into()],
+            draft_name: None,
+            api_port: 3131,
+            inflight_requests: 0,
+            mesh_id: Some("mesh-1".into()),
+            mesh_name: Some("test-mesh".into()),
+            mesh_discovery_mode: "mdns".into(),
+            discovery_scope: "lan".into(),
+            discovery_source: "mdns-sd".into(),
+            nostr_discovery: false,
+            publication_state: "private".into(),
+            local_processes: vec![],
+            peers: vec![peer.clone()],
+            connected_peer_ids,
+            wakeable_nodes: vec![],
+            routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
+            hardware: hardware.clone(),
+        };
+
+        let disconnected = collector
+            .build_status_view(status_input(HashSet::new()))
+            .peers
+            .remove(0);
+        assert!(
+            disconnected.rtt_ms.is_none(),
+            "precondition: the phantom peer has no observed RTT"
+        );
+        assert_eq!(
+            disconnected.state,
+            NodeState::Standby,
+            "a peer with a legacy serving signal but no connection and no \
+             observed RTT must not be reported as serving"
+        );
+
+        let connected = collector
+            .build_status_view(status_input(HashSet::from([peer_id])))
+            .peers
+            .remove(0);
+        assert_eq!(
+            connected.state,
+            NodeState::Serving,
+            "control: the same peer must report as serving once a live \
+             connection exists, so the demotion above tracks the connection \
+             and not the fixture"
         );
     }
 
@@ -609,6 +748,7 @@ pub(crate) mod tests {
             publication_state: "private".into(),
             local_processes: vec![],
             peers: vec![peer],
+            connected_peer_ids: HashSet::from([peer_id]),
             wakeable_nodes: vec![],
             routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
             hardware,
@@ -749,6 +889,7 @@ pub(crate) mod tests {
             publication_state: "private".into(),
             local_processes: vec![],
             peers: vec![peer],
+            connected_peer_ids: HashSet::from([peer_id]),
             wakeable_nodes: vec![],
             routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
             hardware,

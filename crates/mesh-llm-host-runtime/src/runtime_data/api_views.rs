@@ -160,6 +160,7 @@ mod tests {
             publication_state: "public".into(),
             local_processes: vec![],
             peers: vec![],
+            connected_peer_ids: HashSet::new(),
             wakeable_nodes: vec![],
             routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
             hardware,

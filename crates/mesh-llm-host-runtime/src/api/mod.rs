@@ -833,7 +833,7 @@ impl MeshApi {
     }
 
     #[cfg(test)]
-    fn derive_peer_state(peer: &mesh::PeerInfo) -> NodeState {
+    fn derive_peer_state(peer: &mesh::PeerInfo, has_connection: bool) -> NodeState {
         fn has_nonempty_models(models: &[String]) -> bool {
             models.iter().any(|model| !model.trim().is_empty())
         }
@@ -858,12 +858,17 @@ impl MeshApi {
                         .routable_models()
                         .iter()
                         .any(|model| !model.trim().is_empty());
+                // Kept in lockstep with `runtime_data::collector::derive_peer_state`
+                // (issue #1756): a legacy serving signal alone is not proof of
+                // reachability, so it must also carry a live connection or an
+                // observed RTT before reporting `Serving`.
+                let has_observed_liveness = mesh::peer_has_observed_liveness(peer, has_connection);
 
-                if has_ready_runtime {
+                if has_ready_runtime && has_observed_liveness {
                     NodeState::Serving
                 } else if has_runtime_descriptors && has_assigned_model_work {
                     NodeState::Loading
-                } else if has_legacy_serving_signal {
+                } else if has_legacy_serving_signal && has_observed_liveness {
                     NodeState::Serving
                 } else {
                     NodeState::Standby
@@ -961,31 +966,17 @@ impl MeshApi {
         append_external_inference_models(&mut serving_models, &plugin_models);
         let mut hosted_models = node.hosted_models().await;
         append_external_inference_models(&mut hosted_models, &plugin_models);
-        let peers = node.peers().await;
+        let (peers, connected_peer_ids) = peer_reporting_snapshot(&node).await;
 
-        let lifecycle_instances = build_lifecycle_instances(&local_processes);
-        let has_terminal_failure = lifecycle_instances
-            .iter()
-            .any(|instance| instance.lifecycle_state == "failed");
-        let intents = node
-            .runtime_intents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let intent_summary = summarize_intents(&intents);
-        let capabilities =
-            derive_capability_flags(&node, is_client, &local_processes, &plugin_models, &peers);
-        runtime.daemon_state = Some(derive_daemon_state(
-            crate::system::backend::runtime_shutting_down(),
-            has_terminal_failure,
-            node.activity_policy_guard.priority_degraded(),
-            capabilities.local_serving,
-            capabilities.proxying,
+        decorate_runtime_payload(
+            &mut runtime,
+            &node,
+            is_client,
             listeners_ready,
-        ));
-        runtime.capabilities = Some(capabilities);
-        runtime.lifecycle_instances = lifecycle_instances;
-        runtime.intent_summary = Some(intent_summary);
+            &local_processes,
+            &plugin_models,
+            &peers,
+        );
 
         let mut payload = runtime_data::status_payload(runtime_data_collector.build_status_view(
             runtime_data::StatusViewInput {
@@ -1016,6 +1007,7 @@ impl MeshApi {
                 publication_state: publication_state.as_str().into(),
                 local_processes,
                 peers,
+                connected_peer_ids,
                 wakeable_nodes,
                 routing_affinity,
                 hardware,
@@ -1035,6 +1027,48 @@ impl MeshApi {
         inner.runtime_data_producer.mark_status_dirty();
         inner.sse_clients.retain(|tx| !tx.is_closed());
     }
+}
+
+async fn peer_reporting_snapshot(
+    node: &mesh::Node,
+) -> (
+    Vec<mesh::PeerInfo>,
+    std::collections::HashSet<iroh::EndpointId>,
+) {
+    (node.peers().await, node.connected_peer_ids().await)
+}
+
+fn decorate_runtime_payload(
+    runtime: &mut RuntimeStatusPayload,
+    node: &mesh::Node,
+    is_client: bool,
+    listeners_ready: bool,
+    local_processes: &[RuntimeProcessPayload],
+    plugin_models: &[String],
+    peers: &[mesh::PeerInfo],
+) {
+    let lifecycle_instances = build_lifecycle_instances(local_processes);
+    let has_terminal_failure = lifecycle_instances
+        .iter()
+        .any(|instance| instance.lifecycle_state == "failed");
+    let intents = node
+        .runtime_intents
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let capabilities =
+        derive_capability_flags(node, is_client, local_processes, plugin_models, peers);
+    runtime.daemon_state = Some(derive_daemon_state(
+        crate::system::backend::runtime_shutting_down(),
+        has_terminal_failure,
+        node.activity_policy_guard.priority_degraded(),
+        capabilities.local_serving,
+        capabilities.proxying,
+        listeners_ready,
+    ));
+    runtime.capabilities = Some(capabilities);
+    runtime.lifecycle_instances = lifecycle_instances;
+    runtime.intent_summary = Some(summarize_intents(&intents));
 }
 
 fn build_lifecycle_instances(
