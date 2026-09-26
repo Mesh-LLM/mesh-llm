@@ -525,8 +525,11 @@ bytes, concurrent workload copies, and explicit runtime allowances; they are
 admission estimates, not measured peak guarantees. Workers recompute the tier
 from the verified handoff, check physical and available memory, and stop their
 own process group if available memory falls below the reserve.
-One certification per physical host holds a cross-account lock in host-global
-`/tmp`. Oversized families fail closed rather than silently skipping certification. The embedding SDK uses
+One certification per physical host holds a cross-account lock in the
+root-owned `/Library/Application Support/MeshLLM/locks` directory. The lock
+file is pre-provisioned world-writable, while runner accounts cannot replace
+its directory entry. Oversized families fail closed rather than silently
+skipping certification. The embedding SDK uses
 a locked controller-owned Python project, including with historical sources.
 
 The family matrix is submitted in ascending estimated model bytes, with family

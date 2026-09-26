@@ -23,7 +23,8 @@ GIB = 1024 ** 3
 TIERS = (128, 256)
 RESERVE_PERCENT = 10
 HOST_LOCK_NAME = "mesh-canary-family-host.lock"
-HOST_LOCK_ROOT = Path("/tmp")
+HOST_LOCK_ROOT = Path("/Library/Application Support/MeshLLM/locks")
+HOST_LOCK_OWNER_UID = 0
 
 
 def positive_bytes(value, name):
@@ -165,20 +166,34 @@ def stop_group(process):
 
 
 def open_host_lock():
-    """Open a world-writable, symlink-safe lock shared by runner accounts."""
+    """Open a stable, world-writable lock shared by runner accounts."""
     lock_path = HOST_LOCK_ROOT / HOST_LOCK_NAME
-    flags = os.O_CREAT | os.O_RDWR
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
     if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    previous_umask = os.umask(0)
+        directory_flags |= os.O_NOFOLLOW
+    directory = os.open(HOST_LOCK_ROOT, directory_flags)
     try:
-        descriptor = os.open(lock_path, flags, 0o666)
+        directory_metadata = os.fstat(directory)
+        if not stat.S_ISDIR(directory_metadata.st_mode):
+            raise ValueError("family host lock root is not a directory")
+        if directory_metadata.st_uid != HOST_LOCK_OWNER_UID:
+            raise ValueError("family host lock directory has the wrong owner")
+        if directory_metadata.st_mode & 0o022:
+            raise ValueError("family host lock directory must not be writable by runner accounts")
+        flags = os.O_RDWR
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(HOST_LOCK_NAME, flags, dir_fd=directory)
     finally:
-        os.umask(previous_umask)
+        os.close(directory)
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             raise ValueError("family host lock is not a regular single-link file")
+        if metadata.st_uid != HOST_LOCK_OWNER_UID:
+            raise ValueError("family host lock has the wrong owner")
         if metadata.st_mode & 0o666 != 0o666:
             raise ValueError("family host lock is not writable by every runner account")
         return os.fdopen(descriptor, "a+"), lock_path

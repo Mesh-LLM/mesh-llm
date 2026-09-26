@@ -207,9 +207,12 @@ masked before export. `HF_HUB_OFFLINE=1` is applied as certification policy rath
 than required in the machine environment. Compiler-cache and local-tool defaults
 use the runner account's home directory instead of a fixed username. Runner
 services sharing a physical certification machine serialize model loads through
-a cross-account host lock in host-global `/tmp`.
+a pre-provisioned cross-account host lock in the root-owned
+`/Library/Application Support/MeshLLM/locks` directory.
 Certification endpoints use distinct OS-assigned loopback ports selected when
-each lane starts; the environment preflight owns disk headroom only. There is no
+each lane starts. An address-in-use startup failure receives at most two retries
+with newly selected ports; other startup errors fail immediately. The environment
+preflight owns disk headroom only. There is no
 Actions model cache.
 
 The aggregate requires every planned family exactly once, successful worker
@@ -1120,7 +1123,8 @@ These are explicit admission estimates for the current short-context harness,
 not measured peak guarantees; changes to concurrency/context require review.
 
 The worker recomputes placement from the digest-verified plan, waits for one
-cross-account physical-host lock in `/tmp`, checks actual physical capacity and
+pre-provisioned cross-account physical-host lock in the root-owned
+`/Library/Application Support/MeshLLM/locks` directory, checks actual physical capacity and
 available memory, and polls availability once per second while running the battery.
 Expected contention between runner services on one machine is serialized rather
 than reported as a family failure; the evidence records whether and how long the
@@ -1131,6 +1135,11 @@ stops only this family's process group and fails certification.
 failure. Sampling cannot guarantee that instantaneous allocations never cross
 the reserve. Unrelated workloads must leave enough headroom at admission;
 labels alone are insufficient.
+
+Runner provisioning owns the lock path: create
+`/Library/Application Support/MeshLLM/locks` as root with mode `0755`, and
+pre-create `mesh-canary-family-host.lock` as root with mode `0666`. Jobs verify
+both owner and permissions and never create the path themselves.
 
 The shared `setup-canary-python` action restores `ci/canary-python/uv.lock` into
 a controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
