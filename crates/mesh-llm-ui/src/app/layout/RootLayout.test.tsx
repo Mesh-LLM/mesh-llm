@@ -137,6 +137,61 @@ describe('RootLayout', () => {
     )
   })
 
+  describe.each([
+    ['is_client: true', { is_client: true, node_state: 'serving' }],
+    ["node_state: 'client'", { is_client: false, node_state: 'client' }]
+  ])('on a client-only node (%s)', (_label, clientSignal) => {
+    beforeEach(() => {
+      featureFlagState.logsPage = true
+      useStatusQuerySpy.mockReturnValue({ data: liveStatus(clientSignal) })
+    })
+
+    it('disables the Logs and Configuration tabs but keeps Reserves', () => {
+      renderRootLayout('live')
+
+      expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({
+          enabledTabs: { reserves: true, logs: false, configuration: false }
+        })
+      )
+    })
+
+    it.each(['/logs', '/configuration/general'])('shows no active tab on %s', (pathname) => {
+      routerState.pathname = pathname
+
+      renderRootLayout('live')
+
+      expect(topNavSpy.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ tab: null }))
+    })
+
+    it.each(['logs', 'configuration'] as const)('does not navigate when the %s tab is requested', (tab) => {
+      renderRootLayout('live')
+
+      const { onTabChange } = topNavSpy.mock.calls.at(-1)?.[0] as { onTabChange: (tab: string) => void }
+      onTabChange(tab)
+
+      expect(navigateSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  it('keeps the Logs and Configuration tabs enabled on a host node', () => {
+    featureFlagState.logsPage = true
+    routerState.pathname = '/logs'
+    useStatusQuerySpy.mockReturnValue({ data: liveStatus({ is_client: false, node_state: 'serving' }) })
+
+    renderRootLayout('live')
+
+    const topNavProps = topNavSpy.mock.calls.at(-1)?.[0] as { onTabChange: (tab: string) => void }
+    expect(topNavProps).toEqual(
+      expect.objectContaining({
+        tab: 'logs',
+        enabledTabs: { reserves: true, logs: true, configuration: true }
+      })
+    )
+    topNavProps.onTabChange('logs')
+    expect(navigateSpy).toHaveBeenCalledWith({ to: '/logs' })
+  })
+
   it('passes privacy-safe private-mesh invitation rows while keeping the configured API target', () => {
     useStatusQuerySpy.mockReturnValue({
       data: {
@@ -322,6 +377,22 @@ describe('RootLayout', () => {
     )
   })
 })
+
+function liveStatus(overrides: Record<string, unknown>) {
+  return {
+    node_id: 'node-1',
+    node_state: 'serving',
+    model_name: 'Qwen-Test',
+    peers: [],
+    models: [],
+    my_vram_gb: 24,
+    api_port: 3131,
+    gpus: [],
+    serving_models: [],
+    hostname: 'mesh.local',
+    ...overrides
+  }
+}
 
 function pluginWebUi(state: PluginWebUiStateRaw['state']): PluginWebUiStateRaw {
   if (state === 'ready') {

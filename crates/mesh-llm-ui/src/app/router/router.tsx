@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter, lazyRouteComponent } from '
 import { AppErrorBoundary, NotFoundRoute } from '@/app/error-boundaries/AppErrorBoundary'
 import { FeatureErrorBoundary } from '@/app/error-boundaries/FeatureErrorBoundary'
 import { RootLayout } from '@/app/layout/RootLayout'
+import { ConfigurationFeatureGate } from '@/features/configuration/pages/ConfigurationFeatureGate'
 import { parseDeveloperPlaygroundSearch } from '@/features/developer/playground/developer-playground-tabs'
 import { parseLogsLedgerSearch } from '@/features/logs/lib/log-search'
 import { parseLogRequestDetailsSearch } from '@/features/logs/lib/log-request-details'
@@ -65,13 +66,18 @@ const chatRoute = createRoute({
   component: lazyRouteComponent(() => import('@/features/chat/pages/ChatPage'), 'ChatPageContent'),
   errorComponent: FeatureErrorBoundary
 })
+const ConfigurationRoutePage = lazyRouteComponent(
+  () => import('@/features/configuration/pages/ConfigurationRoutePage'),
+  'ConfigurationRoutePage'
+)
 const configurationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/configuration',
   head: () => ({ meta: [{ title: 'MeshLLM - Configuration' }] }),
-  component: lazyRouteComponent(
-    () => import('@/features/configuration/pages/ConfigurationRoutePage'),
-    'ConfigurationRoutePage'
+  component: () => (
+    <ConfigurationFeatureGate>
+      <ConfigurationRoutePage />
+    </ConfigurationFeatureGate>
   ),
   errorComponent: FeatureErrorBoundary
 })
@@ -79,9 +85,10 @@ const configurationTabRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/configuration/$configurationTab',
   head: () => ({ meta: [{ title: 'MeshLLM - Configuration' }] }),
-  component: lazyRouteComponent(
-    () => import('@/features/configuration/pages/ConfigurationRoutePage'),
-    'ConfigurationRoutePage'
+  component: () => (
+    <ConfigurationFeatureGate>
+      <ConfigurationRoutePage />
+    </ConfigurationFeatureGate>
   ),
   errorComponent: FeatureErrorBoundary
 })
