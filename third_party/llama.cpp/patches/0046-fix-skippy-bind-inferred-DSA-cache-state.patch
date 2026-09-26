@@ -1,0 +1,44 @@
+From 6c14e90d12d144b593b655e6371ea34a47df2710 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 16:57:36 +1000
+Subject: [PATCH] fix(skippy): bind inferred DSA cache state
+
+---
+ src/skippy/stage_program_extraction_roots.cpp | 19 +++++++++++--------
+ 1 file changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/src/skippy/stage_program_extraction_roots.cpp b/src/skippy/stage_program_extraction_roots.cpp
+index fb59af909..c46b96884 100644
+--- a/src/skippy/stage_program_extraction_roots.cpp
++++ b/src/skippy/stage_program_extraction_roots.cpp
+@@ -202,16 +202,19 @@ bool extraction::assign_root(const ggml_tensor * tensor) {
+             if (dsa != nullptr) {
+                 const auto classify_dsa = [&](const llama_kv_cache_context * cache,
+                         skippy_stage_program::state_partition partition, const char * suffix) {
+-                    const bool match =
+-                            (kind == static_cast<int32_t>(skippy_state_kind::kv_key) &&
+-                                canonical == cache->find_k_storage(layer)) ||
+-                            (kind == static_cast<int32_t>(skippy_state_kind::kv_value) &&
+-                                canonical == cache->find_v_storage(layer));
+-                    if (match) {
++                    if (canonical == cache->find_k_storage(layer)) {
++                        root.state_kind = static_cast<int32_t>(skippy_state_kind::kv_key);
+                         root.partition = partition;
+-                        root.value_id += suffix;
++                        root.value_id = "state/0/" + std::to_string(layer) + suffix;
++                        return true;
++                    }
++                    if (canonical == cache->find_v_storage(layer)) {
++                        root.state_kind = static_cast<int32_t>(skippy_state_kind::kv_value);
++                        root.partition = partition;
++                        root.value_id = "state/1/" + std::to_string(layer) + suffix;
++                        return true;
+                     }
+-                    return match;
++                    return false;
+                 };
+                 if (!classify_dsa(dsa->get_mla(),
+                             skippy_stage_program::state_partition::dsa_mla, "/dsa-mla")) {
+-- 
+2.54.0 (Apple Git-157)
+

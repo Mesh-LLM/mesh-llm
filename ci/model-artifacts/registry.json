@@ -4726,6 +4726,371 @@
       }
     },
     {
+      "id": "family-deepseek4",
+      "family": "deepseek4",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "moe",
+        "mla",
+        "multimodal",
+        "projector"
+      ],
+      "artifact": {
+        "repo": "unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF",
+        "revision": "87ce15810931a270f165e5e50439cd446f6b4ba5",
+        "selector": "UD-Q2_K_XL",
+        "files": [
+          {
+            "path": "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf",
+            "size_bytes": 5305248,
+            "sha256": "9b6a9671fc7edfca95cdf54b121f82c878c6bb75825c9f283beaa0ba1eacb6b6"
+          },
+          {
+            "path": "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00002-of-00003.gguf",
+            "size_bytes": 49437013568,
+            "sha256": "2e67b9def2486211d94f4510b5108388f8c50143e4f3e0e5147d340aa6c68d7d"
+          },
+          {
+            "path": "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00003-of-00003.gguf",
+            "size_bytes": 47390237120,
+            "sha256": "55e35127ec9c3020d2684e759144541afc5233b27fde6b1b7ee492ac9d1c65bf"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "class": "causal_generation",
+        "architecture": "deepseek4",
+        "execution": {
+          "trunk_layers": 43,
+          "mtp_layers": 0,
+          "activation_width": 4096,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 96824555936
+        },
+        "notes": "deepseek4 hybrid-connection MoE with a vision projector; ~97 GB Q2 artifact, so manual-full only; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+        "mmproj_artifact": {
+          "repo": "unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF",
+          "revision": "87ce15810931a270f165e5e50439cd446f6b4ba5",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 933258400,
+              "sha256": "fd997ca416f418dcb6a103e57e25dd6ea286bdc8ddd7225455d30c9301f2c442"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "family-minimax-m2",
+      "family": "minimax-m2",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "moe",
+        "multipart"
+      ],
+      "artifact": {
+        "repo": "unsloth/MiniMax-M2.7-GGUF",
+        "revision": "d2a05ccf69491b03db0cc40b335aec14bdaf7198",
+        "selector": "UD-Q3_K_S",
+        "files": [
+          {
+            "path": "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00001-of-00003.gguf",
+            "size_bytes": 8237824,
+            "sha256": "ec73a864385ed70633fb85719985ac7ceae6d7f54993bb1885de73e0adca8d37"
+          },
+          {
+            "path": "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00002-of-00003.gguf",
+            "size_bytes": 49844040960,
+            "sha256": "2ed4db6452da66c69021e959c6b31dca32c5c1253aef6fef7ada0d56960ffed9"
+          },
+          {
+            "path": "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00003-of-00003.gguf",
+            "size_bytes": 43785019584,
+            "sha256": "d1964bae02fe0ece1a8b4012bc320c47705f7a63655f5331749aa6c88ee72656"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "class": "causal_generation",
+        "architecture": "minimax-m2",
+        "execution": {
+          "trunk_layers": 62,
+          "mtp_layers": 0,
+          "activation_width": 3072,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 93629298368
+        },
+        "notes": "minimax-m2 MoE (256 experts, 8 active); smallest 3-bit artifact is ~94 GB, so this row is manual-full only; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata"
+      }
+    },
+    {
+      "id": "family-bailingmoe2-sarvam-30b",
+      "family": "bailingmoe2",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "moe",
+        "multipart"
+      ],
+      "artifact": {
+        "repo": "sarvamai/sarvam-30b-gguf",
+        "revision": "54e15edbbcb112e7d6c69b612e5041973e953c2f",
+        "selector": "Q4_K_M",
+        "files": [
+          {
+            "path": "sarvam-30b-Q4_K_M.gguf-00001-of-00006.gguf",
+            "size_bytes": 3920955744,
+            "sha256": "3846a49dd94118a313ab0368f376c9f0866b6fd95e8e893171f546643949165d"
+          },
+          {
+            "path": "sarvam-30b-Q4_K_M.gguf-00002-of-00006.gguf",
+            "size_bytes": 3585809856,
+            "sha256": "d96ae2e9012c030b132c661ff16ea0780705b121cf98f9b365f18dc3ff65f93b"
+          },
+          {
+            "path": "sarvam-30b-Q4_K_M.gguf-00003-of-00006.gguf",
+            "size_bytes": 3700365408,
+            "sha256": "4846470605585a8c720a2e99b47ff3092795f6204dc3ea8fd65bd19456948a8c"
+          },
+          {
+            "path": "sarvam-30b-Q4_K_M.gguf-00004-of-00006.gguf",
+            "size_bytes": 3885293184,
+            "sha256": "38efbe4b63741e744a0862cef39d3d960daaeb692d675f08f6fe4ea268df30e2"
+          },
+          {
+            "path": "sarvam-30b-Q4_K_M.gguf-00005-of-00006.gguf",
+            "size_bytes": 3867549056,
+            "sha256": "34ceb9cb125c7a2523317bd9421ae020980a0e3a6bb3b4d791db1aa9b35b985f"
+          },
+          {
+            "path": "sarvam-30b-Q4_K_M.gguf-00006-of-00006.gguf",
+            "size_bytes": 610812416,
+            "sha256": "4dfe5bf3ced850378af5a3b879b2bde7c681b8afd2f8af101f56bc7ca3674ad8"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "class": "causal_generation",
+        "architecture": "bailingmoe2",
+        "execution": {
+          "trunk_layers": 19,
+          "mtp_layers": 0,
+          "activation_width": 4096,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 19562785664
+        },
+        "notes": "bailingmoe2 MoE (128 experts, 6 active) shipping only as a six-shard Q4_K_M set; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata"
+      }
+    },
+    {
+      "id": "family-muse-glimmer",
+      "family": "muse-glimmer",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "multimodal",
+        "projector"
+      ],
+      "artifact": {
+        "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+        "revision": "70bf1b61ac09f91b24d39038091b41c582bc5d7a",
+        "selector": "Q4_K_M",
+        "files": [
+          {
+            "path": "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
+            "size_bytes": 16756683904,
+            "sha256": "4cc57c0f51040a226e5a72cc47b7613f7772950e460a665f7083de89f183f60e"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "class": "causal_generation",
+        "architecture": "muse-glimmer",
+        "execution": {
+          "trunk_layers": 52,
+          "mtp_layers": 0,
+          "activation_width": 6656,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 16748683904
+        },
+        "notes": "dense 30B with a vision projector and a paired dflash speculative drafter; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+        "mmproj_artifact": {
+          "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+          "revision": "70bf1b61ac09f91b24d39038091b41c582bc5d7a",
+          "selector": "Q4_K_M",
+          "files": [
+            {
+              "path": "mmproj-Muse-Glimmer-30B-Q4_K_M.gguf",
+              "size_bytes": 1400328928,
+              "sha256": "f48b452316f9b213758e8659444029b961a24a07f99a1abb2a9f88b06f7c00c6"
+            }
+          ]
+        },
+        "draft_artifact": {
+          "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+          "revision": "70bf1b61ac09f91b24d39038091b41c582bc5d7a",
+          "selector": "Q4_K_M",
+          "files": [
+            {
+              "path": "dflash-Muse-Glimmer-30B-Q4_K_M.gguf",
+              "size_bytes": 1631208128,
+              "sha256": "b2e808bf656086fe86bd0d0bd990f01d33e377537a07c02d45371517c8b264ef"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "family-mistral3-minstral-14b",
+      "family": "mistral3",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "multimodal",
+        "projector"
+      ],
+      "artifact": {
+        "repo": "mistralai/Ministral-3-14B-Reasoning-2512-GGUF",
+        "revision": "fe3b038f30334729263d860d5dadbaa34e0f2a18",
+        "selector": "Q4_K_M",
+        "files": [
+          {
+            "path": "Ministral-3-14B-Reasoning-2512-Q4_K_M.gguf",
+            "size_bytes": 8239591488,
+            "sha256": "fe08ca2158cd7438211ec6a4e5256d31bc980f016e3f5b635fe91fe6848d461c"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "class": "causal_generation",
+        "architecture": "mistral3",
+        "execution": {
+          "trunk_layers": 40,
+          "mtp_layers": 0,
+          "activation_width": 5120,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 8231591488
+        },
+        "notes": "dense mistral3 with a separate BF16 vision projector; distinct repository from family-mistral-small; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+        "mmproj_artifact": {
+          "repo": "mistralai/Ministral-3-14B-Reasoning-2512-GGUF",
+          "revision": "fe3b038f30334729263d860d5dadbaa34e0f2a18",
+          "selector": "BF16-mmproj",
+          "files": [
+            {
+              "path": "Ministral-3-14B-Reasoning-2512-BF16-mmproj.gguf",
+              "size_bytes": 879258784,
+              "sha256": "d2be75b7f374b964656ca69e7f5b0e8a99729c0a3a9e4c163b6de01551558adb"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "family-nemotron-nano-4b",
+      "family": "nemotron-nano",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "hybrid",
+        "recurrent"
+      ],
+      "artifact": {
+        "repo": "nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF",
+        "revision": "ba223d14e45525f7fae81db77ea8cabeb2fc6c25",
+        "selector": "Q4_K_M",
+        "files": [
+          {
+            "path": "NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf",
+            "size_bytes": 2837072864,
+            "sha256": "be5d9a656a51922f24f1f09a759cebb694e1f5d9728bf0ef9f8c972c5a0b5ef2"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "class": "causal_generation",
+        "architecture": "nemotron_h",
+        "execution": {
+          "trunk_layers": 42,
+          "mtp_layers": 0,
+          "activation_width": 3136,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 2829072864
+        },
+        "notes": "nemotron_h hybrid (Mamba2 + attention) Nano 4B; head_count_kv is per-layer and zero on non-attention layers; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata"
+      }
+    },
+    {
       "id": "family-diffusion-gemma",
       "family": "diffusion-gemma",
       "suites": [

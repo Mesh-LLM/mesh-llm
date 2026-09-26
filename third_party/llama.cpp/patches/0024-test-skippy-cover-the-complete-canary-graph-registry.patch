@@ -132,7 +132,7 @@ new file mode 100644
 index 000000000..d490a559f
 --- /dev/null
 +++ b/src/skippy/tests/graph_contract_cases.cmake
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,107 @@
 +# Registry dimensions are checked by scripts/tests/test_synthetic_graph_registry.py.
 +function(skippy_contract_case family arch layers width mtp mode)
 +    set(contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-${family}")
@@ -234,6 +234,12 @@ index 000000000..d490a559f
 +skippy_contract_case(ultravox llama 16 2048 0 causal)
 +skippy_contract_case(inkling inkling 42 4096 0 causal)
 +skippy_contract_case(llama4 llama4 48 5120 0 causal)
++skippy_contract_case(nemotron-nano nemotron_h 42 3136 0 causal)
++skippy_contract_case(mistral3 mistral3 40 5120 0 causal)
++skippy_contract_case(muse-glimmer muse-glimmer 52 6656 0 causal)
++skippy_contract_case(bailingmoe2 bailingmoe2 19 4096 0 causal)
++skippy_contract_case(minimax-m2 minimax-m2 62 3072 0 causal)
++skippy_contract_case(deepseek4 deepseek4 43 4096 0 causal)
 diff --git a/src/skippy/tests/graph_contract_checks.h b/src/skippy/tests/graph_contract_checks.h
 index 3e4c1c15f..69844b1f8 100644
 --- a/src/skippy/tests/graph_contract_checks.h
