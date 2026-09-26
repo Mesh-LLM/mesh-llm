@@ -73,9 +73,28 @@ async fn expired_invoice_with_no_payment_fails_and_releases() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     wallet.lose_submission.store(true, Ordering::SeqCst);
+    let service = PaymentService::with_provider(directory.path(), wallet.clone())?;
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(BUDGET),
+    })?;
+    service.await_authorization(&terms("one", 1000)).await?;
     let mut charge = charge("one", 0, 1, 100, 200);
-    charge.invoice = invoice_with_expiry(1, 100, 1);
-    let service = uncertain_charge(&wallet, directory.path(), &charge).await?;
+    // Built only after the slow setup above, immediately before the charge is
+    // prepared, and with a margin that survives scheduler starvation.
+    //
+    // BOLT11 timestamps have one-second resolution, so an `s`-second invoice is
+    // built with `s*1000 - (now mod 1000)` ms left: between (s-1)*1000 and
+    // s*1000 ms. One second therefore left a floor of zero, and a task starved
+    // past that floor between this construction and `prepare_charge`'s
+    // wall-clock validation failed the charge as unsubmitted, leaving
+    // `pending_charges()` empty instead of one. Three seconds leaves a floor of
+    // two, the same order as the sibling short-lived invoice in
+    // `failure_boundaries::pending_htlc_recovers`, and covers the single
+    // validation step this test still races.
+    charge.invoice = invoice_with_expiry(1, 100, 3);
+    assert!(service.pay_charge(&charge).await.is_err());
+    assert_eq!(service.ledger.pending_charges()?.len(), 1);
     let wait = charge.invoice.expires_at_ms.saturating_sub(crate::now_ms()) + 25;
     tokio::time::sleep(Duration::from_millis(wait)).await;
 
