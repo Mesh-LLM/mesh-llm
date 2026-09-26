@@ -658,21 +658,35 @@ pub(crate) fn is_peer_admitted(peers: &HashMap<EndpointId, PeerInfo>, id: &Endpo
 /// only come from a real exchange: a live connection, a measured RTT, or a
 /// direct-latency observation.
 ///
-/// The RTT terms are load-bearing rather than redundant with `has_connection`:
-/// [`update_peer_rtt`](crate::mesh::Node::update_peer_rtt) refuses to record a
-/// zero-millisecond sample, and relay- or loopback-only peers can therefore
-/// legitimately have no observed RTT while still being perfectly routable.
-/// A connection alone is likewise too strict on its own, because a reconnect
-/// in progress or a tunnel teardown briefly removes the connection entry while
-/// the peer remains a valid target. The conjunction is what both routing and
-/// status reporting must agree on.
+/// Without a live connection the only acceptable evidence is a latency
+/// observation recent enough to still mean something. The stored
+/// [`PeerInfo::rtt_ms`] is deliberately *not* used on its own: it is the best
+/// RTT ever seen and is never aged or cleared, so a peer that vanished while
+/// holding a good sample would otherwise stay `serving` and routing-eligible
+/// until the stale sweep finally removed it (observed on a real 2-node mesh:
+/// a departed peer kept reporting `serving` for minutes). Ageing on
+/// `display_rtt.observed_at` closes that window — the same staleness bound the
+/// heartbeat sweep uses.
+///
+/// Requiring an observation rather than mere presence is also what keeps
+/// genuinely live peers eligible. [`update_peer_rtt`] refreshes
+/// `display_rtt.observed_at` on *every* non-zero sample, including the branch
+/// that keeps an older, better `rtt_ms`, so a peer still exchanging traffic
+/// always has a fresh observation; and it refuses to record a zero-millisecond
+/// sample, so relay- or loopback-only peers legitimately have no `rtt_ms` at
+/// all. A live connection remains sufficient on its own, because a reconnect
+/// in progress or a tunnel teardown can briefly drop the connection entry while
+/// the peer is still the right target.
 ///
 /// This is deliberately one function so the two consumers cannot drift: the
 /// routing eligibility gate below, and `derive_peer_state` in
 /// `runtime_data::collector` (mirrored under `#[cfg(test)]` in `api`), which
 /// decides whether a peer is reported as `serving`.
 pub fn peer_has_observed_liveness(peer: &PeerInfo, has_connection: bool) -> bool {
-    has_connection || peer.rtt_ms.is_some() || peer.display_rtt.is_some()
+    has_connection
+        || peer.display_rtt.as_ref().is_some_and(|observation| {
+            observation.observed_at.elapsed() < std::time::Duration::from_secs(PEER_STALE_SECS)
+        })
 }
 
 /// Returns `true` if `peer` is eligible to receive routed requests: admitted

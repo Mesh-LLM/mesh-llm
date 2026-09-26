@@ -2009,6 +2009,69 @@ async fn peer_with_no_connection_and_no_observed_rtt_is_not_routing_eligible() {
     );
 }
 
+use super::peer_state::{DirectLatencyObservation, PEER_STALE_SECS};
+use super::PeerInfo;
+
+fn stale_rtt_observation() -> DirectLatencyObservation {
+    DirectLatencyObservation {
+        rtt_ms: 5,
+        observed_at: std::time::Instant::now()
+            - std::time::Duration::from_secs(PEER_STALE_SECS + 60),
+    }
+}
+
+fn departed_peer_never_seen_again(peer_id: EndpointId) -> PeerInfo {
+    let mut peer = make_test_peer(peer_id, None, 24);
+    peer.role = super::NodeRole::Host { http_port: 9337 };
+    peer.serving_models = vec!["Qwen3-8B-Q4_K_M".to_string()];
+    peer.hosted_models = vec!["Qwen3-8B-Q4_K_M".to_string()];
+    peer.hosted_models_known = true;
+    peer.rtt_ms = Some(5);
+    peer.display_rtt = Some(stale_rtt_observation());
+    peer
+}
+
+/// RED test for issue #1756: `PeerInfo::rtt_ms` is the best RTT ever observed and
+/// is never aged or cleared, so a peer that vanished while holding a good
+/// sample kept reporting `serving` and stayed routing-eligible until the stale
+/// sweep removed it. Liveness evidence must expire.
+#[tokio::test]
+async fn departed_peer_with_only_a_stale_rtt_sample_is_not_routing_eligible() {
+    let node = Node::new_for_tests(super::NodeRole::Worker).await.unwrap();
+    let peer_id = make_test_endpoint_id(51);
+    node.insert_test_peer_without_liveness(departed_peer_never_seen_again(peer_id))
+        .await;
+
+    assert!(
+        !node.hosts_for_model("Qwen3-8B-Q4_K_M").await.contains(&peer_id),
+        "a peer whose last RTT sample is older than PEER_STALE_SECS must not be routed to"
+    );
+    assert!(
+        node.any_host().await.is_none(),
+        "a peer whose only liveness evidence is a stale RTT must not be returned by any_host"
+    );
+}
+
+/// Control for the test above: the same connectionless peer is eligible again
+/// while its RTT sample is still recent, so the ageing above does not demote
+/// peers that are merely mid-reconnect.
+#[tokio::test]
+async fn connectionless_peer_with_a_recent_rtt_sample_is_still_routing_eligible() {
+    let node = Node::new_for_tests(super::NodeRole::Worker).await.unwrap();
+    let peer_id = make_test_endpoint_id(52);
+    let mut peer = departed_peer_never_seen_again(peer_id);
+    peer.display_rtt = Some(DirectLatencyObservation {
+        rtt_ms: 5,
+        observed_at: std::time::Instant::now(),
+    });
+    node.insert_test_peer_without_liveness(peer).await;
+
+    assert!(
+        node.hosts_for_model("Qwen3-8B-Q4_K_M").await.contains(&peer_id),
+        "a peer whose last RTT sample is still within PEER_STALE_SECS must remain routable"
+    );
+}
+
 /// `weights_digest` must be stripped when a local `PeerAnnouncement` is
 /// converted to its proto gossip form. A receiving peer has no way to verify
 /// a file-byte hash it didn't measure itself, so the field is deliberately
