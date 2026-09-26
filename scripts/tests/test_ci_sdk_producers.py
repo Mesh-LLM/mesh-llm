@@ -317,12 +317,12 @@ class CiSdkProducersTests(RunnerSelectorMixin, unittest.TestCase):
         )
         self.assertIn(
             "mesh-llm-cuda-runner-sha256-"
-            "f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7",
+            "0d4e98e62d9e06419e87e1b1d10020a2eb2b0584086aa983795e1c5f2d933dd7",
             producer,
         )
         epoch = (
             "mesh-llm-cuda-runner-sha256-"
-            "f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7"
+            "0d4e98e62d9e06419e87e1b1d10020a2eb2b0584086aa983795e1c5f2d933dd7"
         )
         for consumer in (native_sdk_producer,):
             self.assertIn(epoch, consumer)
