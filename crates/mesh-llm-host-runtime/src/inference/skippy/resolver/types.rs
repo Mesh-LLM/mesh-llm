@@ -162,7 +162,8 @@ pub(crate) struct ResolvedStageKvCacheTemplate {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedRequestDefaultsConfig {
-    pub(crate) max_tokens: u32,
+    pub(crate) max_tokens: Option<u32>,
+    pub(crate) package_request_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
     pub(crate) temperature: Option<f64>,
     pub(crate) top_p: Option<f64>,
     pub(crate) presence_penalty: Option<f64>,

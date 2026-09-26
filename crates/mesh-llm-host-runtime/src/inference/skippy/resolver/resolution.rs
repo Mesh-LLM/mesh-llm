@@ -77,6 +77,7 @@ fn resolve_skippy_config_with_context(
         context.defaults,
         context.model_entry,
         context.request.request_defaults,
+        context.request.package_generation,
     )?;
     let multimodal = resolve_multimodal_config(&context)?;
 

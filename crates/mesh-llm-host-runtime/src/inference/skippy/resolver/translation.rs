@@ -12,8 +12,9 @@ use skippy_protocol::{
 };
 use skippy_runtime::MtpSource;
 use skippy_server::{
-    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults,
-    EmbeddedRuntimeOptions, NativeMtpProposalConfig, SpeculativeDecodeConfig, telemetry::Telemetry,
+    DEFAULT_EMBEDDED_MAX_TOKENS, DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs,
+    EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions, NativeMtpProposalConfig,
+    SpeculativeDecodeConfig, telemetry::Telemetry,
 };
 
 use super::super::{
@@ -125,7 +126,7 @@ impl ResolvedSkippyConfig {
         .with_cache_idle_slots(self.model_fit.cache_idle_slots)
         .with_telemetry(telemetry);
 
-        options.default_max_tokens = self.request_defaults.max_tokens;
+        options.default_max_tokens = DEFAULT_EMBEDDED_MAX_TOKENS;
         options.n_gpu_layers = self.hardware.gpu_layers;
         options.mmap = self.hardware.mmap;
         options.mlock = self.hardware.mlock;
@@ -279,8 +280,13 @@ impl ResolvedSkippyConfig {
             .context("serialize request_defaults.json_schema")?;
         Ok(ResolvedEmbeddedOpenAiArgs {
             model_id: Some(self.model_id.clone()),
-            default_max_tokens: self.request_defaults.max_tokens,
+            default_max_tokens: self
+                .request_defaults
+                .max_tokens
+                .unwrap_or(DEFAULT_EMBEDDED_MAX_TOKENS),
             request_defaults: EmbeddedOpenAiRequestDefaults {
+                max_tokens: self.request_defaults.max_tokens,
+                package_request_defaults: self.request_defaults.package_request_defaults.clone(),
                 stop: self.request_defaults.stop.clone(),
                 temperature: self.request_defaults.temperature.map(|value| value as f32),
                 top_p: self.request_defaults.top_p.map(|value| value as f32),

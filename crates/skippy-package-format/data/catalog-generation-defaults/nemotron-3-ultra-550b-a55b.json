@@ -1,0 +1,18 @@
+{
+  "selection": {
+    "default": "recommended"
+  },
+  "profiles": {
+    "recommended": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "provenance": {
+        "source_repo": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
+        "revision": "77df655d5e9f8362164ed14dd8b48f8bce657498",
+        "file": "generation_config.json",
+        "section": "Generation defaults",
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16/blob/77df655d5e9f8362164ed14dd8b48f8bce657498/generation_config.json"
+      }
+    }
+  }
+}

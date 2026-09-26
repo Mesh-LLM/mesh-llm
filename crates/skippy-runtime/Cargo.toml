@@ -18,6 +18,7 @@ hex = "0.4"
 skippy-ffi = { path = "../skippy-ffi", version = "0.76.1", default-features = false  }
 skippy-cache = { path = "../skippy-cache", version = "0.76.1" }
 skippy-model = { path = "../skippy-model", version = "0.76.1" }
+skippy-package-format = { path = "../skippy-package-format", version = "0.76.1" }
 model-ref = { path = "../model-ref", version = "0.76.1" }
 serde.workspace = true
 serde_json.workspace = true

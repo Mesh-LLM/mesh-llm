@@ -38,6 +38,7 @@ pub struct SamplingConfig {
     pub dry_sequence_breaker_count: u32,
     pub dry_sequence_breakers: [[u8; MAX_DRY_SEQUENCE_BREAKER_BYTES]; MAX_DRY_SEQUENCE_BREAKERS],
     pub logit_bias: [LogitBias; 256],
+    pub reasoning_budget_tokens: i32,
 }
 
 pub const NATIVE_MTP_MAX_DRAFT_TOKENS: usize = 8;

@@ -262,6 +262,11 @@ pub struct EmbeddedOpenAiArgs {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EmbeddedOpenAiRequestDefaults {
+    /// Deployment/operator output limit. Package profile limits are resolved
+    /// below this field and above the server fallback.
+    pub max_tokens: Option<u32>,
+    /// Publisher-reviewed profiles carried by model-package v2.
+    pub package_request_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
     pub stop: Option<Vec<String>>,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
@@ -317,6 +322,7 @@ pub enum EmbeddedReasoningEnabled {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EmbeddedReasoningBudget {
     Auto,
+    Unrestricted,
     Tokens(u32),
     Effort(ReasoningEffort),
 }

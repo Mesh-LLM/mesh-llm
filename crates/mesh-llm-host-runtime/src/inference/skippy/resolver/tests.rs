@@ -141,6 +141,38 @@ fn assert_openai_args_use_request_time_defaults(
 }
 
 #[test]
+fn package_request_defaults_reach_embedded_openai_server_config() {
+    let package_request_defaults: skippy_package_format::GenerationRequestDefaults =
+        serde_json::from_str(include_str!(
+            "../../../../../skippy-package-format/data/catalog-generation-defaults/qwen3.8-27b.json"
+        ))
+        .unwrap();
+    let package_generation = skippy_runtime::package::PackageGenerationInfo {
+        request_defaults: Some(package_request_defaults.clone()),
+        speculative_decoding: None,
+    };
+    let mesh_config = parse_config("");
+    let model_file = temp_model_file();
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: Some(&package_generation),
+        compact_meta: None,
+    })
+    .unwrap();
+    let embedded = resolved.to_embedded_openai_args(32_000, true).unwrap();
+
+    assert_eq!(
+        embedded.request_defaults.package_request_defaults.as_ref(),
+        Some(&package_request_defaults)
+    );
+}
+
+#[test]
 fn resolver_applies_precedence_and_keeps_request_defaults_out_of_stage_config() {
     let mesh_config = parse_config(
         r#"
@@ -209,7 +241,7 @@ temperature = 0.4
     assert_eq!(resolved.hardware.mmap, Some(false));
     assert!(resolved.hardware.mlock);
     assert_eq!(resolved.throughput.parallel, 3);
-    assert_eq!(resolved.request_defaults.max_tokens, 256);
+    assert_eq!(resolved.request_defaults.max_tokens, Some(256));
     assert_eq!(resolved.request_defaults.temperature, Some(0.7));
     assert_eq!(
         resolved.request_defaults.reasoning_budget,
@@ -256,6 +288,7 @@ fn mutually_exclusive_request_defaults_stop_lower_precedence_fill_in() {
         Some(&global),
         Some(&model),
         Some(&request),
+        None,
     )
     .expect("request defaults should resolve");
     assert_eq!(resolved.chat_template.as_deref(), Some("request-template"));
@@ -270,7 +303,7 @@ fn mutually_exclusive_request_defaults_stop_lower_precedence_fill_in() {
     );
 
     let resolved =
-        super::request_defaults::resolve_request_defaults(Some(&global), Some(&model), None)
+        super::request_defaults::resolve_request_defaults(Some(&global), Some(&model), None, None)
             .expect("request defaults should resolve");
     assert_eq!(resolved.chat_template, None);
     assert_eq!(
@@ -1715,8 +1748,8 @@ max_tokens = 128
     assert_request_override_keeps_load_time_config(&without_request, &with_request);
     assert_eq!(without_request.request_defaults.temperature, Some(0.2));
     assert_eq!(with_request.request_defaults.temperature, Some(0.9));
-    assert_eq!(without_request.request_defaults.max_tokens, 128);
-    assert_eq!(with_request.request_defaults.max_tokens, 32);
+    assert_eq!(without_request.request_defaults.max_tokens, Some(128));
+    assert_eq!(with_request.request_defaults.max_tokens, Some(32));
     assert_stage_configs_match_for_request_override(&without_request, &with_request);
     assert_openai_args_use_request_time_defaults(&without_request, &with_request);
 }

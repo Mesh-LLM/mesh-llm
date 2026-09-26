@@ -649,7 +649,7 @@ ignore_eos = false
 # Reasoning (for thinking models)
 reasoning_format  = "auto"   # auto none deepseek deepseek-legacy hidden
 reasoning_enabled = "auto"   # bool or "auto" / "on" / "off"
-reasoning_budget  = "auto"   # integer token budget, or "auto"
+reasoning_budget  = "auto"   # integer, low/medium/high, auto, or unrestricted
 
 # Chat template (leave unset to use model's embedded template)
 # chat_template      = "chatml"
@@ -665,6 +665,17 @@ reasoning_budget  = "auto"   # integer token budget, or "auto"
 #   backend_sampling    — raw backend sampling passthrough
 #   grammar, json_schema, logprobs
 #   prefill_assistant, chat_template_kwargs
+
+# When max_tokens remains unset, Mesh caps output at min(8192, context left
+# after the prompt). For reasoning-capable chat templates, an omitted/auto
+# reasoning budget resolves to min(4096, half the effective output cap).
+# low/medium/high map to 1024/4096/8192 and also clamp to half the output cap.
+# Numeric budgets are explicit; 0 ends thinking immediately and unrestricted
+# removes only the reasoning cap. Explicit request fields override model config,
+# which overrides package profiles, which override these fallbacks.
+# Generation phase diagnostics report the selected package profile and a
+# generation_default_sources map labeling every supported field as request,
+# deployment, package, or fallback.
 
 # --- Multimodal ----------------------------------------------------------
 [defaults.multimodal]

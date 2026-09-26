@@ -867,7 +867,7 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.reasoning_budget"),
-            integer_or_string_enum(["auto", "low", "medium", "high"]),
+            integer_or_string_enum(["auto", "low", "medium", "high", "unrestricted"]),
         ),
         basic_setting(
             &format!("{prefix}.chat_template"),

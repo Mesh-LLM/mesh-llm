@@ -30,6 +30,9 @@ pub enum ModelsCommand {
         /// Override model ID in the manifest.
         #[arg(long)]
         model_id: Option<String>,
+        /// Reviewed typed generation defaults JSON to embed in the package.
+        #[arg(long)]
+        generation_defaults: Option<std::path::PathBuf>,
         /// HF Job hardware flavor. Use auto for the default CPU splitter baseline.
         #[arg(long, default_value = "auto")]
         flavor: String,
