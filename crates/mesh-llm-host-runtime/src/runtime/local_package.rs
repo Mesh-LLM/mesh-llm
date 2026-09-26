@@ -88,42 +88,26 @@ pub(super) fn split_runtime_kv_bytes_per_token(
 
 /// Resolve the K/V cache types that split stages will actually load with.
 ///
-/// Stage loading applies the family default (for example Inkling's Q4_0 K/V)
-/// ahead of the size-tiered `KvCachePolicy`. Planning must resolve K/V the same
-/// way, or it budgets for a cheaper cache than the stages allocate and
-/// over-packs the topology into an out-of-memory load.
+/// Planning uses the same package-backed default as stage loading so it
+/// budgets the allocation that will actually be created.
 pub(super) fn split_effective_kv_cache_quant(
     package: &skippy::SkippyPackageIdentity,
     compact_meta: &models::gguf::GgufCompactMeta,
     cache_type_k_override: Option<&str>,
     cache_type_v_override: Option<&str>,
 ) -> models::gguf::GgufKvCacheQuant {
-    // Guard the size-tiered default against the model's quantised-KV
-    // compatibility (Flash Attention / block alignment) so planning budgets for
-    // the same cache the stage load can actually allocate. The family default
-    // gets the same metadata guard: a family that defaults to quantised K/V
-    // (Inkling -> q4_0) must fall back to f16 when the actual GGUF metadata
-    // cannot load it, or planning and load both select an unloadable cache.
-    // Explicit overrides below are never guarded — an override that cannot
-    // load must fail loudly.
-    let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes)
-        .guarded_for_model(Some(compact_meta));
-    let family_default = skippy::family_policy_for_compact_meta(compact_meta)
-        .default_kv_cache_type
-        .and_then(|default| models::gguf::GgufKvCacheQuant::from_llama_args(default, default))
-        .map(|quant| compact_meta.compatible_default_kv_cache_quant(quant))
-        .map(|quant| quant.k.as_llama_arg());
-
-    // Explicit user overrides win, then the family default, then model size.
-    let effective_k = cache_type_k_override
-        .or(family_default)
-        .unwrap_or(size_policy.cache_type_k());
-    let effective_v = cache_type_v_override
-        .or(family_default)
-        .unwrap_or(size_policy.cache_type_v());
+    let package_policy =
+        skippy::KvCachePolicy::from_publisher_defaults(package.publisher_defaults.as_ref())
+            .guarded_for_model(Some(compact_meta));
+    let effective_k = cache_type_k_override.unwrap_or(package_policy.cache_type_k());
+    let effective_v = cache_type_v_override.unwrap_or(package_policy.cache_type_v());
 
     models::gguf::GgufKvCacheQuant::from_llama_args(effective_k, effective_v).unwrap_or_else(|| {
-        split_kv_cache_quant(&size_policy, cache_type_k_override, cache_type_v_override)
+        split_kv_cache_quant(
+            &package_policy,
+            cache_type_k_override,
+            cache_type_v_override,
+        )
     })
 }
 pub(super) async fn resolve_split_runtime_package(
@@ -175,7 +159,7 @@ pub(super) fn split_kv_cache_quant(
         split_kv_policy.cache_type_k(),
         split_kv_policy.cache_type_v(),
     )
-    .unwrap_or(models::gguf::GgufKvCacheQuant::Q8_0);
+    .unwrap_or(models::gguf::GgufKvCacheQuant::F16);
 
     match (cache_type_k_override, cache_type_v_override) {
         (None, None) => policy_quant,

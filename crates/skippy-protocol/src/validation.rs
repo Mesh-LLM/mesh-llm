@@ -3,6 +3,9 @@
 use crate::proto;
 pub const SCHEMA_VERSION: u32 = 1;
 pub const STAGE_ALPN_V2: &[u8] = b"skippy-stage/2";
+/// ALPN for the L3 KV segment fetch subprotocol: pull exact-state manifests
+/// and content-addressed segments from a peer's store (`skippy_cache::l3`).
+pub const KV_ALPN_V1: &[u8] = b"skippy-kv/1";
 pub const STAGE_SUBPROTOCOL_NAME: &str = "skippy-stage";
 pub const STAGE_SUBPROTOCOL_MAJOR: u32 = 2;
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL: &str = "stage-control";

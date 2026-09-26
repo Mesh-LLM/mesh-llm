@@ -1,7 +1,7 @@
-From 4bebd46edf5078fe56e5ea454ff472493e6a2d91 Mon Sep 17 00:00:00 2001
+From 0600365fa79a9e24e3975a80103dca3fa66fdfd3 Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
-Subject: [PATCH] skippy: add DiffusionGemma system-one reads
+Subject: [PATCH 2/2] skippy: add DiffusionGemma system-one reads
 
 Expose a narrow native operation that prefills a DiffusionGemma prompt, performs one zero-self-conditioning canvas read, and returns normalized probabilities over caller-declared label tokens.
 
@@ -10,12 +10,12 @@ Co-authored-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 ---
  include/skippy.h            |   1 +
- include/skippy/common.h     |   3 +-
+ include/skippy/common.h     |   3 ++-
  include/skippy/system_one.h |  60 +++++++++
  src/CMakeLists.txt          |   1 +
- src/skippy/abi.cpp          |   3 +-
+ src/skippy/abi.cpp          |   1 +
  src/skippy/system_one.cpp   | 243 ++++++++++++++++++++++++++++++++++++
- 6 files changed, 309 insertions(+), 2 deletions(-)
+ 6 files changed, 308 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/system_one.h
  create mode 100644 src/skippy/system_one.cpp
 
@@ -31,7 +31,7 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index ba62a2c8b..34374efb2 100644
+index f2628a7da..0ff24e80b 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -49,8 +49,8 @@ index ba62a2c8b..34374efb2 100644
  #define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)
 +#define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
  
- enum skippy_status {
-     SKIPPY_STATUS_OK                      = 0,
+ #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
+ 
 diff --git a/include/skippy/system_one.h b/include/skippy/system_one.h
 new file mode 100644
 index 000000000..4faf057ba
@@ -130,19 +130,17 @@ index 756acbae6..b7e0a38d9 100644
              ${LLAMA_MODELS_SOURCES}
              )
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index 45e3b4b86..79dc77162 100644
+index ceed6e5d3..1e1d2d7c8 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -45,7 +45,8 @@ uint64_t skippy_abi_features(void) {
-            SKIPPY_FEATURE_DEVICE_EVENTS |
+@@ -46,6 +46,7 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
             SKIPPY_FEATURE_UNLOAD_EVENTS |
--           SKIPPY_FEATURE_NON_CHAT_WORKLOADS;
-+           SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
-+           SKIPPY_FEATURE_SYSTEM_ONE;
+            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
++           SKIPPY_FEATURE_SYSTEM_ONE |
+            SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
  }
  
- void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/system_one.cpp b/src/skippy/system_one.cpp
 new file mode 100644
 index 000000000..5044b13df
@@ -394,4 +392,3 @@ index 000000000..5044b13df
 +}
 -- 
 2.54.0 (Apple Git-157)
-

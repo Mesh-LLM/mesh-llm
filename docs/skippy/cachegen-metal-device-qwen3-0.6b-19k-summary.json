@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "decision": "quality-pass-local-latency-stop",
+  "date": "2026-09-11",
+  "commit": "c86cf848b0fa183f2c2e594fe1e51bf1024d7185",
+  "reference": {
+    "implementation": "LMCache CacheGen",
+    "revision": "b5d109ea99a89b4d8a670ee4fc2e8cb76411ee5c",
+    "license": "Apache-2.0"
+  },
+  "hardware": {
+    "model": "Mac Studio",
+    "chip": "Apple M1 Ultra",
+    "memory_gib": 128,
+    "runtime_backend": "Metal",
+    "codec_backend": "native MSL direct-to-resident-KV"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-0.6B-GGUF:Q8_0",
+    "sha256": "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735",
+    "layer_end": 28
+  },
+  "workload": {
+    "prefix_tokens": 19000,
+    "continuation_steps": 64,
+    "ctx_size": 19200,
+    "cache_types": {
+      "k": "f16",
+      "v": "f16"
+    },
+    "chunk_rows": 256,
+    "continuation_sessions": "isolated"
+  },
+  "thresholds": {
+    "minimum_token_agreement": 0.95,
+    "maximum_p99_decode_regression": 0.05,
+    "restore_to_first_token_must_beat_native": true
+  },
+  "metrics": {
+    "restore_path": "native-device",
+    "native_storage_bytes": 2179072000,
+    "cachegen_storage_bytes": 446903003,
+    "compression_ratio": 0.20508868132856556,
+    "tile_count": 4200,
+    "encode_ms": 21133.011542,
+    "scalar_oracle_decode_ms": 41436.069375,
+    "native_write_ms": 424.18879100000004,
+    "cachegen_write_ms": 199.407333,
+    "native_persist_ms": 424.18879100000004,
+    "cachegen_persist_ms": 21332.418875,
+    "native_read_ms": 296.2475,
+    "cachegen_read_ms": 54.211334,
+    "native_import_ms": 56.690583000000004,
+    "cachegen_import_ms": 540.7443750000001,
+    "native_ttft_ms": 385.41308300000003,
+    "cachegen_ttft_ms": 604.8354170000001,
+    "native_decode_tokens_per_second": 122.33699996373663,
+    "cachegen_decode_tokens_per_second": 128.07457193180554,
+    "native_p99_decode_ms": 32.474999999999994,
+    "cachegen_p99_decode_ms": 9.879707999999999,
+    "p99_decode_regression": -0.6957749653579676,
+    "matching_tokens": 64,
+    "token_agreement": 1.0,
+    "mean_entropy_abs_drift": 0.3461667150259018,
+    "max_entropy_abs_drift": 2.166335344314575,
+    "mean_top_logprob_abs_drift": 0.06625335784883646,
+    "max_top_logprob_abs_drift": 0.4222277104854584,
+    "estimated_peak_codec_working_bytes": 2627965638
+  },
+  "failure_reasons": [
+    "restore-to-first-token did not beat native (604.835 ms >= 385.413 ms)"
+  ],
+  "notes": [
+    "The direct Metal decoder consumes the persisted archive and writes resident K/V cells without materializing a decoded host page.",
+    "The scalar CPU decoder runs as an independently timed oracle and is excluded from direct-device TTFT.",
+    "The 64/64 agreement result clears the predeclared 95% quality threshold.",
+    "Filesystem writes used sync_all; same-run reads may be page-cache warm.",
+    "This local-tier result does not qualify or reject a transport-bound remote tier."
+  ]
+}

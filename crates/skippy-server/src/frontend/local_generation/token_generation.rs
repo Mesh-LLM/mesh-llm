@@ -1281,11 +1281,16 @@ impl StageOpenAiBackend {
                         cache_operation,
                     )?;
                     ensure_cache_operation_active(runtime, session_id, cache_operation)?;
-                    kv.record_exact_state(
+                    let cold_prefill_cost = self
+                        .generation_service_estimator
+                        .estimated_prefill_ms(boundary);
+                    let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
+                    kv.record_exact_state_with_cost(
                         runtime,
                         session_id,
                         &identity,
                         crate::kv_integration::CaptureAdmission::BestEffort,
+                        l3_cost,
                     )
                     .map_err(openai_backend_error)?;
                     prefill_cache_chunks(

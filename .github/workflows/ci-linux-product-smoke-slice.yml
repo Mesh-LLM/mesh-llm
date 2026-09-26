@@ -70,7 +70,7 @@ jobs:
       staged_binary_path: ${{ inputs.binary_target }}
       model_artifact_id: smollm2-q8-inference
       model_cache_scope: two-node-split-smoke-model
-      smoke_script: MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED=1 scripts/ci-two-node-split-smoke.sh
+      smoke_script: MESH_TWO_NODE_SPLIT_DURABLE_L3=1 MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED=1 scripts/ci-two-node-split-smoke.sh
       kv_recurrent_model_artifact_id: family-granite-hybrid
       kv_recurrent_model_cache_scope: two-node-split-recurrent-smoke-model
       kv_recurrent_context_size: '4096'

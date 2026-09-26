@@ -232,7 +232,11 @@ impl StageOpenAiBackend {
         } else {
             crate::kv_integration::CaptureAdmission::BestEffort
         };
-        match kv.record_exact_state(runtime, session_id, &identity, admission) {
+        let cold_prefill_cost = self
+            .generation_service_estimator
+            .estimated_prefill_ms(checkpoint_tokens.len());
+        let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
+        match kv.record_exact_state_with_cost(runtime, session_id, &identity, admission, l3_cost) {
             Ok(Some(record)) => {
                 let mut attrs = self.openai_attrs(ids);
                 attrs.insert(

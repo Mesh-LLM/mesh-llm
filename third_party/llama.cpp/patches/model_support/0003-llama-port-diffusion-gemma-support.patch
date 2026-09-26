@@ -1,7 +1,7 @@
-From 7c8315f7c0b99a5441477ed2a2c974b904b7a83e Mon Sep 17 00:00:00 2001
+From 1d15336bf41c19bc9eb0cf9d08eb0f0af846da37 Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Sun, 20 Sep 2026 11:16:21 +1000
-Subject: [PATCH] llama: port DiffusionGemma support
+Subject: [PATCH 1/2] llama: port DiffusionGemma support
 
 Port the feature diff from ggml-org/llama.cpp PR #24423 at 12e0a9627d02c6395fd4bbf2aadff93d0d46a0e4 onto the mesh-llm llama.cpp pin. Express the phase-specific embedding selection as one assignment so the deterministic Skippy stage rewriter can prove the layer-carried activation.
 
@@ -2479,10 +2479,10 @@ index 000000000..678611e0d
 +        int                  n_tokens,
 +        float                inv_temp);
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 69decaa3e..f3ed63c4a 100644
+index b77c901f6..d9833926d 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -25,6 +25,7 @@
+@@ -26,6 +26,7 @@
  #include "ggml-cuda/cumsum.cuh"
  #include "ggml-cuda/diagmask.cuh"
  #include "ggml-cuda/diag.cuh"
@@ -2490,10 +2490,10 @@ index 69decaa3e..f3ed63c4a 100644
  #include "ggml-cuda/fattn.cuh"
  #include "ggml-cuda/fwht.cuh"
  #include "ggml-cuda/getrows.cuh"
-@@ -5783,6 +5784,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
-     if (strcmp(name, "ggml_backend_get_features") == 0) {
-         return (void *)ggml_backend_cuda_get_features;
+@@ -6113,6 +6114,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+         return (void *)ggml_cuda_cachegen_decode;
      }
+ #endif // !defined(GGML_USE_MUSA)
 +    if (strcmp(name, "ggml_backend_cuda_diffusion_sample") == 0) {
 +        return (void *)ggml_cuda_diffusion_sample;
 +    }

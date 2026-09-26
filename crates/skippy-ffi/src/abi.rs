@@ -22,6 +22,7 @@ pub const FEATURE_UNLOAD_EVENTS: u64 = 1 << 36;
 /// Full-model workloads use a separate bit from all runtime-event families.
 pub const FEATURE_NON_CHAT_WORKLOADS: u64 = 1 << 37;
 pub const FEATURE_SYSTEM_ONE: u64 = 1 << 38;
+pub const FEATURE_CACHEGEN_KV_PAGE: u64 = 1 << 39;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
 

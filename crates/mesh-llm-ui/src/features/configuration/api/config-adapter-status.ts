@@ -249,14 +249,6 @@ function modelConfigFromEntry(
     placementPaths.cacheTypeV ?? DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeV!
   )
 
-  const kvCachePolicy = stringModelEntryValue(
-    entry,
-    placementPaths.kvCachePolicy ?? DEFAULT_MODEL_PLACEMENT_PATHS.kvCachePolicy!
-  )
-  if (kvCachePolicy === 'quality' || kvCachePolicy === 'balanced' || kvCachePolicy === 'saver') {
-    config.kvCachePolicy = kvCachePolicy
-  }
-
   return Object.keys(config).length ? config : undefined
 }
 

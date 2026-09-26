@@ -173,6 +173,7 @@ mod tests {
             activation_width: 1,
             tensor_count: 1,
             generation: None,
+            publisher_defaults: None,
         }
     }
 

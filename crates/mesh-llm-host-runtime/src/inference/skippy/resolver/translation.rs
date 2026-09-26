@@ -475,23 +475,27 @@ impl ResolvedSkippyConfig {
         &self,
         family_default: Option<StageKvCacheConfig>,
     ) -> Result<Option<StageKvCacheConfig>> {
-        match &self.model_fit.prefix_cache {
-            ResolvedStageKvCache::FamilyDefault => Ok(family_default),
-            ResolvedStageKvCache::Disabled => Ok(Some(StageKvCacheConfig {
+        let mut resolved = match &self.model_fit.prefix_cache {
+            ResolvedStageKvCache::FamilyDefault => family_default,
+            ResolvedStageKvCache::Disabled => Some(StageKvCacheConfig {
                 mode: StageKvCacheMode::Disabled,
                 payload: StageKvCachePayload::Auto,
                 max_entries: 0,
                 max_bytes: 0,
+                l2_max_bytes: 0,
+                codec: skippy_protocol::StageKvCacheCodec::Native,
                 min_tokens: 0,
                 shared_prefix_stride_tokens: 0,
                 shared_prefix_record_limit: 0,
-            })),
+            }),
             ResolvedStageKvCache::Explicit(template) => {
                 let mut cache = family_default.unwrap_or(StageKvCacheConfig {
                     mode: template.mode.clone(),
                     payload: StageKvCachePayload::Auto,
                     max_entries: 128,
                     max_bytes: 0,
+                    l2_max_bytes: 0,
+                    codec: skippy_protocol::StageKvCacheCodec::Native,
                     min_tokens: 256,
                     shared_prefix_stride_tokens: 128,
                     shared_prefix_record_limit: 2,
@@ -513,9 +517,19 @@ impl ResolvedSkippyConfig {
                 if let Some(value) = template.shared_prefix_record_limit {
                     cache.shared_prefix_record_limit = value as u64;
                 }
-                Ok(Some(cache))
+                Some(cache)
             }
+        };
+        if self.model_fit.l2_max_bytes > 0 && resolved.is_none() {
+            anyhow::bail!(
+                "model_fit.cache_ram_mib requires an executable prefix-cache configuration"
+            );
         }
+        if let Some(cache) = resolved.as_mut() {
+            cache.l2_max_bytes = self.model_fit.l2_max_bytes;
+            cache.codec = self.model_fit.kv_cache_codec;
+        }
+        Ok(resolved)
     }
 }
 
@@ -692,6 +706,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             linear_proposal_ingress: None,
             kv_lifecycle_observer: None,
             openai_guardrails: None,
+            l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
         }
     }
 }

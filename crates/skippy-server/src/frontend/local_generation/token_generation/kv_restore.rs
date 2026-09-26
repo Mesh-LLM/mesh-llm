@@ -18,7 +18,15 @@ impl StageOpenAiBackend {
         let mut protected_resident_seq_id = None;
         let kv_restore_started = Instant::now();
         let kv_restore_timer = self.telemetry.is_debug_enabled().then(PhaseTimer::start);
-        match kv.restore_exact_state(runtime, session_id, identities) {
+        let estimated_cold_prefill_ms = self
+            .generation_service_estimator
+            .estimated_prefill_ms(prefill_tokens.len());
+        match kv.restore_exact_state_with_cold_cost(
+            runtime,
+            session_id,
+            identities,
+            estimated_cold_prefill_ms,
+        ) {
             Ok(Some(restored)) => {
                 restored_prefill = true;
                 cache_stats.status = "hit";
@@ -37,6 +45,20 @@ impl StageOpenAiBackend {
                     "skippy.exact_cache.restored_tokens".to_string(),
                     json!(restored.token_count),
                 );
+                attrs.insert(
+                    "skippy.exact_cache.source".to_string(),
+                    json!(restored.source),
+                );
+                if restored.source != "radix" {
+                    attrs.insert(
+                        "skippy.exact_cache.fill_ms".to_string(),
+                        json!(restored.fill_ms),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.rewarm_enqueued".to_string(),
+                        json!(restored.rewarm_enqueued),
+                    );
+                }
                 attrs.insert(
                     "skippy.kv.matched_prefix_tokens".to_string(),
                     json!(restored.token_count),
@@ -181,11 +203,16 @@ impl StageOpenAiBackend {
         ) {
             let base = self.local_kv_message_base(session_id, ids);
             let exact_identity = kv.prefill_identity(&self.config, &base, 0, prefill_tokens);
-            if let Ok(Some(record)) = kv.record_exact_state(
+            let cold_prefill_cost = self
+                .generation_service_estimator
+                .estimated_prefill_ms(prefill_tokens.len());
+            let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
+            if let Ok(Some(record)) = kv.record_exact_state_with_cost(
                 runtime,
                 session_id,
                 &exact_identity,
                 crate::kv_integration::CaptureAdmission::BestEffort,
+                l3_cost,
             ) {
                 resident_recorded_pages = resident_recorded_pages.saturating_add(1);
                 let mut attrs = self.openai_attrs(ids);

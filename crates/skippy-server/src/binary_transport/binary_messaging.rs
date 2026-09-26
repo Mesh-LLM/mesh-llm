@@ -281,6 +281,7 @@ fn run_binary_stage(
         native_mtp_enabled,
         continuous_batching,
         openai,
+        l3_manager,
         compute_meter,
     } = options;
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
@@ -357,10 +358,11 @@ fn run_binary_stage(
         telemetry.clone(),
     )
     .map_err(|error| anyhow!("create binary iteration scheduler: {error}"))?;
-    let kv = KvStageIntegration::from_loaded_model(
+    let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &config,
         loaded_model_state_kind(Some(&runtime)),
         loaded_model_has_indexer_memory(Some(&runtime)),
+        l3_manager.clone(),
         None,
     )?
     .map(Arc::new);
@@ -428,6 +430,7 @@ fn run_binary_stage(
                         openai_guardrails: Some(
                             frontend::OpenAiGuardrailsConfig::disabled_for_skippy(),
                         ),
+                        l3_manager,
                     },
                     openai_iteration_scheduler,
                 )

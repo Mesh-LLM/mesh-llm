@@ -59,7 +59,7 @@ describe('CONFIGURATION_DEFAULTS', () => {
       {
         id: 'memory',
         label: 'Memory',
-        summary: 'KV cache policy and fit headroom.',
+        summary: 'KV cache precision and fit headroom.',
         help: 'VRAM accounting and fit headroom'
       },
       {
@@ -222,7 +222,7 @@ describe('CONFIGURATION_DEFAULTS', () => {
   it('keeps all settings keyed to canonical TOML sections without duplicate ids', () => {
     const settingIds = CONFIGURATION_DEFAULTS.settings.map((setting) => setting.id)
 
-    expect(CONFIGURATION_DEFAULTS.settings.length).toBeGreaterThanOrEqual(74)
+    expect(CONFIGURATION_DEFAULTS.settings.length).toBeGreaterThanOrEqual(73)
     expect(new Set(settingIds).size).toBe(settingIds.length)
     expect(CONFIGURATION_DEFAULTS.settings.every((setting) => setting.tomlSection.startsWith('defaults.'))).toBe(true)
   })

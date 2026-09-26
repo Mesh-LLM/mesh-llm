@@ -604,7 +604,11 @@ runtime producers are not duplicated.
   topology/run/model/package/manifest identity, the same exact two-stage
   contiguous cut on distinct nodes and bind addresses, two matching `ready`
   statuses, and the same sole served model. It atomically records
-  `split-evidence.json`. Readiness uses a capped five-minute wall-clock deadline
+  `split-evidence.json`. The Linux CPU row also enables the durable-L3 restart
+  probe: it preserves each node's cache root and identity across a full process
+  restart, requires a post-restart L3 fill with cached tokens and exact output,
+  exercises `kv-cache status` and `clear`, and writes digest-bound evidence.
+  Readiness uses a capped five-minute wall-clock deadline
   and parallel endpoint captures bounded to two seconds by default; timeout or
   process-exit diagnostics retain the final snapshots, failed reconciliation,
   and both server log tails. The status projection never persists invite

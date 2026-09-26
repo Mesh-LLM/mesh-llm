@@ -22,6 +22,11 @@ pub(crate) enum Command {
         out_dir: PathBuf,
         #[arg(long = "projector")]
         projectors: Vec<PathBuf>,
+        /// Immutable publisher configuration files to copy into metadata/.
+        /// Supported basenames: config.json, generation_config.json,
+        /// tokenizer_config.json, chat_template.jinja, hf_quant_config.json.
+        #[arg(long = "publisher-metadata")]
+        publisher_metadata: Vec<PathBuf>,
         #[arg(long)]
         after_artifact_command: Option<PathBuf>,
         #[arg(long)]

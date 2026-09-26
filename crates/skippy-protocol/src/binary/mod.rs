@@ -7,6 +7,7 @@ pub use activation::{
     activation_frame_wire_bytes, decode_activation_frame, decode_raw_activation_frame,
     encode_activation_frame, encode_raw_activation_frame, select_lossless_activation_codec,
 };
+pub use activation_codec::f16_bits::{f16_bits_to_f32, f32_to_f16_bits};
 pub use codec::{
     read_stage_message, read_stage_message_for_codec, read_stage_message_for_codec_policy,
     recv_ready, recv_reply, send_ready, send_reply_ack, send_reply_ack_with_stats,

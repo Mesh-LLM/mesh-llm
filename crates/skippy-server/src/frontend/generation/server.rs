@@ -255,6 +255,9 @@ pub struct EmbeddedOpenAiArgs {
     pub linear_proposal_ingress: Option<LinearProposalIngressConfig>,
     pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
     pub kv_lifecycle_observer: Option<Arc<dyn crate::kv_integration::KvLifecycleObserver>>,
+    /// Node-scoped durable disk-cache owner supplied by the embedding host.
+    /// `None` keeps standalone and cache-disabled launches in-memory only.
+    pub l3_manager: Option<skippy_cache::L3CacheManager>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -514,10 +517,11 @@ fn embedded_openai_backend_with_scheduler(
         "stage.openai_runtime_prewarm",
     )
     .context("prewarm embedded OpenAI runtime sessions")?;
-    let kv = KvStageIntegration::from_loaded_model(
+    let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &args.config,
         loaded_model_state_kind(Some(&args.runtime)),
         loaded_model_has_indexer_memory(Some(&args.runtime)),
+        args.l3_manager.clone(),
         args.kv_lifecycle_observer.clone(),
     )?
     .map(Arc::new);

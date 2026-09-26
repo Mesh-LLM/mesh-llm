@@ -45,6 +45,13 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
 async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Auth { command } => mesh_llm_commands::auth::run_auth_command(command),
+        Command::KvCache { command } => {
+            mesh_llm_commands::kv_cache::dispatch_kv_cache_command(command).await
+        }
+        Command::Runtime { command } => {
+            dispatch_runtime_command(command.as_ref(), cli.config.as_deref(), cli.llama_flavor)
+                .await
+        }
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
         Command::Hermes(args) => mesh_llm_commands::agent_cli::config_write::run(args, true).await,
         Command::Openclaw(args) => {
@@ -91,9 +98,8 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             )?;
             Ok(())
         }
-        Command::Runtime { command } => {
-            dispatch_runtime_command(command.as_ref(), cli.config.as_deref(), cli.llama_flavor)
-                .await
+        Command::Runtime { .. } | Command::KvCache { .. } => {
+            unreachable!("runtime and kv-cache commands are dispatched before general commands")
         }
         Command::Setup { .. } => {
             dispatch_setup_command(cmd, cli.config.as_deref(), cli.llama_flavor).await

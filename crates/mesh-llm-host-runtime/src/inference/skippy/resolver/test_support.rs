@@ -94,6 +94,7 @@ pub(super) fn fake_package_identity(layer_count: u32) -> SkippyPackageIdentity {
         activation_width: 4096,
         tensor_count: 100,
         generation: None,
+        publisher_defaults: None,
     }
 }
 

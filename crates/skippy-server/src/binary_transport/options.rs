@@ -32,6 +32,8 @@ pub struct BinaryStageOptions {
     /// the stage-control load request.
     pub continuous_batching: bool,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
+    /// Shared node owner for the durable disk tier.
+    pub l3_manager: Option<skippy_cache::L3CacheManager>,
     /// Receives this stage's runtime compute time, for auto-balance
     /// split placement. `None` skips the accounting.
     pub compute_meter: Option<std::sync::Arc<crate::compute_meter::StageComputeMeter>>,
@@ -161,6 +163,7 @@ impl BinaryStageOptions {
             continuous_batching: true,
             compute_meter: None,
             openai,
+            l3_manager: None,
         })
     }
 

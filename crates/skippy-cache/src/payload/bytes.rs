@@ -25,7 +25,7 @@ pub(super) enum CacheBytesRepr {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct CacheBlockRef {
+pub(crate) struct CacheBlockRef {
     pub(super) hash: String,
     /// Shared indirection lets eviction materialize a surviving deduped block
     /// before releasing its former contiguous backing allocation.
@@ -68,6 +68,45 @@ impl CacheBytes {
         Self {
             len: bytes.len() as u64,
             repr: CacheBytesRepr::Inline(Arc::new(bytes)),
+        }
+    }
+
+    /// Crate-internal: build a block-backed view over shared immutable
+    /// storages without copying bytes. Each item is `(hash, storage, range)`;
+    /// `hash` is bookkeeping identity for the block (the L2 tier uses the
+    /// segment digest). When exactly one item covers its whole storage the
+    /// view borrows it contiguously; otherwise reads reconstruct in block
+    /// order.
+    pub(crate) fn from_shared_blocks(
+        len: u64,
+        blocks: impl IntoIterator<Item = (String, Arc<Vec<u8>>, Range<usize>)>,
+    ) -> Self {
+        let refs: Vec<CacheBlockRef> = blocks
+            .into_iter()
+            .map(|(hash, storage, range)| {
+                CacheBlockRef::new(
+                    hash,
+                    Arc::new(RwLock::new(CacheBlockBytes::new(storage, range))),
+                )
+            })
+            .collect();
+        let contiguous = match refs.as_slice() {
+            [single] => {
+                let bytes = single
+                    .bytes
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                (bytes.range.start == 0 && bytes.range.end == bytes.storage.len())
+                    .then(|| Arc::clone(&bytes.storage))
+            }
+            _ => None,
+        };
+        Self {
+            len,
+            repr: CacheBytesRepr::Blocks {
+                blocks: refs.into(),
+                contiguous,
+            },
         }
     }
 

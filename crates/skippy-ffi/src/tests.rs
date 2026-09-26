@@ -2,10 +2,13 @@ use std::mem::{offset_of, size_of};
 
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
-    ActivationPartDesc, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1,
-    StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1,
-    StagePlannerProfileV1, StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1,
-    WorkloadKind, WorkloadPooling, runtime_abi_supported,
+    ActivationPartDesc, CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16, CACHEGEN_RECORD_F16_TRANSPOSED,
+    CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED, CACHEGEN_RECORD_Q4_0,
+    CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1, StagePlanDescV1,
+    StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStateKind, StagePlanStringRefV1,
+    StagePlanValueDescV1, StagePlannerConfigV1, StagePlannerProfileV1, StagePlannerTensorV1,
+    WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
+    runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -161,6 +164,27 @@ fn activation_boundary_descriptor_matches_native_layout() {
     assert_eq!(offset_of!(ActivationBoundaryDesc, part_count), 4);
     assert_eq!(offset_of!(ActivationBoundaryDesc, frontier_identity), 8);
     assert_eq!(offset_of!(ActivationBoundaryDesc, parts), 40);
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn cachegen_record_matches_native_layout() {
+    assert_eq!(CACHEGEN_RECORD_V1_ABI_VERSION, 1);
+    assert_eq!(CACHEGEN_RECORD_F16, 0);
+    assert_eq!(CACHEGEN_RECORD_EXACT, 1);
+    assert_eq!(CACHEGEN_RECORD_F16_TRANSPOSED, 2);
+    assert_eq!(CACHEGEN_RECORD_F32, 3);
+    assert_eq!(CACHEGEN_RECORD_F32_TRANSPOSED, 4);
+    assert_eq!(CACHEGEN_RECORD_Q8_0, 5);
+    assert_eq!(CACHEGEN_RECORD_Q4_0, 6);
+    assert_eq!(size_of::<CacheGenRecordV1>(), 72);
+    assert_eq!(offset_of!(CacheGenRecordV1, output_offset), 16);
+    assert_eq!(offset_of!(CacheGenRecordV1, decoded_bytes), 24);
+    assert_eq!(offset_of!(CacheGenRecordV1, token_count), 32);
+    assert_eq!(offset_of!(CacheGenRecordV1, token_start), 40);
+    assert_eq!(offset_of!(CacheGenRecordV1, total_tokens), 48);
+    assert_eq!(offset_of!(CacheGenRecordV1, payload), 56);
+    assert_eq!(offset_of!(CacheGenRecordV1, payload_bytes), 64);
 }
 
 #[test]
