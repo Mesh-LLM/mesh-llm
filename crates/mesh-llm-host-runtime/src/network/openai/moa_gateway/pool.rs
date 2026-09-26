@@ -319,6 +319,7 @@ async fn add_worker_backend(
         resolution.node.hosts_for_model(name).await,
     )
     .await;
+    let remote_hosts = exclude_paid_hosts(resolution.node, name, remote_hosts).await;
     if !remote_hosts.is_empty() {
         let backend_idx = backends.len();
         backends.push(std::sync::Arc::new(RemoteModelBackend {
@@ -335,6 +336,34 @@ async fn add_worker_backend(
         return true;
     }
     false
+}
+
+/// MoA workers call peers without the payment protocol, so a peer that
+/// charges for `name` would answer 402 and, because 402 is not a retryable
+/// replica error, take the whole worker down even when a free standby exists.
+/// Keep MoA on free replicas until committee-level payment is designed (#2059).
+#[cfg(feature = "payments")]
+pub(super) async fn exclude_paid_hosts(
+    node: &mesh::Node,
+    name: &str,
+    hosts: Vec<iroh::EndpointId>,
+) -> Vec<iroh::EndpointId> {
+    let mut free = Vec::with_capacity(hosts.len());
+    for host in hosts {
+        if node.peer_payment_offer(host, name).await.is_none() {
+            free.push(host);
+        }
+    }
+    free
+}
+
+#[cfg(not(feature = "payments"))]
+pub(super) async fn exclude_paid_hosts(
+    _node: &mesh::Node,
+    _name: &str,
+    hosts: Vec<iroh::EndpointId>,
+) -> Vec<iroh::EndpointId> {
+    hosts
 }
 
 /// Discover and assemble the MoA worker pool: resolve one worker per distinct
