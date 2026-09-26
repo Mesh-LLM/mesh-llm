@@ -1054,7 +1054,7 @@ async fn anthropic_ingress_normalizes_before_dispatch_and_adapts_response() {
 #[tokio::test]
 async fn anthropic_ingress_rejects_unsupported_fields_with_anthropic_error() {
     let (addr, proxy) = spawn_api_proxy_test_harness(local_targets(&[])).await;
-    let body = json!({"model":"test","max_tokens":32,"thinking":{"type":"enabled","budget_tokens":16},"messages":[{"role":"user","content":"hello"}]}).to_string();
+    let body = json!({"model":"test","max_tokens":32,"unsupported_field":true,"messages":[{"role":"user","content":"hello"}]}).to_string();
     let request = format!(
         "POST /v1/messages HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
