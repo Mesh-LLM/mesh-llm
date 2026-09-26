@@ -1,0 +1,18 @@
+{
+  "selection": {
+    "default": "recommended"
+  },
+  "profiles": {
+    "recommended": {
+      "temperature": 1,
+      "top_p": 1,
+      "provenance": {
+        "source_repo": "deepseek-ai/DeepSeek-V4-Flash-0731",
+        "revision": "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+        "file": "README.md",
+        "section": "Local Deployment",
+        "url": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731/blob/7872f01b1d1fe23eabc4c98b48bffcef5a386062/README.md"
+      }
+    }
+  }
+}

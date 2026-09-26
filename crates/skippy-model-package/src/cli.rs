@@ -34,6 +34,9 @@ pub(crate) enum Command {
         source_revision: Option<String>,
         #[arg(long)]
         source_file: Option<String>,
+        /// JSON file containing typed package generation request defaults.
+        #[arg(long)]
+        generation_defaults: Option<PathBuf>,
         #[arg(long)]
         resume_existing_artifacts: bool,
         /// Maximum payload bytes per artifact; oversized common and layer

@@ -26,6 +26,7 @@ blake3.workspace = true
 clap.workspace = true
 futures-util = "0.3"
 skippy-runtime = { path = "../skippy-runtime", version = "0.76.1"  }
+skippy-package-format = { path = "../skippy-package-format", version = "0.76.1" }
 skippy-scheduler = { path = "../skippy-scheduler", version = "0.76.1" }
 skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.1" }
 model-artifact = { path = "../model-artifact", version = "0.76.1" }
@@ -47,6 +48,5 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-skippy-package-format = { path = "../skippy-package-format", version = "0.76.1" }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

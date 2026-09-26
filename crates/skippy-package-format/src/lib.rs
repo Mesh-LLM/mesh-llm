@@ -299,11 +299,185 @@ pub enum SidecarKind {
 /// It is never stage-selection or loader policy: which strategy actually runs
 /// is resolved from runtime configuration, and layer indices here must never
 /// be consulted by a stage selector.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Generation {
+    /// Publisher-reviewed request defaults for the exact source revision.
+    /// These values are advisory package data and are resolved below explicit
+    /// request and deployment/operator settings by the serving runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_defaults: Option<GenerationRequestDefaults>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speculative_decoding: Option<SpeculativeDecoding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationRequestDefaults {
+    pub selection: GenerationProfileSelection,
+    pub profiles: BTreeMap<String, GenerationProfile>,
+}
+
+impl GenerationRequestDefaults {
+    /// Validate profile references, sampler values, and immutable provenance.
+    pub fn validate(&self) -> Result<(), ValidationErrors> {
+        let mut issues = Vec::new();
+        validate_generation_request_defaults(self, &mut issues);
+        if issues.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationErrors { issues })
+        }
+    }
+}
+
+/// Selects a package profile after the request's reasoning mode has been
+/// resolved. `default` is used when the mode remains automatic or unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationProfileSelection {
+    pub default: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_enabled: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_disabled: Option<String>,
+}
+
+/// One publisher-recommended request profile. Unknown values stay absent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typical_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_nsigma: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logit_bias: Option<BTreeMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_last_n: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynatemp_range: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynatemp_exponent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry: Option<GenerationDryDefaults>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xtc: Option<GenerationXtcDefaults>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirostat_mode: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirostat_entropy: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirostat_learning_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samplers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampler_sequence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignore_eos: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<GenerationReasoningDefaults>,
+    pub provenance: GenerationDefaultsProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationDryDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiplier: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_length: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub penalty_last_n: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence_breakers: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationXtcDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probability: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationReasoningDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<GenerationReasoningEnabled>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<GenerationReasoningFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<GenerationReasoningBudget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationReasoningEnabled {
+    Auto,
+    Off,
+    On,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GenerationReasoningFormat {
+    Auto,
+    None,
+    Deepseek,
+    DeepseekLegacy,
+    Hidden,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GenerationReasoningBudget {
+    Tokens(u32),
+    Level(GenerationReasoningBudgetLevel),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationReasoningBudgetLevel {
+    Auto,
+    Low,
+    Medium,
+    High,
+    Unrestricted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationDefaultsProvenance {
+    pub source_repo: String,
+    pub revision: String,
+    pub file: String,
+    pub section: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1025,6 +1199,9 @@ fn validate_generation(
     layer_count: u32,
     issues: &mut Vec<ValidationIssue>,
 ) {
+    if let Some(request_defaults) = &generation.request_defaults {
+        validate_generation_request_defaults(request_defaults, issues);
+    }
     let Some(speculative) = &generation.speculative_decoding else {
         return;
     };
@@ -1075,6 +1252,338 @@ fn validate_generation(
                 "default strategy {:?} is not declared under strategies",
                 speculative.default
             ),
+        );
+    }
+}
+
+fn validate_generation_request_defaults(
+    request_defaults: &GenerationRequestDefaults,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let base = "generation.request_defaults";
+    if request_defaults.profiles.is_empty() {
+        push_issue(
+            issues,
+            ValidationCode::MissingValue,
+            format!("{base}.profiles"),
+            "at least one generation profile is required",
+        );
+    }
+    for (name, profile) in &request_defaults.profiles {
+        validate_identifier(&format!("{base}.profiles[{name}]"), name, issues);
+        validate_generation_profile(name, profile, issues);
+    }
+    for (field, selected) in [
+        ("default", Some(&request_defaults.selection.default)),
+        (
+            "reasoning_enabled",
+            request_defaults.selection.reasoning_enabled.as_ref(),
+        ),
+        (
+            "reasoning_disabled",
+            request_defaults.selection.reasoning_disabled.as_ref(),
+        ),
+    ] {
+        let Some(selected) = selected else { continue };
+        if selected.trim().is_empty() {
+            push_issue(
+                issues,
+                ValidationCode::MissingValue,
+                format!("{base}.selection.{field}"),
+                "selected profile must not be empty",
+            );
+        } else if !request_defaults.profiles.contains_key(selected) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.selection.{field}"),
+                format!("references undeclared generation profile {selected:?}"),
+            );
+        }
+    }
+}
+
+fn validate_generation_profile(
+    name: &str,
+    profile: &GenerationProfile,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let base = format!("generation.request_defaults.profiles[{name}]");
+    if profile.max_tokens == Some(0) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.max_tokens"),
+            "max_tokens must be greater than zero",
+        );
+    }
+    if let Some(stop) = &profile.stop {
+        for (index, value) in stop.iter().enumerate() {
+            validate_nonempty(&format!("{base}.stop[{index}]"), value, issues);
+        }
+    }
+    for (field, value) in [
+        ("temperature", profile.temperature),
+        ("top_p", profile.top_p),
+        ("min_p", profile.min_p),
+        ("typical_p", profile.typical_p),
+        ("top_nsigma", profile.top_nsigma),
+        ("presence_penalty", profile.presence_penalty),
+        ("frequency_penalty", profile.frequency_penalty),
+        ("repeat_penalty", profile.repeat_penalty),
+        ("dynatemp_range", profile.dynatemp_range),
+        ("dynatemp_exponent", profile.dynatemp_exponent),
+        ("mirostat_entropy", profile.mirostat_entropy),
+        ("mirostat_learning_rate", profile.mirostat_learning_rate),
+    ] {
+        if value.is_some_and(|value| !value.is_finite()) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.{field}"),
+                "value must be finite",
+            );
+        }
+    }
+    for (field, value, min, max) in [
+        ("temperature", profile.temperature, 0.0, 100.0),
+        ("presence_penalty", profile.presence_penalty, -2.0, 2.0),
+        ("frequency_penalty", profile.frequency_penalty, -2.0, 2.0),
+        ("top_nsigma", profile.top_nsigma, -1.0, f64::MAX),
+        ("dynatemp_range", profile.dynatemp_range, 0.0, f64::MAX),
+        (
+            "dynatemp_exponent",
+            profile.dynatemp_exponent,
+            0.0,
+            f64::MAX,
+        ),
+    ] {
+        if value.is_some_and(|value| value < min || value > max) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.{field}"),
+                format!("value must be within {min}..={max}"),
+            );
+        }
+    }
+    for (field, value) in [
+        ("top_p", profile.top_p),
+        ("min_p", profile.min_p),
+        ("typical_p", profile.typical_p),
+    ] {
+        if value.is_some_and(|value| !(0.0..=1.0).contains(&value)) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.{field}"),
+                "value must be within 0..=1",
+            );
+        }
+    }
+    if profile.temperature.is_some_and(|value| value < 0.0) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.temperature"),
+            "temperature must be non-negative",
+        );
+    }
+    if profile.repeat_penalty.is_some_and(|value| value <= 0.0) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.repeat_penalty"),
+            "repeat_penalty must be greater than zero",
+        );
+    }
+    if profile.top_k.is_some_and(|value| value < 0) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.top_k"),
+            "top_k must be greater than or equal to zero",
+        );
+    }
+    if profile.repeat_last_n.is_some_and(|value| value < -1) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.repeat_last_n"),
+            "repeat_last_n must be greater than or equal to -1",
+        );
+    }
+    if profile.seed.is_some_and(|value| value > u32::MAX.into()) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.seed"),
+            "seed must fit in the native u32 field",
+        );
+    }
+    if let Some(logit_bias) = &profile.logit_bias {
+        for (token, bias) in logit_bias {
+            let valid_token = token.parse::<i32>().is_ok_and(|token| token >= 0);
+            if !valid_token || !bias.is_finite() || !(-100.0..=100.0).contains(bias) {
+                push_issue(
+                    issues,
+                    ValidationCode::InvalidGenerationValue,
+                    format!("{base}.logit_bias[{token}]"),
+                    "logit bias keys must be signed token ids and values must be within -100..=100",
+                );
+            }
+        }
+    }
+    if profile
+        .mirostat_mode
+        .is_some_and(|value| !(0..=2).contains(&value))
+    {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.mirostat_mode"),
+            "mirostat_mode must be 0, 1, or 2",
+        );
+    }
+    for (field, value) in [
+        ("mirostat_entropy", profile.mirostat_entropy),
+        ("mirostat_learning_rate", profile.mirostat_learning_rate),
+    ] {
+        if value.is_some_and(|value| value <= 0.0) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.{field}"),
+                "value must be greater than zero",
+            );
+        }
+    }
+    if let Some(samplers) = &profile.samplers {
+        for (index, sampler) in samplers.iter().enumerate() {
+            validate_nonempty(&format!("{base}.samplers[{index}]"), sampler, issues);
+            if !matches!(
+                sampler.as_str(),
+                "penalties"
+                    | "dry"
+                    | "top_n_sigma"
+                    | "top_k"
+                    | "typical_p"
+                    | "typ_p"
+                    | "top_p"
+                    | "min_p"
+                    | "xtc"
+                    | "temperature"
+                    | "temp"
+            ) {
+                push_issue(
+                    issues,
+                    ValidationCode::InvalidGenerationValue,
+                    format!("{base}.samplers[{index}]"),
+                    "unsupported sampler name",
+                );
+            }
+        }
+    }
+    if let Some(sequence) = &profile.sampler_sequence {
+        validate_nonempty(&format!("{base}.sampler_sequence"), sequence, issues);
+        if sequence
+            .chars()
+            .filter(|value| !value.is_whitespace())
+            .any(|value| !matches!(value, 'e' | 'd' | 's' | 'k' | 'y' | 'p' | 'm' | 'x' | 't'))
+        {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.sampler_sequence"),
+                "sampler sequence contains an unsupported code",
+            );
+        }
+    }
+    if let Some(dry) = &profile.dry {
+        if dry.multiplier.is_some_and(|value| value < 0.0)
+            || dry.base.is_some_and(|value| value <= 0.0)
+            || dry.allowed_length.is_some_and(|value| value < 0)
+            || dry.penalty_last_n.is_some_and(|value| value < -1)
+        {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.dry"),
+                "DRY values are outside native sampler bounds",
+            );
+        }
+        if let Some(breakers) = &dry.sequence_breakers {
+            for (index, breaker) in breakers.iter().enumerate() {
+                if breaker.is_empty() || breaker.len() >= 16 {
+                    push_issue(
+                        issues,
+                        ValidationCode::InvalidGenerationValue,
+                        format!("{base}.dry.sequence_breakers[{index}]"),
+                        "DRY sequence breakers must be non-empty and shorter than 16 bytes",
+                    );
+                }
+            }
+        }
+    }
+    if let Some(xtc) = &profile.xtc {
+        for (field, value) in [
+            ("probability", xtc.probability),
+            ("threshold", xtc.threshold),
+        ] {
+            if value.is_some_and(|value| !(0.0..=1.0).contains(&value)) {
+                push_issue(
+                    issues,
+                    ValidationCode::InvalidGenerationValue,
+                    format!("{base}.xtc.{field}"),
+                    "value must be within 0..=1",
+                );
+            }
+        }
+    }
+    validate_generation_provenance(&base, &profile.provenance, issues);
+}
+
+fn validate_generation_provenance(
+    profile_path: &str,
+    provenance: &GenerationDefaultsProvenance,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let base = format!("{profile_path}.provenance");
+    for (field, value) in [
+        ("source_repo", provenance.source_repo.as_str()),
+        ("revision", provenance.revision.as_str()),
+        ("file", provenance.file.as_str()),
+        ("section", provenance.section.as_str()),
+        ("url", provenance.url.as_str()),
+    ] {
+        validate_nonempty(&format!("{base}.{field}"), value, issues);
+    }
+    let revision = provenance.revision.trim();
+    if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.revision"),
+            "provenance revision must be an immutable 40-character Git commit SHA",
+        );
+    }
+    if !provenance.url.starts_with("https://") && !provenance.url.starts_with("http://") {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.url"),
+            "provenance URL must use http or https",
+        );
+    } else if !provenance
+        .url
+        .split(['/', '?', '#', '&', '='])
+        .any(|segment| segment == revision)
+    {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.url"),
+            "provenance URL must contain the exact revision as a distinct path or query segment",
         );
     }
 }

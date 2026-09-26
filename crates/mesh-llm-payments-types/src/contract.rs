@@ -2,6 +2,9 @@
 //! request/response shapes. The host speaks only this; any provider of the
 //! capability (the in-process builtin or an external plugin) implements it.
 
+use std::collections::BTreeMap;
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::intent::PaymentIntent;
@@ -14,6 +17,8 @@ pub const CAPABILITY: &str = "payments.v1";
 pub mod ops {
     /// Run one local operator command (the `/api/wallet` surface).
     pub const CONTROL: &str = "control";
+    /// Advertised seller prices, and whether the provider has payments state.
+    pub const PRICING: &str = "pricing";
     /// Effective intent and spendable budget for pay-first routing.
     pub const ROUTING_BUDGET: &str = "routing_budget";
     /// Reconcile uncertain charges and recover output debt; returns the
@@ -51,6 +56,46 @@ pub mod ops {
     pub const OUTPUT_RECEIVABLE: &str = "output_receivable";
     /// Answer a payer's recovery probe for a serving request.
     pub const SERVE_RECOVER: &str = "serve_recover";
+}
+
+/// Bound for the ledger-only operations listed by [`deadline`].
+pub const BOOKKEEPING_DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long the host waits for one `payments.v1` operation, or `None` when the
+/// operation legitimately waits on the wallet and carries its own deadline.
+///
+/// Bookkeeping operations touch only the ledger, or start background work and
+/// return: they must answer promptly. Without a bound, a stalled engine holds a
+/// response, a routing decision or the serving close open forever. Operations
+/// that create invoices, observe settlement, wait out a peer's prior debt or pay
+/// are deliberately unbounded here — the provider bounds them (invoice expiry,
+/// arrival wait, prior-settlement deadline) and the caller owns cancellation.
+///
+/// An operation that is not listed is unbounded: a new operation must be
+/// classified here, rather than silently inheriting a housekeeping deadline.
+pub fn deadline(operation: &str) -> Option<Duration> {
+    matches!(
+        operation,
+        ops::PRICING
+            | ops::FINISH
+            | ops::PAYMENT_INTENT
+            | ops::PREFETCH
+            | ops::CANCEL
+            | ops::RECORD_DELIVERED
+            | ops::SERVE_FINISH
+    )
+    .then_some(BOOKKEEPING_DEADLINE)
+}
+
+/// Advertised seller prices, and whether the provider has any payments state.
+///
+/// The provider must answer without provisioning: `configured` is false for a
+/// node that has never had a ledger, so the host can skip periodic recovery
+/// instead of opening one to find nothing.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AdvertisedPricing {
+    pub configured: bool,
+    pub prices: BTreeMap<String, crate::pricing::Pricing>,
 }
 
 /// Error body of a failed operation.
@@ -196,4 +241,61 @@ pub enum ServeRecoverResponse {
 pub struct InputInvoiceResponse {
     pub terms: RequestTerms,
     pub invoice: mesh_llm_wallet::invoice::Invoice,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every operation the host may invoke, so a new one cannot ship without
+    /// being classified as bounded or as a wallet wait.
+    const ALL_OPS: &[&str] = &[
+        ops::CONTROL,
+        ops::PRICING,
+        ops::ROUTING_BUDGET,
+        ops::RECONCILE,
+        ops::SETTLE_OUTPUT,
+        ops::FINISH,
+        ops::PAYMENT_INTENT,
+        ops::PREFETCH,
+        ops::AUTHORIZE,
+        ops::CANCEL,
+        ops::PAY_INPUT,
+        ops::SERVE_BEGIN,
+        ops::SERVE_INPUT_INVOICE,
+        ops::AWAIT_ARRIVAL,
+        ops::SETTLE_RECEIVED,
+        ops::RECORD_DELIVERED,
+        ops::SERVE_FINISH,
+        ops::OUTPUT_RECEIVABLE,
+        ops::SERVE_RECOVER,
+    ];
+
+    #[test]
+    fn only_ledger_bookkeeping_operations_are_bounded() {
+        let bounded: Vec<&str> = ALL_OPS
+            .iter()
+            .copied()
+            .filter(|operation| deadline(operation).is_some())
+            .collect();
+        assert_eq!(
+            bounded,
+            [
+                ops::PRICING,
+                ops::FINISH,
+                ops::PAYMENT_INTENT,
+                ops::PREFETCH,
+                ops::CANCEL,
+                ops::RECORD_DELIVERED,
+                ops::SERVE_FINISH,
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unclassified_operation_is_unbounded() {
+        // A new operation must be classified here rather than silently
+        // inheriting a housekeeping deadline.
+        assert!(deadline("a_future_operation").is_none());
+    }
 }
