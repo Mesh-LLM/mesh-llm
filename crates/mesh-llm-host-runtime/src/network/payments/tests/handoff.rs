@@ -54,6 +54,43 @@ async fn handed_off(hold: bool, fallback: bool) -> Result<()> {
     application.read_to_string(&mut response).await?;
     assert!(response.contains("402"));
     server.await??;
+    // The provider took the input payment and closed without output: that is
+    // a paid-but-undelivered strike against it. With `hold`, the payment only
+    // settles after the drop, so the exchange never observed it: no strike.
+    if !hold {
+        assert_paid_undelivered_strike(&payer, &provider).await?;
+    }
+    payer_cleanup(failing, &payer, &provider).await
+}
+
+async fn assert_paid_undelivered_strike(payer: &Node, provider: &Node) -> Result<()> {
+    let directory = payer.config_state.lock().await.payment_directory();
+    let now = mesh_llm_wallet::now_ms();
+    use crate::network::payments::strikes::{PayeeStrikes, STRIKE_THRESHOLD};
+    let mut recorded = false;
+    for _ in 0..200 {
+        let strikes = PayeeStrikes::load(&directory);
+        // One real strike plus THRESHOLD-1 synthetic ones reaches a block
+        // only if the real one was recorded for this provider.
+        let mut probe = strikes.clone();
+        for _ in 1..STRIKE_THRESHOLD {
+            probe.record(&provider.id().to_string(), now);
+        }
+        if probe.is_blocked(&provider.id().to_string(), now) {
+            recorded = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(recorded, "paid-but-undelivered strike was not recorded");
+    Ok(())
+}
+
+async fn payer_cleanup(
+    failing: Option<(Node, FailingProviderTask)>,
+    payer: &Node,
+    provider: &Node,
+) -> Result<()> {
     if let Some((first, task)) = failing {
         first.endpoint.close().await;
         task.await??;
@@ -103,6 +140,9 @@ async fn payer_fixture(
     )?);
     allow_paid(&service)?;
     let payer = Node::new_for_tests(NodeRole::Client).await?;
+    // Keep node-local payment state (the payee blocklist) inside the fixture.
+    *payer.config_state.lock().await =
+        crate::runtime::config_state::ConfigState::load(&dir.path().join("config.toml"))?;
     payer
         .payments
         .set(service.clone())

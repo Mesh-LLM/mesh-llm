@@ -192,8 +192,10 @@ async fn start(
     let (ready, wait_ready) = tokio::sync::oneshot::channel();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
     let evidence = exchange_id.map(|id| (node.clone(), id.to_owned()));
+    let strike_node = node.clone();
     tokio::spawn(async move {
-        let result = exchange(
+        let mut progress = ExchangeProgress::default();
+        let result = exchange_tracked(
             payments,
             peer,
             id,
@@ -206,8 +208,12 @@ async fn start(
             ready,
             cancellation,
             evidence,
+            &mut progress,
         )
         .await;
+        if result.is_err() && progress.paid_undelivered() {
+            record_paid_undelivered(&strike_node, peer).await;
+        }
         if result.is_err() {
             // Static logging only: invoices, prompt contents, and hashes are
             // operator data and do not belong in ordinary runtime logs.
@@ -272,8 +278,75 @@ async fn validate_initial_invoice(
     Ok((input_amount, total))
 }
 
+/// What a paid exchange had done when it ended, for the payee blocklist.
+#[derive(Debug, Default)]
+pub(crate) struct ExchangeProgress {
+    input_settled: bool,
+    output_delivered: bool,
+    cancelled: bool,
+}
+
+impl ExchangeProgress {
+    /// Our input payment settled, the provider sent no output, and we did not
+    /// cancel: the provider took the prefill charge and delivered nothing.
+    pub(crate) fn paid_undelivered(&self) -> bool {
+        self.input_settled && !self.output_delivered && !self.cancelled
+    }
+}
+
+async fn record_paid_undelivered(node: &Node, peer: iroh::EndpointId) {
+    let directory = node.config_state.lock().await.payment_directory();
+    let payee = peer.to_string();
+    let now = mesh_llm_wallet::now_ms();
+    match tokio::task::spawn_blocking(move || {
+        crate::network::payments::strikes::record_strike(&directory, &payee, now)
+    })
+    .await
+    {
+        Ok(Ok(true)) => {
+            tracing::warn!("paid provider blocked after repeated paid-but-undelivered exchanges");
+        }
+        Ok(Ok(false)) => {}
+        _ => tracing::warn!("could not persist paid-but-undelivered strike"),
+    }
+}
+
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn exchange(
+    payments: Payments,
+    peer: iroh::EndpointId,
+    id: String,
+    request: PaidRequest,
+    price: Pricing,
+    send: impl AsyncWrite + Unpin,
+    recv: impl AsyncRead + Unpin,
+    initial: Frame,
+    output: &mut DuplexStream,
+    ready: tokio::sync::oneshot::Sender<()>,
+    cancellation: tokio::sync::watch::Receiver<bool>,
+    evidence: Option<(Node, String)>,
+) -> Result<()> {
+    exchange_tracked(
+        payments,
+        peer,
+        id,
+        request,
+        price,
+        send,
+        recv,
+        initial,
+        output,
+        ready,
+        cancellation,
+        evidence,
+        &mut ExchangeProgress::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn exchange_tracked(
     payments: Payments,
     peer: iroh::EndpointId,
     id: String,
@@ -286,6 +359,7 @@ pub(crate) async fn exchange(
     ready: tokio::sync::oneshot::Sender<()>,
     mut cancellation: tokio::sync::watch::Receiver<bool>,
     evidence: Option<(Node, String)>,
+    progress: &mut ExchangeProgress,
 ) -> Result<()> {
     let (_input_amount, total) =
         match validate_initial_invoice(&payments, &request, &price, &id, &initial).await {
@@ -345,10 +419,12 @@ pub(crate) async fn exchange(
                     accounted_msat = accounted_msat.saturating_add(payment.amount_msat).saturating_add(payment.fee_msat);
                     observations.settled(0, &payment);
                     input_settled = true;
+                    progress.input_settled = true;
                 }
                 frame = &mut reading => break frame?,
                 _ = cancellation.changed(), if !cancelled => {
                     cancelled = true;
+                    progress.cancelled = true;
                     wire::write(&mut send, &Frame::Cancel).await?;
                 }
             }
@@ -356,8 +432,10 @@ pub(crate) async fn exchange(
         match frame {
             Frame::Output { bytes } => {
                 ensure!(!output_settled, "output after final invoice");
+                progress.output_delivered |= !bytes.is_empty();
                 if !cancelled && output.write_all(&bytes).await.is_err() {
                     cancelled = true;
+                    progress.cancelled = true;
                     wire::write(&mut send, &Frame::Cancel).await?;
                 }
             }
