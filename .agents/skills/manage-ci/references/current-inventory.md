@@ -10,8 +10,10 @@ The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
 `mesh-wallet-lexe` and `mesh-llm-payments`, including optional dependencies.
 
-The protected catalogs include `platform-windows-cfg`: ownership of
-`mesh-llm-plugin` selects `platform-checks` and its existing `windows-unit`
+The protected catalogs include `platform-windows-cfg`: ownership of the crates
+it lists (`mesh-llm-plugin` and the crates verified green on Windows since,
+`scripts/tests/test_ci_windows_composition.py` keeps the list and the ones
+still unverified) selects `platform-checks` and its existing `windows-unit`
 row. It does not select host/native product builds by itself.
 
 ## Entry workflows
