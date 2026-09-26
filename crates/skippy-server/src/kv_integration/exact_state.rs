@@ -394,13 +394,14 @@ impl KvStageIntegration {
                 drop(lease);
                 continue;
             }
-            let promote_to_l3 = self.l3.as_ref().is_some_and(|l3| {
-                l3.benefit_observe_memory_hit(
-                    &identity.namespace,
-                    &lookup.stored_tokens,
-                    cold_prefill_cost,
-                )
-            });
+            let promote_to_l3 = lookup.value.l3_promotion_eligible
+                && self.l3.as_ref().is_some_and(|l3| {
+                    l3.benefit_observe_memory_hit(
+                        &identity.namespace,
+                        &lookup.stored_tokens,
+                        cold_prefill_cost,
+                    )
+                });
             let page_id = lookup.value.page_id.clone();
             let promotion_payload = promote_to_l3.then(|| lookup.value.payload.clone());
             let promotion_extra = promote_to_l3.then(|| lookup.value.extra.clone());

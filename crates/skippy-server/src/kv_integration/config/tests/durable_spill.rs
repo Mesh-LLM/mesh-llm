@@ -120,15 +120,17 @@ fn resident_only_exact_record_does_not_spill_to_l3() {
 
     store_exact_radix_record(&radix, &blobs, 1, limits(0, 0), None, Some(&tier), record).unwrap();
 
-    assert_eq!(
-        radix
-            .lock()
-            .unwrap()
-            .lookup_recurrent("model", &[1, 2])
-            .expect("resident-only exact state must remain available in L1")
-            .value
-            .page_id,
-        "full-prompt"
+    let radix_entry = radix
+        .lock()
+        .unwrap()
+        .lookup_recurrent("model", &[1, 2])
+        .expect("resident-only exact state must remain available in L1")
+        .value
+        .clone();
+    assert_eq!(radix_entry.page_id, "full-prompt");
+    assert!(
+        !radix_entry.l3_promotion_eligible,
+        "a later L1 hit must not promote an off-checkpoint state into L3"
     );
     assert!(
         tier.locate_longest("model", &[1, 2], 2).unwrap().is_none(),

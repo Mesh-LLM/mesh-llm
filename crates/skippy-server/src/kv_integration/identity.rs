@@ -359,11 +359,12 @@ mod tests {
                 recorded.namespace.clone(),
                 &recorded.token_ids,
                 1,
-                super::super::RadixExactEntry {
-                    page_id: recorded.page_id.clone(),
-                    payload: ExactStatePayload::kv_recurrent(Vec::new(), vec![1]),
-                    extra: ExactStateExtra::default(),
-                },
+                super::super::RadixExactEntry::new(
+                    recorded.page_id.clone(),
+                    ExactStatePayload::kv_recurrent(Vec::new(), vec![1]),
+                    ExactStateExtra::default(),
+                    true,
+                ),
             )
             .unwrap();
         let mut lookup_tokens = recorded_tokens.clone();

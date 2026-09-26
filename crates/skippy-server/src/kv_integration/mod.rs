@@ -345,6 +345,24 @@ pub(crate) struct RadixExactEntry {
     pub(crate) page_id: String,
     pub(crate) payload: ExactStatePayload,
     pub(crate) extra: ExactStateExtra,
+    /// Whether a later resident hit may promote this entry into durable L3.
+    pub(crate) l3_promotion_eligible: bool,
+}
+
+impl RadixExactEntry {
+    pub(crate) fn new(
+        page_id: String,
+        payload: ExactStatePayload,
+        extra: ExactStateExtra,
+        l3_promotion_eligible: bool,
+    ) -> Self {
+        Self {
+            page_id,
+            payload,
+            extra,
+            l3_promotion_eligible,
+        }
+    }
 }
 
 #[derive(Debug)]

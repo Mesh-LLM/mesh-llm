@@ -1,5 +1,13 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct DurableRecordTarget<'a> {
+    pub(super) l3: Option<&'a L3Tier>,
+    pub(super) cachegen_enabled: bool,
+    #[cfg(test)]
+    pub(super) before_l3_spill: Option<&'a dyn Fn()>,
+}
+
 /// Exact-state payload handed from the serving worker to durable storage.
 #[derive(Debug)]
 pub(super) struct PendingDurableSpill {

@@ -24,7 +24,9 @@ use super::{
 };
 
 mod durable_spill;
-use durable_spill::{PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker};
+use durable_spill::{
+    DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
+};
 
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
 // sequence lanes, so their exact-state catalog must remain deliberately small.
@@ -672,14 +674,6 @@ fn store_exact_radix_record(
     )
 }
 
-#[derive(Clone, Copy)]
-struct DurableRecordTarget<'a> {
-    l3: Option<&'a L3Tier>,
-    cachegen_enabled: bool,
-    #[cfg(test)]
-    before_l3_spill: Option<&'a dyn Fn()>,
-}
-
 fn store_exact_radix_record_with_codec(
     radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
     blobs: &Mutex<CacheBlobStore>,
@@ -725,11 +719,12 @@ fn store_exact_radix_record_with_codec(
             namespace.clone(),
             &token_ids,
             logical_bytes,
-            RadixExactEntry {
-                page_id: page_id.clone(),
-                payload: payload.clone(),
-                extra: extra.clone(),
-            },
+            RadixExactEntry::new(
+                page_id.clone(),
+                payload.clone(),
+                extra.clone(),
+                write_through_l3,
+            ),
         );
         match insert_result {
             Err(error) => Err(error),
@@ -2406,11 +2401,12 @@ mod reserved_admission_harness {
                 chat_identity.namespace.clone(),
                 &chat_identity.token_ids,
                 32,
-                RadixExactEntry {
-                    page_id: "exact".to_string(),
-                    payload: ExactStatePayload::full_state(vec![9]),
-                    extra: ExactStateExtra::default(),
-                },
+                RadixExactEntry::new(
+                    "exact".to_string(),
+                    ExactStatePayload::full_state(vec![9]),
+                    ExactStateExtra::default(),
+                    true,
+                ),
             )
             .expect("seeding the radix must succeed");
 
@@ -2446,11 +2442,12 @@ mod reserved_admission_harness {
                 chat_identity.namespace.clone(),
                 &chat_identity.token_ids,
                 32,
-                RadixExactEntry {
-                    page_id: "pre-existing".to_string(),
-                    payload: ExactStatePayload::full_state(vec![9]),
-                    extra: ExactStateExtra::default(),
-                },
+                RadixExactEntry::new(
+                    "pre-existing".to_string(),
+                    ExactStatePayload::full_state(vec![9]),
+                    ExactStateExtra::default(),
+                    true,
+                ),
             )
             .expect("pre-seeding the radix must succeed");
         let result = kv.record_exact_state(
