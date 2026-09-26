@@ -17,6 +17,7 @@ SPEC = importlib.util.spec_from_file_location('memory_evidence', ROOT / 'scripts
 E = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(E)
 M = E.MEMORY
+PRODUCTION_HOST_LOCK_ROOT = M.HOST_LOCK_ROOT
 
 
 def model(size=1, kind='causal_generation', projector=0, minimum=None):
@@ -34,9 +35,15 @@ class MemoryTests(unittest.TestCase):
     def setUp(self):
         self.lock_root = tempfile.TemporaryDirectory()
         self.addCleanup(self.lock_root.cleanup)
-        lock_root = patch('tempfile.gettempdir', return_value=self.lock_root.name)
+        lock_root = patch.object(M, 'HOST_LOCK_ROOT', Path(self.lock_root.name))
         lock_root.start()
         self.addCleanup(lock_root.stop)
+        lock_owner = patch.object(M, 'HOST_LOCK_OWNER_UID', os.getuid())
+        lock_owner.start()
+        self.addCleanup(lock_owner.stop)
+        self.lock_path = Path(self.lock_root.name) / M.HOST_LOCK_NAME
+        self.lock_path.touch(mode=0o666)
+        self.lock_path.chmod(0o666)
 
     def test_exact_boundaries_and_invalid_estimates(self):
         small = 128 * M.GIB * 90 // 100
@@ -136,7 +143,10 @@ class MemoryTests(unittest.TestCase):
     def test_busy_host_lock_waits_then_runs_family(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory) / 'evidence'
-            lock = Path(directory) / f'mesh-canary-family-{os.getuid()}.lock'
+            lock = self.lock_path
+            initialized_lock, initialized_path = M.open_host_lock()
+            initialized_lock.close()
+            self.assertEqual(initialized_path, lock)
             ready = Path(directory) / 'lock-ready'
             released = Path(directory) / 'lock-released'
             holder = subprocess.Popen([
@@ -163,8 +173,7 @@ class MemoryTests(unittest.TestCase):
                 time.sleep(0.01)
             command = [sys.executable, '-c',
                        f'import pathlib; assert pathlib.Path({str(released)!r}).exists()']
-            with patch('tempfile.gettempdir', return_value=directory), \
-                 patch.object(M, 'host_memory', return_value=(128*M.GIB, 128*M.GIB)):
+            with patch.object(M, 'host_memory', return_value=(128*M.GIB, 128*M.GIB)):
                 result = M.guarded_run(model(), 'accelerator-memory-128plus', command, evidence)
             holder.wait(timeout=5)
             report = json.loads((evidence / 'memory-admission.json').read_text())
@@ -172,6 +181,21 @@ class MemoryTests(unittest.TestCase):
             self.assertTrue(report['host_lock_contended'])
             self.assertGreater(report['host_lock_wait_seconds'], 0)
             self.assertEqual(report['status'], 'passed')
+
+    @unittest.skipIf(os.name != 'posix', 'host lock uses POSIX permissions')
+    def test_host_lock_is_shared_across_runner_accounts(self):
+        lock, path = M.open_host_lock()
+        lock.close()
+        self.assertEqual(PRODUCTION_HOST_LOCK_ROOT,
+                         Path('/Library/Application Support/MeshLLM/locks'))
+        self.assertEqual(path.name, M.HOST_LOCK_NAME)
+        self.assertEqual(path.stat().st_mode & 0o666, 0o666)
+
+    @unittest.skipIf(os.name != 'posix', 'host lock uses POSIX permissions')
+    def test_host_lock_rejects_replaceable_directory(self):
+        Path(self.lock_root.name).chmod(0o777)
+        with self.assertRaisesRegex(ValueError, 'must not be writable'):
+            M.open_host_lock()
 
     @unittest.skipIf(os.name != 'posix', 'process-group guard is macOS/POSIX')
     def test_pressure_stops_real_child_and_records_failure(self):

@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -21,6 +22,9 @@ import time
 GIB = 1024 ** 3
 TIERS = (128, 256)
 RESERVE_PERCENT = 10
+HOST_LOCK_NAME = "mesh-canary-family-host.lock"
+HOST_LOCK_ROOT = Path("/Library/Application Support/MeshLLM/locks")
+HOST_LOCK_OWNER_UID = 0
 
 
 def positive_bytes(value, name):
@@ -161,16 +165,51 @@ def stop_group(process):
         time.sleep(0.05)
 
 
+def open_host_lock():
+    """Open a stable, world-writable lock shared by runner accounts."""
+    lock_path = HOST_LOCK_ROOT / HOST_LOCK_NAME
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    directory = os.open(HOST_LOCK_ROOT, directory_flags)
+    try:
+        directory_metadata = os.fstat(directory)
+        if not stat.S_ISDIR(directory_metadata.st_mode):
+            raise ValueError("family host lock root is not a directory")
+        if directory_metadata.st_uid != HOST_LOCK_OWNER_UID:
+            raise ValueError("family host lock directory has the wrong owner")
+        if directory_metadata.st_mode & 0o022:
+            raise ValueError("family host lock directory must not be writable by runner accounts")
+        flags = os.O_RDWR
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(HOST_LOCK_NAME, flags, dir_fd=directory)
+    finally:
+        os.close(directory)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("family host lock is not a regular single-link file")
+        if metadata.st_uid != HOST_LOCK_OWNER_UID:
+            raise ValueError("family host lock has the wrong owner")
+        if metadata.st_mode & 0o666 != 0o666:
+            raise ValueError("family host lock is not writable by every runner account")
+        return os.fdopen(descriptor, "a+"), lock_path
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
 def guarded_run(model, expected_tier, command, evidence, *, cwd=None):
     import fcntl
     evidence.mkdir(parents=True, exist_ok=True)
     report = {"family": model["family"], "reserve_percent": RESERVE_PERCENT, "status": "failed"}
     process = None
-    # macOS per-user temp root is outside runner workspaces and survives jobs.
-    import tempfile
-    lock_path = Path(tempfile.gettempdir()) / f"mesh-canary-family-{os.getuid()}.lock"
     try:
-        with lock_path.open("a") as lock:
+        lock, lock_path = open_host_lock()
+        with lock:
             lock_wait_started = time.monotonic()
             report["host_lock_contended"] = False
             try:

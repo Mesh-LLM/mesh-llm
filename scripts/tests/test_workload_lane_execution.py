@@ -132,6 +132,120 @@ class WorkloadLaneExecutionTests(unittest.TestCase):
                     env=env, capture_output=True, text=True, check=False, timeout=5)
                 self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_address_in_use_detection_is_narrow(self) -> None:
+        function = shell_function("skippy-workload-certify.sh", "address_in_use_log")
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "server.log"
+            prefix = "set -euo pipefail\n" + function + "\n"
+            for message in ("Address already in use (os error 48)", "AddrInUse", "EADDRINUSE"):
+                with self.subTest(message=message):
+                    log.write_text(message + "\n")
+                    result = subprocess.run(
+                        ["bash", "-c", prefix + 'address_in_use_log "$LOG"'],
+                        env={**os.environ, "LOG": str(log)}, capture_output=True,
+                        text=True, check=False, timeout=5,
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+            log.write_text("model initialization failed\n")
+            result = subprocess.run(
+                ["bash", "-c", prefix + 'address_in_use_log "$LOG"'],
+                env={**os.environ, "LOG": str(log)}, capture_output=True,
+                text=True, check=False, timeout=5,
+            )
+            self.assertEqual(1, result.returncode)
+
+    def test_candidate_start_retries_only_address_in_use_with_fresh_port(self) -> None:
+        address_check = shell_function("skippy-workload-certify.sh", "address_in_use_log")
+        start_server = shell_function("skippy-workload-certify.sh", "start_candidate_server")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary_dir = root / "bin"
+            binary_dir.mkdir()
+            calls = root / "calls"
+            server = binary_dir / "skippy-server"
+            server.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"$*\" >> \"$CALLS\"\n"
+                "if [[ $(wc -l < \"$CALLS\") -eq 1 ]]; then\n"
+                "  echo 'Address already in use (os error 48)' >&2\n"
+                "  exit 1\n"
+                "fi\n"
+            )
+            server.chmod(0o755)
+            env = {
+                **os.environ,
+                "BACKEND": "cpu",
+                "CALLS": str(calls),
+                "CANDIDATE_BIN_DIR": str(binary_dir),
+                "CONFIG_PATH": str(root / "config.json"),
+                "SERVER_LOG": str(root / "server.log"),
+                "PORT": "",
+                "PORT_START_ATTEMPTS": "3",
+                "ROOT": str(ROOT),
+            }
+            script = "\n".join([
+                "set -euo pipefail",
+                address_check,
+                "python3() { if [[ -f \"$CALLS\" ]]; then printf 41002; else printf 41001; fi; }",
+                "wait_for_workload_server() { wait \"$1\"; }",
+                start_server,
+                "start_candidate_server",
+            ])
+            result = subprocess.run(
+                ["bash", "-c", script], env=env, capture_output=True,
+                text=True, check=False, timeout=5,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            invocations = calls.read_text().splitlines()
+            self.assertEqual(2, len(invocations))
+            self.assertIn("127.0.0.1:41001", invocations[0])
+            self.assertIn("127.0.0.1:41002", invocations[1])
+            self.assertTrue((root / "server.log.attempt-1").exists())
+            self.assertTrue((root / "server.log").exists())
+
+    def test_candidate_start_does_not_retry_other_startup_failures(self) -> None:
+        address_check = shell_function("skippy-workload-certify.sh", "address_in_use_log")
+        start_server = shell_function("skippy-workload-certify.sh", "start_candidate_server")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary_dir = root / "bin"
+            binary_dir.mkdir()
+            calls = root / "calls"
+            server = binary_dir / "skippy-server"
+            server.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"$*\" >> \"$CALLS\"\n"
+                "echo 'model initialization failed' >&2\n"
+                "exit 1\n"
+            )
+            server.chmod(0o755)
+            env = {
+                **os.environ,
+                "BACKEND": "cpu",
+                "CALLS": str(calls),
+                "CANDIDATE_BIN_DIR": str(binary_dir),
+                "CONFIG_PATH": str(root / "config.json"),
+                "SERVER_LOG": str(root / "server.log"),
+                "PORT": "",
+                "PORT_START_ATTEMPTS": "3",
+                "ROOT": str(ROOT),
+            }
+            script = "\n".join([
+                "set -euo pipefail",
+                address_check,
+                "python3() { printf 41001; }",
+                "wait_for_workload_server() { wait \"$1\"; }",
+                start_server,
+                "start_candidate_server",
+            ])
+            result = subprocess.run(
+                ["bash", "-c", script], env=env, capture_output=True,
+                text=True, check=False, timeout=5,
+            )
+            self.assertEqual(1, result.returncode)
+            self.assertEqual(1, len(calls.read_text().splitlines()))
+            self.assertIn("model initialization failed", (root / "server.log").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

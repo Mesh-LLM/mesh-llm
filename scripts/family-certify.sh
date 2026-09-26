@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/family-outcome.sh
 source "$ROOT/scripts/lib/family-outcome.sh"
+PORT_START_ATTEMPTS=3
 
 usage() {
   cat >&2 <<'EOF'
@@ -64,7 +65,6 @@ Speculative options:
 Output options:
   --cert-root DIR             output root; default: target/family-certify
   --run-id ID                 output run id; default: timestamp
-  --port-base N               base port; default: 19000 + random offset
   -h, --help                  show this help
 
 Arguments after -- are currently ignored by the mesh-llm import.
@@ -140,7 +140,6 @@ RECURRENT_RANGES=""
 RECURRENT_ALL=0
 CERT_ROOT="target/family-certify"
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
-PORT_BASE="$((19000 + RANDOM % 1000))"
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -180,7 +179,6 @@ while [[ $# -gt 0 ]]; do
     --recurrent-all) RECURRENT_ALL=1; shift ;;
     --cert-root) CERT_ROOT="$2"; shift 2 ;;
     --run-id) RUN_ID="$2"; shift 2 ;;
-    --port-base) PORT_BASE="$2"; shift 2 ;;
     --) shift; EXTRA_ARGS=("$@"); break ;;
     -h|--help) usage; exit 2 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
@@ -280,13 +278,39 @@ run_logged_core_parity() {
   local chain_report="$2"
   shift 2
   local log="$LOG_DIR/core-parity.log"
-  local exit_code=0
-  local command
-  command="$(quote_cmd "$@")"
-  {
-    printf '+ %s\n\n' "$command"
-    "$@"
-  } >"$log" 2>&1 || exit_code=$?
+  local exit_code=0 attempt=1 core_ports
+  local single_stage1_port chain_stage1_port chain_stage2_port
+  local command command_text attempt_log retryable
+  : >"$log"
+  while (( attempt <= PORT_START_ATTEMPTS )); do
+    rm -f "$single_report" "$chain_report"
+    core_ports="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 3)"
+    IFS=',' read -r single_stage1_port chain_stage1_port chain_stage2_port <<< "$core_ports"
+    command=(
+      "$@"
+      --single-stage1-bind-addr "127.0.0.1:$single_stage1_port"
+      --chain-stage1-bind-addr "127.0.0.1:$chain_stage1_port"
+      --chain-stage2-bind-addr "127.0.0.1:$chain_stage2_port"
+    )
+    command_text="$(quote_cmd "${command[@]}")"
+    attempt_log="$log.attempt-$attempt"
+    printf '+ %s\n\n' "$command_text" >"$attempt_log"
+    exit_code=0
+    "${command[@]}" >>"$attempt_log" 2>&1 || exit_code=$?
+    retryable=0
+    if address_in_use_log "$attempt_log"; then
+      retryable=1
+    fi
+    cat "$attempt_log" >>"$log"
+    rm -f "$attempt_log"
+    if (( exit_code == 0 )) || (( attempt == PORT_START_ATTEMPTS )) ||
+       (( retryable == 0 )); then
+      break
+    fi
+    printf '\naddress-in-use startup failure; retrying with fresh ports (%s/%s)\n\n' \
+      "$attempt" "$PORT_START_ATTEMPTS" >>"$log"
+    attempt=$((attempt + 1))
+  done
   local single_status="pass"
   local chain_status="pass"
   [[ -f "$single_report" ]] || single_status="fail"
@@ -298,6 +322,53 @@ run_logged_core_parity() {
   record_event "single-step" "$single_status" "$exit_code" "$log" "$single_report" "shared monolithic oracle"
   record_event "chain" "$chain_status" "$exit_code" "$log" "$chain_report" "shared monolithic oracle"
   printf 'core-parity: %s (exit %s)\n' "$(if (( exit_code == 0 )); then printf pass; else printf fail; fi)" "$exit_code"
+}
+
+address_in_use_log() {
+  grep -Eiq 'address (is )?already in use|AddrInUse|EADDRINUSE' "$1"
+}
+
+run_logged_state_handoff() {
+  local report="$1"
+  shift
+  local log="$LOG_DIR/state-handoff.log"
+  local exit_code=0 attempt=1 state_ports source_port restore_port
+  local command command_text attempt_log retryable
+  : >"$log"
+  while (( attempt <= PORT_START_ATTEMPTS )); do
+    rm -f "$report"
+    state_ports="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 2)"
+    IFS=',' read -r source_port restore_port <<< "$state_ports"
+    command=(
+      "$@"
+      --source-bind-addr "127.0.0.1:$source_port"
+      --restore-bind-addr "127.0.0.1:$restore_port"
+    )
+    command_text="$(quote_cmd "${command[@]}")"
+    attempt_log="$log.attempt-$attempt"
+    printf '+ %s\n\n' "$command_text" >"$attempt_log"
+    exit_code=0
+    "${command[@]}" >>"$attempt_log" 2>&1 || exit_code=$?
+    retryable=0
+    if address_in_use_log "$attempt_log"; then
+      retryable=1
+    fi
+    cat "$attempt_log" >>"$log"
+    rm -f "$attempt_log"
+    if (( exit_code == 0 )) || (( attempt == PORT_START_ATTEMPTS )) ||
+       (( retryable == 0 )); then
+      break
+    fi
+    printf '\naddress-in-use startup failure; retrying with fresh ports (%s/%s)\n\n' \
+      "$attempt" "$PORT_START_ATTEMPTS" >>"$log"
+    attempt=$((attempt + 1))
+  done
+  local status="pass"
+  if (( exit_code != 0 )); then
+    status="fail"
+  fi
+  record_event "state-handoff" "$status" "$exit_code" "$log" "$report" ""
+  printf 'state-handoff: %s (exit %s)\n' "$status" "$exit_code"
 }
 
 model_identity_json() {
@@ -415,9 +486,6 @@ else
       "${correctness_common[@]}"
       --split-layer "$SPLIT_LAYER"
       --splits "$SPLITS"
-      --single-stage1-bind-addr "127.0.0.1:$((PORT_BASE + 1))"
-      --chain-stage1-bind-addr "127.0.0.1:$((PORT_BASE + 11))"
-      --chain-stage2-bind-addr "127.0.0.1:$((PORT_BASE + 12))"
       --single-report-out "$REPORT_DIR/single-step.json"
       --chain-report-out "$REPORT_DIR/chain.json"
       )
@@ -450,8 +518,6 @@ else
       state-handoff
       "${correctness_common[@]}"
       --activation-width "$ACTIVATION_WIDTH"
-      --source-bind-addr "127.0.0.1:$((PORT_BASE + 31))"
-      --restore-bind-addr "127.0.0.1:$((PORT_BASE + 32))"
       --state-payload-kind "$STATE_PAYLOAD_KIND"
       --cache-hit-repeats "$CACHE_HIT_REPEATS"
       --report-out "$REPORT_DIR/state-handoff.json"
@@ -465,7 +531,7 @@ else
     if (( CACHE_DECODED_RESULT_HITS != 0 )); then
       state_args+=(--cache-decoded-result-hits)
     fi
-    run_logged "state-handoff" "$REPORT_DIR/state-handoff.json" "${state_args[@]}"
+    run_logged_state_handoff "$REPORT_DIR/state-handoff.json" "${state_args[@]}"
   else
     record_event "state-handoff" "skipped" 0 "" "" "requires --activation-width and --layer-end"
   fi
