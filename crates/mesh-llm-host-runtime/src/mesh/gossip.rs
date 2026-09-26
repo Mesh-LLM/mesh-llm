@@ -2,9 +2,9 @@
 //! and peer list management (add/remove/update).
 
 use super::{
-    DEAD_PEER_TTL, DEPARTED_PEER_TRANSITIVE_BLOCK_TTL, InviteTokenMaterial, MeshOperationalEvent,
-    MeshPeerRemovalReason, MeshPolicyRejectionReason, Node, PEER_CONNECT_AND_GOSSIP_TIMEOUT,
-    PEER_STALE_SECS, PeerAnnouncement, PeerInfo, connect_mesh, elapsed_ms_u64, emit_mesh_info,
+    DEAD_PEER_TTL, InviteTokenMaterial, MeshOperationalEvent, MeshPeerRemovalReason,
+    MeshPolicyRejectionReason, Node, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS,
+    PeerAnnouncement, PeerInfo, connect_mesh, elapsed_ms_u64, emit_mesh_info,
     mesh_peer_operational_context, parse_invite_token, record_mesh_operational_event,
     record_mesh_operational_event_with_context,
 };
@@ -1331,22 +1331,14 @@ impl Node {
         if id == self.endpoint.id() {
             return;
         }
-        if state
-            .dead_peers
-            .get(&id)
-            .is_some_and(|t| t.elapsed() < DEAD_PEER_TTL)
-        {
-            return;
-        }
-        // Issue #1756: even after DEAD_PEER_TTL expires, a departed id stays
-        // barred from transitive re-admission so a bridge's stale
-        // announcement cannot resurrect a ghost `state: serving` entry for a
-        // genuinely gone peer. Only direct proof of life clears this early.
-        if state
-            .departed_peers
-            .get(&id)
-            .is_some_and(|t| t.elapsed() < DEPARTED_PEER_TRANSITIVE_BLOCK_TTL)
-        {
+        // Issue #1756: a departed id stays barred from any transitive update
+        // while either tombstone is active. Being already ADMITTED is not an
+        // exemption, so this check deliberately sits before the
+        // `if let Some(existing)` branch below: a bridge's stale
+        // re-announcement must not refresh `last_mentioned` on a departed
+        // peer, or `stale_heartbeat_peers()` could never prune it. Only
+        // direct proof of life clears the records early.
+        if state.departure_record_blocks_mention(&id) {
             return;
         }
         if let Some(existing) = state.peers.get_mut(&id) {
@@ -1357,7 +1349,9 @@ impl Node {
             // being alive (collect_announcements already filters stale peers).
             // We update last_mentioned (not last_seen) so that PeerDown
             // silencing and collect_announcements use only direct proof-of-life,
-            // while the prune decision considers both timestamps.
+            // while the prune decision considers both timestamps. Reaching
+            // this line already proves departure_record_blocks_mention was
+            // false, so the refresh below is never reached for a departed id.
             existing.last_mentioned = std::time::Instant::now();
             let updated_peer = existing.clone();
             let changed = peer_meaningfully_changed(&old_peer, &updated_peer);

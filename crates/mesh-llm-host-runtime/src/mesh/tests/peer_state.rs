@@ -1962,6 +1962,53 @@ fn peer_meaningfully_changed_detects_memory_updates() {
     assert!(!peer_meaningfully_changed(&old_peer, &old_peer.clone()));
 }
 
+/// RED test for issue #1756 Layer 3: an admitted host peer that advertises a
+/// routable model but has no live entry in `state.connections` must be
+/// excluded from routing — `hosts_for_model`, `any_host`, and `routing_table`
+/// must all agree it is not eligible.
+#[tokio::test]
+async fn peer_with_no_connection_and_no_observed_rtt_is_not_routing_eligible() {
+    let node = Node::new_for_tests(super::NodeRole::Worker).await.unwrap();
+    let peer_id = make_test_endpoint_id(50);
+    let mut peer = make_test_peer(peer_id, None, 24);
+    peer.role = super::NodeRole::Host { http_port: 9337 };
+    peer.serving_models = vec!["Qwen3-8B-Q4_K_M".to_string()];
+    peer.hosted_models = vec!["Qwen3-8B-Q4_K_M".to_string()];
+    peer.hosted_models_known = true;
+    node.insert_test_peer_without_liveness(peer).await;
+
+    assert!(
+        !node
+            .state
+            .lock()
+            .await
+            .connections
+            .contains_key(&peer_id),
+        "precondition: peer has no connection entry"
+    );
+
+    assert!(
+        !node
+            .hosts_for_model("Qwen3-8B-Q4_K_M")
+            .await
+            .contains(&peer_id),
+        "an admitted peer without a live connection must not appear in hosts_for_model"
+    );
+    assert!(
+        node.any_host().await.is_none(),
+        "an admitted peer without a live connection must not be returned by any_host"
+    );
+    assert!(
+        !node
+            .routing_table()
+            .await
+            .hosts
+            .iter()
+            .any(|entry| entry.endpoint_id == peer_id),
+        "an admitted peer without a live connection must not appear in routing_table"
+    );
+}
+
 /// `weights_digest` must be stripped when a local `PeerAnnouncement` is
 /// converted to its proto gossip form. A receiving peer has no way to verify
 /// a file-byte hash it didn't measure itself, so the field is deliberately
