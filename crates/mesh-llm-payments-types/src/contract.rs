@@ -2,6 +2,7 @@
 //! request/response shapes. The host speaks only this; any provider of the
 //! capability (the in-process builtin or an external plugin) implements it.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,8 @@ pub const CAPABILITY: &str = "payments.v1";
 pub mod ops {
     /// Run one local operator command (the `/api/wallet` surface).
     pub const CONTROL: &str = "control";
+    /// Advertised seller prices, and whether the provider has payments state.
+    pub const PRICING: &str = "pricing";
     /// Effective intent and spendable budget for pay-first routing.
     pub const ROUTING_BUDGET: &str = "routing_budget";
     /// Reconcile uncertain charges and recover output debt; returns the
@@ -73,7 +76,8 @@ pub const BOOKKEEPING_DEADLINE: Duration = Duration::from_secs(10);
 pub fn deadline(operation: &str) -> Option<Duration> {
     matches!(
         operation,
-        ops::FINISH
+        ops::PRICING
+            | ops::FINISH
             | ops::PAYMENT_INTENT
             | ops::PREFETCH
             | ops::CANCEL
@@ -81,6 +85,17 @@ pub fn deadline(operation: &str) -> Option<Duration> {
             | ops::SERVE_FINISH
     )
     .then_some(BOOKKEEPING_DEADLINE)
+}
+
+/// Advertised seller prices, and whether the provider has any payments state.
+///
+/// The provider must answer without provisioning: `configured` is false for a
+/// node that has never had a ledger, so the host can skip periodic recovery
+/// instead of opening one to find nothing.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AdvertisedPricing {
+    pub configured: bool,
+    pub prices: BTreeMap<String, crate::pricing::Pricing>,
 }
 
 /// Error body of a failed operation.
@@ -236,6 +251,7 @@ mod tests {
     /// being classified as bounded or as a wallet wait.
     const ALL_OPS: &[&str] = &[
         ops::CONTROL,
+        ops::PRICING,
         ops::ROUTING_BUDGET,
         ops::RECONCILE,
         ops::SETTLE_OUTPUT,
@@ -265,6 +281,7 @@ mod tests {
         assert_eq!(
             bounded,
             [
+                ops::PRICING,
                 ops::FINISH,
                 ops::PAYMENT_INTENT,
                 ops::PREFETCH,
