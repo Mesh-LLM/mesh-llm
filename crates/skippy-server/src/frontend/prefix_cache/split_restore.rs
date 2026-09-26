@@ -23,7 +23,11 @@ impl StageOpenAiBackend {
         let local_restore = self.iteration_scheduler.execute_runtime(
             "embedded-split-prefix-restore",
             move |runtime| match scheduler_kv
-                .restore_exact_state(runtime, &scheduler_session_key, &identities)
+                .restore_exact_state_with_shared_durable_fallback(
+                    runtime,
+                    &scheduler_session_key,
+                    &identities,
+                )
                 .map_err(openai_backend_error)?
             {
                 Some(restored) => Ok(Some(restored.token_count)),

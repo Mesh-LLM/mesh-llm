@@ -618,6 +618,7 @@ impl StageOpenAiBackend {
         session_id: &str,
         ids: &OpenAiGenerationIds,
         checkpoint_tokens: &[i32],
+        write_through_l3: bool,
     ) -> OpenAiResult<bool> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(false);
@@ -638,7 +639,7 @@ impl StageOpenAiBackend {
                     &scheduler_ids,
                     &scheduler_checkpoint_tokens,
                     "embedded_shared_checkpoint",
-                    true,
+                    write_through_l3,
                 ))
             },
         )

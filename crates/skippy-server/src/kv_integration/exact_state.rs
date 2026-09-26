@@ -181,6 +181,19 @@ impl KvStageIntegration {
         self.restore_exact_state_with_cold_cost(runtime, session_id, identities, None)
     }
 
+    /// Restores the longest warm L1 prefix, but constrains a cold L3 fallback
+    /// to the canonical checkpoint shared by every stage in a split chain.
+    pub(crate) fn restore_exact_state_with_shared_durable_fallback(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identities: &[PrefillKvIdentity],
+    ) -> Result<Option<ExactStateRestore>> {
+        runtime.restore_transaction(session_id, |runtime| {
+            self.restore_exact_state_inner(runtime, session_id, identities, None, true)
+        })
+    }
+
     pub fn restore_exact_state_with_cold_cost(
         &self,
         runtime: &mut RuntimeState,
@@ -189,7 +202,13 @@ impl KvStageIntegration {
         cold_prefill_cost: Option<f64>,
     ) -> Result<Option<ExactStateRestore>> {
         runtime.restore_transaction(session_id, |runtime| {
-            self.restore_exact_state_inner(runtime, session_id, identities, cold_prefill_cost)
+            self.restore_exact_state_inner(
+                runtime,
+                session_id,
+                identities,
+                cold_prefill_cost,
+                false,
+            )
         })
     }
 
@@ -199,6 +218,7 @@ impl KvStageIntegration {
         session_id: &str,
         identities: &[PrefillKvIdentity],
         cold_prefill_cost: Option<f64>,
+        shared_durable_fallback: bool,
     ) -> Result<Option<ExactStateRestore>> {
         if !self.should_lookup() || self.exact_state_payload().is_none() {
             return Ok(None);
@@ -245,6 +265,7 @@ impl KvStageIntegration {
                     identity,
                     lookup_started,
                     cold_prefill_cost,
+                    shared_durable_fallback,
                 )? {
                     return Ok(Some(restored));
                 }
@@ -708,6 +729,7 @@ impl KvStageIntegration {
         identity: &PrefillKvIdentity,
         lookup_started: Instant,
         cold_prefill_cost: Option<f64>,
+        shared_durable_fallback: bool,
     ) -> Result<Option<ExactStateRestore>> {
         const MAX_PREFIX_PROBES: usize = 64;
         let Some(l3) = &self.l3 else {
@@ -717,8 +739,13 @@ impl KvStageIntegration {
         // load on the located entry's manifest key: same-length queries for
         // different prefixes never suppress each other, and different-length
         // queries resolving to one entry never load it twice.
+        let durable_token_ids = if shared_durable_fallback {
+            self.durable_exact_lookup_token_ids(&identity.token_ids)
+        } else {
+            &identity.token_ids
+        };
         let location =
-            match l3.locate_longest(&identity.namespace, &identity.token_ids, MAX_PREFIX_PROBES) {
+            match l3.locate_longest(&identity.namespace, durable_token_ids, MAX_PREFIX_PROBES) {
                 Ok(Some(location)) => location,
                 // Nothing stored, or a corrupt / identity-mismatched entry.
                 // Either way the miss path is the safe one; the tier has

@@ -176,6 +176,20 @@ impl KvStageIntegration {
             self.exact_state_record_token_count_allowed(token_count, token_count)
         })
     }
+
+    /// Restrict a cold durable lookup to the checkpoint shared by every stage.
+    ///
+    /// Warm L1 may retain a longer request- or chat-specific boundary, but an
+    /// older durable entry at that boundary cannot be restored coherently when
+    /// downstream stages only persisted the canonical shared checkpoint.
+    pub(crate) fn durable_exact_lookup_token_ids<'a>(&self, token_ids: &'a [i32]) -> &'a [i32] {
+        let checkpoint = self
+            .exact_shared_checkpoint_token_count(token_ids.len() as u64)
+            .and_then(|token_count| usize::try_from(token_count).ok())
+            .unwrap_or(token_ids.len())
+            .min(token_ids.len());
+        &token_ids[..checkpoint]
+    }
 }
 
 #[cfg(test)]
@@ -427,5 +441,9 @@ mod tests {
         assert!(kv.exact_state_record_token_count_allowed(200, 200));
         assert!(!kv.full_exact_state_writes_through_l3(970));
         assert!(kv.full_exact_state_writes_through_l3(200));
+        let long_tokens = (0..970).collect::<Vec<_>>();
+        let short_tokens = (0..200).collect::<Vec<_>>();
+        assert_eq!(kv.durable_exact_lookup_token_ids(&long_tokens).len(), 768);
+        assert_eq!(kv.durable_exact_lookup_token_ids(&short_tokens).len(), 200);
     }
 }
