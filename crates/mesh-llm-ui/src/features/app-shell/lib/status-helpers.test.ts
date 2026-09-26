@@ -5,6 +5,7 @@ import {
   formatGpuMemory,
   formatLiveNodeState,
   gpuInventoryVramGb,
+  isClientOnlyNode,
   localRoutableModels,
   meshGpuVram,
   normalizeVramGb,
@@ -82,33 +83,50 @@ describe('live node state helpers', () => {
     }
   })
 
-  it('excludes client nodes from local routable models', () => {
-    const baseStatus: StatusPayload = {
-      node_id: 'local-node',
-      node_status: 'Serving',
-      node_state: 'serving',
-      token: 'token',
-      is_host: false,
-      is_client: false,
-      llama_ready: true,
-      peers: [],
-      model_name: 'fallback-model',
-      requested_models: [],
-      available_models: [],
-      serving_models: ['serving-model'],
-      hosted_models: ['hosted-model'],
-      my_vram_gb: 24,
-      api_port: 3131,
-      model_size_gb: 0,
-      inflight_requests: 0,
-      version: 'test',
-      latest_version: null,
-      wakeable_nodes: []
-    }
+  const baseStatus: StatusPayload = {
+    node_id: 'local-node',
+    node_status: 'Serving',
+    node_state: 'serving',
+    token: 'token',
+    is_host: false,
+    is_client: false,
+    llama_ready: true,
+    peers: [],
+    model_name: 'fallback-model',
+    requested_models: [],
+    available_models: [],
+    serving_models: ['serving-model'],
+    hosted_models: ['hosted-model'],
+    my_vram_gb: 24,
+    api_port: 3131,
+    model_size_gb: 0,
+    inflight_requests: 0,
+    version: 'test',
+    latest_version: null,
+    wakeable_nodes: []
+  }
 
+  it('excludes client nodes from local routable models', () => {
     expect(localRoutableModels(baseStatus)).toEqual(['hosted-model'])
     expect(localRoutableModels({ ...baseStatus, is_client: true })).toEqual([])
     expect(localRoutableModels({ ...baseStatus, node_state: 'client', is_client: false })).toEqual([])
+  })
+
+  it('detects a client-only node from is_client', () => {
+    expect(isClientOnlyNode({ ...baseStatus, is_client: true })).toBe(true)
+  })
+
+  it('detects a client-only node from node_state even when is_client is false', () => {
+    expect(isClientOnlyNode({ ...baseStatus, node_state: 'client', is_client: false })).toBe(true)
+  })
+
+  it('does not treat a host node as client-only', () => {
+    expect(isClientOnlyNode(baseStatus)).toBe(false)
+  })
+
+  it('does not treat unknown status as client-only', () => {
+    expect(isClientOnlyNode(null)).toBe(false)
+    expect(isClientOnlyNode(undefined)).toBe(false)
   })
 
   it('prefers advertised capacity over rated GPU inventory for VRAM totals', () => {

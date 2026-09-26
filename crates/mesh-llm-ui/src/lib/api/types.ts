@@ -165,6 +165,7 @@ export interface LoggingStatus {
 export interface StatusPayload {
   node_id: string
   node_state: 'client' | 'standby' | 'loading' | 'serving'
+  is_client?: boolean
   model_name: string
   llama_ready?: boolean
   runtime?: RuntimeInfo

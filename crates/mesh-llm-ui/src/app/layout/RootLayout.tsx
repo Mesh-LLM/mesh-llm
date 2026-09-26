@@ -2,6 +2,7 @@ import { HeadContent, Outlet, useRouter, useRouterState } from '@tanstack/react-
 import { useCallback, useMemo, useState } from 'react'
 import { LiveStatusConnector } from '@/app/layout/LiveStatusConnector'
 import { resolveHarnessTopNavData, resolveLiveTopNavData } from '@/app/layout/shell-adapter'
+import { isClientOnlyNode } from '@/features/app-shell/lib/status-helpers'
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { Footer } from '@/features/shell/components/Footer'
 import { TopNav } from '@/features/shell/components/TopNav'
@@ -71,6 +72,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
   const { mode } = useDataMode()
   const liveMode = mode === 'live'
   const statusQuery = useStatusQuery({ enabled: liveMode })
+  const clientOnlyNode = isClientOnlyNode(statusQuery.data)
   const pluginSummariesQuery = usePluginSummariesQuery({ enabled: liveMode })
   const { theme, accent, density, panelStyle, setTheme, setAccent, setDensity, setPanelStyle } = useUIPreferences()
   const newConfigurationPageEnabled = useBooleanFeatureFlag('global/newConfigurationPage')
@@ -111,20 +113,20 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
     [enabledConfigurationTabs, pathname]
   )
   const visibleActiveTab =
-    activeTab === 'configuration' && !newConfigurationPageEnabled
+    activeTab === 'configuration' && (!newConfigurationPageEnabled || clientOnlyNode)
       ? null
       : activeTab === 'reserves' && !newReservesPageEnabled
         ? null
-        : activeTab === 'logs' && !logsPageEnabled
+        : activeTab === 'logs' && (!logsPageEnabled || clientOnlyNode)
           ? null
           : activeTab
   const showDevelopmentNavControls = env.isDevelopment
 
   const onTabChange = useCallback(
     (tab: AppTab | null) => {
-      if (tab === 'logs' && !logsPageEnabled) return
+      if (tab === 'logs' && (!logsPageEnabled || clientOnlyNode)) return
       if (tab === 'reserves' && !newReservesPageEnabled) return
-      if (tab === 'configuration' && !newConfigurationPageEnabled) return
+      if (tab === 'configuration' && (!newConfigurationPageEnabled || clientOnlyNode)) return
       if (tab === 'configuration') {
         void router.navigate({
           to: '/configuration/$configurationTab',
@@ -134,7 +136,15 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
       }
       void router.navigate({ to: tabToPath(tab!) })
     },
-    [router, pathname, enabledConfigurationTabs, newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled]
+    [
+      router,
+      pathname,
+      enabledConfigurationTabs,
+      newConfigurationPageEnabled,
+      newReservesPageEnabled,
+      logsPageEnabled,
+      clientOnlyNode
+    ]
   )
 
   const onTogglePreferences = useCallback(() => setPreferencesOpen((value) => !value), [])
@@ -146,8 +156,12 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
   const onOpenIdentity = useCallback(() => setPreferencesOpen(true), [])
 
   const enabledTabs = useMemo(
-    () => ({ reserves: newReservesPageEnabled, logs: logsPageEnabled, configuration: newConfigurationPageEnabled }),
-    [newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled]
+    () => ({
+      reserves: newReservesPageEnabled,
+      logs: logsPageEnabled && !clientOnlyNode,
+      configuration: newConfigurationPageEnabled && !clientOnlyNode
+    }),
+    [newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled, clientOnlyNode]
   )
 
   const pluginNavItems = useMemo<readonly TopNavPluginPageItem[]>(() => {
