@@ -25,6 +25,7 @@ jobs:
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
       MESH_LIVE_CLAUDE_MODEL: ${{ inputs.model }}
       MESH_LLM_SKIP_UI: '1'
     steps:
@@ -43,6 +44,8 @@ jobs:
         run: |
           npm install --global @anthropic-ai/claude-code@2.1.273
           test "$(claude --version | awk '{print $1}')" = "2.1.273"
+      - name: Install repository build accelerator
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Run live Claude model round trip through Mesh
         run: |
           cargo test --locked -p mesh-llm-host-runtime --no-default-features \

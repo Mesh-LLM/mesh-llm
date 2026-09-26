@@ -17,6 +17,7 @@ jobs:
   plan:
     name: Plan Linux
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
     outputs:
@@ -78,6 +79,7 @@ jobs:
         if: ${{ contains(steps.changes.outputs.affected_crates, 'openai-frontend') || contains(steps.changes.outputs.affected_crates, 'mesh-llm-host-runtime') }}
         env:
           CARGO_INCREMENTAL: '0'
+          CARGO_PROFILE_TEST_DEBUG: '0'
           MESH_LLM_SKIP_UI: '1'
         run: |
           cargo test --locked -p openai-frontend
