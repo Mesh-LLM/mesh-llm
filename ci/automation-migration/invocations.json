@@ -1762,13 +1762,13 @@
       "id": "boundary:pr_linux:compute-changes",
       "disposition": "external_trust_boundary",
       "caller": ".github/workflows/pr_linux.yml",
-      "line": 48,
+      "line": 49,
       "source_block": "uses: ./.github/actions/compute-changes",
       "occurrence": 1,
       "candidate_id": null,
       "child": ".github/actions/compute-changes/action.yml",
       "bound_child": null,
-      "selector": "pull_request caller .github/workflows/pr_linux.yml checks out ref ${{ github.event.repository.default_branch }} (line 29), so ./.github/actions/compute-changes resolves in protected default-branch bytes",
+      "selector": "pull_request caller .github/workflows/pr_linux.yml checks out ref ${{ github.event.repository.default_branch }} (line 30), so ./.github/actions/compute-changes resolves in protected default-branch bytes",
       "reachable_bytes": ".github/actions/compute-changes/action.yml as it exists on the protected default branch at run time; this checkout's copy is the same-commit main lane's bytes only",
       "replacement_owner": "task 26 protected rollout prerequisites and shadow receipts",
       "deletion_condition": "Remove when the protected default-branch action no longer invokes Python, proven by task 26 shadow receipts for this caller.",
@@ -1781,12 +1781,12 @@
         },
         {
           "path": ".github/workflows/pr_linux.yml",
-          "line": 29,
+          "line": 30,
           "text": "ref: ${{ github.event.repository.default_branch }}"
         },
         {
           "path": ".github/workflows/pr_linux.yml",
-          "line": 48,
+          "line": 49,
           "text": "uses: ./.github/actions/compute-changes"
         }
       ]
@@ -1795,13 +1795,13 @@
       "id": "boundary:pr_linux:plan-ci",
       "disposition": "external_trust_boundary",
       "caller": ".github/workflows/pr_linux.yml",
-      "line": 55,
+      "line": 56,
       "source_block": "uses: ./.github/actions/plan-ci",
       "occurrence": 1,
       "candidate_id": null,
       "child": ".github/actions/plan-ci/action.yml",
       "bound_child": null,
-      "selector": "pull_request caller .github/workflows/pr_linux.yml checks out ref ${{ github.event.repository.default_branch }} (line 29), so ./.github/actions/plan-ci resolves in protected default-branch bytes",
+      "selector": "pull_request caller .github/workflows/pr_linux.yml checks out ref ${{ github.event.repository.default_branch }} (line 30), so ./.github/actions/plan-ci resolves in protected default-branch bytes",
       "reachable_bytes": ".github/actions/plan-ci/action.yml as it exists on the protected default branch at run time; this checkout's copy is the same-commit main lane's bytes only",
       "replacement_owner": "task 26 protected rollout prerequisites and shadow receipts",
       "deletion_condition": "Remove when the protected default-branch action no longer invokes Python, proven by task 26 shadow receipts for this caller.",
@@ -1814,12 +1814,12 @@
         },
         {
           "path": ".github/workflows/pr_linux.yml",
-          "line": 29,
+          "line": 30,
           "text": "ref: ${{ github.event.repository.default_branch }}"
         },
         {
           "path": ".github/workflows/pr_linux.yml",
-          "line": 55,
+          "line": 56,
           "text": "uses: ./.github/actions/plan-ci"
         }
       ]
@@ -1828,7 +1828,7 @@
       "id": "boundary:pr_linux:lane",
       "disposition": "external_trust_boundary",
       "caller": ".github/workflows/pr_linux.yml",
-      "line": 72,
+      "line": 98,
       "source_block": "uses: Mesh-LLM/mesh-llm/.github/workflows/ci-linux-lane.yml@main",
       "occurrence": 1,
       "candidate_id": null,
@@ -1847,7 +1847,7 @@
         },
         {
           "path": ".github/workflows/pr_linux.yml",
-          "line": 72,
+          "line": 98,
           "text": "uses: Mesh-LLM/mesh-llm/.github/workflows/ci-linux-lane.yml@main"
         }
       ]
