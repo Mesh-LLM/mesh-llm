@@ -500,15 +500,18 @@ existing pin and patches without repair or publication. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 
-Changed pins have at most three distributed repair attempts. Within each
-attempt, prepare/build failures return to the same bounded Goose session.
-Family or independent-verification failures feed the preserved candidate and
-all available worker/build evidence into a new session in the next attempt.
-Every edit invalidates all family results. A complete green repair pass must
-be followed by a fresh independent build and complete per-family pass on the
-same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
-or mismatched results. Only the final hosted publisher receives the repair
-credential, and exhausted attempts publish no branch or PR.
+Changed pins use one candidate pass followed by one independent verification
+pass. Before the candidate begins, a separate deterministic preflight verifies
+the immutable family plan and every pinned cache artifact. Environment or
+process-supervision failures stop without asking Goose to repair source. Within
+the candidate pass, prepare/build failures return to the same bounded Goose
+session. A family or independent-verification failure retains evidence and
+stops the run; it never creates another candidate or agent session. Every edit
+invalidates all family results. A complete green candidate pass must be
+followed by a fresh independent build and complete per-family pass on the same
+commit. A hosted aggregate rejects missing, duplicate, failed, cancelled, or
+mismatched results. Only the final hosted publisher receives the repair
+credential, and a failed pass publishes no branch or PR.
 
 The family plan must require executable coverage for every integrated MTP head
 declared by immutable GGUF metadata. A single draft token cannot certify a
@@ -554,8 +557,9 @@ bounds, and never falls back from a newer failure to an older success. The
 family job-result gate remains mandatory so missing uploads cannot hide failures.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-Repair feedback retains attempt-labelled history; it is diagnostic input, never
-certification authority. Rebuilding a producer invalidates its prior receipts.
+GitHub failed-job reruns retain attempt-labelled evidence, but no failure is fed
+into an automatic outer repair cycle. Rebuilding a producer invalidates its
+prior receipts.
 
 ## Validation contract
 

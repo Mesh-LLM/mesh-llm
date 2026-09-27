@@ -32,9 +32,7 @@ index f38f4a936..15b29abfa 100644
      uint32_t context_size_per_lane = 0;
      uint32_t context_size_total = 0;
      if (!skippy_context_capacity(config, lane_count, context_size_per_lane, context_size_total)) {
-@@ -714,8 +724,17 @@ enum skippy_status skippy_finish_model_open(
-     params.type_k = config != nullptr && config->cache_type_k > 0 ? static_cast<ggml_type>(config->cache_type_k) : GGML_TYPE_F16;
-     params.type_v = config != nullptr && config->cache_type_v > 0 ? static_cast<ggml_type>(config->cache_type_v) : GGML_TYPE_F16;
+@@ -712,6 +722,15 @@ enum skippy_status skippy_finish_model_open(
      params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
 -    params.embeddings = skippy_runtime_has_stage_plan(config) &&
 -            !skippy_runtime_is_terminal_stage(config);

@@ -5996,7 +5996,7 @@ new file mode 100644
 index 000000000..7a3e0fe09
 --- /dev/null
 +++ b/src/skippy/model_load_config.cpp
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,194 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -6178,10 +6178,18 @@ index 000000000..7a3e0fe09
 +void skippy_apply_context_hardware_config(
 +        const struct skippy_runtime_config * config,
 +        llama_context_params & params) {
-+    if (config == nullptr || config->op_offload == SKIPPY_TRISTATE_AUTO) {
++    if (config == nullptr) {
 +        return;
 +    }
-+    params.op_offload = config->op_offload == SKIPPY_TRISTATE_TRUE;
++    if (config->cache_type_k >= 0) {
++        params.type_k = static_cast<ggml_type>(config->cache_type_k);
++    }
++    if (config->cache_type_v >= 0) {
++        params.type_v = static_cast<ggml_type>(config->cache_type_v);
++    }
++    if (config->op_offload != SKIPPY_TRISTATE_AUTO) {
++        params.op_offload = config->op_offload == SKIPPY_TRISTATE_TRUE;
++    }
 +}
 diff --git a/src/skippy/model_load_config_internal.h b/src/skippy/model_load_config_internal.h
 new file mode 100644
@@ -6219,7 +6227,7 @@ new file mode 100644
 index 000000000..20b7abad7
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,1174 @@
+@@ -0,0 +1,1172 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -6822,6 +6830,8 @@ index 000000000..20b7abad7
 +
 +struct skippy_runtime_config skippy_runtime_config_default(void) {
 +    struct skippy_runtime_config config = {};
++    config.cache_type_k = GGML_TYPE_F16;
++    config.cache_type_v = GGML_TYPE_F16;
 +    config.kv_offload = SKIPPY_TRISTATE_AUTO;
 +    config.kv_unified = SKIPPY_TRISTATE_AUTO;
 +    config.swa_full = SKIPPY_TRISTATE_AUTO;
@@ -6928,8 +6938,6 @@ index 000000000..20b7abad7
 +        params.swa_full = skippy_resolve_tristate(config->swa_full, params.swa_full);
 +        skippy_apply_context_hardware_config(config, params);
 +    }
-+    params.type_k = config != nullptr && config->cache_type_k > 0 ? static_cast<ggml_type>(config->cache_type_k) : GGML_TYPE_F16;
-+    params.type_v = config != nullptr && config->cache_type_v > 0 ? static_cast<ggml_type>(config->cache_type_v) : GGML_TYPE_F16;
 +    params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
 +    params.embeddings = skippy_runtime_has_stage_plan(config) &&
 +            !skippy_runtime_is_terminal_stage(config);
@@ -7376,8 +7384,6 @@ index 000000000..20b7abad7
 +        ctx_params.swa_full = skippy_resolve_tristate(config->swa_full, ctx_params.swa_full);
 +        skippy_apply_context_hardware_config(config, ctx_params);
 +    }
-+    ctx_params.type_k = config != nullptr && config->cache_type_k > 0 ? static_cast<ggml_type>(config->cache_type_k) : GGML_TYPE_F16;
-+    ctx_params.type_v = config != nullptr && config->cache_type_v > 0 ? static_cast<ggml_type>(config->cache_type_v) : GGML_TYPE_F16;
 +    ctx_params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
 +
 +    target_model->mtp_ctx = llama_init_from_model(draft_model, ctx_params);

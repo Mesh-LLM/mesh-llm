@@ -151,6 +151,7 @@ turns=0
 date() { echo "$now"; }
 agent_prompt() { echo initial; }
 agent_feedback_prompt() { echo feedback; }
+record_failure_class() { :; }
 assert_agent_control_unchanged() { :; }
 validate_agent_manifest_changes() { :; }
 agent_session_step() {
@@ -204,6 +205,21 @@ run_candidate_gates() {
         ):
             self.assertIn(f"-p {package}", build)
         self.assertIn("scripts/skippy-ci-smoke.sh", build)
+
+    def test_model_cache_is_an_infrastructure_gate_outside_agent_repair(self) -> None:
+        cache = self.wrapper[
+            self.wrapper.index("check_family_cache() {") :
+            self.wrapper.index("remaining_verification_seconds() {")
+        ]
+        gates = self.wrapper[
+            self.wrapper.index("run_candidate_gates() {") :
+            self.wrapper.index("write_split_certification_roster() {")
+        ]
+        main = self.wrapper[self.wrapper.index('if ! check_family_cache; then') :]
+        self.assertIn("--check-cache", cache)
+        self.assertNotIn("--check-cache", gates)
+        self.assertLess(main.index("check_family_cache"), main.index("repair_candidate_until_green"))
+        self.assertIn("record_failure_class infrastructure model-cache", main)
 
     def test_certification_is_full_and_uses_prebuilt_candidate(self) -> None:
         certify = self.wrapper[

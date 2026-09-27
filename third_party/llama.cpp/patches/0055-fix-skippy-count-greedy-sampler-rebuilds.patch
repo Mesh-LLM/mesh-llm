@@ -22,4 +22,3 @@ index 013e49709..fc162a604 100644
      const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed;
 -- 
 2.54.0 (Apple Git-157)
-
