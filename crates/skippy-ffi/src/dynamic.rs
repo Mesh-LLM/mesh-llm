@@ -7,16 +7,17 @@ use std::{
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationDesc, BackendDevice, CacheGenRecordV1, Error, GenerationSignalWindow,
-    IterationRequest, KvPageDesc, LayaInfoV1, LayaModel, LayaSequence, LlamaLogCallback,
-    LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo, ModelTensorSourceV1,
-    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdGenAudioInfo,
-    MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput, MtmdHelperInitOpt,
-    MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft,
-    NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session,
-    SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1,
-    StagePlan, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
-    StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
-    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1, runtime_abi_supported,
+    IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
+    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo,
+    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
+    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
+    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig,
+    Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
+    SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
+    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
+    WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -190,8 +191,9 @@ dynamic_symbols! {
     skippy_system_one_canvas_length(model: *mut Model, out_canvas_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_system_one_read(model: *mut Model, prompt_tokens: *const i32, prompt_token_count: usize, canvas_tokens: *const i32, canvas_token_count: usize, label_token_ids: *const i32, label_token_count: usize, slots: *const SystemOneSlot, slot_count: usize, out_probabilities: *mut f32, output_capacity: usize, out_output_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_model_workload_info_v1(model: *const Model, out_info: *mut WorkloadInfoV1, out_error: *mut *mut Error) -> Status;
-    skippy_laya_model_open(model_path: *const c_char, n_threads: i32, use_accelerator: bool, out_model: *mut *mut LayaModel, out_error: *mut *mut Error) -> Status;
+    skippy_laya_model_open(model_path: *const c_char, n_threads: i32, device: *const c_char, out_model: *mut *mut LayaModel, out_error: *mut *mut Error) -> Status;
     skippy_laya_model_free(model: *mut LayaModel);
+    skippy_laya_model_memory_v1(model: *mut LayaModel, out_info: *mut LayaMemoryV1, out_error: *mut *mut Error) -> Status;
     skippy_laya_model_info_v1(model: *const LayaModel, out_info: *mut LayaInfoV1, out_error: *mut *mut Error) -> Status;
     skippy_laya_tokenize(model: *const LayaModel, text: *const c_char, text_len: usize, out_tokens: *mut i32, capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_laya_read(model: *mut LayaModel, tokens: *const i32, token_count: usize, marker_positions: *const i32, marker_count: usize, sequences: *const LayaSequence, sequence_count: usize, out_logits: *mut f32, logits_capacity: usize, out_act_logits: *mut f32, act_logits_capacity: usize, out_error: *mut *mut Error) -> Status;

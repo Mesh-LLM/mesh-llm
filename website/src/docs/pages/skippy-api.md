@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **18 headers** and **108 exported functions**.
+Current generated surface: **18 headers** and **109 exported functions**.
 
 ## Quick navigation
 
@@ -74,11 +74,12 @@ Current generated surface: **18 headers** and **108 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-laya-h"><code>laya.h</code><span>5 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-laya-h"><code>laya.h</code><span>6 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-laya-model-open"><code>skippy_laya_model_open</code></a>
         <a href="#skippy-fn-skippy-laya-model-free"><code>skippy_laya_model_free</code></a>
         <a href="#skippy-fn-skippy-laya-model-info-v1"><code>skippy_laya_model_info_v1</code></a>
+        <a href="#skippy-fn-skippy-laya-model-memory-v1"><code>skippy_laya_model_memory_v1</code></a>
         <a href="#skippy-fn-skippy-laya-tokenize"><code>skippy_laya_tokenize</code></a>
         <a href="#skippy-fn-skippy-laya-read"><code>skippy_laya_read</code></a>
       </div>
@@ -231,7 +232,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/devices.h` | Enumerates backend devices available to the staged runtime. |
 | `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
 | `include/skippy/execution.h` | Prefill, decode, verification, activation-frame, and batched execution. |
-| `include/skippy/laya.h` | Full-model Laya decision reads (encoder + typed decision head). Laya is non-autoregressive: one forward pass scores every option of every question. It does not load through `skippy_model_open`; it owns its GGUF, tokenizer, and execution context, which runs on the CPU backend or, when the caller opts in, on the first accelerator with CPU fallback. Callers build the per-question token sequences (see `skippy_laya_tokenize`) and read raw scorer and action-head logits back; temperature and softmax stay on the caller side. |
+| `include/skippy/laya.h` | Full-model Laya decision reads (encoder + typed decision head). Laya is non-autoregressive: one forward pass scores every option of every question. It does not load through `skippy_model_open`; it owns its GGUF, tokenizer, and execution context, which runs on the CPU backend or on a device the caller names, with CPU fallback. Callers build the per-question token sequences (see `skippy_laya_tokenize`) and read raw scorer and action-head logits back; temperature and softmax stay on the caller side. |
 | `include/skippy/model_package.h` | Inspects GGUF tensors and writes metadata and multi-part packages. |
 | `include/skippy/model_source.h` | Callback-backed model construction and load-time quantization. |
 | `include/skippy/runtime.h` | Model loading, session lifecycle, and llama.cpp context access. |
@@ -715,13 +716,13 @@ LLAMA_API enum skippy_status skippy_session_copy_output_activation_frame(
 <a id="skippy-fn-skippy-laya-model-open"></a>
 #### `skippy_laya_model_open`
 
-Opens a Laya GGUF with its own loader; not a `skippy_model`. With `use_accelerator`, weights go to the first GPU device when one exists, with the CPU backend behind it for any unsupported op; otherwise the model runs on the CPU backend. `n_threads` sizes the CPU backend. Fails with SKIPPY_STATUS_MODEL_ERROR when the GGUF declares a `laya.max_len` above SKIPPY_LAYA_MAX_SEQUENCE_TOKENS or a head budget larger than it.
+Opens a Laya GGUF with its own loader; not a `skippy_model`. `device` selects where the weights live: NULL or "" is the CPU backend, "auto" is the first GPU device when one exists, and any other value names a ggml backend device such as "CUDA0" or "MTL0". On a GPU the CPU backend stays behind it for any unsupported op. `n_threads` sizes the CPU backend. Fails with SKIPPY_STATUS_MODEL_ERROR when the GGUF declares a `laya.max_len` above SKIPPY_LAYA_MAX_SEQUENCE_TOKENS or a head budget larger than it.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_laya_model_open(
          const char * model_path,
         int32_t n_threads,
-        bool use_accelerator,
+        const char * device,
         struct skippy_laya_model ** out_model,
         struct skippy_error ** out_error);
 ```
@@ -745,6 +746,18 @@ Reports the model's sequence budgets, special tokens, and temperatures. `out_inf
 LLAMA_API enum skippy_status skippy_laya_model_info_v1(
          const struct skippy_laya_model * model,
         struct skippy_laya_info_v1 * out_info,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-laya-model-memory-v1"></a>
+#### `skippy_laya_model_memory_v1`
+
+Measures the model's memory at its largest read. The first call runs one read of a full `max_len`-token sequence, so the scheduler reserves the buffers the biggest pass needs, then reports them with the weight buffer. `out_info` must be initialized with its `struct_size` and `abi_version`.
+
+```cpp
+LLAMA_API enum skippy_status skippy_laya_model_memory_v1(
+         struct skippy_laya_model * model,
+        struct skippy_laya_memory_v1 * out_info,
         struct skippy_error ** out_error);
 ```
 
@@ -1857,7 +1870,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`
-- `laya.h`: `skippy_laya_model`, `skippy_laya_qtype`, `skippy_laya_info_v1`, `skippy_laya_sequence`, `SKIPPY_LAYA_INFO_V1_ABI_VERSION = 1`, `SKIPPY_LAYA_QTYPE_COUNT = 3`, `SKIPPY_LAYA_MAX_SEQUENCE_TOKENS = 4096`
+- `laya.h`: `skippy_laya_model`, `skippy_laya_qtype`, `skippy_laya_info_v1`, `skippy_laya_memory_v1`, `skippy_laya_sequence`, `SKIPPY_LAYA_INFO_V1_ABI_VERSION = 1`, `SKIPPY_LAYA_QTYPE_COUNT = 3`, `SKIPPY_LAYA_MEMORY_V1_ABI_VERSION = 1`, `SKIPPY_LAYA_MAX_SEQUENCE_TOKENS = 4096`
 - `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_tensor_info`
 - `model_source.h`: `skippy_model`, `skippy_runtime_config`, `skippy_model_imatrix_entry_v1`, `skippy_model_tensor_source_v1`, `SKIPPY_MODEL_TENSOR_SOURCE_V1_ABI_VERSION = 1`
 - `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_activation_boundary_desc`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`, `SKIPPY_TRISTATE_AUTO = (-1)`, `SKIPPY_TRISTATE_FALSE = (0)`, `SKIPPY_TRISTATE_TRUE = (1)`

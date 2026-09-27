@@ -527,19 +527,18 @@ impl SkippyOpenAiGuardrailOptions {
     }
 }
 
-/// Loads a Laya decision model. It opens through its own native entry point,
-/// not `skippy_model_open`, on the CPU backend unless `use_accelerator`.
+/// Loads a Laya decision model through its own native entry point, not
+/// `skippy_model_open`. `device` is `None` for the CPU backend, `"auto"` for the
+/// first GPU, or a ggml backend device name.
 pub(crate) fn load_laya_model(
     path: &Path,
-    use_accelerator: bool,
+    device: Option<&str>,
 ) -> Result<Arc<skippy_runtime::LayaModel>> {
     let threads = std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(4);
     Ok(Arc::new(skippy_runtime::LayaModel::open(
-        path,
-        threads,
-        use_accelerator,
+        path, threads, device,
     )?))
 }
 

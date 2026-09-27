@@ -234,15 +234,23 @@ narrow Skippy ABI (`skippy/laya.h`, feature bit 40). Laya does
 not load through `skippy_model_open`; the host recognizes
 `general.architecture = "laya"` and opens it through its own entry point.
 
-**Device and memory.** Laya runs on the CPU backend by default. Set
-`MESH_LLM_LAYA_ACCELERATOR=1` to put its weights on the node's first GPU (the
-CPU backend stays behind it for any op the GPU lacks). Each read packs
-question sequences into passes of at most the model's `laya.max_len` tokens
-(1,024 for `laya-multilingual`; GGUFs declaring more than 4,096 are refused
-at open), and a pass holds dense attention masks and scores over its tokens.
-The host charges that worst case to the capacity ledger together with the
-weights (about 170 MB on top of 659 MB for `laya-multilingual`), records it as
-the memory plan's compute charge, and refuses the load when capacity is short.
+**Device and memory.** Laya follows the node's device policy: a configured
+`--device` or a pinned GPU places its weights on that device. With neither,
+it runs on the CPU backend, unless `MESH_LLM_LAYA_ACCELERATOR=1` opts into the
+first GPU. On a GPU the CPU backend stays behind it for any op the GPU lacks.
+
+Each read packs question sequences into passes of at most the model's
+`laya.max_len` tokens (1,024 for `laya-multilingual`); GGUFs declaring more
+than 4,096 are refused at open. A pass holds dense attention masks and scores
+over its tokens, so:
+
+- the capacity ledger reserves the weights plus a worst-case read estimate
+  (about 170 MB on top of 659 MB for `laya-multilingual`), and the load
+  records that as its memory plan's compute charge;
+- after opening, the runtime runs one full-length warm-up read and reports its
+  measured weight, compute-buffer and host-scratch bytes; the host logs them
+  against the plan and the reservation, and refuses the model if the measured
+  peak exceeds what was reserved.
 
 ### Convert a checkpoint
 

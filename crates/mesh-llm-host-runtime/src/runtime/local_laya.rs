@@ -24,11 +24,13 @@ use crate::models;
 /// `general.architecture` of a Laya decision model GGUF.
 pub(super) const LAYA_ARCHITECTURE: &str = "laya";
 
-/// Opts the Laya runtime into the node's accelerator. Laya runs on the CPU
-/// backend by default: a 322M encoder answers in tens of milliseconds there,
-/// and keeping it off the accelerator leaves that memory to the models the
-/// split planner accounts for.
+/// Opts the Laya runtime into the node's first accelerator when no device is
+/// configured. Laya runs on the CPU backend by default: a 322M encoder answers
+/// in tens of milliseconds there, and staying off the accelerator leaves that
+/// memory to the models placed on it.
 const LAYA_ACCELERATOR_ENV: &str = "MESH_LLM_LAYA_ACCELERATOR";
+/// Native device name for "the first GPU, CPU when there is none".
+const FIRST_ACCELERATOR: &str = "auto";
 
 /// Default `laya.max_len` when a GGUF omits it, matching the native runtime.
 const DEFAULT_MAX_LEN: u64 = 1024;
@@ -72,6 +74,49 @@ pub(super) fn laya_activation_reserve_bytes(meta: &models::gguf::GgufCompactMeta
 /// the worst-case read reserve.
 pub(super) fn laya_resident_bytes(weight_bytes: u64, meta: &models::gguf::GgufCompactMeta) -> u64 {
     weight_bytes.saturating_add(laya_activation_reserve_bytes(meta))
+}
+
+/// Where a Laya model runs: the configured device (`--device`, then a pinned
+/// GPU) when there is one; otherwise the CPU, or the first accelerator when
+/// `MESH_LLM_LAYA_ACCELERATOR` opts in.
+fn laya_device(
+    device_override: Option<&str>,
+    pinned_device: Option<&str>,
+    accelerator_env: Option<&str>,
+) -> Option<String> {
+    device_override
+        .or(pinned_device)
+        .map(str::to_string)
+        .or_else(|| accelerator_requested(accelerator_env).then(|| FIRST_ACCELERATOR.to_string()))
+}
+
+/// Checks a loaded model's measured peak against what the capacity ledger
+/// reserved for it, and records the comparison next to the plan.
+fn reconcile_memory(
+    model_name: &str,
+    memory: &skippy_runtime::LayaMemory,
+    planned_bytes: u64,
+    reserved_bytes: u64,
+) -> Result<()> {
+    let measured = memory.peak_bytes();
+    tracing::info!(
+        model = model_name,
+        memory_plan.planned_bytes = planned_bytes,
+        memory_plan.reserved_bytes = reserved_bytes,
+        memory_plan.measured_bytes = measured,
+        memory_plan.measured_weights_bytes = memory.weights_bytes,
+        memory_plan.measured_compute_bytes = memory.compute_bytes,
+        memory_plan.measured_host_scratch_bytes = memory.host_scratch_bytes,
+        laya.on_accelerator = memory.on_accelerator,
+        "Laya memory reconciled: measured peak at the largest read against the ledger reservation"
+    );
+    anyhow::ensure!(
+        measured <= reserved_bytes,
+        "Laya model measured {} at its largest read, more than the {} reserved for it",
+        format_gb(measured),
+        format_gb(reserved_bytes)
+    );
+    Ok(())
 }
 
 fn accelerator_requested(value: Option<&str>) -> bool {
@@ -132,24 +177,32 @@ pub(super) async fn start_local_laya_model(
         MemoryPlanStartPath::Direct,
     );
 
-    let use_accelerator =
-        accelerator_requested(std::env::var(LAYA_ACCELERATOR_ENV).ok().as_deref());
+    let device = laya_device(
+        spec.device_override.as_deref(),
+        spec.pinned_gpu.map(|gpu| gpu.backend_device.as_str()),
+        std::env::var(LAYA_ACCELERATOR_ENV).ok().as_deref(),
+    );
     let _ = emit_event(OutputEvent::ModelLoading {
         model: model_name.clone(),
         source: None,
     });
     let model_path = spec.model_path.to_path_buf();
-    let model =
-        tokio::task::spawn_blocking(move || skippy::load_laya_model(&model_path, use_accelerator))
-            .await
-            .context("join load Laya model task")??;
+    let load_device = device.clone();
+    let (model, memory) = tokio::task::spawn_blocking(move || {
+        let model = skippy::load_laya_model(&model_path, load_device.as_deref())?;
+        let memory = model.memory()?;
+        anyhow::Ok((model, memory))
+    })
+    .await
+    .context("join load Laya model task")??;
     tracing::info!(
         model = model_name,
-        laya.accelerator = use_accelerator,
+        laya.device = device.as_deref().unwrap_or("CPU"),
         laya.max_len = model.info().max_len,
         laya.reserve_bytes = reserve,
         "Laya decision model loaded"
     );
+    reconcile_memory(&model_name, &memory, resident, required)?;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_name.clone(),
         bytes: None,
@@ -222,6 +275,40 @@ mod tests {
             laya_activation_reserve_bytes(&meta(0, 0, 0)),
             laya_activation_reserve_bytes(&meta(1024, 768, 12))
         );
+    }
+
+    #[test]
+    fn the_configured_device_wins_and_the_cpu_is_the_default() {
+        assert_eq!(
+            laya_device(Some("CUDA1"), Some("CUDA0"), Some("1")).as_deref(),
+            Some("CUDA1")
+        );
+        assert_eq!(
+            laya_device(None, Some("CUDA0"), None).as_deref(),
+            Some("CUDA0")
+        );
+        assert_eq!(laya_device(None, None, None), None);
+        assert_eq!(laya_device(None, None, Some("1")).as_deref(), Some("auto"));
+    }
+
+    fn memory(weights: u64, compute: u64, scratch: u64) -> skippy_runtime::LayaMemory {
+        skippy_runtime::LayaMemory {
+            weights_bytes: weights,
+            compute_bytes: compute,
+            host_scratch_bytes: scratch,
+            on_accelerator: false,
+        }
+    }
+
+    #[test]
+    fn a_measured_peak_within_the_reservation_passes() {
+        assert!(reconcile_memory("laya", &memory(650, 100, 8), 830, 900).is_ok());
+    }
+
+    #[test]
+    fn a_measured_peak_over_the_reservation_refuses_the_model() {
+        let error = reconcile_memory("laya", &memory(650, 300, 8), 830, 900).unwrap_err();
+        assert!(error.to_string().contains("more than"), "{error}");
     }
 
     #[test]

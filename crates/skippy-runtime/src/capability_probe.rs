@@ -79,6 +79,7 @@ const FAMILIES: &[FamilySpec] = &[
             b"skippy_laya_model_open\0",
             b"skippy_laya_model_free\0",
             b"skippy_laya_model_info_v1\0",
+            b"skippy_laya_model_memory_v1\0",
             b"skippy_laya_tokenize\0",
             b"skippy_laya_read\0",
         ],

@@ -28,6 +28,7 @@ pub const FEATURE_LAYA_DECISIONS: u64 = 1 << 40;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
 pub const LAYA_INFO_V1_ABI_VERSION: u32 = 1;
+pub const LAYA_MEMORY_V1_ABI_VERSION: u32 = 1;
 /// Question types the Laya decision head distinguishes, in native order.
 pub const LAYA_QTYPE_COUNT: usize = 3;
 
@@ -172,6 +173,32 @@ impl Default for LayaInfoV1 {
             n_layer: 0,
             parameter_count: 0,
             temperature: [0.0; LAYA_QTYPE_COUNT],
+        }
+    }
+}
+
+/// Measured memory of an opened Laya model.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayaMemoryV1 {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub weights_bytes: u64,
+    pub compute_bytes: u64,
+    pub host_scratch_bytes: u64,
+    pub on_accelerator: bool,
+}
+
+impl Default for LayaMemoryV1 {
+    /// Initialize the memory descriptor with its ABI size and version.
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            abi_version: LAYA_MEMORY_V1_ABI_VERSION,
+            weights_bytes: 0,
+            compute_bytes: 0,
+            host_scratch_bytes: 0,
+            on_accelerator: false,
         }
     }
 }

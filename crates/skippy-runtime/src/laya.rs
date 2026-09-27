@@ -43,6 +43,27 @@ pub struct LayaModelInfo {
     pub temperature: [f32; skippy_ffi::LAYA_QTYPE_COUNT],
 }
 
+/// Measured memory of a loaded Laya model at its largest read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayaMemory {
+    pub weights_bytes: u64,
+    /// Scheduler compute buffers after a full-length read.
+    pub compute_bytes: u64,
+    /// Host-side attention masks one full pass builds.
+    pub host_scratch_bytes: u64,
+    pub on_accelerator: bool,
+}
+
+impl LayaMemory {
+    /// Peak bytes while serving: weights, compute buffers, and one pass's
+    /// host scratch.
+    pub fn peak_bytes(&self) -> u64 {
+        self.weights_bytes
+            .saturating_add(self.compute_bytes)
+            .saturating_add(self.host_scratch_bytes)
+    }
+}
+
 /// One question sequence: `[CLS] head [SEP] ([MASK] option)* [SEP] state [SEP]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LayaSequence {
@@ -74,9 +95,9 @@ unsafe impl Send for LayaModel {}
 unsafe impl Sync for LayaModel {}
 
 impl LayaModel {
-    /// Opens a Laya GGUF on the CPU backend, or with `use_accelerator` on the
-    /// first GPU device (CPU fallback for unsupported ops).
-    pub fn open(path: impl AsRef<Path>, threads: usize, use_accelerator: bool) -> Result<Self> {
+    /// Opens a Laya GGUF. `device` is `None` for the CPU backend, `"auto"` for
+    /// the first GPU device, or a ggml backend device name such as `"CUDA0"`.
+    pub fn open(path: impl AsRef<Path>, threads: usize, device: Option<&str>) -> Result<Self> {
         ensure_laya_supported()?;
         let path = path.as_ref();
         write_native_log_note(format!(
@@ -85,13 +106,20 @@ impl LayaModel {
         ));
         let c_path = path_to_cstring(path, "Laya model path")?;
         let threads = i32::try_from(threads.max(1)).unwrap_or(i32::MAX);
+        let c_device = device
+            .map(|device| {
+                std::ffi::CString::new(device).context("Laya device name contains a NUL byte")
+            })
+            .transpose()?;
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_laya_model_open(
                 c_path.as_ptr(),
                 threads,
-                use_accelerator,
+                c_device
+                    .as_ref()
+                    .map_or(ptr::null(), |device| device.as_ptr()),
                 &mut raw,
                 &mut error,
             )
@@ -163,6 +191,22 @@ impl LayaModel {
             layer_count: u32::try_from(raw.n_layer).unwrap_or(0),
             parameter_count: u64::try_from(raw.parameter_count).unwrap_or(0),
             temperature: raw.temperature,
+        })
+    }
+
+    /// Measures the model's memory at its largest read. The first call runs one
+    /// full-length warm-up read so the scheduler reserves its largest buffers.
+    pub fn memory(&self) -> Result<LayaMemory> {
+        let mut raw = skippy_ffi::LayaMemoryV1::default();
+        let mut error = ptr::null_mut();
+        let status =
+            unsafe { skippy_ffi::skippy_laya_model_memory_v1(self.raw, &mut raw, &mut error) };
+        ensure_ok(status, error)?;
+        Ok(LayaMemory {
+            weights_bytes: raw.weights_bytes,
+            compute_bytes: raw.compute_bytes,
+            host_scratch_bytes: raw.host_scratch_bytes,
+            on_accelerator: raw.on_accelerator,
         })
     }
 

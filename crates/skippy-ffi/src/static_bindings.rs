@@ -2,15 +2,15 @@ use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
     ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
-    IterationRequest, KvPageDesc, LayaInfoV1, LayaModel, LayaSequence, LlamaLogCallback,
-    LlamaModelQuantizeParams, LlamaPerfContextData, Model, ModelInfo, ModelTensorSourceV1,
-    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdGenAudioInfo,
-    MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput, MtmdHelperInitOpt,
-    MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft,
-    NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan, StagePlanDescV1,
-    StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1,
-    StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo,
-    TokenSignal, WorkloadInfoV1,
+    IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
+    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData, Model, ModelInfo,
+    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
+    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
+    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
+    StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
+    StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
+    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1,
 };
 
 unsafe extern "C" {
@@ -164,12 +164,18 @@ unsafe extern "C" {
     pub fn skippy_laya_model_open(
         model_path: *const c_char,
         n_threads: i32,
-        use_accelerator: bool,
+        device: *const c_char,
         out_model: *mut *mut LayaModel,
         out_error: *mut *mut Error,
     ) -> Status;
 
     pub fn skippy_laya_model_free(model: *mut LayaModel);
+
+    pub fn skippy_laya_model_memory_v1(
+        model: *mut LayaModel,
+        out_info: *mut LayaMemoryV1,
+        out_error: *mut *mut Error,
+    ) -> Status;
 
     pub fn skippy_laya_model_info_v1(
         model: *const LayaModel,

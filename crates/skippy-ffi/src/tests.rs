@@ -5,11 +5,11 @@ use crate::{
     ActivationPartDesc, CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16, CACHEGEN_RECORD_F16_TRANSPOSED,
     CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED, CACHEGEN_RECORD_Q4_0,
     CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
-    LAYA_INFO_V1_ABI_VERSION, LayaInfoV1, LayaSequence, StagePlanDescV1, StagePlanProfileDescV1,
-    StagePlanStateDescV1, StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1,
-    StagePlannerConfigV1, StagePlannerProfileV1, StagePlannerTensorV1,
-    WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
-    runtime_abi_supported,
+    LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1, LayaMemoryV1, LayaSequence,
+    StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStateKind,
+    StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1, StagePlannerProfileV1,
+    StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind,
+    WorkloadPooling, runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -306,6 +306,14 @@ fn laya_types_match_native_layout() {
     let info = LayaInfoV1::default();
     assert_eq!(info.struct_size, 72);
     assert_eq!(info.abi_version, LAYA_INFO_V1_ABI_VERSION);
+
+    assert_eq!(LAYA_MEMORY_V1_ABI_VERSION, 1);
+    assert_eq!(size_of::<LayaMemoryV1>(), 40);
+    assert_eq!(offset_of!(LayaMemoryV1, weights_bytes), 8);
+    assert_eq!(offset_of!(LayaMemoryV1, compute_bytes), 16);
+    assert_eq!(offset_of!(LayaMemoryV1, host_scratch_bytes), 24);
+    assert_eq!(offset_of!(LayaMemoryV1, on_accelerator), 32);
+    assert_eq!(LayaMemoryV1::default().struct_size, 40);
 
     assert_eq!(size_of::<LayaSequence>(), 40);
     assert_eq!(offset_of!(LayaSequence, qtype), 16);
