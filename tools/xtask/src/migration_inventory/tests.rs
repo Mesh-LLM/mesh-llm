@@ -139,6 +139,19 @@ fn migration_inventory_detects_computed_dynamic_import() {
 }
 
 #[test]
+fn migration_inventory_detects_selected_interpreter_in_assignment() {
+    let edges = scan::scan_source(
+        ".github/actions/resolve-cargo-packages/action.yml",
+        "run: |\n  python_bin=python3\n  resolved=$(\"$python_bin\" \"$GITHUB_ACTION_PATH/../../../scripts/ci-cargo-packages.py\" --crates \"$REQUESTED_CRATES\")\n",
+    );
+    assert!(
+        edges
+            .iter()
+            .any(|edge| edge.executable && edge.source_block.starts_with("resolved="))
+    );
+}
+
+#[test]
 fn migration_inventory_detects_skill_command_in_markdown_list() {
     // Given an actionable inline command in a skill list.
     // When scanning its source.

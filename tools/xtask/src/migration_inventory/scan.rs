@@ -134,6 +134,7 @@ fn shell_execution(text: &str) -> bool {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
         && !value.contains("$(python")
+        && !value.contains("$(\"$python_bin\"")
         && !value.contains("| python")
         && !value.contains(" python3 ")
         && !value.contains(" python ")
