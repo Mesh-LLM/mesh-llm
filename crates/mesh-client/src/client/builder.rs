@@ -165,6 +165,7 @@ impl MeshClient {
             .map(|model| Model {
                 id: model.id.clone(),
                 name: model.id,
+                context_length: model.metadata.context_length,
             })
             .collect())
     }
@@ -477,6 +478,7 @@ pub struct OpenAiResponse {
 pub struct Model {
     pub id: String,
     pub name: String,
+    pub context_length: Option<u32>,
 }
 
 pub struct Status {
@@ -514,6 +516,13 @@ struct ModelsResponse {
 #[derive(Deserialize)]
 struct ModelEntry {
     id: String,
+    #[serde(default)]
+    metadata: ModelMetadata,
+}
+
+#[derive(Default, Deserialize)]
+struct ModelMetadata {
+    context_length: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -992,6 +1001,22 @@ mod openai_response_tests {
 
         assert_eq!(value["stream"], false);
         assert_eq!(value["input"], "hello");
+    }
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::ModelsResponse;
+
+    #[test]
+    fn parses_served_context_length_and_preserves_legacy_models() {
+        let response: ModelsResponse = serde_json::from_str(
+            r#"{"data":[{"id":"ready","metadata":{"context_length":131072}},{"id":"legacy"}]}"#,
+        )
+        .expect("models response parses");
+
+        assert_eq!(response.data[0].metadata.context_length, Some(131_072));
+        assert_eq!(response.data[1].metadata.context_length, None);
     }
 }
 

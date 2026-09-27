@@ -5,6 +5,7 @@ import pathlib
 import sys
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parents[1] / "src"))
 
@@ -60,7 +61,7 @@ class FakeHandle:
         return SimpleNamespace(connected=self.started, peer_count=2)
 
     def inference_list_models(self) -> list[object]:
-        return [SimpleNamespace(id="model-a", name="Model A")]
+        return [SimpleNamespace(id="model-a", name="Model A", context_length=131_072)]
 
     def openai_request(self, path: str, body_json: str) -> object:
         body = json.loads(body_json)
@@ -122,13 +123,36 @@ class FakeHandle:
 
 
 class ClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connect_public_discovers_with_query(self) -> None:
+        handle = FakeHandle()
+        binding = SimpleNamespace(
+            PublicMeshQuery=lambda **values: SimpleNamespace(**values),
+            create_auto_client=lambda owner, query: (
+                self.assertEqual(owner, "ab" * 32),
+                self.assertEqual(query.target_name, "community"),
+                self.assertEqual(query.relays, ["wss://relay.example"]),
+                handle,
+            )[-1],
+        )
+
+        with patch("meshllm.client.native", return_value=binding):
+            client = await Client.connect_public(
+                owner_keypair_hex="ab" * 32,
+                target_name="community",
+                relays=("wss://relay.example",),
+            )
+
+        self.assertIs(client._handle, handle)
+
     async def test_lifecycle_and_models(self) -> None:
         handle = FakeHandle()
         client = Client(handle)
 
         async with client:
             self.assertTrue((await client.status()).connected)
-            self.assertEqual((await client.inference.list_models())[0].id, "model-a")
+            model = (await client.inference.list_models())[0]
+            self.assertEqual(model.id, "model-a")
+            self.assertEqual(model.context_length, 131_072)
 
         self.assertFalse(handle.started)
 

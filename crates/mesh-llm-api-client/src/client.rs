@@ -258,6 +258,7 @@ impl From<ResponsesRequest> for mesh_client::ResponsesRequest {
 pub struct Model {
     pub id: String,
     pub name: String,
+    pub context_length: Option<u32>,
 }
 
 impl From<mesh_client::Model> for Model {
@@ -265,6 +266,7 @@ impl From<mesh_client::Model> for Model {
         Self {
             id: value.id,
             name: value.name,
+            context_length: value.context_length,
         }
     }
 }

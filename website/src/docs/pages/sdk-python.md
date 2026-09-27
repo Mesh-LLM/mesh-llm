@@ -32,10 +32,15 @@ from meshllm import Client, generate_owner_keypair_hex
 
 
 async def main() -> None:
-    async with Client.create(
-        owner_keypair_hex=generate_owner_keypair_hex(),
-        invite_token=os.environ["MESH_INVITE_TOKEN"],
-    ) as client:
+    owner = generate_owner_keypair_hex()
+    # Public Mesh: discover and connect to the best published mesh.
+    client = await Client.connect_public(owner_keypair_hex=owner)
+    # Private Mesh instead:
+    # client = Client.create(
+    #     owner_keypair_hex=owner,
+    #     invite_token=os.environ["MESH_INVITE_TOKEN"],
+    # )
+    async with client:
         models = await client.inference.list_models()
         response = await client.inference.chat_completions({
             "model": models[0].id,
@@ -48,6 +53,16 @@ asyncio.run(main())
 ```
 
 Persist the owner keypair in the host application's secure storage. Generating one during every startup creates a new Mesh identity and is suitable only for examples.
+
+`Client.connect_public()` uses Nostr discovery and selects the best matching
+published Mesh. Pass `model`, `region`, `target_name`, or custom `relays` to
+narrow discovery. `Client.create()` connects directly to a specific public or
+private Mesh using its invite token.
+
+Each model returned by `list_models()` includes `context_length` when the Mesh
+advertises its actual served window. Agent runtimes should budget against that
+value rather than a model architecture's theoretical maximum. Legacy servers
+that omit served-context metadata return `None`.
 
 ## Agent requests
 

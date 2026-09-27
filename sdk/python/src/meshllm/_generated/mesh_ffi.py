@@ -2406,21 +2406,62 @@ class _UniffiFfiConverterTypeModelCacheStatus(_UniffiConverterRustBuffer):
     def write(value, buf):
         _UniffiFfiConverterOptionalString.write(value.cache_dir, buf)
 
+class _UniffiFfiConverterUInt32(_UniffiConverterPrimitiveInt):
+    CLASS_NAME = "u32"
+    VALUE_MIN = 0
+    VALUE_MAX = 2**32
+
+    @staticmethod
+    def read(buf):
+        return buf.read_u32()
+
+    @staticmethod
+    def write(value, buf):
+        buf.write_u32(value)
+
+class _UniffiFfiConverterOptionalUInt32(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        if value is not None:
+            _UniffiFfiConverterUInt32.check_lower(value)
+
+    @classmethod
+    def write(cls, value, buf):
+        if value is None:
+            buf.write_u8(0)
+            return
+
+        buf.write_u8(1)
+        _UniffiFfiConverterUInt32.write(value, buf)
+
+    @classmethod
+    def read(cls, buf):
+        flag = buf.read_u8()
+        if flag == 0:
+            return None
+        elif flag == 1:
+            return _UniffiFfiConverterUInt32.read(buf)
+        else:
+            raise InternalError("Unexpected flag byte for optional type")
+
 @dataclass
 class ModelNative:
-    def __init__(self, *, id:str, name:str):
+    def __init__(self, *, id:str, name:str, context_length:typing.Optional[int]):
         self.id = id
         self.name = name
+        self.context_length = context_length
 
 
 
 
     def __str__(self):
-        return "ModelNative(id={}, name={})".format(self.id, self.name)
+        return "ModelNative(id={}, name={}, context_length={})".format(self.id, self.name, self.context_length)
     def __eq__(self, other):
         if self.id != other.id:
             return False
         if self.name != other.name:
+            return False
+        if self.context_length != other.context_length:
             return False
         return True
 
@@ -2430,17 +2471,20 @@ class _UniffiFfiConverterTypeModelNative(_UniffiConverterRustBuffer):
         return ModelNative(
             id=_UniffiFfiConverterString.read(buf),
             name=_UniffiFfiConverterString.read(buf),
+            context_length=_UniffiFfiConverterOptionalUInt32.read(buf),
         )
 
     @staticmethod
     def check_lower(value):
         _UniffiFfiConverterString.check_lower(value.id)
         _UniffiFfiConverterString.check_lower(value.name)
+        _UniffiFfiConverterOptionalUInt32.check_lower(value.context_length)
 
     @staticmethod
     def write(value, buf):
         _UniffiFfiConverterString.write(value.id, buf)
         _UniffiFfiConverterString.write(value.name, buf)
+        _UniffiFfiConverterOptionalUInt32.write(value.context_length, buf)
 
 @dataclass
 class ModelSearchQuery:
@@ -3353,44 +3397,6 @@ class _UniffiFfiConverterTypeServingModelState(_UniffiConverterRustBuffer):
             _UniffiFfiConverterString.write(value.value, buf)
 
 
-
-class _UniffiFfiConverterUInt32(_UniffiConverterPrimitiveInt):
-    CLASS_NAME = "u32"
-    VALUE_MIN = 0
-    VALUE_MAX = 2**32
-
-    @staticmethod
-    def read(buf):
-        return buf.read_u32()
-
-    @staticmethod
-    def write(value, buf):
-        buf.write_u32(value)
-
-class _UniffiFfiConverterOptionalUInt32(_UniffiConverterRustBuffer):
-    @classmethod
-    def check_lower(cls, value):
-        if value is not None:
-            _UniffiFfiConverterUInt32.check_lower(value)
-
-    @classmethod
-    def write(cls, value, buf):
-        if value is None:
-            buf.write_u8(0)
-            return
-
-        buf.write_u8(1)
-        _UniffiFfiConverterUInt32.write(value, buf)
-
-    @classmethod
-    def read(cls, buf):
-        flag = buf.read_u8()
-        if flag == 0:
-            return None
-        elif flag == 1:
-            return _UniffiFfiConverterUInt32.read(buf)
-        else:
-            raise InternalError("Unexpected flag byte for optional type")
 
 @dataclass
 class ServedModel:

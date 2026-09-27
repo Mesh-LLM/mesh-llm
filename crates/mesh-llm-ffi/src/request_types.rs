@@ -2,6 +2,7 @@
 pub struct ModelNative {
     pub id: String,
     pub name: String,
+    pub context_length: Option<u32>,
 }
 
 #[derive(uniffi::Record)]

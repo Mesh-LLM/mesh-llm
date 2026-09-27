@@ -16,10 +16,15 @@ from meshllm import Client, generate_owner_keypair_hex
 
 
 async def main() -> None:
-    async with Client.create(
-        owner_keypair_hex=generate_owner_keypair_hex(),
-        invite_token=os.environ["MESH_INVITE_TOKEN"],
-    ) as client:
+    owner = generate_owner_keypair_hex()
+    # Public Mesh: discover and connect to the best published mesh.
+    client = await Client.connect_public(owner_keypair_hex=owner)
+    # Private Mesh instead:
+    # client = Client.create(
+    #     owner_keypair_hex=owner,
+    #     invite_token=os.environ["MESH_INVITE_TOKEN"],
+    # )
+    async with client:
         response = await client.inference.chat_completions({
             "model": "Qwen3-8B",
             "messages": [{"role": "user", "content": "What is the weather?"}],
@@ -64,6 +69,11 @@ async for event in client.inference.stream_chat_completions({
 Use `stream_responses()` for the Responses API, or `stream(path, body)` for
 another OpenAI-compatible SSE endpoint. Closing an iterator cancels the native
 request and interrupts an in-flight transport read.
+
+`list_models()` returns each model's actual served `context_length` when the
+Mesh advertises it. Agent runtimes should budget against that value rather than
+the model architecture's theoretical maximum; legacy servers may return
+`None`.
 
 ## Building from a checkout
 

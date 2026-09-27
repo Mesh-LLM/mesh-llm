@@ -37,7 +37,14 @@ class Inference:
 
     async def list_models(self) -> list[Model]:
         models = await asyncio.to_thread(self._handle.inference_list_models)
-        return [Model(id=model.id, name=model.name) for model in models]
+        return [
+            Model(
+                id=model.id,
+                name=model.name,
+                context_length=getattr(model, "context_length", None),
+            )
+            for model in models
+        ]
 
     async def request(
         self,
@@ -175,6 +182,33 @@ class _Lifecycle:
 
 class Client(_Lifecycle):
     """Client-only connection to an existing public or private mesh."""
+
+    @classmethod
+    async def connect_public(
+        cls,
+        *,
+        owner_keypair_hex: str,
+        model: str | None = None,
+        min_vram_gb: float | None = None,
+        region: str | None = None,
+        target_name: str | None = None,
+        relays: tuple[str, ...] = (),
+    ) -> Client:
+        """Discover and connect to the best matching published mesh."""
+        binding = native()
+        query = binding.PublicMeshQuery(
+            model=model,
+            min_vram_gb=min_vram_gb,
+            region=region,
+            target_name=target_name,
+            relays=list(relays),
+        )
+        handle = await asyncio.to_thread(
+            binding.create_auto_client,
+            owner_keypair_hex,
+            query,
+        )
+        return cls(handle)
 
     @classmethod
     def create(cls, *, owner_keypair_hex: str, invite_token: str) -> Client:

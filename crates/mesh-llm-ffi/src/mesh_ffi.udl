@@ -211,6 +211,7 @@ callback interface NativeRuntimeProgressListener {
 dictionary ModelNative {
     string id;
     string name;
+    u32? context_length;
 };
 
 dictionary ClientStatus {

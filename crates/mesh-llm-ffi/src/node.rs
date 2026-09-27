@@ -134,7 +134,11 @@ impl MeshNodeHandle {
             if !models.is_empty() {
                 return Ok(models
                     .into_iter()
-                    .map(|(id, name)| ModelNative { id, name })
+                    .map(|(id, name)| ModelNative {
+                        id,
+                        name,
+                        context_length: None,
+                    })
                     .collect());
             }
         }
@@ -145,6 +149,7 @@ impl MeshNodeHandle {
                     .map(|m| ModelNative {
                         id: m.id,
                         name: m.name,
+                        context_length: m.context_length,
                     })
                     .collect()
             })

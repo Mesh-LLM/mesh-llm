@@ -86,6 +86,7 @@ impl MeshClientHandle {
                     .map(|m| ModelNative {
                         id: m.id,
                         name: m.name,
+                        context_length: m.context_length,
                     })
                     .collect()
             })

@@ -31,6 +31,7 @@ class OpenAIRequestError(MeshError):
 class Model:
     id: str
     name: str
+    context_length: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
