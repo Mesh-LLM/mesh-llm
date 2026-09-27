@@ -19,6 +19,7 @@
     "watch:css": "tailwindcss -i ./src/assets/site.tailwind.css -o ./src/assets/site.generated.css --watch",
     "dev": "npm run generate:cli && npm run build:css && eleventy && npm run build:pagefind && sh -c 'npm run watch:css & css_pid=$!; eleventy --serve --watch --incremental --port=8765; kill $css_pid'",
     "test:cli-explorer": "node ./scripts/test-cli-explorer.mjs",
+    "test:website-data": "node ./scripts/test-website-data.mjs",
     "clean": "node ./scripts/clean-generated-site.mjs"
   },
   "devDependencies": {
