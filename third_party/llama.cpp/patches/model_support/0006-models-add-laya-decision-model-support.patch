@@ -13,15 +13,17 @@ report its sequence budgets and special tokens, tokenize with its own
 Metaspace + BPE tokenizer, and run one packed read returning raw scorer and
 action-head logits per question. A GGUF declaring laya.max_len above 4,096
 tokens is refused at open, and sequences are packed into passes of at most
-4,096 tokens, because each pass builds dense attention masks. Every exported
+max_len tokens, because each pass builds dense attention masks. Every exported
 entry point runs inside the native exception containment.
 
 Changes from the upstream draft:
 - Compile the runtime into libllama and export its API with LLAMA_API, so
   shared builds of llama-laya-cli link.
-- Keep weights on the first accelerator, with the CPU backend behind it in
-  the scheduler, instead of CPU only; set threads through the backend
-  registry rather than linking ggml-cpu directly.
+- Let the caller choose the device: with use_accelerator, weights go to the
+  first GPU with the CPU backend behind it in the scheduler; otherwise they
+  stay on the CPU as upstream does (llama-laya-cli keeps the accelerator by
+  default and takes --cpu). Set threads through the backend registry rather
+  than linking ggml-cpu directly.
 - Take the act-head top-1/top-2 indices from per-question strided views of a
   descending argsort. The upstream 1-D views read the third-ranked option as
   top-2, and gave every question after the first another question's ranking.
@@ -35,19 +37,19 @@ Co-authored-by: ZhangYu <zhangyub@uniontech.com>
  gguf-py/gguf/tensor_mapping.py |   40 ++
  include/skippy.h               |    1 +
  include/skippy/common.h        |    4 +-
- include/skippy/laya.h          |  138 ++++
+ include/skippy/laya.h          |  141 ++++
  src/CMakeLists.txt             |    4 +-
  src/llama-arch.cpp             |   32 +
  src/llama-arch.h               |   20 +
  src/llama-model.cpp            |    7 +
  src/skippy/abi.cpp             |    3 +-
- src/skippy/laya.cpp            |  326 ++++++++++
+ src/skippy/laya.cpp            |  330 ++++++++++
  tools/CMakeLists.txt           |    1 +
  tools/laya/CMakeLists.txt      |   23 +
- tools/laya/laya-cli.cpp        |  665 +++++++++++++++++++
- tools/laya/laya.cpp            | 1101 ++++++++++++++++++++++++++++++++
- tools/laya/laya.h              |  106 +++
- 19 files changed, 2679 insertions(+), 3 deletions(-)
+ tools/laya/laya-cli.cpp        |  668 +++++++++++++++++++
+ tools/laya/laya.cpp            | 1104 ++++++++++++++++++++++++++++++++
+ tools/laya/laya.h              |  108 ++++
+ 19 files changed, 2694 insertions(+), 3 deletions(-)
  create mode 100644 conversion/laya.py
  create mode 100644 include/skippy/laya.h
  create mode 100644 src/skippy/laya.cpp
@@ -441,10 +443,10 @@ index 0ff24e80b..343ff1616 100644
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/include/skippy/laya.h b/include/skippy/laya.h
 new file mode 100644
-index 000000000..964c53943
+index 000000000..2b23c8aa4
 --- /dev/null
 +++ b/include/skippy/laya.h
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,141 @@
 +#ifndef SKIPPY_LAYA_H
 +#define SKIPPY_LAYA_H
 +
@@ -454,8 +456,8 @@ index 000000000..964c53943
 + *
 + * Laya is non-autoregressive: one forward pass scores every option of every
 + * question. It does not load through `skippy_model_open`; it owns its GGUF,
-+ * tokenizer, and execution context, which runs on the first accelerator when
-+ * one exists and falls back to the CPU backend. Callers build the per-question token
++ * tokenizer, and execution context, which runs on the CPU backend or, when the
++ * caller opts in, on the first accelerator with CPU fallback. Callers build the per-question token
 + * sequences (see `skippy_laya_tokenize`) and read raw scorer and action-head
 + * logits back; temperature and softmax stay on the caller side.
 + */
@@ -469,9 +471,9 @@ index 000000000..964c53943
 +#define SKIPPY_LAYA_INFO_V1_ABI_VERSION 1
 +#define SKIPPY_LAYA_QTYPE_COUNT 3
 +/**
-+ * Longest question sequence a Laya GGUF may declare (`laya.max_len`), and the
-+ * most tokens one forward pass reads. A model declaring more is refused at
-+ * open, because each pass builds dense attention masks over its tokens.
++ * Longest question sequence a Laya GGUF may declare (`laya.max_len`). A model
++ * declaring more is refused at open, because each pass builds dense attention
++ * masks over up to `max_len` tokens.
 + */
 +#define SKIPPY_LAYA_MAX_SEQUENCE_TOKENS 4096
 +
@@ -514,14 +516,16 @@ index 000000000..964c53943
 +/**
 + * @brief Opens a Laya GGUF with its own loader; not a `skippy_model`.
 + *
-+ * Weights go to the first accelerator when one exists, with the CPU backend
-+ * behind it for any unsupported op. `n_threads` sizes the CPU backend. Fails
++ * With `use_accelerator`, weights go to the first GPU device when one exists,
++ * with the CPU backend behind it for any unsupported op; otherwise the model
++ * runs on the CPU backend. `n_threads` sizes the CPU backend. Fails
 + * with SKIPPY_STATUS_MODEL_ERROR when the GGUF declares a `laya.max_len` above
 + * SKIPPY_LAYA_MAX_SEQUENCE_TOKENS or a head budget larger than it.
 + */
 +LLAMA_API enum skippy_status skippy_laya_model_open(
 +        const char * model_path,
 +        int32_t n_threads,
++        bool use_accelerator,
 +        struct skippy_laya_model ** out_model,
 +        struct skippy_error ** out_error);
 +
@@ -560,9 +564,10 @@ index 000000000..964c53943
 + * per sequence: `out_logits` holds `sequence_count * max_markers` scorer
 + * logits (unused markers are 0) and `out_act_logits` holds
 + * `sequence_count * n_act` action-head logits. Calls are serialized per
-+ * model. Sequences are packed into passes of at most
-+ * SKIPPY_LAYA_MAX_SEQUENCE_TOKENS tokens; a single sequence never exceeds
-+ * that because `max_len` is capped at open.
++ * model. Sequences are packed into passes of at most `max_len` tokens (see
++ * `skippy_laya_model_info_v1`), which open caps at
++ * SKIPPY_LAYA_MAX_SEQUENCE_TOKENS, so a pass's attention masks are bounded by
++ * the model's own sequence budget.
 + */
 +LLAMA_API enum skippy_status skippy_laya_read(
 +        struct skippy_laya_model * model,
@@ -762,10 +767,10 @@ index 1e1d2d7c8..f806cdbdc 100644
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/laya.cpp b/src/skippy/laya.cpp
 new file mode 100644
-index 000000000..52e17d7c9
+index 000000000..96956a489
 --- /dev/null
 +++ b/src/skippy/laya.cpp
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,330 @@
 +#include "skippy/laya.h"
 +
 +#include "skippy/errors.h"
@@ -843,6 +848,7 @@ index 000000000..52e17d7c9
 +extern "C" enum skippy_status skippy_laya_model_open(
 +        const char * model_path,
 +        int32_t n_threads,
++        bool use_accelerator,
 +        struct skippy_laya_model ** out_model,
 +        struct skippy_error ** out_error) {
 +    if (model_path == nullptr || out_model == nullptr) {
@@ -853,7 +859,7 @@ index 000000000..52e17d7c9
 +    skippy_laya_model * handle = nullptr;
 +    const enum skippy_status status = laya_entry(out_error, [&] {
 +        handle = new skippy_laya_model();
-+        handle->model = laya_model_load_from_file(model_path);
++        handle->model = laya_model_load_from_file(model_path, use_accelerator);
 +        const enum skippy_status budgets = validate_budgets(laya_model_hparams(handle->model), out_error);
 +        if (budgets != SKIPPY_STATUS_OK) {
 +            return budgets;
@@ -1070,15 +1076,18 @@ index 000000000..52e17d7c9
 +            return valid;
 +        }
 +
-+        // Every sequence fits in max_len <= SKIPPY_LAYA_MAX_SEQUENCE_TOKENS, so
-+        // grouping sequences up to that many tokens bounds every pass.
++        // Every sequence fits in max_len, which open capped at
++        // SKIPPY_LAYA_MAX_SEQUENCE_TOKENS, so packing sequences up to max_len
++        // tokens bounds every pass by the model's own sequence budget.
++        const laya_hparams & hp = laya_model_hparams(model->model);
++        const size_t pass_budget = (size_t) (hp.max_len > 0 ? hp.max_len : 1024);
 +        std::lock_guard<std::mutex> lane(model->lane);
 +        size_t first = 0;
 +        while (first < sequence_count) {
 +            size_t last = first;
 +            size_t pass_tokens = 0;
 +            while (last < sequence_count &&
-+                    pass_tokens + sequences[last].token_count <= SKIPPY_LAYA_MAX_SEQUENCE_TOKENS) {
++                    pass_tokens + sequences[last].token_count <= pass_budget) {
 +                pass_tokens += sequences[last].token_count;
 +                ++last;
 +            }
@@ -1135,10 +1144,10 @@ index 000000000..608e677b8
 +endif()
 diff --git a/tools/laya/laya-cli.cpp b/tools/laya/laya-cli.cpp
 new file mode 100644
-index 000000000..66ff95626
+index 000000000..460edc2ae
 --- /dev/null
 +++ b/tools/laya/laya-cli.cpp
-@@ -0,0 +1,665 @@
+@@ -0,0 +1,668 @@
 +// llama-laya-cli: run the self-contained laya decision model.
 +//
 +// Loads a laya GGUF twice: once through the tools/laya library (self-contained
@@ -1430,6 +1439,7 @@ index 000000000..66ff95626
 +    std::string input_path;
 +    int n_threads = 1;
 +    int n_bench   = 0; // >0: repeat the forward pass in-process for timing/stability
++    bool use_accelerator = true; // --cpu keeps the weights on the CPU backend
 +
 +    for (int i = 1; i < argc; ++i) {
 +        const std::string arg = argv[i];
@@ -1439,10 +1449,12 @@ index 000000000..66ff95626
 +            if (i + 1 < argc) input_path = argv[++i];
 +        } else if (arg == "-t" || arg == "--threads") {
 +            if (i + 1 < argc) n_threads = std::max(1, std::atoi(argv[++i]));
++        } else if (arg == "--cpu") {
++            use_accelerator = false;
 +        } else if (arg == "-b" || arg == "--bench") {
 +            if (i + 1 < argc) n_bench = std::max(0, std::atoi(argv[++i]));
 +        } else if (arg == "-h" || arg == "--help") {
-+            printf("Usage: %s -m <laya-f16.gguf> -f <input.json> [-t threads] [-b bench_runs]\n", argv[0]);
++            printf("Usage: %s -m <laya-f16.gguf> -f <input.json> [-t threads] [-b bench_runs] [--cpu]\n", argv[0]);
 +            return 0;
 +        } else {
 +            fprintf(stderr, "laya: unknown argument: %s\n", arg.c_str());
@@ -1458,7 +1470,7 @@ index 000000000..66ff95626
 +    // load the self-contained model
 +    laya_model * model = nullptr;
 +    try {
-+        model = laya_model_load_from_file(model_path.c_str());
++        model = laya_model_load_from_file(model_path.c_str(), use_accelerator);
 +    } catch (const std::exception & e) {
 +        fprintf(stderr, "laya: failed to load model: %s\n", e.what());
 +        return 1;
@@ -1806,10 +1818,10 @@ index 000000000..66ff95626
 +}
 diff --git a/tools/laya/laya.cpp b/tools/laya/laya.cpp
 new file mode 100644
-index 000000000..dc67ec1f8
+index 000000000..dafb8f506
 --- /dev/null
 +++ b/tools/laya/laya.cpp
-@@ -0,0 +1,1101 @@
+@@ -0,0 +1,1104 @@
 +#include "laya.h"
 +
 +#include "ggml.h"
@@ -2000,7 +2012,7 @@ index 000000000..dc67ec1f8
 +
 +// ---- model loading ------------------------------------------------------
 +
-+laya_model * laya_model_load_from_file(const char * fname) {
++laya_model * laya_model_load_from_file(const char * fname, bool use_accelerator) {
 +    std::unique_ptr<laya_model> model(new laya_model());
 +
 +    struct ggml_context * meta = nullptr;
@@ -2199,8 +2211,11 @@ index 000000000..dc67ec1f8
 +    model->act_head_2   = get_tensor("act_head.2.weight");
 +    model->act_head_2_b = get_tensor("act_head.2.bias");
 +
-+    // backend: prefer an accelerator (Metal/CUDA/...) and fall back to the CPU
-+    model->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
++    // backend: the first accelerator (Metal/CUDA/...) when asked for and
++    // present, otherwise the CPU
++    if (use_accelerator) {
++        model->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
++    }
 +    if (!model->backend) {
 +        model->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
 +    }
@@ -2913,10 +2928,10 @@ index 000000000..dc67ec1f8
 +}
 diff --git a/tools/laya/laya.h b/tools/laya/laya.h
 new file mode 100644
-index 000000000..74cb74f21
+index 000000000..3c237d266
 --- /dev/null
 +++ b/tools/laya/laya.h
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,108 @@
 +#pragma once
 +
 +// Self-contained laya model: a ModernBERT encoder + a typed decision head for
@@ -2990,8 +3005,10 @@ index 000000000..74cb74f21
 +struct laya_model;
 +struct laya_context;
 +
-+// load a laya GGUF (F16 or quantized; dequantization happens inside ggml mul_mat)
-+LLAMA_API laya_model * laya_model_load_from_file(const char * fname);
++// load a laya GGUF (F16 or quantized; dequantization happens inside ggml mul_mat).
++// With use_accelerator, weights go to the first GPU device when one exists;
++// otherwise, or when no GPU is present, they stay on the CPU backend.
++LLAMA_API laya_model * laya_model_load_from_file(const char * fname, bool use_accelerator = true);
 +
 +LLAMA_API void laya_model_free(laya_model * model);
 +

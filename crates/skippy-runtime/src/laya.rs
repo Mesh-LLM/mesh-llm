@@ -74,7 +74,9 @@ unsafe impl Send for LayaModel {}
 unsafe impl Sync for LayaModel {}
 
 impl LayaModel {
-    pub fn open(path: impl AsRef<Path>, threads: usize) -> Result<Self> {
+    /// Opens a Laya GGUF on the CPU backend, or with `use_accelerator` on the
+    /// first GPU device (CPU fallback for unsupported ops).
+    pub fn open(path: impl AsRef<Path>, threads: usize, use_accelerator: bool) -> Result<Self> {
         ensure_laya_supported()?;
         let path = path.as_ref();
         write_native_log_note(format!(
@@ -86,7 +88,13 @@ impl LayaModel {
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_laya_model_open(c_path.as_ptr(), threads, &mut raw, &mut error)
+            skippy_ffi::skippy_laya_model_open(
+                c_path.as_ptr(),
+                threads,
+                use_accelerator,
+                &mut raw,
+                &mut error,
+            )
         };
         ensure_ok(status, error).with_context(|| format!("open Laya model {}", path.display()))?;
         if raw.is_null() {
@@ -160,30 +168,33 @@ impl LayaModel {
 
     /// Tokenizes text without special tokens using the model's own tokenizer.
     pub fn tokenize(&self, text: &str) -> Result<Vec<i32>> {
-        let mut tokens = vec![0_i32; text.len() + 8];
-        loop {
-            let mut count = 0usize;
-            let mut error = ptr::null_mut();
-            let status = unsafe {
-                skippy_ffi::skippy_laya_tokenize(
-                    self.raw,
-                    text.as_ptr().cast(),
-                    text.len(),
-                    tokens.as_mut_ptr(),
-                    tokens.len(),
-                    &mut count,
-                    &mut error,
-                )
-            };
-            if status == skippy_ffi::Status::BufferTooSmall && count > tokens.len() {
-                crate::error::free_error(error);
-                tokens.resize(count, 0);
-                continue;
-            }
-            ensure_ok(status, error)?;
-            tokens.truncate(count);
-            return Ok(tokens);
-        }
+        // The tokenizer maps each space to U+2581 (three bytes) and prefixes
+        // one, and every BPE token covers at least one byte of that text, so
+        // this capacity always suffices; a larger reported count is an error,
+        // never a reason to grow the buffer.
+        let capacity = text.len().saturating_mul(3).saturating_add(8);
+        let mut tokens = vec![0_i32; capacity];
+        let mut count = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_laya_tokenize(
+                self.raw,
+                text.as_ptr().cast(),
+                text.len(),
+                tokens.as_mut_ptr(),
+                tokens.len(),
+                &mut count,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error).with_context(|| {
+            format!(
+                "Laya tokenizer produced {count} tokens for {} bytes",
+                text.len()
+            )
+        })?;
+        tokens.truncate(count);
+        Ok(tokens)
     }
 
     /// Runs one decision read over every question sequence.

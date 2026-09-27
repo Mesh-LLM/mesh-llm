@@ -59,8 +59,8 @@ shape:
   `convaiinnovations/laya-multilingual`) is a small encoder with a typed
   decision head that scores every option in one forward pass. It serves only
   `/systemone`, keeps the request order of choice options and `state` keys, and
-  runs on the node's GPU with CPU fallback. It accepts the same
-  `openjev-latest` aliases.
+  runs on the CPU unless `MESH_LLM_LAYA_ACCELERATOR=1` puts it on the node's GPU.
+  It accepts the same `openjev-latest` aliases.
 
 See the [OpenJEV setup and validation runbook](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/design/OPENJEV_SKIPPY_POC.md)
 for worker configuration and the supported subset.

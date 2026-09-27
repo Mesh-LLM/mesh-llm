@@ -11,7 +11,6 @@ use openai_frontend::{
     OpenAiError, OpenAiResult, SystemOneAnswer, SystemOneJson, SystemOneQuestion, SystemOneRequest,
     SystemOneResponse, SystemOneUsage,
 };
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use skippy_runtime::{
     DecisionError, DecisionModel, DecisionOutput, DecisionQuestion, DecisionQuestionKind,
@@ -119,7 +118,6 @@ fn decision_request(request: &SystemOneRequest) -> OpenAiResult<DecisionRequest>
 }
 
 fn decision_question(key: &str, question: &SystemOneQuestion) -> OpenAiResult<DecisionQuestion> {
-    let from_value = |value: &Value| DecisionValue::from(value.clone());
     let (instructions, kind) = match question {
         SystemOneQuestion::Noul {
             instructions,
@@ -130,11 +128,11 @@ fn decision_question(key: &str, question: &SystemOneQuestion) -> OpenAiResult<De
                 when_true: criteria
                     .as_ref()
                     .and_then(|criteria| criteria.r#true.as_ref())
-                    .map(from_value),
+                    .map(decision_value),
                 when_false: criteria
                     .as_ref()
                     .and_then(|criteria| criteria.r#false.as_ref())
-                    .map(from_value),
+                    .map(decision_value),
             },
         ),
         SystemOneQuestion::Choice {
@@ -175,7 +173,7 @@ fn decision_question(key: &str, question: &SystemOneQuestion) -> OpenAiResult<De
     };
     Ok(DecisionQuestion {
         key: key.to_string(),
-        instructions: instructions.as_ref().map(from_value),
+        instructions: instructions.as_ref().map(decision_value),
         kind,
     })
 }
@@ -321,17 +319,24 @@ mod tests {
         assert_eq!(options[0].0, "support");
     }
 
+    /// Nested objects in unsorted order, a float, criteria given as objects,
+    /// and every question kind.
+    const SEED_REQUEST: &str = r#"{"model":"m","state":{"zeta":{"b":[1,2.5,"x"],"a":null},"alpha":"hi"},"questions":{"team":{"type":"choice","instructions":{"y":1,"x":2},"criteria":{"support":"faults","billing":{"z":true,"a":false}}},"billing":{"type":"noul","instructions":"Billing?","criteria":{"true":"a charge","false":{"k":2,"j":1}}},"urgency":{"type":"score","criteria":["low",{"m":1,"l":0},"high"]}}}"#;
+
     #[test]
-    fn the_seed_is_the_canonical_request_digest() {
-        // DiffusionGemma's canvas filler derives from this seed; it must stay
-        // the digest of the sorted-key serialization it has always been.
-        let reordered =
-            request(r#"{"model":"m","state":{"b":1,"a":2},"questions":{"q":{"type":"noul"}}}"#);
-        let sorted =
-            request(r#"{"model":"m","state":{"a":2,"b":1},"questions":{"q":{"type":"noul"}}}"#);
+    fn the_seed_is_the_digest_diffusiongemma_has_always_used() {
+        // DiffusionGemma's canvas filler derives from this seed, so it must
+        // not move. Captured from origin/main (7d571a91d) by serializing
+        // `(&request.state, &request.questions)` for SEED_REQUEST and taking
+        // its SHA-256.
+        let seed = decision_request(&request(SEED_REQUEST)).unwrap().seed;
+        let hex = seed
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         assert_eq!(
-            decision_request(&reordered).unwrap().seed,
-            decision_request(&sorted).unwrap().seed
+            hex,
+            "3e7216c3eca8bf70ed5ac23016188815058b30d8155e1adcb745e70a5c8d98dd"
         );
     }
 

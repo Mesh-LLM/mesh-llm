@@ -508,7 +508,7 @@ impl ModelLoadSource {
 /// analytics label grammar; anything else, and every direct `--gguf` name, is
 /// `redacted`. The count and the source still land either way, which is what
 /// the question "which models actually get run" is asking.
-fn report_model_loaded_analytics(
+pub(super) fn report_model_loaded_analytics(
     model: &str,
     source: ModelLoadSource,
     metadata: Option<&models::gguf::GgufCompactMeta>,
@@ -528,7 +528,7 @@ fn report_model_loaded_analytics(
 /// closed vocabulary even for a direct `--gguf` load whose name is redacted.
 fn system_one_backend(metadata: Option<&models::gguf::GgufCompactMeta>) -> Option<&'static str> {
     match metadata?.architecture.as_str() {
-        LAYA_ARCHITECTURE => Some("laya"),
+        super::local_laya::LAYA_ARCHITECTURE => Some("laya"),
         "diffusion-gemma" => Some("openjev"),
         _ => None,
     }
@@ -1001,9 +1001,9 @@ pub(super) async fn start_local_openai_model(
         .flatten()
     };
 
-    if compact_meta
+    if let Some(meta) = compact_meta
         .as_ref()
-        .is_some_and(|meta| meta.architecture == LAYA_ARCHITECTURE)
+        .filter(|meta| super::local_laya::is_laya(Some(meta)))
     {
         // Laya has no stages, sessions, or KV cache for a layer package to
         // carry; it opens from one GGUF file.
@@ -1011,7 +1011,13 @@ pub(super) async fn start_local_openai_model(
             package.is_none(),
             "Laya models must be served from a GGUF file, not a layer package"
         );
-        return start_local_laya_model(spec, model_name, compact_meta.as_ref()).await;
+        return super::local_laya::start_local_laya_model(
+            spec,
+            model_name,
+            total_model_bytes,
+            meta,
+        )
+        .await;
     }
 
     let kv_cache = skippy::KvCachePolicy::from_publisher_defaults(
@@ -1085,64 +1091,6 @@ pub(super) async fn start_local_openai_model(
         )
         .await
     }
-}
-
-/// `general.architecture` of a Laya decision model GGUF.
-const LAYA_ARCHITECTURE: &str = "laya";
-
-/// Loads a Laya decision model. It has no KV cache or generation lanes, so the
-/// context planner and llama loader are skipped; the model answers System One
-/// reads only and advertises the decision workload class.
-async fn start_local_laya_model(
-    spec: LocalOpenAiModelStartSpec<'_>,
-    model_name: String,
-    compact_meta: Option<&models::gguf::GgufCompactMeta>,
-) -> Result<(
-    String,
-    LocalRuntimeModelHandle,
-    tokio::sync::oneshot::Receiver<()>,
-)> {
-    let _ = emit_event(OutputEvent::ModelLoading {
-        model: model_name.clone(),
-        source: None,
-    });
-    let model_path = spec.model_path.to_path_buf();
-    let model = tokio::task::spawn_blocking(move || skippy::load_laya_model(&model_path))
-        .await
-        .context("join load Laya model task")??;
-    let _ = emit_event(OutputEvent::ModelLoaded {
-        model: model_name.clone(),
-        bytes: None,
-    });
-    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf, compact_meta);
-    let context_length = u32::try_from(model.info().max_len)
-        .ok()
-        .or_else(|| compact_meta.map(|meta| meta.context_length))
-        .unwrap_or(0);
-    let capabilities = models::runtime_verified_model_capabilities(
-        &model_name,
-        spec.model_path,
-        models::runtime_media_capability_evidence(None).await,
-    );
-    let http = skippy::start_laya_http_on(&model_name, model.clone(), spec.http_bind_addr);
-    let (death_tx, death_rx) = tokio::sync::oneshot::channel();
-    Ok((
-        model_name,
-        LocalRuntimeModelHandle {
-            port: http.port(),
-            backend: "skippy".into(),
-            context_length,
-            slots: 1,
-            capabilities,
-            workload_class: mesh::ModelWorkloadClass::Decision,
-            inner: LocalRuntimeBackendHandle::Laya {
-                _model: model,
-                http,
-                _death_tx: death_tx,
-            },
-        },
-        death_rx,
-    ))
 }
 
 async fn start_local_skippy_model(

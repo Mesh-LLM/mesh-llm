@@ -26,19 +26,19 @@ pub struct SystemOneRequest {
 pub enum SystemOneQuestion {
     Noul {
         #[serde(default)]
-        instructions: Option<Value>,
+        instructions: Option<SystemOneJson>,
         #[serde(default)]
         criteria: Option<SystemOneNoulCriteria>,
     },
     Choice {
         #[serde(default)]
-        instructions: Option<Value>,
+        instructions: Option<SystemOneJson>,
         /// Options in request order; see [`SystemOneJson`].
         criteria: SystemOneJsonObject,
     },
     Score {
         #[serde(default)]
-        instructions: Option<Value>,
+        instructions: Option<SystemOneJson>,
         criteria: Vec<SystemOneJson>,
     },
 }
@@ -46,9 +46,9 @@ pub enum SystemOneQuestion {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SystemOneNoulCriteria {
     #[serde(default)]
-    pub r#true: Option<Value>,
+    pub r#true: Option<SystemOneJson>,
     #[serde(default)]
-    pub r#false: Option<Value>,
+    pub r#false: Option<SystemOneJson>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -208,15 +208,32 @@ impl PartialEq for SystemOneJsonObject {
     }
 }
 
+/// Serializes the canonical form: object keys sorted, whatever order the
+/// request used and whether or not `serde_json` preserves insertion order.
+/// System One request digests are taken over this form.
 impl Serialize for SystemOneJson {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.to_value().serialize(serializer)
+        match self {
+            Self::Null => serializer.serialize_unit(),
+            Self::Bool(value) => serializer.serialize_bool(*value),
+            Self::Number(value) => value.serialize(serializer),
+            Self::String(value) => serializer.serialize_str(value),
+            Self::Array(values) => values.serialize(serializer),
+            Self::Object(object) => object.serialize(serializer),
+        }
     }
 }
 
 impl Serialize for SystemOneJsonObject {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.to_map().serialize(serializer)
+        use serde::ser::SerializeMap;
+        let mut entries = self.0.iter().collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut map = serializer.serialize_map(Some(entries.len()))?;
+        for (key, value) in entries {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
     }
 }
 
@@ -246,14 +263,6 @@ impl<'de> Visitor<'de> for SystemOneJsonVisitor {
 
     fn visit_unit<E>(self) -> Result<Self::Value, E> {
         Ok(SystemOneJson::Null)
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(SystemOneJson::Null)
-    }
-
-    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
-        SystemOneJson::deserialize(deserializer)
     }
 
     fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
@@ -329,6 +338,22 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&state).expect("serialize"),
             serde_json::to_string(&value).expect("serialize value")
+        );
+    }
+
+    #[test]
+    fn canonical_serialization_matches_main_byte_for_byte() {
+        // System One request digests are taken over this serialization.
+        // Expected bytes captured from origin/main (7d571a91d); object keys
+        // are sorted explicitly, not by serde_json's default map, and struct
+        // fields keep their declaration order.
+        let request: SystemOneRequest = serde_json::from_str(
+            r#"{"model":"m","state":{"zeta":{"b":[1,2.5,"x"],"a":null},"alpha":"hi"},"questions":{"team":{"type":"choice","instructions":{"y":1,"x":2},"criteria":{"support":"faults","billing":{"z":true,"a":false}}},"billing":{"type":"noul","instructions":"Billing?","criteria":{"true":"a charge","false":{"k":2,"j":1}}},"urgency":{"type":"score","criteria":["low",{"m":1,"l":0},"high"]}}}"#,
+        )
+        .expect("request");
+        assert_eq!(
+            serde_json::to_string(&(&request.state, &request.questions)).unwrap(),
+            r#"[{"alpha":"hi","zeta":{"a":null,"b":[1,2.5,"x"]}},{"billing":{"type":"noul","instructions":"Billing?","criteria":{"true":"a charge","false":{"j":1,"k":2}}},"team":{"type":"choice","instructions":{"x":2,"y":1},"criteria":{"billing":{"a":false,"z":true},"support":"faults"}},"urgency":{"type":"score","instructions":null,"criteria":["low",{"l":0,"m":1},"high"]}}]"#
         );
     }
 

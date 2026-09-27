@@ -190,7 +190,7 @@ dynamic_symbols! {
     skippy_system_one_canvas_length(model: *mut Model, out_canvas_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_system_one_read(model: *mut Model, prompt_tokens: *const i32, prompt_token_count: usize, canvas_tokens: *const i32, canvas_token_count: usize, label_token_ids: *const i32, label_token_count: usize, slots: *const SystemOneSlot, slot_count: usize, out_probabilities: *mut f32, output_capacity: usize, out_output_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_model_workload_info_v1(model: *const Model, out_info: *mut WorkloadInfoV1, out_error: *mut *mut Error) -> Status;
-    skippy_laya_model_open(model_path: *const c_char, n_threads: i32, out_model: *mut *mut LayaModel, out_error: *mut *mut Error) -> Status;
+    skippy_laya_model_open(model_path: *const c_char, n_threads: i32, use_accelerator: bool, out_model: *mut *mut LayaModel, out_error: *mut *mut Error) -> Status;
     skippy_laya_model_free(model: *mut LayaModel);
     skippy_laya_model_info_v1(model: *const LayaModel, out_info: *mut LayaInfoV1, out_error: *mut *mut Error) -> Status;
     skippy_laya_tokenize(model: *const LayaModel, text: *const c_char, text_len: usize, out_tokens: *mut i32, capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;

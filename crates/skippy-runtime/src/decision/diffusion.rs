@@ -460,15 +460,25 @@ mod tests {
         ));
     }
 
+    /// A stand-in tokenizer whose token depends on every byte of the word,
+    /// so the expected sequence below pins the xorshift walk itself.
+    fn word_hash(text: &str) -> Result<Vec<i32>, DecisionError> {
+        Ok(vec![
+            text.bytes().fold(7_i32, |acc, byte| {
+                acc.wrapping_mul(31).wrapping_add(i32::from(byte))
+            }) & 0xffff,
+        ])
+    }
+
     #[test]
-    fn filler_tokens_fill_every_slot_exactly_and_deterministically() {
-        let draw = |text: &str| Ok(vec![i32::try_from(text.len()).unwrap()]);
-        let mut first_rng = 0x0123_4567_89ab_cdef_u64;
-        let first = filler_tokens(5, &mut first_rng, draw).expect("fillers");
-        assert_eq!(first, vec![FILLER_WORD_LEN as i32; 5]);
-        let mut second_rng = 0x0123_4567_89ab_cdef_u64;
-        let second = filler_tokens(5, &mut second_rng, draw).expect("fillers");
-        assert_eq!(first, second);
+    fn filler_tokens_follow_the_seeded_sequence() {
+        let mut rng = 0x0123_4567_89ab_cdef_u64;
+        let tokens = filler_tokens(5, &mut rng, word_hash).expect("fillers");
+        assert_eq!(tokens, vec![32609, 5868, 46964, 38019, 44864]);
+        let mut again = 0x0123_4567_89ab_cdef_u64;
+        assert_eq!(filler_tokens(5, &mut again, word_hash).unwrap(), tokens);
+        let mut other = 0x0123_4567_89ab_cdee_u64;
+        assert_ne!(filler_tokens(5, &mut other, word_hash).unwrap(), tokens);
     }
 
     #[test]

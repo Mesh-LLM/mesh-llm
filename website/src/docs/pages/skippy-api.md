@@ -231,7 +231,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/devices.h` | Enumerates backend devices available to the staged runtime. |
 | `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
 | `include/skippy/execution.h` | Prefill, decode, verification, activation-frame, and batched execution. |
-| `include/skippy/laya.h` | Full-model Laya decision reads (encoder + typed decision head). Laya is non-autoregressive: one forward pass scores every option of every question. It does not load through `skippy_model_open`; it owns its GGUF, tokenizer, and execution context, which runs on the first accelerator when one exists and falls back to the CPU backend. Callers build the per-question token sequences (see `skippy_laya_tokenize`) and read raw scorer and action-head logits back; temperature and softmax stay on the caller side. |
+| `include/skippy/laya.h` | Full-model Laya decision reads (encoder + typed decision head). Laya is non-autoregressive: one forward pass scores every option of every question. It does not load through `skippy_model_open`; it owns its GGUF, tokenizer, and execution context, which runs on the CPU backend or, when the caller opts in, on the first accelerator with CPU fallback. Callers build the per-question token sequences (see `skippy_laya_tokenize`) and read raw scorer and action-head logits back; temperature and softmax stay on the caller side. |
 | `include/skippy/model_package.h` | Inspects GGUF tensors and writes metadata and multi-part packages. |
 | `include/skippy/model_source.h` | Callback-backed model construction and load-time quantization. |
 | `include/skippy/runtime.h` | Model loading, session lifecycle, and llama.cpp context access. |
@@ -715,12 +715,13 @@ LLAMA_API enum skippy_status skippy_session_copy_output_activation_frame(
 <a id="skippy-fn-skippy-laya-model-open"></a>
 #### `skippy_laya_model_open`
 
-Opens a Laya GGUF with its own loader; not a `skippy_model`. Weights go to the first accelerator when one exists, with the CPU backend behind it for any unsupported op. `n_threads` sizes the CPU backend. Fails with SKIPPY_STATUS_MODEL_ERROR when the GGUF declares a `laya.max_len` above SKIPPY_LAYA_MAX_SEQUENCE_TOKENS or a head budget larger than it.
+Opens a Laya GGUF with its own loader; not a `skippy_model`. With `use_accelerator`, weights go to the first GPU device when one exists, with the CPU backend behind it for any unsupported op; otherwise the model runs on the CPU backend. `n_threads` sizes the CPU backend. Fails with SKIPPY_STATUS_MODEL_ERROR when the GGUF declares a `laya.max_len` above SKIPPY_LAYA_MAX_SEQUENCE_TOKENS or a head budget larger than it.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_laya_model_open(
          const char * model_path,
         int32_t n_threads,
+        bool use_accelerator,
         struct skippy_laya_model ** out_model,
         struct skippy_error ** out_error);
 ```
@@ -766,7 +767,7 @@ LLAMA_API enum skippy_status skippy_laya_tokenize(
 <a id="skippy-fn-skippy-laya-read"></a>
 #### `skippy_laya_read`
 
-Scores every question's options in one packed forward pass. `marker_positions` are sequence-local token indices. Outputs are row-major per sequence: `out_logits` holds `sequence_count * max_markers` scorer logits (unused markers are 0) and `out_act_logits` holds `sequence_count * n_act` action-head logits. Calls are serialized per model. Sequences are packed into passes of at most SKIPPY_LAYA_MAX_SEQUENCE_TOKENS tokens; a single sequence never exceeds that because `max_len` is capped at open.
+Scores every question's options in one packed forward pass. `marker_positions` are sequence-local token indices. Outputs are row-major per sequence: `out_logits` holds `sequence_count * max_markers` scorer logits (unused markers are 0) and `out_act_logits` holds `sequence_count * n_act` action-head logits. Calls are serialized per model. Sequences are packed into passes of at most `max_len` tokens (see `skippy_laya_model_info_v1`), which open caps at SKIPPY_LAYA_MAX_SEQUENCE_TOKENS, so a pass's attention masks are bounded by the model's own sequence budget.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_laya_read(

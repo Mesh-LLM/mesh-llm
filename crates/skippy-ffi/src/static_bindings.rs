@@ -164,6 +164,7 @@ unsafe extern "C" {
     pub fn skippy_laya_model_open(
         model_path: *const c_char,
         n_threads: i32,
+        use_accelerator: bool,
         out_model: *mut *mut LayaModel,
         out_error: *mut *mut Error,
     ) -> Status;

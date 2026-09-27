@@ -232,10 +232,17 @@ The native side ports the draft upstream support
 in one family patch (`model_support/0006`), which also exposes it through a
 narrow Skippy ABI (`skippy/laya.h`, feature bit 40). Laya does
 not load through `skippy_model_open`; the host recognizes
-`general.architecture = "laya"` and opens it through its own entry point,
-skipping KV and context planning. The runtime keeps its weights on the node's
-first accelerator and schedules with the CPU backend behind it, so an op the
-accelerator lacks falls back rather than failing.
+`general.architecture = "laya"` and opens it through its own entry point.
+
+**Device and memory.** Laya runs on the CPU backend by default. Set
+`MESH_LLM_LAYA_ACCELERATOR=1` to put its weights on the node's first GPU (the
+CPU backend stays behind it for any op the GPU lacks). Each read packs
+question sequences into passes of at most the model's `laya.max_len` tokens
+(1,024 for `laya-multilingual`; GGUFs declaring more than 4,096 are refused
+at open), and a pass holds dense attention masks and scores over its tokens.
+The host charges that worst case to the capacity ledger together with the
+weights (about 170 MB on top of 659 MB for `laya-multilingual`), records it as
+the memory plan's compute charge, and refuses the load when capacity is short.
 
 ### Convert a checkpoint
 
@@ -279,6 +286,21 @@ Laya has no stages, sessions, or KV cache to split. Use the model ID from `GET /
 as in the DiffusionGemma setup above. The node advertises the `decision` workload class, so chat, completion,
 embedding, and audio requests are never routed to it; `/systemone` routes by
 model name as it does for DiffusionGemma.
+
+### Check parity with the reference
+
+The upstream PyTorch golden fixtures are vendored in
+`ci/llama-canary/fixtures/laya-golden`. Compare a running node, or a
+`llama-laya-cli` build, against them:
+
+```bash
+python3 scripts/skippy-laya-parity.py --base-url http://127.0.0.1:9337 --model laya-multilingual-F16
+python3 scripts/skippy-laya-parity.py --cli path/to/llama-laya-cli --gguf /tmp/laya-multilingual-F16.gguf
+```
+
+Each fixture may differ from its golden by upstream's own CPU error on it plus
+0.005. `noul_zh` carries the largest budget (0.0579), because the upstream
+runtime itself misses it by that much.
 
 ### How it differs from the DiffusionGemma read
 
