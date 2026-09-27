@@ -136,8 +136,7 @@ fn test_shard_checks_all_tracked_test_candidates() -> DynResult<()> {
         .iter()
         .flat_map(|(_, cases)| cases.iter().map(|(_, _, _, lines)| lines.len()))
         .sum::<usize>();
-    // When reconciled, then the full 380-row roster includes 288 additional identities.
-    assert_eq!(observed.len(), 380);
-    assert_eq!(additional, 288);
+    assert_eq!(observed.len(), 425);
+    assert_eq!(additional, 326);
     check_test_source_shard(&root, &text, &observed)
 }
