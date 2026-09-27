@@ -28,10 +28,10 @@ const site = {
 const GITHUB_TIMEOUT_MS = 5000;
 
 const fetchGithubJson = async (path, describe) => {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), GITHUB_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GITHUB_TIMEOUT_MS);
 
+  try {
     const response = await fetch(`https://api.github.com/repos/${site.githubRepo}${path}`, {
       headers: {
         Accept: 'application/vnd.github+json',
@@ -40,16 +40,19 @@ const fetchGithubJson = async (path, describe) => {
       signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
     if (!response.ok) {
       console.warn(`GitHub API returned ${response.status} for ${path}; using the committed fallback ${describe}`);
       return null;
     }
 
+    // The timeout stays armed across the body read, so a response that sends
+    // headers and then stalls still hits the abort and falls back.
     return await response.json();
   } catch (err) {
     console.warn(`Failed to fetch GitHub ${describe}, falling back to the committed value:`, err);
     return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
 };
 
@@ -74,8 +77,10 @@ const formatStarCount = (count) => {
 
 const fetchStargazerCount = async () => {
   const repo = await fetchGithubJson('', 'star count');
-  const count = Number(repo?.stargazers_count);
-  return Number.isFinite(count) ? count : null;
+  const count = repo?.stargazers_count;
+  // Accept only a real, non-negative integer. Number(null) is 0, so converting
+  // first would render "0 stars" instead of the committed fallback.
+  return typeof count === 'number' && Number.isInteger(count) && count >= 0 ? count : null;
 };
 
 export default async function () {
