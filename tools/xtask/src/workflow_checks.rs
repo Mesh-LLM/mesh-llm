@@ -551,15 +551,19 @@ const RELEASE_CARGO_INVOCATIONS: &[&str] = &[
     "scripts/publish-crates.sh",
 ];
 
-/// Steps that can initialize sccache before the first compiler probe. Some
-/// pinned runner images already include the sccache binary, so they need only
+/// Steps that can initialize sccache before the first compiler probe, listed in
+/// the order a job that uses both must run them: the installer puts the sccache
+/// binary on `PATH`, and the repository action starts a server from that binary.
+/// Some pinned runner images already include the binary, so those jobs need only
 /// the repository action that configures its cache backend.
 const RELEASE_SCCACHE_INITIALIZATION: &[&str] = &[
     "uses: mozilla-actions/sccache-action",
     "uses: ./.github/actions/configure-sccache-gha",
 ];
 
-/// These hosted jobs install sccache and then configure its cache backend.
+/// These hosted jobs install sccache and then configure its cache backend, so
+/// both markers must precede cargo and keep their declared order. The reversed
+/// order starts the server from a binary the installer has not provided yet.
 const RELEASE_HOSTED_SCCACHE_JOBS: &[&str] = &["metadata", "publish"];
 
 /// Names of the jobs declared under `jobs:` in a workflow, in file order.
@@ -652,16 +656,28 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
             })
             .collect::<Vec<_>>();
         if RELEASE_HOSTED_SCCACHE_JOBS.contains(&job_name.as_str()) {
+            // Presence is not enough for a hosted job: the installer has to run
+            // before the action that starts a server from the installed binary.
+            let mut previous: Option<(&str, usize)> = None;
             for marker in RELEASE_SCCACHE_INITIALIZATION {
-                if initialized_before_cargo
+                let found = initialized_before_cargo
                     .iter()
-                    .all(|(initialized_marker, _)| initialized_marker != marker)
-                {
+                    .find(|(initialized_marker, _)| *initialized_marker == *marker);
+                let Some((_, position)) = found else {
                     return Err(format!(
                         "release workflow `{job_name}` invokes {invocation_list} before required sccache initialization `{marker}`"
                     )
                     .into());
+                };
+                if let Some((previous_marker, previous_position)) = previous
+                    && *position < previous_position
+                {
+                    return Err(format!(
+                        "release workflow `{job_name}` runs `{marker}` before `{previous_marker}`; a hosted job installs sccache before it configures the cache backend"
+                    )
+                    .into());
                 }
+                previous = Some((*marker, *position));
             }
         } else if initialized_before_cargo.is_empty() {
             let marker = RELEASE_SCCACHE_INITIALIZATION.join("` or `");
@@ -1360,6 +1376,22 @@ jobs:
     #[test]
     fn release_sccache_initialization_accepts_supported_setup_variants() {
         check_release_sccache_initialization(VALID_SCCACHE_INITIALIZATION_WORKFLOW).unwrap();
+    }
+
+    #[test]
+    fn release_sccache_initialization_rejects_swapped_hosted_setup() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
+            "      - uses: mozilla-actions/sccache-action@v0\n      - uses: ./.github/actions/configure-sccache-gha\n",
+            "      - uses: ./.github/actions/configure-sccache-gha\n      - uses: mozilla-actions/sccache-action@v0\n",
+        );
+
+        let error = check_release_sccache_initialization(&workflow).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "`metadata` runs `uses: ./.github/actions/configure-sccache-gha` before `uses: mozilla-actions/sccache-action`"
+            ),
+            "{error}"
+        );
     }
 
     #[test]
