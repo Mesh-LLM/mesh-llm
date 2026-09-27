@@ -281,7 +281,7 @@ struct TerminationSignals {
     #[cfg(unix)]
     interrupt: tokio::signal::unix::Signal,
     #[cfg(unix)]
-    terminate: Option<tokio::signal::unix::Signal>,
+    terminate: tokio::signal::unix::Signal,
     #[cfg(windows)]
     ctrl_c: tokio::signal::windows::CtrlC,
     #[cfg(windows)]
@@ -294,13 +294,7 @@ impl TerminationSignals {
         {
             use tokio::signal::unix::{SignalKind, signal};
             let interrupt = signal(SignalKind::interrupt())?;
-            let terminate = match signal(SignalKind::terminate()) {
-                Ok(terminate) => Some(terminate),
-                Err(error) => {
-                    tracing::warn!(%error, "SIGTERM handling unavailable; observing SIGINT only");
-                    None
-                }
-            };
+            let terminate = signal(SignalKind::terminate())?;
             Ok(Self {
                 interrupt,
                 terminate,
@@ -326,15 +320,9 @@ impl TerminationSignals {
                 interrupt,
                 terminate,
             } = self;
-            match terminate.as_mut() {
-                Some(terminate) => tokio::select! {
-                    _ = interrupt.recv() => "SIGINT",
-                    _ = terminate.recv() => "SIGTERM",
-                },
-                None => {
-                    let _ = interrupt.recv().await;
-                    "SIGINT"
-                }
+            tokio::select! {
+                _ = interrupt.recv() => "SIGINT",
+                _ = terminate.recv() => "SIGTERM",
             }
         }
         #[cfg(windows)]
@@ -370,6 +358,23 @@ mod tests {
                 .expect_err("startup must not continue without registered signal streams");
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert!(installation.starting.is_some(), "retain the late forwarder");
+    }
+
+    #[test]
+    fn startup_reports_a_signal_registration_failure() {
+        let mut installation = InstallState {
+            delivery: None,
+            starting: None,
+        };
+        let (started_tx, started_rx) = mpsc::channel();
+        started_tx
+            .send(Err("could not register SIGTERM".to_owned()))
+            .expect("the startup receiver is open");
+        let error =
+            record_forwarder_start_result(&mut installation, started_rx, Duration::from_millis(10))
+                .expect_err("startup must not continue after signal registration fails");
+        assert!(error.to_string().contains("could not register SIGTERM"));
+        assert!(installation.starting.is_none());
     }
 
     /// A signal delivered while nothing is awaiting the shutdown signal must
