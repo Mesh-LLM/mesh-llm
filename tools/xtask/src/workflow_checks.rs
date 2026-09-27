@@ -122,6 +122,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
         &compute_changes,
     )?;
     check_release_dispatch_version_preparation(&release_workflow, &native_sdk, &swift_sdk)?;
+    check_release_sccache_initialization(&release_workflow)?;
     check_release_container_contracts(&release_workflow, &configure_sccache)?;
     check_windows_dynamic_runtime_contract(
         &host,
@@ -528,18 +529,131 @@ fn check_protected_reusable_runner_policy(workflow: &str, context: &str) -> DynR
     Ok(())
 }
 
+/// Release jobs that only compose immutable producer artifacts. They consume
+/// an already-versioned source and finished host/runtime inputs, so they must
+/// never rewrite the release version and must never invoke cargo.
+const RELEASE_COMPOSITION_ONLY_JOBS: &[&str] = &[
+    "compose_cpu_products",
+    "compose_linux_arm64_cpu",
+    "compose_linux_aarch64_cuda",
+    "compose_linux_cuda",
+    "compose_linux_rocm",
+    "compose_linux_vulkan",
+    "compose_windows_cpu",
+    "compose_windows_gpu",
+];
+
+/// Text that proves a release job can reach cargo, either directly or through
+/// the release scripts that own version rewriting and crates.io packaging.
+const RELEASE_CARGO_INVOCATIONS: &[&str] = &[
+    "cargo ",
+    "scripts/release-version.sh",
+    "scripts/publish-crates.sh",
+];
+
+/// Steps that start a working sccache server before the first compiler probe.
+/// `.cargo/config.toml` makes sccache the repository-wide `rustc` wrapper, so
+/// every cargo call in `release.yml` depends on one of these having run.
+const RELEASE_SCCACHE_INITIALIZATION: &[&str] = &[
+    "uses: mozilla-actions/sccache-action",
+    "uses: ./.github/actions/configure-sccache-gha",
+];
+
+/// Names of the jobs declared under `jobs:` in a workflow, in file order.
+fn workflow_job_names(workflow: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_jobs = false;
+
+    for raw_line in workflow.lines() {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if !in_jobs {
+            in_jobs = line == "jobs:";
+            continue;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        // Leaving the two-space indentation ends the `jobs:` mapping.
+        if !line.starts_with(' ') {
+            break;
+        }
+        let Some(candidate) = line
+            .strip_prefix("  ")
+            .and_then(|rest| rest.strip_suffix(':'))
+        else {
+            continue;
+        };
+        if candidate.is_empty()
+            || candidate.starts_with(' ')
+            || !candidate
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+        {
+            continue;
+        }
+        names.push(candidate.to_string());
+    }
+
+    names
+}
+
+/// Every job that can invoke cargo must start sccache first, and a
+/// composition-only job must never invoke cargo at all.
+///
+/// This is the static half of the release CI contract: it catches a cargo
+/// caller that was never given the wrapper initialization, which a green
+/// canary cannot catch for the canary-skipped jobs. Steps reached through local
+/// composite actions or reusable workflows are outside this scan; only the
+/// steps spelled out in `release.yml` are visible here.
+fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()> {
+    for job_name in workflow_job_names(release_workflow) {
+        let job = workflow_job_section(release_workflow, &job_name)
+            .ok_or_else(|| format!("release workflow: unable to read `{job_name}` job"))?;
+        // Comments and step names may mention cargo without running it.
+        let steps = job
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cargo_invocations = RELEASE_CARGO_INVOCATIONS
+            .iter()
+            .filter(|invocation| steps.contains(**invocation))
+            .copied()
+            .collect::<Vec<_>>();
+        if cargo_invocations.is_empty() {
+            continue;
+        }
+        let invocation_list = cargo_invocations
+            .iter()
+            .map(|invocation| invocation.trim())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if RELEASE_COMPOSITION_ONLY_JOBS.contains(&job_name.as_str()) {
+            return Err(format!(
+                "release workflow `{job_name}` is composition-only but invokes {invocation_list}"
+            )
+            .into());
+        }
+        if !RELEASE_SCCACHE_INITIALIZATION
+            .iter()
+            .any(|marker| steps.contains(marker))
+        {
+            return Err(format!(
+                "release workflow `{job_name}` invokes {invocation_list} without initializing sccache"
+            )
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
 fn check_release_dispatch_version_preparation(
     release_workflow: &str,
     native_sdk_artifact_workflow: &str,
     swift_sdk_artifact_workflow: &str,
 ) -> DynResult<()> {
     const SOURCE_BUILD_JOBS: &[&str] = &["build", "build_linux_arm64", "windows_host_input"];
-    const COMPOSITION_ONLY_JOBS: &[&str] = &[
-        "compose_linux_aarch64_cuda",
-        "compose_linux_cuda",
-        "compose_linux_rocm",
-        "compose_linux_vulkan",
-    ];
     const REQUIRED_STEP: &str = "Prepare dispatched release version";
     const REQUIRED_COMMAND: &str = "scripts/release-version.sh \"$RELEASE_TAG\"";
 
@@ -564,7 +678,7 @@ fn check_release_dispatch_version_preparation(
         )?;
     }
 
-    for job_name in COMPOSITION_ONLY_JOBS {
+    for job_name in RELEASE_COMPOSITION_ONLY_JOBS {
         let job = workflow_job_section(release_workflow, job_name).ok_or_else(|| {
             format!("release workflow: missing `{job_name}` job for composition-only check")
         })?;
@@ -1039,7 +1153,7 @@ pub(crate) fn check_ci_script_workspace_members(repo_root: &Path) -> DynResult<(
 
 #[cfg(test)]
 mod tests {
-    use super::check_release_container_contracts;
+    use super::{check_release_container_contracts, check_release_sccache_initialization};
 
     const VALID_SCCACHE_ACTION: &str = r#"
 uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
@@ -1170,5 +1284,65 @@ jobs:
         let error =
             check_release_container_contracts(VALID_CONTAINER_WORKFLOW, &action).unwrap_err();
         assert!(error.to_string().contains("cache chain"));
+    }
+
+    const VALID_SCCACHE_INITIALIZATION_WORKFLOW: &str = r#"jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mozilla-actions/sccache-action@v0
+      - uses: ./.github/actions/configure-sccache-gha
+      - name: Prepare canonical release source
+        run: |
+          scripts/release-version.sh "$RELEASE_TAG"
+          cargo fmt --all -- --check
+  compose_linux_cuda:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./.github/actions/compose-product-input
+  release_notes:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Regroup published release notes
+        # The script decides what the release it just published needs.
+        run: scripts/release-notes-generate.sh
+"#;
+
+    #[test]
+    fn release_sccache_initialization_accepts_configured_cargo_jobs() {
+        check_release_sccache_initialization(VALID_SCCACHE_INITIALIZATION_WORKFLOW).unwrap();
+    }
+
+    #[test]
+    fn release_sccache_initialization_requires_configured_cargo_jobs() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
+            "      - uses: mozilla-actions/sccache-action@v0\n      - uses: ./.github/actions/configure-sccache-gha\n",
+            "",
+        );
+
+        let error = check_release_sccache_initialization(&workflow).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`metadata` invokes cargo, scripts/release-version.sh"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn release_sccache_initialization_rejects_cargo_in_composition_only_jobs() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
+            "      - uses: ./.github/actions/compose-product-input\n",
+            "      - uses: ./.github/actions/compose-product-input\n      - name: Prepare dispatched release version\n        run: scripts/release-version.sh \"$RELEASE_TAG\"\n",
+        );
+
+        let error = check_release_sccache_initialization(&workflow).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`compose_linux_cuda` is composition-only but invokes"),
+            "{error}"
+        );
     }
 }
