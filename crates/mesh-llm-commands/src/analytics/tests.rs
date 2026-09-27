@@ -6,7 +6,6 @@ fn config_in(dir: &TempDir) -> std::path::PathBuf {
 }
 
 #[test]
-#[serial_test::serial]
 fn disable_writes_a_durable_opt_out() {
     let dir = TempDir::new().expect("tempdir");
     let path = config_in(&dir);
@@ -23,7 +22,6 @@ fn disable_writes_a_durable_opt_out() {
 }
 
 #[test]
-#[serial_test::serial]
 fn enable_and_disable_round_trip() {
     let dir = TempDir::new().expect("tempdir");
     let path = config_in(&dir);
@@ -42,7 +40,6 @@ fn enable_and_disable_round_trip() {
 }
 
 #[test]
-#[serial_test::serial]
 fn opting_out_preserves_the_rest_of_a_hand_edited_config() {
     let dir = TempDir::new().expect("tempdir");
     let path = config_in(&dir);
@@ -69,7 +66,6 @@ fn opting_out_preserves_the_rest_of_a_hand_edited_config() {
 }
 
 #[test]
-#[serial_test::serial]
 fn status_reports_without_a_config_file_present() {
     let dir = TempDir::new().expect("tempdir");
     let path = config_in(&dir);
@@ -82,7 +78,6 @@ fn status_reports_without_a_config_file_present() {
 }
 
 #[test]
-#[serial_test::serial]
 fn an_unreadable_config_fails_closed_rather_than_reading_as_consent() {
     let dir = TempDir::new().expect("tempdir");
     let path = config_in(&dir);
@@ -104,7 +99,6 @@ fn an_unreadable_config_fails_closed_rather_than_reading_as_consent() {
 }
 
 #[test]
-#[serial_test::serial]
 fn status_does_not_create_an_install_identifier() {
     let dir = TempDir::new().expect("tempdir");
     let path = config_in(&dir);

@@ -38,13 +38,13 @@ fn auto_disables_backend_when_device_events_confirmed() {
 }
 
 #[test]
-fn auto_keeps_model_fallback_when_structured_model_events_are_confirmed() {
+fn auto_disables_model_when_structured_model_events_are_confirmed() {
     assert_eq!(
         forwarded_categories(
             NativeLogParserMode::Auto,
             FEATURE_RUNTIME_EVENT_REPORTER | FEATURE_MODEL_LOAD_EVENTS_V2 | FEATURE_RUNTIME_EVENTS
         ),
-        vec!["backend", "model", "kv_cache"]
+        vec!["backend", "kv_cache"]
     );
 }
 
@@ -71,11 +71,22 @@ fn auto_disables_kv_cache_when_kv_events_confirmed() {
 }
 
 #[test]
-fn auto_keeps_model_fallback_with_full_structured_coverage() {
+fn auto_disables_every_parsed_category_with_full_structured_coverage() {
     assert_eq!(
         forwarded_categories(NativeLogParserMode::Auto, FULL_STRUCTURED_COVERAGE),
-        vec!["model"]
+        Vec::<&str>::new()
     );
+}
+
+#[test]
+fn auto_keeps_only_the_dedicated_model_fallback_note() {
+    let report = crate::CapabilityReport {
+        confirmed: FULL_STRUCTURED_COVERAGE,
+        health_messages: Vec::new(),
+    };
+    let policy = NativeLogParserPolicy::new(NativeLogParserMode::Auto, &report);
+    assert!(policy.forwards_model_fallback_note());
+    assert!(!policy.forwards("model"));
 }
 
 #[test]
@@ -100,16 +111,28 @@ fn auto_forwards_everything_on_legacy_runtime() {
 #[test]
 fn enabled_and_disabled_ignore_capabilities() {
     for confirmed in [0, FULL_STRUCTURED_COVERAGE, u64::MAX] {
+        let report = crate::CapabilityReport {
+            confirmed,
+            health_messages: Vec::new(),
+        };
         assert_eq!(
             forwarded_categories(NativeLogParserMode::Enabled, confirmed),
             CATEGORIES.to_vec()
         );
+        assert!(
+            NativeLogParserPolicy::new(NativeLogParserMode::Enabled, &report)
+                .forwards_model_fallback_note()
+        );
         assert!(forwarded_categories(NativeLogParserMode::Disabled, confirmed).is_empty());
+        assert!(
+            !NativeLogParserPolicy::new(NativeLogParserMode::Disabled, &report)
+                .forwards_model_fallback_note()
+        );
     }
 }
 
 #[test]
-fn auto_keeps_safetensors_model_open_note_with_full_coverage() {
+fn auto_keeps_only_safetensors_fallback_note_with_full_coverage() {
     let _native_log_guard = native_log_test_guard();
     struct ResetForwarding;
     impl Drop for ResetForwarding {
@@ -131,7 +154,10 @@ fn auto_keeps_safetensors_model_open_note_with_full_coverage() {
         },
     ));
     unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
-    write_native_log_note("SafeTensors source loading does not yet emit native model-open events");
+    write_native_log_note("ordinary GGUF model note");
+    write_native_log_fallback_note(
+        "SafeTensors source loading does not yet emit native model-open events",
+    );
     let note = receiver
         .try_recv()
         .expect("SafeTensors model-open fallback note should be forwarded");

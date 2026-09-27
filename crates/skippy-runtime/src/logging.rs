@@ -30,7 +30,9 @@ static NATIVE_LOG_FORWARDING_MASK: AtomicU8 = AtomicU8::new(0);
 
 mod parser_policy;
 
-use parser_policy::{ALL_PRESENTATION_CATEGORIES, MODEL_CATEGORY, category_mask};
+use parser_policy::{
+    ALL_FORWARDING_CATEGORIES, MODEL_CATEGORY, MODEL_FALLBACK_NOTE, category_mask,
+};
 pub use parser_policy::{NativeLogParserMode, NativeLogParserPolicy};
 
 #[cfg(test)]
@@ -272,7 +274,7 @@ pub fn unregister_filtered_native_logs() {
 
 pub fn set_filtered_native_logs_enabled(enabled: bool) {
     let mask = if enabled {
-        ALL_PRESENTATION_CATEGORIES
+        ALL_FORWARDING_CATEGORIES
     } else {
         0
     };
@@ -843,6 +845,19 @@ fn sanitize_native_log_note(note: &str) -> String {
 }
 
 pub fn write_native_log_note(note: impl AsRef<str>) {
+    write_native_log_note_with_mask(note, MODEL_CATEGORY);
+}
+
+/// Writes a native-log note that remains visible in `auto` mode even when
+/// structured model-open events cover ordinary parsed model summaries.
+///
+/// This is reserved for source-specific compatibility gaps such as the
+/// SafeTensors loader, which does not enter the native model-open callback.
+pub(crate) fn write_native_log_fallback_note(note: impl AsRef<str>) {
+    write_native_log_note_with_mask(note, MODEL_FALLBACK_NOTE);
+}
+
+fn write_native_log_note_with_mask(note: impl AsRef<str>, required_mask: u8) {
     let note = sanitize_native_log_note(note.as_ref());
     if let Ok(mut guard) = native_log_file().lock()
         && let Some(writer) = guard.as_mut()
@@ -850,12 +865,12 @@ pub fn write_native_log_note(note: impl AsRef<str>) {
         let _ = writeln!(writer, "mesh-llm: {note}");
         let _ = writer.flush();
     }
-    forward_native_log_note(note);
+    forward_native_log_note(note, required_mask);
 }
 
-fn forward_native_log_note(note: String) {
+fn forward_native_log_note(note: String, required_mask: u8) {
     let forwarding_mask = NATIVE_LOG_FORWARDING_MASK.load(Ordering::Relaxed);
-    if forwarding_mask & MODEL_CATEGORY == 0 {
+    if forwarding_mask & required_mask == 0 {
         return;
     }
     let event = NativeLogEvent {
