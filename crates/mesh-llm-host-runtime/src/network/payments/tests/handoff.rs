@@ -72,17 +72,21 @@ async fn handed_off(hold: bool, fallback: bool, ending: ProviderEnding) -> Resul
         .await
     };
     verify_handoff(&service, &network, retryable, fallback, hold).await?;
+    // The provider took the input payment and closed without output: that is a
+    // paid-but-undelivered strike against it. With `hold`, the payment only
+    // settles after the drop, so the exchange never observed it: no strike.
+    //
+    // Asserted while this client is still connected, because dropping it first
+    // would cancel the request from our side and legitimately exempt the
+    // provider — the test would then be measuring its own timing.
+    if !hold {
+        assert_paid_undelivered_strike(&payer, &provider).await?;
+    }
     drop(client);
     let mut response = String::new();
     application.read_to_string(&mut response).await?;
     assert!(response.contains("402"));
     server.await??;
-    // The provider took the input payment and closed without output: that is
-    // a paid-but-undelivered strike against it. With `hold`, the payment only
-    // settles after the drop, so the exchange never observed it: no strike.
-    if !hold {
-        assert_paid_undelivered_strike(&payer, &provider).await?;
-    }
     payer_cleanup(failing, &payer, &provider).await
 }
 
@@ -323,6 +327,8 @@ async fn fake_paid_provider(
         network: network.clone(),
     };
     let invoice = seller.create_invoice(Some(1), 3600).await?;
+    // The input invoice's hash keys the charge in this payer's ledger.
+    let input_charge = invoice.payment_hash.clone();
     let terms = RequestTerms {
         exchange_id: None,
         id,
@@ -336,12 +342,21 @@ async fn fake_paid_provider(
         expires_at_ms: invoice.expires_at_ms,
     };
     wire::write(&mut send, &Frame::InputInvoice { terms, invoice }).await?;
-    while if hold {
-        service.ledger.pending_charges()?.is_empty()
+    if hold {
+        while service.ledger.pending_charges()?.is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     } else {
-        network.payments.load(Ordering::SeqCst) == 0
-    } {
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        // Hang up only once this payer's own ledger has settled the input
+        // charge, and then let the exchange observe that settlement. Closing
+        // as soon as the wallet reports the send decides the strike on a
+        // scheduling race: the provider dropping before the payer observes
+        // settlement is the documented no-strike gap, and here the exchange is
+        // parked on a read with the payment reply still in flight.
+        while service.ledger.charge_state(&input_charge)?.as_deref() != Some("succeeded") {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
     if ending == ProviderEnding::EmptyComplete {
         wire::write(&mut send, &Frame::Complete).await?;
