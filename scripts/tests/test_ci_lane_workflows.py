@@ -222,6 +222,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
             'smoke: [.matrices.smoke[] | select(.id == "metal-model-load")]',
             action,
         )
+        self.assertIn(
+            'smoke: [.matrices.smoke[] | select(.id == "core")]',
+            action,
+        )
 
     def test_pr_planner_uses_only_immutable_source_manifests(self) -> None:
         action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
