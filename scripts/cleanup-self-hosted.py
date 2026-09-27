@@ -79,6 +79,9 @@ def other_targets(env, job, uploaded, workspace, temporary):
                 paths.append((workspace, path.parent / 'native-runtimes'))
     elif job == 'runner-contract':
         paths = [(workspace, workspace / 'target')]
+    elif job == 'canary-preflight':
+        if uploaded:
+            paths = [(temporary, temporary / 'llama-canary-preflight')]
     else:
         raise ValueError('unknown cleanup profile')
     return paths
@@ -135,7 +138,8 @@ def cleanup(paths, replay=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--job', choices=('build', 'family', 'replay', 'cuda-release', 'smoke', 'runner-contract'), required=True)
+    parser.add_argument('--job', choices=('build', 'family', 'replay', 'cuda-release', 'smoke',
+                                          'runner-contract', 'canary-preflight'), required=True)
     parser.add_argument('--evidence-uploaded', choices=('true', 'false'), required=True)
     parser.add_argument('--package-uploaded', choices=('true', 'false'), default='false')
     args = parser.parse_args()
