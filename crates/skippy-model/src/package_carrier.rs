@@ -166,6 +166,11 @@ fn payload_artifacts(manifest: &PackageManifest) -> Result<Vec<&Artifact>> {
         .iter()
         .map(|sidecar| sidecar.artifact_id.as_str())
         .collect::<BTreeSet<_>>();
+    let publisher_metadata = manifest
+        .publisher_metadata
+        .iter()
+        .map(|metadata| metadata.artifact_id.as_str())
+        .collect::<BTreeSet<_>>();
     let mut artifacts = manifest
         .artifact_catalog
         .entries
@@ -173,6 +178,7 @@ fn payload_artifacts(manifest: &PackageManifest) -> Result<Vec<&Artifact>> {
         .filter(|artifact| {
             artifact.id != manifest.source_model.metadata_artifact_id
                 && !sidecars.contains(artifact.id.as_str())
+                && !publisher_metadata.contains(artifact.id.as_str())
         })
         .collect::<Vec<_>>();
     artifacts.sort_by(|left, right| left.id.cmp(&right.id));

@@ -531,13 +531,13 @@ impl KvStageIntegration {
         if !self.should_record() || self.payload != StagePrefixCachePayload::ResidentKv {
             return Ok(None);
         }
-        let token_count = identity
+        let requested_tokens = identity
             .identity
             .token_count
             .try_into()
             .unwrap_or(usize::MAX)
             .min(token_ids.len());
-        if token_count == 0 || (token_count as u64) < self.checkpoint_policy.min_tokens {
+        if requested_tokens == 0 || (requested_tokens as u64) < self.checkpoint_policy.min_tokens {
             return Ok(None);
         }
         let layer_count = identity
@@ -545,13 +545,12 @@ impl KvStageIntegration {
             .layer_end
             .saturating_sub(identity.identity.layer_start)
             .max(1);
-        let estimated_bytes = resident_estimated_bytes(token_count as u64, layer_count);
-        if (self.resident_config.max_bytes > 0 && estimated_bytes > self.resident_config.max_bytes)
-            || (self.resident_config.max_resident_tokens > 0
-                && token_count as u64 > self.resident_config.max_resident_tokens)
-        {
+        let token_count =
+            recordable_token_count(self.resident_config, requested_tokens, layer_count);
+        if token_count == 0 || (token_count as u64) < self.checkpoint_policy.min_tokens {
             return Ok(None);
         }
+        let estimated_bytes = resident_estimated_bytes(token_count as u64, layer_count);
         let mut evicted_entries = 0usize;
         let mut evicted_tokens = 0u64;
         let seq_id = {
@@ -769,6 +768,35 @@ fn resident_estimated_bytes(token_count: u64, layer_count: u32) -> u64 {
         .saturating_mul(2)
 }
 
+/// Longest prefix this cache may record for a request whose identity covers
+/// `requested` tokens.
+///
+/// Two bounds keep the pinned cells out of the way of the active lanes, which
+/// share one unified `n_ctx` cell pool with the resident cache: the per-entry
+/// cell cap (`max_resident_tokens`, `n_ctx - n_ctx/8`) and the per-entry byte
+/// budget (`max_bytes`). Treating either as all-or-nothing silently disabled
+/// reuse for every prompt above the bound - a prompt one token over the cell cap
+/// re-prefilled in full on an identical re-send (mesh-llm#1358). Clamping keeps
+/// each bound exactly (pinned cells never exceed it, so the lane reserve is
+/// unchanged) and still makes most of an over-long prompt reusable, because
+/// restore is a longest-prefix match against the recorded entry.
+fn recordable_token_count(
+    config: skippy_cache::ResidentCacheConfig,
+    requested: usize,
+    layer_count: u32,
+) -> usize {
+    let mut allowed = requested;
+    if config.max_resident_tokens > 0 {
+        allowed = allowed.min(usize::try_from(config.max_resident_tokens).unwrap_or(usize::MAX));
+    }
+    if config.max_bytes > 0 {
+        let bytes_per_token = resident_estimated_bytes(1, layer_count).max(1);
+        allowed =
+            allowed.min(usize::try_from(config.max_bytes / bytes_per_token).unwrap_or(usize::MAX));
+    }
+    allowed
+}
+
 fn resident_index_over_capacity(
     config: skippy_cache::ResidentCacheConfig,
     stats: skippy_cache::UnifiedRadixCacheStats,
@@ -824,6 +852,8 @@ mod proactive_eviction_tests {
                 payload: StageKvCachePayload::ResidentKv,
                 max_entries: 4,
                 max_bytes: 0,
+                l2_max_bytes: 0,
+                codec: skippy_protocol::StageKvCacheCodec::Native,
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 1,
                 shared_prefix_record_limit: 1,
@@ -1179,5 +1209,85 @@ mod proactive_eviction_tests {
         assert_eq!(existing.value.page_id, "existing");
         assert_eq!(existing.value.seq_id, existing_seq_id);
         assert_eq!(sequences.allocate().unwrap(), duplicate_seq_id);
+    }
+}
+
+#[cfg(test)]
+mod resident_record_cap_tests {
+    use super::*;
+
+    fn config(max_resident_tokens: u64, max_bytes: u64) -> skippy_cache::ResidentCacheConfig {
+        skippy_cache::ResidentCacheConfig {
+            max_entries: 64,
+            max_bytes,
+            min_tokens: 1,
+            reserved_seq_count: 8,
+            max_resident_tokens,
+        }
+    }
+
+    #[test]
+    fn prompt_above_the_cell_cap_records_the_cap_instead_of_nothing() {
+        // mesh-llm#1358: n_ctx 28_672 -> cap 25_088. A 25_989-token prompt used
+        // to be dropped entirely; it must be recorded at the cap.
+        let ctx: u64 = 28_672;
+        let cap = ctx - ctx / 8;
+        assert_eq!(cap, 25_088);
+        assert_eq!(recordable_token_count(config(cap, 0), 25_989, 42), 25_088);
+        assert_eq!(recordable_token_count(config(cap, 0), 24_000, 42), 24_000);
+    }
+
+    #[test]
+    fn unset_caps_keep_the_requested_prefix() {
+        assert_eq!(recordable_token_count(config(0, 0), 40_000, 42), 40_000);
+    }
+
+    #[test]
+    fn byte_budget_clamps_to_whole_tokens() {
+        // 42 layers, two bytes per cell per token: 84 bytes/token.
+        assert_eq!(resident_estimated_bytes(1, 42), 84);
+        let budget = 84 * 1_000;
+        let clamped = recordable_token_count(config(0, budget), 40_000, 42);
+        assert_eq!(clamped, 1_000);
+        assert!(resident_estimated_bytes(clamped as u64, 42) <= budget);
+    }
+
+    #[test]
+    fn byte_budget_below_one_token_records_nothing() {
+        // Falls to 0 so the caller's min_tokens guard rejects the record
+        // instead of pinning a zero-length snapshot.
+        assert_eq!(recordable_token_count(config(0, 1), 40_000, 42), 0);
+    }
+
+    #[test]
+    fn clamped_entry_is_found_by_a_longer_request() {
+        // Restore is a longest-prefix match, so an entry recorded at the cap
+        // still serves a longer prompt: the identical re-send reuses the cap
+        // and prefills only the remainder.
+        let stored: Vec<i32> = (0..100).collect();
+        let mut radix: skippy_cache::UnifiedRadixCache<
+            RadixResidentEntry,
+            crate::kv_integration::RadixExactEntry,
+        > = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(4);
+        let seq_id = sequences.allocate().unwrap();
+        radix
+            .insert_resident(
+                "stage",
+                &stored,
+                100,
+                RadixResidentEntry {
+                    page_id: "page".to_string(),
+                    seq_id,
+                    token_count: 100,
+                    recompute_cost: 100,
+                },
+            )
+            .unwrap();
+        let longer: Vec<i32> = (0..140).collect();
+        let hit = radix
+            .peek_resident("stage", &longer)
+            .expect("clamped prefix must still match a longer request");
+        assert_eq!(hit.matched_tokens, 100);
     }
 }

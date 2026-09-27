@@ -129,6 +129,7 @@ fn status_view_input(
         publication_state: "private".to_string(),
         local_processes: Vec::new(),
         peers: Vec::new(),
+        connected_peer_ids: std::collections::HashSet::new(),
         wakeable_nodes: Vec::new(),
         routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
         hardware: collector.build_hardware_view(

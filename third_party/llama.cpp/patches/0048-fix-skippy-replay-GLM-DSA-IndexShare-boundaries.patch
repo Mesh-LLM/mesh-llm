@@ -1,0 +1,291 @@
+From 74247a801325cc60c9e3e96695a4b5e8f6d56f2f Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 17:18:49 +1000
+Subject: [PATCH] fix(skippy): replay GLM DSA IndexShare boundaries
+
+---
+ src/llama-graph.cpp                     | 83 +++++++++++++++++++++++--
+ src/models/glm-dsa.cpp                  |  4 ++
+ src/skippy/stage_program.cpp            | 17 ++++-
+ src/skippy/stage_program_extraction.cpp |  2 +
+ src/skippy/stage_program_replay.cpp     | 15 +++--
+ src/skippy/stage_program_token_axis.cpp |  2 +
+ src/skippy/stage_realization.cpp        | 10 ++-
+ tests/test-llama-archs.cpp              |  5 +-
+ 8 files changed, 123 insertions(+), 15 deletions(-)
+
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 8672df583..9dd7343d2 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -752,7 +752,9 @@ void llm_graph_input_attn_k_dsa::set_input(const llama_ubatch * ubatch) {
+ }
+ 
+ bool llm_graph_input_attn_k_dsa::can_reuse(const llm_graph_params & params) {
+-    mctx = static_cast<const llama_kv_cache_dsa_context *>(params.mctx);
++    const auto * runtime_memory = dynamic_cast<const llama_kv_cache_dsa_context *>(params.mctx);
++    if (runtime_memory == nullptr) return false;
++    mctx = runtime_memory;
+ 
+     return can_reuse_impl(params);
+ }
+@@ -760,11 +762,19 @@ bool llm_graph_input_attn_k_dsa::can_reuse(const llm_graph_params & params) {
+ bool llm_graph_input_attn_k_dsa::can_reuse_impl(const llm_graph_params & params) {
+     bool res = true;
+ 
+-    res &= self_k_idxs_mla->ne[0] == params.ubatch.n_tokens;
+-    res &= self_k_idxs_lid->ne[0] == params.ubatch.n_tokens;
++    if (self_k_idxs_mla && self_k_idxs_mla->buffer) {
++        res &= self_k_idxs_mla->ne[0] == params.ubatch.n_tokens;
++    }
++    if (self_k_idxs_lid && self_k_idxs_lid->buffer) {
++        res &= self_k_idxs_lid->ne[0] == params.ubatch.n_tokens;
++    }
+ 
+-    res &= can_reuse_kq_mask(self_kq_mask_mla, mctx->get_mla(), params.ubatch, params.cparams);
+-    res &= can_reuse_kq_mask(self_kq_mask_lid, mctx->get_lid(), params.ubatch, params.cparams);
++    if (self_kq_mask_mla && self_kq_mask_mla->buffer) {
++        res &= can_reuse_kq_mask(self_kq_mask_mla, mctx->get_mla(), params.ubatch, params.cparams);
++    }
++    if (self_kq_mask_lid && self_kq_mask_lid->buffer) {
++        res &= can_reuse_kq_mask(self_kq_mask_lid, mctx->get_lid(), params.ubatch, params.cparams);
++    }
+ 
+     return res;
+ }
+@@ -1632,7 +1642,13 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
+         GGML_ASSERT(destination != nullptr && destination->buffer != nullptr);
+         GGML_ASSERT(source.rank > 0 && source.rank <= GGML_MAX_DIMS &&
+                 source.token_axis >= 0 && source.token_axis < static_cast<int32_t>(source.rank));
+-        GGML_ASSERT(destination->type == static_cast<ggml_type>(source.ggml_type));
++        if (destination->type != static_cast<ggml_type>(source.ggml_type)) {
++            throw std::runtime_error(
++                    "activation frontier part type mismatch at index " + std::to_string(index) +
++                    " binding=" + activation_imports[index].binding +
++                    " destination=" + ggml_type_name(destination->type) +
++                    " source=" + ggml_type_name(static_cast<ggml_type>(source.ggml_type)));
++        }
+         for (uint32_t dimension = 0; dimension < source.rank; ++dimension) {
+             const int64_t expected = static_cast<int32_t>(dimension) == source.token_axis ?
+                     ubatch->n_tokens : source.dimensions[dimension];
+@@ -3763,13 +3779,51 @@ ggml_tensor * llm_graph_context::build_attn(
+     // reshape KQ mask into tensor with rows of size 1:
+     // [n_kv, n_batch, 1, n_stream] -> [1, n_kv, n_batch, n_stream]
+     kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
++    {
++        auto geometry = skippy_stage_geometry_static(kq_mask_all);
++        geometry.dimensions = {
++            skippy_stage_geometry_expression::constant(1),
++            skippy_stage_geometry_expression::source_dimension(0, 0),
++            skippy_stage_geometry_expression::source_dimension(0, 1),
++            skippy_stage_geometry_expression::source_dimension(0, 3),
++        };
++        geometry.byte_strides = {
++            skippy_stage_geometry_expression::source_stride(0, 0),
++            skippy_stage_geometry_expression::source_stride(0, 0),
++            skippy_stage_geometry_expression::source_stride(0, 1),
++            skippy_stage_geometry_expression::source_stride(0, 2),
++        };
++        geometry.view_offset = skippy_stage_geometry_expression::constant(0);
++        skippy_stage_geometry_note(kq_mask_all, geometry);
++    }
+ 
+     // reshape top_k indices: [n_top_k, n_batch, 1, n_stream] -> [n_top_k, n_batch, n_stream, 1]
+     ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], top_k->ne[3], 1, top_k->nb[1], top_k->nb[2], top_k->ne[3]*top_k->nb[3], 0);
++    {
++        auto geometry = skippy_stage_geometry_static(top_k_3d);
++        geometry.dimensions = {
++            skippy_stage_geometry_expression::source_dimension(0, 0),
++            skippy_stage_geometry_expression::source_dimension(0, 1),
++            skippy_stage_geometry_expression::source_dimension(0, 3),
++            skippy_stage_geometry_expression::constant(1),
++        };
++        geometry.byte_strides = {
++            skippy_stage_geometry_expression::source_stride(0, 0),
++            skippy_stage_geometry_expression::source_stride(0, 1),
++            skippy_stage_geometry_expression::source_stride(0, 2),
++            skippy_stage_geometry_expression::source_stride(0, 3, top_k->ne[3]),
++        };
++        geometry.view_offset = skippy_stage_geometry_expression::constant(0);
++        skippy_stage_geometry_note(top_k_3d, geometry);
++    }
+ 
+     // prepare zero-filled tensor with rows of size 1: [1, n_top_k, n_batch, n_stream]
+     // this will be our source of zero values for unmasking top k mask elements
+     ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
++    auto zeros_geometry = skippy_stage_geometry_static(zeros);
++    zeros_geometry.dimensions[2] = skippy_stage_geometry_expression::tokens_per_kv_stream();
++    zeros_geometry.dimensions[3] = skippy_stage_geometry_expression::kv_stream_count();
++    skippy_stage_geometry_note(zeros, zeros_geometry);
+     zeros = ggml_fill(ctx0, zeros, 0.0f);
+ 
+     // modify KQ mask by unmasking elements that are in top_k indices
+@@ -3779,6 +3833,23 @@ ggml_tensor * llm_graph_context::build_attn(
+     // reshape to restore the original shape of KQ mask:
+     // [1, n_kv, n_batch, n_stream] -> [n_kv, n_batch, 1, n_stream]
+     kq_mask_top_k = ggml_view_4d(ctx0, kq_mask_top_k, kq_mask_top_k->ne[1], kq_mask_top_k->ne[2], 1, kq_mask_top_k->ne[3], kq_mask_top_k->nb[2], kq_mask_top_k->nb[3], kq_mask_top_k->nb[3], 0);
++    {
++        auto geometry = skippy_stage_geometry_static(kq_mask_top_k);
++        geometry.dimensions = {
++            skippy_stage_geometry_expression::source_dimension(0, 1),
++            skippy_stage_geometry_expression::source_dimension(0, 2),
++            skippy_stage_geometry_expression::constant(1),
++            skippy_stage_geometry_expression::source_dimension(0, 3),
++        };
++        geometry.byte_strides = {
++            skippy_stage_geometry_expression::source_stride(0, 0),
++            skippy_stage_geometry_expression::source_stride(0, 2),
++            skippy_stage_geometry_expression::source_stride(0, 3),
++            skippy_stage_geometry_expression::source_stride(0, 3),
++        };
++        geometry.view_offset = skippy_stage_geometry_expression::constant(0);
++        skippy_stage_geometry_note(kq_mask_top_k, geometry);
++    }
+ 
+     // combine with the original kq mask
+     kq_mask_top_k = ggml_add(ctx0, kq_mask_top_k, kq_mask);
+diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
+index bbb08c132..134a9de63 100644
+--- a/src/models/glm-dsa.cpp
++++ b/src/models/glm-dsa.cpp
+@@ -423,6 +423,10 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+                 // get indices of top k indexer scores
+                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
+                 top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
++                auto top_k_geometry = skippy_stage_geometry_static(top_k);
++                top_k_geometry.dimensions[1] = skippy_stage_geometry_expression::tokens_per_kv_stream();
++                top_k_geometry.dimensions[3] = skippy_stage_geometry_expression::kv_stream_count();
++                skippy_stage_geometry_note(top_k, top_k_geometry);
+                 prev_top_k = top_k;
+                 cb(top_k, "top_k", il);
+             } else {
+diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
+index 7b1a3ba03..b61f47aeb 100644
+--- a/src/skippy/stage_program.cpp
++++ b/src/skippy/stage_program.cpp
+@@ -244,7 +244,6 @@ bool skippy_stage_program::instantiate(
+                 tensor = ggml_new_tensor_4d(context, static_cast<ggml_type>(root.type),
+                         dims[0], dims[1], dims[2], dims[3]);
+                 ggml_set_input(tensor);
+-                result.add_skippy_activation_import(tensor, root.dynamic_axis, false, true);
+                 break;
+             }
+             case root_kind::scratch: {
+@@ -278,6 +277,22 @@ bool skippy_stage_program::instantiate(
+         if (tensor != nullptr) values.emplace(root.value_id, tensor);
+     }
+ 
++    // Root discovery follows dependency traversal, while the public activation
++    // descriptor follows the admitted frontier order. Reinstall imports in the
++    // latter order so multi-part boundaries keep identity, type, and payload
++    // positions aligned.
++    for (const auto & id : activation_imports) {
++        const auto value = values.find(id);
++        const auto root = std::find_if(roots.begin(), roots.end(), [&](const auto & candidate) {
++            return candidate.value_id == id && candidate.kind == root_kind::activation_import;
++        });
++        if (value == values.end() || root == roots.end()) {
++            error = "stage program activation import is missing or is not a frontier root: " + id;
++            return false;
++        }
++        result.add_skippy_activation_import(value->second, root->dynamic_axis, false, true);
++    }
++
+     auto bind = [&](const std::string & id, ggml_tensor * tensor) {
+         if (!id.empty() && tensor != nullptr) values[id] = tensor;
+     };
+diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
+index b27603be3..1e01fea01 100644
+--- a/src/skippy/stage_program_extraction.cpp
++++ b/src/skippy/stage_program_extraction.cpp
+@@ -531,6 +531,8 @@ bool extraction::run() {
+                                 dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence ||
+                                 dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_clamped ||
+                                 dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_capped ||
++                                (dimension.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_kv_stream &&
++                                 std::strncmp(ggml_get_name(tensor), "top_k", 5) == 0) ||
+                                 (dimension.value_kind == skippy_stage_geometry_expression::kind::source_dimension &&
+                                  dimension.source == 0 && dimension.axis == first_axis)) {
+                             operation.dynamic_axis = axis;
+diff --git a/src/skippy/stage_program_replay.cpp b/src/skippy/stage_program_replay.cpp
+index b35c2d7fe..1cd7b50a1 100644
+--- a/src/skippy/stage_program_replay.cpp
++++ b/src/skippy/stage_program_replay.cpp
+@@ -377,15 +377,18 @@ ggml_tensor * replay_operation(
+             if (sources[0] == nullptr || sources[1] == nullptr || sources[2] == nullptr ||
+                     sources[0]->ne[1] != sources[1]->ne[0]) {
+                 error = "stage program SET_ROWS geometry mismatch for " + operation.name +
+-                        " (" + operation.value_id + ") rows=" +
++                        " (" + operation.value_id + ") rows=" + operation.sources[0] + ":" +
+                         (sources[0] == nullptr ? std::string("<null>") :
+-                            std::to_string(sources[0]->ne[0]) + "x" + std::to_string(sources[0]->ne[1])) +
+-                        " indices=" +
++                            std::to_string(sources[0]->ne[0]) + "x" + std::to_string(sources[0]->ne[1]) + "x" +
++                            std::to_string(sources[0]->ne[2]) + "x" + std::to_string(sources[0]->ne[3])) +
++                        " indices=" + operation.sources[1] + ":" +
+                         (sources[1] == nullptr ? std::string("<null>") :
+-                            std::to_string(sources[1]->ne[0]) + "x" + std::to_string(sources[1]->ne[1])) +
+-                        " destination=" +
++                            std::to_string(sources[1]->ne[0]) + "x" + std::to_string(sources[1]->ne[1]) + "x" +
++                            std::to_string(sources[1]->ne[2]) + "x" + std::to_string(sources[1]->ne[3])) +
++                        " destination=" + operation.sources[2] + ":" +
+                         (sources[2] == nullptr ? std::string("<null>") :
+-                            std::to_string(sources[2]->ne[0]) + "x" + std::to_string(sources[2]->ne[1]));
++                            std::to_string(sources[2]->ne[0]) + "x" + std::to_string(sources[2]->ne[1]) + "x" +
++                            std::to_string(sources[2]->ne[2]) + "x" + std::to_string(sources[2]->ne[3]));
+                 return nullptr;
+             }
+             tensor = ggml_set_rows(context, sources[2], sources[0], sources[1]);
+diff --git a/src/skippy/stage_program_token_axis.cpp b/src/skippy/stage_program_token_axis.cpp
+index be985d313..371437641 100644
+--- a/src/skippy/stage_program_token_axis.cpp
++++ b/src/skippy/stage_program_token_axis.cpp
+@@ -113,6 +113,8 @@ int32_t skippy_stage_program_builder_token_axis(
+                                 expression.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence ||
+                                 expression.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_clamped ||
+                                 expression.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_sequence_capped ||
++                                (expression.value_kind == skippy_stage_geometry_expression::kind::runtime_tokens_per_kv_stream &&
++                                 std::strncmp(ggml_get_name(node), "top_k", 5) == 0) ||
+                                 (expression.value_kind == skippy_stage_geometry_expression::kind::source_dimension &&
+                                  expression.source == 0 && expression.axis == first_axis)) {
+                             if (axis >= 0) {
+diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
+index 1b7019de7..0f9beb355 100644
+--- a/src/skippy/stage_realization.cpp
++++ b/src/skippy/stage_realization.cpp
+@@ -125,7 +125,15 @@ int32_t skippy_activation_token_axis(const ggml_tensor * tensor, uint32_t n_toke
+ 
+ int32_t skippy_stage_program_token_axis(const ggml_tensor * tensor, uint32_t n_tokens, int32_t admitted_axis) {
+     if (admitted_axis < 0) {
+-        throw std::runtime_error("reusable stage program requires an explicit admitted token axis");
++        throw std::runtime_error(
++                "reusable stage program requires an explicit admitted token axis for " +
++                std::string(tensor == nullptr ? "<null>" : ggml_get_name(tensor)) +
++                (tensor == nullptr ? std::string() :
++                    " dims=" + std::to_string(tensor->ne[0]) + "x" + std::to_string(tensor->ne[1]) + "x" +
++                    std::to_string(tensor->ne[2]) + "x" + std::to_string(tensor->ne[3]) +
++                    " op=" + ggml_op_name(tensor->op) + " source0=" +
++                    (tensor->src[0] == nullptr ? std::string("<null>") :
++                        std::string(ggml_get_name(tensor->src[0])) + "/" + ggml_op_name(tensor->src[0]->op))));
+     }
+     if (admitted_axis >= GGML_MAX_DIMS || tensor->ne[admitted_axis] != static_cast<int64_t>(n_tokens)) {
+         throw std::runtime_error("live stage frontier does not match its prepared token axis");
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index ad6ddc8c1..bde52d933 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -210,7 +210,10 @@ static gguf_context_ptr get_gguf_ctx(
+     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
+     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
+     ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
+-    ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
++    ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,
++            arch == LLM_ARCH_GLM_DSA &&
++                    glm_dsa_indexshare == glm_dsa_indexshare_fixture::FULL_SHARED_SHARED
++                ? n_layer : uint32_t(1));
+ 
+     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
+         std::vector<uint32_t> n_ff_per_layer;
+-- 
+2.54.0 (Apple Git-157)
+

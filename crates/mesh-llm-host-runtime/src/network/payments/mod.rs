@@ -11,7 +11,9 @@ mod server;
 pub(crate) mod strikes;
 pub(crate) mod wallet_plugin;
 
-pub(crate) use node_ext::{PaymentsSlot, in_process_plugins};
+pub(crate) use node_ext::{
+    PaymentRecoverySlot, PaymentsSlot, in_process_plugins, spawn_payment_recovery,
+};
 pub(crate) use server::serve;
 
 pub(crate) fn is_payment_upgrade(prefix: &[u8]) -> bool {

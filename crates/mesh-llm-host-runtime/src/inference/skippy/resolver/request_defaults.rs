@@ -1,9 +1,6 @@
 use anyhow::{Result, bail};
 use openai_frontend::ReasoningEffort;
-use skippy_server::{
-    CONTEXT_BUDGET_MAX_TOKENS, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
-    EmbeddedReasoningFormat,
-};
+use skippy_server::{EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat};
 
 use super::support::string_list_value;
 use super::types::ResolvedRequestDefaultsConfig;
@@ -30,6 +27,7 @@ pub(super) fn resolve_request_defaults(
     defaults: Option<&ModelConfigDefaults>,
     model_entry: Option<&ModelConfigEntry>,
     request_defaults: Option<&RequestDefaultsConfig>,
+    package_generation: Option<&skippy_runtime::package::PackageGenerationInfo>,
 ) -> Result<ResolvedRequestDefaultsConfig> {
     let model = model_entry.and_then(|entry| entry.request_defaults.as_ref());
     let global = defaults.and_then(|value| value.request_defaults.as_ref());
@@ -53,8 +51,9 @@ pub(super) fn resolve_request_defaults(
         max_tokens: request_defaults
             .and_then(|value| value.max_tokens)
             .or_else(|| model.and_then(|value| value.max_tokens))
-            .or_else(|| global.and_then(|value| value.max_tokens))
-            .unwrap_or(CONTEXT_BUDGET_MAX_TOKENS),
+            .or_else(|| global.and_then(|value| value.max_tokens)),
+        package_request_defaults: package_generation
+            .and_then(|generation| generation.request_defaults.clone()),
         temperature: request_defaults
             .and_then(|value| value.temperature)
             .or_else(|| model.and_then(|value| value.temperature))
@@ -203,6 +202,7 @@ pub(super) fn resolve_reasoning_budget(value: &ReasoningBudget) -> Option<Embedd
         ReasoningBudget::Integer(tokens) => Some(EmbeddedReasoningBudget::Tokens(*tokens)),
         ReasoningBudget::String(value) => match value.as_str() {
             "auto" => Some(EmbeddedReasoningBudget::Auto),
+            "unrestricted" => Some(EmbeddedReasoningBudget::Unrestricted),
             "low" => Some(EmbeddedReasoningBudget::Effort(ReasoningEffort::Low)),
             "medium" => Some(EmbeddedReasoningBudget::Effort(ReasoningEffort::Medium)),
             "high" => Some(EmbeddedReasoningBudget::Effort(ReasoningEffort::High)),

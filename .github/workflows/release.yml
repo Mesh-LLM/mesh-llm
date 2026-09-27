@@ -150,6 +150,16 @@ jobs:
         with:
           node-version: 24.20.0
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+      # `release-version.sh` and `cargo fmt` compile through the repository
+      # rustc wrapper, so the first job of the release must start a working
+      # sccache server before its first cargo call. No compilation happens
+      # here, so the job-local disk tier is enough and this job exports no
+      # remote cache authority.
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
       - name: Prepare canonical release source
         id: source
         shell: bash
@@ -1053,12 +1063,6 @@ jobs:
         with:
           name: release-native-runtime-linux-aarch64-cuda-${{ matrix.cuda_version == '12.9.2' && '12' || '13' }}
           path: runtime-input
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
-
       - name: Prepare release verification key
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -1135,11 +1139,6 @@ jobs:
         with:
           name: release-native-runtime-linux-x86_64-cuda-${{ matrix.cuda_major }}
           path: runtime-input
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Prepare release verification key
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -1208,11 +1207,6 @@ jobs:
         with:
           name: release-native-runtime-linux-x86_64-rocm
           path: runtime-input
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Prepare release verification key
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -1279,11 +1273,6 @@ jobs:
         with:
           name: release-native-runtime-linux-x86_64-vulkan
           path: runtime-input
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Prepare release verification key
         env:
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
@@ -1742,6 +1731,20 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
         if: github.event_name == 'workflow_dispatch'
+
+      # The dispatched tag path is the only path here that calls cargo
+      # (`release-version.sh` in `Prepare dispatched release tag`), and it is
+      # skipped by canaries. Initialize the wrapper on that same condition so
+      # the last job of the release cannot fail on an unconfigured sccache.
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        if: github.event_name == 'workflow_dispatch'
+      - uses: ./.github/actions/configure-sccache-gha
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          # This job only rewrites release metadata. Keep the credential-bearing
+          # publisher on its job-local cache, matching `metadata`.
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
 
       - name: Restore shared release UI
         uses: ./.github/actions/restore-release-ui

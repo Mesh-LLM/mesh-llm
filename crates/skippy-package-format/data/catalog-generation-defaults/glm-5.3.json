@@ -1,0 +1,18 @@
+{
+  "selection": {
+    "default": "recommended"
+  },
+  "profiles": {
+    "recommended": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "provenance": {
+        "source_repo": "zai-org/GLM-5.3",
+        "revision": "aca966e4e02791568aa6a4ced368624b3d897f42",
+        "file": "generation_config.json",
+        "section": "Generation defaults",
+        "url": "https://huggingface.co/zai-org/GLM-5.3/blob/aca966e4e02791568aa6a4ced368624b3d897f42/generation_config.json"
+      }
+    }
+  }
+}

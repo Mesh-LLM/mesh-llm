@@ -10,6 +10,7 @@ mod kv_cache;
 mod local_source;
 mod materialization;
 pub(crate) mod metal_pipeline_cache;
+mod model_open_drain;
 mod package;
 mod resolver;
 pub(crate) mod runtime_events;
@@ -52,9 +53,7 @@ use skippy_server::{
 pub use certification::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
 };
-pub(crate) use family_policy::{
-    family_policy_for_compact_meta, family_policy_for_model_path, family_policy_for_stage_config,
-};
+pub(crate) use family_policy::{family_policy_for_model_path, family_policy_for_stage_config};
 pub(crate) use hooks::MeshAutoHookPolicy;
 pub(crate) use kv_cache::KvCachePolicy;
 #[cfg(test)]
@@ -86,6 +85,7 @@ pub(crate) use package::{
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
     effective_safety_margin_bytes, resolve_skippy_config_for_selector,
+    resolve_skippy_config_for_selector_with_publisher_defaults,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
@@ -513,7 +513,10 @@ pub(crate) struct SkippyOpenAiGuardrailOptions {
     telemetry: survey::SurveyTelemetry,
 }
 
+/// Host consumer for native model-open events. Runs on a host drain thread
+/// (see `model_open_drain`), never on the native callback thread.
 pub(crate) type NativeModelOpenEventReporter = Box<dyn FnMut(skippy_runtime::RuntimeEvent) + Send>;
+pub(crate) use model_open_drain::{ModelOpenObservation, ModelOpenReturn, NativeModelOpenEvents};
 
 impl SkippyOpenAiGuardrailOptions {
     pub(crate) fn new(
@@ -521,6 +524,41 @@ impl SkippyOpenAiGuardrailOptions {
         telemetry: survey::SurveyTelemetry,
     ) -> Self {
         Self { config, telemetry }
+    }
+}
+
+/// Loads a Laya decision model through its own native entry point, not
+/// `skippy_model_open`. `device` is `None` for the CPU backend, `"auto"` for the
+/// first GPU, or a ggml backend device name.
+pub(crate) fn load_laya_model(
+    path: &Path,
+    device: Option<&str>,
+) -> Result<Arc<skippy_runtime::LayaModel>> {
+    let threads = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4);
+    Ok(Arc::new(skippy_runtime::LayaModel::open(
+        path, threads, device,
+    )?))
+}
+
+/// Serves `POST /systemone` for a loaded Laya model on `bind_addr`.
+pub(crate) fn start_laya_http_on(
+    model_id: &str,
+    model: Arc<skippy_runtime::LayaModel>,
+    bind_addr: std::net::SocketAddr,
+) -> SkippyHttpHandle {
+    let lifecycle_observer = crate::network::openai::runtime_events::compose_lifecycle_observer(
+        crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+    );
+    let server = skippy_server::start_openai_backend_with_lifecycle_observer(
+        bind_addr,
+        Arc::new(skippy_server::LayaSystemOneBackend::new(model_id, model)),
+        lifecycle_observer,
+    );
+    SkippyHttpHandle {
+        port: bind_addr.port(),
+        server,
     }
 }
 
@@ -604,6 +642,7 @@ fn embedded_openai_args_from(
         linear_proposal_ingress: serving_hooks.linear_proposal_ingress(),
         kv_lifecycle_observer: serving_hooks.kv_lifecycle_observer(),
         openai_guardrails: None,
+        l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
     })
 }
 
@@ -733,7 +772,6 @@ impl SkippyModelHandle {
             metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: options.telemetry.queue_capacity,
             telemetry_level: options.telemetry.level,
-            operation_id: None,
             session_lifecycle_observer: Some(session_observer),
         })
         .with_context(|| {
@@ -795,7 +833,7 @@ impl SkippyModelHandle {
     pub(crate) fn load_with_hooks_and_open_events(
         options: SkippyModelLoadOptions,
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-        model_open_event_reporter: Option<NativeModelOpenEventReporter>,
+        model_open_events: Option<NativeModelOpenEvents>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
@@ -818,20 +856,25 @@ impl SkippyModelHandle {
         let operation_id = skippy_runtime::next_operation_id();
         let session_observer: Arc<dyn skippy_server::runtime_state::SessionLifecycleObserver> =
             Arc::new(runtime_events::SkippySessionRuntimeEventObserver::new());
-        let runtime = SkippyRuntimeHandle::load_with_open_events(
-            EmbeddedRuntimeOptions {
-                config: stage_config.clone(),
-                topology: None,
-                n_threads: options.n_threads,
-                n_threads_batch: options.n_threads_batch,
-                mtp_source,
-                metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
-                telemetry_queue_capacity: options.telemetry.queue_capacity,
-                telemetry_level: options.telemetry.level,
-                operation_id: Some(operation_id),
-                session_lifecycle_observer: Some(session_observer),
+        let runtime = model_open_drain::observe_model_open(
+            operation_id,
+            model_open_events,
+            |model_open_queue| {
+                SkippyRuntimeHandle::load_with_open_events(
+                    EmbeddedRuntimeOptions {
+                        config: stage_config.clone(),
+                        topology: None,
+                        n_threads: options.n_threads,
+                        n_threads_batch: options.n_threads_batch,
+                        mtp_source,
+                        metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
+                        telemetry_queue_capacity: options.telemetry.queue_capacity,
+                        telemetry_level: options.telemetry.level,
+                        session_lifecycle_observer: Some(session_observer),
+                    },
+                    model_open_queue,
+                )
             },
-            model_open_event_reporter,
         )
         .with_context(|| {
             format!(
@@ -938,7 +981,6 @@ impl SkippyModelHandle {
                 metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
                 telemetry_queue_capacity: telemetry.queue_capacity,
                 telemetry_level: telemetry.level,
-                operation_id: None,
                 session_lifecycle_observer: Some(session_observer),
             },
             embedded_args,
@@ -1040,7 +1082,7 @@ impl SkippyModelHandle {
         mut embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
-        model_open_event_reporter: Option<NativeModelOpenEventReporter>,
+        model_open_events: Option<NativeModelOpenEvents>,
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
@@ -1056,14 +1098,19 @@ impl SkippyModelHandle {
             config.kv_cache = family_policy.stage_kv_cache_config_for_stage(config);
         }
         let runtime_config = config.clone();
-        let runtime =
-            SkippyRuntimeHandle::load_with_open_events(runtime_options, model_open_event_reporter)
-                .with_context(|| {
-                    format!(
-                        "load skippy stage 0 runtime for model {} from {:?}",
-                        runtime_config.model_id, runtime_config.model_path
-                    )
-                })?;
+        let runtime = model_open_drain::observe_model_open(
+            skippy_runtime::next_operation_id(),
+            model_open_events,
+            |model_open_queue| {
+                SkippyRuntimeHandle::load_with_open_events(runtime_options, model_open_queue)
+            },
+        )
+        .with_context(|| {
+            format!(
+                "load skippy stage 0 runtime for model {} from {:?}",
+                runtime_config.model_id, runtime_config.model_path
+            )
+        })?;
         embedded_args.activation_width = if runtime_config.downstream.is_some() {
             runtime
                 .output_activation_boundary()
@@ -1236,6 +1283,10 @@ fn wrap_host_guardrail_backend(
 
 #[async_trait]
 impl OpenAiBackend for SkippyModelHandle {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+        self.backend.count_chat_tokens(request).await
+    }
+
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
         self.backend.models().await
     }
@@ -1668,6 +1719,7 @@ mod tests {
             activation_width: 4096,
             tensor_count: 100,
             generation: None,
+            publisher_defaults: None,
         }
     }
 

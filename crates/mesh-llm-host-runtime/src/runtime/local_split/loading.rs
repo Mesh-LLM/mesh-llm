@@ -9,7 +9,7 @@ use crate::inference::skippy;
 use crate::mesh;
 use crate::models;
 use crate::plugin;
-use crate::runtime::local::skippy_native_model_open_event_reporter;
+use crate::runtime::local::skippy_native_model_open_events;
 use crate::runtime::local_package::{
     split_node_labels, split_participant_set_hash, split_topology_hash,
 };
@@ -293,10 +293,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             // their own (event-system-fixes deferral D2 scopes
             // `ModelLoadProgress` to the single-node runtime-load path) --
             // degrade rather than fabricate an uncorrelated root.
-            Some(skippy_native_model_open_event_reporter(
-                reporter_model_ref,
-                None,
-            )),
+            Some(skippy_native_model_open_events(reporter_model_ref, None)),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
             serving_hooks_factory,
         )
@@ -362,7 +359,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: handle,
+                model: Box::new(handle),
                 http,
                 _death_tx: death_tx,
             },
@@ -839,7 +836,7 @@ pub(super) async fn split_generation_load_settings<'a>(
         .first()
         .context("split topology did not produce stage 0")?;
     let load_mode = split_generation_load_mode(spec.package);
-    let mut resolved = skippy::resolve_skippy_config_for_selector(
+    let mut resolved = skippy::resolve_skippy_config_for_selector_with_publisher_defaults(
         skippy::SkippyConfigResolveRequest {
             mesh_config: spec.mesh_config,
             model_id: spec.model_ref,
@@ -849,11 +846,12 @@ pub(super) async fn split_generation_load_settings<'a>(
             request_defaults: None,
             package_generation: spec.package.generation.as_ref(),
             // Split stage load uses the compact metadata scanned during planning
-            // so the resolver guards both the size-tiered default and the family
-            // K/V default exactly like the split planner does.
+            // so publisher-declared quantised K/V gets the same native
+            // compatibility guard as the split planner.
             compact_meta: Some(spec.compact_meta),
         },
         spec.config_model_id,
+        spec.package.publisher_defaults.as_ref(),
     )?;
     resolved.materialize_projector_url().await?;
     resolved.model_fit.ctx_size = spec.ctx_size;

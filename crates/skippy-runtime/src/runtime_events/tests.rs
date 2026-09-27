@@ -1,6 +1,6 @@
 use std::ptr;
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
@@ -14,7 +14,7 @@ use skippy_ffi::{
 };
 
 use super::{
-    OperationId, RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind,
+    ModelOpenEventQueue, OperationId, RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind,
     RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit, Status,
     collect_model_open_events, run_model_open,
 };
@@ -85,17 +85,49 @@ where
         *mut *mut skippy_ffi::Error,
     ) -> Status,
 {
-    let mut events = Vec::new();
-    let (raw, status, error) =
-        collect_model_open_events(TEST_OPERATION_ID, open_fn, |event| events.push(event));
-    (raw, status, error, events)
+    let queue = ModelOpenEventQueue::new(TEST_OPERATION_ID);
+    let (raw, status, error) = collect_model_open_events(&queue, open_fn);
+    (raw, status, error, drain_events(&queue))
+}
+
+fn drain_events(queue: &ModelOpenEventQueue) -> Vec<RuntimeEvent> {
+    let mut records = Vec::new();
+    queue.drain(&mut records, usize::MAX);
+    records.iter().map(|record| record.to_event()).collect()
+}
+
+fn legacy_open_counting(
+    calls: &Arc<AtomicUsize>,
+) -> impl FnOnce(*mut *mut skippy_ffi::Model, *mut *mut skippy_ffi::Error) -> Status {
+    let calls = Arc::clone(calls);
+    move |out_model, _out_error| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            *out_model = ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr();
+        }
+        Status::Ok
+    }
+}
+
+fn events_open_counting(
+    calls: &Arc<AtomicUsize>,
+) -> impl FnOnce(
+    *const skippy_ffi::SkippyRuntimeEventReporterV1,
+    *mut *mut skippy_ffi::Model,
+    *mut *mut skippy_ffi::Error,
+) -> Status {
+    let calls = Arc::clone(calls);
+    move |_reporter, _out_model, _out_error| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        Status::Ok
+    }
 }
 
 #[test]
 fn runtime_event_from_raw_ptr_converts_unknown_values_and_copies_detail() {
     let mut detail = b"backend-selected".to_vec();
     let raw = RawRuntimeEvent {
-        abi_version: 7,
+        abi_version: 1,
         struct_size: std::mem::size_of::<RawRuntimeEvent>() as u32,
         category: RawRuntimeEventCategory(999),
         kind: RawRuntimeEventKind::BACKEND_DEVICE_SELECTED,
@@ -123,7 +155,7 @@ fn runtime_event_from_raw_ptr_converts_unknown_values_and_copies_detail() {
     let event = RuntimeEvent::from_raw_ptr(&raw).expect("raw event should convert");
     detail.fill(b'x');
 
-    assert_eq!(event.abi_version, 7);
+    assert_eq!(event.abi_version, 1);
     assert_eq!(event.category, RuntimeEventCategory::Unknown(999));
     assert_eq!(event.kind, RuntimeEventKind::BackendDeviceSelected);
     assert_eq!(event.emitter, RuntimeEventEmitterKind::Other(77));
@@ -151,7 +183,7 @@ fn runtime_event_from_raw_ptr_omits_extension_fields_for_a_short_prefix_struct_s
     // built against an older ABI/without SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER.
     let detail = b"short".to_vec();
     let raw = RawRuntimeEvent {
-        abi_version: 7,
+        abi_version: 1,
         // The byte offset of the first appended field IS the original
         // (pre-extension) struct size: the extension is purely additive at
         // the end, so a struct_size stopping exactly there models a native
@@ -407,12 +439,10 @@ pub(crate) fn assert_model_open_events_missing_terminal_callback_uses_return() {
 }
 
 pub(crate) fn assert_model_open_events_forwarded_before_open_returns() {
-    let forwarded_sequences = Arc::new(Mutex::new(Vec::new()));
-    let sink_sequences = Arc::clone(&forwarded_sequences);
-    let open_sequences = Arc::clone(&forwarded_sequences);
-    let (raw, status, error) = collect_model_open_events(
-        TEST_OPERATION_ID,
-        |reporter, out_model, _out_error| {
+    let queue = ModelOpenEventQueue::new(TEST_OPERATION_ID);
+    let open_queue = Arc::clone(&queue);
+    let (raw, status, error) =
+        collect_model_open_events(&queue, |reporter, out_model, _out_error| {
             let callback = unsafe { (*reporter).callback.expect("callback") };
             let started = make_raw_runtime_event(
                 RawRuntimeEventKind::MODEL_OPEN_STARTED,
@@ -423,7 +453,7 @@ pub(crate) fn assert_model_open_events_forwarded_before_open_returns() {
             unsafe {
                 callback(&started, (*reporter).user_data);
             }
-            assert_eq!(open_sequences.lock().expect("event lock").as_slice(), &[1]);
+            assert_eq!(open_queue.len(), 1);
 
             let finished = make_raw_runtime_event(
                 RawRuntimeEventKind::MODEL_OPEN_FINISHED,
@@ -434,30 +464,23 @@ pub(crate) fn assert_model_open_events_forwarded_before_open_returns() {
             unsafe {
                 callback(&finished, (*reporter).user_data);
             }
-            assert_eq!(
-                open_sequences.lock().expect("event lock").as_slice(),
-                &[1, 2]
-            );
+            assert_eq!(open_queue.len(), 2);
 
             unsafe {
                 *out_model = ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr();
             }
             Status::Ok
-        },
-        |event| {
-            sink_sequences
-                .lock()
-                .expect("event lock")
-                .push(event.sequence);
-        },
-    );
+        });
 
     assert_eq!(status, Status::Ok);
     assert!(error.is_null());
     assert_eq!(raw, ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr());
     assert_eq!(
-        forwarded_sequences.lock().expect("event lock").as_slice(),
-        &[1, 2]
+        drain_events(&queue)
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
     );
 }
 
@@ -465,28 +488,10 @@ pub(crate) fn assert_model_open_events_feature_missing_falls_back() {
     let legacy_calls = Arc::new(AtomicUsize::new(0));
     let event_path_calls = Arc::new(AtomicUsize::new(0));
 
-    let mut bridged_events = Vec::new();
-    let mut bridged_event_sink = |event| bridged_events.push(event);
     let (raw, status, error) = run_model_open(
-        TEST_OPERATION_ID,
-        {
-            let legacy_calls = Arc::clone(&legacy_calls);
-            move |out_model, _out_error| {
-                legacy_calls.fetch_add(1, Ordering::SeqCst);
-                unsafe {
-                    *out_model = ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr();
-                }
-                Status::Ok
-            }
-        },
-        {
-            let event_path_calls = Arc::clone(&event_path_calls);
-            move |_reporter, _out_model, _out_error| {
-                event_path_calls.fetch_add(1, Ordering::SeqCst);
-                Status::Ok
-            }
-        },
-        Some(&mut bridged_event_sink),
+        legacy_open_counting(&legacy_calls),
+        events_open_counting(&event_path_calls),
+        None,
         false,
     );
 
@@ -495,34 +500,44 @@ pub(crate) fn assert_model_open_events_feature_missing_falls_back() {
     assert_eq!(raw, ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr());
     assert_eq!(legacy_calls.load(Ordering::SeqCst), 1);
     assert_eq!(event_path_calls.load(Ordering::SeqCst), 0);
-    assert!(bridged_events.is_empty());
+}
+
+#[test]
+fn queue_supplied_but_events_unsupported_takes_legacy_path_and_queue_stays_empty() {
+    let legacy_calls = Arc::new(AtomicUsize::new(0));
+    let event_path_calls = Arc::new(AtomicUsize::new(0));
+    let queue = ModelOpenEventQueue::new(TEST_OPERATION_ID);
 
     let (raw, status, error) = run_model_open(
-        TEST_OPERATION_ID,
-        {
-            let legacy_calls = Arc::clone(&legacy_calls);
-            move |out_model, _out_error| {
-                legacy_calls.fetch_add(1, Ordering::SeqCst);
-                unsafe {
-                    *out_model = ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr();
-                }
-                Status::Ok
-            }
-        },
-        {
-            let event_path_calls = Arc::clone(&event_path_calls);
-            move |_reporter, _out_model, _out_error| {
-                event_path_calls.fetch_add(1, Ordering::SeqCst);
-                Status::Ok
-            }
-        },
-        None,
+        legacy_open_counting(&legacy_calls),
+        events_open_counting(&event_path_calls),
+        Some(&queue),
         false,
     );
 
     assert_eq!(status, Status::Ok);
     assert!(error.is_null());
     assert_eq!(raw, ptr::NonNull::<skippy_ffi::Model>::dangling().as_ptr());
-    assert_eq!(legacy_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(legacy_calls.load(Ordering::SeqCst), 1);
     assert_eq!(event_path_calls.load(Ordering::SeqCst), 0);
+    assert!(queue.is_empty());
+    assert_eq!(queue.dropped(), 0);
+    assert_eq!(queue.rejected(), 0);
+}
+
+#[test]
+fn queue_supplied_and_events_supported_takes_event_path() {
+    let legacy_calls = Arc::new(AtomicUsize::new(0));
+    let event_path_calls = Arc::new(AtomicUsize::new(0));
+    let queue = ModelOpenEventQueue::new(TEST_OPERATION_ID);
+
+    let _ = run_model_open(
+        legacy_open_counting(&legacy_calls),
+        events_open_counting(&event_path_calls),
+        Some(&queue),
+        true,
+    );
+
+    assert_eq!(legacy_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(event_path_calls.load(Ordering::SeqCst), 1);
 }

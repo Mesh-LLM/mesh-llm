@@ -12,7 +12,7 @@ use crate::{
     errors::OpenAiError,
 };
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct ChatCompletionRequest {
     pub model: String,
     #[serde(default)]

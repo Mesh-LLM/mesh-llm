@@ -802,4 +802,172 @@ mod tests {
             assert_eq!(forwarded, REQUEST);
         }
     }
+
+    /// A remote request for a model this node does not charge for must reach
+    /// local inference — even when the node runs with no `payments.v1`
+    /// provider at all, the documented free-only configuration. Treating that
+    /// absence as "seller payment state unavailable" answered 402 before any
+    /// inference happened.
+    #[cfg(feature = "payments")]
+    #[tokio::test]
+    async fn a_remote_free_request_reaches_local_inference_without_a_payments_provider() {
+        const TEST_ALPN: &[u8] = b"mesh-llm/free-routing-regression/1";
+        const BODY: &str = r#"{"model":"free-model","prompt":"Hi","max_tokens":8}"#;
+
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .unwrap();
+        // Free-only: a manager is installed, but nothing serves `payments.v1`.
+        let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(8);
+        let manager = crate::plugin::PluginManager::start_with_in_process(
+            &crate::plugin::ResolvedPlugins {
+                externals: Vec::new(),
+                inactive: Vec::new(),
+            },
+            crate::plugin::PluginHostMode {
+                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+            },
+            mesh_tx,
+            crate::plugin::InProcessPlugins::default(),
+        )
+        .await
+        .unwrap();
+        node.set_plugin_manager(manager).await;
+
+        // The node's local OpenAI surface, which proves inference was reached.
+        let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = backend.local_addr().unwrap().port();
+        let (inference_reached_tx, inference_reached_rx) = oneshot::channel();
+        let backend_task = tokio::spawn(async move {
+            let (mut stream, _) = backend.accept().await.expect("local inference connection");
+            let mut raw = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let read = stream
+                    .read(&mut buffer)
+                    .await
+                    .expect("local inference request");
+                if read == 0 {
+                    break;
+                }
+                raw.extend_from_slice(&buffer[..read]);
+                if raw.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            inference_reached_tx.send(()).unwrap();
+            let body = r#"{"id":"free-1","model":"free-model","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("local inference response");
+            stream.shutdown().await.expect("local inference shutdown");
+        });
+
+        let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(iroh::endpoint::RelayMode::Disabled)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let server_address = server.addr();
+        let request = format!(
+            "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{BODY}",
+            BODY.len()
+        );
+        // The caller dials in over QUIC and reads the relayed response. A QUIC
+        // ingress exposes no socket address, so this request has a remote
+        // origin and the payments branch runs for it.
+        let caller_request = request.clone();
+        let caller_task = tokio::spawn(async move {
+            let caller = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+                .secret_key(iroh::SecretKey::generate())
+                .relay_mode(iroh::endpoint::RelayMode::Disabled)
+                .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+                .unwrap()
+                .bind()
+                .await
+                .unwrap();
+            let connection = caller.connect(server_address, TEST_ALPN).await.unwrap();
+            let (mut request_send, mut response_recv) = connection.open_bi().await.unwrap();
+            request_send
+                .write_all(caller_request.as_bytes())
+                .await
+                .expect("the caller sends its request over the QUIC stream");
+            let relayed = response_recv
+                .read_to_end(16 * 1024)
+                .await
+                .expect("the caller must receive the relayed response");
+            caller.close().await;
+            relayed
+        });
+
+        let incoming = server.accept().await.expect("the remote caller arrives");
+        let connection = incoming.await.expect("the remote caller negotiates");
+        let (send, recv) = connection
+            .accept_bi()
+            .await
+            .expect("the remote request stream");
+        let mut client = ClientStream::from_quic_with_prefix(recv, send, Vec::new());
+
+        let result = timeout(
+            Duration::from_secs(10),
+            route_local_attempt(
+                &node,
+                &mut client,
+                port,
+                request.as_bytes(),
+                RouteAttemptLoggingContext {
+                    exchange_id: None,
+                    request_id: RequestId::new(),
+                    retry_policy: ResponseRetryPolicy::next_target_available(false),
+                    response_adapter: ResponseAdapter::None,
+                    route_observer: OpenAiRouteObserver::default(),
+                    served_by: None,
+                    peer_capsule_id: None,
+                },
+            ),
+        )
+        .await
+        .expect("a free remote request must not stall");
+
+        assert!(
+            matches!(
+                result,
+                RouteAttemptResult::Delivered {
+                    status_code: 200,
+                    ..
+                }
+            ),
+            "{result:?}"
+        );
+
+        // `connection` stays alive here so the caller can still read the
+        // relayed response before the stream is torn down.
+        let relayed = timeout(Duration::from_secs(5), caller_task)
+            .await
+            .expect("the caller must receive its response")
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&relayed).starts_with("HTTP/1.1 200"),
+            "{}",
+            String::from_utf8_lossy(&relayed)
+        );
+        drop(connection);
+        timeout(Duration::from_secs(5), inference_reached_rx)
+            .await
+            .expect("the request must reach local inference")
+            .expect("the local inference task must report acceptance");
+        backend_task.await.unwrap();
+        drop(client);
+        node.endpoint.close().await;
+        server.close().await;
+    }
 }

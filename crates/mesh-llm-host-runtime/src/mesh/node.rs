@@ -176,6 +176,9 @@ pub struct Node {
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
     #[cfg(feature = "payments")]
     pub(crate) payments: crate::network::payments::PaymentsSlot,
+    /// Stops the payment-recovery loop, which holds a `Node` clone.
+    #[cfg(feature = "payments")]
+    pub(crate) payment_recovery: crate::network::payments::PaymentRecoverySlot,
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
@@ -645,6 +648,8 @@ impl Node {
             close_endpoint_gracefully(&lifecycle.endpoint, "owner-control").await;
         }
         self.shutdown_stage_control().await;
+        #[cfg(feature = "payments")]
+        self.shutdown_payment_recovery().await;
     }
 
     async fn shutdown_stage_control(&self) {
@@ -890,6 +895,8 @@ impl Node {
             },
             #[cfg(feature = "payments")]
             payments: Arc::new(tokio::sync::OnceCell::new()),
+            #[cfg(feature = "payments")]
+            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &activity_policy_config,
             ),
@@ -1070,6 +1077,8 @@ impl Node {
             },
             #[cfg(feature = "payments")]
             payments: Arc::new(tokio::sync::OnceCell::new()),
+            #[cfg(feature = "payments")]
+            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &mesh_llm_config::RuntimeActivityConfig::default(),
             ),
@@ -1193,17 +1202,39 @@ impl Node {
         }
     }
 
+    /// Insert a peer that models a *healthy* admitted peer: it is marked as
+    /// showing signs of life so the issue #1756 routing gate admits it. Use
+    /// [`Node::insert_test_peer_without_liveness`] to model a departed or
+    /// unreachable peer instead.
     #[cfg(test)]
     pub async fn insert_test_peer(&self, peer: PeerInfo) {
-        self.state.lock().await.peers.insert(peer.id, peer);
+        let id = peer.id;
+        let mut state = self.state.lock().await;
+        state.test_peer_liveness.insert(id);
+        state.peers.insert(id, peer);
+    }
+
+    /// Insert a peer with no connection and no observed RTT — the shape of a
+    /// departed peer still carried by a stale bridge announcement. It stays
+    /// `admitted` so the test isolates the issue #1756 liveness gate rather
+    /// than the admission gate.
+    #[cfg(test)]
+    pub async fn insert_test_peer_without_liveness(&self, peer: PeerInfo) {
+        let id = peer.id;
+        let mut state = self.state.lock().await;
+        state.test_peer_liveness.remove(&id);
+        state.peers.insert(id, peer);
     }
 
     /// Drop a peer from the local mesh view, simulating churn.
     #[cfg(test)]
     pub async fn remove_test_peer(&self, id: EndpointId) {
-        self.state.lock().await.peers.remove(&id);
+        let mut state = self.state.lock().await;
+        state.test_peer_liveness.remove(&id);
+        state.peers.remove(&id);
     }
 }
+
 impl Node {
     pub fn id(&self) -> EndpointId {
         self.endpoint.id()

@@ -146,6 +146,23 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn('SCCACHE_GHA_ENABLED', PASS_WORKFLOW.read_text())
         self.assertIn('force_certify:', WORKFLOW.read_text())
 
+    def test_family_certification_uses_os_assigned_ports(self) -> None:
+        battery = BATTERY.read_text(encoding="utf-8")
+        family = FAMILY_CERTIFY.read_text(encoding="utf-8")
+        workload = (ROOT / "scripts/skippy-workload-certify.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("--port-base", battery + family)
+        self.assertNotIn("19000 +", battery + family)
+        self.assertNotIn(":-19337", workload)
+        self.assertNotIn(":-19338", workload)
+        self.assertIn("allocate_local_ports.py", family)
+        self.assertIn("allocate_local_ports.py", workload)
+        self.assertIn("PORT_START_ATTEMPTS=3", family)
+        self.assertIn("PORT_START_ATTEMPTS=3", workload)
+        self.assertIn("address_in_use_log", family)
+        self.assertIn("address_in_use_log", workload)
+
     def test_persistent_runner_executes_only_trusted_main_with_read_access(self) -> None:
         workflow = WORKFLOW.read_text()
         worker = PASS_WORKFLOW.read_text()
@@ -172,11 +189,10 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertEqual(cache["runs"]["steps"][0]["shell"], "/bin/zsh -il {0}")
 
     def test_persistent_runner_executes_goose_preflight(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        preflight = setup_step("Verify runner toolchain")
+        preflight = setup_step("Verify changed-pin agent executable")
         self.assertIn('goose_dir="$HOME/.local/bin"', preflight)
         self.assertIn('echo "$goose_dir" >> "$GITHUB_PATH"', preflight)
-        self.assertIn("xcrun goose; do", preflight)
+        self.assertIn("command -v goose", preflight)
         self.assertIn('goose_version="$(goose --version 2>&1)"', preflight)
         self.assertIn("goose_status=$?", preflight)
         self.assertIn("failed its executable preflight", preflight)
@@ -253,18 +269,20 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             self.assertEqual(0, prepared.returncode, prepared.stderr)
             self.assertEqual(prepared_target + "\n", pin.read_text(encoding="utf-8"))
 
-    def test_changed_pin_uses_one_agent_then_success_gated_publication(self) -> None:
+    def test_changed_pin_uses_linear_preflight_candidate_and_verification(self) -> None:
         workflow = yaml.safe_load(WORKFLOW.read_text())
         jobs = workflow['jobs']
-        for attempt in range(1, 4):
-            repair, verify = jobs[f'repair-{attempt}'], jobs[f'verify-{attempt}']
-            self.assertEqual(repair['uses'], './.github/workflows/llama-canary-family-pass.yml')
-            self.assertEqual(verify['uses'], repair['uses'])
-            self.assertEqual(verify['with']['mode'], 'verify-build')
-            self.assertIn(f"needs.repair-{attempt}.outputs.green == 'true'", verify['if'])
-            if attempt > 1:
-                self.assertIn(f"needs.verify-{attempt - 1}.outputs.green != 'true'", repair['if'])
-                self.assertIn('feedback_pattern', repair['with'])
+        self.assertEqual(jobs['preflight']['needs'], ['resolve'])
+        preflight_commands = '\n'.join(step.get('run', '') for step in jobs['preflight']['steps'])
+        self.assertIn('llama-canary-family-evidence.py preflight', preflight_commands)
+        self.assertIn('--root "$CANARY_SOURCE_ROOT"', preflight_commands)
+        candidate, verify = jobs['candidate'], jobs['verification']
+        self.assertEqual(candidate['needs'], ['resolve', 'preflight'])
+        self.assertEqual(candidate['uses'], './.github/workflows/llama-canary-family-pass.yml')
+        self.assertEqual(verify['uses'], candidate['uses'])
+        self.assertEqual(verify['with']['mode'], 'verify-build')
+        self.assertIn("needs.candidate.outputs.green == 'true'", verify['if'])
+        self.assertFalse({'repair-2', 'verify-2', 'repair-3', 'verify-3'} & jobs.keys())
         self.assertIn("needs.result.outputs.publish == 'true'", jobs['publish-certified-canary']['if'])
         worker = PASS_WORKFLOW.read_text()
         self.assertIn("CANARY_AGENT_TIMEOUT_SECONDS: '41400'", worker)
@@ -337,7 +355,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         repair = wrapper[wrapper.index("repair_candidate_until_green()") :]
         self.assertIn("run_candidate_gates refresh", repair)
         verify = wrapper[wrapper.rindex("load_candidate_bundle") :]
-        self.assertIn("if ! run_candidate_gates; then", verify)
+        self.assertIn("if run_candidate_gates; then", verify)
         self.assertLess(
             verify.index("check_split_certification_roster"),
             verify.index("finalize_certified_tree"),
@@ -951,7 +969,9 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             environment = json.loads(
                 (run_dir / "preflight" / "environment.json").read_text(encoding="utf-8")
             )
-            self.assertFalse(environment["port_range"]["checked"])
+            self.assertEqual(
+                {"allocation": "os-assigned-at-launch"}, environment["ports"]
+            )
             resolved = (run_dir / "resolved-models.tsv").read_text(encoding="utf-8")
             self.assertIn(revision, resolved)
             self.assertIn("|1|1024|5|", resolved)

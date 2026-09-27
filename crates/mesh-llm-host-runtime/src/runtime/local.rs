@@ -3,6 +3,10 @@ use super::context_planning::{
     RuntimeResourcePlan, RuntimeResourcePlanInput, RuntimeResourcePlanningProfile,
     plan_runtime_resources,
 };
+use super::local_memory_plan::{
+    MemoryPlanMeasurementKey, MemoryPlanStartPath, emit_measured_memory_reconciliation,
+    emit_memory_plan_resolved, measured_buffers_footprint,
+};
 use super::split_planning::format_gb;
 use crate::api;
 use crate::inference::{election, skippy};
@@ -40,11 +44,11 @@ pub(super) use super::local_split::{
     SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan, now_unix_nanos,
     start_runtime_split_model, startup_runtime_plan, stop_split_generation_cleanup,
 };
-pub(super) fn skippy_native_model_open_event_reporter(
+pub(super) fn skippy_native_model_open_events(
     model_name: String,
     progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
-) -> skippy::NativeModelOpenEventReporter {
-    native_runtime_events::skippy_native_model_open_event_reporter(model_name, progress_ingress)
+) -> skippy::NativeModelOpenEvents {
+    native_runtime_events::skippy_native_model_open_events(model_name, progress_ingress)
 }
 
 pub(super) type OpenAiGuardrailPolicyHandle = openai_frontend::GuardrailPolicyHandle;
@@ -85,7 +89,14 @@ pub(super) enum RuntimeEvent {
 
 pub(super) enum LocalRuntimeBackendHandle {
     Skippy {
-        model: skippy::SkippyModelHandle,
+        model: Box<skippy::SkippyModelHandle>,
+        http: skippy::SkippyHttpHandle,
+        _death_tx: tokio::sync::oneshot::Sender<()>,
+    },
+    /// A Laya decision model: no sessions, KV cache, or guardrails, only
+    /// System One reads through its own HTTP server.
+    Laya {
+        _model: Arc<skippy_runtime::LayaModel>,
         http: skippy::SkippyHttpHandle,
         _death_tx: tokio::sync::oneshot::Sender<()>,
     },
@@ -104,7 +115,9 @@ pub(super) struct LocalRuntimeModelHandle {
 impl LocalRuntimeModelHandle {
     pub(super) fn pid(&self) -> u32 {
         match &self.inner {
-            LocalRuntimeBackendHandle::Skippy { .. } => std::process::id(),
+            LocalRuntimeBackendHandle::Skippy { .. } | LocalRuntimeBackendHandle::Laya { .. } => {
+                std::process::id()
+            }
         }
     }
 
@@ -113,18 +126,21 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 Some(model.status().max_session_tokens)
             }
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
     pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
     pub(super) fn openai_server_status(&self) -> skippy_server::EmbeddedServerStatus {
         match &self.inner {
-            LocalRuntimeBackendHandle::Skippy { http, .. } => http.status(),
+            LocalRuntimeBackendHandle::Skippy { http, .. }
+            | LocalRuntimeBackendHandle::Laya { http, .. } => http.status(),
         }
     }
 
@@ -136,6 +152,7 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 model.set_openai_guardrail_mode(mode)
             }
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
@@ -183,6 +200,7 @@ impl LocalRuntimeModelHandle {
                         .collect(),
                 })
             }
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
@@ -191,6 +209,9 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, http, .. } => {
                 let _ = http.shutdown().await;
                 model.shutdown();
+            }
+            LocalRuntimeBackendHandle::Laya { http, .. } => {
+                let _ = http.shutdown().await;
             }
         }
     }
@@ -287,6 +308,31 @@ pub(super) fn resolved_model_name(path: &Path) -> String {
 pub(super) fn mmproj_path_for_model(model_name: &str) -> Option<PathBuf> {
     let model_path = models::find_model_path(model_name);
     models::find_mmproj_path(model_name, &model_path)
+}
+
+/// Device bytes the multimodal projector will hold, as far as plan time can tell.
+///
+/// The projector shares the device pool with the model weights and is loaded
+/// *after* them, so it has to be charged to the fit: otherwise a plan can spend
+/// the last of the pool on weights and KV and leave the projector's allocation
+/// to fail, which upstream `mtmd` turns into a NULL-buffer abort instead of a
+/// load error (mesh-llm#1166).
+///
+/// This mirrors the loader for the two sources visible here — an explicit
+/// `--mmproj`, then the sidecar beside the GGUF — and reports the projector
+/// file's length. That is an upper bound on the tensor data the weights buffer
+/// holds, since the file stores those same tensors; upstream computes the exact
+/// per-device figure with `mtmd_get_memory_usage`, which is not exposed to this
+/// crate. A projector named only in the model configuration, or one that lives
+/// inside a package-v2 layer package, is resolved later than this plan and is
+/// therefore not charged here.
+fn planned_projector_bytes(spec: &LocalOpenAiModelStartSpec<'_>, model_name: &str) -> u64 {
+    spec.mmproj_override
+        .map(PathBuf::from)
+        .or_else(|| mmproj_path_for_model(model_name).filter(|path| path.exists()))
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
 }
 
 fn pinned_skippy_device(
@@ -462,13 +508,30 @@ impl ModelLoadSource {
 /// analytics label grammar; anything else, and every direct `--gguf` name, is
 /// `redacted`. The count and the source still land either way, which is what
 /// the question "which models actually get run" is asking.
-fn report_model_loaded_analytics(model: &str, source: ModelLoadSource) {
-    mesh_llm_analytics::capture(
-        mesh_llm_analytics::Event::ModelLoaded,
-        mesh_llm_analytics::Properties::new()
-            .with("model", model_loaded_label(model, source))
-            .with("source", source.as_str()),
-    );
+pub(super) fn report_model_loaded_analytics(
+    model: &str,
+    source: ModelLoadSource,
+    metadata: Option<&models::gguf::GgufCompactMeta>,
+) {
+    let mut properties = mesh_llm_analytics::Properties::new()
+        .with("model", model_loaded_label(model, source))
+        .with("source", source.as_str());
+    if let Some(backend) = system_one_backend(metadata) {
+        properties = properties.with("system_one_backend", backend);
+    }
+    mesh_llm_analytics::capture(mesh_llm_analytics::Event::ModelLoaded, properties);
+}
+
+/// Which System One (OpenJEV) backend a loaded model is, if any.
+///
+/// Read from the GGUF architecture, never from the model name, so it stays a
+/// closed vocabulary even for a direct `--gguf` load whose name is redacted.
+fn system_one_backend(metadata: Option<&models::gguf::GgufCompactMeta>) -> Option<&'static str> {
+    match metadata?.architecture.as_str() {
+        super::local_laya::LAYA_ARCHITECTURE => Some("laya"),
+        "diffusion-gemma" => Some("openjev"),
+        _ => None,
+    }
 }
 
 /// The `model` value `report_model_loaded_analytics` puts on the wire.
@@ -938,12 +1001,31 @@ pub(super) async fn start_local_openai_model(
         .flatten()
     };
 
-    // Guard the size-tiered default against quantised-KV load incompatibilities
-    // (Flash Attention off, or a head_dim not divisible by the block size) so
-    // planning and the load agree and the context build does not fail. Explicit
-    // user overrides below are never guarded — they must fail loudly.
-    let kv_cache = skippy::KvCachePolicy::for_model_size(total_model_bytes)
-        .guarded_for_model(compact_meta.as_ref());
+    if let Some(meta) = compact_meta
+        .as_ref()
+        .filter(|meta| super::local_laya::is_laya(Some(meta)))
+    {
+        // Laya has no stages, sessions, or KV cache for a layer package to
+        // carry; it opens from one GGUF file.
+        anyhow::ensure!(
+            package.is_none(),
+            "Laya models must be served from a GGUF file, not a layer package"
+        );
+        return super::local_laya::start_local_laya_model(
+            spec,
+            model_name,
+            total_model_bytes,
+            meta,
+        )
+        .await;
+    }
+
+    let kv_cache = skippy::KvCachePolicy::from_publisher_defaults(
+        package
+            .as_ref()
+            .and_then(|package| package.publisher_defaults.as_ref()),
+    )
+    .guarded_for_model(compact_meta.as_ref());
     let effective_cache_type_k = spec
         .cache_type_k_override
         .unwrap_or(kv_cache.cache_type_k());
@@ -954,18 +1036,38 @@ pub(super) async fn start_local_openai_model(
         effective_cache_type_k,
         effective_cache_type_v,
     )
-    .unwrap_or(models::gguf::GgufKvCacheQuant::Q8_0);
+    .unwrap_or(models::gguf::GgufKvCacheQuant::F16);
+    let measurement_key = MemoryPlanMeasurementKey::new(format!(
+        "model={runtime_model_name:?};path={:?};bytes={local_model_bytes};capacity={my_vram};config={:?};config_model={:?};device={:?};pinned_gpu={:?};cache_k={effective_cache_type_k:?};cache_v={effective_cache_type_v:?};batch={:?};ubatch={:?};flash={:?}",
+        spec.model_path,
+        spec.mesh_config,
+        spec.config_model_id,
+        spec.device_override,
+        spec.pinned_gpu,
+        spec.n_batch_override,
+        spec.n_ubatch_override,
+        spec.flash_attention_override,
+    ));
 
     let plan = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
         model_bytes: local_model_bytes,
+        projector_bytes: planned_projector_bytes(&spec, &model_name),
         vram_bytes: my_vram,
         metadata: compact_meta.as_ref(),
         kv_cache_quant,
         local_layer_fraction,
         planning_profile: spec.planning_profile,
+        measured_buffers: measured_buffers_footprint(&measurement_key),
     });
+    anyhow::ensure!(
+        !plan
+            .breakdown
+            .as_ref()
+            .is_some_and(|breakdown| breakdown.measured_fit == Some(false)),
+        "measured native buffers leave no capacity for the minimum context under the current model configuration"
+    );
 
     if let Some(package) = package {
         start_local_package_v2_model(
@@ -974,6 +1076,7 @@ pub(super) async fn start_local_openai_model(
             progress_ingress,
             package,
             plan,
+            measurement_key,
             compact_meta.as_ref(),
         )
         .await
@@ -983,6 +1086,7 @@ pub(super) async fn start_local_openai_model(
             model_name,
             progress_ingress,
             plan,
+            measurement_key,
             compact_meta.as_ref(),
         )
         .await
@@ -994,6 +1098,7 @@ async fn start_local_skippy_model(
     model_name: String,
     progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
     plan: RuntimeResourcePlan,
+    measurement_key: MemoryPlanMeasurementKey,
     compact_meta: Option<&models::gguf::GgufCompactMeta>,
 ) -> Result<(
     String,
@@ -1001,6 +1106,11 @@ async fn start_local_skippy_model(
     tokio::sync::oneshot::Receiver<()>,
 )> {
     let context_length = plan.context_length;
+    emit_memory_plan_resolved(
+        &model_name,
+        plan.breakdown.as_ref(),
+        MemoryPlanStartPath::Direct,
+    );
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
     let mut resolved = resolve_local_openai_skippy_config(
         &spec,
@@ -1055,7 +1165,7 @@ async fn start_local_skippy_model(
         skippy::SkippyModelHandle::load_with_hooks_and_open_events(
             options,
             hook_policy,
-            Some(skippy_native_model_open_event_reporter(
+            Some(skippy_native_model_open_events(
                 reporter_model_name,
                 progress_ingress,
             )),
@@ -1064,12 +1174,13 @@ async fn start_local_skippy_model(
     })
     .await
     .context("join load skippy direct GGUF task")??;
+    emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
     let workload_class = skippy_model.workload_class()?;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_name.clone(),
         bytes: None,
     });
-    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf);
+    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf, compact_meta);
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
@@ -1083,7 +1194,7 @@ async fn start_local_skippy_model(
             capabilities,
             workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: skippy_model,
+                model: Box::new(skippy_model),
                 http,
                 _death_tx: death_tx,
             },
@@ -1098,6 +1209,7 @@ async fn start_local_package_v2_model(
     progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
     package: skippy::SkippyPackageIdentity,
     plan: RuntimeResourcePlan,
+    measurement_key: MemoryPlanMeasurementKey,
     compact_meta: Option<&models::gguf::GgufCompactMeta>,
 ) -> Result<(
     String,
@@ -1134,6 +1246,11 @@ async fn start_local_package_v2_model(
         )
     };
     let context_length = plan.context_length;
+    emit_memory_plan_resolved(
+        &model_name,
+        plan.breakdown.as_ref(),
+        MemoryPlanStartPath::PackageV2,
+    );
     let fallback_projector_path = package_projector_path
         .or_else(|| mmproj_path_for_model(&model_name).filter(|path| path.exists()));
     let mut resolved = resolve_local_openai_skippy_config(
@@ -1222,7 +1339,7 @@ async fn start_local_package_v2_model(
             embedded_openai,
             hook_policy,
             skippy_telemetry,
-            Some(skippy_native_model_open_event_reporter(
+            Some(skippy_native_model_open_events(
                 reporter_model_ref,
                 progress_ingress,
             )),
@@ -1232,8 +1349,9 @@ async fn start_local_package_v2_model(
     })
     .await
     .context("join load skippy package-v2 task")??;
+    emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
     let workload_class = handle.workload_class()?;
-    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage);
+    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage, compact_meta);
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -1251,7 +1369,7 @@ async fn start_local_package_v2_model(
             capabilities,
             workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: handle,
+                model: Box::new(handle),
                 http,
                 _death_tx: death_tx,
             },
@@ -1320,7 +1438,7 @@ mod tests {
     use super::{
         LocalRuntimeModelStartSpec, ModelLoadSource, RuntimeResourcePlanningProfile,
         model_loaded_label, openai_guardrail_policy_handle, resolved_model_name,
-        unix_nanos_to_unix_ms,
+        system_one_backend, unix_nanos_to_unix_ms,
     };
     use crate::inference::skippy;
     use crate::mesh;
@@ -1347,6 +1465,21 @@ mod tests {
             model_loaded_label(&name, ModelLoadSource::DirectGguf).as_str(),
             "redacted"
         );
+    }
+
+    #[test]
+    fn model_loaded_names_the_system_one_backend_from_the_architecture() {
+        let meta = |architecture: &str| crate::models::gguf::GgufCompactMeta {
+            architecture: architecture.to_string(),
+            ..Default::default()
+        };
+        assert_eq!(system_one_backend(Some(&meta("laya"))), Some("laya"));
+        assert_eq!(
+            system_one_backend(Some(&meta("diffusion-gemma"))),
+            Some("openjev")
+        );
+        assert_eq!(system_one_backend(Some(&meta("qwen3"))), None);
+        assert_eq!(system_one_backend(None), None);
     }
 
     #[test]

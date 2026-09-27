@@ -28,57 +28,12 @@ static NATIVE_LOG_FILTERED_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<Nativ
 static NATIVE_LOG_AGGREGATOR: OnceLock<Mutex<NativeLogAggregator>> = OnceLock::new();
 static NATIVE_LOG_FORWARDING_MASK: AtomicU8 = AtomicU8::new(0);
 
-const BACKEND_CATEGORY: u8 = 1 << 0;
-const MODEL_CATEGORY: u8 = 1 << 1;
-const MEMORY_CATEGORY: u8 = 1 << 2;
-const KV_CACHE_CATEGORY: u8 = 1 << 3;
-const TOKENIZER_CATEGORY: u8 = 1 << 4;
-const ALL_PRESENTATION_CATEGORIES: u8 =
-    BACKEND_CATEGORY | MODEL_CATEGORY | MEMORY_CATEGORY | KV_CACHE_CATEGORY | TOKENIZER_CATEGORY;
+mod parser_policy;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NativeLogParserMode {
-    Auto,
-    Enabled,
-    Disabled,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NativeLogParserPolicy {
-    forwarding_mask: u8,
-}
-
-impl NativeLogParserPolicy {
-    pub fn new(mode: NativeLogParserMode, _capabilities: &crate::CapabilityReport) -> Self {
-        let forwarding_mask = match mode {
-            NativeLogParserMode::Enabled => ALL_PRESENTATION_CATEGORIES,
-            NativeLogParserMode::Disabled => 0,
-            // A bit, a callable symbol, or one observed event proves only
-            // that one native path is observable. It does not prove that
-            // every category in a family has a production transition. Keep
-            // fallback enabled in Auto; callers may explicitly choose
-            // Disabled only after they have a complete, version-specific
-            // coverage proof.
-            NativeLogParserMode::Auto => ALL_PRESENTATION_CATEGORIES,
-        };
-        Self { forwarding_mask }
-    }
-
-    pub fn forwards(self, category: &str) -> bool {
-        category_mask(category).is_some_and(|mask| self.forwarding_mask & mask != 0)
-    }
-}
-
-fn category_mask(category: &str) -> Option<u8> {
-    match category {
-        "backend" => Some(BACKEND_CATEGORY),
-        "model" => Some(MODEL_CATEGORY),
-        "memory" => Some(MEMORY_CATEGORY),
-        "kv_cache" => Some(KV_CACHE_CATEGORY),
-        "tokenizer" => Some(TOKENIZER_CATEGORY),
-        _ => None,
-    }
-}
+use parser_policy::{
+    ALL_FORWARDING_CATEGORIES, MODEL_CATEGORY, MODEL_FALLBACK_NOTE, category_mask,
+};
+pub use parser_policy::{NativeLogParserMode, NativeLogParserPolicy};
 
 #[cfg(test)]
 static NATIVE_LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -148,6 +103,30 @@ impl ProgressTracker {
     fn is_complete(&self) -> bool {
         matches!(self.total, Some(total) if total > 0 && self.completed >= total)
     }
+}
+
+/// Latest measured buffer sizes parsed from native log lines, keyed by the
+/// line's kind (compute vs KV). These are what llama.cpp actually allocated
+/// during `sched_reserve`, and are the ground truth the memory planner should
+/// charge instead of the KV-scaled estimate.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MeasuredNativeBuffers {
+    pub compute_mib: Option<f64>,
+    pub kv_mib: Option<f64>,
+    /// A CPU-resident compute or KV allocation was observed, so the device
+    /// footprint is incomplete for a capacity pool that includes host RAM.
+    pub host_memory_observed: bool,
+}
+
+/// Snapshot of the measured native buffer sizes observed so far in this
+/// process. The native log callback is synchronous with model open, so by the
+/// time `skippy_model_open` returns, the `sched_reserve` buffer lines have
+/// already been parsed. The snapshot is returned whenever the aggregator is
+/// reachable; its fields stay `None` until a buffer line is observed (e.g.
+/// native log forwarding disabled).
+pub fn measured_native_buffers() -> Option<MeasuredNativeBuffers> {
+    let aggregator = native_log_aggregator().lock().ok()?;
+    Some(aggregator.measured_snapshot())
 }
 
 #[derive(Debug, Default)]
@@ -246,6 +225,19 @@ struct NativeLogAggregator {
     tensor_groups: Vec<(String, usize)>,
     tensor_groups_emitted: bool,
     kv_layers_seen: BTreeSet<usize>,
+    /// Latest measured buffer sizes parsed from native log lines, keyed by
+    /// backend device name (e.g. `CUDA0`, `Metal`). Updated by the
+    /// memory/kv_cache arms of `summarize_native_log_line`; read via
+    /// [`measured_native_buffers`] after model open completes. Multiple
+    /// reserves on the same device keep the high-water mark; distinct devices
+    /// are summed by [`measured_native_buffers`] (one buffer line is printed
+    /// per device, so a plain per-kind max would under-measure multi-GPU by a
+    /// factor of N). Host-pinned buffers (`CUDA_Host`) and CPU buffers are
+    /// excluded at record time — they are not device memory and must never be
+    /// charged against a VRAM budget.
+    measured_compute_mib: BTreeMap<String, f64>,
+    measured_kv_mib: BTreeMap<String, f64>,
+    host_memory_observed: bool,
 }
 
 fn native_log_file() -> &'static Mutex<Option<LineWriter<File>>> {
@@ -282,7 +274,7 @@ pub fn unregister_filtered_native_logs() {
 
 pub fn set_filtered_native_logs_enabled(enabled: bool) {
     let mask = if enabled {
-        ALL_PRESENTATION_CATEGORIES
+        ALL_FORWARDING_CATEGORIES
     } else {
         0
     };
@@ -294,6 +286,20 @@ pub fn configure_native_log_parser(policy: NativeLogParserPolicy) {
 }
 
 impl NativeLogAggregator {
+    /// Per-device-summed measured buffer snapshot (see
+    /// [`measured_native_buffers`] for the accounting rules).
+    fn measured_snapshot(&self) -> MeasuredNativeBuffers {
+        let compute_mib = (!self.measured_compute_mib.is_empty())
+            .then(|| self.measured_compute_mib.values().sum::<f64>());
+        let kv_mib =
+            (!self.measured_kv_mib.is_empty()).then(|| self.measured_kv_mib.values().sum::<f64>());
+        MeasuredNativeBuffers {
+            compute_mib,
+            kv_mib,
+            host_memory_observed: self.host_memory_observed,
+        }
+    }
+
     fn reset(&mut self) {
         *self = Self::default();
     }
@@ -311,6 +317,12 @@ impl NativeLogAggregator {
         self.tensor_groups.clear();
         self.tensor_groups_emitted = false;
         self.kv_layers_seen.clear();
+        // A new model load invalidates the previous model's measured buffer
+        // sizes: buffer scales are model/shape-specific, and charging one
+        // model's HWM against another's budget would be wrong both directions.
+        self.measured_compute_mib.clear();
+        self.measured_kv_mib.clear();
+        self.host_memory_observed = false;
     }
 
     fn process_line(&mut self, line: &str) -> Vec<NativeLogEvent> {
@@ -399,11 +411,56 @@ impl NativeLogAggregator {
             return events;
         }
 
+        self.record_measured_buffer_size(s);
+
         if let Some(event) = summarize_native_log_line(s) {
             events.push(event);
         }
 
         events
+    }
+
+    /// Track the largest measured buffer size per kind. A later, smaller line
+    /// (e.g. a per-graph reserve for a shorter context) must not lower the
+    /// high-water mark recorded at full context init. CPU-offload lines are
+    /// skipped: the snapshot feeds VRAM planning, and a CPU-resident buffer
+    /// larger than the accelerator's must not be charged against VRAM.
+    fn record_measured_buffer_size(&mut self, line: &str) {
+        if !line.contains("buffer size") {
+            return;
+        }
+        let Some(device) = buffer_size_device(line) else {
+            return;
+        };
+        let is_compute = line.contains("compute buffer size");
+        let is_kv = line.contains("KV buffer size");
+        if !is_compute && !is_kv {
+            return;
+        }
+        if device == "CPU" || device.starts_with("CPU_") {
+            self.host_memory_observed = true;
+            return;
+        }
+        let Some(mib) = parse_buffer_size_mib(line) else {
+            return;
+        };
+        // Host-pinned staging buffers (CUDA_Host and friends) are host RAM,
+        // not device memory — never charge them against a VRAM budget.
+        if is_host_pinned_device_name(&device) {
+            return;
+        }
+        let field = if is_compute {
+            &mut self.measured_compute_mib
+        } else {
+            &mut self.measured_kv_mib
+        };
+        // One line per device per reserve: keep the high-water mark within a
+        // device (larger of repeated reserves) so a smaller re-reserve on the
+        // same device cannot shrink the measured footprint.
+        let slot = field.entry(device).or_insert(0.0);
+        if mib > *slot {
+            *slot = mib;
+        }
     }
 
     fn record_layer_assignment(&mut self, layer_index: usize, device: &str) -> Vec<NativeLogEvent> {
@@ -523,6 +580,59 @@ fn should_suppress_native_log_line(line: &str) -> bool {
             && (line.contains(": filtered") || line.contains(": dev =")))
 }
 
+fn parse_buffer_size_mib(line: &str) -> Option<f64> {
+    // Native buffer-size lines print the value with a fixed-width field, e.g.
+    // `sched_reserve:        CUDA0 compute buffer size =   579.83 MiB` or
+    // `llama_kv_cache:        CUDA0 KV buffer size =  1088.00 MiB`. Capture the
+    // last `<number> MiB` occurrence on the line.
+    let rest = line.rfind("MiB")?;
+    let prefix = line[..rest].trim_end();
+    let start = prefix
+        .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    prefix[start..].trim().parse::<f64>().ok()
+}
+
+/// Host-pinned buffer names some CUDA backends report (e.g. `CUDA_Host`).
+/// Their memory is host RAM pinned for device transfers, not device memory —
+/// it must not be charged against a VRAM budget.
+fn is_host_pinned_device_name(device: &str) -> bool {
+    device == "CUDA_Host" || device.ends_with("_Host")
+}
+
+/// Backend device a buffer-size line belongs to, from the buffer name token
+/// that precedes `KV buffer size` / `compute buffer size` (e.g. `CUDA0`,
+/// `CUDA1`, `CUDA_Host`, `Metal`, `CPU`). `None` when the device cannot be
+/// determined.
+fn buffer_size_device(line: &str) -> Option<String> {
+    let marker = if line.contains("KV buffer size") {
+        "KV buffer size"
+    } else if line.contains("compute buffer size") {
+        "compute buffer size"
+    } else {
+        return None;
+    };
+    let idx = line.find(marker)?;
+    let name = line[..idx].trim();
+    name.rsplit(' ').next().map(str::to_string)
+}
+
+fn buffer_size_params(line: &str) -> Vec<(String, Value)> {
+    // Structured facts for memory-planning telemetry: the measured buffer size
+    // (the number llama.cpp actually allocated) plus the device the line names.
+    // These are the inputs the topology planner will consume in place of its
+    // KV-scaled compute-buffer estimate.
+    let mut params = Vec::new();
+    if let Some(mib) = parse_buffer_size_mib(line) {
+        params.push(("buffer_mib".to_string(), Value::from(mib)));
+    }
+    if let Some(device) = buffer_size_device(line) {
+        params.push(("backend_device".to_string(), Value::String(device)));
+    }
+    params
+}
+
 fn summarize_native_log_line(line: &str) -> Option<NativeLogEvent> {
     if let Some((category, params)) = cpu_offload_diagnostic_params(line) {
         return Some(NativeLogEvent {
@@ -564,6 +674,19 @@ fn summarize_native_log_line(line: &str) -> Option<NativeLogEvent> {
         });
     }
 
+    if line.starts_with("llama_context: n_ubatch") || line.starts_with("llama_context: flash_attn")
+    {
+        // Forward the resolved micro-batch size and flash-attention mode so a live
+        // deployment can prove which values the runtime actually constructed with.
+        // These lines come from the llama_context parameter dump
+        // (llama-context.cpp, `n_ubatch = ...` / `flash_attn = ...`).
+        return Some(NativeLogEvent {
+            message: line.to_string(),
+            category: "runtime",
+            params: Vec::new(),
+        });
+    }
+
     if line.contains("VRAM")
         || line.contains("vram")
         || line.contains("mem_alloc")
@@ -572,20 +695,30 @@ fn summarize_native_log_line(line: &str) -> Option<NativeLogEvent> {
         || line.contains("compute buffer size")
         || line.contains("scratch buffer")
     {
+        let params = if line.contains("buffer size") {
+            buffer_size_params(line)
+        } else {
+            Vec::new()
+        };
         return Some(NativeLogEvent {
             message: line.to_string(),
             category: "memory",
-            params: Vec::new(),
+            params,
         });
     }
 
     if line.starts_with("llama_kv_cache:")
         && (line.contains("buffer size") || line.contains("size = ") || line.contains("attn_rot"))
     {
+        let params = if line.contains("buffer size") {
+            buffer_size_params(line)
+        } else {
+            Vec::new()
+        };
         return Some(NativeLogEvent {
             message: line.to_string(),
             category: "kv_cache",
-            params: Vec::new(),
+            params,
         });
     }
 
@@ -712,6 +845,19 @@ fn sanitize_native_log_note(note: &str) -> String {
 }
 
 pub fn write_native_log_note(note: impl AsRef<str>) {
+    write_native_log_note_with_mask(note, MODEL_CATEGORY);
+}
+
+/// Writes a native-log note that remains visible in `auto` mode even when
+/// structured model-open events cover ordinary parsed model summaries.
+///
+/// This is reserved for source-specific compatibility gaps such as the
+/// SafeTensors loader, which does not enter the native model-open callback.
+pub(crate) fn write_native_log_fallback_note(note: impl AsRef<str>) {
+    write_native_log_note_with_mask(note, MODEL_FALLBACK_NOTE);
+}
+
+fn write_native_log_note_with_mask(note: impl AsRef<str>, required_mask: u8) {
     let note = sanitize_native_log_note(note.as_ref());
     if let Ok(mut guard) = native_log_file().lock()
         && let Some(writer) = guard.as_mut()
@@ -719,12 +865,12 @@ pub fn write_native_log_note(note: impl AsRef<str>) {
         let _ = writeln!(writer, "mesh-llm: {note}");
         let _ = writer.flush();
     }
-    forward_native_log_note(note);
+    forward_native_log_note(note, required_mask);
 }
 
-fn forward_native_log_note(note: String) {
+fn forward_native_log_note(note: String, required_mask: u8) {
     let forwarding_mask = NATIVE_LOG_FORWARDING_MASK.load(Ordering::Relaxed);
-    if forwarding_mask & MODEL_CATEGORY == 0 {
+    if forwarding_mask & required_mask == 0 {
         return;
     }
     let event = NativeLogEvent {
@@ -853,745 +999,5 @@ unsafe extern "C" fn discard_native_log(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use skippy_ffi::{FEATURE_DEVICE_EVENTS, FEATURE_KV_EVENTS, FEATURE_MODEL_LOAD_EVENTS_V2};
-    use std::{
-        env,
-        ffi::CString,
-        fs, ptr,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    #[test]
-    fn parser_mode_runtime_events_keeps_auto_fallback_until_coverage() {
-        let report = crate::CapabilityReport {
-            confirmed: FEATURE_DEVICE_EVENTS | FEATURE_KV_EVENTS,
-            health_messages: Vec::new(),
-        };
-        let policy = NativeLogParserPolicy::new(NativeLogParserMode::Auto, &report);
-
-        assert!(policy.forwards("backend"));
-        assert!(policy.forwards("model"));
-        assert!(policy.forwards("memory"));
-        assert!(policy.forwards("kv_cache"));
-        assert!(policy.forwards("tokenizer"));
-    }
-
-    #[test]
-    fn parser_mode_runtime_events_keeps_model_fallback_until_coverage() {
-        let report = crate::CapabilityReport {
-            confirmed: FEATURE_MODEL_LOAD_EVENTS_V2,
-            health_messages: Vec::new(),
-        };
-        let policy = NativeLogParserPolicy::new(NativeLogParserMode::Auto, &report);
-
-        assert!(policy.forwards("model"));
-        assert!(policy.forwards("memory"));
-        assert!(policy.forwards("tokenizer"));
-        assert!(policy.forwards("backend"));
-        assert!(policy.forwards("kv_cache"));
-    }
-
-    #[test]
-    fn auto_parser_retains_fallback_when_one_family_is_observable() {
-        let _native_log_guard = native_log_test_guard();
-        let report = crate::CapabilityReport {
-            confirmed: FEATURE_DEVICE_EVENTS | FEATURE_KV_EVENTS,
-            health_messages: Vec::new(),
-        };
-        configure_native_log_parser(NativeLogParserPolicy::new(
-            NativeLogParserMode::Auto,
-            &report,
-        ));
-        // Capability bits and a live event from one family do not prove
-        // coverage for the other transitions in that family. Auto therefore
-        // keeps every parser fallback available until a version-specific
-        // complete coverage policy exists.
-        let mask = NATIVE_LOG_FORWARDING_MASK.load(Ordering::Relaxed);
-        assert_ne!(mask & BACKEND_CATEGORY, 0);
-        assert_ne!(mask & MODEL_CATEGORY, 0);
-        assert_ne!(mask & MEMORY_CATEGORY, 0);
-        assert_ne!(mask & KV_CACHE_CATEGORY, 0);
-        assert_ne!(mask & TOKENIZER_CATEGORY, 0);
-        configure_native_log_parser(NativeLogParserPolicy::new(
-            NativeLogParserMode::Disabled,
-            &crate::CapabilityReport::default(),
-        ));
-    }
-
-    #[test]
-    fn parser_mode_runtime_events_enabled_and_disabled_ignore_capabilities() {
-        let report = crate::CapabilityReport {
-            confirmed: u64::MAX,
-            health_messages: Vec::new(),
-        };
-
-        for category in ["backend", "model", "memory", "kv_cache", "tokenizer"] {
-            assert!(
-                NativeLogParserPolicy::new(NativeLogParserMode::Enabled, &report)
-                    .forwards(category)
-            );
-            assert!(
-                !NativeLogParserPolicy::new(NativeLogParserMode::Disabled, &report)
-                    .forwards(category)
-            );
-        }
-    }
-
-    #[test]
-    fn native_log_note_obeys_the_model_category_mask() {
-        let _native_log_guard = native_log_test_guard();
-        let mut receiver = register_filtered_native_logs();
-        struct RestoreForwardingMask(u8);
-
-        impl Drop for RestoreForwardingMask {
-            fn drop(&mut self) {
-                NATIVE_LOG_FORWARDING_MASK.store(self.0, Ordering::Relaxed);
-            }
-        }
-
-        let _mask_guard = RestoreForwardingMask(
-            NATIVE_LOG_FORWARDING_MASK.swap(BACKEND_CATEGORY, Ordering::Relaxed),
-        );
-        write_native_log_note("hidden model note despite backend forwarding");
-        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
-
-        NATIVE_LOG_FORWARDING_MASK.store(MODEL_CATEGORY, Ordering::Relaxed);
-        write_native_log_note("visible model note");
-        let event = receiver
-            .try_recv()
-            .expect("enabled model note should forward");
-        assert_eq!(event.category, "model");
-        assert!(event.message.contains("visible model note"));
-
-        unregister_filtered_native_logs();
-    }
-
-    use tokio::sync::mpsc::error::TryRecvError;
-
-    mod native_log {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/tests/native_log.rs"
-        ));
-    }
-
-    struct FlushCountingWriter {
-        flush_count: Arc<AtomicUsize>,
-    }
-
-    impl Write for FlushCountingWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            self.flush_count.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn native_log_writer_flush_helper_explicitly_flushes_line_writer() {
-        let flush_count = Arc::new(AtomicUsize::new(0));
-        let writer = FlushCountingWriter {
-            flush_count: flush_count.clone(),
-        };
-        let mut writer = Some(LineWriter::new(writer));
-        writer
-            .as_mut()
-            .expect("writer should exist")
-            .write_all(b"buffered native log line\n")
-            .expect("write to buffered test writer should succeed");
-
-        flush_native_log_writer(&mut writer);
-
-        assert_eq!(flush_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn native_log_writer_flushes_newline_and_partial_line() -> anyhow::Result<()> {
-        let _native_log_guard = native_log_test_guard();
-
-        struct RestoreNativeLogs;
-
-        impl Drop for RestoreNativeLogs {
-            fn drop(&mut self) {
-                restore_native_logs();
-            }
-        }
-
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = env::temp_dir().join(format!(
-            "skippy-native-log-buffer-test-{}-{nanos}.log",
-            std::process::id()
-        ));
-        let _guard = RestoreNativeLogs;
-        redirect_native_logs_to_file(&path)?;
-
-        let message = CString::new("buffered native log line\n")?;
-        unsafe {
-            write_native_log(0, message.as_ptr(), ptr::null_mut());
-        }
-
-        let contents = fs::read_to_string(&path)?;
-        restore_native_logs();
-
-        fs::remove_file(&path)?;
-        assert_eq!(contents, "buffered native log line\n");
-
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = env::temp_dir().join(format!(
-            "skippy-native-log-partial-line-test-{}-{nanos}.log",
-            std::process::id()
-        ));
-        let _guard = RestoreNativeLogs;
-        redirect_native_logs_to_file(&path)?;
-
-        let message = CString::new("partial native log line")?;
-        unsafe {
-            write_native_log(0, message.as_ptr(), ptr::null_mut());
-        }
-        restore_native_logs();
-
-        let contents = fs::read_to_string(&path)?;
-        fs::remove_file(&path)?;
-        assert_eq!(contents, "partial native log line");
-        Ok(())
-    }
-
-    #[test]
-    fn native_log_note_writes_sanitized_flushed_context() -> anyhow::Result<()> {
-        let _native_log_guard = native_log_test_guard();
-
-        struct RestoreNativeLogs;
-
-        impl Drop for RestoreNativeLogs {
-            fn drop(&mut self) {
-                restore_native_logs();
-            }
-        }
-
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = env::temp_dir().join(format!(
-            "skippy-native-log-note-test-{}-{nanos}.log",
-            std::process::id()
-        ));
-        let _guard = RestoreNativeLogs;
-        redirect_native_logs_to_file(&path)?;
-
-        write_native_log_note("native call begin\nwith context");
-
-        let contents = fs::read_to_string(&path)?;
-        restore_native_logs();
-        fs::remove_file(&path)?;
-
-        assert!(
-            contents.ends_with("mesh-llm: native call begin with context\n"),
-            "unexpected native log contents: {contents:?}"
-        );
-        assert!(
-            !contents.contains("native call begin\nwith context"),
-            "native log note was not sanitized: {contents:?}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn aggregator_preserves_backend_summary_lines() {
-        let mut aggregator = NativeLogAggregator::default();
-        assert_eq!(
-            aggregator.process_line("backend_init succeeded"),
-            vec![NativeLogEvent {
-                message: "backend_init succeeded".to_string(),
-                category: "backend",
-                params: Vec::new(),
-            }]
-        );
-        assert_eq!(
-            aggregator.process_line("llama_backend_init: GGML_CUDA"),
-            vec![NativeLogEvent {
-                message: "llama_backend_init: GGML_CUDA".to_string(),
-                category: "backend",
-                params: Vec::new(),
-            }]
-        );
-        assert_eq!(
-            aggregator.process_line("llama_backend_init: GGML_HIP backend initialized"),
-            vec![NativeLogEvent {
-                message: "llama_backend_init: GGML_HIP backend initialized".to_string(),
-                category: "backend",
-                params: Vec::new(),
-            }]
-        );
-        assert_eq!(
-            aggregator.process_line("llama_backend_init: GGML_ROCM backend initialized"),
-            vec![NativeLogEvent {
-                message: "llama_backend_init: GGML_ROCM backend initialized".to_string(),
-                category: "backend",
-                params: Vec::new(),
-            }]
-        );
-    }
-
-    #[test]
-    fn aggregator_ignores_non_backend_cuda_mentions() {
-        let mut aggregator = NativeLogAggregator::default();
-        assert!(
-            aggregator
-                .process_line("CUDA kernel launch for attention")
-                .is_empty()
-        );
-        assert!(aggregator.process_line("offloading to CUDA").is_empty());
-    }
-
-    #[test]
-    fn aggregator_builds_metadata_summary_and_progress() {
-        let mut aggregator = NativeLogAggregator::default();
-        assert_eq!(
-                aggregator.process_line(
-                    "llama_model_loader: loaded meta data with 10 key-value pairs and 100 tensors from model.gguf (version GGUF V3)"
-                ),
-                vec![NativeLogEvent {
-                    message: "model load plan: metadata rows=10, tensor rows=100".to_string(),
-                    category: "model",
-                    params: Vec::new(),
-                }]
-            );
-
-        for (idx, line) in [
-            "llama_model_loader: - kv   0: general.architecture str = qwen35",
-            "llama_model_loader: - kv   1: general.name str = Qwen 3.5 4B",
-            "llama_model_loader: - kv   2: general.type str = model",
-            "llama_model_loader: - kv   3: general.size_label str = 4B",
-            "llama_model_loader: - kv   4: qwen35.context_length u32 = 40960",
-            "llama_model_loader: - kv   5: qwen35.block_count u32 = 36",
-            "llama_model_loader: - kv   6: qwen35.embedding_length u32 = 2560",
-            "llama_model_loader: - kv   7: qwen35.feed_forward_length u32 = 9728",
-            "llama_model_loader: - kv   8: qwen35.attention.head_count u32 = 32",
-            "llama_model_loader: - kv   9: qwen35.attention.head_count_kv u32 = 8",
-        ]
-        .iter()
-        .enumerate()
-        {
-            let events = aggregator.process_line(line);
-            assert!(
-                events
-                    .iter()
-                    .any(|event| event.message.contains(&format!("{}%", (idx + 1) * 10))),
-                "expected {}% metadata progress in {:?}",
-                (idx + 1) * 10,
-                events
-            );
-        }
-
-        let flush_events = aggregator.process_line("llm_load_print_meta: version = 3");
-        assert!(
-            flush_events
-                .iter()
-                .any(|event| event.message == "llm_load_print_meta: version = 3")
-        );
-        assert!(
-            flush_events
-                .iter()
-                .any(|event| event.message == "Reading model metadata...")
-        );
-        assert!(flush_events.iter().any(|event| {
-            event.params.iter().any(|(key, value)| {
-                key == "architecture" && value == &Value::String("qwen35".to_string())
-            })
-        }));
-    }
-
-    #[test]
-    fn aggregator_emits_tensor_progress_from_type_summaries() {
-        let mut aggregator = NativeLogAggregator::default();
-        aggregator.process_line(
-                "llama_model_loader: loaded meta data with 46 key-value pairs and 100 tensors from model.gguf (version GGUF V3)",
-            );
-
-        let first = aggregator.process_line("llama_model_loader: - type  f32:  30 tensors");
-        assert!(
-            first
-                .iter()
-                .any(|event| event.message.contains("tensors 10%"))
-        );
-        assert!(
-            first
-                .iter()
-                .any(|event| event.message.contains("tensors 30%"))
-        );
-
-        let second = aggregator.process_line("llama_model_loader: - type q4_k:  70 tensors");
-        assert!(
-            second
-                .iter()
-                .any(|event| event.message.contains("tensors 100%"))
-        );
-        assert!(second.iter().any(|event| {
-            event.message == "Reading tensor groups..."
-                && event
-                    .params
-                    .iter()
-                    .any(|(key, value)| key == "f32" && value == &Value::from(30_u64))
-                && event
-                    .params
-                    .iter()
-                    .any(|(key, value)| key == "q4_K" && value == &Value::from(70_u64))
-        }));
-    }
-
-    #[test]
-    fn aggregator_preserves_memory_summary_lines() {
-        let mut aggregator = NativeLogAggregator::default();
-        assert_eq!(
-            aggregator.process_line("VRAM used: 12.4 GB"),
-            vec![NativeLogEvent {
-                message: "VRAM used: 12.4 GB".to_string(),
-                category: "memory",
-                params: Vec::new(),
-            }]
-        );
-    }
-
-    #[test]
-    fn aggregator_preserves_model_buffers_for_all_devices() {
-        let mut aggregator = NativeLogAggregator::default();
-        for device in ["CUDA0", "CUDA1", "Metal", "ROCm0", "Vulkan0", "CPU_Mapped"] {
-            let line = format!("load_tensors: {device} model buffer size = 4321.00 MiB");
-            let events = aggregator.process_line(&line);
-            assert_eq!(events.len(), 1, "missing buffer for {device}");
-            assert_eq!(events[0].message, line);
-            assert_eq!(events[0].category, "memory");
-        }
-    }
-
-    #[test]
-    fn aggregator_summarizes_unique_layer_assignments_including_output_layer() {
-        let mut aggregator = NativeLogAggregator::default();
-        aggregator.process_line("llama_model_loader: - kv 0: qwen35.block_count u32 = 4");
-        for (layer, device) in [
-            (0, "CUDA0"),
-            (1, "CPU"),
-            (2, "CUDA0"),
-            (2, "CUDA0"),
-            (3, "CUDA1"),
-            (4, "CPU"),
-        ] {
-            let events = aggregator.process_line(&format!(
-                "load_tensors: layer {layer} assigned to device {device}, is_swa = 0"
-            ));
-            assert!(
-                events
-                    .iter()
-                    .all(|event| event.message != "Model layers by device")
-            );
-        }
-
-        assert_eq!(
-            aggregator.process_line("load_tensors: finished"),
-            vec![NativeLogEvent {
-                message: "Model layers by device".to_string(),
-                category: "model",
-                params: vec![
-                    ("CPU".to_string(), Value::from(2_u64)),
-                    ("CUDA0".to_string(), Value::from(2_u64)),
-                    ("CUDA1".to_string(), Value::from(1_u64)),
-                ],
-            }]
-        );
-        assert!(aggregator.process_line("load_tensors: finished").is_empty());
-    }
-
-    #[test]
-    fn aggregator_emits_only_changed_layer_device_counts() {
-        let mut aggregator = NativeLogAggregator::default();
-        aggregator.process_line("load_tensors: layer 0 assigned to device CUDA0");
-        assert_eq!(aggregator.process_line("load_tensors: finished").len(), 1);
-        aggregator.process_line("load_tensors: layer 0 assigned to device CUDA0");
-        assert!(aggregator.process_line("load_tensors: finished").is_empty());
-
-        aggregator.process_line("load_tensors: layer 0 assigned to device CPU");
-        assert_eq!(
-            aggregator.process_line("load_tensors: finished"),
-            vec![NativeLogEvent {
-                message: "Model layers by device".to_string(),
-                category: "model",
-                params: vec![("CPU".to_string(), Value::from(1_u64))],
-            }]
-        );
-    }
-
-    #[test]
-    fn aggregator_resets_layer_devices_for_each_model() {
-        let mut aggregator = NativeLogAggregator::default();
-        aggregator.process_line("load_tensors: layer 0 assigned to device CUDA0");
-        let next_model = aggregator.process_line(
-            "llama_model_loader: loaded meta data with 1 key-value pairs and 1 tensors from next.gguf (version GGUF V3)",
-        );
-        assert!(next_model.iter().any(|event| {
-            event.message == "Model layers by device"
-                && event.params == vec![("CUDA0".to_string(), Value::from(1_u64))]
-        }));
-        aggregator.process_line("load_tensors: layer 0 assigned to device Metal");
-        assert_eq!(
-            aggregator.process_line("load_tensors: finished"),
-            vec![NativeLogEvent {
-                message: "Model layers by device".to_string(),
-                category: "model",
-                params: vec![("Metal".to_string(), Value::from(1_u64))],
-            }]
-        );
-    }
-
-    #[test]
-    fn aggregator_tags_cpu_offload_evidence_without_capacity_facts() {
-        let mut aggregator = NativeLogAggregator::default();
-        let model_buffer =
-            aggregator.process_line("load_tensors:   CPU_Mapped model buffer size = 47492.37 MiB");
-        assert_eq!(
-            model_buffer,
-            vec![NativeLogEvent {
-                message: "load_tensors:   CPU_Mapped model buffer size = 47492.37 MiB".to_string(),
-                category: "memory",
-                params: vec![
-                    (
-                        "offload_device".to_string(),
-                        Value::String("CPU".to_string())
-                    ),
-                    (
-                        "offload_surface".to_string(),
-                        Value::String("model_buffer".to_string())
-                    ),
-                ],
-            }]
-        );
-        assert_no_capacity_params(&model_buffer);
-
-        assert_eq!(
-            aggregator.process_line("llama_kv_cache:        CPU KV buffer size =  3264.00 MiB"),
-            vec![NativeLogEvent {
-                message: "llama_kv_cache:        CPU KV buffer size =  3264.00 MiB".to_string(),
-                category: "kv_cache",
-                params: vec![
-                    (
-                        "offload_device".to_string(),
-                        Value::String("CPU".to_string())
-                    ),
-                    (
-                        "offload_surface".to_string(),
-                        Value::String("kv_buffer".to_string())
-                    ),
-                ],
-            }]
-        );
-        assert_eq!(
-            aggregator.process_line("sched_reserve:        CPU compute buffer size =   856.29 MiB"),
-            vec![NativeLogEvent {
-                message: "sched_reserve:        CPU compute buffer size =   856.29 MiB".to_string(),
-                category: "memory",
-                params: vec![
-                    (
-                        "offload_device".to_string(),
-                        Value::String("CPU".to_string())
-                    ),
-                    (
-                        "offload_surface".to_string(),
-                        Value::String("compute_buffer".to_string())
-                    ),
-                ],
-            }]
-        );
-    }
-
-    fn assert_no_capacity_params(events: &[NativeLogEvent]) {
-        const CAPACITY_KEYS: &[&str] = &[
-            "backend_device",
-            "capacity_gb",
-            "gpu_count",
-            "gpu_vram",
-            "vram_bytes",
-        ];
-        assert!(events.iter().all(|event| {
-            event
-                .params
-                .iter()
-                .all(|(key, _)| !CAPACITY_KEYS.contains(&key.as_str()))
-        }));
-    }
-
-    #[test]
-    fn aggregator_tracks_kv_cache_layer_progress_without_double_counting() {
-        let mut aggregator = NativeLogAggregator::default();
-        let plan = aggregator.process_line(
-                "llama_kv_cache: size = 4096.00 MiB (131072 cells,   8 layers,  2/1 seqs), K (f16): 2048.00 MiB, V (f16): 2048.00 MiB",
-            );
-        assert_eq!(
-            plan,
-            vec![NativeLogEvent {
-                message: "kv cache plan: layer rows=8".to_string(),
-                category: "kv_cache",
-                params: Vec::new(),
-            }]
-        );
-
-        let first = aggregator.process_line("llama_kv_cache: layer   0: filtered");
-        assert!(
-            first
-                .iter()
-                .any(|event| event.message.contains("kv cache 10%"))
-        );
-
-        let duplicate = aggregator.process_line("llama_kv_cache: layer   0: dev = MTL0");
-        assert!(duplicate.is_empty());
-
-        for layer in 1..8 {
-            aggregator.process_line(&format!("llama_kv_cache: layer   {layer}: filtered"));
-        }
-
-        let summary = aggregator.process_line("llama_kv_cache: attn_rot = 128");
-        assert_eq!(
-            summary,
-            vec![NativeLogEvent {
-                message: "llama_kv_cache: attn_rot = 128".to_string(),
-                category: "kv_cache",
-                params: Vec::new(),
-            }]
-        );
-    }
-
-    #[test]
-    fn aggregator_preserves_tokenizer_summary_lines() {
-        let mut aggregator = NativeLogAggregator::default();
-        assert_eq!(
-            aggregator.process_line("init_tokenizer: initializing tokenizer for type 2"),
-            vec![NativeLogEvent {
-                message: "init_tokenizer: initializing tokenizer for type 2".to_string(),
-                category: "tokenizer",
-                params: Vec::new(),
-            }]
-        );
-    }
-
-    #[test]
-    fn aggregator_suppresses_print_info_lines() {
-        let mut aggregator = NativeLogAggregator::default();
-        assert!(
-            aggregator
-                .process_line("print_info: n_vocab               = 248320")
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn aggregator_rejects_empty_and_whitespace_lines() {
-        let mut aggregator = NativeLogAggregator::default();
-        assert!(aggregator.process_line("").is_empty());
-        assert!(aggregator.process_line("   ").is_empty());
-    }
-
-    #[test]
-    fn aggregator_suppresses_raw_noise_lines() {
-        let mut aggregator = NativeLogAggregator::default();
-        assert!(
-            aggregator
-                .process_line(
-                    "clip_model_loader: tensor[0]: n_dims = 1, name = v.blk.0.attn_out.bias"
-                )
-                .is_empty()
-        );
-        assert!(
-            aggregator
-                .process_line("tokenizer.ggml.tokens arr[str,248320] = [\"!\", ...]")
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn parse_layer_assignment_extracts_layer_and_device() {
-        assert_eq!(
-            parse_layer_assignment("load_tensors: layer   0 assigned to device CUDA0"),
-            Some((0, "CUDA0"))
-        );
-        assert_eq!(
-            parse_layer_assignment("load_tensors: layer  63 assigned to device CUDA0, is_swa = 0"),
-            Some((63, "CUDA0"))
-        );
-        assert_eq!(
-            parse_layer_assignment("load_tensors: layer   5 assigned to device CPU, is_swa = 1"),
-            Some((5, "CPU"))
-        );
-        assert_eq!(
-            parse_layer_assignment("llm_load_tensors: offloaded 64/65 layers"),
-            None
-        );
-        assert_eq!(
-            parse_layer_assignment("load_tensors: layer   0 computation graph"),
-            None
-        );
-        assert_eq!(
-            parse_layer_assignment("load_tensors: layer x assigned to device CUDA0"),
-            None
-        );
-        assert_eq!(
-            parse_layer_assignment("load_tensors: layer 0 assigned to device , is_swa = 0"),
-            None
-        );
-    }
-
-    #[test]
-    fn aggregator_tracks_layer_assign_progress_using_block_count() {
-        let mut aggregator = NativeLogAggregator::default();
-
-        aggregator.process_line(
-                "llama_model_loader: loaded meta data with 10 key-value pairs and 100 tensors from model.gguf (version GGUF V3)"
-            );
-        for line in [
-            "llama_model_loader: - kv   0: general.architecture str = qwen35",
-            "llama_model_loader: - kv   1: general.name str = Qwen 3.5 4B",
-            "llama_model_loader: - kv   2: general.type str = model",
-            "llama_model_loader: - kv   3: general.size_label str = 4B",
-            "llama_model_loader: - kv   4: qwen35.context_length u32 = 40960",
-            "llama_model_loader: - kv   5: qwen35.block_count u32 = 4",
-            "llama_model_loader: - kv   6: qwen35.embedding_length u32 = 2560",
-            "llama_model_loader: - kv   7: qwen35.feed_forward_length u32 = 9728",
-            "llama_model_loader: - kv   8: qwen35.attention.head_count u32 = 32",
-            "llama_model_loader: - kv   9: qwen35.attention.head_count_kv u32 = 8",
-        ] {
-            aggregator.process_line(line);
-        }
-        aggregator.process_line("llm_load_print_meta: version = 3");
-
-        let e0 = aggregator.process_line("load_tensors: layer   0 assigned to device CUDA0");
-        assert!(e0.iter().any(|event| event.message.contains("layers 10%")));
-        assert!(e0.iter().any(|event| event.message.contains("layers 20%")));
-
-        let e1 = aggregator.process_line("load_tensors: layer   1 assigned to device CUDA0");
-        assert!(e1.iter().any(|event| event.message.contains("layers 50%")));
-
-        let e2 = aggregator.process_line("load_tensors: layer   2 assigned to device CUDA0");
-        assert!(e2.iter().any(|event| event.message.contains("layers 70%")));
-
-        let e3 = aggregator.process_line("load_tensors: layer   3 assigned to device CUDA0");
-        let pcts: Vec<&str> = e3
-            .iter()
-            .filter_map(|ev| {
-                if ev.message.contains("layers") && ev.message.contains('%') {
-                    Some(ev.message.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert!(
-            pcts.iter().any(|m| m.contains("100%")),
-            "expected layers 100% at final layer, got {:?}",
-            pcts
-        );
-    }
-}
+#[path = "logging/tests/mod.rs"]
+mod tests;

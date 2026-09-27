@@ -10,6 +10,8 @@ pub enum ResponseAdapter {
     OpenAiChatCompletionsStream,
     OpenAiResponsesJson,
     OpenAiResponsesStream,
+    AnthropicMessagesJson,
+    AnthropicMessagesStream,
 }
 
 #[derive(Debug)]
@@ -25,6 +27,12 @@ pub(super) fn normalize_openai_compat_request(
 ) -> Result<RequestNormalization> {
     let normalized = openai_frontend::normalize_openai_compat_request(path, body)?;
     let response_adapter = match normalized.response_adapter {
+        openai_frontend::ResponseAdapterMode::AnthropicMessagesJson => {
+            ResponseAdapter::AnthropicMessagesJson
+        }
+        openai_frontend::ResponseAdapterMode::AnthropicMessagesStream => {
+            ResponseAdapter::AnthropicMessagesStream
+        }
         openai_frontend::ResponseAdapterMode::None => ResponseAdapter::None,
         openai_frontend::ResponseAdapterMode::OpenAiResponsesJson => {
             ResponseAdapter::OpenAiResponsesJson

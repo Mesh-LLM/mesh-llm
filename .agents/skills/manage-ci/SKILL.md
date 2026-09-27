@@ -371,6 +371,14 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Keep PR sccache job-local unless a provider proves safe isolation. A cache
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
+- Every `release.yml` job that can reach cargo — directly, or through
+  `scripts/release-version.sh` or `scripts/publish-crates.sh` — initializes
+  sccache (`mozilla-actions/sccache-action` plus `configure-sccache-gha`)
+  before its first compiler probe, because `.cargo/config.toml` makes sccache
+  the repository-wide `rustc` wrapper. Only composition-only jobs skip it, and
+  they stay cargo-free. `tools/xtask` rejects a cargo caller without
+  initialization and any cargo call inside a composition-only job, because a
+  canary cannot exercise the canary-skipped jobs.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
@@ -492,15 +500,18 @@ existing pin and patches without repair or publication. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 
-Changed pins have at most three distributed repair attempts. Within each
-attempt, prepare/build failures return to the same bounded Goose session.
-Family or independent-verification failures feed the preserved candidate and
-all available worker/build evidence into a new session in the next attempt.
-Every edit invalidates all family results. A complete green repair pass must
-be followed by a fresh independent build and complete per-family pass on the
-same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
-or mismatched results. Only the final hosted publisher receives the repair
-credential, and exhausted attempts publish no branch or PR.
+Changed pins use one candidate pass followed by one independent verification
+pass. Before the candidate begins, a separate deterministic preflight verifies
+the immutable family plan and every pinned cache artifact. Environment or
+process-supervision failures stop without asking Goose to repair source. Within
+the candidate pass, prepare/build failures return to the same bounded Goose
+session. A family or independent-verification failure retains evidence and
+stops the run; it never creates another candidate or agent session. Every edit
+invalidates all family results. A complete green candidate pass must be
+followed by a fresh independent build and complete per-family pass on the same
+commit. A hosted aggregate rejects missing, duplicate, failed, cancelled, or
+mismatched results. Only the final hosted publisher receives the repair
+credential, and a failed pass publishes no branch or PR.
 
 The family plan must require executable coverage for every integrated MTP head
 declared by immutable GGUF metadata. A single draft token cannot certify a
@@ -525,8 +536,11 @@ bytes, concurrent workload copies, and explicit runtime allowances; they are
 admission estimates, not measured peak guarantees. Workers recompute the tier
 from the verified handoff, check physical and available memory, and stop their
 own process group if available memory falls below the reserve.
-One certification per runner account/host holds a local lock. Oversized families
-fail closed rather than silently skipping certification. The embedding SDK uses
+One certification per physical host holds a cross-account lock in the
+root-owned `/Library/Application Support/MeshLLM/locks` directory. The lock
+file is pre-provisioned world-writable, while runner accounts cannot replace
+its directory entry. Oversized families fail closed rather than silently
+skipping certification. The embedding SDK uses
 a locked controller-owned Python project, including with historical sources.
 
 The family matrix is submitted in ascending estimated model bytes, with family
@@ -543,8 +557,9 @@ bounds, and never falls back from a newer failure to an older success. The
 family job-result gate remains mandatory so missing uploads cannot hide failures.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-Repair feedback retains attempt-labelled history; it is diagnostic input, never
-certification authority. Rebuilding a producer invalidates its prior receipts.
+GitHub failed-job reruns retain attempt-labelled evidence, but no failure is fed
+into an automatic outer repair cycle. Rebuilding a producer invalidates its
+prior receipts.
 
 ## Validation contract
 

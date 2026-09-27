@@ -1,0 +1,42 @@
+{
+  "selection": {
+    "default": "thinking",
+    "reasoning_enabled": "thinking",
+    "reasoning_disabled": "direct"
+  },
+  "profiles": {
+    "thinking": {
+      "max_tokens": 20480,
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "repeat_penalty": 1,
+      "reasoning": {
+        "enabled": "on",
+        "budget": 16384
+      },
+      "provenance": {
+        "source_repo": "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+        "revision": "e5e9932441de940c9a62185c870ea5bcd4cd24e2",
+        "file": "README.md",
+        "section": "Quick Start Guide / Model Parameters",
+        "url": "https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16/blob/e5e9932441de940c9a62185c870ea5bcd4cd24e2/README.md"
+      }
+    },
+    "direct": {
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_k": 1,
+      "reasoning": {
+        "enabled": "off",
+        "budget": 0
+      },
+      "provenance": {
+        "source_repo": "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+        "revision": "e5e9932441de940c9a62185c870ea5bcd4cd24e2",
+        "file": "README.md",
+        "section": "Quick Start Guide / Model Parameters",
+        "url": "https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16/blob/e5e9932441de940c9a62185c870ea5bcd4cd24e2/README.md"
+      }
+    }
+  }
+}

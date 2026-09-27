@@ -606,6 +606,8 @@ mod tests {
                     name: Some("vision".to_string()),
                 },
             ],
+            publisher_metadata: Vec::new(),
+            publisher_defaults: None,
             generation: None,
             native_abi_version: "0.1.49".to_string(),
             generator_version: "test".to_string(),

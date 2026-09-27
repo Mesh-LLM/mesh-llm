@@ -36,10 +36,14 @@ fn progress_on_a_reserved_operation_coalesces_to_the_latest_value() {
         1,
         "five progress updates inside one export window publish once"
     );
+    let health = engine.health().snapshot();
     assert_eq!(
-        engine.health().snapshot().dropped_progress,
-        4,
-        "the four superseded snapshots are counted, not silently discarded"
+        health.coalesced_progress, 4,
+        "the four superseded snapshots are counted as coalesced, not silently discarded"
+    );
+    assert_eq!(
+        health.dropped_progress, 0,
+        "coalescing publishes the newest value, so nothing was lost"
     );
 
     reservation.cancel();

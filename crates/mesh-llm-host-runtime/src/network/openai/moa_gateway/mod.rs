@@ -292,6 +292,7 @@ pub async fn try_handle_moa(
     .await
 }
 
+mod anthropic;
 pub(in crate::network::openai) mod context_selection;
 mod pool;
 mod progress;
@@ -358,7 +359,8 @@ async fn run_moa_turn(
     if was_streaming
         && matches!(
             response_adapter,
-            proxy::ResponseAdapter::None
+            proxy::ResponseAdapter::AnthropicMessagesStream
+                | proxy::ResponseAdapter::None
                 | proxy::ResponseAdapter::OpenAiChatCompletionsStream
                 | proxy::ResponseAdapter::OpenAiResponsesStream
         )

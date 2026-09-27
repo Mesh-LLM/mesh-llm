@@ -1,7 +1,7 @@
 use super::*;
 use crate::cli::{Args, Command};
 use crate::package::ArtifactHook;
-use crate::package_v2::write_package;
+use crate::package_v2::{PackageSidecars, PackageWriteOptions, write_package};
 use crate::test_gguf::{FixtureTensor, explicit, fixture, tensor};
 use clap::Parser;
 
@@ -31,12 +31,18 @@ impl Case {
         write_package(
             self.source.display().to_string(),
             self.package.clone(),
-            projectors,
+            PackageSidecars {
+                projectors,
+                publisher_metadata: Vec::new(),
+            },
             ArtifactHook { command: None },
             ArtifactHook { command: None },
-            explicit(&self.source),
-            false,
-            None,
+            PackageWriteOptions {
+                explicit: explicit(&self.source),
+                generation_defaults: None,
+                resume_existing_artifacts: false,
+                max_artifact_bytes: None,
+            },
         )
         .unwrap();
     }

@@ -104,7 +104,7 @@ fn assert_explicit_full_surface_resolution(explicit: &ResolvedSkippyConfig) {
     assert_eq!(explicit.throughput.threads, Some(10));
     assert_eq!(explicit.throughput.threads_batch, Some(6));
     assert_eq!(explicit.request_defaults.temperature, Some(0.7));
-    assert_eq!(explicit.request_defaults.max_tokens, 256);
+    assert_eq!(explicit.request_defaults.max_tokens, Some(256));
 }
 
 fn assert_explicit_full_surface_stage_config(explicit: &ResolvedSkippyConfig) {
@@ -153,7 +153,7 @@ fn assert_defaults_full_surface_resolution(omitted: &ResolvedSkippyConfig) {
     assert_eq!(omitted.hardware.device.as_deref(), Some("CUDA2"));
     assert_eq!(omitted.throughput.parallel, 2);
     assert_eq!(omitted.request_defaults.temperature, Some(0.2));
-    assert_eq!(omitted.request_defaults.max_tokens, 128);
+    assert_eq!(omitted.request_defaults.max_tokens, Some(128));
 
     let single_stage = omitted
         .to_model_load_options(SkippyTelemetryOptions::off())

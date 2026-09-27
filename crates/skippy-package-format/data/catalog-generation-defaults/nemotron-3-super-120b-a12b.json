@@ -1,0 +1,18 @@
+{
+  "selection": {
+    "default": "recommended"
+  },
+  "profiles": {
+    "recommended": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "provenance": {
+        "source_repo": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+        "revision": "2dc98e2afe4face0e4ce40972a915c45368bd34a",
+        "file": "README.md",
+        "section": "Quick Start",
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/blob/2dc98e2afe4face0e4ce40972a915c45368bd34a/README.md"
+      }
+    }
+  }
+}

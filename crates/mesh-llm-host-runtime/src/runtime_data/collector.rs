@@ -433,7 +433,11 @@ impl RuntimeDataCollector {
             hosted_models: input.hosted_models,
             draft_name: input.draft_name,
             api_port: input.api_port,
-            peers: input.peers.iter().map(build_peer_payload).collect(),
+            peers: input
+                .peers
+                .iter()
+                .map(|peer| build_peer_payload(peer, input.connected_peer_ids.contains(&peer.id)))
+                .collect(),
             wakeable_nodes: input
                 .wakeable_nodes
                 .into_iter()
@@ -1157,7 +1161,7 @@ fn derive_local_node_state(
     }
 }
 
-fn derive_peer_state(peer: &mesh::PeerInfo) -> NodeState {
+fn derive_peer_state(peer: &mesh::PeerInfo, has_connection: bool) -> NodeState {
     fn has_nonempty_models(models: &[String]) -> bool {
         models.iter().any(|model| !model.trim().is_empty())
     }
@@ -1182,12 +1186,20 @@ fn derive_peer_state(peer: &mesh::PeerInfo) -> NodeState {
                     .routable_models()
                     .iter()
                     .any(|model| !model.trim().is_empty());
+            // Issue #1756: a serving signal drawn purely from announcement
+            // content is not proof the peer is still reachable — a bridge
+            // can keep rebroadcasting a departed peer's last-known models
+            // indefinitely. Require a live connection or an actually
+            // observed RTT before reporting `Serving`; otherwise the peer
+            // falls through to `Standby` even though it still looks
+            // "assigned" on paper.
+            let has_observed_liveness = mesh::peer_has_observed_liveness(peer, has_connection);
 
-            if has_ready_runtime {
+            if has_ready_runtime && has_observed_liveness {
                 NodeState::Serving
             } else if has_runtime_descriptors && has_assigned_model_work {
                 NodeState::Loading
-            } else if has_legacy_serving_signal {
+            } else if has_legacy_serving_signal && has_observed_liveness {
                 NodeState::Serving
             } else {
                 NodeState::Standby
@@ -1196,7 +1208,7 @@ fn derive_peer_state(peer: &mesh::PeerInfo) -> NodeState {
     }
 }
 
-fn build_peer_payload(peer: &mesh::PeerInfo) -> PeerPayload {
+fn build_peer_payload(peer: &mesh::PeerInfo, has_connection: bool) -> PeerPayload {
     let display_latency = peer.display_latency();
     PeerPayload {
         id: peer.id.fmt_short().to_string(),
@@ -1207,7 +1219,7 @@ fn build_peer_payload(peer: &mesh::PeerInfo) -> PeerPayload {
             mesh::NodeRole::Host { .. } => "Host".into(),
             mesh::NodeRole::Client => "Client".into(),
         },
-        state: derive_peer_state(peer),
+        state: derive_peer_state(peer, has_connection),
         models: peer.models.clone(),
         available_models: peer.available_models.clone(),
         requested_models: peer.requested_models.clone(),

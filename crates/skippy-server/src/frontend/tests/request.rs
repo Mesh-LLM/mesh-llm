@@ -67,12 +67,158 @@ fn default_sampling_controls_are_allowed() {
     }))
     .unwrap();
 
-    let sampling = chat_sampling_config(&request).unwrap();
+    let sampling =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert!(sampling.enabled);
     assert_eq!(sampling.temperature, 0.8);
     assert_eq!(sampling.top_p, 0.95);
     assert_eq!(sampling.top_k, 40);
     assert_eq!(sampling.min_p, 0.05);
+}
+
+fn package_generation_defaults() -> skippy_package_format::GenerationRequestDefaults {
+    serde_json::from_value(json!({
+        "selection": {
+            "default": "thinking",
+            "reasoning_enabled": "thinking",
+            "reasoning_disabled": "direct"
+        },
+        "profiles": {
+            "thinking": {
+                "max_tokens": 12000,
+                "temperature": 1.0,
+                "top_k": 20,
+                "presence_penalty": 1.5,
+                "reasoning": {"enabled": "on", "budget": "high"},
+                "provenance": {
+                    "source_repo": "vendor/model",
+                    "revision": "0123456789abcdef",
+                    "file": "README.md",
+                    "section": "Thinking",
+                    "url": "https://example.com/vendor/model/blob/0123456789abcdef/README.md"
+                }
+            },
+            "direct": {
+                "max_tokens": 4096,
+                "temperature": 0.7,
+                "top_k": 10,
+                "reasoning": {"enabled": "off", "budget": 0},
+                "provenance": {
+                    "source_repo": "vendor/model",
+                    "revision": "0123456789abcdef",
+                    "file": "README.md",
+                    "section": "Direct",
+                    "url": "https://example.com/vendor/model/blob/0123456789abcdef/README.md"
+                }
+            }
+        }
+    }))
+    .unwrap()
+}
+
+#[test]
+fn package_profile_fills_fields_without_overriding_request_or_operator_values() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "top_k": 7,
+        "reasoning_effort": "high"
+    }))
+    .unwrap();
+    let configured = EmbeddedOpenAiRequestDefaults {
+        temperature: Some(0.4),
+        package_request_defaults: Some(package_generation_defaults()),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+
+    let (resolved, diagnostics) = resolve_chat_request_defaults(&request, &configured).unwrap();
+    let mut request = request;
+    apply_chat_request_defaults(&mut request, &resolved).unwrap();
+
+    assert_eq!(
+        diagnostics.selected_package_profile.as_deref(),
+        Some("thinking")
+    );
+    assert_eq!(diagnostics.max_tokens_source, "package");
+    assert_eq!(diagnostics.reasoning_budget_source, "request");
+    assert_eq!(diagnostics.field_sources["top_k"], "request");
+    assert_eq!(diagnostics.field_sources["temperature"], "deployment");
+    assert_eq!(diagnostics.field_sources["presence_penalty"], "package");
+    assert_eq!(diagnostics.field_sources["typical_p"], "fallback");
+    assert_eq!(request.max_tokens, Some(12000));
+    assert_eq!(request.temperature, Some(0.4));
+    assert_eq!(request.extra.get("top_k"), Some(&json!(7)));
+    assert_eq!(request.presence_penalty, Some(1.5));
+}
+
+#[test]
+fn resolved_reasoning_mode_selects_direct_package_profile() {
+    for configured in [
+        EmbeddedOpenAiRequestDefaults {
+            reasoning_enabled: Some(EmbeddedReasoningEnabled::Disabled),
+            package_request_defaults: Some(package_generation_defaults()),
+            ..EmbeddedOpenAiRequestDefaults::default()
+        },
+        EmbeddedOpenAiRequestDefaults {
+            reasoning_budget: Some(EmbeddedReasoningBudget::Tokens(0)),
+            package_request_defaults: Some(package_generation_defaults()),
+            ..EmbeddedOpenAiRequestDefaults::default()
+        },
+    ] {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .unwrap();
+        let (resolved, diagnostics) = resolve_chat_request_defaults(&request, &configured).unwrap();
+        assert_eq!(
+            diagnostics.selected_package_profile.as_deref(),
+            Some("direct")
+        );
+        assert_eq!(resolved.max_tokens, Some(4096));
+        assert_eq!(resolved.temperature, Some(0.7));
+    }
+
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_effort": "none"
+    }))
+    .unwrap();
+    let configured = EmbeddedOpenAiRequestDefaults {
+        package_request_defaults: Some(package_generation_defaults()),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    let (resolved, diagnostics) = resolve_chat_request_defaults(&request, &configured).unwrap();
+    assert_eq!(
+        diagnostics.selected_package_profile.as_deref(),
+        Some("direct")
+    );
+    assert_eq!(resolved.max_tokens, Some(4096));
+    assert_eq!(diagnostics.reasoning_budget_source, "request");
+}
+
+#[test]
+fn legacy_completion_uses_direct_package_profile() {
+    let request: CompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "prompt": "hello"
+    }))
+    .unwrap();
+    let configured = EmbeddedOpenAiRequestDefaults {
+        package_request_defaults: Some(package_generation_defaults()),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+
+    let (resolved, diagnostics) = resolve_completion_request_defaults(&request, &configured);
+    assert_eq!(
+        diagnostics.selected_package_profile.as_deref(),
+        Some("direct")
+    );
+    assert_eq!(diagnostics.max_tokens_source, "package");
+    assert_eq!(diagnostics.reasoning_budget_source, "not_applicable");
+    assert_eq!(resolved.max_tokens, Some(4096));
+    assert_eq!(resolved.temperature, Some(0.7));
 }
 
 #[test]
@@ -101,7 +247,8 @@ fn typed_sampling_penalties_are_enabled() {
     }))
     .unwrap();
 
-    let sampling = chat_sampling_config(&request).unwrap();
+    let sampling =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert!(sampling.enabled);
     assert_eq!(sampling.presence_penalty, 1.0);
 }
@@ -115,7 +262,8 @@ fn extra_sampling_fields_are_enabled() {
     }))
     .unwrap();
 
-    let sampling = chat_sampling_config(&request).unwrap();
+    let sampling =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert!(sampling.enabled);
     assert_eq!(sampling.top_k, 40);
 }
@@ -129,9 +277,11 @@ fn ignore_eos_is_accepted_and_forwarded() {
     }))
     .unwrap();
 
-    let sampling = chat_sampling_config(&request).unwrap();
+    let mut sampling =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert!(sampling.enabled);
     assert!(sampling.ignore_eos);
+    sampling.resolve_reasoning_budget(4_096);
     let wire = wire_sampling_config(&sampling).unwrap();
     assert_ne!(
         wire.flags & skippy_protocol::binary::sampling_flags::IGNORE_EOS,
@@ -148,7 +298,8 @@ fn ignore_eos_rejects_non_boolean_values() {
     }))
     .unwrap();
 
-    let error = chat_sampling_config(&request).unwrap_err();
+    let error =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap_err();
     assert_eq!(error.body().error.code.as_deref(), Some("invalid_value"));
 }
 
@@ -162,7 +313,8 @@ fn request_defaults_fill_omitted_chat_fields_only() {
 
     apply_chat_request_defaults(&mut request, &test_request_defaults()).unwrap();
 
-    let sampling = chat_sampling_config(&request).unwrap();
+    let sampling =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(request.temperature, Some(0.2));
     assert_eq!(request.top_p, Some(0.9));
     assert_eq!(request.presence_penalty, Some(1.25));
@@ -318,7 +470,8 @@ fn explicit_chat_request_values_override_request_defaults() {
 
     apply_chat_request_defaults(&mut request, &test_request_defaults()).unwrap();
 
-    let sampling = chat_sampling_config(&request).unwrap();
+    let sampling =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert_eq!(request.temperature, Some(0.8));
     assert_eq!(request.top_p, Some(0.7));
     assert_eq!(request.presence_penalty, Some(0.1));
@@ -699,7 +852,8 @@ fn logit_bias_is_enabled() {
     }))
     .unwrap();
 
-    let sampling = chat_sampling_config(&request).unwrap();
+    let sampling =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert!(sampling.enabled);
     assert_eq!(sampling.logit_bias.len(), 2);
     assert_eq!(sampling.logit_bias[0].token_id, 123);
@@ -717,7 +871,8 @@ fn invalid_logit_bias_returns_openai_error() {
     }))
     .unwrap();
 
-    let error = chat_sampling_config(&request).unwrap_err();
+    let error =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap_err();
     assert_eq!(error.body().error.code.as_deref(), Some("invalid_value"));
 }
 
@@ -747,7 +902,8 @@ fn extended_sampling_fields_reach_runtime_sampling_config() {
     }))
     .unwrap();
 
-    let sampling = chat_sampling_config(&request).expect("extended sampling should normalize");
+    let sampling = chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default())
+        .expect("extended sampling should normalize");
     assert_eq!(sampling.typical_p, 0.73);
     assert_eq!(sampling.top_nsigma, 1.7);
     assert_eq!(sampling.dynatemp_range, 0.21);
@@ -792,7 +948,8 @@ fn min_p_is_accepted_and_forwarded() {
     }))
     .unwrap();
 
-    let sampling = chat_sampling_config(&request).unwrap();
+    let sampling =
+        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert!(sampling.enabled);
     assert_eq!(sampling.min_p, 0.1);
 }
@@ -849,7 +1006,10 @@ fn malformed_nested_sampling_values_are_rejected() {
         }))
         .unwrap();
 
-        assert!(chat_sampling_config(&request).is_err(), "field={field}");
+        assert!(
+            chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err(),
+            "field={field}"
+        );
     }
 }
 
@@ -886,7 +1046,8 @@ fn extended_sampling_boundaries_are_rejected_with_openai_errors() {
         );
         let request: ChatCompletionRequest = serde_json::from_value(body).unwrap();
 
-        let error = chat_sampling_config(&request).expect_err("invalid sampling control");
+        let error = chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default())
+            .expect_err("invalid sampling control");
         assert_eq!(error.body().error.code.as_deref(), Some("invalid_value"));
     }
 }
@@ -908,7 +1069,7 @@ fn malformed_sampler_controls_are_rejected() {
             .extend(payload.as_object().unwrap().clone());
         let request: ChatCompletionRequest = serde_json::from_value(body).unwrap();
 
-        assert!(chat_sampling_config(&request).is_err());
+        assert!(chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
     }
 }
 

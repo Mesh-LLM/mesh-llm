@@ -20,7 +20,8 @@
 //! * **Progress** is the only class that persists across passes: one
 //!   latest value per operation, exported at most once per
 //!   `PROGRESS_EXPORT_INTERVAL`. Everything in between is a superseded
-//!   snapshot and is counted as a drop rather than published.
+//!   snapshot and is counted as `coalesced_progress` rather than published;
+//!   it is not loss, because the newest value still publishes.
 
 use std::collections::HashMap;
 use std::time::Instant;

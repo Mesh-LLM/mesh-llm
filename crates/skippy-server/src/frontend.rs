@@ -26,6 +26,7 @@ mod request;
 mod sampling_cache_key;
 mod speculative;
 mod system_one;
+mod token_counting;
 mod tool_emulation;
 mod util;
 
@@ -70,6 +71,7 @@ pub use self::speculative::{
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
     SpeculativeDecodeConfig, VerifyWindowConfig,
 };
+pub use self::system_one::LayaSystemOneBackend;
 
 #[cfg(test)]
 mod tests;

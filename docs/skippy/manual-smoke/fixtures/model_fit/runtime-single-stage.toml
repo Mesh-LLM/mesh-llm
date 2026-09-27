@@ -6,7 +6,6 @@ batch = 64
 ubatch = 16
 cache_type_k = "f16"
 cache_type_v = "f16"
-kv_cache_policy = "balanced"
 kv_offload = "auto"
 prompt_cache = true
 swa_full = false

@@ -13,8 +13,9 @@ use super::{
     RuntimeResourcePlanningProfile, RuntimeSurface, SkippyNativeLogForwardingGuard,
     StartupLocalModelTask, StartupMeshCreationState, StartupModelPlan, StartupModelSpec,
     StartupReadyReporter, bridge_skippy_native_logs, build_serving_list, cli_has_explicit_models,
-    configure_skippy_native_logging, emit_configuration_ui_read_only_hint,
-    initialize_embedded_runtime_entrypoint, initialize_runtime_entrypoint,
+    configure_skippy_native_logging, configure_startup_lifecycle_log_parser,
+    emit_configuration_ui_read_only_hint, initialize_embedded_runtime_entrypoint,
+    initialize_runtime_entrypoint, kv_disk_config::configure_node_kv_disk_cache,
     maybe_discover_join_candidates, next_runtime_instance_id, nostr_rediscovery, nostr_relays,
     openai_guardrail_policy_handle, owner_runtime_config, prepare_runtime_startup,
     publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
@@ -282,7 +283,7 @@ pub(super) async fn run_runtime_cli(
     // publishes readiness well before the serving loops await the signal, so a
     // handler installed at loop entry can miss a SIGTERM that arrives in
     // between and leave the daemon running until it is killed (#1812).
-    super::shutdown_signal::install_shutdown_signals();
+    super::shutdown_signal::install_shutdown_signals()?;
 
     options.validate_discovery_mode_args()?;
 
@@ -298,11 +299,13 @@ pub(super) async fn run_runtime_cli(
     // Load config only to configure their optional audit sink; failures stay
     // nonfatal so they retain their early-return behavior.
     if options.local_model_only {
+        super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
         initialize_early_topology_audit_logging(&mut options)?;
         return run_local_model_only(options).await;
     }
 
     if let Some(name) = options.plugin.clone() {
+        super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
         initialize_early_topology_audit_logging(&mut options)?;
         return run_plugin_until_shutdown(name).await;
     }
@@ -353,6 +356,14 @@ pub(super) async fn run_runtime_cli(
         config.gpu.host_ram_offload.unwrap_or(false),
     );
     join_sources::validate_join_token_sources(&options)?;
+
+    let disk_cache = configure_node_kv_disk_cache(&config, &options)?;
+    for warning in &disk_cache.configured.warnings {
+        let _ = emit_event(OutputEvent::Warning {
+            message: warning.clone(),
+            context: None,
+        });
+    }
 
     initialize_audit_logging_for_options(&options)?;
 
@@ -756,33 +767,13 @@ pub(super) fn configure_run_auto_process_state(
     }
 
     let native_log_rx = skippy_runtime::register_filtered_native_logs();
-    let parser_mode = native_log_parser_mode(config.runtime.lifecycle_log_parser);
-    let capabilities = skippy_runtime::probe_capabilities();
-    skippy_runtime::configure_native_log_parser(skippy_runtime::NativeLogParserPolicy::new(
-        parser_mode,
-        &capabilities,
-    ));
-    tracing::info!(
-        source = config.runtime.lifecycle_log_parser_source.as_str(),
-        "configured lifecycle native-log parser"
+    configure_startup_lifecycle_log_parser(
+        config.runtime.lifecycle_log_parser,
+        config.runtime.lifecycle_log_parser_source.as_str(),
     );
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));
-}
-
-pub(super) fn native_log_parser_mode(
-    mode: mesh_llm_config::LifecycleLogParserMode,
-) -> skippy_runtime::NativeLogParserMode {
-    match mode {
-        mesh_llm_config::LifecycleLogParserMode::Auto => skippy_runtime::NativeLogParserMode::Auto,
-        mesh_llm_config::LifecycleLogParserMode::Enabled => {
-            skippy_runtime::NativeLogParserMode::Enabled
-        }
-        mesh_llm_config::LifecycleLogParserMode::Disabled => {
-            skippy_runtime::NativeLogParserMode::Disabled
-        }
-    }
 }
 
 /// Lift the soft open-file limit to the hard limit. A serving node holds a
@@ -956,6 +947,8 @@ pub(super) async fn start_run_auto_node_and_plugins(
     )
     .await?;
     node.set_plugin_manager(plugin_manager.clone()).await;
+    #[cfg(feature = "payments")]
+    crate::network::payments::spawn_payment_recovery(&node).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
 }
@@ -1674,6 +1667,8 @@ fn install_run_auto_runtime_event_stack_with_selector(
     let engine = crate::runtime_events::engine::RuntimeEventEngine::new();
     engine.set_progress_diagnostic_class_bypass(progress_diagnostic_class_bypass);
     crate::runtime_events::install_runtime_event_engine(engine.clone());
+    #[cfg(feature = "dynamic-native-runtime")]
+    crate::system::native_runtime_events::replay_deferred_resolution(&engine);
     // Task 3: the engine-owned driver is the process's one production
     // drain loop (defect D3 -- previously nothing but the presentation
     // subscriber's own tick ever drained anything, and that tick is now a
@@ -1742,6 +1737,10 @@ async fn run_auto_inner(
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
+    // Do not create the mesh node or detached role watchers until a slow
+    // termination-signal observer has either registered every required stream
+    // or reported a terminal registration failure.
+    super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
     super::node_lifecycle_events::emit_node_starting();
     // Stage-control starts accepting before eager model resolution. Register
     // every spelling that can become the model's runtime identity now so a
@@ -1870,6 +1869,7 @@ async fn run_auto_inner(
     }
 
     let interactive_started = Arc::new(AtomicBool::new(false));
+
     let RunAutoServingSurface {
         api_proxy_handle,
         console_server_handle,

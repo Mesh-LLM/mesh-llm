@@ -261,6 +261,22 @@ async fn native_reporter_keeps_rich_presentation_while_audit_stays_static() {
         .await
         .expect("startable logging service");
 
+    // The reporter below resolves the logging service from process-global state
+    // at call time, so draining the service captured here is only meaningful
+    // while that captured service is still the live global one. Assert it
+    // explicitly, so a retired or replaced global state reports itself instead
+    // of surfacing as an empty drain.
+    assert!(
+        Arc::ptr_eq(
+            &service,
+            &crate::logging_runtime_state()
+                .expect("logging runtime state")
+                .service_for_test()
+                .expect("global logging service"),
+        ),
+        "the captured service must still be the live global logging service"
+    );
+
     let sink = Arc::new(RecordingOutputSink::default());
     let _reset_guard = OutputSinkResetGuard;
     set_output_sink(sink.clone());

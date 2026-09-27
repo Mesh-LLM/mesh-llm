@@ -812,6 +812,9 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         mirostat_entropy: sampling.mirostat_entropy,
         mirostat_learning_rate: sampling.mirostat_learning_rate,
         samplers: sampling.samplers.clone(),
+        reasoning_budget: skippy_runtime::ReasoningBudget::Resolved(
+            sampling.reasoning_budget_tokens,
+        ),
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling
@@ -995,6 +998,8 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
             payload: StageKvCachePayload::ResidentKv,
             max_entries: 8,
             max_bytes: 0,
+            l2_max_bytes: 0,
+            codec: skippy_protocol::StageKvCacheCodec::Native,
             min_tokens: 256,
             shared_prefix_stride_tokens: 128,
             shared_prefix_record_limit: 2,

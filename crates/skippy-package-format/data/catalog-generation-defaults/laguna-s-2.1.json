@@ -1,0 +1,20 @@
+{
+  "selection": {
+    "default": "recommended"
+  },
+  "profiles": {
+    "recommended": {
+      "temperature": 1,
+      "top_p": 1,
+      "top_k": 20,
+      "min_p": 0,
+      "provenance": {
+        "source_repo": "poolside/Laguna-S-2.1",
+        "revision": "0f573140834b11cfac0c2af97a101a7a69a13e22",
+        "file": "generation_config.json",
+        "section": "Generation defaults",
+        "url": "https://huggingface.co/poolside/Laguna-S-2.1/blob/0f573140834b11cfac0c2af97a101a7a69a13e22/generation_config.json"
+      }
+    }
+  }
+}

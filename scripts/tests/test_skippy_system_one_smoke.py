@@ -536,7 +536,7 @@ class SystemOneCanaryWiringTests(unittest.TestCase):
         # independent verification pass, so both are covered.
         self.assertIn("run_candidate_gates() {", wrapper)
         self.assertIn("run_full_build || return 1", wrapper)
-        self.assertIn("if ! run_candidate_gates; then", wrapper)
+        self.assertIn("if run_candidate_gates; then", wrapper)
         # The verifier work dir must be re-derived under the verification root
         # so the smoke evidence lands inside the copied verification tree.
         materialize = wrapper[wrapper.index("materialize_verification_tree() {") :]

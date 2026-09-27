@@ -72,7 +72,7 @@ export const CONFIGURATION_DEFAULTS = {
     {
       id: 'memory',
       label: 'Memory',
-      summary: 'KV cache policy and fit headroom.',
+      summary: 'KV cache precision and fit headroom.',
       help: 'VRAM accounting and fit headroom'
     },
     {

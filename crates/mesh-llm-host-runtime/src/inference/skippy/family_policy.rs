@@ -9,7 +9,6 @@ const DEFAULT_PREFIX_CACHE_MAX_ENTRIES: usize = 512;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FamilyPolicy {
-    pub(crate) default_kv_cache_type: Option<&'static str>,
     pub(crate) prefix_cache: FamilyPrefixCachePolicy,
 }
 
@@ -54,6 +53,8 @@ impl FamilyPolicy {
             payload: StageKvCachePayload::Auto,
             max_entries: bounded_entries,
             max_bytes,
+            l2_max_bytes: 0,
+            codec: skippy_protocol::StageKvCacheCodec::Native,
             min_tokens,
             shared_prefix_stride_tokens: 128,
             shared_prefix_record_limit: derive_shared_prefix_record_limit(bounded_entries),
@@ -107,14 +108,8 @@ pub(crate) fn family_policy_for_model_path(path: impl AsRef<Path>) -> FamilyPoli
     generic_model_policy(metadata.as_ref())
 }
 
-fn generic_model_policy(meta: Option<&GgufCompactMeta>) -> FamilyPolicy {
-    // Inkling requires q4_0 native KV storage. This is read from the GGUF
-    // architecture field, never inferred from a repository or filename.
-    let default_kv_cache_type = meta
-        .is_some_and(|meta| meta.architecture == "inkling")
-        .then_some("q4_0");
+fn generic_model_policy(_meta: Option<&GgufCompactMeta>) -> FamilyPolicy {
     FamilyPolicy {
-        default_kv_cache_type,
         prefix_cache: FamilyPrefixCachePolicy::Auto {
             min_tokens: DEFAULT_PREFIX_CACHE_MIN_TOKENS,
             max_entries: DEFAULT_PREFIX_CACHE_MAX_ENTRIES,
@@ -244,18 +239,6 @@ mod tests {
                 .expect("generic cache policy");
             assert_eq!(cache.payload, StageKvCachePayload::Auto, "{model_id}");
         }
-    }
-
-    #[test]
-    fn gguf_architecture_only_controls_required_native_kv_storage_type() {
-        assert_eq!(
-            family_policy_for_compact_meta(&kv_meta("inkling")).default_kv_cache_type,
-            Some("q4_0")
-        );
-        assert_eq!(
-            family_policy_for_compact_meta(&kv_meta("nemotron_h_moe")).default_kv_cache_type,
-            None
-        );
     }
 
     #[test]

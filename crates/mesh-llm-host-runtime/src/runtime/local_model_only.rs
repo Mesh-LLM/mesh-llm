@@ -123,6 +123,8 @@ pub(super) async fn run_local_model_only(options: RuntimeOptions) -> Result<()> 
     } else {
         let engine = crate::runtime_events::engine::RuntimeEventEngine::new();
         crate::runtime_events::install_runtime_event_engine(engine.clone());
+        #[cfg(feature = "dynamic-native-runtime")]
+        crate::system::native_runtime_events::replay_deferred_resolution(&engine);
         Some(engine)
     };
     // Task 3: same engine-owned driver as the mesh-serve path in
@@ -527,6 +529,8 @@ mod tests {
             payload: StageKvCachePayload::Auto,
             max_entries: 8,
             max_bytes: 0,
+            l2_max_bytes: 0,
+            codec: skippy_protocol::StageKvCacheCodec::Native,
             min_tokens: 8,
             shared_prefix_stride_tokens: 8,
             shared_prefix_record_limit: 2,
