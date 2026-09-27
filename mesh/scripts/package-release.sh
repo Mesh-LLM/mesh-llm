@@ -112,40 +112,10 @@ create_archive() {
     local source_dir="$1"
     local archive_path="$2"
     local archive_kind="$3"
-    local py
-    py="$(python_bin)"
-
-    rm -f "$archive_path"
-    mkdir -p "$(dirname "$archive_path")"
-
-    "$py" - "$source_dir" "$archive_path" "$archive_kind" <<'PY'
-import os
-import sys
-import tarfile
-import zipfile
-
-source_dir, archive_path, archive_kind = sys.argv[1:4]
-base = os.path.basename(os.path.normpath(source_dir))
-root = os.path.dirname(os.path.normpath(source_dir))
-
-if archive_kind == "tar.gz":
-    with tarfile.open(archive_path, "w:gz") as tf:
-        tf.add(source_dir, arcname=base)
-elif archive_kind == "zip":
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for current_root, dirs, files in os.walk(source_dir):
-            dirs.sort()
-            files.sort()
-            rel_root = os.path.relpath(current_root, root)
-            if rel_root != ".":
-                zf.write(current_root, rel_root)
-            for filename in files:
-                path = os.path.join(current_root, filename)
-                rel = os.path.relpath(path, root)
-                zf.write(path, rel)
-else:
-    raise SystemExit(f"unsupported archive kind: {archive_kind}")
-PY
+    if [[ "$archive_path" != /* ]]; then
+        archive_path="$PWD/$archive_path"
+    fi
+    (cd "$REPO_ROOT" && cargo xtool product archive-write "$source_dir" "$archive_path" "$archive_kind")
 }
 
 write_checksum_sidecar() {
@@ -601,9 +571,7 @@ main() {
     fi
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
-    write_checksum_sidecar "$output_dir/$versioned_asset"
     create_archive "$bundle_dir" "$output_dir/$STABLE_ASSET" "$ARCHIVE_EXT"
-    write_checksum_sidecar "$output_dir/$STABLE_ASSET"
 
     echo "Created release archives:"
     find "$output_dir" -maxdepth 1 -type f -print | sort
