@@ -82,7 +82,8 @@ static DELIVERY: OnceLock<Arc<ShutdownDelivery>> = OnceLock::new();
 static INSTALL: Mutex<InstallState> = Mutex::new(InstallState {
     delivery: None,
     starting: None,
-    partial_failure: None,
+    terminal_failure: None,
+    startup_gate_bypassed: false,
 });
 
 /// Keep one channel across startup attempts so waiters also observe a
@@ -90,15 +91,23 @@ static INSTALL: Mutex<InstallState> = Mutex::new(InstallState {
 struct InstallState {
     delivery: Option<Arc<ShutdownDelivery>>,
     starting: Option<mpsc::Receiver<Result<(), ForwarderStartFailure>>>,
-    /// A partial observer remains process-live after reporting that one of the
-    /// required streams could not be registered. Keep the failure sticky so a
-    /// later runtime entrypoint does not spawn a duplicate observer.
-    partial_failure: Option<String>,
+    /// Registration and forwarder-channel failures are terminal for this
+    /// process. Retain them so retries cannot spawn duplicate observers.
+    terminal_failure: Option<StoredInstallFailure>,
+    /// Failure to spawn the observer thread preserves the historical fallback
+    /// behavior instead of refusing startup. Keep that decision sticky too, so
+    /// readiness does not spin and later waiters do not retry in a tight loop.
+    startup_gate_bypassed: bool,
 }
 
 struct ForwarderStartFailure {
     cause: String,
     observer_active: bool,
+}
+
+struct StoredInstallFailure {
+    kind: io::ErrorKind,
+    cause: String,
 }
 
 /// Register the process termination-signal handlers once.
@@ -113,13 +122,16 @@ pub(crate) fn install_shutdown_signals() -> io::Result<()> {
         installation.starting = None;
         return Ok(());
     }
-    if let Some(error) = retained_partial_failure(&installation) {
+    if let Some(error) = retained_terminal_failure(&installation) {
         return Err(error);
+    }
+    if installation.startup_gate_bypassed {
+        return Ok(());
     }
     match forwarder_start_state(&mut installation)? {
         ForwarderStartState::Idle => {}
         ForwarderStartState::Starting => {
-            tracing::warn!(
+            tracing::debug!(
                 "termination-signal forwarder is still starting; retaining the late observer"
             );
             return Ok(());
@@ -134,6 +146,13 @@ pub(crate) fn install_shutdown_signals() -> io::Result<()> {
     let forwarder = std::thread::Builder::new()
         .name(FORWARDER_THREAD_NAME.to_owned())
         .spawn(move || run_shutdown_forwarder(delivery, started_tx));
+    let forwarder = match forwarder {
+        Ok(forwarder) => forwarder,
+        Err(error) => {
+            record_nonfatal_spawn_failure(&mut installation, error);
+            return Ok(());
+        }
+    };
     wait_for_forwarder_start(&mut installation, forwarder, started_rx)
 }
 
@@ -147,7 +166,8 @@ pub(crate) async fn wait_for_shutdown_signal_installation() -> io::Result<()> {
     wait_for_shutdown_signal_installation_with(
         || {
             install_shutdown_signals()?;
-            Ok(DELIVERY.get().is_some())
+            let installation = INSTALL.lock().unwrap_or_else(PoisonError::into_inner);
+            Ok(DELIVERY.get().is_some() || installation.startup_gate_bypassed)
         },
         FORWARDER_STATUS_POLL_INTERVAL,
     )
@@ -191,9 +211,11 @@ fn forwarder_start_state(installation: &mut InstallState) -> io::Result<Forwarde
         }
         Err(mpsc::TryRecvError::Disconnected) => {
             installation.starting = None;
-            Err(io::Error::new(
+            Err(retain_install_failure(
+                installation,
                 io::ErrorKind::BrokenPipe,
                 "termination-signal forwarder exited before registering its signal streams",
+                false,
             ))
         }
     }
@@ -202,12 +224,12 @@ fn forwarder_start_state(installation: &mut InstallState) -> io::Result<Forwarde
 /// Bound the synchronous install wait without abandoning late signal delivery.
 fn wait_for_forwarder_start(
     installation: &mut InstallState,
-    forwarder: io::Result<std::thread::JoinHandle<()>>,
+    forwarder: std::thread::JoinHandle<()>,
     started: mpsc::Receiver<Result<(), ForwarderStartFailure>>,
 ) -> io::Result<()> {
     // Detached on purpose: the forwarder observes signals for the life of the
     // process, and an unjoined thread does not hold the process open.
-    let _forwarder = forwarder?;
+    let _forwarder = forwarder;
     record_forwarder_start_result(installation, started, FORWARDER_START_TIMEOUT)
 }
 
@@ -220,9 +242,11 @@ fn record_forwarder_start_result(
     match started.recv_timeout(timeout) {
         Ok(Ok(())) => Ok(()),
         Ok(Err(failure)) => Err(retain_forwarder_failure(installation, failure)),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(retain_install_failure(
+            installation,
             io::ErrorKind::BrokenPipe,
             "termination-signal forwarder exited before registering its signal streams",
+            false,
         )),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             installation.starting = Some(started);
@@ -239,17 +263,46 @@ fn retain_forwarder_failure(
     installation: &mut InstallState,
     failure: ForwarderStartFailure,
 ) -> io::Error {
-    if failure.observer_active {
-        installation.partial_failure = Some(failure.cause.clone());
-    }
-    io::Error::other(failure.cause)
+    retain_install_failure(
+        installation,
+        io::ErrorKind::Other,
+        failure.cause,
+        failure.observer_active,
+    )
 }
 
-fn retained_partial_failure(installation: &InstallState) -> Option<io::Error> {
+fn retain_install_failure(
+    installation: &mut InstallState,
+    kind: io::ErrorKind,
+    cause: impl Into<String>,
+    observer_active: bool,
+) -> io::Error {
+    let cause = cause.into();
+    if observer_active {
+        tracing::debug!(
+            "retaining the partial termination-signal observer after registration failure"
+        );
+    }
+    installation.terminal_failure = Some(StoredInstallFailure {
+        kind,
+        cause: cause.clone(),
+    });
+    io::Error::new(kind, cause)
+}
+
+fn record_nonfatal_spawn_failure(installation: &mut InstallState, error: io::Error) {
+    installation.startup_gate_bypassed = true;
+    tracing::warn!(
+        %error,
+        "could not start the termination-signal forwarder; retaining the platform fallback"
+    );
+}
+
+fn retained_terminal_failure(installation: &InstallState) -> Option<io::Error> {
     installation
-        .partial_failure
+        .terminal_failure
         .as_ref()
-        .map(|cause| io::Error::other(cause.clone()))
+        .map(|failure| io::Error::new(failure.kind, failure.cause.clone()))
 }
 
 /// Wait for a termination signal, including one delivered before this call.
@@ -332,23 +385,16 @@ fn run_shutdown_forwarder(
         let signals = match TerminationSignals::register() {
             Ok(signals) => signals,
             Err(failure) => {
-                let cause = format!("could not register signal streams: {}", failure.error);
-                let Some(signals) = failure.signals else {
-                    let _ = started.send(Err(ForwarderStartFailure {
-                        cause,
-                        observer_active: false,
-                    }));
+                let (failure, signals) = classify_registration_failure(failure);
+                let _ = started.send(Err(failure));
+                let Some(signals) = signals else {
                     return;
                 };
                 // A successfully registered SIGINT listener must stay alive
-                // even when SIGTERM registration fails. Publish the partial
-                // observer for shutdown waiters, while reporting the failure
-                // to the startup path so it can refuse readiness.
+                // even when SIGTERM registration fails. Keep the partial
+                // observer on the pending delivery channel while reporting the
+                // failure to the startup path so it can refuse readiness.
                 let sender = delivery.sender.clone();
-                let _ = started.send(Err(ForwarderStartFailure {
-                    cause,
-                    observer_active: true,
-                }));
                 forward_shutdown_signals(signals, &sender).await;
                 return;
             }
@@ -361,6 +407,21 @@ fn run_shutdown_forwarder(
         forward_shutdown_signals(signals, &sender).await;
     });
 }
+
+fn classify_registration_failure(
+    failure: SignalRegistrationFailure,
+) -> (ForwarderStartFailure, Option<TerminationSignals>) {
+    let cause = format!("could not register signal streams: {}", failure.error);
+    let observer_active = failure.signals.is_some();
+    (
+        ForwarderStartFailure {
+            cause,
+            observer_active,
+        },
+        failure.signals,
+    )
+}
+
 async fn forward_shutdown_signals(
     mut signals: TerminationSignals,
     sender: &watch::Sender<Option<&'static str>>,
@@ -487,7 +548,8 @@ mod tests {
         let mut installation = InstallState {
             delivery: None,
             starting: None,
-            partial_failure: None,
+            terminal_failure: None,
+            startup_gate_bypassed: false,
         };
         let (_started_tx, started_rx) = mpsc::channel();
         record_forwarder_start_result(&mut installation, started_rx, Duration::from_millis(10))
@@ -500,7 +562,8 @@ mod tests {
         let mut installation = InstallState {
             delivery: None,
             starting: None,
-            partial_failure: None,
+            terminal_failure: None,
+            startup_gate_bypassed: false,
         };
         let (started_tx, started_rx) = mpsc::channel();
         started_tx.send(Ok(())).expect("the receiver is open");
@@ -518,7 +581,8 @@ mod tests {
         let mut installation = InstallState {
             delivery: None,
             starting: None,
-            partial_failure: None,
+            terminal_failure: None,
+            startup_gate_bypassed: false,
         };
         let (started_tx, started_rx) = mpsc::channel();
         started_tx
@@ -533,6 +597,9 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::Other);
         assert!(error.to_string().contains("could not register SIGTERM"));
         assert!(installation.starting.is_none());
+        let retry = retained_terminal_failure(&installation)
+            .expect("a hard registration failure must remain sticky");
+        assert_eq!(retry.kind(), io::ErrorKind::Other);
     }
 
     #[test]
@@ -540,7 +607,8 @@ mod tests {
         let mut installation = InstallState {
             delivery: None,
             starting: None,
-            partial_failure: None,
+            terminal_failure: None,
+            startup_gate_bypassed: false,
         };
         let (started_tx, started_rx) = mpsc::channel();
         started_tx
@@ -554,16 +622,62 @@ mod tests {
         let first = forwarder_start_state(&mut installation)
             .expect_err("the partial registration failure must reach startup");
         assert_eq!(first.kind(), io::ErrorKind::Other);
-        assert_eq!(
-            installation.partial_failure.as_deref(),
-            Some("could not register SIGTERM")
-        );
+        let retained = installation
+            .terminal_failure
+            .as_ref()
+            .expect("the partial failure is retained");
+        assert_eq!(retained.cause, "could not register SIGTERM");
         assert!(installation.starting.is_none());
 
-        let retry = retained_partial_failure(&installation)
+        let retry = retained_terminal_failure(&installation)
             .expect("a retry must reuse the retained partial observer failure");
         assert_eq!(retry.kind(), io::ErrorKind::Other);
         assert!(retry.to_string().contains("could not register SIGTERM"));
+    }
+
+    #[test]
+    fn a_thread_spawn_failure_keeps_startup_on_the_platform_fallback() {
+        let mut installation = InstallState {
+            delivery: None,
+            starting: None,
+            terminal_failure: None,
+            startup_gate_bypassed: false,
+        };
+        record_nonfatal_spawn_failure(
+            &mut installation,
+            io::Error::from(io::ErrorKind::WouldBlock),
+        );
+
+        assert!(installation.startup_gate_bypassed);
+        assert!(installation.terminal_failure.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_sigint_only_registration_failure_retains_and_forwards_the_partial_observer() {
+        let interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("register the test SIGINT stream");
+        let (failure, signals) = classify_registration_failure(SignalRegistrationFailure {
+            error: io::Error::new(io::ErrorKind::PermissionDenied, "SIGTERM unavailable"),
+            signals: Some(TerminationSignals {
+                interrupt,
+                terminate: None,
+            }),
+        });
+
+        assert!(failure.observer_active);
+        assert!(failure.cause.contains("SIGTERM unavailable"));
+        let mut signals = signals.expect("the registered SIGINT stream remains owned");
+        assert!(signals.terminate.is_none());
+
+        // SAFETY: `raise` sends SIGINT to this process only, whose handler was
+        // registered above. This exercises the SIGINT-only `recv` branch that
+        // remains alive after the synthetic SIGTERM registration failure.
+        unsafe { libc::raise(libc::SIGINT) };
+        let observed = tokio::time::timeout(Duration::from_secs(5), signals.recv())
+            .await
+            .expect("the retained SIGINT-only observer must forward its signal");
+        assert_eq!(observed, "SIGINT");
     }
 
     #[tokio::test]

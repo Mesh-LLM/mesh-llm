@@ -1737,6 +1737,10 @@ async fn run_auto_inner(
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
+    // Do not create the mesh node or detached role watchers until a slow
+    // termination-signal observer has either registered every required stream
+    // or reported a terminal registration failure.
+    super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
     super::node_lifecycle_events::emit_node_starting();
     // Stage-control starts accepting before eager model resolution. Register
     // every spelling that can become the model's runtime identity now so a
@@ -1865,10 +1869,6 @@ async fn run_auto_inner(
     }
 
     let interactive_started = Arc::new(AtomicBool::new(false));
-    // A slow signal observer may finish while the rest of startup proceeds,
-    // but no ready endpoint may be published until that observer has either
-    // registered every required stream or reported its failure.
-    super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
 
     let RunAutoServingSurface {
         api_proxy_handle,
