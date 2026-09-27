@@ -299,11 +299,13 @@ pub(super) async fn run_runtime_cli(
     // Load config only to configure their optional audit sink; failures stay
     // nonfatal so they retain their early-return behavior.
     if options.local_model_only {
+        super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
         initialize_early_topology_audit_logging(&mut options)?;
         return run_local_model_only(options).await;
     }
 
     if let Some(name) = options.plugin.clone() {
+        super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
         initialize_early_topology_audit_logging(&mut options)?;
         return run_plugin_until_shutdown(name).await;
     }
@@ -1863,6 +1865,11 @@ async fn run_auto_inner(
     }
 
     let interactive_started = Arc::new(AtomicBool::new(false));
+    // A slow signal observer may finish while the rest of startup proceeds,
+    // but no ready endpoint may be published until that observer has either
+    // registered every required stream or reported its failure.
+    super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
+
     let RunAutoServingSurface {
         api_proxy_handle,
         console_server_handle,
