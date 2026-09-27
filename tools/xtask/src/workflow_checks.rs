@@ -562,6 +562,123 @@ const RELEASE_SCCACHE_INITIALIZATION: &[&str] = &[
     "uses: ./.github/actions/configure-sccache-gha",
 ];
 
+#[derive(Clone, Copy)]
+struct WorkflowStep<'a> {
+    source: &'a str,
+    offset: usize,
+}
+
+fn workflow_steps(job: &str) -> Vec<WorkflowStep<'_>> {
+    let mut steps = Vec::new();
+    let Some(steps_header) = job.find("    steps:\n") else {
+        return steps;
+    };
+    let body_start = steps_header + "    steps:\n".len();
+    let body = &job[body_start..];
+    let mut current_start = None;
+    let mut offset = body_start;
+
+    for line in body.split_inclusive('\n') {
+        if line.starts_with("      - ")
+            && let Some(start) = current_start.replace(offset)
+        {
+            steps.push(WorkflowStep {
+                source: &job[start..offset],
+                offset: start,
+            });
+        }
+        offset += line.len();
+    }
+    if let Some(start) = current_start {
+        steps.push(WorkflowStep {
+            source: &job[start..],
+            offset: start,
+        });
+    }
+    steps
+}
+
+fn yaml_property<'a>(scope: &'a str, indentation: usize, name: &str) -> Option<&'a str> {
+    let prefix = format!("{}{name}:", " ".repeat(indentation));
+    scope.lines().find_map(|line| {
+        line.strip_prefix(&prefix)
+            .map(|value| value.split(" #").next().unwrap_or(value).trim())
+    })
+}
+
+fn yaml_mapping_value<'a>(
+    scope: &'a str,
+    mapping_indentation: usize,
+    mapping_name: &str,
+    key: &str,
+) -> Option<&'a str> {
+    let mapping = format!("{}{mapping_name}:", " ".repeat(mapping_indentation));
+    let entry = format!("{}{key}:", " ".repeat(mapping_indentation + 2));
+    let mut in_mapping = false;
+
+    for line in scope.lines() {
+        if line == mapping {
+            in_mapping = true;
+            continue;
+        }
+        if !in_mapping {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix(&entry) {
+            return Some(value.split(" #").next().unwrap_or(value).trim());
+        }
+        let indentation = line.len() - line.trim_start().len();
+        if !line.trim().is_empty()
+            && !line.trim_start().starts_with('#')
+            && indentation <= mapping_indentation
+        {
+            break;
+        }
+    }
+    None
+}
+
+fn yaml_true(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value.trim_matches(['\'', '"']) == "true")
+}
+
+fn effective_step_env<'a>(job: &'a str, step: &'a str, key: &str) -> Option<&'a str> {
+    let job_prelude = job.split("    steps:\n").next().unwrap_or(job);
+    yaml_mapping_value(step, 8, "env", key)
+        .or_else(|| yaml_mapping_value(job_prelude, 4, "env", key))
+}
+
+fn normalize_condition(condition: &str) -> String {
+    condition
+        .trim()
+        .strip_prefix("${{")
+        .and_then(|condition| condition.strip_suffix("}}"))
+        .unwrap_or(condition.trim())
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn setup_condition_covers_cargo(setup: Option<&str>, cargo: Option<&str>) -> bool {
+    let setup = setup.map(normalize_condition);
+    let cargo = cargo.map(normalize_condition);
+    match (setup.as_deref(), cargo.as_deref()) {
+        (Some("always()"), _) | (None, None) => true,
+        (Some(setup), Some(cargo)) if setup == cargo => true,
+        (None | Some("success()"), Some(cargo)) => !["always()", "failure()", "cancelled()"]
+            .iter()
+            .any(|status| cargo.contains(status)),
+        _ => false,
+    }
+}
+
+fn step_without_comments(step: &str) -> String {
+    step.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// A hosted Ubuntu job starts without the repository's pinned runner image, so
 /// it must install sccache before configuring its cache backend. Derive this
 /// from the job instead of maintaining a name allowlist that a new job can
@@ -629,10 +746,11 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
     for job_name in workflow_job_names(release_workflow) {
         let job = workflow_job_section(release_workflow, &job_name)
             .ok_or_else(|| format!("release workflow: unable to read `{job_name}` job"))?;
+        let job_steps = workflow_steps(job);
         // Comments and step names may mention cargo without running it.
-        let steps = job
-            .lines()
-            .filter(|line| !line.trim_start().starts_with('#'))
+        let steps = job_steps
+            .iter()
+            .map(|step| step_without_comments(step.source))
             .collect::<Vec<_>>()
             .join("\n");
         let mut cargo_invocations = RELEASE_CARGO_INVOCATIONS
@@ -645,15 +763,20 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
         }
         if RELEASE_COMPOSITION_ONLY_JOBS.contains(&job_name.as_str()) {
             if cargo_invocations.contains(&"scripts/package-release.sh") {
-                for guard in [
-                    "MESH_RELEASE_HOST_PRESTAMPED: \"1\"",
-                    "MESH_RELEASE_ATTESTATION_PREVERIFIED: \"1\"",
-                ] {
-                    if !steps.contains(guard) {
-                        return Err(format!(
-                            "release workflow `{job_name}` runs scripts/package-release.sh without the cargo-bypass guard `{guard}`"
-                        )
-                        .into());
+                for package_step in job_steps.iter().filter(|step| {
+                    step_without_comments(step.source).contains("scripts/package-release.sh")
+                }) {
+                    for guard in [
+                        "MESH_RELEASE_HOST_PRESTAMPED",
+                        "MESH_RELEASE_ATTESTATION_PREVERIFIED",
+                    ] {
+                        let value = effective_step_env(job, package_step.source, guard);
+                        if value.map(|value| value.trim_matches(['\'', '"'])) != Some("1") {
+                            return Err(format!(
+                                "release workflow `{job_name}` runs scripts/package-release.sh without the effective cargo-bypass guard `{guard}: \"1\"` on that package step"
+                            )
+                            .into());
+                        }
                     }
                 }
                 cargo_invocations.retain(|invocation| *invocation != "scripts/package-release.sh");
@@ -676,20 +799,40 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
             .map(|invocation| invocation.trim())
             .collect::<Vec<_>>()
             .join(", ");
-        let first_cargo_invocation = RELEASE_CARGO_INVOCATIONS
+        let cargo_steps = job_steps
             .iter()
-            .filter_map(|invocation| steps.find(invocation))
-            .min()
+            .filter(|step| {
+                let step = step_without_comments(step.source);
+                RELEASE_CARGO_INVOCATIONS
+                    .iter()
+                    .any(|invocation| step.contains(invocation))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        let first_cargo_step = cargo_steps
+            .first()
             .expect("a cargo invocation was found above");
         let initialized_before_cargo = RELEASE_SCCACHE_INITIALIZATION
             .iter()
             .filter_map(|marker| {
-                steps
-                    .find(marker)
-                    .filter(|position| *position < first_cargo_invocation)
-                    .map(|position| (*marker, position))
+                job_steps
+                    .iter()
+                    .find(|step| {
+                        step.offset < first_cargo_step.offset && step.source.contains(marker)
+                    })
+                    .map(|step| (*marker, step.offset, step.source))
             })
             .collect::<Vec<_>>();
+        let workflow_prelude = release_workflow.split("jobs:\n").next().unwrap_or_default();
+        let job_prelude = job.split("    steps:\n").next().unwrap_or(job);
+        if yaml_true(yaml_property(workflow_prelude, 0, "continue-on-error"))
+            || yaml_true(yaml_property(job_prelude, 4, "continue-on-error"))
+        {
+            return Err(format!(
+                "release workflow `{job_name}` suppresses failures around required sccache initialization"
+            )
+            .into());
+        }
         if release_job_requires_hosted_sccache_setup(job) {
             // Presence is not enough for a hosted job: the installer has to run
             // before the action that starts a server from the installed binary.
@@ -697,8 +840,8 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
             for marker in RELEASE_SCCACHE_INITIALIZATION {
                 let found = initialized_before_cargo
                     .iter()
-                    .find(|(initialized_marker, _)| *initialized_marker == *marker);
-                let Some((_, position)) = found else {
+                    .find(|(initialized_marker, _, _)| *initialized_marker == *marker);
+                let Some((_, position, setup_step)) = found else {
                     return Err(format!(
                         "release workflow `{job_name}` invokes {invocation_list} before required sccache initialization `{marker}`"
                     )
@@ -712,6 +855,24 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
                     )
                     .into());
                 }
+                if yaml_true(yaml_property(setup_step, 8, "continue-on-error")) {
+                    return Err(format!(
+                        "release workflow `{job_name}` suppresses failures from required sccache initialization `{marker}`"
+                    )
+                    .into());
+                }
+                let setup_condition = yaml_property(setup_step, 8, "if");
+                for cargo_step in &cargo_steps {
+                    let cargo_condition = yaml_property(cargo_step.source, 8, "if");
+                    if !setup_condition_covers_cargo(setup_condition, cargo_condition) {
+                        return Err(format!(
+                            "release workflow `{job_name}` can run a Cargo step with condition `{}` while required sccache initialization `{marker}` has condition `{}`",
+                            cargo_condition.unwrap_or("success()"),
+                            setup_condition.unwrap_or("success()")
+                        )
+                        .into());
+                    }
+                }
                 previous = Some((*marker, *position));
             }
         } else if initialized_before_cargo.is_empty() {
@@ -720,6 +881,27 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
                 "release workflow `{job_name}` invokes {invocation_list} before any required sccache initialization (`{marker}`)"
             )
             .into());
+        } else {
+            for (marker, _, setup_step) in &initialized_before_cargo {
+                if yaml_true(yaml_property(setup_step, 8, "continue-on-error")) {
+                    return Err(format!(
+                        "release workflow `{job_name}` suppresses failures from required sccache initialization `{marker}`"
+                    )
+                    .into());
+                }
+                let setup_condition = yaml_property(setup_step, 8, "if");
+                for cargo_step in &cargo_steps {
+                    let cargo_condition = yaml_property(cargo_step.source, 8, "if");
+                    if !setup_condition_covers_cargo(setup_condition, cargo_condition) {
+                        return Err(format!(
+                            "release workflow `{job_name}` can run a Cargo step with condition `{}` while required sccache initialization `{marker}` has condition `{}`",
+                            cargo_condition.unwrap_or("success()"),
+                            setup_condition.unwrap_or("success()")
+                        )
+                        .into());
+                    }
+                }
+            }
         }
     }
 
@@ -1504,10 +1686,87 @@ jobs:
         let error = check_release_sccache_initialization(&workflow).unwrap_err();
         assert!(
             error.to_string().contains(
-                "`compose_linux_cuda` runs scripts/package-release.sh without the cargo-bypass guard"
+                "`compose_linux_cuda` runs scripts/package-release.sh without the effective cargo-bypass guard"
             ),
             "{error}"
         );
+    }
+
+    #[test]
+    fn release_sccache_initialization_rejects_package_guards_on_an_unrelated_step() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
+            "      - uses: ./.github/actions/compose-product-input\n",
+            "      - name: Unrelated guarded step\n        env:\n          MESH_RELEASE_HOST_PRESTAMPED: \"1\"\n          MESH_RELEASE_ATTESTATION_PREVERIFIED: \"1\"\n        run: echo unrelated\n      - name: Package release\n        run: scripts/package-release.sh dist/product\n",
+        );
+
+        let error = check_release_sccache_initialization(&workflow).unwrap_err();
+        assert!(
+            error.to_string().contains("effective cargo-bypass guard"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn release_sccache_initialization_accepts_effective_job_package_guards() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
+            "  compose_linux_cuda:\n    runs-on: ubuntu-24.04\n",
+            "  compose_linux_cuda:\n    runs-on: ubuntu-24.04\n    env:\n      MESH_RELEASE_HOST_PRESTAMPED: \"1\"\n      MESH_RELEASE_ATTESTATION_PREVERIFIED: \"1\"\n",
+        ).replace(
+            "      - uses: ./.github/actions/compose-product-input\n",
+            "      - name: Package release\n        run: scripts/package-release.sh dist/product\n",
+        );
+
+        check_release_sccache_initialization(&workflow).unwrap();
+    }
+
+    #[test]
+    fn release_sccache_initialization_rejects_a_narrower_setup_condition() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
+            "      - uses: mozilla-actions/sccache-action@v0\n",
+            "      - uses: mozilla-actions/sccache-action@v0\n        if: false\n",
+        );
+
+        let error = check_release_sccache_initialization(&workflow).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "can run a Cargo step with condition `success()` while required sccache initialization `uses: mozilla-actions/sccache-action` has condition `false`"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn release_sccache_initialization_accepts_matching_setup_and_cargo_conditions() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
+            "      - uses: mozilla-actions/sccache-action@v0\n      - uses: ./.github/actions/configure-sccache-gha\n      - name: Prepare dispatched release tag\n        run: scripts/release-version.sh \"$RELEASE_TAG\"\n",
+            "      - uses: mozilla-actions/sccache-action@v0\n        if: github.event_name == 'workflow_dispatch'\n      - uses: ./.github/actions/configure-sccache-gha\n        if: ${{ github.event_name == 'workflow_dispatch' }}\n      - name: Prepare dispatched release tag\n        if: github.event_name == 'workflow_dispatch'\n        run: scripts/release-version.sh \"$RELEASE_TAG\"\n",
+        );
+
+        check_release_sccache_initialization(&workflow).unwrap();
+    }
+
+    #[test]
+    fn release_sccache_initialization_rejects_failure_suppression_at_each_scope() {
+        for workflow in [
+            VALID_SCCACHE_INITIALIZATION_WORKFLOW.replacen(
+                "jobs:\n",
+                "continue-on-error: true\njobs:\n",
+                1,
+            ),
+            VALID_SCCACHE_INITIALIZATION_WORKFLOW.replacen(
+                "  metadata:\n",
+                "  metadata:\n    continue-on-error: true\n",
+                1,
+            ),
+            VALID_SCCACHE_INITIALIZATION_WORKFLOW.replacen(
+                "      - uses: mozilla-actions/sccache-action@v0\n",
+                "      - uses: mozilla-actions/sccache-action@v0\n        continue-on-error: true\n",
+                1,
+            ),
+        ] {
+            let error = check_release_sccache_initialization(&workflow).unwrap_err();
+            assert!(error.to_string().contains("suppresses failures"), "{error}");
+        }
     }
 
     #[test]
