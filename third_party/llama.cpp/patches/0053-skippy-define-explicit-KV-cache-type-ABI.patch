@@ -1,0 +1,46 @@
+From cc96726534d17c6eedf8dc97328ec697d9a0075c Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 28 Sep 2026 05:35:30 +1000
+Subject: [PATCH] skippy: define explicit KV cache type ABI
+
+Declare the ABI boundary for the explicit KV cache type contract: 0 selects
+F32, a positive value selects that ggml type, and a negative value keeps
+llama.cpp's derived default. Document the contract beside the public
+skippy_runtime_config fields.
+
+The boundary changes what an existing field value means, so a native runtime
+built before this contract must not be admitted by a host built after it.
+---
+ include/skippy/common.h  | 2 +-
+ include/skippy/runtime.h | 2 ++
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index f2628a7da..149989b1f 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 63
++#define SKIPPY_ABI_VERSION_PATCH 64
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index b0881ead6..781572706 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -54,6 +54,8 @@ struct skippy_runtime_config {
+     bool has_mmap_override;
+     bool use_mmap;
+     bool use_mlock;
++    // Cache types: 0 selects F32, a positive value selects that ggml type,
++    // and a negative value keeps llama.cpp's derived default.
+     int32_t cache_type_k;
+     int32_t cache_type_v;
+     int32_t flash_attn_type;
+-- 
+2.54.0 (Apple Git-157)
+
