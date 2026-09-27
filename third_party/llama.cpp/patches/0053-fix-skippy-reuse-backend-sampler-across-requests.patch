@@ -1,18 +1,18 @@
-From 7347f74d5fdc123c38652542736d25b0979c89bf Mon Sep 17 00:00:00 2001
+From 6715e250780ba6a8baecf8310f9fc7945ee95ddf Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 27 Sep 2026 16:49:17 +1000
 Subject: [PATCH] fix(skippy): reuse backend sampler across requests
 
 ---
- src/CMakeLists.txt                  |  4 +-
- src/llama-context.cpp               |  7 +++
- src/llama-context.h                 |  4 ++
- src/skippy/sampling.cpp             | 52 +++++++++++++++---
- src/skippy/session.cpp              | 18 +++---
- src/skippy/tests/runtime_events.cpp | 85 ++++++++++++++++++++++++++++-
- src/skippy/workloads.cpp            | 12 +++-
- src/skippy/workloads_internal.h     |  8 +++
- 8 files changed, 168 insertions(+), 22 deletions(-)
+ src/CMakeLists.txt                  |   4 +-
+ src/llama-context.cpp               |   7 ++
+ src/llama-context.h                 |   4 +
+ src/skippy/sampling.cpp             |  54 +++++++++--
+ src/skippy/session.cpp              |  18 ++--
+ src/skippy/tests/runtime_events.cpp | 137 +++++++++++++++++++++++++++-
+ src/skippy/workloads.cpp            |  12 ++-
+ src/skippy/workloads_internal.h     |   8 ++
+ 8 files changed, 221 insertions(+), 23 deletions(-)
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
@@ -78,7 +78,7 @@ index 9f957033e..f4e14c769 100644
      ggml_backend_t backend_cpu = nullptr;
      std::vector<ggml_backend_ptr> backends;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 99d9731cf..a272aaf3a 100644
+index 99d9731cf..e68c8f068 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -135,6 +135,16 @@ enum skippy_status skippy_verify_token_batch(
@@ -98,6 +98,15 @@ index 99d9731cf..a272aaf3a 100644
      const int32_t n_tokens = static_cast<int32_t>(token_count);
      llama_batch batch = llama_batch_init(n_tokens, 0, 1);
      batch.n_tokens = n_tokens;
+@@ -311,7 +321,7 @@ void skippy_clear_chat_sampling(skippy_session * session) {
+     if (session == nullptr) {
+         return;
+     }
+-    if (session->ctx != nullptr) {
++    if (session->ctx != nullptr && session->sampling_backend_enabled) {
+         llama_set_sampler(session->ctx, session->seq_id, nullptr);
+     }
+     llama_sampler_free(session->sampling_chain);
 @@ -442,21 +452,49 @@ static bool skippy_sampling_configs_equal(
      return true;
  }
@@ -217,7 +226,7 @@ index 37b0b9c5b..a4dc6b559 100644
      }
      skippy_mtp_clear_session_state(session);
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
-index 60357184a..abc803705 100644
+index 60357184a..a7e1d73f5 100644
 --- a/src/skippy/tests/runtime_events.cpp
 +++ b/src/skippy/tests/runtime_events.cpp
 @@ -1,7 +1,9 @@
@@ -230,7 +239,7 @@ index 60357184a..abc803705 100644
  
  #include <atomic>
  #include <cstdio>
-@@ -342,16 +344,93 @@ int test_native_model_load_production(const char * fixture_path) {
+@@ -342,16 +344,145 @@ int test_native_model_load_production(const char * fixture_path) {
      sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
      sampling.repeat_penalty = 1.0f;
      CHECK(skippy_session_configure_chat_sampling(
@@ -311,6 +320,58 @@ index 60357184a..abc803705 100644
 +    CHECK(llama_decode(session->ctx, multi_output) == 0);
 +    llama_batch_free(multi_output);
 +    skippy_mark_context_work_pending(session->stage_model);
++
++    // CPU-only sampler chains never enter the backend graph. Rebuilding or
++    // clearing them must not call llama_set_sampler(nullptr), which would
++    // otherwise force an unrelated scheduler reservation on the next decode.
++    skippy_sampling_config cpu_sampling = sampling;
++    cpu_sampling.temperature = 0.75f;
++    cpu_sampling.top_p = 0.9f;
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &cpu_sampling, "{\"grammar\":\"\"}", 2,
++            &error) == SKIPPY_STATUS_OK);
++    CHECK(!session->sampling_backend_enabled);
++    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
++    cpu_sampling.seed = 29;
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &cpu_sampling, "{\"grammar\":\"\"}", 0,
++            &error) == SKIPPY_STATUS_OK);
++    CHECK(!session->sampling_backend_enabled);
++    const uint64_t reserves_before_cpu_rebuild =
++            session->ctx->get_sched_reserve_count_for_test();
++    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_prefill_chunk(
++            session, prompt, 2, nullptr, 0, nullptr, 0,
++            &output_bytes, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->ctx->get_sched_reserve_count_for_test() ==
++            reserves_before_cpu_rebuild);
++
++    cpu_sampling.logit_bias_count = 1;
++    cpu_sampling.logit_bias[0].token = 0;
++    cpu_sampling.logit_bias[0].bias = -1.0f;
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &cpu_sampling, "{\"grammar\":\"\"}", 2,
++            &error) == SKIPPY_STATUS_OK);
++    CHECK(!session->sampling_backend_enabled);
++    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_prefill_chunk(
++            session, prompt, 2, nullptr, 0, nullptr, 0,
++            &output_bytes, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->ctx->get_sched_reserve_count_for_test() ==
++            reserves_before_cpu_rebuild);
++
++    cpu_sampling.logit_bias_count = 0;
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &cpu_sampling, "{\"grammar\":\"root ::= [a]\"}", 2,
++            &error) == SKIPPY_STATUS_OK);
++    CHECK(session->grammar_sampler != nullptr);
++    CHECK(!session->sampling_backend_enabled);
++    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_prefill_chunk(
++            session, prompt, 2, nullptr, 0, nullptr, 0,
++            &output_bytes, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->ctx->get_sched_reserve_count_for_test() ==
++            reserves_before_cpu_rebuild);
 +
 +    // Sampled verification retires an initialized backend chain after
 +    // detaching it. Reset must discard that one-shot chain immediately rather
