@@ -322,20 +322,20 @@ class RunnerImageIdentityTests(unittest.TestCase):
 
     def test_qualified_receipts_match_retained_admission(self) -> None:
         expected_candidates = {
-            "public-cpu": "candidate-index-public-cpu",
-            "public-web": "candidate-index-public-web",
-            "public-cuda12": "candidate-index-public-cuda12",
-            "public-cuda13": "candidate-index-public-cuda13",
-            "public-rocm-ci": "candidate-index-public-rocm72",
-            "public-rocm-release": "candidate-index-public-rocm70",
-            "public-vulkan": "candidate-index-public-vulkan",
-            "public-browser": "candidate-index-public-browser",
-            "public-ui": "candidate-index-public-ui",
+            "public-cpu": ("candidate-index-public-cpu", 34256062098),
+            "public-web": ("candidate-index-public-web", 34256062098),
+            "public-cuda12": ("candidate-index-public-cuda12", 34256062098),
+            "public-cuda13": ("candidate-index-public-cuda13", 34896161280),
+            "public-rocm-ci": ("candidate-index-public-rocm72", 34256062098),
+            "public-rocm-release": ("candidate-index-public-rocm70", 34896161280),
+            "public-vulkan": ("candidate-index-public-vulkan", 34256062098),
+            "public-browser": ("candidate-index-public-browser", 34256062098),
+            "public-ui": ("candidate-index-public-ui", 34256062098),
         }
-        for image_id, candidate_key in expected_candidates.items():
+        for image_id, (candidate_key, expected_run_id) in expected_candidates.items():
             image = self.catalog["images"][image_id]
             self.assertEqual(image["receipt"]["index_candidate_key"], candidate_key)
-            self.assertEqual(image["provenance"]["origin"]["run_id"], 34256062098)
+            self.assertEqual(image["provenance"]["origin"]["run_id"], expected_run_id)
             self.assertEqual(image["provenance"]["origin"]["run_attempt"], 1)
             self.assertEqual(image["provenance"]["validation"], "offline_binding_only")
         self.catalog["images"]["public-ui"]["receipt"]["index_candidate_key"] = "candidate-index-public-browser"
