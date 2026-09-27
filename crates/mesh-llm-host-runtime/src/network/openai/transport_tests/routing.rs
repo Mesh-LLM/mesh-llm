@@ -740,3 +740,41 @@ async fn named_model_route_records_prompt_shape_from_usage() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+/// A long System One `state` must still reach a decision model whose advertised
+/// context is its per-question sequence budget.
+async fn system_one_read_is_not_sized_by_its_body() -> Result<()> {
+    let model = "acme/laya-model:F16";
+    let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let node = test_node_with_remote_models(&[(model, peer_id)]).await;
+    let mut peer = test_peer_serving_model(peer_id, model);
+    peer.served_model_runtime = vec![mesh::ModelRuntimeDescriptor {
+        model_name: model.to_owned(),
+        identity_hash: None,
+        context_length: Some(1_024),
+        ready: true,
+    }];
+    node.insert_test_peer(peer).await;
+
+    let mut request = large_tokenize_request(model);
+    request.path = "/systemone".to_owned();
+    request.client_path = "/systemone".to_owned();
+    request.body_len_bytes = 64 * 1024;
+    let mistaken_text_budget =
+        request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
+    assert!(mistaken_text_budget.is_some_and(|tokens| tokens > 1_024));
+    assert!(request.is_system_one_request());
+    assert_eq!(request_context_budget(&request), None);
+    assert_eq!(
+        order_remote_hosts_by_context(
+            &node,
+            model,
+            request_context_budget(&request),
+            std::slice::from_ref(&peer_id),
+        )
+        .await,
+        vec![peer_id]
+    );
+    Ok(())
+}
