@@ -328,11 +328,19 @@ pub(crate) async fn wait_for_shutdown_signal() -> &'static str {
 
 /// Keep observing a late forwarder while the ctrl-c fallback is available.
 async fn wait_for_pending_delivery_or_fallback(delivery: &ShutdownDelivery) -> &'static str {
+    wait_for_pending_delivery_or(delivery, async {
+        resolve_fallback_registration(tokio::signal::ctrl_c().await).await
+    })
+    .await
+}
+
+async fn wait_for_pending_delivery_or(
+    delivery: &ShutdownDelivery,
+    fallback: impl std::future::Future<Output = &'static str>,
+) -> &'static str {
     tokio::select! {
         signal = delivery.wait() => signal,
-        signal = async {
-            resolve_fallback_registration(tokio::signal::ctrl_c().await).await
-        } => signal,
+        signal = fallback => signal,
     }
 }
 
@@ -655,6 +663,23 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_sigint_only_registration_failure_retains_and_forwards_the_partial_observer() {
+        const CHILD_ENV: &str = "MESH_LLM_SIGINT_ONLY_REGISTRATION_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let status = std::process::Command::new(
+                std::env::current_exe().expect("resolve the current test executable"),
+            )
+            .args([
+                "--exact",
+                "runtime::shutdown_signal::tests::a_sigint_only_registration_failure_retains_and_forwards_the_partial_observer",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .status()
+            .expect("run the live SIGINT check in an isolated process");
+            assert!(status.success(), "the isolated live SIGINT check failed");
+            return;
+        }
+
         let interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
             .expect("register the test SIGINT stream");
         let (failure, signals) = classify_registration_failure(SignalRegistrationFailure {
@@ -744,7 +769,10 @@ mod tests {
             delivery.sender.send(Some("SIGTERM"))
         };
         let (observed, delivered) = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(wait_for_pending_delivery_or_fallback(&delivery), deliver)
+            tokio::join!(
+                wait_for_pending_delivery_or(&delivery, std::future::pending()),
+                deliver
+            )
         })
         .await
         .expect("the pending waiter must observe a late forwarder delivery");
