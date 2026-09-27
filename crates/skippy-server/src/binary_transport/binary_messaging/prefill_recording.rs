@@ -136,7 +136,12 @@ fn exact_prefill_record_allowed(
     message: &StageWireMessage,
     accumulated_token_count: usize,
 ) -> bool {
-    if !kv.payload_is_exact_state() || !message.kind.is_prefill() {
+    // A dense stage with durable L3 has two independent record targets:
+    // resident KV serves the full prompt from L1, while the exact snapshot is
+    // checkpoint-aligned for durability. The exact checkpoint must not gate
+    // the primary resident record.
+    if kv.records_resident_prefixes() || !kv.payload_is_exact_state() || !message.kind.is_prefill()
+    {
         return true;
     }
     let Ok(prompt_token_count) = u64::try_from(message.state.prompt_token_count) else {
@@ -239,5 +244,31 @@ mod tests {
         assert!(exact_prefill_record_allowed(&kv, &message, 768));
         assert!(!exact_prefill_record_allowed(&kv, &message, 896));
         assert!(!exact_prefill_record_allowed(&kv, &message, 970));
+    }
+
+    #[test]
+    fn durable_exact_checkpoint_does_not_gate_dense_resident_full_prefill() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = skippy_cache::L3CacheManager::acquire(
+            root.path(),
+            skippy_cache::StoreLimits::new(1 << 20, 0),
+        )
+        .unwrap();
+        let config = prefix_cache_test_config();
+        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &config,
+            Some(ModelStateKind::Dense),
+            None,
+            Some(manager),
+            None,
+        )
+        .unwrap()
+        .expect("dense resident cache with durable L3");
+        let (_, message) = exact_prefill_fixture(970);
+
+        assert!(kv.records_resident_prefixes());
+        assert!(kv.payload_is_exact_state());
+        assert!(!kv.exact_state_record_token_count_allowed(970, 970));
+        assert!(exact_prefill_record_allowed(&kv, &message, 970));
     }
 }

@@ -1,0 +1,432 @@
+From 68a2d319ee011550995ae9ee47bdf0b80c1d2771 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 17:34:09 +1000
+Subject: [PATCH] skippy: guard geometry annotation construction
+
+Annotation sites in the architecture builders build a recipe on every graph
+build, including an unsplit model's, and the result is dropped: only a capture
+consumes one. Open the recipe as an intent record instead -- the site records
+the axes it owns and skippy_stage_geometry_note() derives the rest from the
+live tensor while the capture runs. Consumption that does not go through
+note() (stage extraction fallbacks) derives immediately with
+skippy_stage_geometry_snapshot(), and a recipe that is evaluated without being
+derived fails closed instead of replaying a zeroed geometry.
+
+skippy_stage_geometry_note_sites() and skippy_stage_geometry_recipe_derivations()
+make the difference observable, and the structural coverage tests assert it: an
+unsplit gemma build reaches 168 annotation sites and derives none, while the
+same build under capture derives one recipe per site.
+---
+ src/skippy/stage_program.cpp                  | 10 +++
+ src/skippy/stage_program.h                    | 22 ++++++
+ src/skippy/stage_program_extraction.cpp       | 18 +++--
+ src/skippy/stage_program_extraction_roots.cpp |  4 +-
+ src/skippy/stage_program_geometry.cpp         | 77 +++++++++++++++++--
+ src/skippy/tests/graph_build_inputs.cpp       | 65 +++++++++++++++-
+ 6 files changed, 181 insertions(+), 15 deletions(-)
+
+diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
+index 9d484103c..7b1a3ba03 100644
+--- a/src/skippy/stage_program.cpp
++++ b/src/skippy/stage_program.cpp
+@@ -33,7 +33,16 @@
+ 
+ using namespace skippy_stage_program_detail;
+ 
++#ifdef LLAMA_STAGE_BUILD_TESTS
++namespace {
++thread_local uint64_t test_replay_plan_builds = 0;
++}
++#endif
++
+ skippy_stage_program::replay_plan skippy_stage_program::build_replay_plan(bool token_input) const {
++#ifdef LLAMA_STAGE_BUILD_TESTS
++    ++test_replay_plan_builds;
++#endif
+     replay_plan plan;
+     std::unordered_set<std::string> live_operations;
+     for (const auto & operation : operations) {
+@@ -875,4 +884,5 @@ void skippy_stage_program_note_arch_builder_call() { ++test_arch_builder_calls;
+ void skippy_stage_program_note_selector_call() { ++test_selector_calls; }
+ uint64_t skippy_stage_program_arch_builder_calls() { return test_arch_builder_calls; }
+ uint64_t skippy_stage_program_selector_calls() { return test_selector_calls; }
++uint64_t skippy_stage_program_replay_plan_builds() { return test_replay_plan_builds; }
+ #endif
+diff --git a/src/skippy/stage_program.h b/src/skippy/stage_program.h
+index b6902afd2..8628afb0e 100644
+--- a/src/skippy/stage_program.h
++++ b/src/skippy/stage_program.h
+@@ -42,6 +42,11 @@ struct skippy_stage_geometry_expression {
+         source_stride,
+         source_stride_per_kv_stream,
+         source_elements,
++        // Not derived from a tensor yet. An annotation site leaves the axes it
++        // does not override unspecified and skippy_stage_geometry_note() fills
++        // them from the captured tensor; evaluation fails closed rather than
++        // replaying a zeroed geometry.
++        unset,
+     };
+ 
+     kind value_kind = kind::constant;
+@@ -289,7 +294,18 @@ bool skippy_extract_stage_program(
+ // during capture before a stage program can be installed.
+ bool skippy_stage_program_supports_operation(uint32_t op);
+ 
++// Geometry annotation sites in the architecture builders describe how a
++// tensor's shape follows the runtime shape. Each one opens a recipe with
++// skippy_stage_geometry_static() and overrides the axes it owns. Those sites run
++// for every graph build, split or not, so the recipe a site hands to
++// skippy_stage_geometry_note() is an intent record: which axes the site chose
++// and which it left to the tensor. note() completes it from the live tensor, and
++// only a capture calls note() -- outside a capture nothing is derived and
++// nothing is stored. Consumption that does not go through note() (stage
++// extraction fallbacks, the geometry proof) derives immediately with
++// skippy_stage_geometry_snapshot().
+ skippy_stage_geometry_recipe skippy_stage_geometry_static(const ggml_tensor * tensor);
++skippy_stage_geometry_recipe skippy_stage_geometry_snapshot(const ggml_tensor * tensor);
+ void skippy_stage_geometry_note(const ggml_tensor * tensor, const skippy_stage_geometry_recipe & recipe);
+ void skippy_stage_geometry_reset();
+ bool skippy_stage_geometry_lookup(const ggml_tensor * tensor, skippy_stage_geometry_recipe & recipe);
+@@ -323,4 +339,10 @@ void skippy_stage_program_note_arch_builder_call();
+ void skippy_stage_program_note_selector_call();
+ uint64_t skippy_stage_program_arch_builder_calls();
+ uint64_t skippy_stage_program_selector_calls();
++// Monotonic: counts every skippy_stage_program::build_replay_plan() derivation
++// in the process, so a caller compares before/after rather than resetting it.
++uint64_t skippy_stage_program_replay_plan_builds();
++void skippy_stage_geometry_reset_test_counters();
++uint64_t skippy_stage_geometry_note_sites();
++uint64_t skippy_stage_geometry_recipe_derivations();
+ #endif
+diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
+index 4e89b911b..a68d99fe4 100644
+--- a/src/skippy/stage_program_extraction.cpp
++++ b/src/skippy/stage_program_extraction.cpp
+@@ -173,14 +173,16 @@ bool extraction::run() {
+                 const bool same_shape_cont = tensor->op == GGML_OP_CONT && tensor->src[0] != nullptr &&
+                         dimensions(tensor) == dimensions(tensor->src[0]);
+                 if (recorded_geometry && same_shape_cont) {
+-                    operation.geometry = skippy_stage_geometry_static(tensor);
++                    // Stored on the program, never handed to note(): derive it now,
++                    // while the captured tensor is still alive.
++                    operation.geometry = skippy_stage_geometry_snapshot(tensor);
+                     for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+                         operation.geometry.dimensions[axis] =
+                                 skippy_stage_geometry_expression::source_dimension(0, axis);
+                     }
+                 } else if (!recorded_geometry) {
+                     if (same_shape_cont) {
+-                        operation.geometry = skippy_stage_geometry_static(tensor);
++                        operation.geometry = skippy_stage_geometry_snapshot(tensor);
+                         for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+                             operation.geometry.dimensions[axis] =
+                                     skippy_stage_geometry_expression::source_dimension(0, axis);
+@@ -190,7 +192,7 @@ bool extraction::run() {
+                         // Preserve padded target extents while unpadded axes continue to follow the
+                         // runtime source. Replay recomputes right padding from this target geometry
+                         // and the captured invariant left padding.
+-                        operation.geometry = skippy_stage_geometry_static(tensor);
++                        operation.geometry = skippy_stage_geometry_snapshot(tensor);
+                         for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+                             const int32_t left = ggml_get_op_params_i32(tensor, 2*axis);
+                             const int32_t right = ggml_get_op_params_i32(tensor, 2*axis + 1);
+@@ -232,12 +234,12 @@ bool extraction::run() {
+                                     std::to_string(tensor->src[0]->ne[3]);
+                             return false;
+                         }
+-                        operation.geometry = skippy_stage_geometry_static(tensor);
++                        operation.geometry = skippy_stage_geometry_snapshot(tensor);
+                         operation.geometry.dimensions[source_axis] =
+                                 skippy_stage_geometry_expression::source_dimension(
+                                         0, source_axis, tensor->ne[source_axis] / tensor->src[0]->ne[source_axis]);
+                     } else if (tensor->op == GGML_OP_VIEW && tensor->src[0] != nullptr) {
+-                        operation.geometry = skippy_stage_geometry_static(tensor);
++                        operation.geometry = skippy_stage_geometry_snapshot(tensor);
+                         const int32_t source_axis = dynamic_axis(value(tensor->src[0]));
+                         for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+                             if (n_sequences > 1 && tensor->ne[axis] == static_cast<int64_t>(n_sequences) &&
+@@ -322,7 +324,7 @@ bool extraction::run() {
+                         }
+                     } else if (tensor->op == GGML_OP_CONT && tensor->src[0] != nullptr &&
+                             ggml_nelements(tensor) == ggml_nelements(tensor->src[0])) {
+-                        operation.geometry = skippy_stage_geometry_static(tensor);
++                        operation.geometry = skippy_stage_geometry_snapshot(tensor);
+                         int32_t token_axis = -1;
+                         for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+                             if (tensor->ne[axis] != static_cast<int64_t>(n_tokens)) continue;
+@@ -352,7 +354,7 @@ bool extraction::run() {
+                             singleton_only = tensor->src[0]->ne[source_axes[axis]] == tensor->ne[target_axes[axis]];
+                         }
+                         if (singleton_only) {
+-                            operation.geometry = skippy_stage_geometry_static(tensor);
++                            operation.geometry = skippy_stage_geometry_snapshot(tensor);
+                             for (size_t axis = 0; axis < source_axes.size(); ++axis) {
+                                 operation.geometry.dimensions[target_axes[axis]] =
+                                         skippy_stage_geometry_expression::source_dimension(0, source_axes[axis]);
+@@ -361,7 +363,7 @@ bool extraction::run() {
+                             const std::string source_id = value(tensor->src[0]);
+                             int32_t source_axis = dynamic_axis(source_id);
+                             if (source_axis < 0) source_axis = reference_dynamic_axis(source_id);
+-                            operation.geometry = skippy_stage_geometry_static(tensor);
++                            operation.geometry = skippy_stage_geometry_snapshot(tensor);
+                             bool recipe_built = false;
+                             int32_t runtime_token_axis = -1;
+                             for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+diff --git a/src/skippy/stage_program_extraction_roots.cpp b/src/skippy/stage_program_extraction_roots.cpp
+index ffbb30715..fb59af909 100644
+--- a/src/skippy/stage_program_extraction_roots.cpp
++++ b/src/skippy/stage_program_extraction_roots.cpp
+@@ -317,7 +317,9 @@ bool extraction::assign_root(const ggml_tensor * tensor) {
+                 skippy_stage_program::root root;
+                 root.value_id = "scratch/" + std::to_string(program.roots.size());
+                 root.kind = skippy_stage_program::root_kind::scratch;
+-                root.geometry = skippy_stage_geometry_static(tensor);
++                // Stored on the program, never handed to note(): derive it now,
++                // while the captured tensor is still alive.
++                root.geometry = skippy_stage_geometry_snapshot(tensor);
+                 for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+                     if (tensor->ne[axis] == static_cast<int64_t>(n_tokens)) {
+                         root.geometry.dimensions[axis] = skippy_stage_geometry_expression::tokens();
+diff --git a/src/skippy/stage_program_geometry.cpp b/src/skippy/stage_program_geometry.cpp
+index ce3d36e93..0c5ba2572 100644
+--- a/src/skippy/stage_program_geometry.cpp
++++ b/src/skippy/stage_program_geometry.cpp
+@@ -35,6 +35,14 @@ namespace {
+ thread_local std::unordered_map<const ggml_tensor *, skippy_stage_geometry_recipe> recorded_geometry;
+ thread_local bool recording_geometry = false;
+ 
++#ifdef LLAMA_STAGE_BUILD_TESTS
++// Observation for the structural coverage tests: how many annotation sites ran
++// and how many of them derived a recipe from a live tensor. Both are monotonic
++// within a process and are only reset explicitly by a test.
++thread_local uint64_t test_note_sites = 0;
++thread_local uint64_t test_recipe_derivations = 0;
++#endif
++
+ int32_t permuted_axis(const ggml_tensor * tensor, int32_t source_axis) {
+     return source_axis < 0 ? -1 : ggml_get_op_params_i32(tensor, source_axis);
+ }
+@@ -82,6 +90,11 @@ bool evaluate_expression(
+         std::string & error) {
+     int64_t base = 0;
+     switch (expression.value_kind) {
++        case skippy_stage_geometry_expression::kind::unset:
++            // An annotation site built this recipe but nothing derived it from a
++            // tensor. Fail closed rather than replay a zeroed geometry.
++            error = "geometry recipe was not derived from a captured tensor";
++            return false;
+         case skippy_stage_geometry_expression::kind::constant:
+             result = expression.constant_value;
+             return true;
+@@ -443,18 +456,64 @@ skippy_stage_geometry_expression skippy_stage_geometry_expression::source_elemen
+     return result;
+ }
+ 
+-skippy_stage_geometry_recipe skippy_stage_geometry_static(const ggml_tensor * tensor) {
++namespace {
++
++// An annotation site's starting point: every axis unspecified, so note() can
++// tell the axes the site chose from the axes the tensor owns.
++skippy_stage_geometry_recipe unspecified_geometry() {
+     skippy_stage_geometry_recipe result;
+     for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+-        result.dimensions[axis] = skippy_stage_geometry_expression::constant(tensor->ne[axis]);
+-        result.byte_strides[axis] = skippy_stage_geometry_expression::constant(tensor->nb[axis]);
++        result.dimensions[axis].value_kind = skippy_stage_geometry_expression::kind::unset;
++        result.byte_strides[axis].value_kind = skippy_stage_geometry_expression::kind::unset;
+     }
+-    result.view_offset = skippy_stage_geometry_expression::constant(tensor->view_offs);
++    result.view_offset.value_kind = skippy_stage_geometry_expression::kind::unset;
+     return result;
+ }
+ 
++// Complete an annotation site's intent record from the live tensor. Every axis
++// the site did not override follows the tensor, which is exactly what the
++// recipe used to be seeded with at the site itself.
++skippy_stage_geometry_recipe derive_geometry(
++        const ggml_tensor * tensor, const skippy_stage_geometry_recipe & recipe) {
++    skippy_stage_geometry_recipe result = recipe;
++    for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
++        if (result.dimensions[axis].value_kind == skippy_stage_geometry_expression::kind::unset) {
++            result.dimensions[axis] = skippy_stage_geometry_expression::constant(tensor->ne[axis]);
++        }
++        if (result.byte_strides[axis].value_kind == skippy_stage_geometry_expression::kind::unset) {
++            result.byte_strides[axis] = skippy_stage_geometry_expression::constant(tensor->nb[axis]);
++        }
++    }
++    if (result.view_offset.value_kind == skippy_stage_geometry_expression::kind::unset) {
++        result.view_offset = skippy_stage_geometry_expression::constant(tensor->view_offs);
++    }
++#ifdef LLAMA_STAGE_BUILD_TESTS
++    ++test_recipe_derivations;
++#endif
++    return result;
++}
++
++}
++
++// An annotation site: record the axes this site owns and defer everything else.
++// The tensor is not read here, so a graph build that is not capturing pays for
++// the site's own assignments and nothing more.
++skippy_stage_geometry_recipe skippy_stage_geometry_static(const ggml_tensor * tensor) {
++    (void) tensor;
++#ifdef LLAMA_STAGE_BUILD_TESTS
++    ++test_note_sites;
++#endif
++    return unspecified_geometry();
++}
++
++// The tensor's own geometry, derived now, for consumption that does not go
++// through skippy_stage_geometry_note().
++skippy_stage_geometry_recipe skippy_stage_geometry_snapshot(const ggml_tensor * tensor) {
++    return derive_geometry(tensor, unspecified_geometry());
++}
++
+ void skippy_stage_geometry_note(const ggml_tensor * tensor, const skippy_stage_geometry_recipe & recipe) {
+-    if (recording_geometry && tensor != nullptr) recorded_geometry[tensor] = recipe;
++    if (recording_geometry && tensor != nullptr) recorded_geometry[tensor] = derive_geometry(tensor, recipe);
+ }
+ 
+ void skippy_stage_geometry_reset() {
+@@ -502,5 +561,13 @@ bool skippy_stage_geometry_evaluate_for_test(
+     runtime.kv_stream_count = kv_stream_count;
+     return skippy_stage_program_detail::evaluate_geometry(recipe, runtime, sources, dims, strides, offset, error);
+ }
++
++void skippy_stage_geometry_reset_test_counters() {
++    test_note_sites = 0;
++    test_recipe_derivations = 0;
++}
++
++uint64_t skippy_stage_geometry_note_sites() { return test_note_sites; }
++uint64_t skippy_stage_geometry_recipe_derivations() { return test_recipe_derivations; }
+ #endif
+ 
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index 384880d5b..d402f64fb 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -820,6 +820,7 @@ static int check_stage_geometry_recipes() {
+     if (!context) return 101;
+ 
+     skippy_stage_geometry_capture_begin();
++    skippy_stage_geometry_reset_test_counters();
+     ggml_tensor * reshape_source = ggml_new_tensor_2d(context.get(), GGML_TYPE_F32, 8, 2);
+     ggml_tensor * reshape = ggml_reshape_2d(context.get(), reshape_source, 8, 2);
+     skippy_stage_geometry_recipe found;
+@@ -848,7 +849,8 @@ static int check_stage_geometry_recipes() {
+     ggml_tensor * view_source_8 = ggml_new_tensor_2d(context.get(), GGML_TYPE_F32, 8, 4);
+     ggml_tensor * view_source_4 = ggml_new_tensor_2d(context.get(), GGML_TYPE_F32, 4, 4);
+     ggml_tensor * view = ggml_view_2d(context.get(), view_source_8, 8, 2, view_source_8->nb[1], 0);
+-    auto view_recipe = skippy_stage_geometry_static(view);
++    // Evaluated below without being recorded, so it has to be derived now.
++    auto view_recipe = skippy_stage_geometry_snapshot(view);
+     view_recipe.dimensions[0] = skippy_stage_geometry_expression::tokens();
+     view_recipe.dimensions[1] = skippy_stage_geometry_expression::constant(2);
+     view_recipe.byte_strides[1] = skippy_stage_geometry_expression::source_stride(0, 1);
+@@ -897,6 +899,38 @@ static int check_stage_geometry_recipes() {
+         return 109;
+     }
+     skippy_stage_geometry_capture_end();
++    // A capture is the only consumer of an annotation site: the sites above
++    // derived their recipes from the live tensors.
++    if (skippy_stage_geometry_note_sites() == 0 || skippy_stage_geometry_recipe_derivations() == 0) {
++        std::fprintf(stderr, "geometry capture derived no recipe: sites=%llu derived=%llu\n",
++                static_cast<unsigned long long>(skippy_stage_geometry_note_sites()),
++                static_cast<unsigned long long>(skippy_stage_geometry_recipe_derivations()));
++        return 199;
++    }
++    return 0;
++}
++
++// An architecture builder runs through the geometry annotation sites whether or
++// not a stage program is being captured. An unsplit build is the ordinary path:
++// it must reach those sites, and it must derive nothing from them, because only
++// a capture consumes a recipe and deriving one reads the tensor and materialises
++// nine expressions at the site.
++static int check_unsplit_graph_build_derives_no_geometry(llama_model * model) {
++    if (model == nullptr) return 196;
++    skippy_graph_build_inputs inputs;
++    skippy_stage_geometry_reset_test_counters();
++    if (!make_stage_inputs(model, 2, 0, llama_model_n_layer(model), inputs)) return 197;
++    const uint64_t sites = skippy_stage_geometry_note_sites();
++    const uint64_t derived = skippy_stage_geometry_recipe_derivations();
++    if (sites == 0) {
++        std::fprintf(stderr, "unsplit graph build reached no geometry annotation site\n");
++        return 198;
++    }
++    if (derived != 0) {
++        std::fprintf(stderr, "unsplit graph build derived %llu geometry recipes at %llu sites\n",
++                static_cast<unsigned long long>(derived), static_cast<unsigned long long>(sites));
++        return 199;
++    }
+     return 0;
+ }
+ 
+@@ -1194,6 +1228,7 @@ static int check_stage_program_rejects_unsupported_operation(llama_model & model
+ static int check_stage_program_replay(const char * model_path) {
+     std::unique_ptr<llama_model, decltype(&llama_model_free)> model(load_model(model_path), llama_model_free);
+     if (!model || llama_model_n_layer(model.get()) < 2) return 110;
++    if (const int rc = check_unsplit_graph_build_derives_no_geometry(model.get())) return rc;
+     if (const int rc = check_stage_program_msa_inputs(*model)) return rc;
+     if (const int rc = check_stage_program_hidden_inputs(*model)) return rc;
+     if (const int rc = check_stage_program_ignores_unused_unsupported_input(*model)) return rc;
+@@ -1246,6 +1281,9 @@ static int check_stage_program_replay(const char * model_path) {
+         return 135;
+     }
+ 
++    // Only the installations below may derive a replay plan: the plan is a pure
++    // function of the captured program.
++    const uint64_t plans_before_install = skippy_stage_program_replay_plan_builds();
+     std::string install_error;
+     if (!first->install_stage_program(first_inputs, install_error) ||
+             !last->install_stage_program(last_inputs, install_error) ||
+@@ -1260,6 +1298,18 @@ static int check_stage_program_replay(const char * model_path) {
+     const skippy_stage_program_installation * last_installation = last->get_stage_program_installation();
+     if (first_installation == nullptr || last_installation == nullptr ||
+             !first_installation->installed || !last_installation->installed) return 134;
++    // One plan per input branch, derived once while the program was extracted.
++    const uint64_t plans_after_install = skippy_stage_program_replay_plan_builds();
++    if (plans_after_install <= plans_before_install || (plans_after_install - plans_before_install) % 2 != 0) {
++        std::fprintf(stderr, "installation did not derive both replay plans: %llu -> %llu\n",
++                static_cast<unsigned long long>(plans_before_install),
++                static_cast<unsigned long long>(plans_after_install));
++        return 187;
++    }
++    if (!first_installation->program.replay_plans_prepared || !last_installation->program.replay_plans_prepared) {
++        std::fprintf(stderr, "installed stage program did not precompute its replay plans\n");
++        return 188;
++    }
+     if (!ambiguous->get_input_activation_frontier(reserved_imports) ||
+             !reserved_imports[0].token_axis_explicit) return 136;
+     const skippy_stage_program & first_program = first_installation->program;
+@@ -1470,6 +1520,8 @@ static int check_stage_program_replay(const char * model_path) {
+     const int32_t n_embd = model->hparams.n_embd_inp();
+     llama_batch token_batch = llama_batch_init(4, 0, 2);
+     llama_batch embedding_batch = llama_batch_init(4, n_embd, 2);
++    const uint64_t plans_before_replays = skippy_stage_program_replay_plan_builds();
++    const uint64_t replays_before = first_installation->replays.load();
+     int result = 0;
+     std::array<llama_pos, 2> positions = {};
+     bool observed_changed_sequences = false;
+@@ -1582,6 +1634,17 @@ static int check_stage_program_replay(const char * model_path) {
+             }
+         }
+     }
++    // The steps above replayed both input branches without deriving another plan.
++    if (result == 0 &&
++            (skippy_stage_program_replay_plan_builds() != plans_before_replays ||
++             first_installation->replays.load() <= replays_before)) {
++        std::fprintf(stderr, "stage program replay re-derived its plan: plans=%llu/%llu replays=%llu/%llu\n",
++                static_cast<unsigned long long>(plans_before_replays),
++                static_cast<unsigned long long>(skippy_stage_program_replay_plan_builds()),
++                static_cast<unsigned long long>(replays_before),
++                static_cast<unsigned long long>(first_installation->replays.load()));
++        result = 189;
++    }
+     if (result == 0 && (!observed_changed_sequences || !observed_partial_outputs || !observed_zero_outputs ||
+             !observed_token_input || !observed_embedding_input)) result = 125;
+     set_reuse_environment(had_reuse_setting ? saved_reuse_setting.c_str() : nullptr);
+-- 
+2.54.0 (Apple Git-157)
+

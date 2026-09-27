@@ -48,7 +48,12 @@ pub(super) struct InvoiceGate {
     pub input_settlement: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
 }
 
-const CLOSE_SERVING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// `SERVE_FINISH` is a bookkeeping operation, so the `payments.v1` contract
+/// already bounds it; the gate keeps its own guard as well so a response cannot
+/// be held open even if that classification changes. On timeout the request
+/// fails and startup recovery reconciles it.
+const CLOSE_SERVING_TIMEOUT: std::time::Duration =
+    mesh_llm_payments_types::contract::BOOKKEEPING_DEADLINE;
 
 impl InvoiceGate {
     /// Wait for the input payment the delivery gate opened on to settle.

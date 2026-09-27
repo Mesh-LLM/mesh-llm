@@ -19,10 +19,10 @@ pub use inventory::{
 
 pub use parser::{
     AnalyticsCommand, AuthCommand, BinaryFlavor, Cli, Command, ConfigCommand, DiscoveryScope,
-    DoctorCommand, GpuCommand, MeshDiscoveryMode, MeshGuardrailCliMode, NormalizedRuntimeArgs,
-    PluginCommand, RuntimeSurface, SkillAgentArg, SkillCommand, TrustCommand, TrustPolicy,
-    legacy_runtime_surface_warning, normalize_runtime_surface_args, raw_args_invoke_analytics,
-    validate_discovery_mode_args,
+    DoctorCommand, GpuCommand, KvCacheCommand, MeshDiscoveryMode, MeshGuardrailCliMode,
+    NormalizedRuntimeArgs, PluginCommand, RuntimeSurface, SkillAgentArg, SkillCommand,
+    TrustCommand, TrustPolicy, legacy_runtime_surface_warning, normalize_runtime_surface_args,
+    raw_args_invoke_analytics, validate_discovery_mode_args,
 };
 
 pub mod wallet;

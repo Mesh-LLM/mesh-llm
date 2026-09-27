@@ -170,7 +170,7 @@ const DEFAULTS_CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory>
   memory: {
     id: 'memory',
     label: 'Memory',
-    summary: 'VRAM accounting and KV cache policy',
+    summary: 'VRAM accounting and KV cache precision',
     help: 'Memory defaults inherited by model placements',
     tomlSection: 'defaults.model_fit',
     order: 20
@@ -225,8 +225,6 @@ const DEFAULTS_CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory>
   }
 }
 
-type ChoicePresentation = Extract<ConfigurationDefaultsControl, { kind: 'choice' }>['presentation']
-
 function settingIdFromPath(canonicalPath: string) {
   return canonicalPath
 }
@@ -275,21 +273,6 @@ function controlNameForPath(canonicalPath: string) {
   return lastPathSegment(canonicalPath)
 }
 
-function segmentedControl(
-  name: string,
-  value: string,
-  options: readonly string[],
-  presentation: ChoicePresentation = 'segmented'
-): ConfigurationDefaultsControl {
-  return {
-    kind: 'choice',
-    name,
-    value,
-    presentation,
-    options: options.map((option) => ({ value: option, label: option }))
-  }
-}
-
 function bespokeControlForRenderer(entry: RuntimeConfigSchemaEntry): ConfigurationDefaultsControl | undefined {
   const rendererId = rendererIdForEntry(entry)
   const name = controlNameForPath(entry.canonical_path)
@@ -308,10 +291,6 @@ function bespokeControlForRenderer(entry: RuntimeConfigSchemaEntry): Configurati
       step: 512,
       unit: entry.presentation?.unit ?? 'tokens'
     }
-  }
-
-  if (rendererId === 'kv-cache-policy') {
-    return segmentedControl(name, 'auto', ['auto', 'quality', 'balanced', 'saver'])
   }
 
   return undefined

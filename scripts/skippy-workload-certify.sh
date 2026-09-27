@@ -14,6 +14,7 @@ ORACLE_COMPLETION=""
 ORACLE_TTS=""
 ORACLE_REQUIRED=0
 STARTUP_TIMEOUT_SECS=180
+PORT_START_ATTEMPTS=3
 
 usage() {
   cat >&2 <<'EOF'
@@ -221,7 +222,11 @@ env \
   LLAMA_STAGE_BACKEND="$BACKEND" \
   "${TEST_COMMAND[@]}"
 
-PORT="${SKIPPY_WORKLOAD_OPENAI_PORT:-19337}"
+PORT="${SKIPPY_WORKLOAD_OPENAI_PORT:-}"
+if [[ -n "$PORT" ]] && { [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); }; then
+  echo "invalid candidate port: $PORT" >&2
+  exit 1
+fi
 CONFIG_PATH="$WORK_DIR/stage-openai.json"
 python3 - "$CONFIG_PATH" "$MODEL_ID" "$MODEL_PATH" "$MODEL_SHA256" "$LAYER_END" "$N_GPU_LAYERS" "$PROJECTOR_PATH" <<'PY'
 import json
@@ -261,14 +266,7 @@ with open(config_path, "w", encoding="utf-8") as handle:
 PY
 
 SERVER_LOG="$WORK_DIR/workload-openai-server.log"
-LLAMA_STAGE_BACKEND="$BACKEND" \
-  "$CANDIDATE_BIN_DIR/skippy-server" serve-openai \
-    --config "$CONFIG_PATH" \
-    --bind-addr "127.0.0.1:$PORT" \
-    --default-max-tokens 128 \
-    --telemetry-level off \
-    >"$SERVER_LOG" 2>&1 &
-SERVER_PID="$!"
+SERVER_PID=""
 ORACLE_PID=""
 cleanup() {
   if [[ -n "$ORACLE_PID" ]] && kill -0 "$ORACLE_PID" >/dev/null 2>&1; then
@@ -281,6 +279,10 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+address_in_use_log() {
+  grep -Eiq 'address (is )?already in use|AddrInUse|EADDRINUSE' "$1"
+}
 
 # Both processes receive the same planned wall-clock startup budget, including
 # time spent probing the endpoint. An early exit retains the owning log.
@@ -303,7 +305,46 @@ wait_for_workload_server() {
   tail -80 "$log" >&2
   return 1
 }
-wait_for_workload_server "$SERVER_PID" "$PORT" "$SERVER_LOG" "OpenAI server"
+
+start_candidate_server() {
+  local dynamic=0 attempt=1 attempt_log
+  if [[ -z "$PORT" ]]; then
+    dynamic=1
+  fi
+  while (( attempt <= PORT_START_ATTEMPTS )); do
+    if (( dynamic == 1 )); then
+      PORT="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 1)"
+    fi
+    attempt_log="$SERVER_LOG.attempt-$attempt"
+    rm -f "$attempt_log"
+    LLAMA_STAGE_BACKEND="$BACKEND" \
+      "$CANDIDATE_BIN_DIR/skippy-server" serve-openai \
+        --config "$CONFIG_PATH" \
+        --bind-addr "127.0.0.1:$PORT" \
+        --default-max-tokens 128 \
+        --telemetry-level off \
+        >"$attempt_log" 2>&1 &
+    SERVER_PID="$!"
+    if wait_for_workload_server "$SERVER_PID" "$PORT" "$attempt_log" "OpenAI server"; then
+      mv "$attempt_log" "$SERVER_LOG"
+      return 0
+    fi
+    if kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+      kill "$SERVER_PID" >/dev/null 2>&1 || true
+    fi
+    wait "$SERVER_PID" >/dev/null 2>&1 || true
+    SERVER_PID=""
+    if (( dynamic == 0 || attempt == PORT_START_ATTEMPTS )) ||
+       ! address_in_use_log "$attempt_log"; then
+      mv "$attempt_log" "$SERVER_LOG"
+      return 1
+    fi
+    echo "candidate address-in-use startup failure; retrying with a fresh port ($attempt/$PORT_START_ATTEMPTS)" >&2
+    attempt=$((attempt + 1))
+  done
+}
+
+start_candidate_server
 python3 "$ROOT/scripts/ci-openai-workload-smoke.py" \
   --base-url "http://127.0.0.1:$PORT/v1" \
   --model "$MODEL_ID" \
@@ -311,9 +352,9 @@ python3 "$ROOT/scripts/ci-openai-workload-smoke.py" \
   --media-path "$MEDIA_PATH"
 
 if [[ -n "$ORACLE_SERVER" ]]; then
-  ORACLE_PORT="${SKIPPY_WORKLOAD_ORACLE_PORT:-19338}"
-  if [[ ! "$ORACLE_PORT" =~ ^[0-9]+$ ]] ||
-     (( ORACLE_PORT < 1 || ORACLE_PORT > 65535 || ORACLE_PORT == PORT )); then
+  ORACLE_PORT="${SKIPPY_WORKLOAD_ORACLE_PORT:-}"
+  if [[ -n "$ORACLE_PORT" ]] && { [[ ! "$ORACLE_PORT" =~ ^[0-9]+$ ]] ||
+     (( ORACLE_PORT < 1 || ORACLE_PORT > 65535 || ORACLE_PORT == PORT )); }; then
     echo "invalid or conflicting oracle port: $ORACLE_PORT" >&2
     exit 1
   fi
@@ -327,9 +368,47 @@ if [[ -n "$ORACLE_SERVER" ]]; then
     ocr|speech_recognition) ORACLE_ARGS+=(--mmproj "$PROJECTOR_PATH") ;;
   esac
   ORACLE_LOG="$WORK_DIR/workload-monolithic-oracle-server.log"
-  "$ORACLE_SERVER" "${ORACLE_ARGS[@]}" >"$ORACLE_LOG" 2>&1 &
-  ORACLE_PID="$!"
-  wait_for_workload_server "$ORACLE_PID" "$ORACLE_PORT" "$ORACLE_LOG" "monolithic oracle server"
+  start_oracle_server() {
+    local dynamic=0 attempt=1 attempt_log
+    if [[ -z "$ORACLE_PORT" ]]; then
+      dynamic=1
+    fi
+    while (( attempt <= PORT_START_ATTEMPTS )); do
+      if (( dynamic == 1 )); then
+        ORACLE_PORT="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 1)"
+        ORACLE_ARGS=(
+          -m "$MODEL_PATH" -a "$MODEL_ID" --host 127.0.0.1 --port "$ORACLE_PORT"
+          -c 2048 -b 2048 -ub 2048 -ngl 0 --parallel 1 --no-repack
+        )
+        case "$MODEL_CLASS" in
+          embedding) ORACLE_ARGS+=(--embedding) ;;
+          rerank) ORACLE_ARGS+=(--embedding --reranking --pooling rank) ;;
+          ocr|speech_recognition) ORACLE_ARGS+=(--mmproj "$PROJECTOR_PATH") ;;
+        esac
+      fi
+      attempt_log="$ORACLE_LOG.attempt-$attempt"
+      rm -f "$attempt_log"
+      "$ORACLE_SERVER" "${ORACLE_ARGS[@]}" >"$attempt_log" 2>&1 &
+      ORACLE_PID="$!"
+      if wait_for_workload_server "$ORACLE_PID" "$ORACLE_PORT" "$attempt_log" "monolithic oracle server"; then
+        mv "$attempt_log" "$ORACLE_LOG"
+        return 0
+      fi
+      if kill -0 "$ORACLE_PID" >/dev/null 2>&1; then
+        kill "$ORACLE_PID" >/dev/null 2>&1 || true
+      fi
+      wait "$ORACLE_PID" >/dev/null 2>&1 || true
+      ORACLE_PID=""
+      if (( dynamic == 0 || attempt == PORT_START_ATTEMPTS )) ||
+         ! address_in_use_log "$attempt_log"; then
+        mv "$attempt_log" "$ORACLE_LOG"
+        return 1
+      fi
+      echo "oracle address-in-use startup failure; retrying with a fresh port ($attempt/$PORT_START_ATTEMPTS)" >&2
+      attempt=$((attempt + 1))
+    done
+  }
+  start_oracle_server
   if [[ "$MODEL_CLASS" =~ ^(ocr|speech_recognition)$ ]]; then
     ORACLE_MEDIA_PATH="$MEDIA_PATH"
     if [[ "$MODEL_CLASS" == "ocr" ]]; then

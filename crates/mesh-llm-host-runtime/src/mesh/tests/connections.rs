@@ -466,6 +466,8 @@ async fn make_test_node_with_requirements(
         },
         #[cfg(feature = "payments")]
         payments: Arc::new(tokio::sync::OnceCell::new()),
+        #[cfg(feature = "payments")]
+        payment_recovery: Arc::new(Mutex::new(None)),
         activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
             &mesh_llm_config::RuntimeActivityConfig::default(),
         ),

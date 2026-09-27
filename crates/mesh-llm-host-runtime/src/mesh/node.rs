@@ -176,6 +176,9 @@ pub struct Node {
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
     #[cfg(feature = "payments")]
     pub(crate) payments: crate::network::payments::PaymentsSlot,
+    /// Stops the payment-recovery loop, which holds a `Node` clone.
+    #[cfg(feature = "payments")]
+    pub(crate) payment_recovery: crate::network::payments::PaymentRecoverySlot,
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
@@ -645,6 +648,8 @@ impl Node {
             close_endpoint_gracefully(&lifecycle.endpoint, "owner-control").await;
         }
         self.shutdown_stage_control().await;
+        #[cfg(feature = "payments")]
+        self.shutdown_payment_recovery().await;
     }
 
     async fn shutdown_stage_control(&self) {
@@ -890,6 +895,8 @@ impl Node {
             },
             #[cfg(feature = "payments")]
             payments: Arc::new(tokio::sync::OnceCell::new()),
+            #[cfg(feature = "payments")]
+            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &activity_policy_config,
             ),
@@ -1070,6 +1077,8 @@ impl Node {
             },
             #[cfg(feature = "payments")]
             payments: Arc::new(tokio::sync::OnceCell::new()),
+            #[cfg(feature = "payments")]
+            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &mesh_llm_config::RuntimeActivityConfig::default(),
             ),

@@ -98,12 +98,18 @@ pub(super) fn sampling_semantic_fingerprint(
         mirostat_entropy,
         mirostat_learning_rate,
         samplers,
+        reasoning_budget,
     } = sampling;
 
     let mut digest = Sha256::new();
-    digest.update(b"skippy-sampling-fingerprint-v2");
+    digest.update(b"skippy-sampling-fingerprint-v3");
     update_bool(&mut digest, b"enabled", *enabled);
     update_bool(&mut digest, b"ignore_eos", *ignore_eos);
+    update_string(
+        &mut digest,
+        b"reasoning_budget",
+        &format!("{reasoning_budget:?}"),
+    );
     update_u32(&mut digest, b"seed", *seed);
     update_f32(&mut digest, b"temperature", *temperature);
     update_f32(&mut digest, b"top_p", *top_p);
@@ -282,6 +288,9 @@ mod tests {
         mutation!("samplers", |sampling: &mut SamplingConfig| sampling
             .samplers
             .swap(0, 1));
+        mutation!("reasoning_budget", |sampling: &mut SamplingConfig| {
+            sampling.reasoning_budget = skippy_runtime::ReasoningBudget::Resolved(1024)
+        });
 
         for (field, sampling) in mutations {
             assert_ne!(

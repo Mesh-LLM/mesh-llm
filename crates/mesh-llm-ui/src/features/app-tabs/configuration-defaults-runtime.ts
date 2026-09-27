@@ -353,27 +353,6 @@ export const CONFIGURATION_DEFAULT_RUNTIME_SETTINGS = [
     control: { kind: 'text', name: 'device', value: '', placeholder: 'cuda:0 or CUDA0' }
   },
   {
-    id: 'kv-cache',
-    categoryId: 'memory',
-    tomlSection: 'defaults.model_fit',
-    tomlKey: 'kv_cache_policy',
-    icon: 'filter',
-    label: 'KV cache policy',
-    description: 'Select how aggressively KV cache precision is reduced to fit larger contexts.',
-    inheritedLabel: 'Used when the placement has no cache override',
-    control: {
-      kind: 'choice',
-      name: 'kv_cache_policy',
-      value: 'auto',
-      options: [
-        { value: 'auto', label: 'auto' },
-        { value: 'quality', label: 'quality' },
-        { value: 'balanced', label: 'balanced' },
-        { value: 'saver', label: 'saver' }
-      ]
-    }
-  },
-  {
     id: 'memory-margin',
     categoryId: 'memory',
     tomlSection: 'defaults.hardware',
@@ -411,7 +390,8 @@ export const CONFIGURATION_DEFAULT_RUNTIME_SETTINGS = [
     categoryId: 'memory',
     icon: 'layers',
     label: 'Micro-batch size',
-    description: 'Set the default decode micro-batch size.',
+    description:
+      'Set the default micro-batch (physical prefill chunk) size. Values at or below 128 keep the CUDA SSM sequential-scan fallback; larger values enable the SSD chunked kernel for recurrent models.',
     inheritedLabel: 'Applied when a placement does not override micro-batch size',
     visibility: 'advanced',
     tomlSection: MODEL_FIT_TOML_SECTION,

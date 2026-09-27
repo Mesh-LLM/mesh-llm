@@ -35,8 +35,7 @@ const DEFAULT_MODEL_PLACEMENT_PATHS: ConfigurationModelPlacementPaths = {
   device: 'models.<model-ref>.hardware.device',
   gpuLayers: 'models.<model-ref>.hardware.gpu_layers',
   cacheTypeK: 'models.<model-ref>.model_fit.cache_type_k',
-  cacheTypeV: 'models.<model-ref>.model_fit.cache_type_v',
-  kvCachePolicy: 'models.<model-ref>.model_fit.kv_cache_policy'
+  cacheTypeV: 'models.<model-ref>.model_fit.cache_type_v'
 }
 
 const defaultSectionOrder: readonly ConfigurationTomlSectionId[] = [
@@ -404,8 +403,7 @@ function consumeModelConfigEntry(
 function modelFitOverridePaths(placementPaths: ConfigurationModelPlacementPaths): Array<{ key: string; path: string }> {
   return [
     { key: 'cache_type_k', path: placementPaths.cacheTypeK ?? DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeK! },
-    { key: 'cache_type_v', path: placementPaths.cacheTypeV ?? DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeV! },
-    { key: 'kv_cache_policy', path: placementPaths.kvCachePolicy ?? DEFAULT_MODEL_PLACEMENT_PATHS.kvCachePolicy! }
+    { key: 'cache_type_v', path: placementPaths.cacheTypeV ?? DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeV! }
   ]
 }
 
@@ -560,15 +558,6 @@ export function appendSelectedModelConfig(
   if (config.cacheTypeV) {
     appendModelConfigLine(modelLines, sectionLines, 'models.<model-ref>.model_fit.cache_type_v', config.cacheTypeV)
     emittedKeys.add('cache_type_v')
-  }
-  if (config.kvCachePolicy) {
-    appendModelConfigLine(
-      modelLines,
-      sectionLines,
-      'models.<model-ref>.model_fit.kv_cache_policy',
-      config.kvCachePolicy
-    )
-    emittedKeys.add('kv_cache_policy')
   }
 }
 

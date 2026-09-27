@@ -129,6 +129,7 @@ fn native_mtp_generation() -> PackageGenerationInfo {
     );
 
     PackageGenerationInfo {
+        request_defaults: None,
         speculative_decoding: Some(PackageSpeculativeDecodingInfo {
             default: "mtp".to_string(),
             proposers,
@@ -184,6 +185,7 @@ fn native_mtp_cache_generation() -> PackageGenerationInfo {
         },
     );
     PackageGenerationInfo {
+        request_defaults: None,
         speculative_decoding: Some(PackageSpeculativeDecodingInfo {
             default: "mtp-cache".to_string(),
             proposers,
@@ -227,6 +229,7 @@ fn ngram_cache_generation() -> PackageGenerationInfo {
         },
     );
     PackageGenerationInfo {
+        request_defaults: None,
         speculative_decoding: Some(PackageSpeculativeDecodingInfo {
             default: "ngram-cache".to_string(),
             proposers,
@@ -270,6 +273,7 @@ fn ngram_suffix_generation() -> PackageGenerationInfo {
         },
     );
     PackageGenerationInfo {
+        request_defaults: None,
         speculative_decoding: Some(PackageSpeculativeDecodingInfo {
             default: "ngram-suffix".to_string(),
             proposers,
@@ -1212,6 +1216,7 @@ strategy = "mtp"
     );
     let model_file = temp_model_file();
     let generation = PackageGenerationInfo {
+        request_defaults: None,
         speculative_decoding: None,
     };
 

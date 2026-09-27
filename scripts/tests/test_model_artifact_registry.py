@@ -17,6 +17,33 @@ RESOLVER = ROOT / "scripts" / "resolve-test-model-manifest.py"
 
 
 class ModelArtifactRegistryTests(unittest.TestCase):
+    def test_generator_rejects_invalid_minimum_runner_memory(self) -> None:
+        registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
+        row = next(row for row in registry["artifacts"] if "certification" in row)
+        for invalid in (192, 128.0, True, "256"):
+            with self.subTest(invalid=invalid):
+                row["certification"]["resources"]["minimum_runner_memory_gib"] = invalid
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    source = Path(temp_dir) / "registry.json"
+                    source.write_text(json.dumps(registry), encoding="utf-8")
+                    result = subprocess.run(
+                        [
+                            "python3",
+                            str(GENERATOR),
+                            "--registry",
+                            str(source),
+                            "--check",
+                        ],
+                        cwd=ROOT,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                self.assertEqual(2, result.returncode)
+                self.assertIn(
+                    "minimum_runner_memory_gib must be 128 or 256", result.stderr
+                )
+
     def test_generator_rejects_incompatible_workload_class_and_profile(self) -> None:
         """A recognized profile must also belong to the selected workload class."""
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))

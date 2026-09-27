@@ -20,8 +20,7 @@ describe('configuration model merge and diagnostics', () => {
             model_fit: {
               ctx_size: 2048,
               cache_type_k: 'q8_0',
-              cache_type_v: 'q4_0',
-              kv_cache_policy: 'balanced'
+              cache_type_v: 'q4_0'
             },
             hardware: { device: 'cuda:0', gpu_layers: -1 },
             keep: 'first'
@@ -64,8 +63,7 @@ describe('configuration model merge and diagnostics', () => {
               draftModelPath: '/models/draft.gguf',
               flashAttention: 'enabled',
               cacheTypeK: 'q8_0',
-              cacheTypeV: 'q5_1',
-              kvCachePolicy: 'balanced'
+              cacheTypeV: 'q5_1'
             }
           },
           { id: 'assign-2', modelId: 'hf://meshllm/dupe@main:Q4_K_M', nodeId: 'self', containerIdx: 1, ctx: 16384 }
@@ -85,7 +83,6 @@ describe('configuration model merge and diagnostics', () => {
           ubatch: 128,
           cache_type_k: 'q8_0',
           cache_type_v: 'q5_1',
-          kv_cache_policy: 'balanced',
           flash_attention: 'enabled'
         },
         hardware: {
@@ -331,7 +328,6 @@ describe('configuration model merge and diagnostics', () => {
       'defaults.throughput.parallel',
       'defaults.hardware.safety_margin_gb',
       'defaults.model_fit.ctx_size',
-      'defaults.model_fit.kv_cache_policy',
       'defaults.request_defaults.temperature',
       'defaults.request_defaults.reasoning_enabled'
     ])

@@ -700,7 +700,8 @@ fn verify_staged_mesh_binary_version(extracted: &Path, expected_version: &str) -
     Ok(())
 }
 
-#[cfg(test)]
+// Only the runtime-tree tests use it, and they do not run on Windows.
+#[cfg(all(test, not(windows)))]
 fn installed_runtime_tree(install_dir: &Path) -> PathBuf {
     install_dir.join(NATIVE_RUNTIMES_DIR_NAME).join("runtime")
 }

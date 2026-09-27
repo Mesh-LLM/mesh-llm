@@ -1,0 +1,26 @@
+{
+  "selection": {
+    "default": "thinking",
+    "reasoning_enabled": "thinking"
+  },
+  "profiles": {
+    "thinking": {
+      "max_tokens": 32768,
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0,
+      "reasoning": {
+        "enabled": "on",
+        "budget": "auto"
+      },
+      "provenance": {
+        "source_repo": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+        "revision": "144afc2f379b542fdd4e85a1fcd5e1f79112d95d",
+        "file": "README.md",
+        "section": "Best Practices",
+        "url": "https://huggingface.co/Qwen/Qwen3-30B-A3B-Thinking-2507/blob/144afc2f379b542fdd4e85a1fcd5e1f79112d95d/README.md"
+      }
+    }
+  }
+}

@@ -233,7 +233,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_stage_status_list_support() {
 }
 
 #[test]
-pub(crate) fn test_apply_transitive_ann_refreshes_stage_protocol_generation_support() {
+pub(crate) fn test_apply_transitive_ann_cannot_promote_stage_protocol_generation_support() {
     let mut existing = test_peer(Some(100));
     existing.stage_protocol_generation_supported = false;
     let mut ann = test_announcement(Some(100));
@@ -243,6 +243,23 @@ pub(crate) fn test_apply_transitive_ann_refreshes_stage_protocol_generation_supp
         &mut existing,
         &test_addr(0x33),
         &ann,
+        test_endpoint_id(0xee),
+    );
+
+    assert!(!existing.stage_protocol_generation_supported);
+}
+
+#[test]
+pub(crate) fn test_apply_transitive_ann_preserves_direct_stage_protocol_generation_support() {
+    let mut existing = test_peer(Some(100));
+    existing.stage_protocol_generation_supported = true;
+    let mut old_relay_ann = test_announcement(Some(100));
+    old_relay_ann.stage_protocol_generation_supported = false;
+
+    apply_transitive_ann(
+        &mut existing,
+        &test_addr(0x33),
+        &old_relay_ann,
         test_endpoint_id(0xee),
     );
 
@@ -316,6 +333,41 @@ pub(crate) async fn test_transitive_peer_cannot_establish_local_gguf_content_id_
     let state = node.state.lock().await;
     let peer = state.peers.get(&peer_id).expect("peer should be tracked");
     assert!(peer.local_gguf_content_id_supported);
+}
+
+#[tokio::test]
+pub(crate) async fn test_transitive_peer_cannot_override_direct_stage_protocol_generation() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x4b);
+    let addr = test_addr(0x4b);
+    let bridge_id = test_endpoint_id(0xec);
+    let mut ann = test_announcement(Some(100));
+    ann.addr = addr.clone();
+    ann.stage_protocol_generation_supported = true;
+
+    node.update_transitive_peer(peer_id, &addr, &ann, bridge_id)
+        .await;
+    {
+        let state = node.state.lock().await;
+        let peer = state.peers.get(&peer_id).expect("peer should be tracked");
+        assert!(!peer.stage_protocol_generation_supported);
+        assert!(!peer.is_admitted());
+    }
+
+    node.add_peer(peer_id, addr.clone(), &ann, None).await;
+    {
+        let state = node.state.lock().await;
+        let peer = state.peers.get(&peer_id).expect("peer should be tracked");
+        assert!(peer.stage_protocol_generation_supported);
+        assert!(peer.is_admitted());
+    }
+
+    ann.stage_protocol_generation_supported = false;
+    node.update_transitive_peer(peer_id, &addr, &ann, bridge_id)
+        .await;
+    let state = node.state.lock().await;
+    let peer = state.peers.get(&peer_id).expect("peer should be tracked");
+    assert!(peer.stage_protocol_generation_supported);
 }
 
 #[test]

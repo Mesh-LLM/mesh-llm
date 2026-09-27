@@ -165,6 +165,31 @@ impl KvStageIntegration {
             None => candidate_token_count == prompt_token_count,
         }
     }
+
+    /// Whether a full-prompt exact state is also a durable checkpoint.
+    ///
+    /// Off-checkpoint full states remain useful in resident L1, but spilling
+    /// them would let this stage reopen farther ahead than downstream stages
+    /// that only persist the shared checkpoint.
+    pub(crate) fn full_exact_state_writes_through_l3(&self, token_count: usize) -> bool {
+        u64::try_from(token_count).ok().is_some_and(|token_count| {
+            self.exact_state_record_token_count_allowed(token_count, token_count)
+        })
+    }
+
+    /// Restrict a cold durable lookup to the checkpoint shared by every stage.
+    ///
+    /// Warm L1 may retain a longer request- or chat-specific boundary, but an
+    /// older durable entry at that boundary cannot be restored coherently when
+    /// downstream stages only persisted the canonical shared checkpoint.
+    pub(crate) fn durable_exact_lookup_token_ids<'a>(&self, token_ids: &'a [i32]) -> &'a [i32] {
+        let checkpoint = self
+            .exact_shared_checkpoint_token_count(token_ids.len() as u64)
+            .and_then(|token_count| usize::try_from(token_count).ok())
+            .unwrap_or(token_ids.len())
+            .min(token_ids.len());
+        &token_ids[..checkpoint]
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +249,8 @@ mod tests {
                 payload: StageKvCachePayload::ResidentKv,
                 max_entries: 8,
                 max_bytes: 0,
+                l2_max_bytes: 0,
+                codec: skippy_protocol::StageKvCacheCodec::Native,
                 min_tokens: 64,
                 shared_prefix_stride_tokens: 32,
                 shared_prefix_record_limit: 2,
@@ -346,11 +373,12 @@ mod tests {
                 recorded.namespace.clone(),
                 &recorded.token_ids,
                 1,
-                super::super::RadixExactEntry {
-                    page_id: recorded.page_id.clone(),
-                    payload: ExactStatePayload::kv_recurrent(Vec::new(), vec![1]),
-                    extra: ExactStateExtra::default(),
-                },
+                super::super::RadixExactEntry::new(
+                    recorded.page_id.clone(),
+                    ExactStatePayload::kv_recurrent(Vec::new(), vec![1]),
+                    ExactStateExtra::default(),
+                    true,
+                ),
             )
             .unwrap();
         let mut lookup_tokens = recorded_tokens.clone();
@@ -411,5 +439,11 @@ mod tests {
         assert!(!kv.exact_state_record_token_count_allowed(970, 969));
         assert!(!kv.exact_state_record_token_count_allowed(970, 970));
         assert!(kv.exact_state_record_token_count_allowed(200, 200));
+        assert!(!kv.full_exact_state_writes_through_l3(970));
+        assert!(kv.full_exact_state_writes_through_l3(200));
+        let long_tokens = (0..970).collect::<Vec<_>>();
+        let short_tokens = (0..200).collect::<Vec<_>>();
+        assert_eq!(kv.durable_exact_lookup_token_ids(&long_tokens).len(), 768);
+        assert_eq!(kv.durable_exact_lookup_token_ids(&short_tokens).len(), 200);
     }
 }

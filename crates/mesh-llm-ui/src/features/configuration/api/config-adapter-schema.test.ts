@@ -210,9 +210,6 @@ describe('configuration schema and status adaptation', () => {
           hardware: {
             safety_margin_gb: 3.5
           },
-          model_fit: {
-            kv_cache_policy: 'quality'
-          },
           request_defaults: {
             temperature: 0.8,
             reasoning_enabled: false
@@ -229,7 +226,6 @@ describe('configuration schema and status adaptation', () => {
 
     expect(values['defaults.throughput.parallel']).toBe('8')
     expect(values['defaults.hardware.safety_margin_gb']).toBe('3.5')
-    expect(values['defaults.model_fit.kv_cache_policy']).toBe('quality')
     expect(values['defaults.request_defaults.temperature']).toBe('0.8')
     expect(values['defaults.request_defaults.reasoning_enabled']).toBe('off')
   })
@@ -240,7 +236,6 @@ describe('configuration schema and status adaptation', () => {
     const reasoningEnabled = defaults.settings.find(
       (setting) => setting.id === 'defaults.request_defaults.reasoning_enabled'
     )
-    const kvCache = defaults.settings.find((setting) => setting.id === 'defaults.model_fit.kv_cache_policy')
     const ctxSize = defaults.settings.find((setting) => setting.id === 'defaults.model_fit.ctx_size')
 
     expect(temperature).toMatchObject({
@@ -261,13 +256,6 @@ describe('configuration schema and status adaptation', () => {
           { value: 'off', label: 'off' },
           { value: 'on', label: 'on' }
         ]
-      })
-    })
-    expect(kvCache).toMatchObject({
-      rendererId: 'kv-cache-policy',
-      control: expect.objectContaining({
-        kind: 'choice',
-        options: expect.arrayContaining([{ value: 'quality', label: 'quality' }])
       })
     })
     expect(ctxSize).toMatchObject({

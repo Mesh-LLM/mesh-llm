@@ -146,6 +146,23 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn('SCCACHE_GHA_ENABLED', PASS_WORKFLOW.read_text())
         self.assertIn('force_certify:', WORKFLOW.read_text())
 
+    def test_family_certification_uses_os_assigned_ports(self) -> None:
+        battery = BATTERY.read_text(encoding="utf-8")
+        family = FAMILY_CERTIFY.read_text(encoding="utf-8")
+        workload = (ROOT / "scripts/skippy-workload-certify.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("--port-base", battery + family)
+        self.assertNotIn("19000 +", battery + family)
+        self.assertNotIn(":-19337", workload)
+        self.assertNotIn(":-19338", workload)
+        self.assertIn("allocate_local_ports.py", family)
+        self.assertIn("allocate_local_ports.py", workload)
+        self.assertIn("PORT_START_ATTEMPTS=3", family)
+        self.assertIn("PORT_START_ATTEMPTS=3", workload)
+        self.assertIn("address_in_use_log", family)
+        self.assertIn("address_in_use_log", workload)
+
     def test_persistent_runner_executes_only_trusted_main_with_read_access(self) -> None:
         workflow = WORKFLOW.read_text()
         worker = PASS_WORKFLOW.read_text()
@@ -951,7 +968,9 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             environment = json.loads(
                 (run_dir / "preflight" / "environment.json").read_text(encoding="utf-8")
             )
-            self.assertFalse(environment["port_range"]["checked"])
+            self.assertEqual(
+                {"allocation": "os-assigned-at-launch"}, environment["ports"]
+            )
             resolved = (run_dir / "resolved-models.tsv").read_text(encoding="utf-8")
             self.assertIn(revision, resolved)
             self.assertIn("|1|1024|5|", resolved)

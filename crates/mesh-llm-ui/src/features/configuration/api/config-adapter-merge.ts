@@ -590,11 +590,6 @@ function writeSelectedModelConfig(
     placementPaths.cacheTypeV ?? DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeV!,
     config?.cacheTypeV
   )
-  writeOptionalModelEntryPath(
-    entry,
-    placementPaths.kvCachePolicy ?? DEFAULT_MODEL_PLACEMENT_PATHS.kvCachePolicy!,
-    config?.kvCachePolicy
-  )
 }
 
 export function mergeConfigurationIntoMeshConfig(

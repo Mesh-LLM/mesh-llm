@@ -221,10 +221,10 @@ index 000000000..f0c3b2ea7
 +}
 diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
 new file mode 100644
-index 000000000..9f8269148
+index 000000000..b54096e58
 --- /dev/null
 +++ b/src/skippy/workloads.cpp
-@@ -0,0 +1,360 @@
+@@ -0,0 +1,365 @@
 +#include "skippy/workloads.h"
 +
 +#include "llama.h"
@@ -335,8 +335,13 @@ index 000000000..9f8269148
 +                                    skippy_error **     out_error) {
 +    clear_workload_state(session);
 +    llama_batch   batch         = make_embedding_batch(session, token_ids, token_count);
-+    const int32_t decode_status = llama_decode(session->ctx, batch);
++    int32_t decode_status = 0;
++    const bool decoded = skippy_contain_native_failure(
++            out_error, [&] { decode_status = llama_decode(session->ctx, batch); });
 +    llama_batch_free(batch);
++    if (!decoded) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
 +    if (decode_status != 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama_decode failed for non-chat workload");
 +        return SKIPPY_STATUS_RUNTIME_ERROR;

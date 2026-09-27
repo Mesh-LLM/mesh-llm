@@ -242,12 +242,15 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("kv_recurrent_model_artifact_id: family-granite-hybrid", caller)
         self.assertIn("kv_recurrent_expected_exact_payload_kind: kv-recurrent", caller)
         self.assertNotIn("Qwen3.5-0.8B-Q4_K_M.gguf", caller)
+        self.assertIn("MESH_TWO_NODE_SPLIT_DURABLE_L3=1", caller)
         self.assertIn("run_client_routing_probe", smoke_script)
         self.assertIn("Passive client routing and streaming validated", smoke_script)
         self.assertIn(
             'checkpointed_restore = exact_payload_kind == "kv-recurrent"',
             smoke_script,
         )
+        self.assertIn("run_durable_restart_probe", smoke_script)
+        self.assertIn("kv-cache status", smoke_script)
         self.assertIn(
             "if not checkpointed_restore and (", smoke_script
         )

@@ -43,6 +43,7 @@ class LlamaNativeFullReplayTests(unittest.TestCase):
         full_replay: bool,
         upstream_tests: bool = False,
         repeat_cached: bool = False,
+        backend: str = "cpu",
     ) -> list[dict[str, object]]:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -127,7 +128,7 @@ class LlamaNativeFullReplayTests(unittest.TestCase):
                 {
                     "LLAMA_WORKDIR": str(llama),
                     "LLAMA_STAGE_BUILD_DIR": str(build),
-                    "LLAMA_STAGE_BACKEND": "cpu",
+                    "LLAMA_STAGE_BACKEND": backend,
                     "LLAMA_STAGE_LINK_MODE": "static",
                     "LLAMA_STAGE_FORCE_BUILD": "1",
                     "LLAMA_STAGE_USE_SCCACHE": "0",
@@ -205,6 +206,12 @@ class LlamaNativeFullReplayTests(unittest.TestCase):
 
         self.assertEqual(len(build_calls), 2)
         self.assertEqual(len(ctest_calls), 2)
+
+    def test_metal_full_replay_builds_cachegen_fixture(self) -> None:
+        trace = self.run_build(full_replay=True, backend="metal")
+        build = next(call for call in trace if call["args"][0] == "--build")
+
+        self.assertIn("test-skippy-cachegen-metal", build["args"])
 
     def test_cached_standard_build_keeps_cache_shortcut(self) -> None:
         trace = self.run_build(full_replay=False, repeat_cached=True)

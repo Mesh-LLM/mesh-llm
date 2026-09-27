@@ -145,6 +145,7 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         Command::Serve
         | Command::Client
         | Command::Runtime { .. }
+        | Command::KvCache { .. }
         | Command::Load { .. }
         | Command::Unload { .. }
         | Command::Status { .. }

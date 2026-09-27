@@ -468,6 +468,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "runner_role",
                 "cache_policy",
                 "estimated_model_bytes",
+                "minimum_runner_memory_gib",
                 "startup_timeout_secs",
             },
             f"{field}.resources",
@@ -495,6 +496,18 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 180,
                 1800,
             )
+        minimum_runner_memory_gib = None
+        if "minimum_runner_memory_gib" in resources:
+            minimum_runner_memory_gib = _integer(
+                resources["minimum_runner_memory_gib"],
+                f"{field}.resources.minimum_runner_memory_gib",
+                128,
+                256,
+            )
+            if minimum_runner_memory_gib not in (128, 256):
+                raise PlanError(
+                    f"{field}.resources.minimum_runner_memory_gib must be 128 or 256"
+                )
         notes = _string(model.get("notes"), f"{field}.notes")
         profile_policy = policy["profiles"][profile]
         models.append(
@@ -525,6 +538,11 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                     "cache_policy": cache_policy,
                     "estimated_model_bytes": estimated_model_bytes,
                     "startup_timeout_secs": startup_timeout_secs,
+                    **(
+                        {"minimum_runner_memory_gib": minimum_runner_memory_gib}
+                        if minimum_runner_memory_gib is not None
+                        else {}
+                    ),
                 },
                 "notes": notes,
                 **({"evidence": evidence} if evidence is not None else {}),

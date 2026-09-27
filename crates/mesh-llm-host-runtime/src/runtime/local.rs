@@ -3,6 +3,10 @@ use super::context_planning::{
     RuntimeResourcePlan, RuntimeResourcePlanInput, RuntimeResourcePlanningProfile,
     plan_runtime_resources,
 };
+use super::local_memory_plan::{
+    MemoryPlanMeasurementKey, MemoryPlanStartPath, emit_measured_memory_reconciliation,
+    emit_memory_plan_resolved, measured_buffers_footprint,
+};
 use super::split_planning::format_gb;
 use crate::api;
 use crate::inference::{election, skippy};
@@ -938,12 +942,12 @@ pub(super) async fn start_local_openai_model(
         .flatten()
     };
 
-    // Guard the size-tiered default against quantised-KV load incompatibilities
-    // (Flash Attention off, or a head_dim not divisible by the block size) so
-    // planning and the load agree and the context build does not fail. Explicit
-    // user overrides below are never guarded — they must fail loudly.
-    let kv_cache = skippy::KvCachePolicy::for_model_size(total_model_bytes)
-        .guarded_for_model(compact_meta.as_ref());
+    let kv_cache = skippy::KvCachePolicy::from_publisher_defaults(
+        package
+            .as_ref()
+            .and_then(|package| package.publisher_defaults.as_ref()),
+    )
+    .guarded_for_model(compact_meta.as_ref());
     let effective_cache_type_k = spec
         .cache_type_k_override
         .unwrap_or(kv_cache.cache_type_k());
@@ -954,7 +958,18 @@ pub(super) async fn start_local_openai_model(
         effective_cache_type_k,
         effective_cache_type_v,
     )
-    .unwrap_or(models::gguf::GgufKvCacheQuant::Q8_0);
+    .unwrap_or(models::gguf::GgufKvCacheQuant::F16);
+    let measurement_key = MemoryPlanMeasurementKey::new(format!(
+        "model={runtime_model_name:?};path={:?};bytes={local_model_bytes};capacity={my_vram};config={:?};config_model={:?};device={:?};pinned_gpu={:?};cache_k={effective_cache_type_k:?};cache_v={effective_cache_type_v:?};batch={:?};ubatch={:?};flash={:?}",
+        spec.model_path,
+        spec.mesh_config,
+        spec.config_model_id,
+        spec.device_override,
+        spec.pinned_gpu,
+        spec.n_batch_override,
+        spec.n_ubatch_override,
+        spec.flash_attention_override,
+    ));
 
     let plan = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: spec.ctx_size_override,
@@ -965,7 +980,15 @@ pub(super) async fn start_local_openai_model(
         kv_cache_quant,
         local_layer_fraction,
         planning_profile: spec.planning_profile,
+        measured_buffers: measured_buffers_footprint(&measurement_key),
     });
+    anyhow::ensure!(
+        !plan
+            .breakdown
+            .as_ref()
+            .is_some_and(|breakdown| breakdown.measured_fit == Some(false)),
+        "measured native buffers leave no capacity for the minimum context under the current model configuration"
+    );
 
     if let Some(package) = package {
         start_local_package_v2_model(
@@ -974,6 +997,7 @@ pub(super) async fn start_local_openai_model(
             progress_ingress,
             package,
             plan,
+            measurement_key,
             compact_meta.as_ref(),
         )
         .await
@@ -983,6 +1007,7 @@ pub(super) async fn start_local_openai_model(
             model_name,
             progress_ingress,
             plan,
+            measurement_key,
             compact_meta.as_ref(),
         )
         .await
@@ -994,6 +1019,7 @@ async fn start_local_skippy_model(
     model_name: String,
     progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
     plan: RuntimeResourcePlan,
+    measurement_key: MemoryPlanMeasurementKey,
     compact_meta: Option<&models::gguf::GgufCompactMeta>,
 ) -> Result<(
     String,
@@ -1001,6 +1027,11 @@ async fn start_local_skippy_model(
     tokio::sync::oneshot::Receiver<()>,
 )> {
     let context_length = plan.context_length;
+    emit_memory_plan_resolved(
+        &model_name,
+        plan.breakdown.as_ref(),
+        MemoryPlanStartPath::Direct,
+    );
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
     let mut resolved = resolve_local_openai_skippy_config(
         &spec,
@@ -1064,6 +1095,7 @@ async fn start_local_skippy_model(
     })
     .await
     .context("join load skippy direct GGUF task")??;
+    emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
     let workload_class = skippy_model.workload_class()?;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_name.clone(),
@@ -1098,6 +1130,7 @@ async fn start_local_package_v2_model(
     progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
     package: skippy::SkippyPackageIdentity,
     plan: RuntimeResourcePlan,
+    measurement_key: MemoryPlanMeasurementKey,
     compact_meta: Option<&models::gguf::GgufCompactMeta>,
 ) -> Result<(
     String,
@@ -1134,6 +1167,11 @@ async fn start_local_package_v2_model(
         )
     };
     let context_length = plan.context_length;
+    emit_memory_plan_resolved(
+        &model_name,
+        plan.breakdown.as_ref(),
+        MemoryPlanStartPath::PackageV2,
+    );
     let fallback_projector_path = package_projector_path
         .or_else(|| mmproj_path_for_model(&model_name).filter(|path| path.exists()));
     let mut resolved = resolve_local_openai_skippy_config(
@@ -1232,6 +1270,7 @@ async fn start_local_package_v2_model(
     })
     .await
     .context("join load skippy package-v2 task")??;
+    emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
     let workload_class = handle.workload_class()?;
     report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage);
     let _ = emit_event(OutputEvent::ModelLoaded {

@@ -122,6 +122,16 @@ continuation state for those models. That is where the largest wins come from:
 llama-server warm slots still have to reprocess the recurrent prefix in many
 request shapes, while Skippy can restore the exact compact state and decode.
 
+Durable L3 manifests identify runtime-native KV segments as
+`native-kv-page/1`. Those segments are the bytes exported by the active runtime
+and are stored and restored verbatim; F32, F16, Q8_0, and Q4_0 remain in their
+active runtime representation when that backend supports the type. Recurrent
+and other auxiliary continuation state stays `raw/1`, with a hard segment
+boundary between the representations. Before reading native segment bytes,
+the server checks the manifest's runtime page descriptor against the located
+prefix and encoded KV length. The exact-state identity already binds the
+runtime ABI, platform, model, layer range, and KV configuration.
+
 ```mermaid
 flowchart LR
     Payload["KV + recurrent payload"] --> Split["1 MiB chunks"]

@@ -71,32 +71,40 @@ fn run(args: Args) -> Result<()> {
             model,
             out_dir,
             projectors,
+            publisher_metadata,
             after_artifact_command,
             transform_artifact_command,
             model_id,
             source_repo,
             source_revision,
             source_file,
+            generation_defaults,
             resume_existing_artifacts,
             max_artifact_bytes,
         } => package_v2::write_package(
             model,
             out_dir,
-            projectors,
+            package_v2::PackageSidecars {
+                projectors,
+                publisher_metadata,
+            },
             ArtifactHook {
                 command: after_artifact_command,
             },
             ArtifactHook {
                 command: transform_artifact_command,
             },
-            ExplicitSourceIdentity {
-                model_id,
-                source_repo,
-                source_revision,
-                source_file,
+            package_v2::PackageWriteOptions {
+                explicit: ExplicitSourceIdentity {
+                    model_id,
+                    source_repo,
+                    source_revision,
+                    source_file,
+                },
+                generation_defaults,
+                resume_existing_artifacts,
+                max_artifact_bytes,
             },
-            resume_existing_artifacts,
-            max_artifact_bytes,
         ),
         Command::VerifyPackageV2 {
             package,
