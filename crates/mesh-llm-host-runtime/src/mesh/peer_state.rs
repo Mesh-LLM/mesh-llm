@@ -530,6 +530,10 @@ pub(crate) const PEER_STALE_SECS: u64 = 180; // 3 minutes
 /// genuinely gone, no bridge peer will mention it and it stays forgotten.
 pub(crate) const DEAD_PEER_TTL: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
 
+// RTT evidence must expire before a dead-peer record does. Otherwise a stale
+// observation could keep a departed peer routing-eligible after re-admission.
+const _: () = assert!(PEER_STALE_SECS < DEAD_PEER_TTL.as_secs());
+
 /// How long a confirmed-departed peer id stays barred from transitive
 /// re-admission. [`DEAD_PEER_TTL`] expires quickly so reconnection attempts
 /// can resume, but gossip bridges can keep carrying the departed id's final
@@ -630,8 +634,8 @@ impl MeshState {
     }
 
     /// Whether this node has observed `peer` actually being reachable. See
-    /// [`peer_has_observed_liveness`] for why the connection term alone is
-    /// neither necessary nor sufficient (issue #1756).
+    /// [`peer_has_observed_liveness`] for why a connection is sufficient but
+    /// not necessary during a brief reconnect (issue #1756).
     pub(crate) fn peer_has_observed_liveness(&self, peer: &PeerInfo) -> bool {
         let has_connection = self.connections.contains_key(&peer.id);
         #[cfg(test)]
