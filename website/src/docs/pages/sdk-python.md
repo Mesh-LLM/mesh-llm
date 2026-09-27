@@ -42,6 +42,8 @@ async def main() -> None:
     # )
     async with client:
         models = await client.inference.list_models()
+        if not models:
+            raise RuntimeError("The selected Mesh has no available models")
         response = await client.inference.chat_completions({
             "model": models[0].id,
             "messages": [{"role": "user", "content": "Say hello from Python."}],

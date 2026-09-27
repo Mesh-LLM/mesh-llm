@@ -16,17 +16,38 @@ from .types import (
     Status,
 )
 
+_MAX_STREAM_EVENTS = 256
+
 
 class _EventSink:
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
-        self._queue: asyncio.Queue[object] = asyncio.Queue()
+        self._queue: asyncio.Queue[object] = asyncio.Queue(maxsize=_MAX_STREAM_EVENTS)
+        self._overflowed = False
 
     def on_event(self, event: object) -> None:
-        self._loop.call_soon_threadsafe(self._queue.put_nowait, event)
+        self._loop.call_soon_threadsafe(self._deliver, event)
+
+    def _deliver(self, event: object) -> None:
+        if self._overflowed:
+            return
+        try:
+            self._queue.put_nowait(event)
+        except asyncio.QueueFull:
+            self._overflowed = True
+            while not self._queue.empty():
+                self._queue.get_nowait()
+            self._queue.put_nowait(
+                RuntimeError(
+                    f"OpenAI stream consumer fell behind by {_MAX_STREAM_EVENTS} events"
+                )
+            )
 
     async def next(self) -> object:
-        return await self._queue.get()
+        event = await self._queue.get()
+        if isinstance(event, BaseException):
+            raise event
+        return event
 
 
 class Inference:
@@ -96,12 +117,20 @@ class Inference:
         request["stream"] = True
         loop = asyncio.get_running_loop()
         sink = _EventSink(loop)
-        request_id = await asyncio.to_thread(
-            self._handle.openai_stream,
-            path,
-            json.dumps(request, separators=(",", ":")),
-            sink,
+        start_task = asyncio.create_task(
+            asyncio.to_thread(
+                self._handle.openai_stream,
+                path,
+                json.dumps(request, separators=(",", ":")),
+                sink,
+            )
         )
+        try:
+            request_id = await asyncio.shield(start_task)
+        except asyncio.CancelledError:
+            request_id = await start_task
+            await asyncio.to_thread(self._handle.cancel, request_id)
+            raise
         finished = False
         try:
             while True:

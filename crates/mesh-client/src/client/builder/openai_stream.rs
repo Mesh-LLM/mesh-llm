@@ -4,6 +4,7 @@ use super::{
 };
 use crate::events::{OpenAiStreamEvent, OpenAiStreamListener};
 use iroh::Endpoint;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -128,33 +129,50 @@ async fn stream_direct_mesh(
         .bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], 0)))
         .map_err(|error| StreamFailure::transport(format!("build mesh endpoint: {error}")))?;
     builder = builder.relay_mode(relay_mode_from_endpoint_addr(&addr));
-    let endpoint = builder
-        .bind()
-        .await
+    let endpoint = race_cancel(builder.bind(), cancelled.as_ref(), cancel_notify.as_ref())
+        .await?
         .map_err(|error| StreamFailure::transport(format!("bind mesh endpoint: {error}")))?;
 
     let result = async {
         if addr.relay_urls().next().is_some() {
-            let _ = tokio::time::timeout(config.connect_timeout, endpoint.online()).await;
+            let _ = race_cancel(
+                tokio::time::timeout(config.connect_timeout, endpoint.online()),
+                cancelled.as_ref(),
+                cancel_notify.as_ref(),
+            )
+            .await?;
         }
-        let connection =
-            tokio::time::timeout(config.connect_timeout, endpoint.connect(addr, ALPN_V1))
-                .await
-                .map_err(|_| StreamFailure::transport("connect mesh endpoint: timed out"))?
-                .map_err(|error| {
-                    StreamFailure::transport(format!("connect mesh endpoint: {error}"))
-                })?;
-        let (mut send, mut recv) = connection.open_bi().await.map_err(|error| {
-            StreamFailure::transport(format!("open mesh request stream: {error}"))
+        let connection = race_cancel(
+            tokio::time::timeout(config.connect_timeout, endpoint.connect(addr, ALPN_V1)),
+            cancelled.as_ref(),
+            cancel_notify.as_ref(),
+        )
+        .await?
+        .map_err(|_| StreamFailure::transport("connect mesh endpoint: timed out"))?
+        .map_err(|error| StreamFailure::transport(format!("connect mesh endpoint: {error}")))?;
+        let (mut send, mut recv) = race_cancel(
+            connection.open_bi(),
+            cancelled.as_ref(),
+            cancel_notify.as_ref(),
+        )
+        .await?
+        .map_err(|error| StreamFailure::transport(format!("open mesh request stream: {error}")))?;
+        race_cancel(
+            send.write_all(&[STREAM_TUNNEL_HTTP]),
+            cancelled.as_ref(),
+            cancel_notify.as_ref(),
+        )
+        .await?
+        .map_err(|error| {
+            StreamFailure::transport(format!("write mesh request stream type: {error}"))
         })?;
-        send.write_all(&[STREAM_TUNNEL_HTTP])
-            .await
-            .map_err(|error| {
-                StreamFailure::transport(format!("write mesh request stream type: {error}"))
-            })?;
-        send.write_all(request.as_bytes())
-            .await
-            .map_err(|error| StreamFailure::transport(format!("write mesh request: {error}")))?;
+        race_cancel(
+            send.write_all(request.as_bytes()),
+            cancelled.as_ref(),
+            cancel_notify.as_ref(),
+        )
+        .await?
+        .map_err(|error| StreamFailure::transport(format!("write mesh request: {error}")))?;
         send.finish()
             .map_err(|error| StreamFailure::transport(format!("finish mesh request: {error}")))?;
 
@@ -178,17 +196,27 @@ async fn stream_http(
     listener: Arc<dyn OpenAiStreamListener>,
 ) -> Result<(), StreamFailure> {
     let address = socket_addr(api_base_url).map_err(StreamFailure::transport)?;
-    let mut stream = TcpStream::connect(&address)
-        .await
-        .map_err(|error| StreamFailure::transport(format!("connect {address}: {error}")))?;
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .map_err(|error| StreamFailure::transport(format!("write request: {error}")))?;
-    stream
-        .shutdown()
-        .await
-        .map_err(|error| StreamFailure::transport(format!("shutdown request: {error}")))?;
+    let mut stream = race_cancel(
+        TcpStream::connect(&address),
+        cancelled.as_ref(),
+        cancel_notify.as_ref(),
+    )
+    .await?
+    .map_err(|error| StreamFailure::transport(format!("connect {address}: {error}")))?;
+    race_cancel(
+        stream.write_all(request.as_bytes()),
+        cancelled.as_ref(),
+        cancel_notify.as_ref(),
+    )
+    .await?
+    .map_err(|error| StreamFailure::transport(format!("write request: {error}")))?;
+    race_cancel(
+        stream.shutdown(),
+        cancelled.as_ref(),
+        cancel_notify.as_ref(),
+    )
+    .await?
+    .map_err(|error| StreamFailure::transport(format!("shutdown request: {error}")))?;
     consume_response(&mut stream, request_id, cancelled, cancel_notify, listener).await
 }
 
@@ -375,6 +403,21 @@ async fn read_with_cancel<R: AsyncRead + Unpin>(
     }
 }
 
+async fn race_cancel<F: Future>(
+    future: F,
+    cancelled: &AtomicBool,
+    cancel_notify: &Notify,
+) -> Result<F::Output, StreamFailure> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err(StreamFailure::cancelled());
+    }
+    tokio::select! {
+        biased;
+        _ = cancel_notify.notified() => Err(StreamFailure::cancelled()),
+        output = future => Ok(output),
+    }
+}
+
 fn emit_decoded(
     body: &mut BodyDecoder,
     sse: &mut SseDecoder,
@@ -483,16 +526,25 @@ impl ChunkedDecoder {
             }
 
             if let Some(remaining) = self.remaining {
-                if self.buffer.len() < remaining + 2 {
+                if remaining > 0 {
+                    let count = remaining.min(self.buffer.len());
+                    output.extend_from_slice(&self.buffer[..count]);
+                    self.buffer.drain(..count);
+                    self.remaining = Some(remaining - count);
+                    if count == 0 || count < remaining {
+                        break;
+                    }
+                    continue;
+                }
+                if self.buffer.len() < 2 {
                     break;
                 }
-                if &self.buffer[remaining..remaining + 2] != b"\r\n" {
+                if !self.buffer.starts_with(b"\r\n") {
                     return Err(StreamFailure::transport(
                         "malformed chunked response: missing chunk terminator",
                     ));
                 }
-                output.extend_from_slice(&self.buffer[..remaining]);
-                self.buffer.drain(..remaining + 2);
+                self.buffer.drain(..2);
                 self.remaining = None;
                 continue;
             }
@@ -526,15 +578,15 @@ struct SseDecoder {
 impl SseDecoder {
     fn push(&mut self, input: &[u8]) -> Result<Vec<SseEvent>, StreamFailure> {
         self.buffer.extend_from_slice(input);
-        if self.buffer.len() > MAX_SSE_EVENT_BYTES {
-            return Err(StreamFailure::transport("OpenAI SSE event exceeds 8 MiB"));
-        }
         let mut events = Vec::new();
         while let Some(end) = sse_frame_end(&self.buffer) {
             let raw = self.buffer.drain(..end).collect::<Vec<_>>();
             if let Some(event) = parse_sse_event(&raw)? {
                 events.push(event);
             }
+        }
+        if self.buffer.len() > MAX_SSE_EVENT_BYTES {
+            return Err(StreamFailure::transport("OpenAI SSE event exceeds 8 MiB"));
         }
         Ok(events)
     }
@@ -550,18 +602,34 @@ impl SseDecoder {
 
 fn sse_frame_end(bytes: &[u8]) -> Option<usize> {
     let mut line_start = 0;
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte != b'\n' {
-            continue;
-        }
-        let mut line_end = index;
-        if line_end > line_start && bytes[line_end - 1] == b'\r' {
-            line_end -= 1;
-        }
-        if line_end == line_start {
-            return Some(index + 1);
-        }
-        line_start = index + 1;
+    let mut index = 0;
+    while index < bytes.len() {
+        let line_end = match bytes[index] {
+            b'\r' => {
+                let end = if bytes.get(index + 1) == Some(&b'\n') {
+                    index + 2
+                } else {
+                    index + 1
+                };
+                if index == line_start {
+                    return Some(end);
+                }
+                end
+            }
+            b'\n' => {
+                let end = index + 1;
+                if index == line_start {
+                    return Some(end);
+                }
+                end
+            }
+            _ => {
+                index += 1;
+                continue;
+            }
+        };
+        line_start = line_end;
+        index = line_end;
     }
     None
 }
@@ -571,7 +639,7 @@ fn parse_sse_event(raw: &[u8]) -> Result<Option<SseEvent>, StreamFailure> {
         .map_err(|error| StreamFailure::transport(format!("OpenAI SSE is not UTF-8: {error}")))?;
     let mut event_type = None;
     let mut data = Vec::new();
-    for line in raw.lines() {
+    for line in raw.split(['\r', '\n']) {
         if line.is_empty() || line.starts_with(':') {
             continue;
         }
@@ -647,6 +715,32 @@ mod tests {
             }
         );
         assert_eq!(events[2].data, "[DONE]");
+    }
+
+    #[test]
+    fn emits_chunk_payload_before_the_http_chunk_terminator_arrives() {
+        let mut body = BodyDecoder::new(true, None);
+
+        assert_eq!(
+            body.push(b"5\r\nhel").expect("partial chunk decodes"),
+            b"hel"
+        );
+        assert_eq!(body.push(b"lo").expect("chunk remainder decodes"), b"lo");
+        assert!(body.push(b"\r\n0\r\n\r\n").expect("chunk ends").is_empty());
+        body.finish().expect("chunked body terminates");
+    }
+
+    #[test]
+    fn accepts_cr_only_sse_line_endings() {
+        let raw = b"event: update\rdata: one\rdata: two\r\r";
+        let event = SseDecoder::default()
+            .push(raw)
+            .expect("CR-only SSE frame decodes")
+            .pop()
+            .expect("event emitted");
+
+        assert_eq!(event.event_type.as_deref(), Some("update"));
+        assert_eq!(event.data, "one\ntwo");
     }
 
     #[test]

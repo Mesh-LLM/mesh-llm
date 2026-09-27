@@ -226,11 +226,16 @@ class Client(private val handle: MeshClientHandleInterface) {
         fun streamJson(path: String, bodyJson: String): Flow<OpenAIStreamEvent> = callbackFlow {
             val requestId = AtomicReference<RequestId?>()
             val terminal = AtomicBoolean(false)
+            fun emitOrClose(event: OpenAIStreamEvent) {
+                if (trySend(event).isFailure && !terminal.get()) {
+                    close(IllegalStateException("OpenAI stream consumer buffer is full"))
+                }
+            }
             val bridge = object : FfiOpenAiStreamListener {
                 override fun onEvent(event: OpenAiStreamEventNative) {
                     when (event) {
-                        is OpenAiStreamEventNative.Started -> trySend(event.toOpenAIStreamEvent())
-                        is OpenAiStreamEventNative.Sse -> trySend(event.toOpenAIStreamEvent())
+                        is OpenAiStreamEventNative.Started -> emitOrClose(event.toOpenAIStreamEvent())
+                        is OpenAiStreamEventNative.Sse -> emitOrClose(event.toOpenAIStreamEvent())
                         is OpenAiStreamEventNative.Completed -> {
                             terminal.set(true)
                             close()
@@ -390,11 +395,16 @@ class Node(private val handle: MeshNodeHandleInterface) {
         fun streamJson(path: String, bodyJson: String): Flow<OpenAIStreamEvent> = callbackFlow {
             val requestId = AtomicReference<RequestId?>()
             val terminal = AtomicBoolean(false)
+            fun emitOrClose(event: OpenAIStreamEvent) {
+                if (trySend(event).isFailure && !terminal.get()) {
+                    close(IllegalStateException("OpenAI stream consumer buffer is full"))
+                }
+            }
             val bridge = object : FfiOpenAiStreamListener {
                 override fun onEvent(event: OpenAiStreamEventNative) {
                     when (event) {
-                        is OpenAiStreamEventNative.Started -> trySend(event.toOpenAIStreamEvent())
-                        is OpenAiStreamEventNative.Sse -> trySend(event.toOpenAIStreamEvent())
+                        is OpenAiStreamEventNative.Started -> emitOrClose(event.toOpenAIStreamEvent())
+                        is OpenAiStreamEventNative.Sse -> emitOrClose(event.toOpenAIStreamEvent())
                         is OpenAiStreamEventNative.Completed -> {
                             terminal.set(true)
                             close()

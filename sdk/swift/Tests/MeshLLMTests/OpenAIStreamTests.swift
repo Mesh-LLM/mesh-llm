@@ -114,4 +114,18 @@ final class OpenAIStreamTests: XCTestCase {
             XCTAssertEqual(failure.body, #"{"error":"slow down"}"#)
         }
     }
+
+    func testBufferOverflowFailsAndCancelsNativeRequest() async throws {
+        let handle = FastOpenAIStreamMeshNodeHandle()
+        let node = Node(handle: handle)
+
+        do {
+            for try await _ in node.inference.streamChatCompletions(toolRequest) {}
+            XCTFail("expected stream buffer overflow")
+        } catch is StreamBufferOverflow {
+            try await waitUntil {
+                handle.cancelledRequestIds == ["fast-request"]
+            }
+        }
+    }
 }

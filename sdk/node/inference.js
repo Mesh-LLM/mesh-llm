@@ -1,5 +1,7 @@
 'use strict'
 
+const MAX_STREAM_EVENTS = 256
+
 class OpenAIRequestError extends Error {
   constructor(statusCode, body, message) {
     super(message || body || 'OpenAI-compatible request failed')
@@ -13,15 +15,27 @@ class AsyncEventQueue {
   constructor() {
     this._values = []
     this._waiters = []
+    this._overflow = null
   }
 
   push(value) {
+    if (this._overflow) return false
     const waiter = this._waiters.shift()
-    if (waiter) waiter(value)
-    else this._values.push(value)
+    if (waiter) {
+      waiter(value)
+      return true
+    }
+    if (this._values.length >= MAX_STREAM_EVENTS) {
+      this._values = []
+      this._overflow = new Error(`OpenAI stream consumer fell behind by ${MAX_STREAM_EVENTS} events`)
+      return false
+    }
+    this._values.push(value)
+    return true
   }
 
   next() {
+    if (this._overflow) return Promise.reject(this._overflow)
     const value = this._values.shift()
     if (value) return Promise.resolve(value)
     return new Promise(resolve => this._waiters.push(resolve))

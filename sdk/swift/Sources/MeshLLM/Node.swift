@@ -277,7 +277,7 @@ public final class Client: @unchecked Sendable {
                 var request = body
                 request["stream"] = true
                 let bodyJson = try encodeOpenAIObject(request)
-                return AsyncThrowingStream { continuation in
+                return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                     do {
                         let bridge = OpenAIStreamBridge(continuation: continuation) { [handle] requestId in
                             handle.cancel(requestId: requestId)
@@ -293,7 +293,7 @@ public final class Client: @unchecked Sendable {
                     }
                 }
             } catch {
-                return AsyncThrowingStream { continuation in
+                return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                     continuation.finish(throwing: error)
                 }
             }
@@ -309,7 +309,7 @@ public final class Client: @unchecked Sendable {
 
         public func chat(_ request: ChatRequest) -> AsyncThrowingStream<Event, Error> {
             let native = Node.mapChatRequest(request)
-            return AsyncThrowingStream { continuation in
+            return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                 do {
                     let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
                         handle.cancel(requestId: requestId)
@@ -324,7 +324,7 @@ public final class Client: @unchecked Sendable {
 
         public func responses(_ request: ResponsesRequest) -> AsyncThrowingStream<Event, Error> {
             let native = Node.mapResponsesRequest(request)
-            return AsyncThrowingStream { continuation in
+            return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                 do {
                     let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
                         handle.cancel(requestId: requestId)
@@ -497,7 +497,7 @@ public final class Node: @unchecked Sendable {
                 var request = body
                 request["stream"] = true
                 let bodyJson = try encodeOpenAIObject(request)
-                return AsyncThrowingStream { continuation in
+                return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                     do {
                         let bridge = OpenAIStreamBridge(continuation: continuation) { [handle] requestId in
                             try? handle.cancel(requestId: requestId)
@@ -513,7 +513,7 @@ public final class Node: @unchecked Sendable {
                     }
                 }
             } catch {
-                return AsyncThrowingStream { continuation in
+                return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                     continuation.finish(throwing: error)
                 }
             }
@@ -529,7 +529,7 @@ public final class Node: @unchecked Sendable {
 
         public func chat(_ request: ChatRequest) -> AsyncThrowingStream<Event, Error> {
             let native = Node.mapChatRequest(request)
-            return AsyncThrowingStream { continuation in
+            return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                 do {
                     let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
                         try? handle.cancel(requestId: requestId)
@@ -544,7 +544,7 @@ public final class Node: @unchecked Sendable {
 
         public func responses(_ request: ResponsesRequest) -> AsyncThrowingStream<Event, Error> {
             let native = Node.mapResponsesRequest(request)
-            return AsyncThrowingStream { continuation in
+            return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                 do {
                     let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
                         try? handle.cancel(requestId: requestId)

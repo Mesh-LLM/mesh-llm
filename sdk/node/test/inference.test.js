@@ -145,3 +145,26 @@ test('closing a stream early cancels the native request', async () => {
   for await (const _event of new Inference(handle).stream('/v1/chat/completions', {})) break
   assert.deepEqual(cancelled, ['req-4'])
 })
+
+test('stream buffer overflow fails explicitly and cancels the native request', async () => {
+  const cancelled = []
+  const handle = {
+    async openaiStream(_path, _body, callback) {
+      for (let index = 0; index < 300; index += 1) {
+        callback(JSON.stringify({ type: 'sse', requestId: 'req-fast', event: null, data: '{}', raw: 'data: {}\n\n' }))
+      }
+      return 'req-fast'
+    },
+    async cancel(requestId) {
+      cancelled.push(requestId)
+    }
+  }
+
+  await assert.rejects(
+    async () => {
+      for await (const _event of new Inference(handle).stream('/v1/chat/completions', {})) {}
+    },
+    /consumer fell behind/
+  )
+  assert.deepEqual(cancelled, ['req-fast'])
+})

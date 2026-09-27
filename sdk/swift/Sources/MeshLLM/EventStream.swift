@@ -1,5 +1,13 @@
 import Foundation
 
+public struct StreamBufferOverflow: LocalizedError, Sendable {
+    public init() {}
+
+    public var errorDescription: String? {
+        "Mesh stream consumer buffer is full"
+    }
+}
+
 public extension Node.Inference {
     func chatStream(_ request: ChatRequest) -> AsyncThrowingStream<Event, Error> {
         chat(request)
@@ -69,7 +77,9 @@ public final class EventStreamBridge: EventListener, @unchecked Sendable {
             guard !isFinished else {
                 return
             }
-            continuation.yield(mapped)
+            if case .dropped = continuation.yield(mapped) {
+                failForOverflow()
+            }
         }
     }
 
@@ -108,18 +118,37 @@ public final class EventStreamBridge: EventListener, @unchecked Sendable {
         onCancel(requestId)
     }
 
+    private func failForOverflow() {
+        stateLock.lock()
+        guard !finished else {
+            stateLock.unlock()
+            return
+        }
+        let requestId = self.requestId
+        finished = true
+        self.requestId = nil
+        cancellationPending = requestId == nil
+        stateLock.unlock()
+
+        if let requestId {
+            onCancel(requestId)
+        }
+        continuation.finish(throwing: StreamBufferOverflow())
+    }
+
     private func finish(with event: Event) {
         stateLock.lock()
         guard !finished else {
             stateLock.unlock()
             return
         }
-        finished = true
-        requestId = nil
         stateLock.unlock()
 
-        continuation.yield(event)
-        continuation.finish()
+        if case .dropped = continuation.yield(event) {
+            failForOverflow()
+        } else {
+            finish()
+        }
     }
 }
 
@@ -189,7 +218,9 @@ public final class OpenAIStreamBridge: OpenAiStreamListener, @unchecked Sendable
         let isFinished = finished
         stateLock.unlock()
         guard !isFinished else { return }
-        continuation.yield(event)
+        if case .dropped = continuation.yield(event) {
+            failForOverflow()
+        }
     }
 
     private func finish(throwing error: Error? = nil) {
@@ -224,6 +255,24 @@ public final class OpenAIStreamBridge: OpenAiStreamListener, @unchecked Sendable
         if let requestId {
             onCancel(requestId)
         }
+    }
+
+    private func failForOverflow() {
+        stateLock.lock()
+        guard !finished else {
+            stateLock.unlock()
+            return
+        }
+        let requestId = self.requestId
+        finished = true
+        self.requestId = nil
+        cancellationPending = requestId == nil
+        stateLock.unlock()
+
+        if let requestId {
+            onCancel(requestId)
+        }
+        continuation.finish(throwing: StreamBufferOverflow())
     }
 }
 #endif

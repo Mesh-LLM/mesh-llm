@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import pathlib
 import sys
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -242,6 +244,43 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await stream.aclose()
 
         self.assertEqual(handle.cancelled, ["stream-1"])
+
+    async def test_cancelling_during_stream_startup_cancels_native_request(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+
+        class SlowHandle(FakeHandle):
+            def openai_stream(self, path: str, body_json: str, listener: object) -> str:
+                started.set()
+                release.wait(timeout=2)
+                return "slow-stream"
+
+        handle = SlowHandle()
+        stream = Client(handle).inference.stream_chat_completions({"model": "model-a"})
+        task = asyncio.create_task(anext(stream))
+        await asyncio.to_thread(started.wait, 2)
+
+        task.cancel()
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertEqual(handle.cancelled, ["slow-stream"])
+
+    async def test_stream_queue_overflow_fails_and_cancels_native_request(self) -> None:
+        class FastHandle(FakeHandle):
+            def openai_stream(self, path: str, body_json: str, listener: object) -> str:
+                for _ in range(300):
+                    listener.on_event(FakeOpenAIStreamEvent("sse", data="{}", raw="data: {}\n\n"))
+                return "fast-stream"
+
+        handle = FastHandle()
+        stream = Client(handle).inference.stream_chat_completions({"model": "model-a"})
+
+        with self.assertRaisesRegex(RuntimeError, "consumer fell behind"):
+            await anext(stream)
+
+        self.assertEqual(handle.cancelled, ["fast-stream"])
 
 
 if __name__ == "__main__":

@@ -817,11 +817,14 @@ fn decode_chunked_body(mut input: &[u8]) -> Result<Vec<u8>, String> {
         if size == 0 {
             break;
         }
-        if input.len() < size + 2 || &input[size..size + 2] != b"\r\n" {
+        let chunk_end = size
+            .checked_add(2)
+            .ok_or_else(|| "malformed chunked response: chunk size overflows usize".to_string())?;
+        if input.len() < chunk_end || &input[size..chunk_end] != b"\r\n" {
             return Err("malformed chunked response: incomplete chunk".to_string());
         }
         output.extend_from_slice(&input[..size]);
-        input = &input[size + 2..];
+        input = &input[chunk_end..];
     }
     Ok(output)
 }
@@ -964,6 +967,15 @@ mod openai_response_tests {
         encoded.extend_from_slice(b"\r\n0\r\n\r\n");
 
         assert_eq!(decode_chunked_body(&encoded).expect("chunks decode"), chunk);
+    }
+
+    #[test]
+    fn rejects_chunk_size_that_overflows_platform_usize() {
+        let encoded = format!("{:X}\r\n", usize::MAX);
+
+        let error = decode_chunked_body(encoded.as_bytes()).expect_err("oversized chunk fails");
+
+        assert!(error.contains("overflows usize"));
     }
 
     #[test]

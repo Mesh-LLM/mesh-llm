@@ -230,4 +230,27 @@ class NodeTest {
 
         verify { handle.cancel("open-request") }
     }
+
+    @Test
+    fun openAIStreamBufferOverflowFailsAndCancelsNativeRequest() = runTest {
+        val handle = mockk<MeshNodeHandleInterface>()
+        val listener = slot<FfiOpenAiStreamListener>()
+        every { handle.openaiStream(any(), any(), capture(listener)) } answers {
+            repeat(100) {
+                listener.captured.onEvent(
+                    OpenAiStreamEventNative.Sse("fast-request", null, "{}", "data: {}\n\n"),
+                )
+            }
+            "fast-request"
+        }
+        every { handle.cancel("fast-request") } just runs
+
+        val failure = runCatching {
+            Node(handle).inference.streamChatCompletions(jsonObject("{}")).collect {}
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalStateException)
+        assertTrue(failure?.message?.contains("buffer is full") == true)
+        verify { handle.cancel("fast-request") }
+    }
 }

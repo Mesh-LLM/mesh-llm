@@ -221,6 +221,47 @@ final class FailedOpenAIStreamMeshNodeHandle: MeshNodeHandle, @unchecked Sendabl
     }
 }
 
+final class FastOpenAIStreamMeshNodeHandle: MeshNodeHandle, @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelledRequestIdsStorage: [String] = []
+
+    var cancelledRequestIds: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelledRequestIdsStorage
+    }
+
+    init() {
+        super.init(noHandle: MeshNodeHandle.NoHandle())
+    }
+
+    required init(unsafeFromHandle handle: UInt64) {
+        super.init(unsafeFromHandle: handle)
+    }
+
+    override func openaiStream(
+        path: String,
+        bodyJson: String,
+        listener: OpenAiStreamListener
+    ) throws -> String {
+        for _ in 0..<300 {
+            listener.onEvent(event: .sse(
+                requestId: "fast-request",
+                eventType: nil,
+                data: "{}",
+                raw: "data: {}\n\n"
+            ))
+        }
+        return "fast-request"
+    }
+
+    override func cancel(requestId: String) throws {
+        lock.lock()
+        cancelledRequestIdsStorage.append(requestId)
+        lock.unlock()
+    }
+}
+
 func waitUntil(
     timeout: Duration = .seconds(2),
     _ condition: @escaping () -> Bool
