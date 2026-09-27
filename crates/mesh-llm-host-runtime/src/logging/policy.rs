@@ -64,9 +64,6 @@ pub const MAX_LOG_STRING_LEN: usize = 1024;
 /// Maximum number of lines to preserve from a stack trace or multi-line error.
 pub const MAX_STACK_LINES: usize = 32;
 
-/// Maximum bytes for an artifact body snapshot before truncation.
-pub const DEFAULT_ARTIFACT_BODY_LIMIT: usize = 256 * 1024; // 256 KiB
-
 // ---------------------------------------------------------------------------
 // Redaction entry point
 // ---------------------------------------------------------------------------

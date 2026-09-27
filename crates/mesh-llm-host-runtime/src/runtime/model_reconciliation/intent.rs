@@ -125,18 +125,7 @@ pub(crate) enum ModelIntent {
     },
 }
 
-impl ModelIntent {
-    #[expect(
-        dead_code,
-        reason = "source projection helper is retained for typed intent producers"
-    )]
-    pub(crate) fn source(&self) -> IntentSource {
-        match self {
-            ModelIntent::Load { source, .. } => *source,
-            ModelIntent::Unload { source, .. } => *source,
-        }
-    }
-}
+impl ModelIntent {}
 
 // ─── Reconciliation candidate / action types ────────────────────────────────
 

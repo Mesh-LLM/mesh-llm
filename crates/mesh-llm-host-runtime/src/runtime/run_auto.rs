@@ -4,7 +4,7 @@ use super::plugin_host_role;
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
 use super::status::mesh_guardrail_mode_to_openai;
 use super::{
-    AutoRuntimeNodeSetup, BootstrapProxyStopTx, DashboardContextUsage, ManagedModelController,
+    AutoRuntimeNodeSetup, DashboardContextUsage, ManagedModelController,
     ModelTargetReconciliationPolicy, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
     PreparedRuntimeStartup, RunAutoAdditionalModelsContext, RunAutoConsoleStateContext,
     RunAutoRuntimeLifecycleContext, RunAutoServingSurface, RunAutoServingSurfaceContext,
@@ -19,13 +19,12 @@ use super::{
     next_runtime_instance_id, nostr_rediscovery, nostr_relays, openai_guardrail_policy_handle,
     owner_runtime_config, prepare_runtime_startup, publish_initial_openai_guardrails_status,
     record_first_joined_mesh_ts, record_runtime_operational_event, resolve_runtime_owner_key_path,
-    resolve_startup_mesh_creation_state, run_auto_join_mesh_phase, run_auto_model_identity,
-    run_auto_model_path_or_shutdown, run_auto_runtime_loop_and_shutdown, run_local_model_only,
-    runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
-    setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
-    spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
-    swarm_capture_observer_requested,
+    resolve_startup_mesh_creation_state, run_auto_join_mesh_phase,
+    run_auto_runtime_loop_and_shutdown, run_local_model_only, runtime_data_producer_for_console,
+    runtime_startup_requirements, setup_run_auto_console_state, setup_run_auto_serving_surface,
+    spawn_embedded_runtime_control_forwarder, spawn_run_auto_additional_model_tasks,
+    spawn_run_auto_discovery_publisher, start_run_auto_bootstrap_proxy, startup_device_override,
+    startup_local_model_loop, swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -54,15 +53,6 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU16},
 };
-
-#[expect(
-    dead_code,
-    reason = "the legacy advertised-model selection lane remains available to compatibility helpers and focused tests"
-)]
-pub(super) enum RunAutoModelSelection {
-    Model(PathBuf),
-    Shutdown,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeUnloadOwner {
@@ -1552,39 +1542,6 @@ pub(super) fn configure_swarm_capture(
         );
     }
     Ok(recorder)
-}
-
-#[expect(
-    dead_code,
-    reason = "the legacy advertised-model selection context is retained for compatibility helpers and focused tests"
-)]
-pub(super) struct RunAutoModelSelectionContext<'a> {
-    pub(super) options: &'a RuntimeOptions,
-    pub(super) node: &'a mesh::Node,
-    pub(super) startup_models: &'a [StartupModelPlan],
-    pub(super) local_models: &'a [String],
-    pub(super) is_client: bool,
-    pub(super) plugin_manager: &'a plugin::PluginManager,
-    pub(super) bootstrap_listener_tx: &'a mut Option<BootstrapProxyStopTx>,
-    pub(super) primary_startup_model: Option<&'a StartupModelPlan>,
-    pub(super) embedded_control_rx:
-        &'a mut Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
-}
-
-#[expect(
-    dead_code,
-    reason = "the daemon startup path supersedes advertised-model selection while compatibility tests still exercise it"
-)]
-pub(super) async fn select_advertised_run_auto_model(
-    mut ctx: RunAutoModelSelectionContext<'_>,
-) -> Result<Option<(PathBuf, String)>> {
-    let Some(model) = run_auto_model_path_or_shutdown(&mut ctx).await? else {
-        return Ok(None);
-    };
-
-    let (model_name, model_source) = run_auto_model_identity(ctx.primary_startup_model, &model);
-    advertise_run_auto_models(ctx.node, ctx.startup_models, &model_name, model_source).await;
-    Ok(Some((model, model_name)))
 }
 
 /// Serve mode: join the mesh and serve local models through the embedded runtime.
