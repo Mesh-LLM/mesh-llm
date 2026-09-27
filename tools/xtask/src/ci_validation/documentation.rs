@@ -26,7 +26,7 @@ pub(super) fn check_documentation_invariants(
         ),
         (
             release_package_source,
-            "cargo run -p xtask -- repo-consistency release-targets",
+            "cargo xtool repo-consistency release-targets",
             "Imported Just release consistency command",
         ),
         (
