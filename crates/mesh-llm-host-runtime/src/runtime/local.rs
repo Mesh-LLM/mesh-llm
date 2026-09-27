@@ -1129,7 +1129,7 @@ async fn start_local_skippy_model(
         resolved.model_fit.cache_type_v.to_ascii_uppercase(),
         context_length / 1024,
     );
-    let capabilities = models::runtime_verified_model_capabilities(
+    let mut capabilities = models::runtime_verified_model_capabilities(
         &model_name,
         spec.model_path,
         models::runtime_media_capability_evidence(
@@ -1175,6 +1175,9 @@ async fn start_local_skippy_model(
     .await
     .context("join load skippy direct GGUF task")??;
     emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
+    if skippy_model.supports_system_one() {
+        capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
+    }
     let workload_class = skippy_model.workload_class()?;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_name.clone(),
@@ -1270,7 +1273,7 @@ async fn start_local_package_v2_model(
         resolved.model_fit.cache_type_v.to_ascii_uppercase(),
         context_length / 1024,
     );
-    let capabilities = models::runtime_verified_model_capabilities(
+    let mut capabilities = models::runtime_verified_model_capabilities(
         &model_name,
         spec.model_path,
         models::runtime_media_capability_evidence(
@@ -1350,6 +1353,9 @@ async fn start_local_package_v2_model(
     .await
     .context("join load skippy package-v2 task")??;
     emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
+    if handle.supports_system_one() {
+        capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
+    }
     let workload_class = handle.workload_class()?;
     report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage, compact_meta);
     let _ = emit_event(OutputEvent::ModelLoaded {

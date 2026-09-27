@@ -152,6 +152,15 @@ impl SkippyRuntimeHandle {
             .supports_speech_synthesis()
     }
 
+    /// True only when the loaded model exposes a valid System One decision
+    /// canvas through the native runtime.
+    pub fn supports_system_one(&self) -> bool {
+        self.runtime
+            .lock()
+            .expect("runtime lock poisoned")
+            .serves_system_one()
+    }
+
     /// Assemble a ready handle around an already-loaded runtime.
     ///
     /// Shared by both loaders so the stats cache is primed exactly once, in one

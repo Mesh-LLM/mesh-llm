@@ -730,6 +730,12 @@ impl SkippyModelHandle {
         })
     }
 
+    /// Report System One only when the loaded native runtime exposes a valid
+    /// decision canvas for this exact model.
+    pub(crate) fn supports_system_one(&self) -> bool {
+        self.runtime.supports_system_one()
+    }
+
     fn resolved_mtp_source(
         native_mtp_enabled: bool,
         native_mtp_draft_model_path: Option<&Path>,

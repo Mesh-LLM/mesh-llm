@@ -8,7 +8,8 @@ use crate::network::openai::automatic;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use crate::network::openai::workload_routing::{
-    self, is_audio_upload_path, model_satisfies_request_workload, request_workload_class,
+    self, is_audio_upload_path, is_system_one_path, model_satisfies_request,
+    model_satisfies_request_workload, request_workload_class,
 };
 use crate::network::router;
 use crate::plugin::openai_exchange::{
@@ -524,6 +525,11 @@ async fn resolve_auto_routed_model(
         {
             return AutoRouteResolution::WorkloadUnsupported(workload);
         }
+        if is_system_one_path(&request.client_path)
+            && !model_satisfies_request(model, &request.client_path, descriptors)
+        {
+            return AutoRouteResolution::WorkloadUnsupported(mesh::ModelWorkloadClass::Decision);
+        }
         return AutoRouteResolution::Continue {
             effective_model: request.model_name.clone(),
             classification: None,
@@ -592,6 +598,9 @@ async fn resolve_auto_routed_model(
         && let Some(workload) = requested_workload
     {
         return AutoRouteResolution::WorkloadUnsupported(workload);
+    }
+    if available.is_empty() && is_system_one_path(&request.client_path) {
+        return AutoRouteResolution::WorkloadUnsupported(mesh::ModelWorkloadClass::Decision);
     }
     let Some(available) = router::filter_media_compatible_candidates(&available, &media) else {
         return AutoRouteResolution::MediaUnsupported;
@@ -1627,7 +1636,9 @@ async fn send_workload_unsupported(
     path: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
-    let message = if is_audio_upload_path(path) {
+    let message = if is_system_one_path(path) {
+        "no served model advertises System One support".to_string()
+    } else if is_audio_upload_path(path) {
         "no served model advertises support for this audio-to-text endpoint".to_string()
     } else {
         format!("no served model advertises the required {workload:?} workload")

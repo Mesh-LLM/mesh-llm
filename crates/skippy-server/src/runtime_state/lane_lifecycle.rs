@@ -26,7 +26,7 @@ impl RuntimeState {
     }
 
     /// Only DiffusionGemma reports a System One canvas.
-    fn serves_system_one(&self) -> bool {
+    pub(crate) fn serves_system_one(&self) -> bool {
         self.model.system_one_canvas_length().is_ok()
     }
 

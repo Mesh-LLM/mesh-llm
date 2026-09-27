@@ -209,11 +209,12 @@ pub(super) async fn start_local_laya_model(
     });
     report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf, Some(compact_meta));
     let context_length = u32::try_from(model.info().max_len).unwrap_or(u32::MAX);
-    let capabilities = models::runtime_verified_model_capabilities(
+    let mut capabilities = models::runtime_verified_model_capabilities(
         &model_name,
         spec.model_path,
         models::runtime_media_capability_evidence(None).await,
     );
+    capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
     let http = skippy::start_laya_http_on(&model_name, model.clone(), spec.http_bind_addr);
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
     Ok((

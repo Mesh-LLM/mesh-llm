@@ -602,13 +602,7 @@ async fn build_mesh_request_plan(
         }
     };
     if let Some(model) = effective_model.as_deref()
-        && let Some(workload) = workload_routing::request_workload_class(&request.client_path)
-        && !workload_routing::model_satisfies_request_workload(
-            model,
-            workload,
-            &request.client_path,
-            &descriptors,
-        )
+        && !workload_routing::model_satisfies_request(model, &request.client_path, &descriptors)
     {
         return Err(MeshRequestFailure::UnsupportedWorkload);
     }
@@ -1354,7 +1348,8 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     let with_caps =
         workload_routing::routing_candidates(node, served, &request.client_path, descriptors);
     if with_caps.is_empty()
-        && workload_routing::request_workload_class(&request.client_path).is_some()
+        && (workload_routing::request_workload_class(&request.client_path).is_some()
+            || workload_routing::is_system_one_path(&request.client_path))
     {
         return AutoModelResolution::UnsupportedWorkload;
     }
