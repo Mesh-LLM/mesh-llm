@@ -260,7 +260,7 @@ class RunnerImageIdentityTests(unittest.TestCase):
         self.assertEqual(lookup.stdout.strip(), self.image("public-cpu"))
         result = self.cli("seed-key", "--recipe-hash", "a" * 64)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-" + "a" * 64)
+        self.assertEqual(result.stdout.strip(), "mesh-llm-sccache-seed-linux-x86_64-img-0d4e98e6-epoch-0d4e98e6-v3-" + "a" * 64)
 
     def test_publisher_and_sdk_roles_require_single_bindings(self) -> None:
         for role_id, message in (
@@ -335,7 +335,7 @@ class RunnerImageIdentityTests(unittest.TestCase):
         for image_id, candidate_key in expected_candidates.items():
             image = self.catalog["images"][image_id]
             self.assertEqual(image["receipt"]["index_candidate_key"], candidate_key)
-            self.assertEqual(image["provenance"]["origin"]["run_id"], 34896161280)
+            self.assertEqual(image["provenance"]["origin"]["run_id"], 34256062098)
             self.assertEqual(image["provenance"]["origin"]["run_attempt"], 1)
             self.assertEqual(image["provenance"]["validation"], "offline_binding_only")
         self.catalog["images"]["public-ui"]["receipt"]["index_candidate_key"] = "candidate-index-public-browser"
