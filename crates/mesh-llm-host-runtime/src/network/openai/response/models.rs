@@ -123,6 +123,9 @@ fn models_list_json(
         if directive_capabilities.reasoning_label().is_some() {
             caps.push("reasoning");
         }
+        if directive_capabilities.supports_system_one_runtime() {
+            caps.push("system_one");
+        }
         let mut model = serde_json::json!({
             "id": mesh_mixture_of_agents::VIRTUAL_MODEL_NAME,
             "display_name": "Mesh (MoA)",
@@ -621,6 +624,30 @@ mod tests {
             .expect("virtual mesh model should be listed");
 
         assert!(mesh.get("metadata").is_none());
+    }
+
+    #[test]
+    fn models_list_advertises_virtual_mesh_system_one_support() {
+        let models = vec!["openjev-latest".to_string()];
+        let descriptors = vec![local_gguf_descriptor_with_capabilities(
+            &models[0],
+            crate::models::ModelCapabilities {
+                system_one: crate::models::CapabilityLevel::Supported,
+                ..Default::default()
+            },
+        )];
+
+        let body = models_list_json(&models, &descriptors, &[]);
+        let mesh = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["id"] == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME)
+            .expect("virtual mesh model should be listed");
+        let capabilities = mesh["capabilities"].as_array().unwrap();
+
+        assert!(capabilities.iter().any(|cap| cap == "system_one"));
+        assert_eq!(mesh["system_one_status"], "supported");
     }
 
     #[test]

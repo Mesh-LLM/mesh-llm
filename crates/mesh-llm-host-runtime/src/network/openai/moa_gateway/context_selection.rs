@@ -107,6 +107,7 @@ pub(in crate::network::openai) fn virtual_mesh_capabilities(
         union.audio = union.audio.max(caps.audio);
         union.reasoning = union.reasoning.max(caps.reasoning);
         union.tool_use = union.tool_use.max(caps.tool_use);
+        union.system_one = union.system_one.max(caps.system_one);
     }
     union
 }

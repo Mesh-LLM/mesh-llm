@@ -152,13 +152,13 @@ impl SkippyRuntimeHandle {
             .supports_speech_synthesis()
     }
 
-    /// True only when the loaded model exposes a valid System One decision
-    /// canvas through the native runtime.
+    /// True only when this loaded runtime can execute System One reads: a valid
+    /// decision canvas on one unsplit execution lane.
     pub fn supports_system_one(&self) -> bool {
         self.runtime
             .lock()
             .expect("runtime lock poisoned")
-            .serves_system_one()
+            .supports_system_one_endpoint()
     }
 
     /// Assemble a ready handle around an already-loaded runtime.

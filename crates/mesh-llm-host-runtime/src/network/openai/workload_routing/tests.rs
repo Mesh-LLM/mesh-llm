@@ -173,6 +173,14 @@ fn decision_models_are_excluded_from_every_classed_endpoint() {
         );
     }
     assert_eq!(request_workload_class("/systemone"), None);
+    assert_eq!(
+        required_request_workload("/systemone?trace=1"),
+        Some(mesh::ModelWorkloadClass::Decision)
+    );
+    assert_eq!(
+        unsupported_workload_message("/systemone", mesh::ModelWorkloadClass::Decision),
+        "no served model advertises System One support"
+    );
 }
 
 #[test]

@@ -54,6 +54,15 @@ fn dropping_an_absent_session_notifies_nothing() {
     );
 }
 
+#[test]
+fn system_one_advertisement_requires_a_single_unsplit_runtime_lane() {
+    assert!(system_one_endpoint_is_runnable(true, false, false, 1));
+    assert!(!system_one_endpoint_is_runnable(true, false, false, 4));
+    assert!(!system_one_endpoint_is_runnable(true, true, false, 1));
+    assert!(!system_one_endpoint_is_runnable(true, false, true, 1));
+    assert!(!system_one_endpoint_is_runnable(false, false, false, 1));
+}
+
 /// `drop_session_timed`'s real reset/discard branches require a
 /// native `StageSession` (the same model-backed requirement
 /// `evict_resident_prefix_for_tokens`'s native drop hit in the KV

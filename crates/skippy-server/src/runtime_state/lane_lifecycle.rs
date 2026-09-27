@@ -30,6 +30,17 @@ impl RuntimeState {
         self.model.system_one_canvas_length().is_ok()
     }
 
+    /// Whether this loaded runtime can execute the System One endpoint, not
+    /// merely whether its model has a decision canvas.
+    pub(crate) fn supports_system_one_endpoint(&self) -> bool {
+        system_one_endpoint_is_runnable(
+            self.serves_system_one(),
+            self.model.input_activation_boundary().is_some(),
+            self.model.output_activation_boundary().is_some(),
+            self.lane_count,
+        )
+    }
+
     fn disable_idle_sessions(&mut self) {
         while let Some(lane_session) = self.idle_sessions.pop() {
             let lane_index = lane_session.index;
@@ -494,6 +505,15 @@ impl RuntimeState {
             resident_prefix: None,
         })
     }
+}
+
+fn system_one_endpoint_is_runnable(
+    has_canvas: bool,
+    has_input_boundary: bool,
+    has_output_boundary: bool,
+    lane_count: u32,
+) -> bool {
+    has_canvas && !has_input_boundary && !has_output_boundary && lane_count == 1
 }
 
 /// Clamps a requested idle-pool prewarm target to `model_fit.cache_idle_slots`

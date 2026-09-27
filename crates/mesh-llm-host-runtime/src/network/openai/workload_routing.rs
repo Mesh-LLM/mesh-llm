@@ -40,6 +40,25 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
     }
 }
 
+/// Workload named in an admission error when an endpoint has no eligible model.
+/// System One remains capability-gated rather than class-gated, but uses the
+/// decision class to describe the failed request contract to clients.
+pub(super) fn required_request_workload(path: &str) -> Option<ModelWorkloadClass> {
+    request_workload_class(path)
+        .or_else(|| is_system_one_path(path).then_some(ModelWorkloadClass::Decision))
+}
+
+/// Explain endpoint admission failures without leaking routing implementation details.
+pub(super) fn unsupported_workload_message(path: &str, workload: ModelWorkloadClass) -> String {
+    if is_system_one_path(path) {
+        "no served model advertises System One support".to_string()
+    } else if is_audio_upload_path(path) {
+        "no served model advertises support for this audio-to-text endpoint".to_string()
+    } else {
+        format!("no served model advertises the required {workload:?} workload")
+    }
+}
+
 /// Only generation requests reuse KV/session state. Metadata such as an
 /// embeddings `user` field must not pin a stateless workload to one replica.
 pub(super) fn supports_generation_affinity(path: &str) -> bool {
