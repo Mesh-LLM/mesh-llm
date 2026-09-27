@@ -1,18 +1,19 @@
-From 48e22903a86914eceae17c4069c89a8572a84850 Mon Sep 17 00:00:00 2001
+From 06ba7d134a315fc9f1bba1b5e13ab300e7f26f3b Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 27 Sep 2026 16:49:17 +1000
 Subject: [PATCH] fix(skippy): reuse backend sampler across requests
 
 ---
  src/CMakeLists.txt                  |   4 +-
- src/llama-context.cpp               |   7 ++
- src/llama-context.h                 |   4 +
- src/skippy/sampling.cpp             |  54 +++++++++--
- src/skippy/session.cpp              |  18 ++--
- src/skippy/tests/runtime_events.cpp | 142 +++++++++++++++++++++++++++-
+ src/llama-context.cpp               |   5 ++
+ src/llama-context.h                 |   2 +
+ src/skippy/runtime_types.h          |   2 +
+ src/skippy/sampling.cpp             |  77 +++++++++++++++---
+ src/skippy/session.cpp              |  19 +++--
+ src/skippy/tests/runtime_events.cpp | 116 +++++++++++++++++++++++++++-
  src/skippy/workloads.cpp            |  12 ++-
  src/skippy/workloads_internal.h     |   8 ++
- 8 files changed, 226 insertions(+), 23 deletions(-)
+ 9 files changed, 223 insertions(+), 22 deletions(-)
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
@@ -31,57 +32,83 @@ index 60d2825e9..b4ee9bd87 100644
      foreach(SKIPPY_EVENT_TEST_CASE
              register_and_dispatch
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 012a7ff1b..6416177bd 100644
+index 012a7ff1b..cc8f6fd83 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -706,6 +706,9 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+@@ -706,6 +706,7 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
      }
  
      sched_need_reserve = false;
-+#ifdef LLAMA_STAGE_BUILD_TESTS
-+    ++sched_reserve_count_for_test;
-+#endif
++    ++sched_reserve_count;
  
      LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
  
-@@ -1036,6 +1039,10 @@ size_t llama_context::get_stage_program_installation_count_for_test() const {
-     return stage_programs.size();
+@@ -1025,6 +1026,10 @@ bool llama_context::configure_stage_program_nextn_outputs(bool value, bool maske
+     return false;
  }
  
-+uint64_t llama_context::get_sched_reserve_count_for_test() const {
-+    return sched_reserve_count_for_test;
++uint64_t llama_context::get_sched_reserve_count() const {
++    return sched_reserve_count;
 +}
 +
- void llama_context::clear_stage_program_for_test() {
-     stage_program_capture_target = nullptr;
-     stage_programs.clear();
+ #ifdef LLAMA_STAGE_BUILD_TESTS
+ skippy_stage_program_installation * llama_context::get_stage_program_installation_for_test(int32_t nextn_layer_offset) {
+     if (nextn_layer_offset < 0) return active_stage_program();
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 9f957033e..f4e14c769 100644
+index 9f957033e..ca82a47c6 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -95,6 +95,7 @@ struct llama_context {
+@@ -92,6 +92,7 @@ struct llama_context {
+     bool reconfigure_stage_program(std::string & error);
+     bool refresh_stage_program(std::string & error);
+     bool configure_stage_program_nextn_outputs(bool value, bool masked, std::string & error);
++    uint64_t get_sched_reserve_count() const;
  #ifdef LLAMA_STAGE_BUILD_TESTS
      skippy_stage_program_installation * get_stage_program_installation_for_test(int32_t nextn_layer_offset = -1);
      size_t get_stage_program_installation_count_for_test() const;
-+    uint64_t get_sched_reserve_count_for_test() const;
-     void clear_stage_program_for_test();
-     bool configure_stage_program_gdn_for_test(bool fused_ar, bool fused_chunk, std::string & error);
- #endif
-@@ -423,6 +424,9 @@ private:
+@@ -423,6 +424,7 @@ private:
      ggml_backend_sched_ptr sched;
  
      bool sched_need_reserve = true;
-+#ifdef LLAMA_STAGE_BUILD_TESTS
-+    uint64_t sched_reserve_count_for_test = 0;
-+#endif
++    uint64_t sched_reserve_count = 0;
  
      ggml_backend_t backend_cpu = nullptr;
      std::vector<ggml_backend_ptr> backends;
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index 24784dd28..fa97e12a5 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -153,6 +153,8 @@ struct skippy_session {
+     // detached -- e.g. so a sampled verify window can output every row --
+     // it must never be re-attached; only building a fresh chain clears this.
+     bool sampling_backend_retired = false;
++    uint64_t sampling_reuse_hit_count = 0;
++    uint64_t sampling_rebuild_count = 0;
+     skippy_sampling_config sampling_config = {};
+     bool sampling_config_valid = false;
+     std::string chat_sampling_metadata;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 99d9731cf..e68c8f068 100644
+index 99d9731cf..013e49709 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -135,6 +135,16 @@ enum skippy_status skippy_verify_token_batch(
+@@ -11,6 +11,7 @@
+ #include "../vendor/nlohmann/json.hpp"
+ 
+ #include <algorithm>
++#include <cinttypes>
+ #include <cmath>
+ #include <cstdint>
+ #include <cstring>
+@@ -45,8 +46,6 @@ enum skippy_status skippy_decode_tokens(
+         bool request_logits,
+         int32_t glm_dsa_phase_hint,
+         struct skippy_error ** out_error) {
+-    (void) request_logits;
+-
+     if (session == nullptr || session->ctx == nullptr || token_ids == nullptr || token_count == 0) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and at least one token are required");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+@@ -135,6 +134,16 @@ enum skippy_status skippy_verify_token_batch(
          return SKIPPY_STATUS_INVALID_ARGUMENT;
      }
  
@@ -98,16 +125,7 @@ index 99d9731cf..e68c8f068 100644
      const int32_t n_tokens = static_cast<int32_t>(token_count);
      llama_batch batch = llama_batch_init(n_tokens, 0, 1);
      batch.n_tokens = n_tokens;
-@@ -311,7 +321,7 @@ void skippy_clear_chat_sampling(skippy_session * session) {
-     if (session == nullptr) {
-         return;
-     }
--    if (session->ctx != nullptr) {
-+    if (session->ctx != nullptr && session->sampling_backend_enabled) {
-         llama_set_sampler(session->ctx, session->seq_id, nullptr);
-     }
-     llama_sampler_free(session->sampling_chain);
-@@ -442,21 +452,49 @@ static bool skippy_sampling_configs_equal(
+@@ -442,25 +451,71 @@ static bool skippy_sampling_configs_equal(
      return true;
  }
  
@@ -138,6 +156,22 @@ index 99d9731cf..e68c8f068 100644
 +    session->sampling_config_valid = true;
 +}
 +
++static void skippy_log_sampling_cache_metrics(
++        const skippy_session * session,
++        const char * action) {
++    if (session == nullptr || session->ctx == nullptr) {
++        return;
++    }
++    LLAMA_LOG_INFO(
++            "%s: seq=%d action=%s reuse_hits=%" PRIu64 " rebuilds=%" PRIu64 " scheduler_reserves=%" PRIu64 "\n",
++            __func__,
++            session->seq_id,
++            action,
++            session->sampling_reuse_hit_count,
++            session->sampling_rebuild_count,
++            session->ctx->get_sched_reserve_count());
++}
++
  bool skippy_reuse_plain_chat_sampling(
          skippy_session * session,
          const skippy_sampling_config * sampling,
@@ -160,7 +194,13 @@ index 99d9731cf..e68c8f068 100644
      session->chat_sampling_metadata = metadata_json;
      session->grammar_generated_start = prompt_token_count;
      session->sampling_accepted_token_count = 0;
-@@ -468,6 +506,7 @@ bool skippy_reset_reusable_sampling(skippy_session * session) {
+     skippy_refresh_backend_sampling(session, sampling);
++    ++session->sampling_reuse_hit_count;
++    skippy_log_sampling_cache_metrics(session, "reuse");
+     return true;
+ }
+ 
+@@ -468,6 +523,7 @@ bool skippy_reset_reusable_sampling(skippy_session * session) {
      if (session == nullptr || session->sampling_chain == nullptr ||
              session->grammar_sampler != nullptr || !session->sampling_config_valid ||
              session->reasoning_budget_sampler != nullptr ||
@@ -168,7 +208,25 @@ index 99d9731cf..e68c8f068 100644
              session->sampling_config.logit_bias_count != 0) {
          return false;
      }
-@@ -712,8 +751,8 @@ static bool skippy_ensure_plain_sampling_chain(
+@@ -476,6 +532,8 @@ bool skippy_reset_reusable_sampling(skippy_session * session) {
+     session->grammar_generated_start = 0;
+     session->sampling_accepted_token_count = 0;
+     skippy_refresh_backend_sampling(session, &session->sampling_config);
++    ++session->sampling_reuse_hit_count;
++    skippy_log_sampling_cache_metrics(session, "reset-reuse");
+     return true;
+ }
+ 
+@@ -700,6 +758,8 @@ llama_sampler * skippy_build_sampling_chain(
+     } else {
+         llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
+     }
++    ++session->sampling_rebuild_count;
++    skippy_log_sampling_cache_metrics(session, "rebuild");
+     return sampler;
+ }
+ 
+@@ -712,8 +772,8 @@ static bool skippy_ensure_plain_sampling_chain(
  
      if (session->sampling_chain != nullptr &&
              session->chat_sampling_metadata.empty() &&
@@ -179,7 +237,7 @@ index 99d9731cf..e68c8f068 100644
          return true;
      }
  
-@@ -722,8 +761,7 @@ static bool skippy_ensure_plain_sampling_chain(
+@@ -722,8 +782,7 @@ static bool skippy_ensure_plain_sampling_chain(
      if (session->sampling_chain == nullptr) {
          return false;
      }
@@ -190,7 +248,7 @@ index 99d9731cf..e68c8f068 100644
      skippy_refresh_backend_sampling(session, sampling);
      return true;
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 37b0b9c5b..a4dc6b559 100644
+index 37b0b9c5b..1babdd733 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
 @@ -305,10 +305,9 @@ enum skippy_status skippy_session_configure_chat_sampling(
@@ -207,7 +265,7 @@ index 37b0b9c5b..a4dc6b559 100644
          session->grammar_generated_start = prompt_token_count;
          session->sampling_accepted_token_count = 0;
          if (!skippy_init_chat_grammar_sampler(session, metadata, out_error)) {
-@@ -361,10 +360,13 @@ enum skippy_status skippy_session_reset(
+@@ -361,10 +360,14 @@ enum skippy_status skippy_session_reset(
          session->token_history.clear();
      }
      session->signal_history.clear();
@@ -215,18 +273,19 @@ index 37b0b9c5b..a4dc6b559 100644
 -    // session must therefore detach its sampler before the next request's
 -    // multi-token prefill; generation will attach a fresh chain afterwards.
 -    if (session->sampling_backend_enabled || !skippy_reset_reusable_sampling(session)) {
-+    // Keep a reusable backend sampler attached across pooled chat requests.
-+    // Single-session prefill requests no output rows; batched prefill requests
-+    // at most the final row when sample_last is set. Both remain within the
-+    // backend sampler's one-output-per-sequence contract without forcing a
-+    // scheduler rebuild at every request boundary. Non-chat workloads detach
-+    // the sampler explicitly before requesting output for every input row.
-+    if (!skippy_reset_reusable_sampling(session)) {
++    // Preserve the established detach-on-reset behavior by default until the
++    // reuse path has production benchmark coverage on every backend. Operators
++    // can opt in with SKIPPY_DETACH_SAMPLER_ON_RESET=0. Single-session prefill
++    // requests no output rows; batched prefill requests at most the final row,
++    // so the opt-in path remains within the one-output-per-sequence contract.
++    const bool detach_sampler_on_reset =
++            !skippy_env_disabled("SKIPPY_DETACH_SAMPLER_ON_RESET");
++    if (detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)) {
          skippy_clear_chat_sampling(session);
      }
      skippy_mtp_clear_session_state(session);
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
-index 60357184a..e8660af1a 100644
+index 60357184a..40f056cdc 100644
 --- a/src/skippy/tests/runtime_events.cpp
 +++ b/src/skippy/tests/runtime_events.cpp
 @@ -1,7 +1,9 @@
@@ -239,32 +298,72 @@ index 60357184a..e8660af1a 100644
  
  #include <atomic>
  #include <cstdio>
-@@ -342,16 +344,150 @@ int test_native_model_load_production(const char * fixture_path) {
+@@ -23,6 +25,18 @@ namespace {
+         }                                                                    \
+     } while (0)
+ 
++void set_detach_sampler_on_reset_environment(const char * value) {
++#if defined(_WIN32)
++    _putenv_s("SKIPPY_DETACH_SAMPLER_ON_RESET", value != nullptr ? value : "");
++#else
++    if (value != nullptr) {
++        setenv("SKIPPY_DETACH_SAMPLER_ON_RESET", value, 1);
++    } else {
++        unsetenv("SKIPPY_DETACH_SAMPLER_ON_RESET");
++    }
++#endif
++}
++
+ struct capture {
+     std::atomic<int> count{0};
+     std::atomic<uint32_t> last_category{0};
+@@ -314,6 +328,10 @@ int test_model_load_events_v2_dispatch() {
+ }
+ 
+ int test_native_model_load_production(const char * fixture_path) {
++    const char * old_detach_setting = std::getenv("SKIPPY_DETACH_SAMPLER_ON_RESET");
++    const bool had_detach_setting = old_detach_setting != nullptr;
++    const std::string saved_detach_setting = had_detach_setting ? old_detach_setting : "";
++    set_detach_sampler_on_reset_environment(nullptr);
+     CHECK(fixture_path != nullptr && fixture_path[0] != '\0');
+ 
+     // A legacy entrypoint with only the process reporter receives concrete
+@@ -342,21 +360,117 @@ int test_native_model_load_production(const char * fixture_path) {
      sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
      sampling.repeat_penalty = 1.0f;
      CHECK(skippy_session_configure_chat_sampling(
 -            session, &sampling, "{}", 0, &error) == SKIPPY_STATUS_OK);
 +            session, &sampling, "{\"grammar\":\"\"}", 0, &error) == SKIPPY_STATUS_OK);
      CHECK(session->sampling_backend_enabled);
+     CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
+     CHECK(!session->sampling_backend_enabled);
+     CHECK(session->sampling_chain == nullptr);
++
++    // Reuse is an explicit opt-in until every backend has production
++    // benchmark coverage. Exercise the opt-in path below.
++    set_detach_sampler_on_reset_environment("0");
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &sampling, "{\"grammar\":\"\"}", 0, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
 +    llama_sampler * sampling_chain = session->sampling_chain;
++    CHECK(session->sampling_rebuild_count == 2);
 +    llama_token predicted = -1;
 +    CHECK(skippy_decode_step_sampled(
 +            session, 2, &sampling, nullptr, 0, nullptr, 0,
 +            &output_bytes, &predicted, &error) == SKIPPY_STATUS_OK);
 +    CHECK(predicted >= 0);
 +    const uint64_t reserves_before_reset =
-+            session->ctx->get_sched_reserve_count_for_test();
-     CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
--    CHECK(!session->sampling_backend_enabled);
--    CHECK(session->sampling_chain == nullptr);
++            session->ctx->get_sched_reserve_count();
++    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
 +    CHECK(session->sampling_backend_enabled);
 +    CHECK(session->sampling_chain == sampling_chain);
++    CHECK(session->sampling_reuse_hit_count == 1);
      CHECK(session->n_past == 0);
      CHECK(skippy_prefill_chunk(
              session, prompt, 2, nullptr, 0, nullptr, 0,
              &output_bytes, &error) == SKIPPY_STATUS_OK);
      CHECK(session->n_past == 2);
-+    CHECK(session->ctx->get_sched_reserve_count_for_test() == reserves_before_reset);
++    CHECK(session->ctx->get_sched_reserve_count() == reserves_before_reset);
 +
 +    // Seed and top-p do not affect a zero-temperature chain. Reconfiguring
 +    // those fields, or disabling explicit sampling, must keep the same greedy
@@ -275,18 +374,18 @@ index 60357184a..e8660af1a 100644
 +            session, &sampling, "{\"grammar\":\"\"}", 2, &error) == SKIPPY_STATUS_OK);
 +    CHECK(session->sampling_backend_enabled);
 +    CHECK(session->sampling_chain == sampling_chain);
-+    CHECK(session->ctx->get_sched_reserve_count_for_test() == reserves_before_reset);
++    CHECK(session->ctx->get_sched_reserve_count() == reserves_before_reset);
 +    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
 +    CHECK(skippy_prefill_chunk(
 +            session, prompt, 2, nullptr, 0, nullptr, 0,
 +            &output_bytes, &error) == SKIPPY_STATUS_OK);
-+    CHECK(session->ctx->get_sched_reserve_count_for_test() == reserves_before_reset);
++    CHECK(session->ctx->get_sched_reserve_count() == reserves_before_reset);
 +    CHECK(skippy_session_configure_chat_sampling(
 +            session, nullptr, "{\"grammar\":\"\"}", 2, &error) == SKIPPY_STATUS_OK);
 +    CHECK(session->sampling_backend_enabled);
 +    CHECK(session->sampling_chain == sampling_chain);
 +    CHECK(session->sampling_config_valid);
-+    CHECK(session->ctx->get_sched_reserve_count_for_test() == reserves_before_reset);
++    CHECK(session->ctx->get_sched_reserve_count() == reserves_before_reset);
 +
 +    // Token verification requests every output row and samples those logits on
 +    // the CPU. It must detach and retire a sampler retained across reset before
@@ -326,58 +425,6 @@ index 60357184a..e8660af1a 100644
 +    llama_batch_free(multi_output);
 +    skippy_mark_context_work_pending(session->stage_model);
 +
-+    // CPU-only sampler chains never enter the backend graph. Rebuilding or
-+    // clearing them must preserve that invariant and leave the scheduler's
-+    // reservation count unchanged on the next decode.
-+    skippy_sampling_config cpu_sampling = sampling;
-+    cpu_sampling.temperature = 0.75f;
-+    cpu_sampling.top_p = 0.9f;
-+    CHECK(skippy_session_configure_chat_sampling(
-+            session, &cpu_sampling, "{\"grammar\":\"\"}", 2,
-+            &error) == SKIPPY_STATUS_OK);
-+    CHECK(!session->sampling_backend_enabled);
-+    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
-+    cpu_sampling.seed = 29;
-+    CHECK(skippy_session_configure_chat_sampling(
-+            session, &cpu_sampling, "{\"grammar\":\"\"}", 0,
-+            &error) == SKIPPY_STATUS_OK);
-+    CHECK(!session->sampling_backend_enabled);
-+    const uint64_t reserves_before_cpu_rebuild =
-+            session->ctx->get_sched_reserve_count_for_test();
-+    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
-+    CHECK(skippy_prefill_chunk(
-+            session, prompt, 2, nullptr, 0, nullptr, 0,
-+            &output_bytes, &error) == SKIPPY_STATUS_OK);
-+    CHECK(session->ctx->get_sched_reserve_count_for_test() ==
-+            reserves_before_cpu_rebuild);
-+
-+    cpu_sampling.logit_bias_count = 1;
-+    cpu_sampling.logit_bias[0].token = 0;
-+    cpu_sampling.logit_bias[0].bias = -1.0f;
-+    CHECK(skippy_session_configure_chat_sampling(
-+            session, &cpu_sampling, "{\"grammar\":\"\"}", 2,
-+            &error) == SKIPPY_STATUS_OK);
-+    CHECK(!session->sampling_backend_enabled);
-+    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
-+    CHECK(skippy_prefill_chunk(
-+            session, prompt, 2, nullptr, 0, nullptr, 0,
-+            &output_bytes, &error) == SKIPPY_STATUS_OK);
-+    CHECK(session->ctx->get_sched_reserve_count_for_test() ==
-+            reserves_before_cpu_rebuild);
-+
-+    cpu_sampling.logit_bias_count = 0;
-+    CHECK(skippy_session_configure_chat_sampling(
-+            session, &cpu_sampling, "{\"grammar\":\"root ::= [a]\"}", 2,
-+            &error) == SKIPPY_STATUS_OK);
-+    CHECK(session->grammar_sampler != nullptr);
-+    CHECK(!session->sampling_backend_enabled);
-+    CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
-+    CHECK(skippy_prefill_chunk(
-+            session, prompt, 2, nullptr, 0, nullptr, 0,
-+            &output_bytes, &error) == SKIPPY_STATUS_OK);
-+    CHECK(session->ctx->get_sched_reserve_count_for_test() ==
-+            reserves_before_cpu_rebuild);
-+
 +    // Sampled verification retires an initialized backend chain after
 +    // detaching it. Reset must discard that one-shot chain immediately rather
 +    // than reusing it for a CPU-sampled first token on the next request.
@@ -393,6 +440,13 @@ index 60357184a..e8660af1a 100644
      CHECK(global.kv_cleared_events.load() > 0);
      CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
      CHECK(skippy_model_free(model, &error) == SKIPPY_STATUS_OK);
+     CHECK(global.unload_started_events.load() == 1);
+     CHECK(global.unload_completed_events.load() == 1);
++    set_detach_sampler_on_reset_environment(
++            had_detach_setting ? saved_detach_setting.c_str() : nullptr);
+     if (error != nullptr) {
+         skippy_error_free(error);
+         error = nullptr;
 diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
 index b54096e58..be5c49fa0 100644
 --- a/src/skippy/workloads.cpp
