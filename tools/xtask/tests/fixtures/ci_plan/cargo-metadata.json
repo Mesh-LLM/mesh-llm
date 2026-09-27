@@ -65,6 +65,11 @@
     "path+file:///workspace/crates/llama-spec-bench#0.76.1",
     "path+file:///workspace/crates/skippy-bench#0.76.1",
     "path+file:///workspace/crates/skippy-prompt#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-analytics#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-payments#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-payments-types#0.76.1",
+    "path+file:///workspace/crates/mesh-llm-wallet#0.76.1",
+    "path+file:///workspace/crates/mesh-wallet-lexe#0.76.1",
     "path+file:///workspace/tools/xtask#0.76.1"
   ],
   "packages": [
@@ -87,6 +92,9 @@
         },
         {
           "name": "mesh-llm-commands"
+        },
+        {
+          "name": "mesh-llm-payments"
         },
         {
           "name": "mesh-llm-events"
@@ -249,6 +257,12 @@
         },
         {
           "name": "mesh-llm-build-info"
+        },
+        {
+          "name": "mesh-llm-analytics"
+        },
+        {
+          "name": "mesh-llm-payments"
         },
         {
           "name": "mesh-llm-cli"
@@ -1056,6 +1070,18 @@
       "name": "mesh-llm-host-runtime",
       "manifest_path": "/workspace/crates/mesh-llm-host-runtime/Cargo.toml",
       "dependencies": [
+        {
+          "name": "mesh-llm-analytics"
+        },
+        {
+          "name": "mesh-llm-payments-types"
+        },
+        {
+          "name": "mesh-llm-wallet"
+        },
+        {
+          "name": "mesh-wallet-lexe"
+        },
         {
           "name": "anyhow"
         },
@@ -1998,6 +2024,9 @@
       "manifest_path": "/workspace/crates/mesh-llm-embedded-runtime/Cargo.toml",
       "dependencies": [
         {
+          "name": "mesh-llm-payments"
+        },
+        {
           "name": "mesh-llm-host-runtime"
         }
       ]
@@ -2362,6 +2391,101 @@
         {
           "name": "skippy-topology"
         }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-analytics#0.76.1",
+      "name": "mesh-llm-analytics",
+      "manifest_path": "/workspace/crates/mesh-llm-analytics/Cargo.toml",
+      "dependencies": [
+        {"name": "anyhow"},
+        {"name": "chrono"},
+        {"name": "dirs"},
+        {"name": "mesh-llm-build-info"},
+        {"name": "mesh-llm-events"},
+        {"name": "reqwest"},
+        {"name": "serde"},
+        {"name": "serde_json"},
+        {"name": "tokio"},
+        {"name": "tracing"},
+        {"name": "uuid"},
+        {"name": "tempfile"},
+        {"name": "tokio"}
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-payments#0.76.1",
+      "name": "mesh-llm-payments",
+      "manifest_path": "/workspace/crates/mesh-llm-payments/Cargo.toml",
+      "dependencies": [
+        {"name": "anyhow"},
+        {"name": "mesh-llm-plugin"},
+        {"name": "rmcp"},
+        {"name": "async-trait"},
+        {"name": "fs2"},
+        {"name": "mesh-llm-payments-types"},
+        {"name": "mesh-llm-wallet"},
+        {"name": "rusqlite"},
+        {"name": "serde"},
+        {"name": "serde_json"},
+        {"name": "tokio"},
+        {"name": "bitcoin"},
+        {"name": "lightning-invoice"},
+        {"name": "tempfile"},
+        {"name": "tokio"}
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-payments-types#0.76.1",
+      "name": "mesh-llm-payments-types",
+      "manifest_path": "/workspace/crates/mesh-llm-payments-types/Cargo.toml",
+      "dependencies": [
+        {"name": "mesh-llm-plugin"},
+        {"name": "anyhow"},
+        {"name": "mesh-llm-wallet"},
+        {"name": "serde"},
+        {"name": "serde_json"},
+        {"name": "tokio"}
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-llm-wallet#0.76.1",
+      "name": "mesh-llm-wallet",
+      "manifest_path": "/workspace/crates/mesh-llm-wallet/Cargo.toml",
+      "dependencies": [
+        {"name": "anyhow"},
+        {"name": "async-trait"},
+        {"name": "hex"},
+        {"name": "lightning-invoice"},
+        {"name": "mesh-llm-plugin"},
+        {"name": "rmcp"},
+        {"name": "schemars"},
+        {"name": "serde"},
+        {"name": "serde_json"},
+        {"name": "sha2"},
+        {"name": "tokio"},
+        {"name": "bitcoin"},
+        {"name": "tokio"},
+        {"name": "tempfile"}
+      ]
+    },
+    {
+      "id": "path+file:///workspace/crates/mesh-wallet-lexe#0.76.1",
+      "name": "mesh-wallet-lexe",
+      "manifest_path": "/workspace/crates/mesh-wallet-lexe/Cargo.toml",
+      "dependencies": [
+        {"name": "anyhow"},
+        {"name": "async-trait"},
+        {"name": "fs2"},
+        {"name": "lexe"},
+        {"name": "lexe-api-core"},
+        {"name": "mesh-llm-plugin"},
+        {"name": "mesh-llm-wallet"},
+        {"name": "rustls"},
+        {"name": "tokio"},
+        {"name": "tracing"},
+        {"name": "tempfile"},
+        {"name": "tokio"}
       ]
     },
     {
