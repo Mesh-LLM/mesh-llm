@@ -785,33 +785,47 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
     if !kv.should_record() || token_ids.is_empty() {
         return result;
     }
-    if kv.payload_is_exact_state() {
+    let exact_state_record_allowed = if kv.payload_is_exact_state() {
         let mut attrs = binary_message_kv_attrs(config, kv, session_id, message, token_ids.len());
-        let Ok(prompt_token_count) = u64::try_from(message.state.prompt_token_count) else {
-            attrs.insert(
-                "skippy.kv.decision".to_string(),
-                json!("exact_state_full_prefill_record_skipped_invalid_prompt_count"),
-            );
-            telemetry.emit("stage.binary_kv_record_decision", attrs);
-            return result;
-        };
-        if !kv.exact_state_record_token_count_allowed(prompt_token_count, token_ids.len() as u64) {
-            attrs.insert(
-                "skippy.kv.decision".to_string(),
-                json!("exact_state_full_prefill_record_skipped_checkpoint_boundary"),
-            );
-            attrs.insert(
-                "skippy.kv.prompt_token_count".to_string(),
-                json!(prompt_token_count),
-            );
-            attrs.insert(
-                "skippy.kv.candidate_token_count".to_string(),
-                json!(token_ids.len()),
-            );
-            telemetry.emit("stage.binary_kv_record_decision", attrs);
-            return result;
+        match u64::try_from(message.state.prompt_token_count) {
+            Ok(prompt_token_count) => {
+                let allowed = kv.exact_state_record_token_count_allowed(
+                    prompt_token_count,
+                    token_ids.len() as u64,
+                );
+                if !allowed && !kv.records_resident_prefixes() {
+                    attrs.insert(
+                        "skippy.kv.decision".to_string(),
+                        json!("exact_state_full_prefill_record_skipped_checkpoint_boundary"),
+                    );
+                    attrs.insert(
+                        "skippy.kv.prompt_token_count".to_string(),
+                        json!(prompt_token_count),
+                    );
+                    attrs.insert(
+                        "skippy.kv.candidate_token_count".to_string(),
+                        json!(token_ids.len()),
+                    );
+                    telemetry.emit("stage.binary_kv_record_decision", attrs);
+                    return result;
+                }
+                allowed
+            }
+            Err(_) => {
+                if !kv.records_resident_prefixes() {
+                    attrs.insert(
+                        "skippy.kv.decision".to_string(),
+                        json!("exact_state_full_prefill_record_skipped_invalid_prompt_count"),
+                    );
+                    telemetry.emit("stage.binary_kv_record_decision", attrs);
+                    return result;
+                }
+                false
+            }
         }
-    }
+    } else {
+        false
+    };
     let identities =
         binary_full_prefill_record_identities(kv, config, session_id, message, token_ids);
     let mut attrs = binary_message_kv_attrs(config, kv, session_id, message, token_ids.len());
@@ -828,7 +842,7 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
         let token_count_usize = usize::try_from(identity.identity.token_count)
             .unwrap_or(usize::MAX)
             .min(token_ids.len());
-        if token_count_usize == token_ids.len() {
+        if exact_state_record_allowed && token_count_usize == token_ids.len() {
             match kv.record_exact_state(
                 runtime,
                 session_id,
@@ -866,7 +880,9 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
                         "skippy.exact_cache.entries".to_string(),
                         json!(record.entries),
                     );
-                    continue;
+                    if !kv.records_resident_prefixes() {
+                        continue;
+                    }
                 }
                 Ok(None) => {}
                 Err(error) => {
