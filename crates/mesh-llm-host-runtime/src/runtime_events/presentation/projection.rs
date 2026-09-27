@@ -239,19 +239,19 @@ pub fn health_projection_event(
     OutputEvent::Info {
         message: format!(
             "version={} reservation_exhausted={} terminal_delivery_failed={} dropped_progress={} \
-             coalesced_progress={} dropped_diagnostic={} replay_evicted={} subscriber_disconnected={} \
+             dropped_diagnostic={} replay_evicted={} subscriber_disconnected={} \
              shutdown_degraded={} reducer_rejected={} state_transition_rejected={} \
-             cancelled_reservation_rejected={} dropped_native={} rejected_native={} \
+             cancelled_reservation_rejected={} \
              state_degraded={} rebuild_required={} rebuild_generation={} \
              bounds.reservation_table_capacity={} bounds.state_transition_lane_depth={} \
              bounds.diagnostic_lane_depth={} bounds.wake_list_depth={} \
              bounds.replay_max_frames={} bounds.subscriber_lag_max_frames={} \
-             bounds.max_concurrent_subscribers={} ingress_p99_us={}",
+             bounds.max_concurrent_subscribers={} ingress_p99_us={} \
+             coalesced_progress={} dropped_native={} rejected_native={}",
             snapshot.version,
             snapshot.reservation_exhausted,
             snapshot.terminal_delivery_failed,
             snapshot.dropped_progress,
-            snapshot.coalesced_progress,
             snapshot.dropped_diagnostic,
             snapshot.replay_evicted,
             snapshot.subscriber_disconnected,
@@ -259,8 +259,6 @@ pub fn health_projection_event(
             snapshot.reducer_rejected,
             snapshot.state_transition_rejected,
             snapshot.cancelled_reservation_rejected,
-            snapshot.dropped_native,
-            snapshot.rejected_native,
             snapshot.state_degraded,
             snapshot.rebuild_required,
             snapshot.rebuild_generation,
@@ -272,6 +270,9 @@ pub fn health_projection_event(
             bounds.subscriber_lag_max_frames,
             bounds.max_concurrent_subscribers,
             ingress_p99_us.map_or_else(|| "null".to_string(), |value| value.to_string()),
+            snapshot.coalesced_progress,
+            snapshot.dropped_native,
+            snapshot.rejected_native,
         ),
         context: Some("event_system_health".to_string()),
     }

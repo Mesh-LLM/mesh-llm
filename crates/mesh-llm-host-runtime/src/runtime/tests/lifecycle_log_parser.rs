@@ -42,7 +42,7 @@ fn capability_report(confirmed: u64, health: &[&str]) -> skippy_runtime::Capabil
 
 #[test]
 #[serial_test::serial]
-fn parser_auto_with_full_coverage_forwards_nothing() {
+fn parser_auto_with_full_coverage_keeps_only_model_fallback() {
     let _reset = ParserStateReset;
 
     let policy = configure_lifecycle_log_parser(
@@ -50,11 +50,13 @@ fn parser_auto_with_full_coverage_forwards_nothing() {
         &capability_report(FULL_STRUCTURED_COVERAGE, &[]),
     );
 
-    assert!(
-        NATIVE_LOG_CATEGORIES
-            .iter()
-            .all(|category| !policy.forwards(category))
-    );
+    for category in NATIVE_LOG_CATEGORIES {
+        assert_eq!(
+            policy.forwards(category),
+            category == "model",
+            "unexpected parser fallback for category {category}"
+        );
+    }
 }
 
 #[test]
