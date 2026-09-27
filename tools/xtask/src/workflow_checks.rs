@@ -547,6 +547,7 @@ const RELEASE_COMPOSITION_ONLY_JOBS: &[&str] = &[
 /// the release scripts that own version rewriting and crates.io packaging.
 const RELEASE_CARGO_INVOCATIONS: &[&str] = &[
     "cargo ",
+    "scripts/package-release.sh",
     "scripts/release-version.sh",
     "scripts/publish-crates.sh",
 ];
@@ -561,10 +562,17 @@ const RELEASE_SCCACHE_INITIALIZATION: &[&str] = &[
     "uses: ./.github/actions/configure-sccache-gha",
 ];
 
-/// These hosted jobs install sccache and then configure its cache backend, so
-/// both markers must precede cargo and keep their declared order. The reversed
-/// order starts the server from a binary the installer has not provided yet.
-const RELEASE_HOSTED_SCCACHE_JOBS: &[&str] = &["metadata", "publish"];
+/// A hosted Ubuntu job starts without the repository's pinned runner image, so
+/// it must install sccache before configuring its cache backend. Derive this
+/// from the job instead of maintaining a name allowlist that a new job can
+/// silently fall outside.
+fn release_job_requires_hosted_sccache_setup(job: &str) -> bool {
+    job.lines()
+        .any(|line| line.trim() == "runs-on: ubuntu-24.04")
+        && !job
+            .lines()
+            .any(|line| line.trim_start().starts_with("container:"))
+}
 
 /// Names of the jobs declared under `jobs:` in a workflow, in file order.
 fn workflow_job_names(workflow: &str) -> Vec<String> {
@@ -578,6 +586,11 @@ fn workflow_job_names(workflow: &str) -> Vec<String> {
             continue;
         }
         if line.is_empty() {
+            continue;
+        }
+        // A column-zero comment is still inside the `jobs:` mapping and must
+        // not truncate discovery of the jobs declared after it.
+        if line.trim_start().starts_with('#') {
             continue;
         }
         // Leaving the two-space indentation ends the `jobs:` mapping.
@@ -622,7 +635,7 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
             .filter(|line| !line.trim_start().starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
-        let cargo_invocations = RELEASE_CARGO_INVOCATIONS
+        let mut cargo_invocations = RELEASE_CARGO_INVOCATIONS
             .iter()
             .filter(|invocation| steps.contains(**invocation))
             .copied()
@@ -630,17 +643,39 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
         if cargo_invocations.is_empty() {
             continue;
         }
+        if RELEASE_COMPOSITION_ONLY_JOBS.contains(&job_name.as_str()) {
+            if cargo_invocations.contains(&"scripts/package-release.sh") {
+                for guard in [
+                    "MESH_RELEASE_HOST_PRESTAMPED: \"1\"",
+                    "MESH_RELEASE_ATTESTATION_PREVERIFIED: \"1\"",
+                ] {
+                    if !steps.contains(guard) {
+                        return Err(format!(
+                            "release workflow `{job_name}` runs scripts/package-release.sh without the cargo-bypass guard `{guard}`"
+                        )
+                        .into());
+                    }
+                }
+                cargo_invocations.retain(|invocation| *invocation != "scripts/package-release.sh");
+            }
+            if !cargo_invocations.is_empty() {
+                let invocation_list = cargo_invocations
+                    .iter()
+                    .map(|invocation| invocation.trim())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "release workflow `{job_name}` is composition-only but invokes {invocation_list}"
+                )
+                .into());
+            }
+            continue;
+        }
         let invocation_list = cargo_invocations
             .iter()
             .map(|invocation| invocation.trim())
             .collect::<Vec<_>>()
             .join(", ");
-        if RELEASE_COMPOSITION_ONLY_JOBS.contains(&job_name.as_str()) {
-            return Err(format!(
-                "release workflow `{job_name}` is composition-only but invokes {invocation_list}"
-            )
-            .into());
-        }
         let first_cargo_invocation = RELEASE_CARGO_INVOCATIONS
             .iter()
             .filter_map(|invocation| steps.find(invocation))
@@ -655,7 +690,7 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
                     .map(|position| (*marker, position))
             })
             .collect::<Vec<_>>();
-        if RELEASE_HOSTED_SCCACHE_JOBS.contains(&job_name.as_str()) {
+        if release_job_requires_hosted_sccache_setup(job) {
             // Presence is not enough for a hosted job: the installer has to run
             // before the action that starts a server from the installed binary.
             let mut previous: Option<(&str, usize)> = None;
@@ -1457,5 +1492,34 @@ jobs:
                 .contains("`compose_linux_cuda` is composition-only but invokes"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn release_sccache_initialization_tracks_package_release_cargo() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
+            "      - uses: ./.github/actions/compose-product-input\n",
+            "      - uses: ./.github/actions/compose-product-input\n      - name: Package release\n        run: scripts/package-release.sh dist/product\n",
+        );
+
+        let error = check_release_sccache_initialization(&workflow).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "`compose_linux_cuda` runs scripts/package-release.sh without the cargo-bypass guard"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn release_sccache_initialization_scans_past_top_level_comments() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW
+            .replace("  publish:\n", "# release publication follows\n  publish:\n")
+            .replace(
+                "      - uses: mozilla-actions/sccache-action@v0\n      - uses: ./.github/actions/configure-sccache-gha\n      - name: Prepare dispatched release tag",
+                "      - name: Prepare dispatched release tag",
+            );
+
+        let error = check_release_sccache_initialization(&workflow).unwrap_err();
+        assert!(error.to_string().contains("`publish` invokes"), "{error}");
     }
 }

@@ -1741,8 +1741,10 @@ jobs:
       - uses: ./.github/actions/configure-sccache-gha
         if: github.event_name == 'workflow_dispatch'
         with:
-          allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
-          allow_native_github_cache: "true"
+          # This job only rewrites release metadata. Keep the credential-bearing
+          # publisher on its job-local cache, matching `metadata`.
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
 
       - name: Restore shared release UI
         uses: ./.github/actions/restore-release-ui
