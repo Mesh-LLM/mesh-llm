@@ -118,7 +118,10 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("release.yml", "build_native_runtime_linux_x86_64_cuda"): "true",
             ("release.yml", "build_native_runtime_linux_x86_64_rocm"): effective_release_runner_16,
             ("release.yml", "build_native_runtime_linux_x86_64_vulkan"): effective_release_runner_16,
-            ("release.yml", "publish"): "true",
+            # `publish` only rewrites release metadata and holds the release
+            # credentials, so it keeps the same job-local-only cache authority
+            # as `metadata`.
+            ("release.yml", "publish"): "false",
             ("release.yml", "publish_crates_preflight"): "false",
             ("release.yml", "publish_crates"): "false",
             ("static-abi-artifact.yml", "static_abi_artifact"): policy,
