@@ -121,10 +121,27 @@ pub(super) fn certification(value: Option<&Json>, row: &str, profiles: &[&str]) 
         get(certification, "execution"),
         &format!("{field}.execution"),
     )?;
-    object(
-        get(certification, "resources"),
-        &format!("{field}.resources"),
+    let resources_field = format!("{field}.resources");
+    let resources = object(get(certification, "resources"), &resources_field)?;
+    exact_keys(
+        resources,
+        &[
+            "runner_role",
+            "cache_policy",
+            "estimated_model_bytes",
+            "minimum_runner_memory_gib",
+            "startup_timeout_secs",
+        ],
+        &resources_field,
     )?;
+    if let Some(value) = get(resources, "minimum_runner_memory_gib")
+        && !matches!(value, Json::Null)
+        && !matches!(value.as_int(), Some(128 | 256))
+    {
+        return fail(format!(
+            "{resources_field}.minimum_runner_memory_gib must be 128 or 256"
+        ));
+    }
     string(get(certification, "notes"), &format!("{field}.notes"))?;
     for optional in OPTIONAL_ARTIFACTS {
         if has(certification, optional) {

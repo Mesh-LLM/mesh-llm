@@ -11,7 +11,7 @@ use crate::ci_plan::document::Json;
 
 const MANIFEST_DIR: &str = "ci/model-artifacts/manifests";
 const FAMILY_MANIFEST: &str = "ci/llama-canary/family-certified.json";
-const SUITES: [&str; 11] = [
+const SUITES: [&str; 12] = [
     "product-smoke",
     "scripted-binary-smoke",
     "sdk-smoke",
@@ -20,6 +20,7 @@ const SUITES: [&str; 11] = [
     "skippy-correctness",
     "safetensors-runtime-smoke",
     "skippy-ci-smoke",
+    "skippy-system-one-smoke",
     "skippy-parity",
     "competitive-benchmark",
     "radix-cache",

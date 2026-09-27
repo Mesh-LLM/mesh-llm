@@ -6,7 +6,7 @@ use crate::support::{Stage, TestResult, assert_streams, fixture_dir, repository_
 use serde_json::Value;
 use std::fs;
 
-const OUTPUTS: [&str; 12] = [
+const OUTPUTS: [&str; 13] = [
     "ci/llama-canary/family-certified.json",
     "ci/model-artifacts/manifests/product-smoke.json",
     "ci/model-artifacts/manifests/scripted-binary-smoke.json",
@@ -16,6 +16,7 @@ const OUTPUTS: [&str; 12] = [
     "ci/model-artifacts/manifests/skippy-correctness.json",
     "ci/model-artifacts/manifests/safetensors-runtime-smoke.json",
     "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+    "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
     "ci/model-artifacts/manifests/skippy-parity.json",
     "ci/model-artifacts/manifests/competitive-benchmark.json",
     "ci/model-artifacts/manifests/radix-cache.json",
@@ -45,7 +46,7 @@ fn migration_models_regenerated_real_registry_is_byte_identical() -> TestResult 
         "",
         "",
     );
-    // Then: all twelve outputs equal the checked-in bytes.
+    // Then: all thirteen outputs equal the checked-in bytes.
     for path in OUTPUTS {
         assert_eq!(
             stage.read(path)?,
@@ -62,9 +63,26 @@ fn migration_models_frozen_manifests_match_the_checkout() -> TestResult {
     let root = repository_root();
     for path in &OUTPUTS[1..] {
         let name = path.rsplit('/').next().ok_or("manifest name")?;
-        // Then: the goldens were captured from today's manifests.
-        let frozen = fs::read(fixture_dir().join("manifests").join(name))?;
-        assert_eq!(frozen, fs::read(root.join(path))?, "{name}");
+        // Then: frozen artifact payloads remain unchanged apart from the
+        // registry digest and Qwen's added System One membership.
+        if name == "skippy-system-one-smoke.json" {
+            continue;
+        }
+        let mut frozen: Value =
+            serde_json::from_slice(&fs::read(fixture_dir().join("manifests").join(name))?)?;
+        let current: Value = serde_json::from_slice(&fs::read(root.join(path))?)?;
+        if let Some(rows) = frozen["artifacts"].as_array_mut() {
+            for row in rows {
+                if row["id"] == "family-qwen3-dense" {
+                    row["suites"]
+                        .as_array_mut()
+                        .ok_or("frozen Qwen suites")?
+                        .push(Value::from("skippy-system-one-smoke"));
+                }
+            }
+        }
+        frozen["registry_sha256"] = current["registry_sha256"].clone();
+        assert_eq!(frozen, current, "{name}");
     }
     Ok(())
 }
