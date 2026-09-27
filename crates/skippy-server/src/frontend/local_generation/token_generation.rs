@@ -902,6 +902,7 @@ impl StageOpenAiBackend {
                     request.ids,
                     request.prompt_token_ids[..boundary].to_vec(),
                     "shared_prefill_checkpoint",
+                    true,
                 ) {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
@@ -937,11 +938,16 @@ impl StageOpenAiBackend {
                 // the native session at the full-prompt boundary. Exporting
                 // that state is useful for growing prompts, but is strictly
                 // best-effort after the preferred shared checkpoint above.
+                // Keep off-checkpoint states resident so every stage reopens
+                // from the same durable boundary after a restart.
                 if self.enqueue_exact_state_record_at_tokens(
                     session_id,
                     request.ids,
                     request.prompt_token_ids.to_vec(),
                     "final_prefill_state",
+                    self.kv.as_ref().is_some_and(|kv| {
+                        kv.full_exact_state_writes_through_l3(request.prompt_token_ids.len())
+                    }),
                 ) {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
@@ -1251,6 +1257,7 @@ impl StageOpenAiBackend {
                     ids,
                     checkpoint_tokens,
                     "chat_prefix_checkpoint",
+                    true,
                 );
                 prefill_cache_chunks(
                     runtime,
