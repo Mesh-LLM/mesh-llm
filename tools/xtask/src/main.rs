@@ -10,9 +10,12 @@ mod command;
 mod installer_fixtures;
 mod migration_inventory;
 mod model_registry;
+mod native_policy;
 mod no_console_print;
 mod prepared_input;
+mod product;
 mod publish_consistency;
+mod release;
 mod release_targets;
 mod repo_consistency;
 mod repository;
@@ -59,6 +62,8 @@ fn run() -> DynResult<()> {
             automation_parity::run(root.as_path(), rest)
         }
         cli::CliCommand::PreparedInput(rest) => prepared_input::run(rest),
+        cli::CliCommand::Product(command, rest) => product::run(command, rest),
+        cli::CliCommand::Release(command, rest) => release::run(command, rest),
         cli::CliCommand::Artifact(command, rest) => artifact::run(command, rest),
         cli::CliCommand::Models(command, rest) => model_registry::run(command, rest, || {
             let root = match explicit_root {
@@ -68,6 +73,13 @@ fn run() -> DynResult<()> {
             Ok(root.as_path().to_path_buf())
         }),
         cli::CliCommand::CiOperations(command, rest) => ci_operations::run(command, rest, || {
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
+            Ok(root.as_path().to_path_buf())
+        }),
+        cli::CliCommand::Native(command, rest) => native_policy::run(command, rest, || {
             let root = match explicit_root {
                 Some(root) => root,
                 None => repository::RepositoryRoot::resolve(None)?,
