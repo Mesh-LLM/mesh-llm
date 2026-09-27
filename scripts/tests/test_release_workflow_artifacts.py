@@ -283,7 +283,7 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             publish,
         )
         self.assertIn(
-            'python3 scripts/select-release-notes-base.py "$RELEASE_TAG"',
+            'cargo xtool release notes-base "$RELEASE_TAG"',
             metadata,
         )
         manual_version_update = metadata.index(
@@ -302,6 +302,34 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         self.assertLess(format_check, whitespace_check)
         self.assertLess(whitespace_check, stage_release_source)
         self.assertLess(stage_release_source, push_release_source)
+
+    def test_release_metadata_selects_prior_stable_tag_or_empty_base(self) -> None:
+        workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+        source_step = next(
+            step for step in workflow["jobs"]["metadata"]["steps"]
+            if step.get("id") == "source"
+        )
+        script = source_step["run"]
+        selection = script[script.index('release_notes_base="$('):]
+        tags = "v0.75.1\nv0.76.0-rc.1\nv0.76.0\n"
+        for target, expected in (
+            ("v0.76.1", "v0.76.0"),
+            ("v0.76.1-rc.1", "v0.76.0"),
+            ("v0.75.1", ""),
+        ):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "github-output"
+                result = subprocess.run(
+                    ["bash", "-c", "git() { printf '%s' \"$FIXTURE_TAGS\"; }; " + selection],
+                    cwd=ROOT,
+                    env={**os.environ, "RELEASE_TAG": target,
+                         "FIXTURE_TAGS": tags, "GITHUB_OUTPUT": str(output),
+                         "source_sha": "fixture-sha"},
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"release_notes_base={expected}\n", output.read_text())
 
     def test_release_depot_policy_is_main_ref_only_and_selected_once(
         self,
