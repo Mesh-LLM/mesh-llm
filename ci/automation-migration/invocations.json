@@ -978,7 +978,7 @@
       "caller": "scripts/llama-canary-family-evidence.py",
       "source_block": "_MEMORY_SPEC = importlib.util.spec_from_file_location(",
       "target": "scripts/lib/canary_family_memory.py",
-      "target_sha256": "1a7d585488d0df7fdcd9ef9358edca590ad6ba50b490ee7e6fe952cf80a12f5d",
+      "target_sha256": "371ef5c3c4a9b77cb0e9912a4b7d2a868c9a312ef1c5a956d483b68b32ea41fa",
       "resolution": "At evidence module initialization Path(__file__).resolve().parent / lib/canary_family_memory.py resolves the fixed sibling relative filename. The controller script's own checkout chooses these bytes; --root/CANARY_SOURCE_ROOT does not redirect the memory import. Module name canary_family_memory is not a runtime selector. This SHA-256 pins the current checkout only, not a historical or selected checkout.",
       "invocation": "All evidence CLI subcommands and imports execute lines 20-23 (spec_from_file_location, module_from_spec, exec_module) before dispatch; no argv or stdin is passed to the memory module. Direct workflow entrypoints: .github/workflows/llama-canary-family-pass.yml build, restore, certify, receipt, aggregate; .github/workflows/llama-upstream-canary.yml publication. scripts/llama-canary-agent-repair.sh invokes the trusted-root controller with pack --root selected ROOT plus output/candidate/base/branch/pass-id/test-build/bundle/summary/workload-oracles. Required just/ci.just:15 and ci-quality-slice.yml:186 unittest discovery imports test_llama_canary_family_evidence.py, test_llama_canary_handoff_contract.py and test_canary_family_memory.py, which dynamically import this controller. Workflow modes are trusted-main scheduled/dispatch and explicitly trusted selected mesh_ref; no direct Just recipe invokes this controller.",
       "status_streams_effects": "Import runs stdlib imports, defines constants/functions, and executes memory module top-level imports/constants; no child process, stdout, stderr, manifest read or intended write. Import exceptions propagate (CLI uncaught traceback/nonzero; unittest import fails discovery). Python may write __pycache__ absent PYTHONDONTWRITEBYTECODE. CLI status/streams/effects depend on the named subcommand: build preflights and launches repair; pack writes handoff and GITHUB_OUTPUT matrix/identity; restore extracts to selected root and writes GITHUB_OUTPUT candidate; certify writes memory evidence and propagates battery failure; receipt writes receipt.json; aggregate prints summary, optionally appends GITHUB_STEP_SUMMARY, fails on invalid receipts; publication writes pr-body.md. These effects are call-time only.",
@@ -992,7 +992,7 @@
       "caller": "scripts/llama-canary-family-evidence.py",
       "source_block": "spec = importlib.util.spec_from_file_location(\"family_planner\", root / \"scripts/plan-family-battery.py\")",
       "target": "scripts/plan-family-battery.py",
-      "target_sha256": "0862d38e617c391ec25ebeb09ef67461b44ea855f56a8b2076fdfa67ac2f24c5",
+      "target_sha256": "24f383830e7231f1506647b7a9f3537f0fe45dbb96620b0b44916f91a66ef470",
       "resolution": "load_planner(root) forms root/scripts/plan-family-battery.py with a fixed relative filename; root is supplied by its caller and may be a separately checked-out, explicitly trusted CANARY_SOURCE_ROOT. The SHA-256 identifies only current checkout bytes; a different selected root must be bound to its verified source revision and cannot be inferred from this digest. Planner import sets ROOT from the selected file's __file__ and DEFAULT_MANIFEST from ROOT/ci/llama-canary/family-certified.json; no manifest is read on import.",
       "invocation": "scripts/llama-canary-family-evidence.py:72-76 defines load_planner(root); direct test calls include scripts/tests/test_llama_canary_family_evidence.py and test_llama_canary_handoff_contract.py. No production evidence subcommand calls load_planner in the current source. Production build preflight (:137-152) and pack (:309-313) instead call source_plan(root,destination): sys.executable root/scripts/plan-family-battery.py --manifest root/ci/llama-canary/family-certified.json --shard-count 256 --output destination [--check-cache --cache-root $HF_CACHE for pack], cwd=root, then the same argv prefix with --verify-plan destination. build picks root from CANARY_SOURCE_ROOT or cwd; pack takes --root, with trusted controller in scripts/llama-canary-agent-repair.sh and selected source root passed separately. The battery shell, repair shell and workload-certify shell also invoke the planner directly (skippy-family-battery.sh:190,193,395; llama-canary-agent-repair.sh:452-466,487-490; skippy-workload-certify.sh:157-159). Required unittest discovery reaches test imports and test function calls, not an automatic production load_planner call.",
       "status_streams_effects": "load_planner import executes planner top-level constant and function/class definitions, returns module, prints nothing and makes no intended write or subprocess; import exceptions propagate and Python may write __pycache__. source_plan's generation and verification are distinct child processes with inherited streams, cwd=root, check=True and timeouts of 600s/60s; failure/timeout raises, direct CLI PlanError prints stderr and exits 2, unexpected errors can traceback. Generation writes destination plan JSON and optional cache checking reads pinned files; verification reads and checks the canonical plan, then source_plan reads and validates it. Planner direct --inspect-gguf prints JSON with layer_count/activation_width, --output writes plan and --github-output appends action fields when requested; no planner subprocess exists in planner source.",
@@ -1005,7 +1005,7 @@
   "selected_process_calls": [
     {
       "caller": "scripts/package-native-runtime.sh",
-      "line": 192,
+      "line": 208,
       "source_block": "\"$candidate\" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then",
       "child": "inline sys.version_info probe",
       "argv": "candidate python3 then python, -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)'",
@@ -1045,7 +1045,7 @@
     },
     {
       "caller": "scripts/skippy-family-battery.sh",
-      "line": 395,
+      "line": 396,
       "source_block": "if ! dimensions=\"$(\"$PLANNER\" --inspect-gguf \"$target\")\"; then",
       "child": "scripts/plan-family-battery.py",
       "argv": "$ROOT/scripts/plan-family-battery.py --inspect-gguf $target",
@@ -2853,17 +2853,17 @@
       ]
     },
     {
-      "id": "boundary:just-with-lld:cargo run -p xtask - repo-consistency release-targets",
+      "id": "boundary:just-with-lld:cargo xtool repo-consistency release-targets",
       "disposition": "platform_conditional",
       "caller": "just:with-lld",
       "line": 0,
-      "source_block": "exec cargo run -p xtask -- repo-consistency release-targets",
+      "source_block": "exec cargo xtool repo-consistency release-targets",
       "occurrence": 1,
       "candidate_id": null,
       "child": null,
       "bound_child": null,
       "selector": "Just attributes [private] [unix] on with-lld (just/build.just:16-18); on Windows the [windows] with-lld at just/build.just:29-31 is selected instead",
-      "reachable_bytes": "exec of the literal Cargo command 'cargo run -p xtask -- repo-consistency release-targets' after sccache and scripts/cargo-linker --mesh-probe; the unix body reaches no Python (scripts/cargo-linker and scripts/lib/lld.sh contain no interpreter launch)",
+      "reachable_bytes": "exec of the literal Cargo command 'cargo xtool repo-consistency release-targets' after sccache and scripts/cargo-linker --mesh-probe; the unix body reaches no Python (scripts/cargo-linker and scripts/lib/lld.sh contain no interpreter launch)",
       "replacement_owner": "task 6 typed xtool dispatch; Just remains the thin wrapper",
       "deletion_condition": "Remove when with-lld has no platform split or both platform bodies are walked as selected children.",
       "rationale": "The body is walked: its only child command is the literal cargo invocation shown, bound from the caller's literal arguments; [private] is visibility only and [unix] is the platform guard.",
@@ -2905,13 +2905,13 @@
       "disposition": "platform_conditional",
       "caller": "just:check-release",
       "line": 0,
-      "source_block": "just with-lld cargo run -p xtask -- repo-consistency release-targets",
+      "source_block": "just with-lld cargo xtool repo-consistency release-targets",
       "occurrence": 1,
       "candidate_id": null,
       "child": "just:with-lld",
       "bound_child": null,
       "selector": "Just attribute [unix] on check-release (just/release-bundle.just:16-17); [windows] check-release at :20-22 calls the same with-lld command",
-      "reachable_bytes": "just:with-lld with literal argv cargo run -p xtask -- repo-consistency release-targets; walked, reaches only Cargo/xtask",
+      "reachable_bytes": "just:with-lld with literal argv cargo xtool repo-consistency release-targets; walked, reaches only Cargo/xtask",
       "replacement_owner": "task 18 release preflight in Rust",
       "deletion_condition": "Remove when check-release has one platform-neutral body.",
       "rationale": "Both platform bodies launch the same literal command; the unix-gated call is walked into just:with-lld, whose own [unix] body is a separate platform_conditional record.",
@@ -2929,7 +2929,7 @@
         {
           "path": "just/release-bundle.just",
           "line": 18,
-          "text": "just with-lld cargo run -p xtask -- repo-consistency release-targets"
+          "text": "just with-lld cargo xtool repo-consistency release-targets"
         },
         {
           "path": "just/release-bundle.just",
@@ -2939,8 +2939,50 @@
         {
           "path": "just/release-bundle.just",
           "line": 22,
-          "text": "@just with-lld cargo run -p xtask -- repo-consistency release-targets"
+          "text": "@just with-lld cargo xtool repo-consistency release-targets"
         }
+      ]
+    },
+    {
+      "id": "boundary:just-website-build:website-dir",
+      "disposition": "bounded_selector",
+      "caller": "just:website-build",
+      "line": 0,
+      "source_block": "cd \"{{ ... }}\" && npm run clean && npm run build",
+      "occurrence": 1,
+      "candidate_id": null,
+      "child": null,
+      "bound_child": null,
+      "selector": "Justfile:11 selects website_dir from MESH_LLM_WEBSITE_DIR or the existing website/ or mesh/website/ directory; just/website-ui.just:12-13 uses it as a working directory, not an executable",
+      "reachable_bytes": "npm run clean and npm run build in the selected website source tree; the directory override is a source-layout boundary, not an interpreter or arbitrary command target",
+      "replacement_owner": "task 1 source-layout-aware CI automation inventory",
+      "deletion_condition": "Remove when the graph evaluates the bounded website_dir Just expression from its source-layout and environment inputs.",
+      "rationale": "The graph cannot evaluate Just's env/path_exists expression; the checked source binds only the working directory and the literal npm commands remain visible.",
+      "evidence": [
+        {"path": "Justfile", "line": 11, "text": "website_dir := env(\"MESH_LLM_WEBSITE_DIR\", if path_exists(justfile_directory() / \"website\") == \"true\" { \"website\" } else if path_exists(justfile_directory() / \"mesh/website\") == \"true\" { \"mesh/website\" } else { \"website\" })"},
+        {"path": "just/website-ui.just", "line": 12, "text": "website-build:"},
+        {"path": "just/website-ui.just", "line": 13, "text": "cd \"{{ website_dir }}\" && npm run clean && npm run build"}
+      ]
+    },
+    {
+      "id": "boundary:just-cli-inventory-check:website-dir",
+      "disposition": "bounded_selector",
+      "caller": "just:cli-inventory-check",
+      "line": 0,
+      "source_block": "cd \"{{ ... }}\" && npm run check:cli",
+      "occurrence": 1,
+      "candidate_id": null,
+      "child": null,
+      "bound_child": null,
+      "selector": "Justfile:11 selects website_dir from MESH_LLM_WEBSITE_DIR or the existing website/ or mesh/website/ directory; just/website-ui.just:19-20 uses it as a working directory, not an executable",
+      "reachable_bytes": "npm run check:cli in the selected website source tree; the source-layout override selects a directory, while the npm script name is literal",
+      "replacement_owner": "task 1 source-layout-aware CI automation inventory",
+      "deletion_condition": "Remove when the graph evaluates the bounded website_dir Just expression from its source-layout and environment inputs.",
+      "rationale": "The graph cannot evaluate Just's env/path_exists expression; the checked source binds only the working directory and the literal npm command remains visible.",
+      "evidence": [
+        {"path": "Justfile", "line": 11, "text": "website_dir := env(\"MESH_LLM_WEBSITE_DIR\", if path_exists(justfile_directory() / \"website\") == \"true\" { \"website\" } else if path_exists(justfile_directory() / \"mesh/website\") == \"true\" { \"mesh/website\" } else { \"website\" })"},
+        {"path": "just/website-ui.just", "line": 19, "text": "cli-inventory-check:"},
+        {"path": "just/website-ui.just", "line": 20, "text": "cd \"{{ website_dir }}\" && npm run check:cli"}
       ]
     },
     {
@@ -3229,16 +3271,16 @@
       ]
     },
     {
-      "id": "boundary:package-native-runtime:202",
+      "id": "boundary:package-native-runtime:218",
       "disposition": "bounded_selector",
       "caller": "scripts/package-native-runtime.sh",
-      "line": 202,
+      "line": 218,
       "source_block": "\"$(python_bin)\" - \"$REPO_ROOT/Cargo.toml\" <<'PY'",
       "occurrence": 1,
       "candidate_id": "scripts/package-native-runtime.sh#candidate:56ea30792e063b30:1",
       "child": null,
       "bound_child": null,
-      "selector": "python_bin() at scripts/package-native-runtime.sh:188 iterates the literal list 'python3 python' and prints the first on PATH (with a >=3.9 probe where present); no environment variable or argument overrides the selection",
+      "selector": "python_bin() at scripts/package-native-runtime.sh:204 iterates the literal list 'python3 python' and prints the first on PATH (with a >=3.9 probe where present); no environment variable or argument overrides the selection",
       "reachable_bytes": "one inline stdlib program (heredoc/-c text at scripts/package-native-runtime.sh:202) run by python3 or python; selected python3/python; Cargo.toml workspace.package version -> stdout; missing version raises and fails packaging",
       "replacement_owner": "task 17 immutable product composition and archive packaging (spec 8.2: package-native-runtime inline JSON/manifest operations)",
       "deletion_condition": "Remove when package-native-runtime.sh delegates version/ABI/manifest generation to the Rust owner with identical output.",
@@ -3246,32 +3288,32 @@
       "evidence": [
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 188,
+          "line": 204,
           "text": "python_bin() {"
         },
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 190,
+          "line": 206,
           "text": "for candidate in python3 python; do"
         },
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 202,
+          "line": 218,
           "text": "\"$(python_bin)\" - \"$REPO_ROOT/Cargo.toml\" <<'PY'"
         }
       ]
     },
     {
-      "id": "boundary:package-native-runtime:224",
+      "id": "boundary:package-native-runtime:240",
       "disposition": "bounded_selector",
       "caller": "scripts/package-native-runtime.sh",
-      "line": 224,
+      "line": 240,
       "source_block": "\"$(python_bin)\" - \"$REPO_ROOT/crates/skippy-ffi/src/lib.rs\" <<'PY'",
       "occurrence": 1,
       "candidate_id": "scripts/package-native-runtime.sh#candidate:6c0e281e395100a6:1",
       "child": null,
       "bound_child": null,
-      "selector": "python_bin() at scripts/package-native-runtime.sh:188 iterates the literal list 'python3 python' and prints the first on PATH (with a >=3.9 probe where present); no environment variable or argument overrides the selection",
+      "selector": "python_bin() at scripts/package-native-runtime.sh:204 iterates the literal list 'python3 python' and prints the first on PATH (with a >=3.9 probe where present); no environment variable or argument overrides the selection",
       "reachable_bytes": "one inline stdlib program (heredoc/-c text at scripts/package-native-runtime.sh:224) run by python3 or python; selected interpreter reads skippy-ffi/src/lib.rs ABI constants and prints major.minor.patch",
       "replacement_owner": "task 17 immutable product composition and archive packaging (spec 8.2: package-native-runtime inline JSON/manifest operations)",
       "deletion_condition": "Remove when package-native-runtime.sh delegates version/ABI/manifest generation to the Rust owner with identical output.",
@@ -3279,32 +3321,32 @@
       "evidence": [
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 188,
+          "line": 204,
           "text": "python_bin() {"
         },
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 190,
+          "line": 206,
           "text": "for candidate in python3 python; do"
         },
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 224,
+          "line": 240,
           "text": "\"$(python_bin)\" - \"$REPO_ROOT/crates/skippy-ffi/src/lib.rs\" <<'PY'"
         }
       ]
     },
     {
-      "id": "boundary:package-native-runtime:362",
+      "id": "boundary:package-native-runtime:378",
       "disposition": "bounded_selector",
       "caller": "scripts/package-native-runtime.sh",
-      "line": 362,
+      "line": 378,
       "source_block": "\"$(python_bin)\" -c 'import json, sys; print(json.load(sys.stdin)[\"target_directory\"])'",
       "occurrence": 1,
       "candidate_id": "scripts/package-native-runtime.sh#candidate:32d1056d41097bbf:1",
       "child": null,
       "bound_child": null,
-      "selector": "python_bin() at scripts/package-native-runtime.sh:188 iterates the literal list 'python3 python' and prints the first on PATH (with a >=3.9 probe where present); no environment variable or argument overrides the selection",
+      "selector": "python_bin() at scripts/package-native-runtime.sh:204 iterates the literal list 'python3 python' and prints the first on PATH (with a >=3.9 probe where present); no environment variable or argument overrides the selection",
       "reachable_bytes": "one inline stdlib program (heredoc/-c text at scripts/package-native-runtime.sh:362) run by python3 or python; selected interpreter parses piped JSON -> target directory stdout; JSON errors propagate",
       "replacement_owner": "task 17 immutable product composition and archive packaging (spec 8.2: package-native-runtime inline JSON/manifest operations)",
       "deletion_condition": "Remove when package-native-runtime.sh delegates version/ABI/manifest generation to the Rust owner with identical output.",
@@ -3312,32 +3354,32 @@
       "evidence": [
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 188,
+          "line": 204,
           "text": "python_bin() {"
         },
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 190,
+          "line": 206,
           "text": "for candidate in python3 python; do"
         },
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 362,
+          "line": 378,
           "text": "\"$(python_bin)\" -c 'import json, sys; print(json.load(sys.stdin)[\"target_directory\"])'"
         }
       ]
     },
     {
-      "id": "boundary:package-native-runtime:782",
+      "id": "boundary:package-native-runtime:818",
       "disposition": "bounded_selector",
       "caller": "scripts/package-native-runtime.sh",
-      "line": 782,
+      "line": 818,
       "source_block": "\"$(python_bin)\" - \"${manifest_args[@]}\" <<PY",
       "occurrence": 1,
       "candidate_id": "scripts/package-native-runtime.sh#candidate:c09345b9ebdea366:1",
       "child": null,
       "bound_child": null,
-      "selector": "python_bin() at scripts/package-native-runtime.sh:188 iterates the literal list 'python3 python' and prints the first on PATH (with a >=3.9 probe where present); no environment variable or argument overrides the selection",
+      "selector": "python_bin() at scripts/package-native-runtime.sh:204 iterates the literal list 'python3 python' and prints the first on PATH (with a >=3.9 probe where present); no environment variable or argument overrides the selection",
       "reachable_bytes": "one inline stdlib program (heredoc/-c text at scripts/package-native-runtime.sh:782) run by python3 or python; selected Python receives manifest_args array; heredoc ends at PY; writes manifest, exact additional argv determined by manifest_args construction",
       "replacement_owner": "task 17 immutable product composition and archive packaging (spec 8.2: package-native-runtime inline JSON/manifest operations)",
       "deletion_condition": "Remove when package-native-runtime.sh delegates version/ABI/manifest generation to the Rust owner with identical output.",
@@ -3345,17 +3387,17 @@
       "evidence": [
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 188,
+          "line": 204,
           "text": "python_bin() {"
         },
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 190,
+          "line": 206,
           "text": "for candidate in python3 python; do"
         },
         {
           "path": "scripts/package-native-runtime.sh",
-          "line": 782,
+          "line": 818,
           "text": "\"$(python_bin)\" - \"${manifest_args[@]}\" <<PY"
         }
       ]
@@ -3909,16 +3951,16 @@
       ]
     },
     {
-      "id": "boundary:restore-release-ui:34",
+      "id": "boundary:restore-release-ui:37",
       "disposition": "bounded_selector",
       "caller": ".github/actions/restore-release-ui/action.yml",
-      "line": 34,
+      "line": 37,
       "source_block": "\"$python_bin\" scripts/ui-distribution.py verify \\",
       "occurrence": 1,
       "candidate_id": ".github/actions/restore-release-ui/action.yml#candidate:65b0802eb19a319c:1",
       "child": "scripts/ui-distribution.py",
       "bound_child": "scripts/ui-distribution.py",
-      "selector": "python_bin is set to the literal python3 (:30) when command -v python3 succeeds, else the literal python (:32); no input overrides it",
+      "selector": "python_bin is set to the literal python3 (:33) when command -v python3 succeeds, else the literal python (:35); no input overrides it",
       "reachable_bytes": "scripts/ui-distribution.py verify --dist crates/mesh-llm-ui/dist --source-sha $UI_SOURCE_SHA --release-tag $UI_RELEASE_TAG; nonzero fails the step; reads the dist tree, no writes",
       "replacement_owner": "task 15 UI and static/native SDK artifact validators",
       "deletion_condition": "Remove when restore-release-ui calls the Rust UI distribution verifier with identical rejection behavior.",
@@ -3926,27 +3968,27 @@
       "evidence": [
         {
           "path": ".github/actions/restore-release-ui/action.yml",
-          "line": 29,
+          "line": 32,
           "text": "if command -v python3 >/dev/null 2>&1; then"
         },
         {
           "path": ".github/actions/restore-release-ui/action.yml",
-          "line": 30,
+          "line": 33,
           "text": "python_bin=python3"
         },
         {
           "path": ".github/actions/restore-release-ui/action.yml",
-          "line": 31,
+          "line": 34,
           "text": "else"
         },
         {
           "path": ".github/actions/restore-release-ui/action.yml",
-          "line": 32,
+          "line": 35,
           "text": "python_bin=python"
         },
         {
           "path": ".github/actions/restore-release-ui/action.yml",
-          "line": 34,
+          "line": 37,
           "text": "\"$python_bin\" scripts/ui-distribution.py verify \\"
         }
       ]

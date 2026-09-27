@@ -48,7 +48,7 @@ fn selected_process_rejects_omitted_required_probe_and_planner() -> DynResult<()
     let ledgers = MigrationLedgers::load(&root)?;
     check_selected_processes(&root, &ledgers.invocations.selected_process_calls)?;
     for (path, line) in [
-        ("scripts/package-native-runtime.sh", 192),
+        ("scripts/package-native-runtime.sh", 208),
         ("scripts/skippy-family-battery.sh", 190),
     ] {
         let mut records = ledgers.invocations.selected_process_calls.clone();
