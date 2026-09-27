@@ -109,10 +109,20 @@ impl Payments {
         node: &Node,
         service: std::sync::Arc<mesh_llm_payments::service::PaymentService>,
     ) -> Result<Self> {
+        Self::attach_for_tests_with(node, service, Vec::new()).await
+    }
+
+    /// [`Self::attach_for_tests`], plus further in-process plugins by name.
+    #[cfg(test)]
+    pub(crate) async fn attach_for_tests_with(
+        node: &Node,
+        service: std::sync::Arc<mesh_llm_payments::service::PaymentService>,
+        extra: Vec<(String, crate::plugin::InProcessPluginRunner)>,
+    ) -> Result<Self> {
         node.payments
             .set(service)
             .map_err(|_| anyhow!("payments already initialized"))?;
-        let plugins = super::node_ext::attach_payments_plugin(node).await?;
+        let plugins = super::node_ext::attach_payments_plugin_with(node, extra).await?;
         Ok(Self::resolve(plugins).await)
     }
 

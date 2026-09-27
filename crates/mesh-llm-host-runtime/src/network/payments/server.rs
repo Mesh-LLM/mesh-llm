@@ -97,6 +97,7 @@ async fn serve_inner(
             },
         )
         .await?;
+    let lifecycle = super::lifecycle::ProviderLifecycle::for_node(node).await;
     let _instance = node.begin_runtime_instance_request(port).await?;
     let (events, mut receiver) = mpsc::unbounded_channel();
     let gate = Arc::new(InvoiceGate {
@@ -116,12 +117,19 @@ async fn serve_inner(
         flushed_tokens: AtomicU64::new(0),
         invoice_expires_at_ms: Arc::new(AtomicU64::new(0)),
         input_settlement: Arc::new(tokio::sync::Mutex::new(None)),
+        lifecycle,
+        observations: Arc::new(std::sync::OnceLock::new()),
     });
     let _serving_guard = ServingGuard { gate: gate.clone() };
     let generated = generate(reader, writer, port, &request, &gate, &mut receiver).await;
     // Close serving on every path, before anything else can observe this
     // peer, so an interrupted request's delivered output counts as debt.
     let closed = gate.close_serving().await;
+    let observations = gate.observations();
+    if let Ok(tokens) = &closed {
+        // Once, with the watermark the close wrote, whatever the transport did.
+        observations.delivered(*tokens);
+    }
     let transport_alive = generated?;
     closed?;
     // Generation is over. Release the runtime's in-flight slot (the gate
@@ -144,6 +152,7 @@ async fn serve_inner(
         None
     };
     if let Some(receipt) = output {
+        observations.invoice(1, &receipt.invoice);
         if transport_alive {
             wire::write(
                 writer,
@@ -159,10 +168,11 @@ async fn serve_inner(
             .call(
                 ops::SETTLE_RECEIVED,
                 &InvoiceRequest {
-                    invoice: receipt.invoice,
+                    invoice: receipt.invoice.clone(),
                 },
             )
             .await?;
+        observations.received(1, &receipt.invoice);
     }
     if transport_alive {
         wire::write(writer, &Frame::Complete).await?;

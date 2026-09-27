@@ -654,21 +654,23 @@ pricing is not inferred from these offers. Invoice terms remain authoritative.
 `RequestTerms.exchange_id` optionally retains the host's existing OpenAI evidence
 exchange ID in the payer's existing JSON terms record. It is not the private
 payment recovery ID. Older records omit it; there is no SQL schema migration.
-The provider protocol and provider evidence emission are unchanged.
+The provider protocol is unchanged.
 
 A trusted local plugin declaring `payment.lifecycle.v1` can observe the active
 payer exchange: `terms_accepted`, `input_invoice_issued`,
 `input_settlement_observed`, `output_invoice_issued`,
 `output_settlement_observed`, and `final_accounted`. Subscribe to
 `openai.exchange.v1` as well to obtain the host exchange and join on `exchange_id`.
-Events contain `exchange_id`, stable `event_ref`, `terms_digest`, `phase`, `source`,
-nullable `segment` (0=input, 1=output), nullable `payment_hash`, nullable
-`settlement` (`terminal` for wallet success), and `amount_msat`.
+Events contain `exchange_id`, stable `event_ref`, `terms_digest`, `role` (`payer`
+or `provider`), `phase`, `source`, nullable `segment` (0=input, 1=output),
+nullable `payment_hash`, nullable `settlement` (`terminal` for wallet success),
+`amount_msat`, and nullable `tokens`.
 Terms acceptance is `payer_asserted` (amount is the approved cap); invoice issuance
 is `provider_asserted` as observed by the payer, not independently verified
 issuance. Settlement is `wallet_reported`, amount excluding fees. Final accounting
-is `payer_asserted`, summing successful debits including fees. No provider-side
-claiming observation is implied by this payer-only stream.
+is `payer_asserted`, summing successful debits including fees. The provider's
+own observations are described below; neither side's stream is evidence of the
+other's.
 
 The terms digest is lowercase SHA-256 over checked JCS JSON using the existing
 host `request_body_digest` helper, applied to the object containing exactly
@@ -686,6 +688,47 @@ leave incomplete evidence; there is no replay or complete audit-log guarantee.
 The persisted correlation remains available to recovery tooling, but recovery
 currently emits no events. No raw invoice, preimage, wallet transaction ID,
 prompt or response text is published. Payment hashes are linkable metadata.
+
+## Provider-side evidence hooks
+
+The serving host emits the same `payment.lifecycle.v1` events, with `role:
+provider`, at the `payments.v1` seller operations it already calls. Emission is
+in the host's serving path, not in the payments engine, so any `payments.v1`
+provider gets it unchanged.
+
+| seller operation | phase | source |
+|---|---|---|
+| `serve_begin` | `terms_accepted` (amount is the terms' cap) | `provider_asserted` |
+| `serve_input_invoice` | `input_invoice_issued` | `provider_asserted` |
+| `settle_received`, input | `input_settlement_observed` | `wallet_reported` |
+| `serve_finish` | `delivered` (`tokens` is the closing watermark, `amount_msat` 0) | `provider_asserted` |
+| `output_receivable` | `output_invoice_issued` | `provider_asserted` |
+| `settle_received`, output | `output_settlement_observed` | `wallet_reported` |
+
+Observation starts when `serve_input_invoice` returns priced terms, and the
+acceptance `serve_begin` made is reported then, just before the input invoice.
+A request that fails before that point — including a backend failure before
+authorization (`Frame::Error`, no invoice, nothing billed) — emits no phases;
+treat that as never priced, not lapsed. `delivered` is emitted once, when the
+serving close succeeds, whatever happened to the transport. Settlement is the
+receiving wallet's report that `settle_received` recorded; the amount is the
+invoice amount. Since the payments engine is a plugin, nothing here claims that
+payment preceded wallet access: `source` says who asserted, which is all it can
+say.
+
+The provider has no host exchange to join, and the request ID is the private
+recovery ID, so it names each observed request with a fresh `exchange_id` of
+its own. `terms_digest` uses the payer's construction over the provider's terms
+with that ID; the other seven fields are the ones the payer approves, but the
+two sides' digests differ because each covers its own `exchange_id`. Join the
+two streams on `payment_hash`, which both sides report for each invoice and
+settlement.
+
+The payer section's bounds apply unchanged: an eight-event queue per request,
+a one-second publication timeout, nothing awaited by serving or settlement, no
+per-token events, and no ID or hashing without a subscriber. Evidence is
+best-effort and can be incomplete. Lapsed input invoices, recorded debt,
+operator unblocking and serving recovery emit no events.
 
 
 ### Failure and recovery boundaries

@@ -181,11 +181,26 @@ pub(crate) fn in_process_plugins(node: &Node) -> crate::plugin::InProcessPlugins
 pub(crate) async fn attach_payments_plugin(
     node: &Node,
 ) -> anyhow::Result<crate::plugin::PluginManager> {
+    attach_payments_plugin_with(node, Vec::new()).await
+}
+
+/// [`attach_payments_plugin`], plus further in-process plugins by name.
+#[cfg(test)]
+pub(crate) async fn attach_payments_plugin_with(
+    node: &Node,
+    extra: Vec<(String, crate::plugin::InProcessPluginRunner)>,
+) -> anyhow::Result<crate::plugin::PluginManager> {
     install_test_engine();
+    let mut externals = vec![crate::plugin::in_process_builtin_spec(
+        crate::plugin::PAYMENTS_PLUGIN_ID,
+    )];
+    let mut plugins = in_process_plugins(node);
+    for (name, runner) in extra {
+        externals.push(crate::plugin::in_process_builtin_spec(&name));
+        plugins = plugins.with(name, runner);
+    }
     let specs = crate::plugin::ResolvedPlugins {
-        externals: vec![crate::plugin::in_process_builtin_spec(
-            crate::plugin::PAYMENTS_PLUGIN_ID,
-        )],
+        externals,
         inactive: Vec::new(),
     };
     let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(8);
@@ -195,7 +210,7 @@ pub(crate) async fn attach_payments_plugin(
             mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
         },
         mesh_tx,
-        in_process_plugins(node),
+        plugins,
     )
     .await?;
     node.set_plugin_manager(manager.clone()).await;

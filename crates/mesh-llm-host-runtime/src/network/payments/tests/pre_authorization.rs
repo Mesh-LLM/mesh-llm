@@ -43,7 +43,18 @@ async fn rejected_exchange() -> Result<()> {
         .payments
         .set(service.clone())
         .map_err(|_| anyhow::anyhow!("already initialized"))?;
-    crate::network::payments::node_ext::attach_payments_plugin(&provider).await?;
+    let recorded = Arc::new(Mutex::new(Vec::new()));
+    let plugins = crate::network::payments::node_ext::attach_payments_plugin_with(
+        &provider,
+        vec![lifecycle_recorder("lifecycle-recorder", recorded.clone())],
+    )
+    .await?;
+    // The recorder is subscribed, so an empty record below is a real absence.
+    assert!(
+        plugins
+            .any_plugin_declares_mesh_channel("payment.lifecycle.v1")
+            .await
+    );
     let caller = Node::new_for_tests(NodeRole::Client).await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let mut targets = ModelTargets::default();
@@ -89,6 +100,14 @@ async fn rejected_exchange() -> Result<()> {
     assert!(result.is_err());
     backend.await??;
     assert!(service.output_receivable(&id).await?.is_none());
+    // Never priced, so no lifecycle phase at all -- not even the acceptance
+    // `SERVE_BEGIN` made before the backend refused.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        recorded.lock().unwrap().is_empty(),
+        "{:?}",
+        recorded.lock().unwrap()
+    );
     assert_eq!(network.payments.load(Ordering::SeqCst), 0);
     assert!(network.entries.lock().unwrap().is_empty());
     caller.endpoint.close().await;
