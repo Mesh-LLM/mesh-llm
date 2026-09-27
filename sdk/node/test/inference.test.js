@@ -70,10 +70,10 @@ test('stream preserves fragmented tool-call SSE data, raw frames, and done', asy
     async openaiStream(path, body, callback) {
       request = { path, body: JSON.parse(body) }
       queueMicrotask(() => {
-        callback(JSON.stringify({ type: 'started', requestId: 'req-1', statusCode: 200, contentType: 'text/event-stream' }))
-        callback(JSON.stringify({ type: 'sse', requestId: 'req-1', event: null, data: JSON.stringify(toolDelta), raw: `data: ${JSON.stringify(toolDelta)}\n\n` }))
-        callback(JSON.stringify({ type: 'sse', requestId: 'req-1', event: null, data: '[DONE]', raw: 'data: [DONE]\n\n' }))
-        callback(JSON.stringify({ type: 'completed', requestId: 'req-1' }))
+        callback(null, JSON.stringify({ type: 'started', requestId: 'req-1', statusCode: 200, contentType: 'text/event-stream' }))
+        callback(null, JSON.stringify({ type: 'sse', requestId: 'req-1', event: null, data: JSON.stringify(toolDelta), raw: `data: ${JSON.stringify(toolDelta)}\n\n` }))
+        callback(null, JSON.stringify({ type: 'sse', requestId: 'req-1', event: null, data: '[DONE]', raw: 'data: [DONE]\n\n' }))
+        callback(null, JSON.stringify({ type: 'completed', requestId: 'req-1' }))
       })
       return 'req-1'
     },
@@ -98,8 +98,8 @@ test('Responses streams preserve named event types', async () => {
   const handle = {
     async openaiStream(_path, _body, callback) {
       queueMicrotask(() => {
-        callback(JSON.stringify({ type: 'sse', requestId: 'req-2', event: 'response.function_call_arguments.delta', data: '{"delta":"{\\"city\\":"}', raw: 'event: response.function_call_arguments.delta\ndata: {}\n\n' }))
-        callback(JSON.stringify({ type: 'completed', requestId: 'req-2' }))
+        callback(null, JSON.stringify({ type: 'sse', requestId: 'req-2', event: 'response.function_call_arguments.delta', data: '{"delta":"{\\"city\\":"}', raw: 'event: response.function_call_arguments.delta\ndata: {}\n\n' }))
+        callback(null, JSON.stringify({ type: 'completed', requestId: 'req-2' }))
       })
       return 'req-2'
     },
@@ -116,7 +116,7 @@ test('Responses streams preserve named event types', async () => {
 test('stream failures expose status, body, and error text', async () => {
   const handle = {
     async openaiStream(_path, _body, callback) {
-      queueMicrotask(() => callback(JSON.stringify({ type: 'failed', requestId: 'req-3', statusCode: 429, error: 'rate limited', body: '{"error":"slow down"}' })))
+      queueMicrotask(() => callback(null, JSON.stringify({ type: 'failed', requestId: 'req-3', statusCode: 429, error: 'rate limited', body: '{"error":"slow down"}' })))
       return 'req-3'
     },
     async cancel() {}
@@ -130,11 +130,30 @@ test('stream failures expose status, body, and error text', async () => {
   )
 })
 
+test('native callback errors use the napi error-first callback contract', async () => {
+  const handle = {
+    async openaiStream(_path, _body, callback) {
+      queueMicrotask(() => callback(new Error('native callback failed')))
+      return 'req-native-error'
+    },
+    async cancel() {
+      assert.fail('terminal native callback errors must not be cancelled again')
+    }
+  }
+
+  await assert.rejects(
+    async () => {
+      for await (const _event of new Inference(handle).stream('/v1/chat/completions', {})) {}
+    },
+    error => error instanceof OpenAIRequestError && error.message === 'Error: native callback failed'
+  )
+})
+
 test('closing a stream early cancels the native request', async () => {
   const cancelled = []
   const handle = {
     async openaiStream(_path, _body, callback) {
-      queueMicrotask(() => callback(JSON.stringify({ type: 'started', requestId: 'req-4', statusCode: 200, contentType: 'text/event-stream' })))
+      queueMicrotask(() => callback(null, JSON.stringify({ type: 'started', requestId: 'req-4', statusCode: 200, contentType: 'text/event-stream' })))
       return 'req-4'
     },
     async cancel(requestId) {
@@ -151,7 +170,7 @@ test('stream buffer overflow fails explicitly and cancels the native request', a
   const handle = {
     async openaiStream(_path, _body, callback) {
       for (let index = 0; index < 300; index += 1) {
-        callback(JSON.stringify({ type: 'sse', requestId: 'req-fast', event: null, data: '{}', raw: 'data: {}\n\n' }))
+        callback(null, JSON.stringify({ type: 'sse', requestId: 'req-fast', event: null, data: '{}', raw: 'data: {}\n\n' }))
       }
       return 'req-fast'
     },

@@ -14,6 +14,7 @@ use tokio::sync::Notify;
 const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SSE_EVENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CHUNK_LINE_BYTES: usize = 4 * 1024;
 
 #[derive(Debug)]
 pub(super) struct StreamFailure {
@@ -519,8 +520,18 @@ impl ChunkedDecoder {
                     .windows(4)
                     .position(|window| window == b"\r\n\r\n")
                 {
+                    if trailer_end + 4 > MAX_RESPONSE_HEADER_BYTES {
+                        return Err(StreamFailure::transport(
+                            "malformed chunked response: trailers exceed 64 KiB",
+                        ));
+                    }
                     self.buffer.drain(..trailer_end + 4);
                     self.finished = true;
+                }
+                if !self.finished && self.buffer.len() > MAX_RESPONSE_HEADER_BYTES {
+                    return Err(StreamFailure::transport(
+                        "malformed chunked response: trailers exceed 64 KiB",
+                    ));
                 }
                 break;
             }
@@ -550,8 +561,18 @@ impl ChunkedDecoder {
             }
 
             let Some(line_end) = self.buffer.windows(2).position(|window| window == b"\r\n") else {
+                if self.buffer.len() > MAX_CHUNK_LINE_BYTES {
+                    return Err(StreamFailure::transport(
+                        "malformed chunked response: chunk size line exceeds 4 KiB",
+                    ));
+                }
                 break;
             };
+            if line_end > MAX_CHUNK_LINE_BYTES {
+                return Err(StreamFailure::transport(
+                    "malformed chunked response: chunk size line exceeds 4 KiB",
+                ));
+            }
             let size_text = std::str::from_utf8(&self.buffer[..line_end]).map_err(|error| {
                 StreamFailure::transport(format!("invalid chunk size: {error}"))
             })?;
@@ -664,7 +685,10 @@ fn parse_sse_event(raw: &[u8]) -> Result<Option<SseEvent>, StreamFailure> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BodyDecoder, SseDecoder, SseEvent, consume_response};
+    use super::{
+        BodyDecoder, MAX_CHUNK_LINE_BYTES, MAX_RESPONSE_HEADER_BYTES, SseDecoder, SseEvent,
+        consume_response,
+    };
     use crate::events::{OpenAiStreamEvent, OpenAiStreamListener};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -741,6 +765,28 @@ mod tests {
 
         assert_eq!(event.event_type.as_deref(), Some("update"));
         assert_eq!(event.data, "one\ntwo");
+    }
+
+    #[test]
+    fn rejects_unterminated_oversized_chunk_size_line() {
+        let mut body = BodyDecoder::new(true, None);
+        let error = body
+            .push(&vec![b'F'; MAX_CHUNK_LINE_BYTES + 1])
+            .expect_err("oversized chunk size line fails");
+
+        assert!(error.message.contains("chunk size line exceeds 4 KiB"));
+    }
+
+    #[test]
+    fn rejects_unterminated_oversized_chunk_trailers() {
+        let mut body = BodyDecoder::new(true, None);
+        body.push(b"0\r\n")
+            .expect("terminating chunk starts trailers");
+        let error = body
+            .push(&vec![b'x'; MAX_RESPONSE_HEADER_BYTES + 1])
+            .expect_err("oversized trailers fail");
+
+        assert!(error.message.contains("trailers exceed 64 KiB"));
     }
 
     #[test]

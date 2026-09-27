@@ -72,17 +72,25 @@ For a private mesh, initialize `Client` with `InviteToken(...)` and the app's pe
 ## Stream agent turns
 
 ```swift
-let body: [String: Any] = [
-    "model": models[0].id,
-    "messages": [["role": "user", "content": "What is the weather?"]],
-    "tools": [["type": "function", "function": ["name": "get_weather"]]],
-]
+try await client.start()
+do {
+    let models = try await client.inference.listModels()
+    let body: [String: Any] = [
+        "model": models[0].id,
+        "messages": [["role": "user", "content": "What is the weather?"]],
+        "tools": [["type": "function", "function": ["name": "get_weather"]]],
+    ]
 
-for try await event in client.inference.streamChatCompletions(body) {
-    if case .sse(let frame) = event, !frame.isDone {
-        print(frame.event as Any, try frame.jsonObject() as Any)
+    for try await event in client.inference.streamChatCompletions(body) {
+        if case .sse(let frame) = event, !frame.isDone {
+            print(frame.event as Any, try frame.jsonObject() as Any)
+        }
     }
+} catch {
+    await client.stop()
+    throw error
 }
+await client.stop()
 ```
 
 The JSON and raw SSE frame remain available, so incremental tool-call arguments,

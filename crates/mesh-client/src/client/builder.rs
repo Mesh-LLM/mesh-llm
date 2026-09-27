@@ -22,7 +22,6 @@ type OpenAiStreamMap = Arc<Mutex<HashMap<String, ActiveOpenAiStream>>>;
 struct ActiveOpenAiStream {
     cancelled: Arc<AtomicBool>,
     cancel_notify: Arc<Notify>,
-    listener: Arc<dyn crate::events::OpenAiStreamListener>,
 }
 
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 10;
@@ -211,7 +210,6 @@ impl MeshClient {
             ActiveOpenAiStream {
                 cancelled: cancelled.clone(),
                 cancel_notify: cancel_notify.clone(),
-                listener: listener.clone(),
             },
         );
 
@@ -231,20 +229,31 @@ impl MeshClient {
             )
             .await;
             streams.lock().unwrap().remove(&id);
-            match result {
-                Ok(()) if !cancelled.load(Ordering::Acquire) => {
-                    listener
-                        .on_event(crate::events::OpenAiStreamEvent::Completed { request_id: id });
+            let was_cancelled = cancelled.load(Ordering::Acquire)
+                || result.as_ref().is_err_and(|error| error.cancelled);
+            if was_cancelled {
+                listener.on_event(crate::events::OpenAiStreamEvent::Failed {
+                    request_id: id,
+                    status_code: None,
+                    error: "cancelled".to_string(),
+                    body: None,
+                });
+            } else {
+                match result {
+                    Ok(()) => {
+                        listener.on_event(crate::events::OpenAiStreamEvent::Completed {
+                            request_id: id,
+                        });
+                    }
+                    Err(error) => {
+                        listener.on_event(crate::events::OpenAiStreamEvent::Failed {
+                            request_id: id,
+                            status_code: error.status_code,
+                            error: error.message,
+                            body: error.body,
+                        });
+                    }
                 }
-                Err(error) if !error.cancelled && !cancelled.load(Ordering::Acquire) => {
-                    listener.on_event(crate::events::OpenAiStreamEvent::Failed {
-                        request_id: id,
-                        status_code: error.status_code,
-                        error: error.message,
-                        body: error.body,
-                    });
-                }
-                _ => {}
             }
         });
         Ok(request_id)
@@ -372,7 +381,8 @@ impl MeshClient {
     }
 
     /// Cancel an in-flight request. No-op if the `request_id` is unknown.
-    /// Emits `Event::Failed { error: "cancelled" }` to the request's listener when found.
+    /// Emits `Event::Failed { error: "cancelled" }` to a legacy request listener when found.
+    /// OpenAI stream cancellation is emitted by the stream task after it stops producing events.
     pub fn cancel(&self, request_id: RequestId) {
         let entry = self.cancel_flags.lock().unwrap().remove(&request_id.0);
         if let Some((flag, listener)) = entry {
@@ -388,14 +398,6 @@ impl MeshClient {
         if let Some(active) = entry {
             active.cancelled.store(true, Ordering::Release);
             active.cancel_notify.notify_one();
-            active
-                .listener
-                .on_event(crate::events::OpenAiStreamEvent::Failed {
-                    request_id: request_id.0,
-                    status_code: None,
-                    error: "cancelled".to_string(),
-                    body: None,
-                });
         }
     }
 

@@ -117,6 +117,17 @@ payload = raw.json()
 ```python
 from meshllm import OpenAIStreamChunk
 
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}]
 arguments = ""
 async for event in client.inference.stream_chat_completions({
     "model": "Qwen3-8B",

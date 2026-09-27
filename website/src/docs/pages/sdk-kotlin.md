@@ -68,6 +68,10 @@ For public mesh discovery, use `Client.connectPublic(ownerKeypair, PublicMeshQue
 ## Stream agent turns
 
 ```kotlin
+import ai.meshllm.OpenAIStreamEvent
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+
 val body = Json.parseToJsonElement("""{
   "model":"Qwen3-8B",
   "messages":[{"role":"user","content":"What is the weather?"}],

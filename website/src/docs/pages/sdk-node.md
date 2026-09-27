@@ -50,12 +50,18 @@ The rich API passes OpenAI-compatible JSON through without narrowing tools,
 multimodal content, structured outputs, reasoning, usage, or future fields:
 
 ```js
-for await (const event of client.inference.streamChatCompletions({
-  model: models[0].id,
-  messages: [{ role: 'user', content: 'What is the weather in Sydney?' }],
-  tools: [{ type: 'function', function: { name: 'get_weather' } }]
-})) {
-  if (event.type === 'sse' && !event.done) console.log(event.event, event.json())
+await client.start()
+try {
+  const models = await client.inference.listModels()
+  for await (const event of client.inference.streamChatCompletions({
+    model: models[0].id,
+    messages: [{ role: 'user', content: 'What is the weather in Sydney?' }],
+    tools: [{ type: 'function', function: { name: 'get_weather' } }]
+  })) {
+    if (event.type === 'sse' && !event.done) console.log(event.event, event.json())
+  }
+} finally {
+  await client.stop()
 }
 ```
 

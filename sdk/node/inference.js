@@ -88,7 +88,17 @@ class Inference {
     const requestId = await this._handle.openaiStream(
       path,
       JSON.stringify({ ...body, stream: true }),
-      eventJson => queue.push(parse(eventJson))
+      (error, eventJson) => {
+        if (error) {
+          return queue.push({
+            type: 'failed',
+            statusCode: null,
+            body: null,
+            error: String(error)
+          })
+        }
+        return queue.push(parse(eventJson))
+      }
     )
     let finished = false
     try {

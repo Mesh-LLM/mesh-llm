@@ -41,12 +41,18 @@ await client.stop()
 ## Agent streaming
 
 ```js
-for await (const event of client.inference.streamChatCompletions({
-  model: models[0].id,
-  messages: [{ role: 'user', content: 'What is the weather?' }],
-  tools: [{ type: 'function', function: { name: 'get_weather' } }]
-})) {
-  if (event.type === 'sse' && !event.done) console.log(event.event, event.json())
+await client.start()
+const models = await client.inference.listModels()
+try {
+  for await (const event of client.inference.streamChatCompletions({
+    model: models[0].id,
+    messages: [{ role: 'user', content: 'What is the weather?' }],
+    tools: [{ type: 'function', function: { name: 'get_weather' } }]
+  })) {
+    if (event.type === 'sse' && !event.done) console.log(event.event, event.json())
+  }
+} finally {
+  await client.stop()
 }
 ```
 

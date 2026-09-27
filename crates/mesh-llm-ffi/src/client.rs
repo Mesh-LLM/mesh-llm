@@ -23,7 +23,7 @@ pub fn create_auto_client(
     block_on(sdk_create_auto_client(kp, query.into()))
         .map(|result| {
             Arc::new(MeshClientHandle {
-                client: tokio::sync::Mutex::new(result.client),
+                client: tokio::sync::RwLock::new(result.client),
             })
         })
         .map_err(map_mesh_api_error)
@@ -42,7 +42,7 @@ pub fn create_client(
         .build()
         .map_err(|error| FfiError::BuildFailed(error.to_string()))?;
     Ok(Arc::new(MeshClientHandle {
-        client: tokio::sync::Mutex::new(client),
+        client: tokio::sync::RwLock::new(client),
     }))
 }
 
@@ -50,7 +50,7 @@ pub fn create_client(
 impl MeshClientHandle {
     pub fn start(&self) -> Result<(), FfiError> {
         block_on(async {
-            let mut client = self.client.lock().await;
+            let mut client = self.client.write().await;
             client.join().await
         })
         .map_err(|error| FfiError::JoinFailed(error.to_string()))
@@ -58,20 +58,20 @@ impl MeshClientHandle {
 
     pub fn stop(&self) {
         block_on(async {
-            self.client.lock().await.disconnect().await;
+            self.client.write().await.disconnect().await;
         });
     }
 
     pub fn reconnect(&self) -> Result<(), FfiError> {
         block_on(async {
-            let mut client = self.client.lock().await;
+            let mut client = self.client.write().await;
             client.reconnect().await
         })
         .map_err(|error| FfiError::ReconnectFailed(error.to_string()))
     }
 
     pub fn status(&self) -> ClientStatus {
-        let status = block_on(async { self.client.lock().await.status().await });
+        let status = block_on(async { self.client.read().await.status().await });
         ClientStatus {
             connected: status.connected,
             peer_count: status.peer_count as u64,
@@ -79,7 +79,7 @@ impl MeshClientHandle {
     }
 
     pub fn inference_list_models(&self) -> Result<Vec<ModelNative>, FfiError> {
-        block_on(async { self.client.lock().await.list_models().await })
+        block_on(async { self.client.read().await.list_models().await })
             .map(|models| {
                 models
                     .into_iter()
@@ -100,7 +100,7 @@ impl MeshClientHandle {
     ) -> Result<OpenAiResponseNative, FfiError> {
         block_on(async {
             self.client
-                .lock()
+                .read()
                 .await
                 .openai_request(&path, body_json)
                 .await
@@ -118,7 +118,7 @@ impl MeshClientHandle {
         let bridge = Arc::new(OpenAiStreamListenerBridge { inner: listener });
         block_on(async {
             self.client
-                .lock()
+                .read()
                 .await
                 .openai_stream(&path, body_json, bridge)
         })
@@ -132,7 +132,7 @@ impl MeshClientHandle {
         listener: Box<dyn EventListener>,
     ) -> Result<String, FfiError> {
         let bridge = Arc::new(EventListenerBridge { inner: listener });
-        let request_id = block_on(async { self.client.lock().await.chat(request.into(), bridge) });
+        let request_id = block_on(async { self.client.read().await.chat(request.into(), bridge) });
         Ok(request_id.0)
     }
 
@@ -143,13 +143,13 @@ impl MeshClientHandle {
     ) -> Result<String, FfiError> {
         let bridge = Arc::new(EventListenerBridge { inner: listener });
         let request_id =
-            block_on(async { self.client.lock().await.responses(request.into(), bridge) });
+            block_on(async { self.client.read().await.responses(request.into(), bridge) });
         Ok(request_id.0)
     }
 
     pub fn cancel(&self, request_id: String) {
         block_on(async {
-            self.client.lock().await.cancel(RequestId(request_id));
+            self.client.read().await.cancel(RequestId(request_id));
         });
     }
 }

@@ -8,7 +8,7 @@ use mesh_llm_node::serving::ServingController;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 #[derive(Clone, Debug, Default)]
 pub enum DevicePolicy {
@@ -265,7 +265,7 @@ impl MeshNodeBuilder {
 
         Ok(MeshNode {
             inner: Arc::new(MeshNodeInner {
-                client: Mutex::new(client),
+                client: RwLock::new(client),
                 config,
                 serving_controller: self.serving_controller,
             }),
@@ -290,7 +290,7 @@ impl Default for MeshNodeBuilder {
 }
 
 struct MeshNodeInner {
-    client: Mutex<MeshClient>,
+    client: RwLock<MeshClient>,
     config: MeshNodeConfig,
     serving_controller: Option<Arc<dyn ServingController>>,
 }
@@ -306,16 +306,16 @@ impl MeshNode {
     }
 
     pub async fn start(&self) -> Result<(), MeshApiError> {
-        self.inner.client.lock().await.join().await
+        self.inner.client.write().await.join().await
     }
 
     pub async fn stop(&self) -> Result<(), MeshApiError> {
-        self.inner.client.lock().await.disconnect().await;
+        self.inner.client.write().await.disconnect().await;
         Ok(())
     }
 
     pub async fn reconnect(&self) -> Result<(), MeshApiError> {
-        self.inner.client.lock().await.reconnect().await
+        self.inner.client.write().await.reconnect().await
     }
 
     pub fn inference(&self) -> MeshInference {
@@ -356,7 +356,7 @@ pub struct MeshInference {
 
 impl MeshInference {
     pub async fn list_models(&self) -> Result<Vec<Model>, MeshApiError> {
-        self.inner.client.lock().await.list_models().await
+        self.inner.client.read().await.list_models().await
     }
 
     pub async fn openai_request(
@@ -366,7 +366,7 @@ impl MeshInference {
     ) -> Result<crate::OpenAiResponse, MeshApiError> {
         self.inner
             .client
-            .lock()
+            .read()
             .await
             .openai_request(path, body_json)
             .await
@@ -380,7 +380,7 @@ impl MeshInference {
     ) -> Result<RequestId, MeshApiError> {
         self.inner
             .client
-            .lock()
+            .read()
             .await
             .openai_stream(path, body_json, listener)
     }
@@ -390,7 +390,7 @@ impl MeshInference {
         request: ChatRequest,
         listener: Arc<dyn EventListener>,
     ) -> Result<RequestId, MeshApiError> {
-        Ok(self.inner.client.lock().await.chat(request, listener))
+        Ok(self.inner.client.read().await.chat(request, listener))
     }
 
     pub async fn responses(
@@ -398,11 +398,11 @@ impl MeshInference {
         request: ResponsesRequest,
         listener: Arc<dyn EventListener>,
     ) -> Result<RequestId, MeshApiError> {
-        Ok(self.inner.client.lock().await.responses(request, listener))
+        Ok(self.inner.client.read().await.responses(request, listener))
     }
 
     pub async fn cancel(&self, request_id: RequestId) -> Result<(), MeshApiError> {
-        self.inner.client.lock().await.cancel(request_id);
+        self.inner.client.read().await.cancel(request_id);
         Ok(())
     }
 }
@@ -803,11 +803,11 @@ pub struct MeshStatusApi {
 
 impl MeshStatusApi {
     pub async fn node(&self) -> Result<Status, MeshApiError> {
-        Ok(self.inner.client.lock().await.status().await)
+        Ok(self.inner.client.read().await.status().await)
     }
 
     pub async fn models(&self) -> Result<Vec<Model>, MeshApiError> {
-        self.inner.client.lock().await.list_models().await
+        self.inner.client.read().await.list_models().await
     }
 
     pub async fn serving(&self) -> Result<ServingStatus, MeshApiError> {

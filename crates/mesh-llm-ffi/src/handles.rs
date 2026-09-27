@@ -11,7 +11,7 @@ use mesh_llm_sdk::embedded_runtime::EmbeddedServingController;
 
 #[derive(uniffi::Object)]
 pub struct MeshClientHandle {
-    pub(crate) client: tokio::sync::Mutex<MeshClient>,
+    pub(crate) client: tokio::sync::RwLock<MeshClient>,
 }
 
 #[derive(uniffi::Object)]
