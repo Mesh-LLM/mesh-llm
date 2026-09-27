@@ -1,0 +1,127 @@
+From 7e40538423d0f1ee92cdf91983306106c977b255 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sun, 27 Sep 2026 16:49:17 +1000
+Subject: [PATCH] fix(skippy): reuse backend sampler across requests
+
+---
+ src/CMakeLists.txt                  |  4 +++-
+ src/llama-context.cpp               |  7 +++++++
+ src/llama-context.h                 |  4 ++++
+ src/skippy/session.cpp              |  9 +++++----
+ src/skippy/tests/runtime_events.cpp | 13 +++++++++++--
+ 5 files changed, 30 insertions(+), 7 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index f393339ed..16a6a5833 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -141,7 +141,9 @@ if (LLAMA_STAGE_BUILD_TESTS)
+         skippy/tests/runtime_events.cpp)
+     target_include_directories(skippy-runtime-events-test PRIVATE .)
+     target_compile_features(skippy-runtime-events-test PRIVATE cxx_std_17)
+-    target_compile_definitions(skippy-runtime-events-test PRIVATE SKIPPY_RUNTIME_EVENTS_TEST_HOOKS)
++    target_compile_definitions(skippy-runtime-events-test PRIVATE
++        LLAMA_STAGE_BUILD_TESTS
++        SKIPPY_RUNTIME_EVENTS_TEST_HOOKS)
+     target_link_libraries(skippy-runtime-events-test PRIVATE llama)
+     foreach(SKIPPY_EVENT_TEST_CASE
+             register_and_dispatch
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 5578ef1f1..9a8001f53 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -712,6 +712,9 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+     }
+ 
+     sched_need_reserve = false;
++#ifdef LLAMA_STAGE_BUILD_TESTS
++    ++sched_reserve_count_for_test;
++#endif
+ 
+     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
+ 
+@@ -1042,6 +1045,10 @@ size_t llama_context::get_stage_program_installation_count_for_test() const {
+     return stage_programs.size();
+ }
+ 
++uint64_t llama_context::get_sched_reserve_count_for_test() const {
++    return sched_reserve_count_for_test;
++}
++
+ void llama_context::clear_stage_program_for_test() {
+     stage_program_capture_target = nullptr;
+     stage_programs.clear();
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 9f957033e..f4e14c769 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -95,6 +95,7 @@ struct llama_context {
+ #ifdef LLAMA_STAGE_BUILD_TESTS
+     skippy_stage_program_installation * get_stage_program_installation_for_test(int32_t nextn_layer_offset = -1);
+     size_t get_stage_program_installation_count_for_test() const;
++    uint64_t get_sched_reserve_count_for_test() const;
+     void clear_stage_program_for_test();
+     bool configure_stage_program_gdn_for_test(bool fused_ar, bool fused_chunk, std::string & error);
+ #endif
+@@ -423,6 +424,9 @@ private:
+     ggml_backend_sched_ptr sched;
+ 
+     bool sched_need_reserve = true;
++#ifdef LLAMA_STAGE_BUILD_TESTS
++    uint64_t sched_reserve_count_for_test = 0;
++#endif
+ 
+     ggml_backend_t backend_cpu = nullptr;
+     std::vector<ggml_backend_ptr> backends;
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 37b0b9c5b..80769b577 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -361,10 +361,11 @@ enum skippy_status skippy_session_reset(
+         session->token_history.clear();
+     }
+     session->signal_history.clear();
+-    // Backend sampling allows only one output row per sequence. A pooled
+-    // session must therefore detach its sampler before the next request's
+-    // multi-token prefill; generation will attach a fresh chain afterwards.
+-    if (session->sampling_backend_enabled || !skippy_reset_reusable_sampling(session)) {
++    // Keep a reusable backend sampler attached across pooled requests. The
++    // prefill path requests at most the final output row, so it remains within
++    // the backend sampler's one-output-per-sequence contract without forcing a
++    // scheduler rebuild at every request boundary.
++    if (!skippy_reset_reusable_sampling(session)) {
+         skippy_clear_chat_sampling(session);
+     }
+     skippy_mtp_clear_session_state(session);
+diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
+index 60357184a..15e01b4ef 100644
+--- a/src/skippy/tests/runtime_events.cpp
++++ b/src/skippy/tests/runtime_events.cpp
+@@ -344,14 +344,23 @@ int test_native_model_load_production(const char * fixture_path) {
+     CHECK(skippy_session_configure_chat_sampling(
+             session, &sampling, "{}", 0, &error) == SKIPPY_STATUS_OK);
+     CHECK(session->sampling_backend_enabled);
++    llama_sampler * sampling_chain = session->sampling_chain;
++    llama_token predicted = -1;
++    CHECK(skippy_decode_step_sampled(
++            session, 2, &sampling, nullptr, 0, nullptr, 0,
++            &output_bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++    CHECK(predicted >= 0);
++    const uint64_t reserves_before_reset =
++            session->ctx->get_sched_reserve_count_for_test();
+     CHECK(skippy_session_reset(session, &error) == SKIPPY_STATUS_OK);
+-    CHECK(!session->sampling_backend_enabled);
+-    CHECK(session->sampling_chain == nullptr);
++    CHECK(session->sampling_backend_enabled);
++    CHECK(session->sampling_chain == sampling_chain);
+     CHECK(session->n_past == 0);
+     CHECK(skippy_prefill_chunk(
+             session, prompt, 2, nullptr, 0, nullptr, 0,
+             &output_bytes, &error) == SKIPPY_STATUS_OK);
+     CHECK(session->n_past == 2);
++    CHECK(session->ctx->get_sched_reserve_count_for_test() == reserves_before_reset);
+     CHECK(global.kv_cleared_events.load() > 0);
+     CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
+     CHECK(skippy_model_free(model, &error) == SKIPPY_STATUS_OK);
+-- 
+2.54.0 (Apple Git-157)
