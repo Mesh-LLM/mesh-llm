@@ -17,6 +17,7 @@ use std::process::Command;
 /// `WORKSPACE_MEMBERS`; tests pin them to that array until it is deleted.
 const WORKSPACE_MEMBERS: &[&str] = &[
     "mesh-llm",
+    "mesh-llm-analytics",
     "mesh-llm-build-info",
     "mesh-llm-cli",
     "mesh-llm-commands",
@@ -28,6 +29,10 @@ const WORKSPACE_MEMBERS: &[&str] = &[
     "mesh-llm-identity",
     "mesh-llm-log-store",
     "mesh-llm-native-runtime",
+    "mesh-llm-payments",
+    "mesh-llm-payments-types",
+    "mesh-llm-wallet",
+    "mesh-wallet-lexe",
     "mesh-llm-protocol",
     "mesh-llm-release-footer",
     "mesh-llm-routing",
