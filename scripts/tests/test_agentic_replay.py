@@ -508,6 +508,57 @@ class AgenticReplayTest(unittest.TestCase):
                 str(root / "runtime-bundle"),
             )
 
+    def test_runtime_context_waits_for_stage_projection(self) -> None:
+        documents = [
+            {"stages": []},
+            {
+                "stages": [
+                    {"model_id": "model", "ctx_size": 131072},
+                ]
+            },
+        ]
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with (
+            mock.patch.object(
+                BENCH.urllib.request,
+                "urlopen",
+                side_effect=[Response(), Response()],
+            ),
+            mock.patch.object(BENCH.json, "load", side_effect=documents),
+            mock.patch.object(BENCH.time, "monotonic", side_effect=[0, 0, 1]),
+            mock.patch.object(BENCH.time, "sleep") as sleep,
+        ):
+            document, context = BENCH.wait_for_runtime_context(131072, 10)
+
+        self.assertEqual(document, documents[1])
+        self.assertEqual(context, 131072)
+        sleep.assert_called_once_with(1)
+
+    def test_runtime_context_rejects_stable_under_capacity_stage(self) -> None:
+        document = {"stages": [{"model_id": "model", "ctx_size": 32768}]}
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with (
+            mock.patch.object(BENCH.urllib.request, "urlopen", return_value=Response()),
+            mock.patch.object(BENCH.json, "load", return_value=document),
+            mock.patch.object(BENCH.time, "monotonic", side_effect=[0, 0]),
+        ):
+            with self.assertRaisesRegex(ValueError, "below required"):
+                BENCH.wait_for_runtime_context(131072, 10)
+
     def test_runtime_evidence_collects_logs_without_copying_identity_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
