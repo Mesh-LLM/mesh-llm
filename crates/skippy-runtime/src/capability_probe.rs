@@ -256,8 +256,9 @@ mod tests {
             .map(str::trim)
             .filter(|line| line.starts_with("pub const FEATURE_"))
             .map(|line| {
-                line.split_once(": u64 = 1 << ")
-                    .and_then(|(_, shift)| shift.strip_suffix(';'))
+                line.split_once(": u64 = ")
+                    .and_then(|(_, initializer)| initializer.strip_suffix(';'))
+                    .and_then(|initializer| initializer.strip_prefix("1 << "))
                     .and_then(|shift| shift.parse::<u32>().ok())
                     .unwrap_or_else(|| {
                         panic!(
