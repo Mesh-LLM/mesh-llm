@@ -455,15 +455,17 @@ claiming a wall-time improvement.
 The later publish job checks out the canonical source commit, adds only the
 generated SwiftPM/binding and SDK console resources needed by the immutable
 release tag, publishes the assets, and enables GitHub-generated release notes.
-The metadata job selects the highest stable `vMAJOR.MINOR.PATCH` tag below the
-target as the explicit comparison base. It excludes every prerelease tag, so
-release candidates and their final stable release use the same stable baseline;
+The metadata job runs `cargo xtool release notes-base` to select the highest
+stable `vMAJOR.MINOR.PATCH` tag below the target as the explicit comparison base.
+It excludes every prerelease tag, so release candidates and their final stable
+release use the same stable baseline;
 the final notes retain the RC changes and add any post-RC changes.
 The workflow-scoped token push does not fan out another main CI run; the release
 graph is the evidence for that version-only source commit.
 
 After a stable release publishes, the `release_notes` job regroups the
-GitHub-generated body into Keep a Changelog sections. A deterministic pass
+GitHub-generated body into Keep a Changelog sections through the Rust `cargo
+xtool release` notes-link, notes-classify and notes-regroup commands. A deterministic pass
 classifies each entry from the Conventional Commits type on the canonical
 squash-merge commit between the comparison base and the tag; an optional agent
 review pass then reclassifies what commit metadata could not place. Both passes
