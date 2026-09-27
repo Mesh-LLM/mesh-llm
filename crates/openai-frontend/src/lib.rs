@@ -87,6 +87,6 @@ pub use router::{
     OpenAiFrontendConfig, router, router_for, router_for_with_config, router_with_config,
 };
 pub use system_one::{
-    SystemOneAnswer, SystemOneNoulCriteria, SystemOneQuestion, SystemOneRequest, SystemOneResponse,
-    SystemOneUsage,
+    SystemOneAnswer, SystemOneJson, SystemOneJsonObject, SystemOneNoulCriteria, SystemOneQuestion,
+    SystemOneRequest, SystemOneResponse, SystemOneUsage,
 };

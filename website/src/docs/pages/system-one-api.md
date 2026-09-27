@@ -48,5 +48,19 @@ selection. The chat guardrail wrapper does not screen System One requests.
 `usage.output_tokens` is zero because no text is generated. This is not full
 compute accounting or a production OpenJEV compatibility guarantee.
 
+## Backends
+
+Two model families answer System One reads with the same request and response
+shape:
+
+- **DiffusionGemma** reads label probabilities from one diffusion canvas step,
+  as described above.
+- **Laya** (`general.architecture = "laya"`, for example a converted
+  `convaiinnovations/laya-multilingual`) is a small encoder with a typed
+  decision head that scores every option in one forward pass. It serves only
+  `/systemone`, keeps the request order of choice options and `state` keys, and
+  runs on the node's GPU with CPU fallback. It accepts the same
+  `openjev-latest` aliases.
+
 See the [OpenJEV setup and validation runbook](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/design/OPENJEV_SKIPPY_POC.md)
 for worker configuration and the supported subset.

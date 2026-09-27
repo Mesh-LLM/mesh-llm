@@ -10,6 +10,10 @@ use skippy_runtime::{ChatTemplateMessage, ChatTemplateOptions, SystemOneReadSlot
 
 use crate::frontend::{OpenAiBackendMode, StageOpenAiBackend, openai_backend_error};
 
+mod laya;
+
+pub use laya::LayaSystemOneBackend;
+
 const SYSTEM_ONE_TURN_CLOSE_TOKEN: i32 = 106;
 const SYSTEM_ONE_PAD_TOKEN: i32 = 0;
 /// Length of the deterministic word drawn from the model tokenizer for each
@@ -24,6 +28,15 @@ struct PreparedQuestion {
     instructions: String,
     labels: Vec<String>,
     kind: PreparedQuestionKind,
+}
+
+/// How a backend lays out a choice question's options.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChoiceOrder {
+    /// Sorted by option name; the DiffusionGemma canvas assigns letters this way.
+    Sorted,
+    /// As the request lists them, like the Jev and Laya references.
+    Request,
 }
 
 #[derive(Clone)]
@@ -50,14 +63,14 @@ impl StageOpenAiBackend {
             serde_json::to_vec(&(&request.state, &request.questions)).map_err(|error| {
                 OpenAiError::invalid_request(format!("serialize System One request: {error}"))
             })?;
-        let questions = prepare_questions(request.questions)?;
+        let questions = prepare_questions(request.questions, ChoiceOrder::Sorted)?;
         let format = if questions.len() <= 10 {
             AnswerFormat::Lines
         } else {
             AnswerFormat::Indexed
         };
         let system_text = system_text(&questions, format);
-        let state_text = value_text(&request.state);
+        let state_text = value_text(&request.state.to_value());
         let seed: [u8; 32] = Sha256::digest(request_seed).into();
 
         let read_questions = questions.clone();
@@ -117,31 +130,7 @@ impl StageOpenAiBackend {
     }
 
     fn validate_system_one_request(&self, request: &SystemOneRequest) -> OpenAiResult<()> {
-        const ALIASES: &[&str] = &["openjev-latest", "openjev-0.1", "jev-latest", "jev-preview"];
-        if request.model != self.model_id && !ALIASES.contains(&request.model.as_str()) {
-            return Err(OpenAiError::invalid_request(format!(
-                "model {:?} is not loaded; use {:?} or openjev-latest",
-                request.model, self.model_id
-            )));
-        }
-        if request.questions.is_empty() {
-            return Err(OpenAiError::invalid_request(
-                "System One needs at least one question",
-            ));
-        }
-        if request
-            .images
-            .as_ref()
-            .is_some_and(|images| !images.is_empty())
-            || request.steps.is_some_and(|steps| steps != 1)
-            || request.samples.is_some_and(|samples| samples != 1)
-            || request.think.is_some_and(|think| think != 0)
-            || request.sequential.unwrap_or(false)
-        {
-            return Err(OpenAiError::unsupported(
-                "this PoC supports one text-only System One read; images, multiple steps/samples, thinking, and sequential reads are not yet supported",
-            ));
-        }
+        validate_request_fields(request, &self.model_id)?;
         match &self.mode {
             OpenAiBackendMode::LocalRuntime => Ok(()),
             OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_none() => {
@@ -152,6 +141,37 @@ impl StageOpenAiBackend {
             )),
         }
     }
+}
+
+/// Checks the request fields every System One backend shares: the model name
+/// or a Jev alias, a non-empty question set, and the one-read text-only subset.
+fn validate_request_fields(request: &SystemOneRequest, model_id: &str) -> OpenAiResult<()> {
+    const ALIASES: &[&str] = &["openjev-latest", "openjev-0.1", "jev-latest", "jev-preview"];
+    if request.model != model_id && !ALIASES.contains(&request.model.as_str()) {
+        return Err(OpenAiError::invalid_request(format!(
+            "model {:?} is not loaded; use {:?} or openjev-latest",
+            request.model, model_id
+        )));
+    }
+    if request.questions.is_empty() {
+        return Err(OpenAiError::invalid_request(
+            "System One needs at least one question",
+        ));
+    }
+    if request
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+        || request.steps.is_some_and(|steps| steps != 1)
+        || request.samples.is_some_and(|samples| samples != 1)
+        || request.think.is_some_and(|think| think != 0)
+        || request.sequential.unwrap_or(false)
+    {
+        return Err(OpenAiError::unsupported(
+            "this PoC supports one text-only System One read; images, multiple steps/samples, thinking, and sequential reads are not yet supported",
+        ));
+    }
+    Ok(())
 }
 
 fn value_text(value: &Value) -> String {
@@ -168,6 +188,7 @@ fn optional_value_text(value: Option<&Value>) -> String {
 
 fn prepare_questions(
     questions: BTreeMap<String, SystemOneQuestion>,
+    choice_order: ChoiceOrder,
 ) -> OpenAiResult<Vec<PreparedQuestion>> {
     const CHOICE_LABELS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     questions
@@ -209,10 +230,19 @@ fn prepare_questions(
                             CHOICE_LABELS.len()
                         )));
                     }
-                    let choices = criteria
-                        .into_iter()
-                        .map(|(name, description)| (name, value_text(&description)))
-                        .collect::<Vec<_>>();
+                    let choices = match choice_order {
+                        ChoiceOrder::Sorted => criteria
+                            .to_sorted_values()
+                            .into_iter()
+                            .map(|(name, description)| (name, value_text(&description)))
+                            .collect::<Vec<_>>(),
+                        ChoiceOrder::Request => criteria
+                            .iter()
+                            .map(|(name, description)| {
+                                (name.to_string(), value_text(&description.to_value()))
+                            })
+                            .collect::<Vec<_>>(),
+                    };
                     let labels = CHOICE_LABELS[..choices.len()]
                         .iter()
                         .map(|label| char::from(*label).to_string())
@@ -240,7 +270,9 @@ fn prepare_questions(
                         id,
                         instructions: optional_value_text(instructions.as_ref()),
                         labels,
-                        kind: PreparedQuestionKind::Score { legend: criteria },
+                        kind: PreparedQuestionKind::Score {
+                            legend: criteria.iter().map(|level| level.to_value()).collect(),
+                        },
                     })
                 }
             }

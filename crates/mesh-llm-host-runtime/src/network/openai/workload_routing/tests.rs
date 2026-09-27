@@ -143,3 +143,34 @@ fn encoder_decoder_models_can_serve_generation_routes() {
         &descriptors
     ));
 }
+
+#[test]
+/// A decision model serves only System One reads; generation and other
+/// non-chat endpoints never reach it.
+fn decision_models_are_excluded_from_every_classed_endpoint() {
+    let descriptors = vec![descriptor_with_workload(
+        "laya",
+        mesh::ModelWorkloadClass::Decision,
+    )];
+    for path in [
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/embeddings",
+        "/v1/rerank",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
+        "/v1/audio/translations",
+    ] {
+        assert!(
+            !model_satisfies_request_workload(
+                "laya",
+                request_workload_class(path).unwrap(),
+                path,
+                &descriptors
+            ),
+            "{path}"
+        );
+    }
+    assert_eq!(request_workload_class("/systemone"), None);
+}

@@ -208,3 +208,83 @@ instead of producing a partial read. The next engineering step is to carry the
 diffusion canvas and zero-self-conditioning state across Skippy stages, then
 compute the selected label logits on the terminal stage. Until that lands, a
 full-model worker in the mesh is the shortest honest proof.
+
+## Laya backend
+
+[Laya](https://huggingface.co/convaiinnovations/laya-multilingual) is a
+second System One backend behind the same `POST /systemone` route, request
+validation, aliases, and answer mapping. It is a 322M-parameter mmBERT encoder
+with a typed decision head: each question becomes one encoder sequence, and
+every option is scored at its own `[MASK]` marker in a single forward pass.
+There is no chat template, answer canvas, or text generation.
+
+The native side ports the draft upstream support
+([ggml-org/llama.cpp#29363](https://github.com/ggml-org/llama.cpp/pull/29363))
+through the patch queue (`model_support/0006`) and exposes it through a narrow
+Skippy ABI (`model_support/0007`, `skippy/laya.h`, feature bit 40). Laya does
+not load through `skippy_model_open`; the host recognizes
+`general.architecture = "laya"` and opens it through its own entry point,
+skipping KV and context planning. The runtime keeps its weights on the node's
+first accelerator and schedules with the CPU backend behind it, so an op the
+accelerator lacks falls back rather than failing.
+
+### Convert a checkpoint
+
+The upstream converter supports the `laya-multilingual` checkpoint. From a
+prepared llama.cpp checkout (`just llama-prepare`):
+
+```bash
+hf download convaiinnovations/laya-multilingual --local-dir /tmp/laya-multilingual
+python3 .deps/llama.cpp/convert_hf_to_gguf.py /tmp/laya-multilingual \
+  --outtype f16 --outfile /tmp/laya-multilingual-F16.gguf
+```
+
+Other published Laya GGUFs use different layouts: the `mys/laya-*-GGUF` files
+are built by the `ggmlc` compiler, and `fr0stbit3/laya-gguf` contains only the
+encoder with the head in a separate file. Use a GGUF written by this converter.
+
+### Serve and read
+
+```bash
+./target/debug/mesh-llm serve --gguf /tmp/laya-multilingual-F16.gguf --headless
+
+curl http://127.0.0.1:9337/systemone \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "laya-multilingual-F16",
+    "state": {"from": "user@example.com", "body": "I was charged twice this month."},
+    "questions": {
+      "is_billing": {"type": "noul", "instructions": "Is this a billing issue?"},
+      "team": {
+        "type": "choice",
+        "instructions": "Which team should handle it?",
+        "criteria": {"billing": "charges or refunds", "support": "technical troubleshooting"}
+      }
+    }
+  }'
+```
+
+Use the model ID from `GET /v1/models`, or configure an `openjev-latest` alias
+as in the DiffusionGemma setup above. The node advertises the `decision` workload class, so chat, completion,
+embedding, and audio requests are never routed to it; `/systemone` routes by
+model name as it does for DiffusionGemma.
+
+### How it differs from the DiffusionGemma read
+
+- **Order.** Choice options and object-valued `state` keep the order the
+  request lists them, rendered with Python `json.dumps` separators, because
+  that is how the reference implementation builds its sequences. The
+  DiffusionGemma read keeps its existing sorted choice order.
+- **Budgets.** Each question is capped at the GGUF's `max_len` tokens (1,024
+  for `laya-multilingual`) with options sharing a `head_max_len` region; long
+  state is truncated, as in the reference. A question can have at most 16
+  options.
+- **Usage.** `usage.input_tokens` counts every question sequence, since each
+  question re-reads the state.
+- **Action head.** The checkpoint's act/escalate head is computed but not
+  returned; the Jev response has no field for it and the model card reports it
+  carries little signal.
+- **Qualification.** Unit tests cover sequence assembly, rendering, and
+  answer mapping against a stub tokenizer. A live read against the converted
+  checkpoint and the upstream golden fixtures is not yet part of the System One
+  smoke.

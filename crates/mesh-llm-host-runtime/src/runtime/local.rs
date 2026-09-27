@@ -89,7 +89,14 @@ pub(super) enum RuntimeEvent {
 
 pub(super) enum LocalRuntimeBackendHandle {
     Skippy {
-        model: skippy::SkippyModelHandle,
+        model: Box<skippy::SkippyModelHandle>,
+        http: skippy::SkippyHttpHandle,
+        _death_tx: tokio::sync::oneshot::Sender<()>,
+    },
+    /// A Laya decision model: no sessions, KV cache, or guardrails, only
+    /// System One reads through its own HTTP server.
+    Laya {
+        _model: Arc<skippy_runtime::LayaModel>,
         http: skippy::SkippyHttpHandle,
         _death_tx: tokio::sync::oneshot::Sender<()>,
     },
@@ -108,7 +115,9 @@ pub(super) struct LocalRuntimeModelHandle {
 impl LocalRuntimeModelHandle {
     pub(super) fn pid(&self) -> u32 {
         match &self.inner {
-            LocalRuntimeBackendHandle::Skippy { .. } => std::process::id(),
+            LocalRuntimeBackendHandle::Skippy { .. } | LocalRuntimeBackendHandle::Laya { .. } => {
+                std::process::id()
+            }
         }
     }
 
@@ -117,18 +126,21 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 Some(model.status().max_session_tokens)
             }
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
     pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
     pub(super) fn openai_server_status(&self) -> skippy_server::EmbeddedServerStatus {
         match &self.inner {
-            LocalRuntimeBackendHandle::Skippy { http, .. } => http.status(),
+            LocalRuntimeBackendHandle::Skippy { http, .. }
+            | LocalRuntimeBackendHandle::Laya { http, .. } => http.status(),
         }
     }
 
@@ -140,6 +152,7 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 model.set_openai_guardrail_mode(mode)
             }
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
@@ -187,6 +200,7 @@ impl LocalRuntimeModelHandle {
                         .collect(),
                 })
             }
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
@@ -195,6 +209,9 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, http, .. } => {
                 let _ = http.shutdown().await;
                 model.shutdown();
+            }
+            LocalRuntimeBackendHandle::Laya { http, .. } => {
+                let _ = http.shutdown().await;
             }
         }
     }
@@ -967,6 +984,14 @@ pub(super) async fn start_local_openai_model(
         .flatten()
     };
 
+    if package.is_none()
+        && compact_meta
+            .as_ref()
+            .is_some_and(|meta| meta.architecture == LAYA_ARCHITECTURE)
+    {
+        return start_local_laya_model(spec, model_name, compact_meta.as_ref()).await;
+    }
+
     let kv_cache = skippy::KvCachePolicy::from_publisher_defaults(
         package
             .as_ref()
@@ -1038,6 +1063,64 @@ pub(super) async fn start_local_openai_model(
         )
         .await
     }
+}
+
+/// `general.architecture` of a Laya decision model GGUF.
+const LAYA_ARCHITECTURE: &str = "laya";
+
+/// Loads a Laya decision model. It has no KV cache or generation lanes, so the
+/// context planner and llama loader are skipped; the model answers System One
+/// reads only and advertises the decision workload class.
+async fn start_local_laya_model(
+    spec: LocalOpenAiModelStartSpec<'_>,
+    model_name: String,
+    compact_meta: Option<&models::gguf::GgufCompactMeta>,
+) -> Result<(
+    String,
+    LocalRuntimeModelHandle,
+    tokio::sync::oneshot::Receiver<()>,
+)> {
+    let _ = emit_event(OutputEvent::ModelLoading {
+        model: model_name.clone(),
+        source: None,
+    });
+    let model_path = spec.model_path.to_path_buf();
+    let model = tokio::task::spawn_blocking(move || skippy::load_laya_model(&model_path))
+        .await
+        .context("join load Laya model task")??;
+    let _ = emit_event(OutputEvent::ModelLoaded {
+        model: model_name.clone(),
+        bytes: None,
+    });
+    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf);
+    let context_length = u32::try_from(model.info().max_len)
+        .ok()
+        .or_else(|| compact_meta.map(|meta| meta.context_length))
+        .unwrap_or(0);
+    let capabilities = models::runtime_verified_model_capabilities(
+        &model_name,
+        spec.model_path,
+        models::runtime_media_capability_evidence(None).await,
+    );
+    let http = skippy::start_laya_http_on(&model_name, model.clone(), spec.http_bind_addr);
+    let (death_tx, death_rx) = tokio::sync::oneshot::channel();
+    Ok((
+        model_name,
+        LocalRuntimeModelHandle {
+            port: http.port(),
+            backend: "skippy".into(),
+            context_length,
+            slots: 1,
+            capabilities,
+            workload_class: mesh::ModelWorkloadClass::Decision,
+            inner: LocalRuntimeBackendHandle::Laya {
+                _model: model,
+                http,
+                _death_tx: death_tx,
+            },
+        },
+        death_rx,
+    ))
 }
 
 async fn start_local_skippy_model(
@@ -1141,7 +1224,7 @@ async fn start_local_skippy_model(
             capabilities,
             workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: skippy_model,
+                model: Box::new(skippy_model),
                 http,
                 _death_tx: death_tx,
             },
@@ -1316,7 +1399,7 @@ async fn start_local_package_v2_model(
             capabilities,
             workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: handle,
+                model: Box::new(handle),
                 http,
                 _death_tx: death_tx,
             },
