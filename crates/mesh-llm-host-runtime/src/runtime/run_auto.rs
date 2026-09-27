@@ -283,7 +283,7 @@ pub(super) async fn run_runtime_cli(
     // publishes readiness well before the serving loops await the signal, so a
     // handler installed at loop entry can miss a SIGTERM that arrives in
     // between and leave the daemon running until it is killed (#1812).
-    super::shutdown_signal::install_shutdown_signals();
+    super::shutdown_signal::install_shutdown_signals()?;
 
     options.validate_discovery_mode_args()?;
 
@@ -299,11 +299,13 @@ pub(super) async fn run_runtime_cli(
     // Load config only to configure their optional audit sink; failures stay
     // nonfatal so they retain their early-return behavior.
     if options.local_model_only {
+        super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
         initialize_early_topology_audit_logging(&mut options)?;
         return run_local_model_only(options).await;
     }
 
     if let Some(name) = options.plugin.clone() {
+        super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
         initialize_early_topology_audit_logging(&mut options)?;
         return run_plugin_until_shutdown(name).await;
     }
@@ -1735,6 +1737,10 @@ async fn run_auto_inner(
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
+    // Do not create the mesh node or detached role watchers until a slow
+    // termination-signal observer has either registered every required stream
+    // or reported a terminal registration failure.
+    super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
     super::node_lifecycle_events::emit_node_starting();
     // Stage-control starts accepting before eager model resolution. Register
     // every spelling that can become the model's runtime identity now so a
@@ -1863,6 +1869,7 @@ async fn run_auto_inner(
     }
 
     let interactive_started = Arc::new(AtomicBool::new(false));
+
     let RunAutoServingSurface {
         api_proxy_handle,
         console_server_handle,

@@ -1109,6 +1109,153 @@ async fn clean_departure_blocks_stale_transitive_resurrection_after_tombstone_ex
     );
 }
 
+/// GUARD test for issue #1756 Layer 1 (already passes on the unmodified
+/// tree: PR #1970's `departed_peers` gate in `update_transitive_peer` runs
+/// before the existing-vs-new-peer branch split, so it already covers both
+/// paths). An admitted peer whose direct AND transitive liveness have both
+/// gone stale (past the dual prune cutoff), and which is covered by an
+/// active `departed_peers` tombstone, must not have `last_mentioned`
+/// refreshed by a bridge's stale re-announcement. Otherwise the entry
+/// survives `stale_heartbeat_peers()` forever even though this node has
+/// already confirmed it departed.
+#[tokio::test]
+async fn stale_bridge_mentions_do_not_keep_a_departed_admitted_peer_prunable() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xF8; 32]).public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+
+    let old_time = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(PEER_STALE_SECS * 2 + 60))
+        .expect("monotonic clock too fresh to test TTL expiry");
+    let mut peer = make_test_peer_info(peer_id);
+    peer.admitted = true;
+    peer.last_seen = old_time;
+    peer.last_mentioned = old_time;
+    node.insert_test_peer(peer).await;
+    {
+        let mut state = node.state.lock().await;
+        state.departed_peers.insert(peer_id, std::time::Instant::now());
+    }
+
+    let (addr, ann) = stale_serving_announcement(peer_id, "GhostModel-Q4_K_M");
+    node.update_transitive_peer(peer_id, &addr, &ann, make_test_endpoint_id(0xF9))
+        .await;
+
+    {
+        let state = node.state.lock().await;
+        let peer_after = state
+            .peers
+            .get(&peer_id)
+            .expect("peer entry must remain present after a blocked stale mention");
+        assert_eq!(
+            peer_after.last_mentioned, old_time,
+            "a stale bridge mention for a departed peer must not refresh last_mentioned"
+        );
+    }
+
+    let stale = node.stale_heartbeat_peers().await;
+    assert!(
+        stale.contains(&peer_id),
+        "a departed peer with unrefreshed last_mentioned must remain prunable via stale_heartbeat_peers()"
+    );
+}
+
+/// GUARD test: a peer's clean stop propagates outward through gossip
+/// bridges as an empty-models announcement (demoting a bridged peer to
+/// standby) before the bridge eventually stops mentioning it and the
+/// stale entry is pruned. Exercises the ordinary transitive merge and
+/// prune paths, independent of the #1756 fix; must pass before and after.
+#[tokio::test]
+async fn clean_stop_still_demotes_then_evicts() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xFA; 32]).public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+
+    let mut peer = make_test_peer_info(peer_id);
+    peer.serving_models = vec!["LiveModel-Q4_K_M".to_string()];
+    peer.hosted_models = vec!["LiveModel-Q4_K_M".to_string()];
+    peer.hosted_models_known = true;
+    node.insert_test_peer(peer).await;
+
+    let addr = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    let empty_ann = peer_state_test_announcement(addr.clone());
+    node.update_transitive_peer(peer_id, &addr, &empty_ann, make_test_endpoint_id(0xFB))
+        .await;
+
+    {
+        let state = node.state.lock().await;
+        let demoted = state
+            .peers
+            .get(&peer_id)
+            .expect("peer must still be tracked right after demotion");
+        assert!(
+            demoted.serving_models.is_empty() && demoted.hosted_models.is_empty(),
+            "an empty-models bridge re-announcement must demote the peer's served models"
+        );
+    }
+
+    let old_time = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(PEER_STALE_SECS * 2 + 60))
+        .expect("monotonic clock too fresh to test TTL expiry");
+    {
+        let mut state = node.state.lock().await;
+        let stored = state.peers.get_mut(&peer_id).expect("peer must exist");
+        stored.last_seen = old_time;
+        stored.last_mentioned = old_time;
+    }
+
+    let stale = node.stale_heartbeat_peers().await;
+    assert!(
+        stale.contains(&peer_id),
+        "once the bridge stops mentioning the demoted peer, it must eventually be evicted"
+    );
+}
+
+/// GUARD test: two different `EndpointId`s that advertise the same
+/// hostname remain tracked as two distinct peer entries — peer identity is
+/// keyed by `EndpointId` only, never collapsed by hostname. Must pass
+/// before and after the #1756 fix.
+#[tokio::test]
+async fn distinct_identities_from_one_hostname_remain_separate_peers() {
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    let shared_hostname = "shared-host.local".to_string();
+
+    let first_id = make_test_endpoint_id(0xFC);
+    let mut first_peer = make_test_peer_info(first_id);
+    first_peer.hostname = Some(shared_hostname.clone());
+    node.insert_test_peer(first_peer).await;
+
+    let second_id = make_test_endpoint_id(0xFD);
+    let mut second_peer = make_test_peer_info(second_id);
+    second_peer.hostname = Some(shared_hostname.clone());
+    node.insert_test_peer(second_peer).await;
+
+    let peers = node.peers().await;
+    assert!(
+        peers.iter().any(|peer| peer.id == first_id),
+        "first identity sharing the hostname must remain present"
+    );
+    assert!(
+        peers.iter().any(|peer| peer.id == second_id),
+        "second identity sharing the hostname must remain present"
+    );
+    assert_eq!(
+        peers
+            .iter()
+            .filter(|peer| peer.hostname.as_deref() == Some(shared_hostname.as_str()))
+            .count(),
+        2,
+        "distinct EndpointIds sharing a hostname must not be collapsed into one peer entry"
+    );
+}
+
 /// Verifies that non-scope tunnel streams (0x02 STREAM_TUNNEL and 0x04
 /// STREAM_TUNNEL_HTTP) are NOT subject to protobuf frame validation — they are
 /// raw byte pass-throughs and must not be accidentally broken by the cut-over.

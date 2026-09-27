@@ -795,7 +795,7 @@ pub(crate) fn build_runtime_status_payload(
         capabilities: None,
         lifecycle_instances: vec![],
         intent_summary: None,
-        runtime_events: None,
+        runtime_events: RuntimeEventsStatusSummary::current(),
     }
 }
 

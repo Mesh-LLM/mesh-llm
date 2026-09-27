@@ -168,6 +168,12 @@ impl BufferedHttpRequest {
         self.method == "POST" && is_audio_upload_path(&self.client_path)
     }
 
+    /// A System One read renders `state` into every question's own bounded
+    /// sequence, so its body size does not describe the context it needs.
+    pub fn is_system_one_request(&self) -> bool {
+        self.method == "POST" && self.client_path.split('?').next() == Some("/systemone")
+    }
+
     pub fn ensure_body_json(&mut self) {
         if self.body_json.is_none() && !self.body_json_attempted {
             self.body_json = self

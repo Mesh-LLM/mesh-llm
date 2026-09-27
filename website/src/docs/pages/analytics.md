@@ -58,7 +58,7 @@ And one of these events:
 | `cli_command` | `family` (`models`, `runtime`, `diagnostics`, …), `outcome` (`completed`, `failed`, …) | Which commands are used, and which fail |
 | `serve_started` | `surface`, `auto`, `headless`, `publish`, `discover`, `joined_explicitly`, `model_requested` — all booleans | How nodes are started |
 | `serve_stopped` | `session_length` (bucketed: `under_1m`, `1m-15m`, …), `succeeded` | Whether nodes stay up |
-| `model_loaded` | `model` (catalog name, or `redacted`; always `redacted` when `source` is `direct_gguf`), `source` (`direct_gguf`, `layer_package`) | Which models actually get run |
+| `model_loaded` | `model` (catalog name, or `redacted`; always `redacted` when `source` is `direct_gguf`), `source` (`direct_gguf`, `layer_package`), and `system_one_backend` (`laya` or `openjev`, only when the model serves [System One](/docs/pages/system-one-api/) reads; read from the model architecture, never the file name) | Which models actually get run |
 | `model_download` | `model` (catalog name, or `redacted`), `succeeded` | Which models people try to get, including ones they fail to |
 | `hardware_profile` | see below | What hardware mesh-llm runs on |
 

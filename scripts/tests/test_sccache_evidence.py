@@ -109,12 +109,19 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("node-sdk-addon-artifact.yml", "linux_addon"): "true",
             ("node-sdk-addon-artifact.yml", "macos_addon"): "true",
             ("node-sdk-addon-artifact.yml", "windows_addon"): "true",
+            # No compilation happens before version rewriting, so the first
+            # release job keeps its compiler cache job-local.
+            ("release.yml", "metadata"): "false",
             ("release.yml", "build"): "true",
             ("release.yml", "build_native_runtime"): effective_release,
             ("release.yml", "build_native_runtime_linux_aarch64_cuda"): "true",
             ("release.yml", "build_native_runtime_linux_x86_64_cuda"): "true",
             ("release.yml", "build_native_runtime_linux_x86_64_rocm"): effective_release_runner_16,
             ("release.yml", "build_native_runtime_linux_x86_64_vulkan"): effective_release_runner_16,
+            # `publish` only rewrites release metadata and holds the release
+            # credentials, so it keeps the same job-local-only cache authority
+            # as `metadata`.
+            ("release.yml", "publish"): "false",
             ("release.yml", "publish_crates_preflight"): "false",
             ("release.yml", "publish_crates"): "false",
             ("static-abi-artifact.yml", "static_abi_artifact"): policy,

@@ -71,6 +71,7 @@ pub use self::speculative::{
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
     SpeculativeDecodeConfig, VerifyWindowConfig,
 };
+pub use self::system_one::LayaSystemOneBackend;
 
 #[cfg(test)]
 mod tests;

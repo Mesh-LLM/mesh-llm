@@ -234,11 +234,15 @@ pub(crate) async fn reject_legacy_lifecycle_request(
 /// Generation context cannot be estimated from every request body's byte size.
 /// Tokenizer requests use no target KV context, and multipart audio bodies
 /// contain encoded media rather than text tokens. The audio backend performs
-/// the authoritative media/context validation after routing.
+/// the authoritative media/context validation after routing. A System One read
+/// fits `state` into each question's bounded sequence (Laya truncates it to its
+/// `max_len`; DiffusionGemma refuses a prompt its context cannot hold), so the
+/// backend is the authority there too.
 pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u32> {
     if request.is_tokenize_request()
         || request.is_anthropic_count_tokens_request()
         || request.is_audio_upload_request()
+        || request.is_system_one_request()
     {
         None
     } else {

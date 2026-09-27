@@ -154,8 +154,10 @@ are forwarded as debug-level `LlamaNativeLog` output as well:
   events, `memory` and `tokenizer` need model-load events v2, and `model`
   needs model-load events v2 plus model-open events. None of these count
   unless the runtime event reporter family is also confirmed and the event
-  system is on. A current runtime forwards nothing. An older runtime without
-  structured coverage keeps the parser as a compatibility fallback.
+  system is on. A current runtime therefore suppresses parsed GGUF model
+  summaries while retaining one dedicated compatibility note for SafeTensors
+  opens, which bypass native model-open callbacks. Older runtimes keep the
+  parser as a compatibility fallback.
 - `enabled` forwards every parsed category regardless of runtime
   capabilities. Use it for debugging; the output is debug-only.
 - `disabled` forwards no parsed categories.

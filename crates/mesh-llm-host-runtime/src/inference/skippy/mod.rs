@@ -527,6 +527,41 @@ impl SkippyOpenAiGuardrailOptions {
     }
 }
 
+/// Loads a Laya decision model through its own native entry point, not
+/// `skippy_model_open`. `device` is `None` for the CPU backend, `"auto"` for the
+/// first GPU, or a ggml backend device name.
+pub(crate) fn load_laya_model(
+    path: &Path,
+    device: Option<&str>,
+) -> Result<Arc<skippy_runtime::LayaModel>> {
+    let threads = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4);
+    Ok(Arc::new(skippy_runtime::LayaModel::open(
+        path, threads, device,
+    )?))
+}
+
+/// Serves `POST /systemone` for a loaded Laya model on `bind_addr`.
+pub(crate) fn start_laya_http_on(
+    model_id: &str,
+    model: Arc<skippy_runtime::LayaModel>,
+    bind_addr: std::net::SocketAddr,
+) -> SkippyHttpHandle {
+    let lifecycle_observer = crate::network::openai::runtime_events::compose_lifecycle_observer(
+        crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+    );
+    let server = skippy_server::start_openai_backend_with_lifecycle_observer(
+        bind_addr,
+        Arc::new(skippy_server::LayaSystemOneBackend::new(model_id, model)),
+        lifecycle_observer,
+    );
+    SkippyHttpHandle {
+        port: bind_addr.port(),
+        server,
+    }
+}
+
 impl SkippyHttpHandle {
     pub(crate) fn port(&self) -> u16 {
         self.port

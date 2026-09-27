@@ -222,4 +222,15 @@ fn health_log_line_carries_version_bounds_and_a_null_ingress_p99() {
         "line: {message}"
     );
     assert!(message.contains("ingress_p99_us=null"), "line: {message}");
+    let legacy_prefix_end = message
+        .find("ingress_p99_us=null")
+        .expect("legacy health fields should retain their order");
+    for new_field in ["coalesced_progress=", "dropped_native=", "rejected_native="] {
+        assert!(
+            message
+                .find(new_field)
+                .is_some_and(|position| position > legacy_prefix_end),
+            "new field {new_field} should follow legacy health fields: {message}"
+        );
+    }
 }

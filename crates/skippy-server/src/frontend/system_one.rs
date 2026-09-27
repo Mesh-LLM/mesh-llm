@@ -1,44 +1,31 @@
+//! `POST /systemone`: Jev-compatible System One reads.
+//!
+//! The frontend owns the Jev contract — validation, aliases, and mapping
+//! probabilities to typed answers. The model behind it is any
+//! [`DecisionModel`]; how each one reads the questions lives in
+//! `skippy_runtime::decision`.
+
 use std::collections::BTreeMap;
 
 use openai_frontend::{
-    OpenAiError, OpenAiResult, SystemOneAnswer, SystemOneQuestion, SystemOneRequest,
+    OpenAiError, OpenAiResult, SystemOneAnswer, SystemOneJson, SystemOneQuestion, SystemOneRequest,
     SystemOneResponse, SystemOneUsage,
 };
-use serde_json::Value;
 use sha2::{Digest, Sha256};
-use skippy_runtime::{ChatTemplateMessage, ChatTemplateOptions, SystemOneReadSlot};
+use skippy_runtime::{
+    DecisionError, DecisionModel, DecisionOutput, DecisionQuestion, DecisionQuestionKind,
+    DecisionRequest, DecisionValue,
+};
 
-use crate::frontend::{OpenAiBackendMode, StageOpenAiBackend, openai_backend_error};
+use crate::frontend::{OpenAiBackendMode, StageOpenAiBackend};
 
-const SYSTEM_ONE_TURN_CLOSE_TOKEN: i32 = 106;
-const SYSTEM_ONE_PAD_TOKEN: i32 = 0;
-/// Length of the deterministic word drawn from the model tokenizer for each
-/// randomized canvas slot.
-const FILLER_WORD_LEN: usize = 8;
-const SYSTEM_ONE_SCAFFOLD: &str = "<|channel>thought\n<channel|>";
+mod laya;
 
-#[derive(Clone)]
-struct PreparedQuestion {
-    key: String,
-    id: String,
-    instructions: String,
-    labels: Vec<String>,
-    kind: PreparedQuestionKind,
-}
+pub use laya::LayaSystemOneBackend;
 
-#[derive(Clone)]
-enum PreparedQuestionKind {
-    Noul {
-        true_description: String,
-        false_description: String,
-    },
-    Choice {
-        choices: Vec<(String, String)>,
-    },
-    Score {
-        legend: Vec<Value>,
-    },
-}
+/// Jev's bounds on options per question.
+const MAX_CHOICES: usize = 26;
+const MAX_SCORE_LEVELS: usize = 10;
 
 impl StageOpenAiBackend {
     pub(super) fn run_system_one(
@@ -46,102 +33,17 @@ impl StageOpenAiBackend {
         request: SystemOneRequest,
     ) -> OpenAiResult<SystemOneResponse> {
         self.validate_system_one_request(&request)?;
-        let request_seed =
-            serde_json::to_vec(&(&request.state, &request.questions)).map_err(|error| {
-                OpenAiError::invalid_request(format!("serialize System One request: {error}"))
+        let decision = decision_request(&request)?;
+        let output = self
+            .iteration_scheduler
+            .execute_runtime("system-one-read", move |runtime| {
+                runtime.model.decide(&decision).map_err(decision_error)
             })?;
-        let questions = prepare_questions(request.questions)?;
-        let format = if questions.len() <= 10 {
-            AnswerFormat::Lines
-        } else {
-            AnswerFormat::Indexed
-        };
-        let system_text = system_text(&questions, format);
-        let state_text = value_text(&request.state);
-        let seed: [u8; 32] = Sha256::digest(request_seed).into();
-
-        let read_questions = questions.clone();
-        let outcome =
-            self.iteration_scheduler
-                .execute_runtime("system-one-read", move |runtime| {
-                    let prompt = runtime
-                        .model
-                        .apply_chat_template_with_options(
-                            &[
-                                ChatTemplateMessage::new("system", &system_text),
-                                ChatTemplateMessage::new("user", &state_text),
-                            ],
-                            ChatTemplateOptions {
-                                add_assistant: true,
-                                enable_thinking: Some(false),
-                                ..ChatTemplateOptions::default()
-                            },
-                        )
-                        .map_err(openai_backend_error)?;
-                    let prompt_tokens = runtime
-                        .model
-                        .tokenize(&prompt, true)
-                        .map_err(openai_backend_error)?;
-                    if prompt_tokens.is_empty() {
-                        return Err(OpenAiError::invalid_request(
-                            "System One prompt produced no tokens",
-                        ));
-                    }
-                    let canvas_token_count = runtime
-                        .model
-                        .system_one_canvas_length()
-                        .map_err(openai_backend_error)?;
-                    let (canvas, slots) = build_canvas(
-                        &runtime.model,
-                        &read_questions,
-                        format,
-                        seed,
-                        canvas_token_count,
-                    )?;
-                    let probabilities = runtime
-                        .model
-                        .system_one_read(&prompt_tokens, &canvas, &slots)
-                        .map_err(openai_backend_error)?;
-                    Ok((prompt_tokens.len(), probabilities))
-                })?;
-
-        let input_tokens = u32::try_from(outcome.0).unwrap_or(u32::MAX);
-        Ok(SystemOneResponse {
-            model: request.model,
-            answers: answers(&questions, &outcome.1)?,
-            usage: SystemOneUsage {
-                input_tokens,
-                output_tokens: 0,
-            },
-        })
+        response(request, output)
     }
 
     fn validate_system_one_request(&self, request: &SystemOneRequest) -> OpenAiResult<()> {
-        const ALIASES: &[&str] = &["openjev-latest", "openjev-0.1", "jev-latest", "jev-preview"];
-        if request.model != self.model_id && !ALIASES.contains(&request.model.as_str()) {
-            return Err(OpenAiError::invalid_request(format!(
-                "model {:?} is not loaded; use {:?} or openjev-latest",
-                request.model, self.model_id
-            )));
-        }
-        if request.questions.is_empty() {
-            return Err(OpenAiError::invalid_request(
-                "System One needs at least one question",
-            ));
-        }
-        if request
-            .images
-            .as_ref()
-            .is_some_and(|images| !images.is_empty())
-            || request.steps.is_some_and(|steps| steps != 1)
-            || request.samples.is_some_and(|samples| samples != 1)
-            || request.think.is_some_and(|think| think != 0)
-            || request.sequential.unwrap_or(false)
-        {
-            return Err(OpenAiError::unsupported(
-                "this PoC supports one text-only System One read; images, multiple steps/samples, thinking, and sequential reads are not yet supported",
-            ));
-        }
+        validate_request_fields(request, &self.model_id)?;
         match &self.mode {
             OpenAiBackendMode::LocalRuntime => Ok(()),
             OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_none() => {
@@ -154,302 +56,163 @@ impl StageOpenAiBackend {
     }
 }
 
-fn value_text(value: &Value) -> String {
-    match value {
-        Value::Null => String::new(),
-        Value::String(text) => text.trim().to_string(),
-        _ => serde_json::to_string(value).unwrap_or_default(),
-    }
+/// Runs a request on a model that holds no scheduler, such as Laya.
+fn run_on_model(
+    model: &dyn DecisionModel,
+    model_id: &str,
+    request: SystemOneRequest,
+) -> OpenAiResult<SystemOneResponse> {
+    validate_request_fields(&request, model_id)?;
+    let decision = decision_request(&request)?;
+    let output = model.decide(&decision).map_err(decision_error)?;
+    response(request, output)
 }
 
-fn optional_value_text(value: Option<&Value>) -> String {
-    value.map(value_text).unwrap_or_default()
-}
-
-fn prepare_questions(
-    questions: BTreeMap<String, SystemOneQuestion>,
-) -> OpenAiResult<Vec<PreparedQuestion>> {
-    const CHOICE_LABELS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    questions
-        .into_iter()
-        .enumerate()
-        .map(|(index, (key, question))| {
-            let id = format!("q{}", index + 1);
-            match question {
-                SystemOneQuestion::Noul {
-                    instructions,
-                    criteria,
-                } => {
-                    let true_description = criteria
-                        .as_ref()
-                        .map(|criteria| optional_value_text(criteria.r#true.as_ref()))
-                        .unwrap_or_default();
-                    let false_description = criteria
-                        .as_ref()
-                        .map(|criteria| optional_value_text(criteria.r#false.as_ref()))
-                        .unwrap_or_default();
-                    Ok(PreparedQuestion {
-                        key,
-                        id,
-                        instructions: optional_value_text(instructions.as_ref()),
-                        labels: vec!["yes".to_string(), "no".to_string()],
-                        kind: PreparedQuestionKind::Noul {
-                            true_description,
-                            false_description,
-                        },
-                    })
-                }
-                SystemOneQuestion::Choice {
-                    instructions,
-                    criteria,
-                } => {
-                    if !(2..=CHOICE_LABELS.len()).contains(&criteria.len()) {
-                        return Err(OpenAiError::invalid_request(format!(
-                            "question {key:?}: choice criteria must contain 2 to {} options",
-                            CHOICE_LABELS.len()
-                        )));
-                    }
-                    let choices = criteria
-                        .into_iter()
-                        .map(|(name, description)| (name, value_text(&description)))
-                        .collect::<Vec<_>>();
-                    let labels = CHOICE_LABELS[..choices.len()]
-                        .iter()
-                        .map(|label| char::from(*label).to_string())
-                        .collect();
-                    Ok(PreparedQuestion {
-                        key,
-                        id,
-                        instructions: optional_value_text(instructions.as_ref()),
-                        labels,
-                        kind: PreparedQuestionKind::Choice { choices },
-                    })
-                }
-                SystemOneQuestion::Score {
-                    instructions,
-                    criteria,
-                } => {
-                    if !(2..=10).contains(&criteria.len()) {
-                        return Err(OpenAiError::invalid_request(format!(
-                            "question {key:?}: score criteria must contain 2 to 10 levels"
-                        )));
-                    }
-                    let labels = (0..criteria.len()).map(|index| index.to_string()).collect();
-                    Ok(PreparedQuestion {
-                        key,
-                        id,
-                        instructions: optional_value_text(instructions.as_ref()),
-                        labels,
-                        kind: PreparedQuestionKind::Score { legend: criteria },
-                    })
-                }
-            }
-        })
-        .collect()
-}
-
-#[derive(Clone, Copy)]
-enum AnswerFormat {
-    Lines,
-    Indexed,
-}
-
-fn system_text(questions: &[PreparedQuestion], format: AnswerFormat) -> String {
-    let mut text = String::from(
-        "Answer a fixed set of questions about the state the user provides. Each question lists its allowed answers; reply with exactly one label per question.\n",
-    );
-    for question in questions {
-        let instruction = if question.instructions.is_empty() {
-            "Answer about the state."
-        } else {
-            &question.instructions
-        };
-        text.push_str(&format!("\nQuestion {}: {instruction}\n", question.id));
-        match &question.kind {
-            PreparedQuestionKind::Noul {
-                true_description,
-                false_description,
-            } => {
-                for (label, description) in [
-                    ("yes", true_description.as_str()),
-                    ("no", false_description.as_str()),
-                ] {
-                    text.push_str(&format!("  {label}"));
-                    if !description.is_empty() {
-                        text.push_str(&format!(": {description}"));
-                    }
-                    text.push('\n');
-                }
-            }
-            PreparedQuestionKind::Choice { choices } => {
-                for ((name, description), label) in choices.iter().zip(&question.labels) {
-                    text.push_str(&format!("  {label}: {name}"));
-                    if !description.is_empty() {
-                        text.push_str(&format!(" ({description})"));
-                    }
-                    text.push('\n');
-                }
-            }
-            PreparedQuestionKind::Score { legend } => {
-                for (index, description) in legend.iter().enumerate() {
-                    text.push_str(&format!("  {index}: {}\n", value_text(description)));
-                }
-            }
-        }
-    }
-    text.push('\n');
-    text.push_str(match format {
-        AnswerFormat::Lines => {
-            "Reply with one line per question, in this order, formatted as \"id: label\"."
-        }
-        AnswerFormat::Indexed => {
-            "Reply on one line with each question's id immediately followed by its label, separated by single spaces."
-        }
-    });
-    text
-}
-
-fn answer_text(
-    questions: &[PreparedQuestion],
-    label_indexes: &[usize],
-    format: AnswerFormat,
-) -> String {
-    questions
-        .iter()
-        .zip(label_indexes)
-        .map(|(question, label_index)| match format {
-            AnswerFormat::Lines => {
-                format!("{}: {}", question.id, question.labels[*label_index])
-            }
-            AnswerFormat::Indexed => {
-                format!("{}{}", question.id, question.labels[*label_index])
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(match format {
-            AnswerFormat::Lines => "\n",
-            AnswerFormat::Indexed => " ",
-        })
-}
-
-fn build_canvas(
-    model: &skippy_runtime::StageModel,
-    questions: &[PreparedQuestion],
-    format: AnswerFormat,
-    seed: [u8; 32],
-    canvas_token_count: usize,
-) -> OpenAiResult<(Vec<i32>, Vec<SystemOneReadSlot>)> {
-    let scaffold = model
-        .tokenize(SYSTEM_ONE_SCAFFOLD, false)
-        .map_err(openai_backend_error)?;
-    let base_indexes = vec![0usize; questions.len()];
-    let mut canvas = scaffold.clone();
-    canvas.extend(
-        model
-            .tokenize(&answer_text(questions, &base_indexes, format), false)
-            .map_err(openai_backend_error)?,
-    );
-    if canvas.len() + 1 > canvas_token_count {
+/// Checks the request fields every System One backend shares: the model name
+/// or a Jev alias, a non-empty question set, and the one-read text-only subset.
+fn validate_request_fields(request: &SystemOneRequest, model_id: &str) -> OpenAiResult<()> {
+    const ALIASES: &[&str] = &["openjev-latest", "openjev-0.1", "jev-latest", "jev-preview"];
+    if request.model != model_id && !ALIASES.contains(&request.model.as_str()) {
         return Err(OpenAiError::invalid_request(format!(
-            "System One answer template uses {} tokens; this PoC canvas holds {}",
-            canvas.len() + 1,
-            canvas_token_count
+            "model {:?} is not loaded; use {:?} or openjev-latest",
+            request.model, model_id
         )));
     }
+    if request.questions.is_empty() {
+        return Err(OpenAiError::invalid_request(
+            "System One needs at least one question",
+        ));
+    }
+    if request
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+        || request.steps.is_some_and(|steps| steps != 1)
+        || request.samples.is_some_and(|samples| samples != 1)
+        || request.think.is_some_and(|think| think != 0)
+        || request.sequential.unwrap_or(false)
+    {
+        return Err(OpenAiError::unsupported(
+            "this PoC supports one text-only System One read; images, multiple steps/samples, thinking, and sequential reads are not yet supported",
+        ));
+    }
+    Ok(())
+}
 
-    let mut slots = Vec::with_capacity(questions.len());
-    for (question_index, question) in questions.iter().enumerate() {
-        let mut canvas_position = None;
-        let mut label_token_ids = vec![0i32; question.labels.len()];
-        for (label_index, label_token_id) in label_token_ids.iter_mut().enumerate().skip(1) {
-            let mut indexes = base_indexes.clone();
-            indexes[question_index] = label_index;
-            let mut candidate = scaffold.clone();
-            candidate.extend(
-                model
-                    .tokenize(&answer_text(questions, &indexes, format), false)
-                    .map_err(openai_backend_error)?,
-            );
-            let differences = candidate
-                .iter()
-                .zip(&canvas)
-                .enumerate()
-                .filter_map(|(index, (left, right))| (left != right).then_some(index))
-                .collect::<Vec<_>>();
-            if candidate.len() != canvas.len()
-                || differences.len() != 1
-                || canvas_position.is_some_and(|position| position != differences[0])
-            {
+/// Translates a Jev request into the model-neutral decision request, enforcing
+/// Jev's option bounds. Questions keep the frontend's key order.
+fn decision_request(request: &SystemOneRequest) -> OpenAiResult<DecisionRequest> {
+    let canonical = serde_json::to_vec(&(&request.state, &request.questions)).map_err(|error| {
+        OpenAiError::invalid_request(format!("serialize System One request: {error}"))
+    })?;
+    let questions = request
+        .questions
+        .iter()
+        .map(|(key, question)| decision_question(key, question))
+        .collect::<OpenAiResult<Vec<_>>>()?;
+    Ok(DecisionRequest {
+        state: decision_value(&request.state),
+        questions,
+        seed: Sha256::digest(canonical).into(),
+    })
+}
+
+fn decision_question(key: &str, question: &SystemOneQuestion) -> OpenAiResult<DecisionQuestion> {
+    let (instructions, kind) = match question {
+        SystemOneQuestion::Noul {
+            instructions,
+            criteria,
+        } => (
+            instructions,
+            DecisionQuestionKind::Noul {
+                when_true: criteria
+                    .as_ref()
+                    .and_then(|criteria| criteria.r#true.as_ref())
+                    .map(decision_value),
+                when_false: criteria
+                    .as_ref()
+                    .and_then(|criteria| criteria.r#false.as_ref())
+                    .map(decision_value),
+            },
+        ),
+        SystemOneQuestion::Choice {
+            instructions,
+            criteria,
+        } => {
+            if !(2..=MAX_CHOICES).contains(&criteria.len()) {
                 return Err(OpenAiError::invalid_request(format!(
-                    "question {:?}: labels do not share one tokenizer slot",
-                    question.key
+                    "question {key:?}: choice criteria must contain 2 to {MAX_CHOICES} options"
                 )));
             }
-            canvas_position = Some(differences[0]);
-            *label_token_id = candidate[differences[0]];
+            (
+                instructions,
+                DecisionQuestionKind::Choice {
+                    options: criteria
+                        .iter()
+                        .map(|(name, description)| (name.to_string(), decision_value(description)))
+                        .collect(),
+                },
+            )
         }
-        let canvas_position = canvas_position.ok_or_else(|| {
-            OpenAiError::invalid_request(format!(
-                "question {:?}: could not resolve its answer slot",
-                question.key
-            ))
-        })?;
-        label_token_ids[0] = canvas[canvas_position];
-        slots.push(SystemOneReadSlot {
-            canvas_position: u32::try_from(canvas_position).unwrap_or(u32::MAX),
-            label_token_ids,
-        });
-    }
-
-    canvas.push(SYSTEM_ONE_TURN_CLOSE_TOKEN);
-    canvas.resize(canvas_token_count, SYSTEM_ONE_PAD_TOKEN);
-    let mut rng = u64::from_be_bytes(seed[..8].try_into().expect("SHA-256 seed is eight bytes"));
-    let filler = filler_tokens(slots.len(), &mut rng, |text| {
-        model.tokenize(text, false).map_err(openai_backend_error)
-    })?;
-    for (slot, token) in slots.iter().zip(filler) {
-        canvas[slot.canvas_position as usize] = token;
-    }
-    Ok((canvas, slots))
+        SystemOneQuestion::Score {
+            instructions,
+            criteria,
+        } => {
+            if !(2..=MAX_SCORE_LEVELS).contains(&criteria.len()) {
+                return Err(OpenAiError::invalid_request(format!(
+                    "question {key:?}: score criteria must contain 2 to {MAX_SCORE_LEVELS} levels"
+                )));
+            }
+            (
+                instructions,
+                DecisionQuestionKind::Score {
+                    levels: criteria.iter().map(decision_value).collect(),
+                },
+            )
+        }
+    };
+    Ok(DecisionQuestion {
+        key: key.to_string(),
+        instructions: instructions.as_ref().map(decision_value),
+        kind,
+    })
 }
 
-/// Draws one canvas filler token per randomized slot.
-///
-/// Every canvas slot outside the answer position must hold a token the loaded
-/// vocabulary can decode, and the value must be reproducible from the request
-/// seed so a leaked diffusion state still changes the read. Minting the fillers
-/// from the model's own tokenizer satisfies both for any vocabulary size, so
-/// the canvas never needs a fixed vocabulary bound.
-fn filler_tokens(
-    count: usize,
-    rng: &mut u64,
-    mut tokenize: impl FnMut(&str) -> OpenAiResult<Vec<i32>>,
-) -> OpenAiResult<Vec<i32>> {
-    let mut tokens = Vec::with_capacity(count);
-    while tokens.len() < count {
-        let mut word = String::with_capacity(FILLER_WORD_LEN);
-        for _ in 0..FILLER_WORD_LEN {
-            word.push(char::from(b'a' + (next_random(rng) % 26) as u8));
+fn decision_value(value: &SystemOneJson) -> DecisionValue {
+    match value {
+        SystemOneJson::Null => DecisionValue::Null,
+        SystemOneJson::Bool(value) => DecisionValue::Bool(*value),
+        SystemOneJson::Number(value) => DecisionValue::Number(value.clone()),
+        SystemOneJson::String(value) => DecisionValue::String(value.clone()),
+        SystemOneJson::Array(values) => {
+            DecisionValue::Array(values.iter().map(decision_value).collect())
         }
-        let mut drawn = tokenize(&word)?;
-        if drawn.is_empty() {
-            return Err(OpenAiError::backend(
-                "tokenizer produced no filler tokens for the System One canvas",
-            ));
-        }
-        drawn.truncate(count - tokens.len());
-        tokens.extend(drawn);
+        SystemOneJson::Object(object) => DecisionValue::Object(
+            object
+                .iter()
+                .map(|(key, value)| (key.to_string(), decision_value(value)))
+                .collect(),
+        ),
     }
-    Ok(tokens)
 }
 
-/// One xorshift64 step. Shared by the canvas filler so its layout stays a pure
-/// function of the request seed.
-fn next_random(rng: &mut u64) -> u64 {
-    *rng ^= *rng << 13;
-    *rng ^= *rng >> 7;
-    *rng ^= *rng << 17;
-    *rng
+fn decision_error(error: DecisionError) -> OpenAiError {
+    match error {
+        DecisionError::InvalidRequest(message) => OpenAiError::invalid_request(message),
+        DecisionError::Unsupported(message) => OpenAiError::unsupported(message),
+        DecisionError::Backend(error) => OpenAiError::backend(format!("{error:#}")),
+    }
+}
+
+fn response(request: SystemOneRequest, output: DecisionOutput) -> OpenAiResult<SystemOneResponse> {
+    Ok(SystemOneResponse {
+        answers: answers(&request.questions, &output.probabilities)?,
+        model: request.model,
+        usage: SystemOneUsage {
+            input_tokens: u32::try_from(output.input_tokens).unwrap_or(u32::MAX),
+            output_tokens: 0,
+        },
+    })
 }
 
 fn confidence(probabilities: &[f32]) -> f32 {
@@ -461,30 +224,27 @@ fn confidence(probabilities: &[f32]) -> f32 {
     (1.0 - entropy / (probabilities.len() as f32).ln()).clamp(0.0, 1.0)
 }
 
+/// Maps each question's distribution (in the order `DecisionQuestionKind`
+/// documents) to its Jev answer.
 fn answers(
-    questions: &[PreparedQuestion],
+    questions: &BTreeMap<String, SystemOneQuestion>,
     probabilities: &[Vec<f32>],
 ) -> OpenAiResult<BTreeMap<String, SystemOneAnswer>> {
     if questions.len() != probabilities.len() {
         return Err(OpenAiError::backend(
-            "native System One output did not match the question count",
+            "System One output did not match the question count",
         ));
     }
     questions
         .iter()
         .zip(probabilities)
-        .map(|(question, probabilities)| {
-            if probabilities.len() != question.labels.len() {
-                return Err(OpenAiError::backend(format!(
-                    "native System One output for {:?} did not match its label count",
-                    question.key
-                )));
-            }
-            let answer = match &question.kind {
-                PreparedQuestionKind::Noul { .. } => SystemOneAnswer::Noul {
+        .map(|((key, question), probabilities)| {
+            let answer = match question {
+                SystemOneQuestion::Noul { .. } => SystemOneAnswer::Noul {
                     noul: probabilities[0],
                 },
-                PreparedQuestionKind::Choice { choices } => {
+                SystemOneQuestion::Choice { criteria, .. } => {
+                    let names = criteria.iter().map(|(name, _)| name).collect::<Vec<_>>();
                     let selected = probabilities
                         .iter()
                         .enumerate()
@@ -492,25 +252,25 @@ fn answers(
                         .map(|(index, _)| index)
                         .unwrap_or(0);
                     SystemOneAnswer::Choice {
-                        choice: choices[selected].0.clone(),
-                        probabilities: choices
+                        choice: names[selected].to_string(),
+                        probabilities: names
                             .iter()
                             .zip(probabilities)
-                            .map(|((name, _), probability)| (name.clone(), *probability))
+                            .map(|(name, probability)| (name.to_string(), *probability))
                             .collect(),
                         confidence: confidence(probabilities),
                     }
                 }
-                PreparedQuestionKind::Score { legend } => SystemOneAnswer::Score {
+                SystemOneQuestion::Score { criteria, .. } => SystemOneAnswer::Score {
                     score: probabilities
                         .iter()
                         .enumerate()
                         .map(|(index, probability)| index as f32 * probability)
                         .sum(),
-                    legend: legend
+                    legend: criteria
                         .iter()
                         .enumerate()
-                        .map(|(index, value)| (index.to_string(), value.clone()))
+                        .map(|(index, level)| (index.to_string(), level.to_value()))
                         .collect(),
                     probabilities: probabilities
                         .iter()
@@ -520,7 +280,7 @@ fn answers(
                     confidence: confidence(probabilities),
                 },
             };
-            Ok((question.key.clone(), answer))
+            Ok((key.clone(), answer))
         })
         .collect()
 }
@@ -528,6 +288,10 @@ fn answers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(json: &str) -> SystemOneRequest {
+        serde_json::from_str(json).expect("request")
+    }
 
     #[test]
     fn confidence_is_zero_for_uniform_distribution() {
@@ -540,33 +304,66 @@ mod tests {
     }
 
     #[test]
-    fn filler_tokens_fill_every_slot_exactly_and_deterministically() {
-        let draw = |text: &str| Ok(vec![i32::try_from(text.len()).unwrap()]);
-        let mut first_rng = 0x0123_4567_89ab_cdef_u64;
-        let first = filler_tokens(5, &mut first_rng, draw).expect("fillers");
-        assert_eq!(first, vec![FILLER_WORD_LEN as i32; 5]);
-        let mut second_rng = 0x0123_4567_89ab_cdef_u64;
-        let second = filler_tokens(5, &mut second_rng, draw).expect("fillers");
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn filler_tokens_stop_at_the_requested_count() {
-        let mut rng = 7_u64;
-        let tokens = filler_tokens(3, &mut rng, |text| {
-            Ok(text.chars().map(|character| character as i32).collect())
-        })
-        .expect("fillers");
-        assert_eq!(tokens.len(), 3);
-    }
-
-    #[test]
-    fn filler_tokens_reject_a_tokenizer_that_produces_nothing() {
-        let mut rng = 11_u64;
-        let error = filler_tokens(1, &mut rng, |_| Ok(Vec::new())).expect_err("no fillers");
-        assert!(
-            error.to_string().contains("no filler tokens"),
-            "unexpected error: {error}"
+    fn decision_request_keeps_request_order_for_options_and_state() {
+        let request = request(
+            r#"{"model":"m","state":{"zeta":1,"alpha":2},"questions":{"team":{"type":"choice","criteria":{"support":"","billing":""}}}}"#,
         );
+        let decision = decision_request(&request).unwrap();
+        let DecisionValue::Object(state) = &decision.state else {
+            panic!("object state")
+        };
+        assert_eq!(state[0].0, "zeta");
+        let DecisionQuestionKind::Choice { options } = &decision.questions[0].kind else {
+            panic!("choice")
+        };
+        assert_eq!(options[0].0, "support");
+    }
+
+    /// Nested objects in unsorted order, a float, criteria given as objects,
+    /// and every question kind.
+    const SEED_REQUEST: &str = r#"{"model":"m","state":{"zeta":{"b":[1,2.5,"x"],"a":null},"alpha":"hi"},"questions":{"team":{"type":"choice","instructions":{"y":1,"x":2},"criteria":{"support":"faults","billing":{"z":true,"a":false}}},"billing":{"type":"noul","instructions":"Billing?","criteria":{"true":"a charge","false":{"k":2,"j":1}}},"urgency":{"type":"score","criteria":["low",{"m":1,"l":0},"high"]}}}"#;
+
+    #[test]
+    fn the_seed_is_the_digest_diffusiongemma_has_always_used() {
+        // DiffusionGemma's canvas filler derives from this seed, so it must
+        // not move. Captured from origin/main (7d571a91d) by serializing
+        // `(&request.state, &request.questions)` for SEED_REQUEST and taking
+        // its SHA-256.
+        let seed = decision_request(&request(SEED_REQUEST)).unwrap().seed;
+        let hex = seed
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            hex,
+            "3e7216c3eca8bf70ed5ac23016188815058b30d8155e1adcb745e70a5c8d98dd"
+        );
+    }
+
+    #[test]
+    fn jev_bounds_are_enforced_before_any_backend() {
+        let one_choice = request(
+            r#"{"model":"m","state":"s","questions":{"q":{"type":"choice","criteria":{"only":""}}}}"#,
+        );
+        assert!(decision_request(&one_choice).is_err());
+    }
+
+    #[test]
+    fn answers_map_request_order_probabilities() {
+        let request = request(
+            r#"{"model":"m","state":"s","questions":{"billing":{"type":"noul"},"team":{"type":"choice","criteria":{"support":"","billing":""}}}}"#,
+        );
+        let answers = answers(&request.questions, &[vec![0.8, 0.2], vec![0.3, 0.7]]).unwrap();
+        assert_eq!(answers["billing"], SystemOneAnswer::Noul { noul: 0.8 });
+        let SystemOneAnswer::Choice {
+            choice,
+            probabilities,
+            ..
+        } = &answers["team"]
+        else {
+            panic!("choice answer")
+        };
+        assert_eq!(choice, "billing");
+        assert_eq!(probabilities["support"], 0.3);
     }
 }

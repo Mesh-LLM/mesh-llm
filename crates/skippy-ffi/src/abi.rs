@@ -23,8 +23,14 @@ pub const FEATURE_UNLOAD_EVENTS: u64 = 1 << 36;
 pub const FEATURE_NON_CHAT_WORKLOADS: u64 = 1 << 37;
 pub const FEATURE_SYSTEM_ONE: u64 = 1 << 38;
 pub const FEATURE_CACHEGEN_KV_PAGE: u64 = 1 << 39;
+/// Full-model Laya decision reads (`skippy/laya.h`).
+pub const FEATURE_LAYA_DECISIONS: u64 = 1 << 40;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
+pub const LAYA_INFO_V1_ABI_VERSION: u32 = 1;
+pub const LAYA_MEMORY_V1_ABI_VERSION: u32 = 1;
+/// Question types the Laya decision head distinguishes, in native order.
+pub const LAYA_QTYPE_COUNT: usize = 3;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(i32)]
@@ -130,6 +136,82 @@ pub struct SystemOneSlot {
     pub canvas_position: u32,
     pub label_token_offset: usize,
     pub label_token_count: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayaInfoV1 {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub max_len: i32,
+    pub head_max_len: i32,
+    pub max_markers: i32,
+    pub n_act: i32,
+    pub cls_token_id: i32,
+    pub sep_token_id: i32,
+    pub mask_token_id: i32,
+    pub n_embd: i32,
+    pub n_layer: i32,
+    pub parameter_count: i64,
+    pub temperature: [f32; LAYA_QTYPE_COUNT],
+}
+
+impl Default for LayaInfoV1 {
+    /// Initialize the Laya descriptor with its ABI size and version.
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            abi_version: LAYA_INFO_V1_ABI_VERSION,
+            max_len: 0,
+            head_max_len: 0,
+            max_markers: 0,
+            n_act: 0,
+            cls_token_id: 0,
+            sep_token_id: 0,
+            mask_token_id: 0,
+            n_embd: 0,
+            n_layer: 0,
+            parameter_count: 0,
+            temperature: [0.0; LAYA_QTYPE_COUNT],
+        }
+    }
+}
+
+/// Measured memory of an opened Laya model.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayaMemoryV1 {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub weights_bytes: u64,
+    pub compute_bytes: u64,
+    pub host_scratch_bytes: u64,
+    pub on_accelerator: bool,
+}
+
+impl Default for LayaMemoryV1 {
+    /// Initialize the memory descriptor with its ABI size and version.
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            abi_version: LAYA_MEMORY_V1_ABI_VERSION,
+            weights_bytes: 0,
+            compute_bytes: 0,
+            host_scratch_bytes: 0,
+            on_accelerator: false,
+        }
+    }
+}
+
+/// One question sequence inside a packed Laya read.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayaSequence {
+    pub token_offset: usize,
+    pub token_count: usize,
+    pub qtype: i32,
+    pub marker_offset: usize,
+    pub marker_count: usize,
 }
 
 #[repr(C)]
@@ -447,6 +529,11 @@ pub struct BackendDevice {
 
 #[repr(C)]
 pub struct Model {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct LayaModel {
     _private: [u8; 0],
 }
 

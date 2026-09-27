@@ -55,7 +55,7 @@ pub use frontend::{
     CONTEXT_BUDGET_MAX_TOKENS, DECODE_BATCH_HEADROOM_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
     DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend,
     EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
-    EmbeddedReasoningFormat, LinearProposal, LinearProposalDiscardReason,
+    EmbeddedReasoningFormat, LayaSystemOneBackend, LinearProposal, LinearProposalDiscardReason,
     LinearProposalDisposition, LinearProposalIngress, LinearProposalQuery, LinearProposalReceipt,
     LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,

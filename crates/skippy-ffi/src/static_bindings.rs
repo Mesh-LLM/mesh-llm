@@ -2,15 +2,15 @@ use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
     ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
-    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData,
-    Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams,
-    MtmdDecoderPos, MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio,
-    MtmdHelperGenAudioInput, MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType,
-    MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache, Opaque, RuntimeConfig,
-    SamplingConfig, Session, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
-    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
-    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
-    WorkloadInfoV1,
+    IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
+    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData, Model, ModelInfo,
+    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
+    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
+    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
+    StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
+    StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
+    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1,
 };
 
 unsafe extern "C" {
@@ -158,6 +158,53 @@ unsafe extern "C" {
     pub fn skippy_system_one_canvas_length(
         model: *mut Model,
         out_canvas_token_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_laya_model_open(
+        model_path: *const c_char,
+        n_threads: i32,
+        device: *const c_char,
+        out_model: *mut *mut LayaModel,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_laya_model_free(model: *mut LayaModel);
+
+    pub fn skippy_laya_model_memory_v1(
+        model: *mut LayaModel,
+        out_info: *mut LayaMemoryV1,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_laya_model_info_v1(
+        model: *const LayaModel,
+        out_info: *mut LayaInfoV1,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_laya_tokenize(
+        model: *const LayaModel,
+        text: *const c_char,
+        text_len: usize,
+        out_tokens: *mut i32,
+        capacity: usize,
+        out_token_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_laya_read(
+        model: *mut LayaModel,
+        tokens: *const i32,
+        token_count: usize,
+        marker_positions: *const i32,
+        marker_count: usize,
+        sequences: *const LayaSequence,
+        sequence_count: usize,
+        out_logits: *mut f32,
+        logits_capacity: usize,
+        out_act_logits: *mut f32,
+        act_logits_capacity: usize,
         out_error: *mut *mut Error,
     ) -> Status;
 

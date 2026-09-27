@@ -73,9 +73,12 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 
 `llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
 one main source SHA and the upstream target before any hardware work. Unchanged
-scheduled/forced runs build once and certify the complete roster. Changed pins
-use up to three repair attempts, each followed (only when all families pass) by
-an independent build and complete verification pass on the exact same commit.
+scheduled/forced runs build once and certify the complete roster. Every
+certification first runs a deterministic immutable-plan and pinned-cache
+preflight. Changed pins then use one candidate pass followed (only when all
+families pass) by one independent build and complete verification pass on the
+exact same commit. A failed pass retains evidence and stops instead of starting
+another agent/candidate cycle.
 
 
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
@@ -140,8 +143,9 @@ job-result gate also rejects failed/cancelled jobs whose receipts never upload.
 Rebuilt producers have distinct identities and cannot reuse old receipts.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-Repair feedback includes attempt-labelled family/build history across reruns;
-these diagnostics never substitute for either complete certification pass.
+Reruns retain attempt-labelled family/build history; these diagnostics never
+substitute for either complete certification pass or trigger a new automatic
+repair candidate.
 
 Each named family job runs `--skip-build --shard-index` on the matching
 `family-certify` pool, with max-parallel 8 and fail-fast disabled. Workers
@@ -184,10 +188,10 @@ independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 
-Within a build job, Goose resumes the same session for prepare/build failures
-under the existing 11.5-hour coding-admission and 12-hour per-gate budgets. A
-failed distributed pass supplies its candidate plus family/build logs to a new
-session in the next bounded attempt. Candidates are local, uncertified commits
+Within the candidate build job, Goose resumes the same session for
+prepare/build failures under the existing 11.5-hour coding-admission and
+12-hour per-gate budgets. A failed distributed or independent-verification pass
+stops after preserving evidence. Candidates are local, uncertified commits
 until both full family passes are green. The separate GitHub-hosted publisher
 alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
 No Actions-write credential or dispatch controller is needed. Feature-ref
@@ -368,11 +372,15 @@ Release efficiency TODOs:
   and per-phase timings on Linux amd64/arm64, macOS, and Windows.
 
 `scripts/release-version.sh` is the single owner of the tracked release-version
-surface. On a non-canary `release.yml` dispatch, the metadata job applies that
-script, creates a linear release-source commit when needed, and fast-forwards
-`main` before the build graph begins. `just release` only performs local
-preflight, dispatches that workflow, and waits for its result. Canary dispatches
-do not mutate `main` or publish. Release tags and releases are immutable on
+surface. It runs cargo, and `.cargo/config.toml` wraps `rustc` with sccache, so
+every release job that can reach cargo — including the canary-skipped
+`metadata` and `publish` jobs — initializes sccache before its first cargo
+call. The artifact-only composition jobs never call cargo, and `tools/xtask`
+enforces both halves. On a non-canary `release.yml` dispatch, the metadata job
+applies that script, creates a linear release-source commit when needed, and
+fast-forwards `main` before the build graph begins. `just release` only
+performs local preflight, dispatches that workflow, and waits for its result.
+Canary dispatches do not mutate `main` or publish. Release tags and releases are immutable on
 the manual release path: a non-canary dispatch refuses an already-existing tag
 and fails closed if it cannot verify the remote tag state. The release
 workflow is dispatch-only, so re-pushing a tag does not start a second release
