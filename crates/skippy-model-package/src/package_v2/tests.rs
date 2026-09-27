@@ -35,7 +35,7 @@ fn write(source: &Path, out: &Path, resume: bool) -> Result<()> {
     write_package(
         source.display().to_string(),
         out.to_path_buf(),
-        Vec::new(),
+        PackageSidecars::default(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
         PackageWriteOptions {
@@ -161,7 +161,7 @@ fn writer_embeds_reviewed_generation_defaults() {
     write_package(
         source.display().to_string(),
         out.clone(),
-        Vec::new(),
+        PackageSidecars::default(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
         PackageWriteOptions {
@@ -209,7 +209,7 @@ fn writer_rejects_invalid_generation_defaults_before_creating_output() {
     let error = write_package(
         source.display().to_string(),
         out.clone(),
-        Vec::new(),
+        PackageSidecars::default(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
         PackageWriteOptions {
@@ -482,7 +482,7 @@ fn refuses_transform_hooks_and_existing_completion_marker() {
     let result = write_package(
         source.display().to_string(),
         out.clone(),
-        Vec::new(),
+        PackageSidecars::default(),
         ArtifactHook { command: None },
         ArtifactHook {
             command: Some("must-not-run".into()),
@@ -519,7 +519,10 @@ fn verified_resume_and_projector_sidecar_round_trip() {
     write_package(
         source.display().to_string(),
         out.clone(),
-        vec![projector],
+        PackageSidecars {
+            projectors: vec![projector],
+            publisher_metadata: Vec::new(),
+        },
         ArtifactHook { command: None },
         ArtifactHook { command: None },
         PackageWriteOptions {
@@ -545,6 +548,109 @@ fn verified_resume_and_projector_sidecar_round_trip() {
     assert_eq!(manifest.artifact_catalog.entries.len(), 3);
 }
 
+#[test]
+fn publisher_metadata_is_copied_hashed_and_typed() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.gguf");
+    fixture(&source, &[tensor("first", 0)], None);
+    let config = temp.path().join("config.json");
+    fs::write(
+        &config,
+        r#"{"torch_dtype":"bfloat16","num_hidden_layers":2}"#,
+    )
+    .unwrap();
+    let quant_config = temp.path().join("hf_quant_config.json");
+    fs::write(&quant_config, r#"{"kv_cache_quant_algo":"FP8"}"#).unwrap();
+    let out = temp.path().join("package");
+    let mut source_identity = explicit(&source);
+    source_identity.source_repo = Some("fixture/model".to_string());
+    source_identity.source_revision = Some("a".repeat(40));
+
+    write_package(
+        source.display().to_string(),
+        out.clone(),
+        PackageSidecars {
+            projectors: Vec::new(),
+            publisher_metadata: vec![config.clone(), quant_config],
+        },
+        ArtifactHook { command: None },
+        ArtifactHook { command: None },
+        PackageWriteOptions {
+            explicit: source_identity,
+            generation_defaults: None,
+            resume_existing_artifacts: false,
+            max_artifact_bytes: None,
+        },
+    )
+    .unwrap();
+
+    let manifest = read_manifest(&out);
+    assert_eq!(manifest.publisher_metadata.len(), 2);
+    let metadata = &manifest.publisher_metadata[0];
+    assert_eq!(metadata.source_repo, "fixture/model");
+    assert_eq!(metadata.source_revision, "a".repeat(40));
+    assert_eq!(metadata.source_path, "config.json");
+    let artifact = manifest
+        .artifact_catalog
+        .entries
+        .iter()
+        .find(|artifact| artifact.id == metadata.artifact_id)
+        .unwrap();
+    assert_eq!(artifact.path, "metadata/config.json");
+    assert_eq!(
+        file_sha256(&out.join(&artifact.path)).unwrap(),
+        artifact.sha256
+    );
+    let defaults = manifest.publisher_defaults.unwrap();
+    let declaration = defaults.compute_dtype.unwrap();
+    assert_eq!(
+        declaration.dtype,
+        skippy_package_format::PublisherDtype::Bf16
+    );
+    assert_eq!(declaration.artifact_id, metadata.artifact_id);
+    assert_eq!(
+        defaults.kv_cache_dtype.unwrap().dtype,
+        skippy_package_format::PublisherDtype::Fp8
+    );
+    crate::verify_v2::verify_package(&out, &source, None, &[]).unwrap();
+}
+
+#[test]
+fn publisher_config_conflicting_with_gguf_geometry_is_rejected() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.gguf");
+    fixture(&source, &[tensor("first", 0)], None);
+    let config = temp.path().join("config.json");
+    fs::write(&config, r#"{"num_hidden_layers":99}"#).unwrap();
+    let out = temp.path().join("package");
+    let mut source_identity = explicit(&source);
+    source_identity.source_repo = Some("fixture/model".to_string());
+    source_identity.source_revision = Some("a".repeat(40));
+
+    let error = write_package(
+        source.display().to_string(),
+        out,
+        PackageSidecars {
+            projectors: Vec::new(),
+            publisher_metadata: vec![config],
+        },
+        ArtifactHook { command: None },
+        ArtifactHook { command: None },
+        PackageWriteOptions {
+            explicit: source_identity,
+            generation_defaults: None,
+            resume_existing_artifacts: false,
+            max_artifact_bytes: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("conflicts with GGUF llama.block_count=2")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
@@ -563,7 +669,7 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
     write_package(
         source.display().to_string(),
         out.clone(),
-        Vec::new(),
+        PackageSidecars::default(),
         ArtifactHook {
             command: Some(hook),
         },
@@ -600,7 +706,7 @@ fn successful_artifact_hook_may_leave_verified_copies_for_rechecking() {
     write_package(
         source.display().to_string(),
         out.clone(),
-        Vec::new(),
+        PackageSidecars::default(),
         ArtifactHook {
             command: Some("/usr/bin/true".into()),
         },
@@ -686,7 +792,7 @@ fn oversized_layer_splits_into_verified_part_artifacts_end_to_end() {
     write_package(
         source.display().to_string(),
         out.clone(),
-        Vec::new(),
+        PackageSidecars::default(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
         PackageWriteOptions {

@@ -113,6 +113,13 @@
       }
     },
     {
+      "canonical_path": "defaults.model_fit.cache_ram_mib",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.model_fit.cache_type_k",
       "support": "supported",
       "source": {
@@ -135,13 +142,6 @@
     },
     {
       "canonical_path": "defaults.model_fit.flash_attention",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.model_fit.kv_cache_policy",
       "support": "supported",
       "source": {
         "kind": "built_in"

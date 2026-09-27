@@ -1,0 +1,292 @@
+From c4bb575806c97e4635e3743323c49844018c3e5a Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Fri, 25 Sep 2026 16:50:20 +1000
+Subject: [PATCH] test(skippy): certify synthetic GLM-DSA stages
+
+---
+ src/CMakeLists.txt                          |  18 +++
+ src/models/glm-dsa.cpp                      |  12 +-
+ src/skippy/stage_program_extraction.cpp     |  22 +++-
+ src/skippy/tests/graph_contract_cases.cmake |  13 ++
+ tests/test-graph-contract-fixture.h         |   8 ++
+ tests/test-llama-archs.cpp                  | 128 +++++++++++++++++---
+ 6 files changed, 128 insertions(+), 14 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index de75e976a..436d6718d 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -236,6 +236,24 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     add_dependencies(skippy-noalloc-graph-planning skippy-graph-contract-models)
+     include(skippy/tests/graph_contract_cases.cmake)
+ 
++    set(GLM_DSA_SYNTHETIC_FIXTURE_DIR "${SKIPPY_MODEL_FIXTURE_DIR}/glm-dsa-synthetic")
++    file(MAKE_DIRECTORY "${GLM_DSA_SYNTHETIC_FIXTURE_DIR}")
++    add_test(NAME skippy_generate_glm_dsa_synthetic COMMAND skippy-model-fixture-generator
++        --arch glm-dsa --seed 42 --glm-dsa-indexshare full-shared-shared
++        --out "${GLM_DSA_SYNTHETIC_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_glm_dsa_synthetic PROPERTIES
++        FIXTURES_SETUP glm-dsa-synthetic)
++    add_test(NAME skippy_glm_dsa_synthetic_replay COMMAND skippy-renamed-multishard-planning
++        "${GLM_DSA_SYNTHETIC_FIXTURE_DIR}/glm-dsa-moe.gguf"
++        "${GLM_DSA_SYNTHETIC_FIXTURE_DIR}/replay" 0)
++    set_tests_properties(skippy_glm_dsa_synthetic_replay PROPERTIES
++        FIXTURES_REQUIRED glm-dsa-synthetic TIMEOUT 900)
++    foreach(glm_dsa_invalid_layout shared-first conflicting-metadata)
++        add_test(NAME skippy_glm_dsa_reject_${glm_dsa_invalid_layout} COMMAND skippy-model-fixture-generator
++            --arch glm-dsa --seed 42 --glm-dsa-indexshare ${glm_dsa_invalid_layout}
++            --expect-invalid --out "${GLM_DSA_SYNTHETIC_FIXTURE_DIR}")
++    endforeach()
++
+     add_executable(skippy-input-capabilities skippy/tests/input_capabilities.cpp)
+     target_compile_features(skippy-input-capabilities PRIVATE cxx_std_17)
+     target_link_libraries(skippy-input-capabilities PRIVATE llama)
+diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
+index 12cfc27d1..bbb08c132 100644
+--- a/src/models/glm-dsa.cpp
++++ b/src/models/glm-dsa.cpp
+@@ -56,7 +56,8 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
+         hparams.expert_gating_func =  LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
+     }
+ 
+-    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K_FREQUENCY,   hparams.indexer_top_k_freq, false);
++    const bool has_indexer_frequency = ml.get_key(
++            LLM_KV_ATTENTION_INDEXER_TOP_K_FREQUENCY, hparams.indexer_top_k_freq, false);
+     ml.get_key(LLM_KV_ATTENTION_INDEXER_SKIP_TOP_K_OFFSET, hparams.indexer_skip_top_k_offset, false);
+ 
+     // BC for GLM 5 and 5.1 (full indexers) and the first GLM 5.2
+@@ -75,6 +76,7 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
+                 il < offset || (il >= offset && ((il - offset + 1) % hparams.indexer_top_k_freq) == 0);
+         }
+     }
++    const auto frequency_indexer_types = hparams.is_indexer_full_impl;
+ 
+     bool has_explicit_indexer_types = false;
+     try {
+@@ -115,8 +117,16 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
+             throw std::runtime_error(
+                 "glm-dsa.attention.indexer.types numeric values must be 0 or 1");
+         }
++        if (has_explicit_indexer_types && has_indexer_frequency &&
++                hparams.is_indexer_full_impl[il] != frequency_indexer_types[il]) {
++            throw std::runtime_error(
++                "glm-dsa.attention.indexer.types conflicts with top_k_frequency metadata");
++        }
+         hparams.indexer_types[il] = static_cast<int32_t>(hparams.is_indexer_full_impl[il]);
+     }
++    if (hparams.n_layer() > 0 && !hparams.is_indexer_full(0)) {
++        throw std::runtime_error("glm-dsa layer 0 must be a full IndexShare producer");
++    }
+ 
+     switch (hparams.n_layer()) {
+         case 78: type = LLM_TYPE_744B_A40B; break;
+diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
+index a68d99fe4..b27603be3 100644
+--- a/src/skippy/stage_program_extraction.cpp
++++ b/src/skippy/stage_program_extraction.cpp
+@@ -250,13 +250,23 @@ bool extraction::run() {
+                         }
+                         if (source_axis >= 0) {
+                             int32_t target_axis = -1;
+-                            for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
+-                                if (tensor->ne[axis] != tensor->src[0]->ne[source_axis]) continue;
+-                                if (target_axis >= 0) {
+-                                    target_axis = -1;
+-                                    break;
++                            const bool identity_view = tensor->view_offs == 0 &&
++                                    dimensions(tensor) == dimensions(tensor->src[0]) &&
++                                    byte_strides(tensor) == byte_strides(tensor->src[0]);
++                            if (identity_view) {
++                                // Equal extents on several axes make shape-only matching ambiguous.
++                                // An identity view preserves the source dynamic axis by definition;
++                                // GLM-DSA top-k reaches this case when top_k == captured token count.
++                                target_axis = source_axis;
++                            } else {
++                                for (int32_t axis = 0; axis < GGML_MAX_DIMS; ++axis) {
++                                    if (tensor->ne[axis] != tensor->src[0]->ne[source_axis]) continue;
++                                    if (target_axis >= 0) {
++                                        target_axis = -1;
++                                        break;
++                                    }
++                                    target_axis = axis;
+                                 }
+-                                target_axis = axis;
+                             }
+                             if (target_axis < 0) {
+                                 if (tensor->view_offs == 0 && source_axis < GGML_MAX_DIMS &&
+diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
+index d2eda9f7b..4ee862411 100644
+--- a/src/skippy/tests/graph_contract_cases.cmake
++++ b/src/skippy/tests/graph_contract_cases.cmake
+@@ -105,3 +105,16 @@ skippy_contract_case(muse-glimmer muse-glimmer 52 6656 0 causal)
+ skippy_contract_case(bailingmoe2 bailingmoe2 19 4096 0 causal)
+ skippy_contract_case(minimax-m2 minimax-m2 62 3072 0 causal)
+ skippy_contract_case(deepseek4 deepseek4 43 4096 0 causal)
++
++# GLM-5.3 is too large for the ordinary one-host family battery. Keep its
++# production topology in a separate synthetic-architecture lane so this case
++# cannot be mistaken for a registry-backed real-artifact certification.
++set(glm53_contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-glm53-synthetic")
++file(MAKE_DIRECTORY "${glm53_contract_dir}")
++add_test(NAME skippy_generate_contract_glm53_synthetic COMMAND skippy-model-fixture-generator
++    --arch glm-dsa --graph-contract 78 6144 --contract-mtp 1 --out "${glm53_contract_dir}")
++set_tests_properties(skippy_generate_contract_glm53_synthetic PROPERTIES FIXTURES_SETUP contract-glm53-synthetic)
++add_test(NAME skippy_graph_contract_glm53_synthetic COMMAND skippy-graph-contract-models
++    "${glm53_contract_dir}/graph-contract.gguf" causal)
++set_tests_properties(skippy_graph_contract_glm53_synthetic PROPERTIES
++    FIXTURES_REQUIRED contract-glm53-synthetic TIMEOUT 900)
+diff --git a/tests/test-graph-contract-fixture.h b/tests/test-graph-contract-fixture.h
+index 32ceaf95b..a59d9f212 100644
+--- a/tests/test-graph-contract-fixture.h
++++ b/tests/test-graph-contract-fixture.h
+@@ -53,6 +53,14 @@ static int save_graph_contract_fixture(llm_arch arch, const std::string & out, u
+         ggml_format_name(&probe, "blk.%u.nextn.eh_proj.weight", layers);
+         gguf_add_tensor(metadata.get(), &probe);
+     }
++    if (arch == LLM_ARCH_GLM_DSA) {
++        std::vector<uint32_t> indexer_types;
++        indexer_types.reserve(layers);
++        for (uint32_t il = 0; il < layers; ++il) {
++            indexer_types.push_back(il % 2 == 0 ? 1 : 0);
++        }
++        kv.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
++    }
+     if (arch == LLM_ARCH_ARWKV7 || arch == LLM_ARCH_RWKV7) {
+         llama_model_saver kv(arch, metadata.get());
+         kv.add_kv(LLM_KV_ATTENTION_DECAY_LORA_RANK, uint32_t(32));
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index ff859916a..9c0a941f3 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -132,7 +132,6 @@ static gguf_context_ptr get_gguf_ctx(
+         const uint32_t glm_dsa_indexer_top_k = 8,
+         const bool deepseek4_mtp = false,
+         const uint32_t contract_layers = 0, const uint32_t contract_width = 0) {
+-    (void) glm_dsa_indexshare;
+     gguf_context_ptr ret(gguf_init_empty());
+     llama_model_saver ms(arch, ret.get());
+     const uint32_t n_ctx = context_length;
+@@ -187,6 +186,14 @@ static gguf_context_ptr get_gguf_ctx(
+         n_layer = 8; // 1 layer per stack x 2 h-cycles x (3 l-cycles + 1) cache slots
+     }
+ 
++    if (arch == LLM_ARCH_GLM_DSA) {
++        if (glm_dsa_indexshare == glm_dsa_indexshare_fixture::FULL_SHARED_SHARED) {
++            n_layer = 3;
++        } else if (glm_dsa_indexshare == glm_dsa_indexshare_fixture::PERIODIC_FULL_SHARED) {
++            n_layer = 4;
++        }
++    }
++
+     if (contract_layers) { n_layer = contract_layers; n_embd = contract_width; }
+ 
+     uint32_t n_head_kv = n_head;
+@@ -356,13 +369,34 @@ static gguf_context_ptr get_gguf_ctx(
+     ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
+     ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
+     if (arch == LLM_ARCH_GLM_DSA) {
+-        ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K_FREQUENCY, uint32_t(1));
+-        ms.add_kv(LLM_KV_ATTENTION_INDEXER_SKIP_TOP_K_OFFSET, uint32_t(0));
+         std::vector<uint32_t> indexer_types;
+         indexer_types.reserve(n_layer);
++        uint32_t frequency = 2;
++        uint32_t offset = 1;
+         for (uint32_t il = 0; il < n_layer; il++) {
+-            indexer_types.push_back(il % 2 ? 0 : 1);
++            switch (glm_dsa_indexshare) {
++                case glm_dsa_indexshare_fixture::SHARED_FIRST:
++                    indexer_types.push_back(il % 2);
++                    offset = 0;
++                    break;
++                case glm_dsa_indexshare_fixture::FULL_SHARED_SHARED:
++                    indexer_types.push_back(il % 3 == 0 ? 1 : 0);
++                    frequency = 3;
++                    break;
++                case glm_dsa_indexshare_fixture::CONFLICTING_METADATA:
++                    indexer_types.push_back(il % 2 ? 0 : 1);
++                    frequency = 1;
++                    offset = 0;
++                    break;
++                case glm_dsa_indexshare_fixture::DEFAULT:
++                case glm_dsa_indexshare_fixture::FULL_SHARED:
++                case glm_dsa_indexshare_fixture::PERIODIC_FULL_SHARED:
++                    indexer_types.push_back(il % 2 ? 0 : 1);
++                    break;
++            }
+         }
++        ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K_FREQUENCY, frequency);
++        ms.add_kv(LLM_KV_ATTENTION_INDEXER_SKIP_TOP_K_OFFSET, offset);
+         ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
+     }
+     // mrope sections count rope pairs; Ling 3.0 VL files carry [t, h, w] sections
+@@ -780,7 +832,7 @@ static bool glm_dsa_backend_config_supported(const std::vector<ggml_backend_dev_
+     return true;
+ }
+ 
+-static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir, bool text_only = false) {
++static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir, bool text_only = false, glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT) {
+     struct user_data_t {
+         struct {
+             ggml_log_callback callback;
+@@ -827,7 +879,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+                 LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
+                 continue;
+             }
+-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
++            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, glm_dsa_indexshare);
+             if (text_only) {
+                 const uint32_t sections[4] = {};
+                 const std::string key = std::string(llm_arch_name(arch)) + ".rope.dimension_sections";
+@@ -1064,6 +1119,8 @@ int main(int argc, char ** argv) {
+     bool dense_mtp = false;
+     uint32_t dense_mtp_depth = 1;
+     bool text_only = false;
++    bool expect_invalid = false;
++    glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT;
+     std::string mtp_model;
+     uint32_t contract_layers = 0, contract_width = 0, contract_mtp_layers = 0;
+     int verbosity = LOG_LEVEL_ERROR;
+@@ -1076,6 +1133,23 @@ int main(int argc, char ** argv) {
+             contract_mtp_layers = std::stoul(argv[++i]);
+         } else if (strcmp(argv[i], "--text-only") == 0 || strcmp(argv[i], "-t") == 0) {
+             text_only = true;
++        } else if (strcmp(argv[i], "--expect-invalid") == 0) {
++            expect_invalid = true;
++        } else if (strcmp(argv[i], "--glm-dsa-indexshare") == 0 && i + 1 < argc) {
++            const std::string layout = argv[++i];
++            if (layout == "full-shared") {
++                glm_dsa_indexshare = glm_dsa_indexshare_fixture::FULL_SHARED;
++            } else if (layout == "full-shared-shared") {
++                glm_dsa_indexshare = glm_dsa_indexshare_fixture::FULL_SHARED_SHARED;
++            } else if (layout == "periodic-full-shared") {
++                glm_dsa_indexshare = glm_dsa_indexshare_fixture::PERIODIC_FULL_SHARED;
++            } else if (layout == "shared-first") {
++                glm_dsa_indexshare = glm_dsa_indexshare_fixture::SHARED_FIRST;
++            } else if (layout == "conflicting-metadata") {
++                glm_dsa_indexshare = glm_dsa_indexshare_fixture::CONFLICTING_METADATA;
++            } else {
++                throw std::runtime_error("unknown --glm-dsa-indexshare layout");
++            }
+         } else if (strcmp(argv[i], "--dense-mtp") == 0) {
+             dense_mtp = true;
+         } else if (strcmp(argv[i], "--dense-mtp-depth") == 0 && i + 1 < argc) {
+@@ -1219,7 +1299,15 @@ int main(int argc, char ** argv) {
+             return 0;
+         }
+         if (!out.empty()) {
+-            return save_models(arch_filter, seed, stdev, verbosity, out, text_only);
++            if (expect_invalid) {
++                try {
++                    save_models(arch_filter, seed, stdev, verbosity, out, text_only, glm_dsa_indexshare);
++                } catch (const std::exception &) {
++                    return 0;
++                }
++                throw std::runtime_error("invalid GLM-DSA fixture was accepted");
++            }
++            return save_models(arch_filter, seed, stdev, verbosity, out, text_only, glm_dsa_indexshare);
+         }
+         return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
+     } catch (const std::exception & err) {
+-- 
+2.54.0 (Apple Git-157)
+

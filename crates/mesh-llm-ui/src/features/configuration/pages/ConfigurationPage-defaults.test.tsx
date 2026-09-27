@@ -93,29 +93,6 @@ describe('ConfigurationPage defaults controls', () => {
     expect(screen.getByText('3.6 GB · 12 × 0.30 GB')).toBeInTheDocument()
   })
 
-  it('updates KV cache memory tiers from the selected policy', async () => {
-    const user = userEvent.setup()
-
-    render(<ConfigurationPage enableNavigationBlocker={false} />)
-
-    const policyControl = within(screen.getByRole('radiogroup', { name: 'KV cache policy' }))
-    const tiers = () =>
-      within(screen.getByRole('group', { name: 'KV cache memory tiers' }))
-        .getAllByText(/^K /)
-        .map((node) => node.closest('[data-kv-tier-active]'))
-
-    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual(['true', 'true', 'true'])
-
-    await user.click(policyControl.getByRole('radio', { name: 'quality' }))
-    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual(['true', undefined, undefined])
-
-    await user.click(policyControl.getByRole('radio', { name: 'balanced' }))
-    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual([undefined, 'true', undefined])
-
-    await user.click(policyControl.getByRole('radio', { name: 'saver' }))
-    expect(tiers().map((node) => node?.getAttribute('data-kv-tier-active'))).toEqual([undefined, undefined, 'true'])
-  })
-
   it('renders speculative decoding defaults and writes them to TOML', async () => {
     const user = userEvent.setup()
 

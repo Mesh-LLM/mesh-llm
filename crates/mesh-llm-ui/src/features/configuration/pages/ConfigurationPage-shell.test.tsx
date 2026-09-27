@@ -232,7 +232,6 @@ describe('ConfigurationPage shell and feature flags', () => {
     expect(screen.queryByText('Model Runtime')).not.toBeInTheDocument()
     expect(screen.getByText('Default GPU device')).toBeInTheDocument()
     expect(screen.getByText('GPU layers')).toBeInTheDocument()
-    expect(screen.getByText('KV cache policy')).toBeInTheDocument()
     expect(screen.getByText('Memory / safety margin')).toBeInTheDocument()
     expect(screen.getByText('Reasoning format')).toBeInTheDocument()
     expect(screen.getByText('Temperature')).toBeInTheDocument()

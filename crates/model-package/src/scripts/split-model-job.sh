@@ -263,6 +263,19 @@ df -h / || true
 echo "  Preparing Hugging Face uploader..."
 python3 -m venv "$VENV_DIR" > /dev/null
 "$VENV_DIR/bin/pip" install -q huggingface_hub
+SOURCE_REVISION="$("$VENV_DIR/bin/python3" <<'PYTHON'
+from huggingface_hub import HfApi
+import os
+
+api = HfApi(token=os.environ.get("HF_TOKEN"))
+info = api.model_info(os.environ["SOURCE_REPO"], revision=os.environ.get("SOURCE_REVISION", "main"))
+if not info.sha:
+    raise RuntimeError("Hugging Face did not return an immutable source revision")
+print(info.sha)
+PYTHON
+)"
+export SOURCE_REVISION
+echo "  Pinned source revision: $SOURCE_REVISION"
 "$VENV_DIR/bin/python3" << 'PYTHON'
 from huggingface_hub import HfApi
 import os
@@ -391,6 +404,43 @@ PYTHON
     echo "  Projector: $PROJECTOR_PATH"
     WRITE_PACKAGE_PROJECTOR_ARGS+=(--projector "$PROJECTOR_PATH")
 done <<< "${SOURCE_PROJECTOR_FILES:-}"
+PUBLISHER_METADATA_DIR="${LOCAL_WORK_DIR}/publisher-metadata"
+mkdir -p "$PUBLISHER_METADATA_DIR"
+export PUBLISHER_METADATA_DIR
+mapfile -t PUBLISHER_METADATA_PATHS < <("$VENV_DIR/bin/python3" <<'PYTHON'
+from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
+from pathlib import Path
+import os
+
+destination = Path(os.environ["PUBLISHER_METADATA_DIR"])
+for name in (
+    "config.json",
+    "generation_config.json",
+    "tokenizer_config.json",
+    "chat_template.jinja",
+    "hf_quant_config.json",
+):
+    try:
+        cached = Path(hf_hub_download(
+            repo_id=os.environ["SOURCE_REPO"],
+            filename=name,
+            revision=os.environ["SOURCE_REVISION"],
+            cache_dir=os.environ["HF_HUB_CACHE"],
+            token=os.environ.get("HF_TOKEN"),
+        ))
+    except EntryNotFoundError:
+        continue
+    output = destination / name
+    output.write_bytes(cached.read_bytes())
+    print(output)
+PYTHON
+)
+WRITE_PACKAGE_METADATA_ARGS=()
+for METADATA_PATH in "${PUBLISHER_METADATA_PATHS[@]}"; do
+    echo "  Publisher metadata: $METADATA_PATH"
+    WRITE_PACKAGE_METADATA_ARGS+=(--publisher-metadata "$METADATA_PATH")
+done
 echo "  Hugging Face cache: $HF_HUB_CACHE"
 echo "  Package workspace: $PACKAGE_DIR"
 echo "  Temporary workspace: $TMPDIR"
@@ -440,6 +490,7 @@ time "$SLICER" write-package "$WRITE_PACKAGE_INPUT" \
     --out-dir "$PACKAGE_DIR" \
     --after-artifact-command "$ARTIFACT_UPLOAD_HOOK" \
     "${WRITE_PACKAGE_PROJECTOR_ARGS[@]}" \
+    "${WRITE_PACKAGE_METADATA_ARGS[@]}" \
     "${WRITE_PACKAGE_GENERATION_ARGS[@]}" \
     "${WRITE_PACKAGE_IDENTITY_ARGS[@]}"
 WRITE_PACKAGE_STATUS=$?

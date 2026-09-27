@@ -29,6 +29,62 @@ fn resolve_qwen_config_with_request_defaults(
     .expect("qwen config should resolve")
 }
 
+fn publisher_q8_defaults() -> skippy_package_format::PublisherModelDefaults {
+    skippy_package_format::PublisherModelDefaults {
+        compute_dtype: Some(skippy_package_format::PublisherDtypeDeclaration {
+            dtype: skippy_package_format::PublisherDtype::Bf16,
+            artifact_id: "publisher-config-json".to_string(),
+            json_path: "/torch_dtype".to_string(),
+        }),
+        kv_cache_dtype: Some(skippy_package_format::PublisherDtypeDeclaration {
+            dtype: skippy_package_format::PublisherDtype::Q8_0,
+            artifact_id: "publisher-hf-quant-config-json".to_string(),
+            json_path: "/kv_cache_quant_algo".to_string(),
+        }),
+    }
+}
+
+fn publisher_default_request(mesh_config: &MeshConfig) -> SkippyConfigResolveRequest<'_> {
+    SkippyConfigResolveRequest {
+        mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: Path::new("/models/qwen.gguf"),
+        model_bytes: 100 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    }
+}
+
+#[test]
+fn publisher_kv_default_is_used_below_explicit_user_override() {
+    let defaults = publisher_q8_defaults();
+    let automatic = resolve_skippy_config_for_selector_with_publisher_defaults(
+        publisher_default_request(&MeshConfig::default()),
+        None,
+        Some(&defaults),
+    )
+    .unwrap();
+    assert_eq!(automatic.model_fit.cache_type_k, "q8_0");
+    assert_eq!(automatic.model_fit.cache_type_v, "q8_0");
+    let explicit_config = parse_config(
+        r#"
+[defaults.model_fit]
+cache_type_k = "f16"
+cache_type_v = "f16"
+"#,
+    );
+    let explicit = resolve_skippy_config_for_selector_with_publisher_defaults(
+        publisher_default_request(&explicit_config),
+        None,
+        Some(&defaults),
+    )
+    .unwrap();
+    assert_eq!(explicit.model_fit.cache_type_k, "f16");
+    assert_eq!(explicit.model_fit.cache_type_v, "f16");
+}
+
 fn assert_request_override_keeps_load_time_config(
     without_request: &ResolvedSkippyConfig,
     with_request: &ResolvedSkippyConfig,
@@ -385,12 +441,9 @@ mlock = true
 }
 
 #[test]
-fn resolver_macro_expands_kv_cache_tuning_profile_and_safety_margin() {
+fn resolver_expands_throughput_profile_and_safety_margin() {
     let mesh_config = parse_config(
         r#"
-[defaults.model_fit]
-kv_cache_policy = "saver"
-
 [defaults.hardware]
 safety_margin_gb = 1.5
 
@@ -411,24 +464,22 @@ tuning_profile = "throughput"
     })
     .unwrap();
 
-    assert_eq!(resolved.model_fit.kv_cache_policy, "saver");
-    assert_eq!(resolved.model_fit.cache_type_k, "q8_0");
-    assert_eq!(resolved.model_fit.cache_type_v, "q8_0");
-    assert_eq!(resolved.model_fit.kv_offload, "true");
+    assert_eq!(resolved.model_fit.cache_type_k, "f16");
+    assert_eq!(resolved.model_fit.cache_type_v, "f16");
+    assert_eq!(resolved.model_fit.kv_offload, "auto");
     assert_eq!(resolved.throughput.tuning_profile, "throughput");
     assert_eq!(resolved.model_fit.batch, 1024);
-    assert_eq!(resolved.model_fit.ubatch, 256);
+    assert_eq!(resolved.model_fit.ubatch, 1024);
     assert_eq!(resolved.throughput.parallel, 2);
     assert_eq!(resolved.throughput.continuous_batching, "true");
     assert_eq!(resolved.hardware.fit_target_mib, Some(10_752));
 }
 
 #[test]
-fn resolver_treats_auto_cache_type_as_policy_selected_cache_type() {
+fn resolver_treats_auto_cache_type_as_publisher_or_safe_default() {
     let mesh_config = parse_config(
         r#"
 [defaults.model_fit]
-kv_cache_policy = "saver"
 cache_type_k = "auto"
 cache_type_v = "auto"
 "#,
@@ -446,9 +497,8 @@ cache_type_v = "auto"
     })
     .unwrap();
 
-    assert_eq!(resolved.model_fit.kv_cache_policy, "saver");
-    assert_eq!(resolved.model_fit.cache_type_k, "q8_0");
-    assert_eq!(resolved.model_fit.cache_type_v, "q8_0");
+    assert_eq!(resolved.model_fit.cache_type_k, "f16");
+    assert_eq!(resolved.model_fit.cache_type_v, "f16");
 }
 
 #[test]
@@ -457,7 +507,6 @@ fn resolver_treats_auto_cache_type_case_insensitively() {
     let mesh_config_upper = parse_config(
         r#"
 [defaults.model_fit]
-kv_cache_policy = "saver"
 cache_type_k = "AUTO"
 cache_type_v = "AUTO"
 "#,
@@ -475,15 +524,13 @@ cache_type_v = "AUTO"
     })
     .unwrap();
 
-    assert_eq!(resolved_upper.model_fit.kv_cache_policy, "saver");
-    assert_eq!(resolved_upper.model_fit.cache_type_k, "q8_0");
-    assert_eq!(resolved_upper.model_fit.cache_type_v, "q8_0");
+    assert_eq!(resolved_upper.model_fit.cache_type_k, "f16");
+    assert_eq!(resolved_upper.model_fit.cache_type_v, "f16");
 
     // Test mixed-case "Auto"
     let mesh_config_mixed = parse_config(
         r#"
 [defaults.model_fit]
-kv_cache_policy = "saver"
 cache_type_k = "Auto"
 cache_type_v = "Auto"
 "#,
@@ -501,15 +548,13 @@ cache_type_v = "Auto"
     })
     .unwrap();
 
-    assert_eq!(resolved_mixed.model_fit.kv_cache_policy, "saver");
-    assert_eq!(resolved_mixed.model_fit.cache_type_k, "q8_0");
-    assert_eq!(resolved_mixed.model_fit.cache_type_v, "q8_0");
+    assert_eq!(resolved_mixed.model_fit.cache_type_k, "f16");
+    assert_eq!(resolved_mixed.model_fit.cache_type_v, "f16");
 
     // Test mixed-case "AuTo"
     let mesh_config_mixed2 = parse_config(
         r#"
 [defaults.model_fit]
-kv_cache_policy = "saver"
 cache_type_k = "AuTo"
 cache_type_v = "AuTo"
 "#,
@@ -527,13 +572,12 @@ cache_type_v = "AuTo"
     })
     .unwrap();
 
-    assert_eq!(resolved_mixed2.model_fit.kv_cache_policy, "saver");
-    assert_eq!(resolved_mixed2.model_fit.cache_type_k, "q8_0");
-    assert_eq!(resolved_mixed2.model_fit.cache_type_v, "q8_0");
+    assert_eq!(resolved_mixed2.model_fit.cache_type_k, "f16");
+    assert_eq!(resolved_mixed2.model_fit.cache_type_v, "f16");
 }
 
 #[test]
-fn per_model_kv_macro_beats_global_explicit_cache_fields_unless_model_explicit_exists() {
+fn per_model_explicit_cache_fields_beat_global_explicit_cache_fields() {
     let mesh_config = parse_config(
         r#"
 [defaults.model_fit]
@@ -545,8 +589,9 @@ kv_offload = false
 model = "Qwen/Qwen3-0.6B:Q4_K_M"
 
 [models.model_fit]
-kv_cache_policy = "saver"
+cache_type_k = "q8_0"
 cache_type_v = "q4_0"
+kv_offload = true
 "#,
     );
 
@@ -562,7 +607,6 @@ cache_type_v = "q4_0"
     })
     .unwrap();
 
-    assert_eq!(resolved.model_fit.kv_cache_policy, "saver");
     assert_eq!(resolved.model_fit.cache_type_k, "q8_0");
     assert_eq!(resolved.model_fit.cache_type_v, "q4_0");
     assert_eq!(resolved.model_fit.kv_offload, "true");
@@ -1504,11 +1548,11 @@ fn resolve_with_config_and_model_path(
 }
 
 #[test]
-fn kv_offload_resolved_reaches_model_load_options_via_kv_cache_policy() {
+fn explicit_kv_offload_reaches_model_load_options() {
     let mesh_config = parse_config(
         r#"
 [defaults.model_fit]
-kv_cache_policy = "saver"
+kv_offload = true
 "#,
     );
 
@@ -1870,7 +1914,7 @@ fn oversized_chat_template_file_is_rejected_before_runtime_startup() {
 }
 
 #[test]
-fn inkling_family_defaults_to_q4_kv() {
+fn model_family_and_weight_size_do_not_quantize_live_kv() {
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
         mesh_config: &MeshConfig::default(),
         model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
@@ -1883,16 +1927,12 @@ fn inkling_family_defaults_to_q4_kv() {
     })
     .unwrap();
 
-    assert_eq!(resolved.model_fit.cache_type_k, "q4_0");
-    assert_eq!(resolved.model_fit.cache_type_v, "q4_0");
+    assert_eq!(resolved.model_fit.cache_type_k, "f16");
+    assert_eq!(resolved.model_fit.cache_type_v, "f16");
 }
 
-/// The family q4_0 default must be guarded against the model's own metadata:
-/// an Inkling variant with per-head widths not divisible by the q4_0 block
-/// size (32) cannot load quantised KV, so the resolver must degrade the
-/// default to f16 rather than fail the context build.
 #[test]
-fn inkling_family_kv_default_degrades_to_f16_for_incompatible_meta() {
+fn safe_f16_default_remains_f16_for_incompatible_quantized_kv_meta() {
     let compact_meta = crate::models::gguf::GgufCompactMeta {
         architecture: "inkling".to_string(),
         context_length: 65_536,
@@ -1921,14 +1961,11 @@ fn inkling_family_kv_default_degrades_to_f16_for_incompatible_meta() {
 }
 
 #[test]
-fn model_name_does_not_override_generic_saver_macro_without_metadata() {
+fn model_name_does_not_override_safe_default_without_metadata() {
     let mesh_config = parse_config(
         r#"
 [[models]]
 model = "meshllm/inkling-UD-Q2_K_XL-layers"
-
-[models.model_fit]
-kv_cache_policy = "saver"
 "#,
     );
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
@@ -1943,8 +1980,8 @@ kv_cache_policy = "saver"
     })
     .unwrap();
 
-    assert_eq!(resolved.model_fit.cache_type_k, "q8_0");
-    assert_eq!(resolved.model_fit.cache_type_v, "q8_0");
+    assert_eq!(resolved.model_fit.cache_type_k, "f16");
+    assert_eq!(resolved.model_fit.cache_type_v, "f16");
 }
 
 #[test]
@@ -2066,6 +2103,7 @@ fn staged_controls_propagate_into_stage_config_and_embedded_openai_args() {
         r#"
 [defaults.model_fit]
 prompt_cache = true
+cache_ram_mib = 64
 
 [defaults.model_fit.prefix_cache]
 enabled = true
@@ -2113,6 +2151,7 @@ draft_max_tokens = 8
     assert_eq!(kv_cache.shared_prefix_stride_tokens, 48);
     assert_eq!(kv_cache.shared_prefix_record_limit, 3);
     assert_eq!(kv_cache.payload, StageKvCachePayload::ResidentKv);
+    assert_eq!(kv_cache.l2_max_bytes, 64 * 1024 * 1024);
 
     let openai = resolved
         .to_embedded_openai_args(4096, true)

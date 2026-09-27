@@ -1045,3 +1045,58 @@ async fn removing_a_non_preferred_replica_does_not_move_our_preference() {
         "the surviving order must be the old order minus the victim"
     );
 }
+
+/// MoA workers do not speak the payment protocol, so a peer charging for a
+/// model must never be picked as a replica: its 402 is not retryable and
+/// would kill the worker even with a free standby (#2059).
+#[cfg(feature = "payments")]
+#[tokio::test]
+async fn moa_pool_excludes_peers_that_charge_for_the_model() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    let priced = |seed, model: FleetModel| {
+        let mut peer = fleet_peer(seed, model);
+        peer.lightning_offers.insert(
+            model.name.to_string(),
+            mesh_llm_payments_types::pricing::Pricing {
+                input_msat_per_million: 1,
+                output_msat_per_million: 1,
+                minimum_invoice_msat: 1,
+            },
+        );
+        peer
+    };
+    // BIG_MODELS[0]: one paid + one free replica. BIG_MODELS[1]: paid only.
+    let paid_mixed = priced(1, BIG_MODELS[0]);
+    let free_mixed = fleet_peer(2, BIG_MODELS[0]);
+    let (paid_id, free_id) = (paid_mixed.id, free_mixed.id);
+    node.insert_test_peer(paid_mixed).await;
+    node.insert_test_peer(free_mixed).await;
+    node.insert_test_peer(priced(3, BIG_MODELS[1])).await;
+    // Precondition: routing still sees the paid replica.
+    assert!(
+        node.hosts_for_model(BIG_MODELS[0].name)
+            .await
+            .contains(&paid_id)
+    );
+
+    let hosts = super::context_selection::eligible_remote_hosts(
+        &node,
+        BIG_MODELS[0].name,
+        None,
+        node.hosts_for_model(BIG_MODELS[0].name).await,
+    )
+    .await;
+    assert_eq!(
+        super::pool::exclude_paid_hosts(&node, BIG_MODELS[0].name, hosts).await,
+        vec![free_id]
+    );
+
+    let targets = election::ModelTargets::default();
+    let http = reqwest::Client::new();
+    let (_backends, models) =
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
+    let names: Vec<String> = models.into_iter().map(|m| m.name).collect();
+    assert!(!names.iter().any(|n| n == BIG_MODELS[1].name), "{names:?}");
+}

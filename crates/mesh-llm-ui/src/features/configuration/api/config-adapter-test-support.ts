@@ -213,28 +213,6 @@ export const SCHEMA_REFERENCE: RuntimeConfigSchemaReference = {
       }
     },
     {
-      canonical_path: 'defaults.model_fit.kv_cache_policy',
-      owner: 'built_in',
-      source: { kind: 'built_in' },
-      value_schema: { kind: 'string' },
-      support: 'supported',
-      control_surfaces: ['config_file'],
-      apply_mode: 'static_on_load',
-      restart_scope: 'model_reload',
-      visibility: 'user',
-      presentation: {
-        label: 'KV cache policy',
-        help: 'Select KV cache policy.',
-        category_id: 'memory',
-        category_label: 'Memory',
-        category_summary: 'Memory defaults',
-        category_order: 20,
-        setting_order: 20,
-        control_hint: 'segmented',
-        renderer_id: 'kv-cache-policy'
-      }
-    },
-    {
       canonical_path: 'defaults.request_defaults.temperature',
       owner: 'built_in',
       source: { kind: 'built_in' },

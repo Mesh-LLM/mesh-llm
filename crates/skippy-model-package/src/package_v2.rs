@@ -10,8 +10,9 @@ use skippy_model::gguf_catalog::read_gguf_metadata_catalog;
 use skippy_model::package_carrier::resolve_package_carrier;
 use skippy_package_format::{
     Artifact, ArtifactCatalog, Generation, GenerationRequestDefaults, PACKAGE_SCHEMA_VERSION,
-    PackageManifest, Sidecar, SidecarKind, SourceModel, SpeculativeDecoding, StrategyKind,
-    StrategySpec, Tensor, TensorCatalog, WindowPolicy,
+    PackageManifest, PublisherDtype, PublisherDtypeDeclaration, PublisherMetadata,
+    PublisherMetadataRole, PublisherModelDefaults, Sidecar, SidecarKind, SourceModel,
+    SpeculativeDecoding, StrategyKind, StrategySpec, Tensor, TensorCatalog, WindowPolicy,
 };
 use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_metadata_from_parts};
 
@@ -28,6 +29,12 @@ mod layout;
 
 use layout::{PlannedArtifact, PlannedArtifactKind, plan_artifacts_with_budget};
 
+#[derive(Default)]
+pub(crate) struct PackageSidecars {
+    pub(crate) projectors: Vec<PathBuf>,
+    pub(crate) publisher_metadata: Vec<PathBuf>,
+}
+
 pub(crate) struct PackageWriteOptions {
     pub explicit: ExplicitSourceIdentity,
     pub generation_defaults: Option<PathBuf>,
@@ -38,11 +45,15 @@ pub(crate) struct PackageWriteOptions {
 pub(crate) fn write_package(
     model: String,
     out_dir: PathBuf,
-    projectors: Vec<PathBuf>,
+    sidecars: PackageSidecars,
     artifact_hook: ArtifactHook,
     artifact_transform: ArtifactHook,
     options: PackageWriteOptions,
 ) -> Result<()> {
+    let PackageSidecars {
+        projectors,
+        publisher_metadata,
+    } = sidecars;
     ensure!(
         artifact_transform.command.is_none(),
         "v2 creation preserves source bytes; transform the independent source before packaging, not package artifacts"
@@ -69,12 +80,25 @@ pub(crate) fn write_package(
             speculative_decoding: None,
         });
     }
+    let mut publisher_defaults_manifest = manifest.clone();
+    let mut publisher_artifact_ids = BTreeSet::new();
+    for metadata_path in &publisher_metadata {
+        let metadata = publisher_metadata_descriptor(metadata_path, &manifest)?;
+        ensure!(
+            publisher_artifact_ids.insert(metadata.artifact_id.clone()),
+            "publisher metadata filename {:?} appears more than once",
+            metadata.source_path
+        );
+        apply_publisher_defaults(&mut publisher_defaults_manifest, metadata_path, &metadata)?;
+    }
+    let publisher_defaults = publisher_defaults_manifest.publisher_defaults;
     fs::create_dir_all(&out_dir)?;
     ensure!(
         !out_dir.join("model-package.json").exists(),
         "output already contains model-package.json; use a new directory for v2 creation"
     );
-    let mut progress = PackageProgress::new(planned.len() + projectors.len() + 2);
+    let mut progress =
+        PackageProgress::new(planned.len() + projectors.len() + publisher_metadata.len() + 2);
     let source_tensors = source_tensors_by_name(&inventory)?;
     let mut catalog = Vec::with_capacity(source_tensors.len());
     let no_hook = ArtifactHook { command: None };
@@ -203,6 +227,34 @@ pub(crate) fn write_package(
         });
         manifest.artifact_catalog.entries.push(artifact);
     }
+    for metadata_path in &publisher_metadata {
+        let (artifact, metadata) = copy_publisher_metadata(
+            metadata_path,
+            &manifest,
+            &out_dir,
+            options.resume_existing_artifacts,
+        )?;
+        progress.start_step(&artifact.path)?;
+        run_artifact_hook(
+            &artifact_hook,
+            &out_dir.join(&artifact.path),
+            &artifact.path,
+        )?;
+        if artifact_hook.command.is_some() && out_dir.join(&artifact.path).exists() {
+            ensure!(
+                file_sha256(&out_dir.join(&artifact.path))? == artifact.sha256,
+                "publisher metadata changed after artifact hook"
+            );
+        }
+        progress.finish_step(&format!(
+            "{} {}",
+            artifact.path,
+            format_bytes(artifact.byte_size)
+        ))?;
+        manifest.publisher_metadata.push(metadata);
+        manifest.artifact_catalog.entries.push(artifact);
+    }
+    manifest.publisher_defaults = publisher_defaults;
     manifest.package_id = manifest.computed_package_id()?;
     manifest.validate()?;
     progress.start_step("model-package.json")?;
@@ -263,6 +315,8 @@ fn manifest_from_source(
             entries: Vec::new(),
         },
         sidecars: Vec::new(),
+        publisher_metadata: Vec::new(),
+        publisher_defaults: None,
         generation: infer_native_mtp_generation(inventory)?,
         native_abi_version: format!(
             "{}.{}.{}",
@@ -733,6 +787,240 @@ fn copy_projector(source: &Path, index: usize, out_dir: &Path, resume: bool) -> 
         byte_size: directory.artifact_bytes,
         sha256,
     })
+}
+
+fn copy_publisher_metadata(
+    source: &Path,
+    manifest: &PackageManifest,
+    out_dir: &Path,
+    resume: bool,
+) -> Result<(Artifact, PublisherMetadata)> {
+    let metadata = publisher_metadata_descriptor(source, manifest)?;
+    let source_name = metadata.source_path.as_str();
+    let id = metadata.artifact_id.clone();
+    let relative = format!("metadata/{source_name}");
+    let destination = out_dir.join(&relative);
+    copy_artifact(source, &destination, resume)?;
+    let source_digest = file_sha256(source)?;
+    ensure!(
+        file_sha256(&destination)? == source_digest,
+        "written publisher metadata differs from source"
+    );
+    let byte_size = fs::metadata(&destination)?.len();
+    Ok((
+        Artifact {
+            id,
+            path: relative,
+            byte_size,
+            sha256: source_digest,
+        },
+        metadata,
+    ))
+}
+
+fn publisher_metadata_descriptor(
+    source: &Path,
+    manifest: &PackageManifest,
+) -> Result<PublisherMetadata> {
+    let source_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("publisher metadata filename must be valid UTF-8")?;
+    let role = match source_name {
+        "config.json" => PublisherMetadataRole::ModelConfig,
+        "generation_config.json" => PublisherMetadataRole::GenerationConfig,
+        "tokenizer_config.json" => PublisherMetadataRole::TokenizerConfig,
+        "chat_template.jinja" => PublisherMetadataRole::ChatTemplate,
+        "hf_quant_config.json" => PublisherMetadataRole::HfQuantConfig,
+        other => anyhow::bail!("unsupported publisher metadata filename {other:?}"),
+    };
+    let repo = manifest
+        .source_model
+        .repo
+        .clone()
+        .context("publisher metadata requires source repository provenance")?;
+    let revision = manifest
+        .source_model
+        .revision
+        .clone()
+        .context("publisher metadata requires an immutable source revision")?;
+    ensure!(
+        revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "publisher metadata requires a 40-character immutable Hugging Face commit revision"
+    );
+    Ok(PublisherMetadata {
+        role,
+        artifact_id: format!("publisher-{}", source_name.replace(['.', '_'], "-")),
+        source_repo: repo,
+        source_revision: revision,
+        source_path: source_name.to_string(),
+    })
+}
+
+fn apply_publisher_defaults(
+    manifest: &mut PackageManifest,
+    source: &Path,
+    metadata: &PublisherMetadata,
+) -> Result<()> {
+    if !matches!(
+        metadata.role,
+        PublisherMetadataRole::ModelConfig | PublisherMetadataRole::HfQuantConfig
+    ) {
+        return Ok(());
+    }
+    let document: serde_json::Value = serde_json::from_slice(&fs::read(source)?)
+        .with_context(|| format!("parse publisher metadata {}", source.display()))?;
+    ensure!(
+        document.is_object(),
+        "publisher metadata {} must contain a JSON object",
+        source.display()
+    );
+    if metadata.role == PublisherMetadataRole::ModelConfig {
+        validate_config_geometry(manifest, &document)?;
+    }
+    let defaults = manifest
+        .publisher_defaults
+        .get_or_insert(PublisherModelDefaults {
+            compute_dtype: None,
+            kv_cache_dtype: None,
+        });
+
+    if metadata.role == PublisherMetadataRole::ModelConfig
+        && let Some((json_path, value)) = first_string_at(&document, &["/torch_dtype", "/dtype"])
+        && let Some(dtype) = parse_publisher_dtype(value)
+    {
+        merge_dtype_declaration(
+            &mut defaults.compute_dtype,
+            PublisherDtypeDeclaration {
+                dtype,
+                artifact_id: metadata.artifact_id.clone(),
+                json_path: json_path.to_string(),
+            },
+            "compute dtype",
+        )?;
+    }
+
+    let kv_paths = [
+        "/kv_cache_quant_algo",
+        "/kv_cache_dtype",
+        "/kv_cache_scheme",
+        "/quantization_config/kv_cache_quant_algo",
+        "/quantization_config/kv_cache_dtype",
+        "/quantization_config/kv_cache_scheme",
+        "/compression_config/kv_cache_quant_algo",
+        "/compression_config/kv_cache_dtype",
+        "/compression_config/kv_cache_scheme",
+    ];
+    if let Some((json_path, value)) = first_dtype_at(&document, &kv_paths) {
+        let dtype = parse_publisher_dtype(value).with_context(|| {
+            format!(
+                "unsupported publisher KV-cache dtype {value:?} at {json_path} in {}",
+                source.display()
+            )
+        })?;
+        merge_dtype_declaration(
+            &mut defaults.kv_cache_dtype,
+            PublisherDtypeDeclaration {
+                dtype,
+                artifact_id: metadata.artifact_id.clone(),
+                json_path: json_path.to_string(),
+            },
+            "KV-cache dtype",
+        )?;
+    }
+    Ok(())
+}
+
+fn first_string_at<'a>(
+    document: &'a serde_json::Value,
+    paths: &'a [&'a str],
+) -> Option<(&'a str, &'a str)> {
+    paths.iter().find_map(|path| {
+        document
+            .pointer(path)
+            .and_then(serde_json::Value::as_str)
+            .map(|value| (*path, value))
+    })
+}
+
+fn first_dtype_at<'a>(
+    document: &'a serde_json::Value,
+    paths: &'a [&'a str],
+) -> Option<(&'a str, &'a str)> {
+    paths.iter().find_map(|path| {
+        let value = document.pointer(path)?;
+        value
+            .as_str()
+            .or_else(|| value.get("dtype").and_then(serde_json::Value::as_str))
+            .or_else(|| value.get("type").and_then(serde_json::Value::as_str))
+            .map(|dtype| (*path, dtype))
+    })
+}
+
+fn parse_publisher_dtype(value: &str) -> Option<PublisherDtype> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "f16" | "fp16" | "float16" => Some(PublisherDtype::F16),
+        "bf16" | "bfloat16" => Some(PublisherDtype::Bf16),
+        "f32" | "fp32" | "float32" => Some(PublisherDtype::F32),
+        "fp8" => Some(PublisherDtype::Fp8),
+        "fp8_e4m3" | "fp8_e4m3fn" => Some(PublisherDtype::Fp8E4m3),
+        "fp8_e5m2" => Some(PublisherDtype::Fp8E5m2),
+        "q8_0" | "int8" => Some(PublisherDtype::Q8_0),
+        "q4_0" | "int4" => Some(PublisherDtype::Q4_0),
+        _ => None,
+    }
+}
+
+fn merge_dtype_declaration(
+    slot: &mut Option<PublisherDtypeDeclaration>,
+    declaration: PublisherDtypeDeclaration,
+    label: &str,
+) -> Result<()> {
+    if let Some(existing) = slot {
+        ensure!(
+            existing.dtype == declaration.dtype,
+            "conflicting publisher {label} declarations: {:?} at {} and {:?} at {}",
+            existing.dtype,
+            existing.json_path,
+            declaration.dtype,
+            declaration.json_path
+        );
+        return Ok(());
+    }
+    *slot = Some(declaration);
+    Ok(())
+}
+
+fn validate_config_geometry(manifest: &PackageManifest, config: &serde_json::Value) -> Result<()> {
+    let architecture = manifest
+        .model_metadata
+        .get("general.architecture")
+        .and_then(serde_json::Value::as_str)
+        .context("GGUF model metadata is missing general.architecture")?;
+    for (config_key, gguf_suffix) in [
+        ("num_hidden_layers", "block_count"),
+        ("hidden_size", "embedding_length"),
+        ("num_attention_heads", "attention.head_count"),
+        ("num_key_value_heads", "attention.head_count_kv"),
+        ("max_position_embeddings", "context_length"),
+    ] {
+        let Some(config_value) = config.get(config_key).and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        let gguf_key = format!("{architecture}.{gguf_suffix}");
+        let Some(gguf_value) = manifest
+            .model_metadata
+            .get(&gguf_key)
+            .and_then(serde_json::Value::as_u64)
+        else {
+            continue;
+        };
+        ensure!(
+            config_value == gguf_value,
+            "publisher config {config_key}={config_value} conflicts with GGUF {gguf_key}={gguf_value}"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

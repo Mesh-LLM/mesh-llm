@@ -332,6 +332,7 @@ impl StageControlState {
             native_mtp_enabled: effective_load.native_mtp_enabled,
             continuous_batching: effective_load.continuous_batching,
             openai: None,
+            l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
             compute_meter: Some(compute_meter.clone()),
         });
         self.stages.insert(

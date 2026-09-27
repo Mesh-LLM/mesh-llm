@@ -1,7 +1,7 @@
 # Synthetic graph-contract coverage
 
 `just skippy-native-tests cpu` (or `metal`) includes sparse synthetic GGUFs for
-all 89 canary registry families (83 distinct architecture identifiers). Generation
+all 95 canary registry families (89 distinct architecture identifiers). Generation
 and graph planning require no downloaded weights. These tests do not run numerical
 inference or replace real-model, projector, audio, OCR or encoder-decoder certification.
 
@@ -158,3 +158,9 @@ or expected-crash tests are used.
 | ultravox | llama | 16 | 2048 | 0 |
 | inkling | inkling | 42 | 4096 | 0 |
 | llama4 | llama4 | 48 | 5120 | 0 |
+| nemotron-nano | nemotron_h | 42 | 3136 | 0 |
+| mistral3 | mistral3 | 40 | 5120 | 0 |
+| muse-glimmer | muse-glimmer | 52 | 6656 | 0 |
+| bailingmoe2 | bailingmoe2 | 19 | 4096 | 0 |
+| minimax-m2 | minimax-m2 | 62 | 3072 | 0 |
+| deepseek4 | deepseek4 | 43 | 4096 | 0 |

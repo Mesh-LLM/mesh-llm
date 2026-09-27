@@ -25,7 +25,7 @@ class GenerateSkippyFamilyPatchTests(unittest.TestCase):
         manifest = ROOT / "ci/llama-canary/family-certified.json"
         families = generator.load_certified_families(manifest)
         models = json.loads(manifest.read_text())["models"]
-        self.assertEqual(83, len(families))
+        self.assertEqual(89, len(families))
         self.assertTrue({"inkling", "llama4"}.issubset(families))
         self.assertEqual({model["family"] for model in models
                           if model["class"] == "causal_generation"}, families)

@@ -380,7 +380,7 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
     def test_family_certification_has_one_complete_model_list(self) -> None:
         """The full family roster is independent of ordinary CI artifact cadence authorization."""
         manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
-        self.assertEqual(89, len(manifest["models"]))
+        self.assertEqual(95, len(manifest["models"]))
         self.assertTrue(all("cadences" not in model for model in manifest["models"]))
 
     def test_gate_model_cadences_cover_pr_and_main(self) -> None:

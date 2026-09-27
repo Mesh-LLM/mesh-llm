@@ -35,7 +35,7 @@ The serialized `model-package.json` root contains:
 - `package_id`: canonical `sha256:<lowercase-hex>` identity;
 - source and model identities;
 - an artifact catalog;
-- optional projector and generation sidecars;
+- optional projector sidecars, typed generation data, and publisher metadata;
 - native ABI and package-generator versions;
 - creation time for provenance.
 
@@ -53,8 +53,8 @@ package.
 The package id is computed by the shared crate as follows:
 
 1. Clone the manifest and replace `package_id` with the empty string.
-2. Sort source files by path, artifacts by id, and sidecars by
-   `(kind, name, artifact_id)`.
+2. Sort source files by path, artifacts by id, sidecars by
+   `(kind, name, artifact_id)`, and publisher metadata by its typed fields.
 3. Serialize the normalized root with the shared Rust schema.
 4. Hash the serialized bytes with SHA-256 and prefix the lowercase digest with
    `sha256:`.
@@ -92,7 +92,7 @@ keys:
 
 Each locator array has exactly one entry per carrier tensor and follows GGUF
 tensor-directory order. Payload artifacts are indexed by artifact id after
-excluding the metadata carrier and sidecars. The runtime rejects an unknown
+excluding the metadata carrier, loader sidecars, and publisher metadata. The runtime rejects an unknown
 locator version, wrong array type or length, invalid part index, invalid
 alignment, or an extent outside the declared artifact size.
 
@@ -124,6 +124,29 @@ ownership, and their semantic identity is the unique `(kind, name)` pair.
 Multiple projectors therefore require stable distinct names; the package writer
 uses each projector's deterministic artifact id as its name. Generation remains
 a typed manifest field rather than a generic sidecar.
+
+## Publisher Metadata and Live KV Defaults
+
+Publisher files are package-level metadata rather than loader sidecars. The
+writer accepts `config.json`, `generation_config.json`,
+`tokenizer_config.json`, `chat_template.jinja`, and `hf_quant_config.json` via
+repeatable `--publisher-metadata` arguments and copies them under `metadata/`.
+Each entry records its semantic role, artifact id, source repository, immutable
+source revision, and source path; the artifact catalog binds its size and
+SHA-256 digest.
+
+The writer derives only typed defaults used by runtime policy. It records the
+publisher compute dtype and any explicit KV-cache dtype together with the
+artifact id and JSON path that supplied the value. Common architecture geometry
+in `config.json` is compared with authoritative GGUF metadata, and a conflict
+fails package creation before payload artifacts are emitted. Weight
+quantization and GGUF size never imply a live KV dtype.
+
+Runtime precedence is explicit user K/V type, then the package's validated KV
+declaration, then its compute dtype mapped to a supported live type, then
+F16/F16. BF16 maps to F16 until BF16 live KV is qualified; FP8 declarations
+also fall back to F16 until the embedded runtime exposes a qualified FP8 type.
+Packages without publisher metadata remain readable and use F16/F16.
 
 ## Generation
 
