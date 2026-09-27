@@ -551,13 +551,16 @@ const RELEASE_CARGO_INVOCATIONS: &[&str] = &[
     "scripts/publish-crates.sh",
 ];
 
-/// Steps that start a working sccache server before the first compiler probe.
-/// `.cargo/config.toml` makes sccache the repository-wide `rustc` wrapper, so
-/// every cargo call in `release.yml` depends on one of these having run.
+/// Steps that can initialize sccache before the first compiler probe. Some
+/// pinned runner images already include the sccache binary, so they need only
+/// the repository action that configures its cache backend.
 const RELEASE_SCCACHE_INITIALIZATION: &[&str] = &[
     "uses: mozilla-actions/sccache-action",
     "uses: ./.github/actions/configure-sccache-gha",
 ];
+
+/// These hosted jobs install sccache and then configure its cache backend.
+const RELEASE_HOSTED_SCCACHE_JOBS: &[&str] = &["metadata", "publish"];
 
 /// Names of the jobs declared under `jobs:` in a workflow, in file order.
 fn workflow_job_names(workflow: &str) -> Vec<String> {
@@ -634,12 +637,36 @@ fn check_release_sccache_initialization(release_workflow: &str) -> DynResult<()>
             )
             .into());
         }
-        if !RELEASE_SCCACHE_INITIALIZATION
+        let first_cargo_invocation = RELEASE_CARGO_INVOCATIONS
             .iter()
-            .any(|marker| steps.contains(marker))
-        {
+            .filter_map(|invocation| steps.find(invocation))
+            .min()
+            .expect("a cargo invocation was found above");
+        let initialized_before_cargo = RELEASE_SCCACHE_INITIALIZATION
+            .iter()
+            .filter_map(|marker| {
+                steps
+                    .find(marker)
+                    .filter(|position| *position < first_cargo_invocation)
+                    .map(|position| (*marker, position))
+            })
+            .collect::<Vec<_>>();
+        if RELEASE_HOSTED_SCCACHE_JOBS.contains(&job_name.as_str()) {
+            for marker in RELEASE_SCCACHE_INITIALIZATION {
+                if initialized_before_cargo
+                    .iter()
+                    .all(|(initialized_marker, _)| initialized_marker != marker)
+                {
+                    return Err(format!(
+                        "release workflow `{job_name}` invokes {invocation_list} before required sccache initialization `{marker}`"
+                    )
+                    .into());
+                }
+            }
+        } else if initialized_before_cargo.is_empty() {
+            let marker = RELEASE_SCCACHE_INITIALIZATION.join("` or `");
             return Err(format!(
-                "release workflow `{job_name}` invokes {invocation_list} without initializing sccache"
+                "release workflow `{job_name}` invokes {invocation_list} before any required sccache initialization (`{marker}`)"
             )
             .into());
         }
@@ -1297,6 +1324,27 @@ jobs:
         run: |
           scripts/release-version.sh "$RELEASE_TAG"
           cargo fmt --all -- --check
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: mozilla-actions/sccache-action@v0
+      - uses: ./.github/actions/configure-sccache-gha
+      - name: Prepare dispatched release tag
+        run: scripts/release-version.sh "$RELEASE_TAG"
+  build_native_runtime_linux_aarch64_cuda:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/example/runner
+    steps:
+      - uses: ./.github/actions/configure-sccache-gha
+      - name: Build native runtime
+        run: cargo build -p skippy-runtime
+  windows_host_input:
+    runs-on: windows-2025
+    steps:
+      - uses: mozilla-actions/sccache-action@v0
+      - name: Build host input
+        run: cargo build -p mesh-llm
   compose_linux_cuda:
     runs-on: ubuntu-24.04
     steps:
@@ -1310,14 +1358,14 @@ jobs:
 "#;
 
     #[test]
-    fn release_sccache_initialization_accepts_configured_cargo_jobs() {
+    fn release_sccache_initialization_accepts_supported_setup_variants() {
         check_release_sccache_initialization(VALID_SCCACHE_INITIALIZATION_WORKFLOW).unwrap();
     }
 
     #[test]
-    fn release_sccache_initialization_requires_configured_cargo_jobs() {
+    fn release_sccache_initialization_requires_both_setup_steps() {
         let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
-            "      - uses: mozilla-actions/sccache-action@v0\n      - uses: ./.github/actions/configure-sccache-gha\n",
+            "      - uses: ./.github/actions/configure-sccache-gha\n",
             "",
         );
 
@@ -1325,7 +1373,40 @@ jobs:
         assert!(
             error
                 .to_string()
-                .contains("`metadata` invokes cargo, scripts/release-version.sh"),
+                .contains("`metadata` invokes cargo, scripts/release-version.sh before required sccache initialization `uses: ./.github/actions/configure-sccache-gha`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn release_sccache_initialization_requires_the_hosted_server_step() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW
+            .replace("      - uses: mozilla-actions/sccache-action@v0\n", "");
+
+        let error = check_release_sccache_initialization(&workflow).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`metadata` invokes cargo, scripts/release-version.sh before required sccache initialization `uses: mozilla-actions/sccache-action`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn release_sccache_initialization_rejects_setup_after_cargo() {
+        let workflow = VALID_SCCACHE_INITIALIZATION_WORKFLOW.replace(
+            "      - uses: mozilla-actions/sccache-action@v0\n      - uses: ./.github/actions/configure-sccache-gha\n",
+            "",
+        ).replace(
+            "          cargo fmt --all -- --check\n",
+            "          cargo fmt --all -- --check\n      - uses: mozilla-actions/sccache-action@v0\n      - uses: ./.github/actions/configure-sccache-gha\n",
+        );
+
+        let error = check_release_sccache_initialization(&workflow).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`metadata` invokes cargo, scripts/release-version.sh before required sccache initialization"),
             "{error}"
         );
     }
