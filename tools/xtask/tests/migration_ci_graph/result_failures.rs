@@ -32,6 +32,18 @@ fn migration_ci_graph_planned_failure_is_rejected() -> TestResult {
 }
 
 #[test]
+fn migration_ci_graph_windows_smoke_rejects_skipped_consumer() -> TestResult {
+    // Given: a selected Windows smoke row whose job was skipped.
+    let plan = r#"{"lane":"windows","required":true,"required_slices":[],"matrices":{"smoke":[{"id":"windows-cpu"}]}}"#;
+    // When/Then: the lane rejects missing smoke coverage.
+    rejects(
+        plan,
+        r#"{"product_smoke":{"result":"skipped"}}"#,
+        "planned job 'product_smoke' finished with 'skipped'",
+    )
+}
+
+#[test]
 fn migration_ci_graph_planned_cancellation_is_rejected() -> TestResult {
     // Given/When/Then: a planned consumer cancelled by fail-fast or supersession.
     rejects(
