@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1049,8 +1050,8 @@ class LinkPassContractTest(unittest.TestCase):
 
     def test_the_link_pass_runs_before_classification(self):
         self.assertLess(
-            self.script.index("release-notes-link.py"),
-            self.script.index("release-notes-classify.py"),
+            self.script.index("cargo xtool release notes-link"),
+            self.script.index("cargo xtool release notes-classify"),
         )
 
     def test_a_dropped_entry_refuses_to_publish(self):
@@ -1069,7 +1070,7 @@ class LinkPassContractTest(unittest.TestCase):
         # all, which is exactly what the link pass repairs. Deciding there is
         # nothing to regroup from GitHub's body skipped that repair.
         self.assertLess(
-            self.script.index("release-notes-link.py"),
+            self.script.index("cargo xtool release notes-link"),
             self.script.index("nothing to regroup"),
         )
         lines = self.script.splitlines()
@@ -1080,17 +1081,6 @@ class LinkPassContractTest(unittest.TestCase):
 class ReleaseNotesGenerateIntegrationTest(unittest.TestCase):
     def test_link_only_body_is_recovered_classified_and_published(self):
         directory = Path(tempfile.mkdtemp())
-        scripts = directory / "scripts"
-        scripts.mkdir()
-        for name in (
-            "check-conventional-commit.py",
-            "release-notes-classify.py",
-            "release-notes-generate.sh",
-            "release-notes-link.py",
-            "release-notes-regroup.py",
-        ):
-            (scripts / name).write_bytes((SCRIPTS / name).read_bytes())
-        (scripts / "release-notes-generate.sh").chmod(0o755)
 
         subprocess.run(["git", "init", "-q"], cwd=directory, check=True)
         subprocess.run(
@@ -1114,6 +1104,19 @@ class ReleaseNotesGenerateIntegrationTest(unittest.TestCase):
 
         fake_bin = directory / "bin"
         fake_bin.mkdir()
+        git_path = shutil.which("git")
+        self.assertIsNotNone(git_path)
+        fake_git = fake_bin / "git"
+        fake_git.write_text(
+            f"#!/bin/sh\n"
+            f"if [ \"$1 $2\" = 'rev-parse --show-toplevel' ]; then\n"
+            f"  printf '%s\\n' \"$RELEASE_SOURCE_ROOT\"\n"
+            f"else\n"
+            f"  exec '{git_path}' -C \"$FAKE_GIT_ROOT\" \"$@\"\n"
+            f"fi\n",
+            encoding="utf-8",
+        )
+        fake_git.chmod(0o755)
         published = directory / "published.md"
         fake_gh = fake_bin / "gh"
         fake_gh.write_text(
@@ -1145,6 +1148,8 @@ else:
             **dict(os.environ),
             "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
             "FAKE_GH_PUBLISHED": str(published),
+            "FAKE_GIT_ROOT": str(directory),
+            "RELEASE_SOURCE_ROOT": str(ROOT),
             "GITHUB_REPOSITORY": "o/r",
             "RELEASE_TAG": "v2",
             "RELEASE_NOTES_BASE": "v1",
@@ -1152,8 +1157,8 @@ else:
             "RELEASE_NOTES_WORKDIR": str(work),
         }
         result = subprocess.run(
-            [str(scripts / "release-notes-generate.sh")],
-            cwd=directory,
+            [str(GENERATE)],
+            cwd=ROOT,
             env=env,
             capture_output=True,
             text=True,
