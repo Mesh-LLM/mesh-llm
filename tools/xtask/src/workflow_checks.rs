@@ -533,19 +533,17 @@ fn check_release_dispatch_version_preparation(
     native_sdk_artifact_workflow: &str,
     swift_sdk_artifact_workflow: &str,
 ) -> DynResult<()> {
-    const DISPATCH_RELEASE_JOBS: &[&str] = &[
-        "build",
-        "build_linux_arm64",
+    const SOURCE_BUILD_JOBS: &[&str] = &["build", "build_linux_arm64", "windows_host_input"];
+    const COMPOSITION_ONLY_JOBS: &[&str] = &[
         "compose_linux_aarch64_cuda",
         "compose_linux_cuda",
         "compose_linux_rocm",
         "compose_linux_vulkan",
-        "windows_host_input",
     ];
     const REQUIRED_STEP: &str = "Prepare dispatched release version";
     const REQUIRED_COMMAND: &str = "scripts/release-version.sh \"$RELEASE_TAG\"";
 
-    for job_name in DISPATCH_RELEASE_JOBS {
+    for job_name in SOURCE_BUILD_JOBS {
         let job = workflow_job_section(release_workflow, job_name).ok_or_else(|| {
             format!("release workflow: missing `{job_name}` job for dispatched version check")
         })?;
@@ -563,6 +561,22 @@ fn check_release_dispatch_version_preparation(
             job,
             REQUIRED_COMMAND,
             &format!("release workflow `{job_name}` dispatch version command"),
+        )?;
+    }
+
+    for job_name in COMPOSITION_ONLY_JOBS {
+        let job = workflow_job_section(release_workflow, job_name).ok_or_else(|| {
+            format!("release workflow: missing `{job_name}` job for composition-only check")
+        })?;
+        ensure_not_contains(
+            job,
+            REQUIRED_STEP,
+            &format!("release workflow `{job_name}` composition-only version step"),
+        )?;
+        ensure_not_contains(
+            job,
+            REQUIRED_COMMAND,
+            &format!("release workflow `{job_name}` composition-only version command"),
         )?;
     }
 
