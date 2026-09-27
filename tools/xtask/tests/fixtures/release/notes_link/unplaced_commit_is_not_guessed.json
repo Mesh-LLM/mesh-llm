@@ -1,0 +1,38 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--repo",
+    "o/r",
+    "--out-body",
+    "body.linked.md",
+    "--out-links",
+    "links.json"
+  ],
+  "code": 0,
+  "gh_argv": [
+    [
+      "api",
+      "repos/o/r/commits/aaa/pulls",
+      "--jq",
+      "[.[].number]"
+    ]
+  ],
+  "git_argv": [
+    [
+      "cwd={root}",
+      "log",
+      "--reverse",
+      "--format=%H%x1f%s%x1f%b%x1e",
+      "v1.0.0..v1.0.1"
+    ]
+  ],
+  "outputs": {
+    "body.linked.md": "## What's Changed\n* fix: repair a thing by @someone in https://github.com/o/r/pull/7\n\n**Full Changelog**: compare\n",
+    "links.json": "{}\n"
+  },
+  "stderr": "",
+  "stdout": "linked 0 commit(s) to a pull request through the API; recovered 0 entry(ies) GitHub did not credit (1 published)\n"
+}
