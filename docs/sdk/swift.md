@@ -56,8 +56,8 @@ await client.stop()
 
 ```swift
 try await client.start()
-let publicModels = try await client.inference.listModels()
 do {
+    let publicModels = try await client.inference.listModels()
     for try await event in client.inference.streamChatCompletions([
         "model": publicModels[0].id,
         "messages": [["role": "user", "content": "What is the weather?"]],

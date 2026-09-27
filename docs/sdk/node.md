@@ -42,8 +42,8 @@ await client.stop()
 
 ```js
 await client.start()
-const models = await client.inference.listModels()
 try {
+  const models = await client.inference.listModels()
   for await (const event of client.inference.streamChatCompletions({
     model: models[0].id,
     messages: [{ role: 'user', content: 'What is the weather?' }],
