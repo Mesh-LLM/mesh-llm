@@ -92,16 +92,24 @@ struct InstallState {
 
 /// Register the process termination-signal handlers once.
 ///
-/// Idempotent, and safe to call from any async context in the process. An
-/// incomplete installation returns an error so startup cannot advertise
-/// readiness before termination signals can be observed.
+/// Idempotent, and safe to call from any async context in the process. A
+/// genuine registration failure returns an error so startup cannot advertise
+/// readiness without the expected termination handlers. A slow forwarder is
+/// retained and allowed to finish in the background.
 pub(crate) fn install_shutdown_signals() -> io::Result<()> {
     let mut installation = INSTALL.lock().unwrap_or_else(PoisonError::into_inner);
     if DELIVERY.get().is_some() {
         return Ok(());
     }
-    if forwarder_is_still_starting(&mut installation) {
-        return Err(forwarder_start_timeout(FORWARDER_START_TIMEOUT));
+    match forwarder_start_state(&mut installation)? {
+        ForwarderStartState::Idle => {}
+        ForwarderStartState::Starting => {
+            tracing::warn!(
+                "termination-signal forwarder is still starting; retaining the late observer"
+            );
+            return Ok(());
+        }
+        ForwarderStartState::Installed => return Ok(()),
     }
     let delivery = installation
         .delivery
@@ -114,34 +122,34 @@ pub(crate) fn install_shutdown_signals() -> io::Result<()> {
     wait_for_forwarder_start(&mut installation, forwarder, started_rx)
 }
 
-fn forwarder_start_timeout(timeout: Duration) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::TimedOut,
-        format!("termination-signal forwarder did not start within {timeout:?}"),
-    )
+enum ForwarderStartState {
+    Idle,
+    Starting,
+    Installed,
 }
 
 /// A timed-out start can still finish later. Avoid spawning another observer
 /// until it reports success or failure.
-fn forwarder_is_still_starting(installation: &mut InstallState) -> bool {
+fn forwarder_start_state(installation: &mut InstallState) -> io::Result<ForwarderStartState> {
     let Some(started) = installation.starting.as_ref() else {
-        return false;
+        return Ok(ForwarderStartState::Idle);
     };
     match started.try_recv() {
-        Err(mpsc::TryRecvError::Empty) => true,
+        Err(mpsc::TryRecvError::Empty) => Ok(ForwarderStartState::Starting),
         Ok(Ok(())) => {
             installation.starting = None;
-            DELIVERY.get().is_some()
+            Ok(ForwarderStartState::Installed)
         }
         Ok(Err(cause)) => {
-            tracing::warn!(%cause, "the termination-signal forwarder could not start");
             installation.starting = None;
-            false
+            Err(io::Error::other(cause))
         }
         Err(mpsc::TryRecvError::Disconnected) => {
-            tracing::warn!("the termination-signal forwarder exited before registering");
             installation.starting = None;
-            false
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "termination-signal forwarder exited before registering its signal streams",
+            ))
         }
     }
 }
@@ -172,7 +180,11 @@ fn record_forwarder_start_result(
         )),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             installation.starting = Some(started);
-            Err(forwarder_start_timeout(timeout))
+            tracing::warn!(
+                ?timeout,
+                "timed out waiting for the termination-signal forwarder; retaining the late observer"
+            );
+            Ok(())
         }
     }
 }
@@ -253,8 +265,19 @@ fn run_shutdown_forwarder(
     runtime.block_on(async move {
         let signals = match TerminationSignals::register() {
             Ok(signals) => signals,
-            Err(error) => {
-                let _ = started.send(Err(format!("could not register signal streams: {error}")));
+            Err(failure) => {
+                let cause = format!("could not register signal streams: {}", failure.error);
+                let Some(signals) = failure.signals else {
+                    let _ = started.send(Err(cause));
+                    return;
+                };
+                // A successfully registered SIGINT listener must stay alive
+                // even when SIGTERM registration fails. Publish the partial
+                // observer for shutdown waiters, while reporting the failure
+                // to the startup path so it can refuse readiness.
+                let sender = delivery.sender.clone();
+                let _ = started.send(Err(cause));
+                forward_shutdown_signals(signals, &sender).await;
                 return;
             }
         };
@@ -281,23 +304,58 @@ struct TerminationSignals {
     #[cfg(unix)]
     interrupt: tokio::signal::unix::Signal,
     #[cfg(unix)]
-    terminate: tokio::signal::unix::Signal,
+    terminate: Option<tokio::signal::unix::Signal>,
     #[cfg(windows)]
     ctrl_c: tokio::signal::windows::CtrlC,
     #[cfg(windows)]
     ctrl_break: tokio::signal::windows::CtrlBreak,
 }
 
+struct SignalRegistrationFailure {
+    error: io::Error,
+    signals: Option<TerminationSignals>,
+}
+
+impl std::fmt::Debug for SignalRegistrationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SignalRegistrationFailure")
+            .field("error", &self.error)
+            .field("has_registered_signals", &self.signals.is_some())
+            .finish()
+    }
+}
+
+impl From<io::Error> for SignalRegistrationFailure {
+    fn from(error: io::Error) -> Self {
+        Self {
+            error,
+            signals: None,
+        }
+    }
+}
+
 impl TerminationSignals {
-    fn register() -> io::Result<Self> {
+    fn register() -> Result<Self, SignalRegistrationFailure> {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{SignalKind, signal};
             let interrupt = signal(SignalKind::interrupt())?;
-            let terminate = signal(SignalKind::terminate())?;
+            let terminate = match signal(SignalKind::terminate()) {
+                Ok(terminate) => terminate,
+                Err(error) => {
+                    return Err(SignalRegistrationFailure {
+                        error,
+                        signals: Some(Self {
+                            interrupt,
+                            terminate: None,
+                        }),
+                    });
+                }
+            };
             Ok(Self {
                 interrupt,
-                terminate,
+                terminate: Some(terminate),
             })
         }
         #[cfg(windows)]
@@ -320,9 +378,15 @@ impl TerminationSignals {
                 interrupt,
                 terminate,
             } = self;
-            tokio::select! {
-                _ = interrupt.recv() => "SIGINT",
-                _ = terminate.recv() => "SIGTERM",
+            match terminate.as_mut() {
+                Some(terminate) => tokio::select! {
+                    _ = interrupt.recv() => "SIGINT",
+                    _ = terminate.recv() => "SIGTERM",
+                },
+                None => {
+                    let _ = interrupt.recv().await;
+                    "SIGINT"
+                }
             }
         }
         #[cfg(windows)]
@@ -347,17 +411,32 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn startup_times_out_when_the_forwarder_has_not_registered() {
+    fn a_slow_forwarder_does_not_abort_startup() {
         let mut installation = InstallState {
             delivery: None,
             starting: None,
         };
         let (_started_tx, started_rx) = mpsc::channel();
-        let error =
-            record_forwarder_start_result(&mut installation, started_rx, Duration::from_millis(10))
-                .expect_err("startup must not continue without registered signal streams");
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        record_forwarder_start_result(&mut installation, started_rx, Duration::from_millis(10))
+            .expect("a slow forwarder must retain the previous warn-and-continue behavior");
         assert!(installation.starting.is_some(), "retain the late forwarder");
+    }
+
+    #[test]
+    fn a_late_success_is_not_reported_as_a_timeout() {
+        let mut installation = InstallState {
+            delivery: None,
+            starting: None,
+        };
+        let (started_tx, started_rx) = mpsc::channel();
+        started_tx.send(Ok(())).expect("the receiver is open");
+        installation.starting = Some(started_rx);
+
+        assert!(matches!(
+            forwarder_start_state(&mut installation).expect("late success is valid"),
+            ForwarderStartState::Installed
+        ));
+        assert!(installation.starting.is_none());
     }
 
     #[test]
@@ -373,6 +452,7 @@ mod tests {
         let error =
             record_forwarder_start_result(&mut installation, started_rx, Duration::from_millis(10))
                 .expect_err("startup must not continue after signal registration fails");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
         assert!(error.to_string().contains("could not register SIGTERM"));
         assert!(installation.starting.is_none());
     }
