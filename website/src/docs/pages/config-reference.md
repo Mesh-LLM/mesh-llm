@@ -148,14 +148,14 @@ depend on parsed llama.cpp log text. `runtime.lifecycle_log_parser` (or
 `MESH_LLM_LIFECYCLE_LOG_PARSER`) controls whether parsed native log summaries
 are forwarded as debug-level `LlamaNativeLog` output as well:
 
-- `auto` (default) is structured-first. A parsed category is forwarded only
-  when the loaded native runtime cannot report it through a confirmed
-  structured event family. `backend` needs device events, `kv_cache` needs KV
-  events, `memory` and `tokenizer` need model-load events v2, and `model`
-  needs model-load events v2 plus model-open events. None of these count
-  unless the runtime event reporter family is also confirmed and the event
-  system is on. A current runtime forwards nothing. An older runtime without
-  structured coverage keeps the parser as a compatibility fallback.
+- `auto` (default) is structured-first for categories that the loaded native
+  runtime can report. `backend` needs device events, `kv_cache` needs KV
+  events, and `memory` and `tokenizer` need model-load events v2. These count
+  only when the runtime event reporter family is also confirmed and the event
+  system is on. The `model` category always remains forwarded because
+  SafeTensors opens bypass native model-open events; event-capable GGUF opens
+  may therefore include both structured events and parsed model summaries.
+  Older runtimes keep the parser as a compatibility fallback.
 - `enabled` forwards every parsed category regardless of runtime
   capabilities. Use it for debugging; the output is debug-only.
 - `disabled` forwards no parsed categories.
