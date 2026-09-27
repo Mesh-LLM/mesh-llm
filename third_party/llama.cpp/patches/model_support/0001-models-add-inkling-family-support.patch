@@ -239,7 +239,7 @@ index 85db1d643..a8c7172b0 100644
      "JanusForConditionalGeneration": "januspro",
      "KimiK25ForConditionalGeneration": "kimivl",
 diff --git a/conversion/base.py b/conversion/base.py
-index 280ab5e50..4a1a7dd35 100644
+index 9fba5a86b054cea2d34f0bd035fe2a4325b67c46..4a1a7dd35 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
 @@ -562,6 +562,20 @@ class ModelBase:
@@ -2459,7 +2459,7 @@ index bd8408d5a..ce1cec84f 100644
      ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens
                            : (model.tok_embd          ? model.tok_embd
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 59b311dd2..18f39a7d9 100644
+index 3d15111fb304c38341aade0a9e44e09962f55c87..18f39a7d9 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
 @@ -7,6 +7,7 @@

@@ -86,14 +86,6 @@ const schemaPayload = {
       value_schema: { kind: 'integer' },
       control_behavior: { numeric: { min: 512, max: 32768, step: 512, unit: 'tokens' } }
     }),
-    setting('defaults.model_fit.kv_cache_policy', {
-      label: 'KV cache policy',
-      help: 'Select the KV cache profile used for memory planning.',
-      category_id: 'memory',
-      category_label: 'Memory',
-      renderer_id: 'kv-cache-policy',
-      value_schema: { kind: 'enum', values: ['auto', 'quality', 'balanced', 'saver'] }
-    }),
     setting('defaults.hardware.device', {
       label: 'Pinned GPU device',
       help: 'Only editable when GPU assignment is pinned.',
@@ -245,7 +237,7 @@ const controlStatePayload = {
 
 const initialConfig = {
   defaults: {
-    model_fit: { ctx_size: 4096, kv_cache_policy: 'balanced' },
+    model_fit: { ctx_size: 4096 },
     hardware: { device: 'cuda:0' },
     speculative: { mode: 'disabled', draft_min_tokens: 4 },
     multimodal: { mmproj_path: './existing/mmproj.gguf', mmproj_url: 'https://example.com/mmproj.gguf' }
@@ -504,9 +496,6 @@ test.describe('schema-driven configuration controls', () => {
     await expect(contextSize).toHaveAttribute('aria-valuemax', '262144')
     await expect(contextSize).toHaveAttribute('aria-valuenow', '4096')
 
-    await expect(page.getByRole('radio', { name: 'balanced' })).toBeChecked()
-    await expect(page.getByText('K q8_0 · V q4_0')).toBeVisible()
-
     await expect(page.getByLabel('GPU assignment').getByRole('radio', { name: 'auto' })).toBeChecked()
     await expect(page.getByRole('textbox', { name: 'Pinned GPU device' })).toBeDisabled()
     await expect(page.getByText('Only editable when GPU assignment is pinned.')).toBeVisible()
@@ -582,7 +571,6 @@ test.describe('schema-driven configuration controls', () => {
     const contextSize = page.getByRole('slider', { name: 'Context size' })
     await page.getByRole('button', { name: '8K', exact: true }).click()
     await expect(contextSize).toHaveAttribute('aria-valuenow', '8192')
-    await page.getByLabel('KV cache policy').getByRole('radio', { name: 'quality' }).click()
     await page.getByLabel('GPU assignment').getByRole('radio', { name: 'pinned' }).click()
     await expect(page.getByRole('textbox', { name: 'Pinned GPU device' })).toBeEnabled()
     await page.getByRole('textbox', { name: 'Pinned GPU device' }).fill('cuda:1')
@@ -590,7 +578,6 @@ test.describe('schema-driven configuration controls', () => {
     await page.getByRole('tab', { name: 'TOML Output' }).click()
     const toml = page.getByRole('textbox', { name: 'Configuration TOML source' })
     await expect(toml).toHaveValue(/ctx_size = 8192/)
-    await expect(toml).toHaveValue(/kv_cache_policy = "quality"/)
     await expect(toml).toHaveValue(/assignment = "pinned"/)
     await expect(toml).toHaveValue(/gpu_id = "cuda:1"/)
     await expect(page.getByText('Generated TOML validates against mesh-llm config rules.')).toBeVisible()
@@ -618,7 +605,6 @@ test.describe('schema-driven configuration controls', () => {
     expect(applyRequest.endpoint).toBe('local-owner')
     expect(applyRequest.expected_revision).toBe(7)
     expect(applyRequest.config.defaults?.model_fit?.ctx_size).toBe(8192)
-    expect(applyRequest.config.defaults?.model_fit?.kv_cache_policy).toBe('quality')
     expect(applyRequest.config.gpu?.assignment).toBe('pinned')
     expect(applyRequest.config.defaults?.hardware?.device).toBe('cuda:1')
     expect(applyRequest.config.plugin?.[0]?.settings?.endpoint).toBe('https://blackboard.local/api')
@@ -631,7 +617,7 @@ test.describe('schema-driven configuration controls', () => {
     await expect(page.getByRole('heading', { name: 'Configuration' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
     await expect(page.getByRole('slider', { name: 'Context size' })).toBeVisible()
-    await expect(page.getByRole('radio', { name: 'balanced' })).toBeVisible()
+    await expect(page.getByLabel('GPU assignment').getByRole('radio', { name: 'auto' })).toBeVisible()
 
     await expectNoHorizontalOverflow(page)
     await testInfo.attach('configuration-controls-mobile', {

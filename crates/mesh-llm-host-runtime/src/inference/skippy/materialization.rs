@@ -39,7 +39,7 @@ pub fn materialized_stage_cache_dir() -> PathBuf {
     crate::models::mesh_llm_cache_dir().join("skippy-stages")
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StagePackageInfo {
     pub package_ref: String,
     pub package_dir: PathBuf,

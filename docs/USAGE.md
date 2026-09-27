@@ -461,14 +461,9 @@ ubatch           = 128           # n_ubatch — micro-batch within a batch
 cache_type_k     = "auto"        # KV key dtype: auto f16 f32 bf16 q8_0 q4_0 …
 cache_type_v     = "auto"        # KV value dtype (same enum)
 flash_attention  = "auto"        # auto on off
-kv_cache_policy  = "balanced"    # macro preset: auto quality balanced saver
-                                 #   quality  → f16/f16, no forced RAM cap
-                                 #   balanced → preserve runtime defaults
-                                 #   saver    → low-memory dtypes + offload
-                                 # explicit cache_type_k/v always wins over preset
 kv_offload       = "auto"        # bool or "auto" — KV residency / offload policy
 kv_unified       = "auto"        # bool or "auto" — unified KV layout (schema-reserved)
-cache_ram_mib    = 0             # byte cap for KV cache in MiB; 0 = no cap (schema-reserved)
+cache_ram_mib    = 0             # host-RAM L2 budget in MiB; 0 = disabled; requires L3
 cache_idle_slots = 0             # idle slot retention count (schema-reserved)
 prompt_cache     = "auto"        # bool or "auto" — reuse previous prompt KV
 swa_full         = false         # sliding-window attention (model-family specific)
@@ -654,7 +649,7 @@ ignore_eos = false
 # Reasoning (for thinking models)
 reasoning_format  = "auto"   # auto none deepseek deepseek-legacy hidden
 reasoning_enabled = "auto"   # bool or "auto" / "on" / "off"
-reasoning_budget  = "auto"   # integer token budget, or "auto"
+reasoning_budget  = "auto"   # integer, low/medium/high, auto, or unrestricted
 
 # Chat template (leave unset to use model's embedded template)
 # chat_template      = "chatml"
@@ -670,6 +665,17 @@ reasoning_budget  = "auto"   # integer token budget, or "auto"
 #   backend_sampling    — raw backend sampling passthrough
 #   grammar, json_schema, logprobs
 #   prefill_assistant, chat_template_kwargs
+
+# When max_tokens remains unset, Mesh caps output at min(8192, context left
+# after the prompt). For reasoning-capable chat templates, an omitted/auto
+# reasoning budget resolves to min(4096, half the effective output cap).
+# low/medium/high map to 1024/4096/8192 and also clamp to half the output cap.
+# Numeric budgets are explicit; 0 ends thinking immediately and unrestricted
+# removes only the reasoning cap. Explicit request fields override model config,
+# which overrides package profiles, which override these fallbacks.
+# Generation phase diagnostics report the selected package profile and a
+# generation_default_sources map labeling every supported field as request,
+# deployment, package, or fallback.
 
 # --- Multimodal ----------------------------------------------------------
 [defaults.multimodal]
@@ -720,7 +726,6 @@ batch           = 1024
 ubatch           = 256
 cache_type_k    = "f16"
 cache_type_v    = "f16"
-kv_cache_policy = "quality"    # overrides global "balanced"
 flash_attention  = "on"
 prompt_cache     = true
 
@@ -831,7 +836,9 @@ fit_target_mib = 20480
 
 [models.model_fit]
 ctx_size        = 8192
-kv_cache_policy = "saver"
+cache_type_k    = "q8_0"
+cache_type_v    = "q8_0"
+kv_offload      = true
 
 [models.throughput]
 parallel = 2

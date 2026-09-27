@@ -1,0 +1,19 @@
+{
+  "selection": {
+    "default": "recommended"
+  },
+  "profiles": {
+    "recommended": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 64,
+      "provenance": {
+        "source_repo": "meta-models/Muse-Glimmer-30B",
+        "revision": "a4e59da52a7bc87ae7251dd5545c0dd437c44b68",
+        "file": "README.md",
+        "section": "Best Practices / Sampling Parameters",
+        "url": "https://huggingface.co/meta-models/Muse-Glimmer-30B/blob/a4e59da52a7bc87ae7251dd5545c0dd437c44b68/README.md"
+      }
+    }
+  }
+}

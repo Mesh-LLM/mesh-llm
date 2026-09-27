@@ -29,6 +29,13 @@ pub trait PaymentsEngine: Send + Sync + 'static {
 /// Opens (lazily, at most once) this node's engine.
 pub type EngineSource = Arc<dyn Fn() -> BoxFuture<Result<Arc<dyn PaymentsEngine>>> + Send + Sync>;
 
+/// Advertised seller prices, read without opening an engine the node does not
+/// have. `None` means this node has no payments state to advertise. The host
+/// supplies this alongside `EngineSource` so a builtin provider can answer
+/// `payments.v1` pricing without creating a ledger to read an empty table.
+pub type AdvertisedPrices =
+    Arc<dyn Fn() -> BoxFuture<Result<Option<BTreeMap<String, Pricing>>>> + Send + Sync>;
+
 /// Supplied by the embedder that links a payments engine.
 pub trait PaymentsEngineProvider: Send + Sync + 'static {
     /// Open the engine over `directory`, using `wallet` for wallet access.
@@ -44,6 +51,7 @@ pub trait PaymentsEngineProvider: Send + Sync + 'static {
         plugin_name: &str,
         version: &str,
         source: EngineSource,
+        prices: AdvertisedPrices,
         stream: mesh_llm_plugin::LocalStream,
     ) -> BoxFuture<Result<()>>;
 }

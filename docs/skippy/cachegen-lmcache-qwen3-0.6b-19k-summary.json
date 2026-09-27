@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "decision": "quality-pass-latency-stop",
+  "date": "2026-09-11",
+  "commit": "4bf0865be6e7a13dbf7159b0fb6e6c41f29db72c",
+  "reference": {
+    "implementation": "LMCache CacheGen",
+    "revision": "b5d109ea99a89b4d8a670ee4fc2e8cb76411ee5c",
+    "license": "Apache-2.0"
+  },
+  "hardware": {
+    "model": "Mac Studio",
+    "chip": "Apple M1 Ultra",
+    "memory_gib": 128,
+    "runtime_backend": "Metal",
+    "codec_backend": "scalar Rust CPU"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-0.6B-GGUF:Q8_0",
+    "sha256": "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735",
+    "layer_end": 28
+  },
+  "workload": {
+    "prefix_tokens": 19000,
+    "continuation_steps": 64,
+    "ctx_size": 19200,
+    "cache_types": {
+      "k": "f16",
+      "v": "f16"
+    },
+    "chunk_rows": 256
+  },
+  "thresholds": {
+    "minimum_token_agreement": 0.95,
+    "maximum_p99_decode_regression": 0.05,
+    "restore_to_first_token_must_beat_native": true
+  },
+  "metrics": {
+    "native_storage_bytes": 2179072000,
+    "cachegen_storage_bytes": 446903003,
+    "compression_ratio": 0.20508868132856556,
+    "tile_count": 4200,
+    "encode_ms": 20732.857249999997,
+    "decode_ms": 41285.729709,
+    "native_write_ms": 2402.914834,
+    "cachegen_write_ms": 693.576666,
+    "native_persist_ms": 2402.914834,
+    "cachegen_persist_ms": 21426.433915999998,
+    "native_read_ms": 281.062542,
+    "cachegen_read_ms": 58.829709,
+    "native_import_ms": 60.07575,
+    "cachegen_import_ms": 57.972333,
+    "native_ttft_ms": 374.379459,
+    "cachegen_ttft_ms": 41411.126585,
+    "native_decode_tokens_per_second": 119.84529650055929,
+    "cachegen_decode_tokens_per_second": 124.166031091795,
+    "native_p99_decode_ms": 33.241167000000004,
+    "cachegen_p99_decode_ms": 8.594834,
+    "p99_decode_regression": -0.7414400643635647,
+    "matching_tokens": 64,
+    "token_agreement": 1.0,
+    "mean_entropy_abs_drift": 0.34619530792406294,
+    "max_entropy_abs_drift": 2.1676456928253174,
+    "mean_top_logprob_abs_drift": 0.06626987643903703,
+    "max_top_logprob_abs_drift": 0.4230744540691376,
+    "estimated_peak_codec_working_bytes": 2627965638
+  },
+  "failure_reasons": [
+    "restore-to-first-token did not beat native (41411.127 ms >= 374.379 ms)"
+  ],
+  "notes": [
+    "The 64/64 agreement result clears the predeclared 95% quality threshold.",
+    "The scalar CPU codec is retained as a deterministic oracle; request-path promotion requires a parallel device implementation to beat native restore-to-first-token.",
+    "Filesystem writes used sync_all; same-run reads may be page-cache warm."
+  ]
+}

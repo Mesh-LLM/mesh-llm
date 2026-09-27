@@ -26,7 +26,7 @@ pub const STAGE_ACTIVATION_PART_OPTIONAL: u32 = 1 << 0;
 pub const READY_MAGIC: i32 = 0x5352_4459; // "SRDY"
 pub const LLAMA_TOKEN_NULL: i32 = -1;
 pub const STAGE_STATE_HEADER_BYTES: usize = 10 * 4;
-pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 27 * 4;
+pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 28 * 4;
 pub const STAGE_LOGIT_BIAS_WIRE_BYTES: usize = 4 + 4;
 pub const STAGE_WIRE_FIXED_HEADER_BYTES: usize = 6 * 4 + STAGE_STATE_HEADER_BYTES + 2 * 8;
 
@@ -281,6 +281,7 @@ pub struct StageSamplingConfig {
     pub mirostat_entropy: f32,
     pub mirostat_learning_rate: f32,
     pub samplers: Vec<String>,
+    pub reasoning_budget_tokens: i32,
     pub ignore_eos: bool,
 }
 
@@ -328,6 +329,7 @@ impl Default for StageSamplingConfig {
                 "xtc".into(),
                 "temperature".into(),
             ],
+            reasoning_budget_tokens: -1,
             ignore_eos: false,
         }
     }

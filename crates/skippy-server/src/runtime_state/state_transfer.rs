@@ -119,6 +119,22 @@ impl RuntimeState {
         import_result
     }
 
+    /// Finalize a session position after page imports for a model with no
+    /// recurrent memory. Pure-attention state has no recurrent snapshot, so
+    /// the tracked token count follows the native position directly.
+    pub fn set_session_position(&mut self, session_id: &str, token_count: u64) -> Result<()> {
+        let result = self.session(session_id)?.set_position(token_count);
+        if result.is_ok() {
+            record_restored_session_token_count(
+                &mut self.session_token_counts,
+                session_id,
+                token_count,
+            );
+        }
+        self.notify_import_outcome(&result);
+        result
+    }
+
     /// Reports the real result of any runtime-state export call (`export_state`,
     /// `export_full_state`, `export_recurrent_state`) to the attached observer.
     /// Never called before the native call returns, so success is only ever

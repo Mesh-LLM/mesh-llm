@@ -97,6 +97,8 @@ pub(crate) fn write_test_package_v2_fixture(
             entries: Vec::new(),
         },
         sidecars: Vec::new(),
+        publisher_metadata: Vec::new(),
+        publisher_defaults: None,
         generation: None,
         native_abi_version: format!(
             "{}.{}.{}",
@@ -248,7 +250,7 @@ pub(crate) fn is_package_v2_ref(package_ref: &str) -> bool {
         == Some(u64::from(skippy_package_format::PACKAGE_SCHEMA_VERSION))
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SkippyPackageIdentity {
     pub package_ref: String,
     pub manifest_sha256: String,
@@ -261,6 +263,7 @@ pub struct SkippyPackageIdentity {
     pub activation_width: u32,
     pub tensor_count: u64,
     pub generation: Option<PackageGenerationInfo>,
+    pub publisher_defaults: Option<skippy_package_format::PublisherModelDefaults>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -396,6 +399,7 @@ pub fn identity_from_package_v2(package_dir: &Path) -> Result<SkippyPackageIdent
         activation_width,
         tensor_count,
         generation,
+        publisher_defaults: manifest.publisher_defaults,
     })
 }
 
@@ -531,6 +535,7 @@ fn package_v2_generation_info(
     generation: &skippy_package_format::Generation,
 ) -> PackageGenerationInfo {
     PackageGenerationInfo {
+        request_defaults: generation.request_defaults.clone(),
         speculative_decoding: generation.speculative_decoding.as_ref().map(|speculative| {
             skippy_runtime::package::PackageSpeculativeDecodingInfo {
                 default: speculative.default.clone(),
@@ -831,6 +836,7 @@ fn synthetic_safetensors_package(
         activation_width,
         tensor_count,
         generation: None,
+        publisher_defaults: None,
     })
 }
 
@@ -926,6 +932,7 @@ fn synthetic_gguf_package_from_source_files(
         activation_width: compact.embedding_size,
         tensor_count,
         generation: None,
+        publisher_defaults: None,
     };
     super::local_source::register_content_addressed_identity(
         &identity,
@@ -1127,6 +1134,8 @@ pub(crate) fn direct_gguf_planning_manifest_from_identity(
         artifact_catalog: ArtifactCatalog { entries: artifacts },
         tensor_catalog: TensorCatalog { entries: tensors },
         sidecars: Vec::new(),
+        publisher_metadata: Vec::new(),
+        publisher_defaults: None,
         generation: None,
         native_abi_version: format!(
             "{}.{}.{}",
@@ -1609,6 +1618,7 @@ fn identity_from_package_v2_metadata(
         activation_width,
         tensor_count,
         generation: manifest.generation.as_ref().map(package_v2_generation_info),
+        publisher_defaults: manifest.publisher_defaults,
     })
 }
 
@@ -1834,6 +1844,8 @@ mod tests {
                 entries: vec![tensor("first", None, 10), tensor("second", None, 20)],
             },
             sidecars: Vec::new(),
+            publisher_metadata: Vec::new(),
+            publisher_defaults: None,
             generation: None,
             native_abi_version: String::new(),
             generator_version: String::new(),
@@ -1893,6 +1905,8 @@ mod tests {
                 }],
             },
             sidecars: Vec::new(),
+            publisher_metadata: Vec::new(),
+            publisher_defaults: None,
             generation,
             native_abi_version: String::new(),
             generator_version: String::new(),
@@ -1912,6 +1926,7 @@ mod tests {
         let manifest = manifest_with_mtp_tensor(
             "blk.40.nextn.eh_proj.weight",
             Some(skippy_package_format::Generation {
+                request_defaults: None,
                 speculative_decoding: None,
             }),
         );
@@ -1924,6 +1939,7 @@ mod tests {
         let manifest = manifest_with_mtp_tensor(
             "blk.40.nextn.eh_proj.weight",
             Some(skippy_package_format::Generation {
+                request_defaults: None,
                 speculative_decoding: Some(skippy_package_format::SpeculativeDecoding {
                     default: "mtp".to_string(),
                     proposers: Default::default(),

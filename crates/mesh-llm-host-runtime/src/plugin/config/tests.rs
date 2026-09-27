@@ -1104,7 +1104,6 @@ version = 1
 
 [defaults.model_fit]
 ctx_size = 4096
-kv_cache_policy = "balanced"
 
 [defaults.hardware]
 gpu_layers = 10
@@ -1157,7 +1156,6 @@ assignment = "pinned"
 ctx_size = 8192
 batch = 512
 ubatch = 128
-kv_cache_policy = "auto"
 cache_type_k = "auto"
 cache_type_v = "auto"
 kv_offload = "auto"

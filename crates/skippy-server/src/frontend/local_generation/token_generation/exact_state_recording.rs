@@ -51,11 +51,13 @@ impl StageOpenAiBackend {
             super::capture_trace::POST_DECODE_GATES_PASSED
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         }
+        let write_through_l3 = kv.full_exact_state_writes_through_l3(checkpoint_tokens.len());
         let scheduled = self.enqueue_exact_state_record_at_tokens(
             session_id,
             request.ids,
             checkpoint_tokens,
             "post_decode_checkpoint",
+            write_through_l3,
         );
         #[cfg(test)]
         if !scheduled {
@@ -71,6 +73,7 @@ impl StageOpenAiBackend {
         ids: &OpenAiGenerationIds,
         checkpoint_tokens: Vec<i32>,
         decision_prefix: &'static str,
+        write_through_l3: bool,
     ) -> bool {
         let scheduler_backend = self.clone();
         let scheduler_session_id = session_id.to_string();
@@ -106,6 +109,7 @@ impl StageOpenAiBackend {
                     &scheduler_ids,
                     &checkpoint_tokens,
                     decision_prefix,
+                    write_through_l3,
                 );
             },
         );
@@ -144,6 +148,7 @@ impl StageOpenAiBackend {
         ids: &OpenAiGenerationIds,
         checkpoint_tokens: &[i32],
         decision_prefix: &str,
+        write_through_l3: bool,
     ) -> bool {
         let Some(kv) = self.kv.as_ref() else {
             return false;
@@ -232,7 +237,18 @@ impl StageOpenAiBackend {
         } else {
             crate::kv_integration::CaptureAdmission::BestEffort
         };
-        match kv.record_exact_state(runtime, session_id, &identity, admission) {
+        let cold_prefill_cost = self
+            .generation_service_estimator
+            .estimated_prefill_ms(checkpoint_tokens.len());
+        let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
+        match kv.record_exact_state_with_cost_and_durability(
+            runtime,
+            session_id,
+            &identity,
+            admission,
+            l3_cost,
+            write_through_l3,
+        ) {
             Ok(Some(record)) => {
                 let mut attrs = self.openai_attrs(ids);
                 attrs.insert(

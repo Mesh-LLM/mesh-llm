@@ -1,0 +1,24 @@
+{
+  "selection": {
+    "default": "thinking",
+    "reasoning_enabled": "thinking"
+  },
+  "profiles": {
+    "thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "reasoning": {
+        "enabled": "on",
+        "budget": "auto"
+      },
+      "provenance": {
+        "source_repo": "ornith-ai/Ornith-1.5-35B-A3B",
+        "revision": "10fbf86fed7ecee4a061f8b499a618f46001cac1",
+        "file": "README.md",
+        "section": "Recommended Settings",
+        "url": "https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B/blob/10fbf86fed7ecee4a061f8b499a618f46001cac1/README.md"
+      }
+    }
+  }
+}

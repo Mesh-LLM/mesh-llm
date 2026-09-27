@@ -7,6 +7,7 @@ pub use activation::{
     activation_frame_wire_bytes, decode_activation_frame, decode_raw_activation_frame,
     encode_activation_frame, encode_raw_activation_frame, select_lossless_activation_codec,
 };
+pub use activation_codec::f16_bits::{f16_bits_to_f32, f32_to_f16_bits};
 pub use codec::{
     read_stage_message, read_stage_message_for_codec, read_stage_message_for_codec_policy,
     recv_ready, recv_reply, send_ready, send_reply_ack, send_reply_ack_with_stats,
@@ -689,6 +690,7 @@ mod tests {
                 temperature: 0.8,
                 top_p: 0.9,
                 top_k: 40,
+                reasoning_budget_tokens: 1024,
                 ..StageSamplingConfig::default()
             }),
             Some("{\"grammar\":\"root ::= \\\"x\\\"\"}".to_string()),
@@ -712,6 +714,7 @@ mod tests {
         let sampling = decoded.sampling.expect("sampling extension round-tripped");
         assert_eq!(sampling.seed, 42);
         assert_eq!(sampling.top_k, 40);
+        assert_eq!(sampling.reasoning_budget_tokens, 1024);
     }
 
     #[test]
@@ -919,7 +922,7 @@ mod tests {
         write_stage_message(&mut bytes, &message).unwrap();
 
         assert_eq!(STAGE_STATE_HEADER_BYTES, 40);
-        assert_eq!(STAGE_SAMPLING_CONFIG_BASE_BYTES, 108);
+        assert_eq!(STAGE_SAMPLING_CONFIG_BASE_BYTES, 112);
         assert_eq!(STAGE_WIRE_FIXED_HEADER_BYTES, 80);
         assert_eq!(
             bytes.len(),

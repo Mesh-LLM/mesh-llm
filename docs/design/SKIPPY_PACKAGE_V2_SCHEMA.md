@@ -35,7 +35,7 @@ The serialized `model-package.json` root contains:
 - `package_id`: canonical `sha256:<lowercase-hex>` identity;
 - source and model identities;
 - an artifact catalog;
-- optional projector and generation sidecars;
+- optional projector sidecars, typed generation data, and publisher metadata;
 - native ABI and package-generator versions;
 - creation time for provenance.
 
@@ -53,8 +53,8 @@ package.
 The package id is computed by the shared crate as follows:
 
 1. Clone the manifest and replace `package_id` with the empty string.
-2. Sort source files by path, artifacts by id, and sidecars by
-   `(kind, name, artifact_id)`.
+2. Sort source files by path, artifacts by id, sidecars by
+   `(kind, name, artifact_id)`, and publisher metadata by its typed fields.
 3. Serialize the normalized root with the shared Rust schema.
 4. Hash the serialized bytes with SHA-256 and prefix the lowercase digest with
    `sha256:`.
@@ -92,7 +92,7 @@ keys:
 
 Each locator array has exactly one entry per carrier tensor and follows GGUF
 tensor-directory order. Payload artifacts are indexed by artifact id after
-excluding the metadata carrier and sidecars. The runtime rejects an unknown
+excluding the metadata carrier, loader sidecars, and publisher metadata. The runtime rejects an unknown
 locator version, wrong array type or length, invalid part index, invalid
 alignment, or an extent outside the declared artifact size.
 
@@ -125,6 +125,29 @@ Multiple projectors therefore require stable distinct names; the package writer
 uses each projector's deterministic artifact id as its name. Generation remains
 a typed manifest field rather than a generic sidecar.
 
+## Publisher Metadata and Live KV Defaults
+
+Publisher files are package-level metadata rather than loader sidecars. The
+writer accepts `config.json`, `generation_config.json`,
+`tokenizer_config.json`, `chat_template.jinja`, and `hf_quant_config.json` via
+repeatable `--publisher-metadata` arguments and copies them under `metadata/`.
+Each entry records its semantic role, artifact id, source repository, immutable
+source revision, and source path; the artifact catalog binds its size and
+SHA-256 digest.
+
+The writer derives only typed defaults used by runtime policy. It records the
+publisher compute dtype and any explicit KV-cache dtype together with the
+artifact id and JSON path that supplied the value. Common architecture geometry
+in `config.json` is compared with authoritative GGUF metadata, and a conflict
+fails package creation before payload artifacts are emitted. Weight
+quantization and GGUF size never imply a live KV dtype.
+
+Runtime precedence is explicit user K/V type, then the package's validated KV
+declaration, then its compute dtype mapped to a supported live type, then
+F16/F16. BF16 maps to F16 until BF16 live KV is qualified; FP8 declarations
+also fall back to F16 until the embedded runtime exposes a qualified FP8 type.
+Packages without publisher metadata remain readable and use F16/F16.
+
 ## Generation
 
 `generation` is an optional typed manifest field, not a sidecar. It sits at the
@@ -133,12 +156,12 @@ if it appears in the sidecar list. When the source has no native
 speculative-decoding support the field is omitted entirely (it is not
 serialized as `null`), so a non-MTP package carries no `generation` key.
 
-The authoritative type is `Generation` in `crates/skippy-package-format`. In the
-v0.76.1 schema it is `deny_unknown_fields` with a single sub-field,
-`speculative_decoding`. `policy` and `thresholds` are not part of the v0.76.1
-wire and are rejected at parse time; they belong to the
-model-generation-defaults change (PR #1878) and the writer must not emit them
-in this release.
+The authoritative type is `Generation` in `crates/skippy-package-format`. It is
+`deny_unknown_fields` with two sub-fields: `speculative_decoding` and the
+optional `request_defaults` publisher profile set described below. `policy` and
+`thresholds` are not part of this manifest field and are rejected at parse time;
+they belong to the packaging policy manifest, and the writer must not emit them
+here.
 
 `speculative_decoding` is a `SpeculativeDecoding` value:
 
@@ -182,6 +205,43 @@ empty or absent. Unknown `"type"` values and unknown fields inside a strategy,
 proposer, or `window_policy` are rejected (`deny_unknown_fields`), as are the
 `policy` and `thresholds` keys. Because `generation` is hashed into the package
 identity, adding or changing it changes the `package_id`.
+
+## Generation request defaults
+
+`generation.request_defaults` carries reviewed publisher recommendations for
+the package's exact model revision. It contains named profiles plus a selection
+record with a default profile and optional reasoning-enabled and
+reasoning-disabled profiles. A profile may declare the portable sampling fields
+supported by Mesh, `max_tokens`, and reasoning enablement, output format, and a
+numeric or semantic budget. Unknown values are omitted.
+
+Every profile includes provenance: official source repository, immutable
+40-character Git commit SHA, file, section, and a URL containing that exact SHA
+as a distinct path or query segment. The runtime consumes this typed package
+data and never downloads or parses model cards.
+
+Request fields resolve independently in this order:
+
+1. explicit request value;
+2. deployment or operator model default;
+3. selected package profile;
+4. Mesh fallback.
+
+When all higher layers omit limits, total output is capped at the lesser of
+8,192 tokens and the context remaining after the prompt. Reasoning receives the
+lesser of 4,096 tokens and half the effective output cap. Semantic reasoning
+levels map to 1,024 (`low`), 4,096 (`medium`), and 8,192 (`high`), then clamp to
+half the output cap. Numeric values are explicit and may exceed those
+interactive fallbacks. `auto` selects the Mesh fallback, so enabled reasoning
+resolves to the lesser of 4,096 tokens and half the effective output cap. Zero
+closes reasoning immediately; `unrestricted` disables the reasoning-only cap
+while retaining the total-output limit.
+
+The resolved numeric budget travels through the public Skippy sampling ABI.
+When the chat parser recognizes thinking start and end markers, llama.cpp forces
+a valid terminator at the cap and generation continues with the visible answer.
+Without recognized boundaries, Mesh skips the reasoning sampler and still
+enforces the finite total-output cap.
 
 ## Loading Rule
 

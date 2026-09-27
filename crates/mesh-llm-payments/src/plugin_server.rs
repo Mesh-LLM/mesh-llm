@@ -9,11 +9,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use mesh_llm_payments_types::contract::{
-    ArrivalResponse, AuthorizeRequest, CancelRequest, Empty, FinishRequest, IdRequest,
-    InvoiceRequest, OpError, OutputReceivableResponse, PayInputRequest, RecordDeliveredRequest,
-    RoutingBudgetRequest, ServeBeginRequest, ServeFinishRequest, ServeInputInvoiceRequest,
-    SettleOutputRequest,
+    AdvertisedPricing, ArrivalResponse, AuthorizeRequest, CancelRequest, Empty, FinishRequest,
+    IdRequest, InvoiceRequest, OpError, OutputReceivableResponse, PayInputRequest,
+    RecordDeliveredRequest, RoutingBudgetRequest, ServeBeginRequest, ServeFinishRequest,
+    ServeInputInvoiceRequest, SettleOutputRequest,
 };
+use mesh_llm_payments_types::engine::AdvertisedPrices;
 use mesh_llm_plugin::{
     InternalRpcPlugin, InternalRpcPluginBuilder, OperationRouter, PluginMetadata, PluginResult,
     capability, operation_with_schema, plugin_server_info,
@@ -71,6 +72,7 @@ impl mesh_llm_payments_types::engine::PaymentsEngineProvider for EngineProvider 
         plugin_name: &str,
         version: &str,
         source: mesh_llm_payments_types::engine::EngineSource,
+        prices: AdvertisedPrices,
         stream: mesh_llm_plugin::LocalStream,
     ) -> mesh_llm_payments_types::engine::BoxFuture<anyhow::Result<()>> {
         let source: ServiceSource = Arc::new(move || {
@@ -83,7 +85,7 @@ impl mesh_llm_payments_types::engine::PaymentsEngineProvider for EngineProvider 
                     .map_err(|_| anyhow::anyhow!("payments engine is not this provider's"))
             })
         });
-        let plugin = payments_plugin(plugin_name, version, source);
+        let plugin = payments_plugin(plugin_name, version, source, prices);
         Box::pin(mesh_llm_plugin::PluginRuntime::run_with_stream(
             plugin, stream,
         ))
@@ -95,6 +97,7 @@ pub fn payments_plugin(
     plugin_name: impl Into<String>,
     version: impl Into<String>,
     source: ServiceSource,
+    prices: AdvertisedPrices,
 ) -> InternalRpcPlugin {
     let version = version.into();
     InternalRpcPluginBuilder::new(PluginMetadata::new(
@@ -110,12 +113,34 @@ pub fn payments_plugin(
     ))
     .with_capabilities(vec![CAPABILITY.into()])
     .with_manifest(mesh_llm_plugin::plugin_manifest![capability(CAPABILITY)])
-    .with_operation_router(operation_router(source))
+    .with_operation_router(operation_router(source, prices))
     .build()
 }
 
-fn operation_router(source: ServiceSource) -> OperationRouter {
+fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> OperationRouter {
     let mut router = OperationRouter::new();
+    // Answered from the host-supplied price read, so a node that has never had
+    // payments state advertises nothing without opening an engine.
+    {
+        let prices = Arc::clone(&prices);
+        router.add_raw(
+            operation_with_schema(
+                ops::PRICING,
+                "Advertised seller prices and whether this provider has payments state.",
+                serde_json::Map::new(),
+            ),
+            move |_request, _context| {
+                let prices = Arc::clone(&prices);
+                Box::pin(async move {
+                    let advertised = prices().await?;
+                    op_result(Ok(AdvertisedPricing {
+                        configured: advertised.is_some(),
+                        prices: advertised.unwrap_or_default(),
+                    }))
+                })
+            },
+        );
+    }
     add_op(
         &mut router,
         &source,

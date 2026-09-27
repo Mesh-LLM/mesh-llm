@@ -53,7 +53,7 @@ fn built_in_schema_preserves_union_typed_fields() {
     );
     assert_eq!(
         schema_value("models.<model-ref>.request_defaults.reasoning_budget"),
-        integer_or_string_enum(["auto", "low", "medium", "high"])
+        integer_or_string_enum(["auto", "low", "medium", "high", "unrestricted"])
     );
 }
 
@@ -62,7 +62,6 @@ fn built_in_schema_marks_curated_defaults_user_visible() {
     for path in [
         "defaults.throughput.threads",
         "defaults.throughput.parallel",
-        "defaults.model_fit.kv_cache_policy",
         "defaults.request_defaults.temperature",
         "defaults.skippy.binary_stage_transport",
         "defaults.multimodal.mmproj_offload",

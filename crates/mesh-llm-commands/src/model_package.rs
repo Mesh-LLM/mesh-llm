@@ -7,7 +7,9 @@ use ::model_package::jobs::HfJobsClient;
 use ::model_package::permissions;
 use ::model_package::prepare::{self, DiscoveredQuant, PrepareJob, PrepareParams};
 use ::model_package::script;
+use mesh_llm_events::OutputEvent;
 use serde_json::json;
+use std::path::Path;
 
 /// All CLI arguments for `model-package`, bundled to avoid too-many-arguments.
 pub struct ModelPrepareArgs<'a> {
@@ -15,6 +17,7 @@ pub struct ModelPrepareArgs<'a> {
     pub quant: Option<&'a str>,
     pub target: Option<&'a str>,
     pub model_id: Option<&'a str>,
+    pub generation_defaults: Option<&'a Path>,
     pub flavor: &'a str,
     pub timeout: &'a str,
     pub mesh_llm_ref: &'a str,
@@ -37,6 +40,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
         quant,
         target,
         model_id,
+        generation_defaults,
         flavor,
         timeout,
         mesh_llm_ref,
@@ -126,6 +130,18 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     // Parse timeout.
     let timeout_seconds = parse_timeout(timeout)?;
 
+    let generation_defaults = generation_defaults
+        .map(|path| {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("read generation defaults {}", path.display()))?;
+            let defaults: skippy_package_format::GenerationRequestDefaults =
+                serde_json::from_slice(&bytes)
+                    .with_context(|| format!("parse generation defaults {}", path.display()))?;
+            defaults.validate().map_err(anyhow::Error::new)?;
+            Ok::<_, anyhow::Error>(defaults)
+        })
+        .transpose()?;
+
     // Resolve source, target, and build job spec.
     writeln!(err, "🔍 Resolving source...")?;
     let params = PrepareParams {
@@ -134,6 +150,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
         quant: source_quant.map(|s| s.to_string()),
         target: target.map(|s| s.to_string()),
         model_id: model_id.map(|s| s.to_string()),
+        generation_defaults,
         flavor: flavor.to_string(),
         timeout_seconds,
         mesh_llm_ref: mesh_llm_ref.to_string(),
@@ -145,7 +162,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
 
     let job = prepare::resolve(&hf_client, params, &perms).await?;
 
-    print_prepare_job(&job, &perms);
+    print_prepare_job(&job, &perms, json)?;
 
     if !submitting {
         let redacted = redacted_spec(&job.spec);
@@ -163,6 +180,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
                     "targetRepo": job.target_repo,
                     "modelId": job.model_id,
                     "experimental": job.experimental,
+                    "generationDefaults": job.generation_defaults,
                     "jobPlan": job.job_plan,
                     "spec": redacted,
                 }))?
@@ -219,6 +237,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
                 "targetRepo": job.target_repo,
                 "modelId": job.model_id,
                 "experimental": job.experimental,
+                "generationDefaults": job.generation_defaults,
                 "jobPlan": job.job_plan,
             }))?
         )?;
@@ -245,7 +264,11 @@ fn validate_submit_output_options(follow: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
+fn print_prepare_job(
+    job: &PrepareJob,
+    perms: &permissions::PermissionCheck,
+    json: bool,
+) -> Result<()> {
     let mut err = mesh_llm_events::console_err();
     let shard_info = model_ref::split_gguf_shard_info(&job.source_file);
     let shard_str = if let Some(shard) = shard_info {
@@ -259,6 +282,25 @@ fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
     let _ = writeln!(err, "   File:   {}{}", job.source_file, shard_str);
     for projector in &job.projectors {
         let _ = writeln!(err, "   MMProj: {}", projector.path);
+    }
+    if let Some(defaults) = &job.generation_defaults
+        && !json
+    {
+        let mut lines = vec!["Generation profiles:".to_string()];
+        lines.extend(defaults.profiles.iter().map(|(name, profile)| {
+            format!(
+                "  {name}: {}@{} {}#{}",
+                profile.provenance.source_repo,
+                profile.provenance.revision,
+                profile.provenance.file,
+                profile.provenance.section
+            )
+        }));
+        lines.push(format!("Default profile: {}", defaults.selection.default));
+        mesh_llm_events::emit_event(OutputEvent::Info {
+            message: lines.join("\n"),
+            context: None,
+        })?;
     }
     let _ = writeln!(err);
     let _ = writeln!(
@@ -316,6 +358,7 @@ fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
         job.job_plan.unit_label,
         format_cost(job.job_plan.max_cost_usd)
     );
+    Ok(())
 }
 
 async fn run_list_quants(

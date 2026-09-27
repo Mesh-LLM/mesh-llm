@@ -940,9 +940,19 @@ fn opencode_write_accepts_jsonc_config_with_comments_and_trailing_commas() {
 
 #[test]
 fn cleanup_mesh_child_stops_spawned_process() {
+    // A child that outlives the test unless it is stopped. Windows has no
+    // `sleep`; `ping` waits about a second between loopback echoes.
+    #[cfg(windows)]
+    let mut command = std::process::Command::new("ping");
+    #[cfg(windows)]
+    command.args(["-n", "31", "127.0.0.1"]);
+    #[cfg(not(windows))]
+    let mut command = std::process::Command::new("sleep");
+    #[cfg(not(windows))]
+    command.arg("30");
     let mut child = Some(
-        std::process::Command::new("sleep")
-            .arg("30")
+        command
+            .stdout(std::process::Stdio::null())
             .spawn()
             .expect("failed to spawn test child"),
     );

@@ -1,7 +1,7 @@
 //! Hardware detection via Collector trait pattern.
 //! VRAM formula preserved byte-identical from mesh.rs:detect_vram_bytes().
 
-#[cfg(feature = "skippy-devices")]
+#[cfg(any(feature = "skippy-devices", test))]
 mod enrichers;
 mod parsers;
 #[cfg(feature = "skippy-devices")]
@@ -526,10 +526,8 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
 /// RAM-offload credit). Real read on Linux and Windows; zero elsewhere, which
 /// leaves those platforms' VRAM budgets untouched.
 #[cfg(any(feature = "skippy-devices", test))]
-#[cfg_attr(
-    not(any(feature = "skippy-devices", target_os = "linux", target_os = "windows")),
-    allow(dead_code)
-)]
+// Its only caller is the feature-gated `skippy_devices` probe.
+#[cfg_attr(all(test, not(feature = "skippy-devices")), allow(dead_code))]
 fn survey_system_ram() -> u64 {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {

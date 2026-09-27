@@ -412,7 +412,8 @@ function LaunchSummaryPanel({
   const localNode = nodes[0]
   const gpuCount = localNode?.gpus.length ?? 0
   const flashAttention = defaultsValues?.['defaults.model_fit.flash_attention'] ?? 'auto'
-  const kvCache = defaultsValues?.['defaults.model_fit.kv_cache_policy'] ?? 'auto'
+  const cacheTypeK = defaultsValues?.['defaults.model_fit.cache_type_k'] ?? 'publisher/default'
+  const cacheTypeV = defaultsValues?.['defaults.model_fit.cache_type_v'] ?? 'publisher/default'
   const httpBind = launchSummaryConfig?.httpBind ?? '0.0.0.0:9337'
   const mmap = launchSummaryConfig?.mmap ?? 'off'
   const rows = [
@@ -420,7 +421,7 @@ function LaunchSummaryPanel({
     ['placements:', `${assigns.length} models on ${gpuCount} GPUs`],
     ['http:', httpBind],
     ['flash attn:', flashAttention],
-    ['kv cache:', `${kvCache} (q8_0/q4_0 above 5GB)`],
+    ['kv cache:', `K ${cacheTypeK} · V ${cacheTypeV}`],
     ['mmap:', mmap]
   ]
 

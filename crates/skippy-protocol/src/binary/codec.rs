@@ -622,6 +622,7 @@ fn write_sampling_config(mut writer: impl Write, sampling: &StageSamplingConfig)
     write_f32(&mut writer, sampling.mirostat_entropy)?;
     write_f32(&mut writer, sampling.mirostat_learning_rate)?;
     write_string_list(&mut writer, &sampling.samplers, MAX_STAGE_SAMPLERS)?;
+    write_i32(&mut writer, sampling.reasoning_budget_tokens)?;
     write_u32(&mut writer, u32::from(sampling.ignore_eos))?;
     Ok(())
 }
@@ -669,6 +670,7 @@ fn read_sampling_config(mut reader: impl Read) -> io::Result<StageSamplingConfig
     sampling.mirostat_entropy = read_f32(&mut reader)?;
     sampling.mirostat_learning_rate = read_f32(&mut reader)?;
     sampling.samplers = read_string_list(&mut reader, MAX_STAGE_SAMPLERS)?;
+    sampling.reasoning_budget_tokens = read_i32(&mut reader)?;
     sampling.ignore_eos = read_u32(&mut reader)? != 0;
     Ok(sampling)
 }

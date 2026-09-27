@@ -1,6 +1,63 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use model_artifact::ModelIdentity;
+
+#[derive(Debug, Serialize)]
+pub struct RemoteHandoffReport {
+    pub mode: &'static str,
+    pub status: &'static str,
+    pub role: &'static str,
+    pub model_identity: ModelIdentity,
+    pub matches: bool,
+    pub tokens_match: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_matches: Option<bool>,
+    pub state_payload_kind: &'static str,
+    pub prompt_token_count: usize,
+    pub decode_token_count: usize,
+    pub continuation_token: i32,
+    pub source_tokens: Vec<i32>,
+    pub restored_tokens: Vec<i32>,
+    pub state_bytes: usize,
+    pub state_bytes_per_prompt_token: f64,
+    pub kv_bytes: usize,
+    pub recurrent_bytes: usize,
+    pub segment_count: usize,
+    pub segment_bytes: usize,
+    pub payload_digest: String,
+    pub model_load_ms: f64,
+    pub tokenize_ms: f64,
+    pub source_prefill_ms: f64,
+    pub state_export_ms: f64,
+    pub transfer_ms: f64,
+    pub transfer_gbps: f64,
+    pub source_decode_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlap_wall_ms: Option<f64>,
+    pub receiver: RemoteHandoffReceiverTimings,
+    pub ttft_disaggregated_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_local_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_speedup: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RemoteHandoffReceiverTimings {
+    pub model_load_ms: f64,
+    pub transfer_receive_ms: f64,
+    pub kv_attach_ms: f64,
+    #[serde(default)]
+    pub store_ms: f64,
+    #[serde(default)]
+    pub attach_residual_ms: f64,
+    pub first_decode_ms: f64,
+    pub decode_ms: f64,
+    pub baseline_prefill_ms: f64,
+    pub baseline_first_decode_ms: f64,
+}
 
 #[derive(Debug, Serialize)]
 pub struct BaselineReport {
@@ -203,7 +260,53 @@ pub struct StateHandoffReport {
     pub cache_hit_import_ms: Vec<f64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cache_hit_decode_ms: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cachegen_gate: Option<CacheGenGateReport>,
     pub stage_models: Vec<StageModelReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CacheGenGateReport {
+    pub passed: bool,
+    pub failure_reasons: Vec<String>,
+    pub restore_path: &'static str,
+    pub cache_type_k: &'static str,
+    pub cache_type_v: &'static str,
+    pub continuation_steps: usize,
+    pub native_storage_bytes: usize,
+    pub cachegen_storage_bytes: usize,
+    pub compression_ratio: f64,
+    pub tile_count: usize,
+    pub encode_ms: f64,
+    pub scalar_oracle_decode_ms: f64,
+    pub native_write_ms: f64,
+    pub cachegen_write_ms: f64,
+    pub native_persist_ms: f64,
+    pub cachegen_persist_ms: f64,
+    pub native_read_ms: f64,
+    pub cachegen_read_ms: f64,
+    pub native_import_ms: f64,
+    pub cachegen_import_ms: f64,
+    pub native_ttft_ms: f64,
+    pub cachegen_ttft_ms: f64,
+    pub native_decode_tokens_per_second: f64,
+    pub cachegen_decode_tokens_per_second: f64,
+    pub native_p99_decode_ms: f64,
+    pub cachegen_p99_decode_ms: f64,
+    pub p99_decode_regression: f64,
+    pub matching_tokens: usize,
+    pub token_agreement: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_token_mismatch_step: Option<usize>,
+    pub mean_entropy_abs_drift: f64,
+    pub max_entropy_abs_drift: f64,
+    pub mean_top_logprob_abs_drift: f64,
+    pub max_top_logprob_abs_drift: f64,
+    pub estimated_peak_codec_working_bytes: usize,
+    pub min_token_agreement: f64,
+    pub max_p99_decode_regression: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_peak_codec_working_bytes: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Clone)]

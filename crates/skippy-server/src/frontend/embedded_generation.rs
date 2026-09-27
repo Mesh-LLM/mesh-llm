@@ -5,6 +5,15 @@ mod prefix_restore;
 mod speculative_policy;
 
 use super::*;
+
+fn exact_checkpoint_writes_through_l3(
+    selected_boundary: Option<usize>,
+    shared_boundary: Option<usize>,
+) -> bool {
+    selected_boundary
+        .zip(shared_boundary)
+        .is_some_and(|(selected, shared)| selected == shared)
+}
 use crate::binary_transport::{
     AsyncForwarder, BinaryStageExecutionOptions, forwarded_stage_message,
     forwarded_stage_message_timed, run_binary_stage_message, write_stage_message_conditioned,
@@ -155,6 +164,18 @@ impl StageOpenAiBackend {
                 let mut pos_start = prefill_chain_restored_tokens.min(prefill_tokens.len());
                 let exact_checkpoint_boundary =
                     self.embedded_exact_checkpoint_boundary(&request, prefill_tokens, pos_start);
+                let durable_exact_checkpoint_boundary = self
+                    .kv
+                    .as_ref()
+                    .filter(|kv| kv.payload_is_exact_state())
+                    .and_then(|kv| {
+                        kv.exact_shared_checkpoint_token_count(prefill_tokens.len() as u64)
+                    })
+                    .and_then(|token_count| usize::try_from(token_count).ok());
+                let exact_checkpoint_writes_through_l3 = exact_checkpoint_writes_through_l3(
+                    exact_checkpoint_boundary,
+                    durable_exact_checkpoint_boundary,
+                );
                 let mut chunk_index = 0usize;
                 while pos_start < prefill_tokens.len() {
                     if request
@@ -288,6 +309,7 @@ impl StageOpenAiBackend {
                                 &session_key,
                                 request.ids,
                                 &prefill_tokens[..end],
+                                exact_checkpoint_writes_through_l3,
                             )?;
                     }
                     let chunk_stage0_compute_ms = stage0_timer.elapsed_ms();
@@ -2103,7 +2125,7 @@ impl StageOpenAiBackend {
 }
 #[cfg(test)]
 mod tests {
-    use super::draft_fallback_budget;
+    use super::{draft_fallback_budget, exact_checkpoint_writes_through_l3};
 
     #[test]
     fn draft_fallback_budget_never_exceeds_the_draft_window() {
@@ -2111,5 +2133,12 @@ mod tests {
         assert_eq!(draft_fallback_budget(8, 2, 8), Some(2));
         assert_eq!(draft_fallback_budget(1, 4, 8), Some(2));
         assert_eq!(draft_fallback_budget(8, 4, 3), Some(3));
+    }
+
+    #[test]
+    fn only_the_shared_exact_checkpoint_writes_through_l3() {
+        assert!(exact_checkpoint_writes_through_l3(Some(768), Some(768)));
+        assert!(!exact_checkpoint_writes_through_l3(Some(936), Some(768)));
+        assert!(!exact_checkpoint_writes_through_l3(None, Some(768)));
     }
 }

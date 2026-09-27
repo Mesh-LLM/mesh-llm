@@ -23,6 +23,8 @@ pub struct PackageManifest {
     pub artifact_catalog: ArtifactCatalog,
     pub tensor_catalog: TensorCatalog,
     pub sidecars: Vec<Sidecar>,
+    pub publisher_metadata: Vec<PublisherMetadata>,
+    pub publisher_defaults: Option<PublisherModelDefaults>,
     pub generation: Option<Generation>,
     pub native_abi_version: String,
     pub generator_version: String,
@@ -41,6 +43,10 @@ struct PackageRoot {
     artifact_catalog: ArtifactCatalog,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidecars: Vec<Sidecar>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    publisher_metadata: Vec<PublisherMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    publisher_defaults: Option<PublisherModelDefaults>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     generation: Option<Generation>,
     native_abi_version: String,
@@ -59,6 +65,8 @@ impl From<&PackageManifest> for PackageRoot {
             layer_count: manifest.layer_count,
             artifact_catalog: manifest.artifact_catalog.clone(),
             sidecars: manifest.sidecars.clone(),
+            publisher_metadata: manifest.publisher_metadata.clone(),
+            publisher_defaults: manifest.publisher_defaults.clone(),
             generation: manifest.generation.clone(),
             native_abi_version: manifest.native_abi_version.clone(),
             generator_version: manifest.generator_version.clone(),
@@ -82,6 +90,8 @@ impl PackageRoot {
                 entries: Vec::new(),
             },
             sidecars: self.sidecars,
+            publisher_metadata: self.publisher_metadata,
+            publisher_defaults: self.publisher_defaults,
             generation: self.generation,
             native_abi_version: self.native_abi_version,
             generator_version: self.generator_version,
@@ -128,6 +138,8 @@ impl PackageManifest {
         let artifacts = collect_artifacts(&self.artifact_catalog.entries, &mut issues);
         validate_metadata_artifact_binding(self, &artifacts, &mut issues);
         validate_sidecars(&self.sidecars, &artifacts, &mut issues);
+        validate_publisher_metadata(self, &artifacts, &mut issues);
+        validate_publisher_defaults(self, &artifacts, &mut issues);
         if let Some(generation) = &self.generation {
             validate_generation(generation, self.layer_count, &mut issues);
         }
@@ -157,6 +169,7 @@ impl PackageManifest {
             .entries
             .sort_by(|left, right| left.id.cmp(&right.id));
         normalized.sidecars.sort();
+        normalized.publisher_metadata.sort();
         let digest = Sha256::digest(serde_json::to_vec(&normalized)?);
         let hex = digest
             .iter()
@@ -293,17 +306,245 @@ pub enum SidecarKind {
     Mmproj,
 }
 
+/// Immutable publisher files used to derive typed model defaults.
+///
+/// These files are package-level metadata. They are not loader sidecars and
+/// therefore never participate in stage selection.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublisherMetadata {
+    pub role: PublisherMetadataRole,
+    pub artifact_id: String,
+    pub source_repo: String,
+    pub source_revision: String,
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublisherMetadataRole {
+    ModelConfig,
+    GenerationConfig,
+    TokenizerConfig,
+    ChatTemplate,
+    HfQuantConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublisherModelDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_dtype: Option<PublisherDtypeDeclaration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kv_cache_dtype: Option<PublisherDtypeDeclaration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublisherDtypeDeclaration {
+    pub dtype: PublisherDtype,
+    pub artifact_id: String,
+    pub json_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublisherDtype {
+    F16,
+    Bf16,
+    F32,
+    Fp8,
+    Fp8E4m3,
+    Fp8E5m2,
+    Q8_0,
+    Q4_0,
+}
+
 /// Generation capability declarations carried as package data.
 ///
 /// Describes speculative-decoding capabilities of the source model only.
 /// It is never stage-selection or loader policy: which strategy actually runs
 /// is resolved from runtime configuration, and layer indices here must never
 /// be consulted by a stage selector.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Generation {
+    /// Publisher-reviewed request defaults for the exact source revision.
+    /// These values are advisory package data and are resolved below explicit
+    /// request and deployment/operator settings by the serving runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_defaults: Option<GenerationRequestDefaults>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speculative_decoding: Option<SpeculativeDecoding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationRequestDefaults {
+    pub selection: GenerationProfileSelection,
+    pub profiles: BTreeMap<String, GenerationProfile>,
+}
+
+impl GenerationRequestDefaults {
+    /// Validate profile references, sampler values, and immutable provenance.
+    pub fn validate(&self) -> Result<(), ValidationErrors> {
+        let mut issues = Vec::new();
+        validate_generation_request_defaults(self, &mut issues);
+        if issues.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationErrors { issues })
+        }
+    }
+}
+
+/// Selects a package profile after the request's reasoning mode has been
+/// resolved. `default` is used when the mode remains automatic or unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationProfileSelection {
+    pub default: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_enabled: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_disabled: Option<String>,
+}
+
+/// One publisher-recommended request profile. Unknown values stay absent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typical_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_nsigma: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logit_bias: Option<BTreeMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_last_n: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynatemp_range: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynatemp_exponent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry: Option<GenerationDryDefaults>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xtc: Option<GenerationXtcDefaults>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirostat_mode: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirostat_entropy: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirostat_learning_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samplers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampler_sequence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignore_eos: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<GenerationReasoningDefaults>,
+    pub provenance: GenerationDefaultsProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationDryDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiplier: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_length: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub penalty_last_n: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence_breakers: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationXtcDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probability: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationReasoningDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<GenerationReasoningEnabled>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<GenerationReasoningFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<GenerationReasoningBudget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationReasoningEnabled {
+    Auto,
+    Off,
+    On,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GenerationReasoningFormat {
+    Auto,
+    None,
+    Deepseek,
+    DeepseekLegacy,
+    Hidden,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GenerationReasoningBudget {
+    Tokens(u32),
+    Level(GenerationReasoningBudgetLevel),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationReasoningBudgetLevel {
+    Auto,
+    Low,
+    Medium,
+    High,
+    Unrestricted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationDefaultsProvenance {
+    pub source_repo: String,
+    pub revision: String,
+    pub file: String,
+    pub section: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -925,6 +1166,141 @@ fn validate_sidecars(
     }
 }
 
+fn validate_publisher_metadata(
+    manifest: &PackageManifest,
+    artifacts: &BTreeMap<&str, &Artifact>,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let mut seen = BTreeSet::new();
+    for (index, metadata) in manifest.publisher_metadata.iter().enumerate() {
+        let prefix = format!("publisher_metadata[{index}]");
+        if !seen.insert((metadata.role, metadata.source_path.as_str())) {
+            push_issue(
+                issues,
+                ValidationCode::DuplicateSidecar,
+                prefix.clone(),
+                format!(
+                    "publisher metadata semantic identity ({:?}, {:?}) appears more than once",
+                    metadata.role, metadata.source_path
+                ),
+            );
+        }
+        if !artifacts.contains_key(metadata.artifact_id.as_str()) {
+            push_issue(
+                issues,
+                ValidationCode::UnknownArtifact,
+                format!("{prefix}.artifact_id"),
+                format!("artifact {:?} does not exist", metadata.artifact_id),
+            );
+        }
+        validate_nonempty(
+            &format!("{prefix}.source_repo"),
+            &metadata.source_repo,
+            issues,
+        );
+        validate_nonempty(
+            &format!("{prefix}.source_revision"),
+            &metadata.source_revision,
+            issues,
+        );
+        if metadata.source_revision.len() != 40
+            || !metadata
+                .source_revision
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            push_issue(
+                issues,
+                ValidationCode::SourceIdentityMismatch,
+                format!("{prefix}.source_revision"),
+                "publisher metadata revision must be an immutable 40-character commit",
+            );
+        }
+        validate_relative_path(
+            &format!("{prefix}.source_path"),
+            &metadata.source_path,
+            issues,
+        );
+        if manifest.source_model.repo.as_deref() != Some(metadata.source_repo.as_str()) {
+            push_issue(
+                issues,
+                ValidationCode::SourceIdentityMismatch,
+                format!("{prefix}.source_repo"),
+                "publisher metadata repository differs from source_model.repo",
+            );
+        }
+        if manifest.source_model.revision.as_deref() != Some(metadata.source_revision.as_str()) {
+            push_issue(
+                issues,
+                ValidationCode::SourceIdentityMismatch,
+                format!("{prefix}.source_revision"),
+                "publisher metadata revision differs from source_model.revision",
+            );
+        }
+    }
+}
+
+fn validate_publisher_defaults(
+    manifest: &PackageManifest,
+    artifacts: &BTreeMap<&str, &Artifact>,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let Some(defaults) = &manifest.publisher_defaults else {
+        return;
+    };
+    for (name, declaration) in [
+        ("compute_dtype", defaults.compute_dtype.as_ref()),
+        ("kv_cache_dtype", defaults.kv_cache_dtype.as_ref()),
+    ] {
+        let Some(declaration) = declaration else {
+            continue;
+        };
+        let path = format!("publisher_defaults.{name}");
+        if !artifacts.contains_key(declaration.artifact_id.as_str()) {
+            push_issue(
+                issues,
+                ValidationCode::UnknownArtifact,
+                format!("{path}.artifact_id"),
+                format!("artifact {:?} does not exist", declaration.artifact_id),
+            );
+        }
+        let metadata = manifest
+            .publisher_metadata
+            .iter()
+            .find(|metadata| metadata.artifact_id == declaration.artifact_id);
+        if metadata.is_none() {
+            push_issue(
+                issues,
+                ValidationCode::SourceIdentityMismatch,
+                format!("{path}.artifact_id"),
+                "typed publisher default is not bound to publisher_metadata",
+            );
+        }
+        if let Some(metadata) = metadata {
+            let role_is_valid = match name {
+                "compute_dtype" => metadata.role == PublisherMetadataRole::ModelConfig,
+                "kv_cache_dtype" => matches!(
+                    metadata.role,
+                    PublisherMetadataRole::ModelConfig | PublisherMetadataRole::HfQuantConfig
+                ),
+                _ => false,
+            };
+            if !role_is_valid {
+                push_issue(
+                    issues,
+                    ValidationCode::SourceIdentityMismatch,
+                    format!("{path}.artifact_id"),
+                    format!(
+                        "publisher default {name} cannot be sourced from {:?}",
+                        metadata.role
+                    ),
+                );
+            }
+        }
+        validate_nonempty(&format!("{path}.json_path"), &declaration.json_path, issues);
+    }
+}
+
 fn validate_nonempty(path: &str, value: &str, issues: &mut Vec<ValidationIssue>) {
     if value.trim().is_empty() {
         push_issue(
@@ -1025,6 +1401,9 @@ fn validate_generation(
     layer_count: u32,
     issues: &mut Vec<ValidationIssue>,
 ) {
+    if let Some(request_defaults) = &generation.request_defaults {
+        validate_generation_request_defaults(request_defaults, issues);
+    }
     let Some(speculative) = &generation.speculative_decoding else {
         return;
     };
@@ -1075,6 +1454,338 @@ fn validate_generation(
                 "default strategy {:?} is not declared under strategies",
                 speculative.default
             ),
+        );
+    }
+}
+
+fn validate_generation_request_defaults(
+    request_defaults: &GenerationRequestDefaults,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let base = "generation.request_defaults";
+    if request_defaults.profiles.is_empty() {
+        push_issue(
+            issues,
+            ValidationCode::MissingValue,
+            format!("{base}.profiles"),
+            "at least one generation profile is required",
+        );
+    }
+    for (name, profile) in &request_defaults.profiles {
+        validate_identifier(&format!("{base}.profiles[{name}]"), name, issues);
+        validate_generation_profile(name, profile, issues);
+    }
+    for (field, selected) in [
+        ("default", Some(&request_defaults.selection.default)),
+        (
+            "reasoning_enabled",
+            request_defaults.selection.reasoning_enabled.as_ref(),
+        ),
+        (
+            "reasoning_disabled",
+            request_defaults.selection.reasoning_disabled.as_ref(),
+        ),
+    ] {
+        let Some(selected) = selected else { continue };
+        if selected.trim().is_empty() {
+            push_issue(
+                issues,
+                ValidationCode::MissingValue,
+                format!("{base}.selection.{field}"),
+                "selected profile must not be empty",
+            );
+        } else if !request_defaults.profiles.contains_key(selected) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.selection.{field}"),
+                format!("references undeclared generation profile {selected:?}"),
+            );
+        }
+    }
+}
+
+fn validate_generation_profile(
+    name: &str,
+    profile: &GenerationProfile,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let base = format!("generation.request_defaults.profiles[{name}]");
+    if profile.max_tokens == Some(0) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.max_tokens"),
+            "max_tokens must be greater than zero",
+        );
+    }
+    if let Some(stop) = &profile.stop {
+        for (index, value) in stop.iter().enumerate() {
+            validate_nonempty(&format!("{base}.stop[{index}]"), value, issues);
+        }
+    }
+    for (field, value) in [
+        ("temperature", profile.temperature),
+        ("top_p", profile.top_p),
+        ("min_p", profile.min_p),
+        ("typical_p", profile.typical_p),
+        ("top_nsigma", profile.top_nsigma),
+        ("presence_penalty", profile.presence_penalty),
+        ("frequency_penalty", profile.frequency_penalty),
+        ("repeat_penalty", profile.repeat_penalty),
+        ("dynatemp_range", profile.dynatemp_range),
+        ("dynatemp_exponent", profile.dynatemp_exponent),
+        ("mirostat_entropy", profile.mirostat_entropy),
+        ("mirostat_learning_rate", profile.mirostat_learning_rate),
+    ] {
+        if value.is_some_and(|value| !value.is_finite()) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.{field}"),
+                "value must be finite",
+            );
+        }
+    }
+    for (field, value, min, max) in [
+        ("temperature", profile.temperature, 0.0, 100.0),
+        ("presence_penalty", profile.presence_penalty, -2.0, 2.0),
+        ("frequency_penalty", profile.frequency_penalty, -2.0, 2.0),
+        ("top_nsigma", profile.top_nsigma, -1.0, f64::MAX),
+        ("dynatemp_range", profile.dynatemp_range, 0.0, f64::MAX),
+        (
+            "dynatemp_exponent",
+            profile.dynatemp_exponent,
+            0.0,
+            f64::MAX,
+        ),
+    ] {
+        if value.is_some_and(|value| value < min || value > max) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.{field}"),
+                format!("value must be within {min}..={max}"),
+            );
+        }
+    }
+    for (field, value) in [
+        ("top_p", profile.top_p),
+        ("min_p", profile.min_p),
+        ("typical_p", profile.typical_p),
+    ] {
+        if value.is_some_and(|value| !(0.0..=1.0).contains(&value)) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.{field}"),
+                "value must be within 0..=1",
+            );
+        }
+    }
+    if profile.temperature.is_some_and(|value| value < 0.0) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.temperature"),
+            "temperature must be non-negative",
+        );
+    }
+    if profile.repeat_penalty.is_some_and(|value| value <= 0.0) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.repeat_penalty"),
+            "repeat_penalty must be greater than zero",
+        );
+    }
+    if profile.top_k.is_some_and(|value| value < 0) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.top_k"),
+            "top_k must be greater than or equal to zero",
+        );
+    }
+    if profile.repeat_last_n.is_some_and(|value| value < -1) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.repeat_last_n"),
+            "repeat_last_n must be greater than or equal to -1",
+        );
+    }
+    if profile.seed.is_some_and(|value| value > u32::MAX.into()) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.seed"),
+            "seed must fit in the native u32 field",
+        );
+    }
+    if let Some(logit_bias) = &profile.logit_bias {
+        for (token, bias) in logit_bias {
+            let valid_token = token.parse::<i32>().is_ok_and(|token| token >= 0);
+            if !valid_token || !bias.is_finite() || !(-100.0..=100.0).contains(bias) {
+                push_issue(
+                    issues,
+                    ValidationCode::InvalidGenerationValue,
+                    format!("{base}.logit_bias[{token}]"),
+                    "logit bias keys must be signed token ids and values must be within -100..=100",
+                );
+            }
+        }
+    }
+    if profile
+        .mirostat_mode
+        .is_some_and(|value| !(0..=2).contains(&value))
+    {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.mirostat_mode"),
+            "mirostat_mode must be 0, 1, or 2",
+        );
+    }
+    for (field, value) in [
+        ("mirostat_entropy", profile.mirostat_entropy),
+        ("mirostat_learning_rate", profile.mirostat_learning_rate),
+    ] {
+        if value.is_some_and(|value| value <= 0.0) {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.{field}"),
+                "value must be greater than zero",
+            );
+        }
+    }
+    if let Some(samplers) = &profile.samplers {
+        for (index, sampler) in samplers.iter().enumerate() {
+            validate_nonempty(&format!("{base}.samplers[{index}]"), sampler, issues);
+            if !matches!(
+                sampler.as_str(),
+                "penalties"
+                    | "dry"
+                    | "top_n_sigma"
+                    | "top_k"
+                    | "typical_p"
+                    | "typ_p"
+                    | "top_p"
+                    | "min_p"
+                    | "xtc"
+                    | "temperature"
+                    | "temp"
+            ) {
+                push_issue(
+                    issues,
+                    ValidationCode::InvalidGenerationValue,
+                    format!("{base}.samplers[{index}]"),
+                    "unsupported sampler name",
+                );
+            }
+        }
+    }
+    if let Some(sequence) = &profile.sampler_sequence {
+        validate_nonempty(&format!("{base}.sampler_sequence"), sequence, issues);
+        if sequence
+            .chars()
+            .filter(|value| !value.is_whitespace())
+            .any(|value| !matches!(value, 'e' | 'd' | 's' | 'k' | 'y' | 'p' | 'm' | 'x' | 't'))
+        {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.sampler_sequence"),
+                "sampler sequence contains an unsupported code",
+            );
+        }
+    }
+    if let Some(dry) = &profile.dry {
+        if dry.multiplier.is_some_and(|value| value < 0.0)
+            || dry.base.is_some_and(|value| value <= 0.0)
+            || dry.allowed_length.is_some_and(|value| value < 0)
+            || dry.penalty_last_n.is_some_and(|value| value < -1)
+        {
+            push_issue(
+                issues,
+                ValidationCode::InvalidGenerationValue,
+                format!("{base}.dry"),
+                "DRY values are outside native sampler bounds",
+            );
+        }
+        if let Some(breakers) = &dry.sequence_breakers {
+            for (index, breaker) in breakers.iter().enumerate() {
+                if breaker.is_empty() || breaker.len() >= 16 {
+                    push_issue(
+                        issues,
+                        ValidationCode::InvalidGenerationValue,
+                        format!("{base}.dry.sequence_breakers[{index}]"),
+                        "DRY sequence breakers must be non-empty and shorter than 16 bytes",
+                    );
+                }
+            }
+        }
+    }
+    if let Some(xtc) = &profile.xtc {
+        for (field, value) in [
+            ("probability", xtc.probability),
+            ("threshold", xtc.threshold),
+        ] {
+            if value.is_some_and(|value| !(0.0..=1.0).contains(&value)) {
+                push_issue(
+                    issues,
+                    ValidationCode::InvalidGenerationValue,
+                    format!("{base}.xtc.{field}"),
+                    "value must be within 0..=1",
+                );
+            }
+        }
+    }
+    validate_generation_provenance(&base, &profile.provenance, issues);
+}
+
+fn validate_generation_provenance(
+    profile_path: &str,
+    provenance: &GenerationDefaultsProvenance,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let base = format!("{profile_path}.provenance");
+    for (field, value) in [
+        ("source_repo", provenance.source_repo.as_str()),
+        ("revision", provenance.revision.as_str()),
+        ("file", provenance.file.as_str()),
+        ("section", provenance.section.as_str()),
+        ("url", provenance.url.as_str()),
+    ] {
+        validate_nonempty(&format!("{base}.{field}"), value, issues);
+    }
+    let revision = provenance.revision.trim();
+    if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.revision"),
+            "provenance revision must be an immutable 40-character Git commit SHA",
+        );
+    }
+    if !provenance.url.starts_with("https://") && !provenance.url.starts_with("http://") {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.url"),
+            "provenance URL must use http or https",
+        );
+    } else if !provenance
+        .url
+        .split(['/', '?', '#', '&', '='])
+        .any(|segment| segment == revision)
+    {
+        push_issue(
+            issues,
+            ValidationCode::InvalidGenerationValue,
+            format!("{base}.url"),
+            "provenance URL must contain the exact revision as a distinct path or query segment",
         );
     }
 }

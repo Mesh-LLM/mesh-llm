@@ -312,11 +312,6 @@ fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> DiagnosticRes
         config.cache_type_v.as_deref(),
         &format!("{base_path}.cache_type_v"),
     )?;
-    validate_optional_enum(
-        config.kv_cache_policy.as_deref(),
-        &["auto", "quality", "balanced", "saver"],
-        &format!("{base_path}.kv_cache_policy"),
-    )?;
     validate_bool_or_auto(
         config.kv_offload.as_ref(),
         &format!("{base_path}.kv_offload"),
@@ -926,7 +921,7 @@ fn validate_request_chat_defaults(
             ReasoningBudget::Integer(_) => {}
             ReasoningBudget::String(value) => validate_allowed(
                 value,
-                &["auto", "low", "medium", "high"],
+                &["auto", "low", "medium", "high", "unrestricted"],
                 &format!("{base_path}.reasoning_budget"),
             )?,
         }

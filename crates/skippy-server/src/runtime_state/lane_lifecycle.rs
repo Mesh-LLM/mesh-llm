@@ -17,6 +17,24 @@ impl RuntimeState {
         Ok(self.session_stats())
     }
 
+    pub(crate) fn warmup_generation_graph(&self) -> Result<bool> {
+        if self.model.input_activation_boundary().is_some()
+            || self.model.output_activation_boundary().is_some()
+        {
+            return Ok(false);
+        }
+        let token_id = self
+            .model
+            .tokenize("", true)?
+            .into_iter()
+            .next()
+            .unwrap_or(0);
+        let mut session = self.model.create_session()?;
+        session.decode_step(token_id)?;
+        session.reset()?;
+        Ok(true)
+    }
+
     /// Release the session slot identified by `session_id`.
     ///
     /// This is the cleanup path called at the end of every chat
@@ -310,6 +328,25 @@ impl RuntimeState {
             .token_start
             .checked_add(desc.token_count)
             .ok_or_else(|| anyhow::anyhow!("KV page token range overflows"))?;
+        self.session_token_counts
+            .entry(session_id.to_string())
+            .and_modify(|current| *current = (*current).max(token_end))
+            .or_insert(token_end);
+        Ok(())
+    }
+
+    pub fn import_cachegen_kv_page(
+        &mut self,
+        session_id: &str,
+        desc: &RuntimeKvPageDesc,
+        archive: &[u8],
+    ) -> Result<()> {
+        let session = self.session(session_id)?;
+        session.import_cachegen_kv_page(desc, archive)?;
+        let token_end = desc
+            .token_start
+            .checked_add(desc.token_count)
+            .ok_or_else(|| anyhow::anyhow!("CacheGen KV page token range overflows"))?;
         self.session_token_counts
             .entry(session_id.to_string())
             .and_modify(|current| *current = (*current).max(token_end))

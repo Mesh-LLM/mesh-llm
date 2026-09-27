@@ -26,7 +26,6 @@ pub(super) fn apply_model_fit_behavior(
             set_static_options(setting);
             push_constraint(setting, ConfigConstraint::NonEmpty);
         }
-        "kv_cache_policy" => set_static_options(setting),
         "kv_offload" | "kv_unified" | "prompt_cache" | "context_shift" | "swa_full"
         | "flash_attention" => set_static_options(setting),
         "cache_ram_mib" => set_numeric(setting, Some(0.0), None, Some(1.0), Some("MiB")),
