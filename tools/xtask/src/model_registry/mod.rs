@@ -11,7 +11,7 @@ mod fields;
 mod generate;
 mod manifest;
 mod projection;
-mod python_json;
+pub(crate) mod python_json;
 mod registry;
 mod resolve;
 mod restore_inputs;

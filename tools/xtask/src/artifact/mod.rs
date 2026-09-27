@@ -6,13 +6,15 @@
 
 mod argv;
 mod checksum;
-mod tar_extract;
+pub(crate) mod tar_extract;
 mod tar_header;
 mod tar_read;
 mod zip_directory;
-mod zip_extract;
+pub(crate) mod zip_extract;
 mod zip_read;
 mod zip_text;
+
+pub(crate) use zip_extract::os_error_line;
 
 use crate::command::DynResult;
 
@@ -36,10 +38,16 @@ impl ArtifactCommand {
 }
 
 pub(crate) fn run(command: ArtifactCommand, args: &[String]) -> DynResult<()> {
-    let report = match command {
+    check(command, args).emit()
+}
+
+pub(crate) fn check(
+    command: ArtifactCommand,
+    args: &[String],
+) -> crate::repository::check_report::CheckReport {
+    match command {
         ArtifactCommand::VerifyChecksum => checksum::run(args),
         ArtifactCommand::ExtractTar => tar_extract::run(args),
         ArtifactCommand::ExtractZip => zip_extract::run(args),
-    };
-    report.emit()
+    }
 }

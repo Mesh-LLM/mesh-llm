@@ -62,7 +62,7 @@ fn decode(raw: &[u8], hooks: &Hooks, exact_numbers: bool) -> Result<Json, Decode
     Ok(value)
 }
 
-fn utf8_error(raw: &[u8], error: &std::str::Utf8Error) -> String {
+pub(crate) fn utf8_error(raw: &[u8], error: &std::str::Utf8Error) -> String {
     let start = error.valid_up_to();
     let (end, reason) = match error.error_len() {
         None => (raw.len(), "unexpected end of data"),

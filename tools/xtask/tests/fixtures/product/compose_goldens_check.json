@@ -1,0 +1,116 @@
+{
+  "added_runtime_file": {
+    "code": 1,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "ValueError: product manifest does not match composed bytes: bundle/product-manifest.json\n",
+    "stdout": ""
+  },
+  "check_validates_before_reading_product": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: native runtime mesh-llm-native-cpu targets MeshLLM 0.70.0, expected 9.9.9\n",
+    "stdout": ""
+  },
+  "different_backend_label": {
+    "code": 1,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cuda-blackwell\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"rt\",\n    \"manifest_sha256\": \"a54805c94c629d0e718e6822a023246f2bb406d650065dba9e12e53cc7d865d2\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"39158f597769dca29aa02d14cda62bcec08198707a237f93cffb5422a6a944f6\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "ValueError: product manifest does not match composed bytes: bundle/product-manifest.json\n",
+    "stdout": ""
+  },
+  "malformed_product_manifest": {
+    "code": 1,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"schema_version\": 2,\n"
+    },
+    "stderr": "json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 3 column 1 (char 25)\n",
+    "stdout": ""
+  },
+  "missing_host_after_compose": {
+    "code": 1,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: 'bundle/mesh-llm'\n",
+    "stdout": ""
+  },
+  "missing_product_manifest": {
+    "code": 1,
+    "products": {},
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: 'bundle/product-manifest.json'\n",
+    "stdout": ""
+  },
+  "missing_verifier": {
+    "code": 1,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "ValueError: product manifest does not match composed bytes: bundle/product-manifest.json\n",
+    "stdout": ""
+  },
+  "product_manifest_is_directory": {
+    "code": 1,
+    "products": {},
+    "stderr": "IsADirectoryError: [Errno 21] Is a directory: 'bundle/product-manifest.json'\n",
+    "stdout": ""
+  },
+  "product_manifest_not_object": {
+    "code": 1,
+    "products": {
+      "bundle/product-manifest.json": "[1, 2]\n"
+    },
+    "stderr": "ValueError: product manifest does not match composed bytes: bundle/product-manifest.json\n",
+    "stdout": ""
+  },
+  "reformatted_equal_manifest": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "roundtrip": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "stale_host_digest": {
+    "code": 1,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "ValueError: product manifest does not match composed bytes: bundle/product-manifest.json\n",
+    "stdout": ""
+  },
+  "stale_runtime_file": {
+    "code": 1,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "ValueError: product manifest does not match composed bytes: bundle/product-manifest.json\n",
+    "stdout": ""
+  },
+  "stale_runtime_manifest_bytes": {
+    "code": 1,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "ValueError: product manifest does not match composed bytes: bundle/product-manifest.json\n",
+    "stdout": ""
+  },
+  "version_prefix_is_normalized": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  }
+}

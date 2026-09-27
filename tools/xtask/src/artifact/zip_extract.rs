@@ -41,7 +41,7 @@ fn os_failure(error: &std::io::Error, path: &Path) -> Failure {
     Failure::Raised(os_error_line(error, &python_path_display(path)))
 }
 
-fn os_error_line(error: &std::io::Error, shown: &str) -> String {
+pub(crate) fn os_error_line(error: &std::io::Error, shown: &str) -> String {
     let class = match error.raw_os_error() {
         Some(2) => "FileNotFoundError",
         Some(1 | 13) => "PermissionError",

@@ -8,11 +8,11 @@ use std::fmt::Write;
 
 /// The `json.dumps` keyword arguments the legacy scripts use.
 #[derive(Clone, Copy)]
-pub(super) struct Style {
-    pub(super) indent: Option<usize>,
-    pub(super) item_separator: &'static str,
-    pub(super) key_separator: &'static str,
-    pub(super) ensure_ascii: bool,
+pub(crate) struct Style {
+    pub(crate) indent: Option<usize>,
+    pub(crate) item_separator: &'static str,
+    pub(crate) key_separator: &'static str,
+    pub(crate) ensure_ascii: bool,
 }
 
 /// `json.dumps(value, indent=2, ensure_ascii=False)`.
@@ -24,7 +24,7 @@ pub(super) const PRETTY: Style = Style {
 };
 
 /// `json.dumps(value, ensure_ascii=False)`.
-pub(super) const INLINE: Style = Style {
+pub(crate) const INLINE: Style = Style {
     indent: None,
     item_separator: ", ",
     key_separator: ": ",
@@ -32,7 +32,7 @@ pub(super) const INLINE: Style = Style {
 };
 
 /// `json.dumps(value)`.
-pub(super) const ASCII: Style = Style {
+pub(crate) const ASCII: Style = Style {
     ensure_ascii: true,
     ..INLINE
 };
@@ -44,7 +44,7 @@ pub(super) const ASCII_COMPACT: Style = Style {
     ..ASCII
 };
 
-pub(super) fn dumps(value: &Json, style: Style) -> String {
+pub(crate) fn dumps(value: &Json, style: Style) -> String {
     let mut out = String::new();
     write_value(&mut out, value, style, 0);
     out

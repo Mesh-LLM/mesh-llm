@@ -1,0 +1,368 @@
+{
+  "base_files": {
+    "bundle/mesh-llm": "neutral host bytes\n",
+    "bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"mesh-llm-native-cpu\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}, \"build\": {\"backend\": \"cpu\"}}\n",
+    "bundle/native-runtimes/rt/lib/libmesh-native.so": {"hex": "7f454c46000102ff"},
+    "bundle/native-runtimes/rt/bin/mesh-llm-attestation-verifier": "verifier\n",
+    "bundle/native-runtimes/rt/checksums.sha256": "0000  lib/libmesh-native.so\n",
+    "bundle/native-runtimes/rt/Z-upper": "ordinal order\n",
+    "bundle/native-runtimes/rt/.hidden/state": "hidden\n"
+  },
+  "groups": {
+    "compose": {
+      "cpu": {
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "version_without_prefix": {
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "0.70.0", "--backend", "cpu"]
+      },
+      "runtime_version_without_prefix": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"0.70.0\", \"backend\": {\"kind\": \"cpu\"}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "cuda_blackwell_alias": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"mesh-llm-native-cuda-blackwell\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cuda\"}}, \"build\": {\"backend\": \"cuda-blackwell\"}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cuda-blackwell"]
+      },
+      "hip_alias": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"mesh-llm-native-rocm\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"rocm\"}}, \"build\": {\"backend\": \"hip\"}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "hip"]
+      },
+      "rocm_with_hip_build": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"rocm\"}}, \"build\": {\"backend\": \"hip\"}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "rocm"]
+      },
+      "no_build_section": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"metal\"}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "metal"]
+      },
+      "null_build_section": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"vulkan\"}}, \"build\": null}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "vulkan"]
+      },
+      "unicode_and_structured_ids": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": {\"z\": \"r\u00e9\\ud83d\\ude00\\u007f\", \"a\": [1, 2.50, true, null, 12345678901234567890123, 1e400, NaN, -Infinity], \"m\": {}}, \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "duplicate_keys_last_wins": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"first\", \"id\": \"second\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cuda\", \"kind\": \"cpu\"}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "absolute_paths": {
+        "args": ["--bundle", "{scratch}/bundle", "--host", "{scratch}/bundle/mesh-llm", "--runtime", "{scratch}/bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "dotted_and_trailing_paths": {
+        "args": ["--bundle", "./bundle/", "--host", "bundle//mesh-llm", "--runtime", "./bundle/./native-runtimes/rt/", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "working_directory_bundle": {
+        "base": false,
+        "files": {
+          "mesh-llm": "host\n",
+          "rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"1.0\", \"backend\": {\"kind\": \"cpu\"}}}",
+          "rt/lib/a": "a\n"
+        },
+        "args": ["--bundle", ".", "--host", "mesh-llm", "--runtime", "rt", "--version", "1.0", "--backend", "cpu"]
+      },
+      "runtime_is_bundle_root": {
+        "base": false,
+        "files": {
+          "b/mesh-llm": "host\n",
+          "b/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"1.0\", \"backend\": {\"kind\": \"cpu\"}}}",
+          "b/product-manifest.json": "old\n"
+        },
+        "args": ["--bundle", "b", "--host", "b/mesh-llm", "--runtime", "b", "--version", "1.0", "--backend", "cpu"]
+      },
+      "runtime_working_directory": {
+        "base": false,
+        "files": {
+          "mesh-llm": "host\n",
+          "manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"1.0\", \"backend\": {\"kind\": \"cpu\"}}}",
+          "d/e": "e\n"
+        },
+        "args": ["--bundle", ".", "--host", "mesh-llm", "--runtime", ".", "--version", "1.0", "--backend", "cpu"]
+      },
+      "overwrites_existing_manifest": {
+        "files": {"bundle/product-manifest.json": "{\"stale\": true}\n"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "symlinks_and_empty_dirs_in_runtime": {
+        "files": {"bundle/native-runtimes/rt/empty/": "", "outside/data": "outside\n", "outside/dir/x": "x\n"},
+        "links": {
+          "bundle/native-runtimes/rt/link-file": "lib/libmesh-native.so",
+          "bundle/native-runtimes/rt/link-outside": "../../../outside/data",
+          "bundle/native-runtimes/rt/link-dir": "../../../outside/dir",
+          "bundle/native-runtimes/rt/broken": "missing-target"
+        },
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "host_symlink": {
+        "files": {"elsewhere/host": "real host\n", "bundle/mesh-llm": null},
+        "links": {"bundle/mesh-llm": "../elsewhere/host"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "empty_version_and_backend_strings": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"\", \"mesh_version\": \"v\", \"backend\": {\"kind\": \"\"}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "", "--backend", ""]
+      }
+    },
+    "check": {
+      "roundtrip": {
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"],
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "version_prefix_is_normalized": {
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"],
+        "args": ["--check", "--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "0.70.0", "--backend", "cpu"]
+      },
+      "reformatted_equal_manifest": {
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"],
+        "mutate": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"mesh-llm-native-cpu\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}, \"build\": {\"backend\": \"cpu\"}}\n"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "stale_host_digest": {
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"],
+        "mutate": {"bundle/mesh-llm": "rebuilt host bytes\n"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "stale_runtime_file": {
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"],
+        "mutate": {"bundle/native-runtimes/rt/lib/libmesh-native.so": "relinked\n"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "stale_runtime_manifest_bytes": {
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"],
+        "mutate": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"mesh-llm-native-cpu\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "added_runtime_file": {
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"],
+        "mutate": {"bundle/native-runtimes/rt/extra.dll": "extra\n"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "missing_verifier": {
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"],
+        "remove": ["bundle/native-runtimes/rt/bin/mesh-llm-attestation-verifier"],
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "missing_host_after_compose": {
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"],
+        "remove": ["bundle/mesh-llm"],
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "different_backend_label": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cuda\"}}}"},
+        "setup": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cuda-blackwell"],
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cuda", "--check"]
+      },
+      "missing_product_manifest": {
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "malformed_product_manifest": {
+        "files": {"bundle/product-manifest.json": "{\n  \"schema_version\": 2,\n"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "product_manifest_not_object": {
+        "files": {"bundle/product-manifest.json": "[1, 2]\n"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "product_manifest_is_directory": {
+        "files": {"bundle/product-manifest.json/": ""},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu", "--check"]
+      },
+      "check_validates_before_reading_product": {
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v9.9.9", "--backend", "cpu", "--check"]
+      }
+    },
+    "reject": {
+      "version_mismatch": {
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.71.0", "--backend", "cpu"]
+      },
+      "runtime_backend_mismatch": {
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cuda"]
+      },
+      "abi_family_alias_mismatch": {
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "hip"]
+      },
+      "build_backend_mismatch": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cuda\"}}, \"build\": {\"backend\": \"hip\"}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cuda"]
+      },
+      "build_backend_non_string": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": 7, \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}, \"build\": {\"backend\": 3.0}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "kind_non_string": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": [\"a\", 1], \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": null}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "version_mismatch_structured_id": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": {\"b\": true, \"a\": 1e400}, \"mesh_version\": \"vv1\", \"backend\": {\"kind\": \"cpu\"}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "1", "--backend", "cpu"]
+      },
+      "missing_runtime_manifest": {
+        "remove": ["bundle/native-runtimes/rt/manifest.json"],
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "missing_runtime_directory": {
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/absent", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "runtime_manifest_is_directory": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": null, "bundle/native-runtimes/rt/manifest.json/": ""},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "missing_host": {
+        "remove": ["bundle/mesh-llm"],
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "host_is_directory": {
+        "args": ["--bundle", "bundle", "--host", "bundle/native-runtimes", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "host_outside_bundle": {
+        "files": {"outside-host": "host\n"},
+        "args": ["--bundle", "bundle", "--host", "outside-host", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "runtime_outside_bundle": {
+        "files": {"rt2/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "rt2", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "absolute_bundle_relative_host": {
+        "args": ["--bundle", "{scratch}/bundle", "--host", "bundle/mesh-llm", "--runtime", "{scratch}/bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "parent_segments_are_not_resolved": {
+        "args": ["--bundle", "bundle", "--host", "bundle/../bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "missing_bundle_directory": {
+        "files": {"rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}}"},
+        "args": ["--bundle", "absent", "--host", "absent/mesh-llm", "--runtime", "absent/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "output_is_directory": {
+        "files": {"bundle/product-manifest.json/": ""},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      }
+    },
+    "malformed": {
+      "invalid_json": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": \n  {\"id\": }"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "empty_file": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": ""},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "byte_order_mark": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": {"hex": "efbbbf7b7d"}},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "invalid_utf8": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": {"hex": "7b2261223a2022ff227d"}},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "extra_data": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{} {}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "top_level_list": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "[]"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "top_level_string": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "\"runtime\""},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "missing_runtime_key": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"build\": {\"backend\": \"cpu\"}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "runtime_null": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": null}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "runtime_number": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": 1.5}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "missing_id": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"mesh_version\": \"v0.70.0\"}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "missing_mesh_version": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\"}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "mesh_version_number": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": 70}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "mesh_version_list": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": []}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "missing_backend": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\"}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "backend_string": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": \"cpu\"}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "missing_kind": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "build_list": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}, \"build\": []}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "build_false": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}, \"build\": false}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "build_missing_backend": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}, \"build\": {}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "build_backend_list": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}, \"build\": {\"backend\": [\"cpu\"]}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "build_backend_object": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": "{\"runtime\": {\"id\": \"rt\", \"mesh_version\": \"v0.70.0\", \"backend\": {\"kind\": \"cpu\"}}, \"build\": {\"backend\": {\"cpu\": 1}}}"},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "integer_digit_limit": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": {"prefix": "{\"runtime\": {\"id\": ", "repeat": "9", "count": 5000, "suffix": "}}"}},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "array_nesting_limit": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": {"prefix": "{\"runtime\": ", "repeat": "[", "count": 10000}},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      },
+      "object_nesting_limit": {
+        "files": {"bundle/native-runtimes/rt/manifest.json": {"prefix": "[\"{[\", ", "repeat": "{\"k\": ", "count": 10000}},
+        "args": ["--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "cpu"]
+      }
+    },
+    "argv": {
+      "help": {"args": ["-h"]},
+      "help_long_abbreviated": {"args": ["--he", "--bogus"]},
+      "help_bundled": {"args": ["-hx"]},
+      "help_with_explicit_value": {"args": ["--help=yes"]},
+      "no_arguments": {"args": []},
+      "some_required_missing": {"args": ["--bundle", "b", "--version", "1"]},
+      "ambiguous_prefix": {"args": ["--b", "x"]},
+      "expected_one_argument": {"args": ["--bundle"]},
+      "value_looks_like_option": {"args": ["--bundle", "a", "--host", "-x"]},
+      "check_with_value": {"args": ["--check=1"]},
+      "check_with_empty_value": {"args": ["--check="]},
+      "unrecognized_after_required": {"args": ["--bundle", "a", "--host", "b", "--runtime", "c", "--version", "d", "--backend", "e", "extra", "-5", "--wat"]},
+      "double_dash_extras": {"args": ["--bundle", "a", "--host", "b", "--runtime", "c", "--version", "d", "--backend", "e", "--", "--check"]},
+      "required_before_unrecognized": {"args": ["positional", "--bundle", "a"]},
+      "abbreviations_reach_composition": {
+        "args": ["--bun=bundle", "--ho", "bundle/mesh-llm", "--r", "bundle/native-runtimes/rt", "--v", "v0.70.0", "--ba", "cpu", "--che"]
+      },
+      "repeated_option_keeps_last": {
+        "args": ["--bundle", "wrong", "--bundle", "bundle", "--host", "bundle/mesh-llm", "--runtime", "bundle/native-runtimes/rt", "--version", "v0.70.0", "--backend", "gpu", "--backend", "cpu"]
+      }
+    }
+  }
+}
