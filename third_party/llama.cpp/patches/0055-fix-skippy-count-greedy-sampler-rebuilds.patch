@@ -1,0 +1,25 @@
+From b7290760d9ad84041e770ee8e8a1f272af98de37 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 28 Sep 2026 05:15:05 +1000
+Subject: [PATCH] fix(skippy): count greedy sampler rebuilds
+
+---
+ src/skippy/sampling.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index 013e49709..fc162a604 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -686,6 +686,8 @@ llama_sampler * skippy_build_sampling_chain(
+     }
+     if (skippy_sampling_is_greedy_equivalent(sampling)) {
+         llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
++        ++session->sampling_rebuild_count;
++        skippy_log_sampling_cache_metrics(session, "rebuild");
+         return sampler;
+     }
+     const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed;
+-- 
+2.54.0 (Apple Git-157)
+
