@@ -139,6 +139,25 @@ jobs:
               jq -r '.reasons[] | "- \(.)"' "$report"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Report Laya smoke result
+        if: ${{ !cancelled() }}
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          WORK_DIR: ${{ env.CANARY_SOURCE_ROOT }}/target/skippy-system-one-smoke
+        run: |
+          set -euo pipefail
+          report="$WORK_DIR/reports/laya.json"
+          {
+            echo "## Laya smoke"
+            echo
+            if [[ ! -f "$report" ]]; then
+              echo "No Laya smoke report was produced (build step outcome: ${BUILD_OUTCOME})."
+            elif [[ "$(jq -r '.passed' "$report")" == "true" ]]; then
+              echo "The pinned Laya Multilingual GGUF passed every upstream golden fixture on the explicit CPU device."
+            else
+              echo "The Laya golden battery failed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload System One smoke evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

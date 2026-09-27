@@ -469,13 +469,23 @@ run_full_build() {
       bash -c 'cargo test -p skippy-server --lib --no-run --message-format=json > "$1"' \
       build-mm "$STATE_DIR/mm-build.jsonl" || return 1
   fi
-  # The System One smoke exit code is 0 for a NOT CERTIFIED full-model read and
-  # non-zero for a red contract part or a red declared-qualified read, so this
-  # gate blocks publication exactly when the lane is qualified to decide.
+  # The family-certify runner is a Metal execution lane. Both real decision
+  # models are mandatory here: Jev exercises the complete DiffusionGemma read
+  # through the staged Metal server, and Laya exercises the static native CLI
+  # on its explicit CPU device against the upstream golden fixtures. Platform
+  # Laya smokes separately prove the packaged Metal runtime.
   run_verification_logged "System One smoke" "$BUILD_LOG" env \
     WORK_DIR="$SYSTEMONE_SMOKE_DIR" \
     SYSTEMONE_SMOKE_CADENCE=llama-bump \
+    SYSTEMONE_SMOKE_BUILD_BACKEND=metal \
+    SYSTEMONE_SMOKE_CERTIFIED_BACKENDS=metal \
+    SYSTEMONE_SMOKE_REQUIRE_QUALIFIED=1 \
     scripts/skippy-system-one-smoke.sh || return 1
+  run_verification_logged "Laya smoke" "$BUILD_LOG" env \
+    WORK_DIR="$SYSTEMONE_SMOKE_DIR" \
+    LAYA_SMOKE_CADENCE=llama-bump \
+    LAYA_SMOKE_DEVICE=CPU \
+    scripts/skippy-laya-smoke.sh || return 1
 }
 
 # Local CLI compatibility path. CI uses *-build modes and separate family jobs.

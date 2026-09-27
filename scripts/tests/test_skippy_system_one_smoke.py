@@ -516,6 +516,8 @@ class SystemOneCanaryWiringTests(unittest.TestCase):
         family_pass = FAMILY_PASS.read_text(encoding="utf-8")
         self.assertIn("      - name: Report System One smoke result\n", family_pass)
         self.assertIn("      - name: Upload System One smoke evidence\n", family_pass)
+        self.assertIn("      - name: Report Laya smoke result\n", family_pass)
+        self.assertIn("reports/laya.json", family_pass)
         self.assertIn("llama-canary-system-one-", family_pass)
         # The summary must render the checked cache state, not guess it.
         self.assertIn("artifact_cache_checked", family_pass)
@@ -532,6 +534,12 @@ class SystemOneCanaryWiringTests(unittest.TestCase):
         self.assertIn("scripts/skippy-system-one-smoke.sh", build)
         # The changed pin's cadence authorizes the pinned artifact.
         self.assertIn("SYSTEMONE_SMOKE_CADENCE=llama-bump", build)
+        self.assertIn("SYSTEMONE_SMOKE_BUILD_BACKEND=metal", build)
+        self.assertIn("SYSTEMONE_SMOKE_CERTIFIED_BACKENDS=metal", build)
+        self.assertIn("SYSTEMONE_SMOKE_REQUIRE_QUALIFIED=1", build)
+        self.assertIn("scripts/skippy-laya-smoke.sh", build)
+        self.assertIn("LAYA_SMOKE_CADENCE=llama-bump", build)
+        self.assertIn("LAYA_SMOKE_DEVICE=CPU", build)
         # `run_full_build` is the shared gate for repair turns and for the
         # independent verification pass, so both are covered.
         self.assertIn("run_candidate_gates() {", wrapper)
@@ -569,10 +577,19 @@ class SystemOneCanaryWiringTests(unittest.TestCase):
         # The contract fixture is reused, not re-pinned under a second identity.
         self.assertIn("skippy-system-one-smoke", rows["family-qwen3-dense"]["suites"])
 
+        laya = rows["family-laya-multilingual"]
+        self.assertEqual("meshllm/laya-multilingual-F16-GGUF", laya["artifact"]["repo"])
+        self.assertEqual(
+            "bcc99560232b5a5c91cb14d46b9496acbeae2c43",
+            laya["artifact"]["revision"],
+        )
+        self.assertIn("product-smoke", laya["suites"])
+        self.assertIn("skippy-system-one-smoke", laya["suites"])
+
         manifest = json.loads(SUITE_MANIFEST.read_text(encoding="utf-8"))
         self.assertEqual("skippy-system-one-smoke", manifest["suite"])
         self.assertEqual(
-            {"family-qwen3-dense", "family-diffusion-gemma"},
+            {"family-qwen3-dense", "family-laya-multilingual", "family-diffusion-gemma"},
             {row["id"] for row in manifest["artifacts"]},
         )
         for cadence in ("llama-bump", "manual-full", "nightly", "manual"):

@@ -180,8 +180,11 @@ credentials may differ.
   matching host and runtime producers succeed.
 - ci-platform-checks-slice.yml: macOS portable/unit and Windows checks.
 - ci-{linux,macos,windows}-product-smoke-slice.yml: platform-local inference,
-  backend, two-node, Metal, Windows CPU and model-download consumers using only
-  composed artifacts. Product integration includes a digest-bound durable-L3
+  backend, two-node, Metal, Windows CPU, model-download, and real-model Laya
+  consumers using only composed artifacts. Laya executes the upstream golden
+  System One battery on every hardware-backed platform row and selects the
+  exact native device name, so an unavailable backend fails at model load.
+  Product integration includes a digest-bound durable-L3
   phase for dense and recurrent models across a full process restart; Windows
   runs that phase alone on a real product executor.
 - ci-linux-sdk-slice.yml and ci-macos-sdk-slice.yml: platform-local
