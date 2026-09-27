@@ -59,7 +59,7 @@ pub(super) async fn rank(
     candidates.ordered.retain(|target| key(target).is_some());
     if candidates.ordered.is_empty() {
         return Err(
-            "paid providers are unavailable under the current payment policy, wallet balance or daily budget",
+            "paid providers are unavailable under the current payment policy, local payee blocklist, wallet balance or daily budget",
         );
     }
     // No paid provider survived the policy filter, so every remaining target
@@ -92,6 +92,9 @@ pub(super) async fn rank(
 
 /// Remove paid providers this node has blocked for repeatedly taking the input
 /// charge and delivering nothing. Free and local targets are never affected.
+/// The blocklist is local state (`payments/payee_strikes.json`); the dropped
+/// payees are logged so an operator can tell such an exclusion apart from a
+/// spending-policy or budget refusal.
 #[cfg(feature = "payments")]
 async fn drop_blocked_payees(
     node: &Node,
@@ -112,6 +115,17 @@ async fn drop_blocked_payees(
     if blocked.is_empty() {
         return;
     }
+    // Name the payees and the state file: an operator asking why a paid
+    // provider is no longer used has to see the blocklist, or the policy
+    // wording in the routing error misleads them.
+    tracing::info!(
+        payees = ?blocked
+            .iter()
+            .map(|peer| peer.fmt_short().to_string())
+            .collect::<Vec<_>>(),
+        state = %crate::network::payments::strikes::state_path(&directory).display(),
+        "local payee blocklist excluded paid providers from routing"
+    );
     let removed_prefix = candidates.ordered[..candidates.equivalent_prefix]
         .iter()
         .filter(|target| matches!(target, InferenceTarget::Remote(peer) if blocked.contains(peer)))

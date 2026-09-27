@@ -279,18 +279,22 @@ async fn validate_initial_invoice(
 }
 
 /// What a paid exchange had done when it ended, for the payee blocklist.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct ExchangeProgress {
     input_settled: bool,
     output_delivered: bool,
+    provider_completed: bool,
     cancelled: bool,
 }
 
 impl ExchangeProgress {
-    /// Our input payment settled, the provider sent no output, and we did not
-    /// cancel: the provider took the prefill charge and delivered nothing.
+    /// Our input payment settled, the provider sent no output and never
+    /// completed the exchange, and we did not cancel: the provider took the
+    /// prefill charge and walked away. A provider that completes — even with
+    /// an empty completion, which settles no output — is not striking: what
+    /// fails after that is this node's own finishing work, not its delivery.
     pub(crate) fn paid_undelivered(&self) -> bool {
-        self.input_settled && !self.output_delivered && !self.cancelled
+        self.input_settled && !self.output_delivered && !self.provider_completed && !self.cancelled
     }
 }
 
@@ -457,6 +461,7 @@ pub(crate) async fn exchange_tracked(
                 output_settled = true;
             }
             Frame::Complete => {
+                progress.provider_completed = true;
                 if !input_settled {
                     let payment = input_payment.await.context("input payment task failed")??;
                     accounted_msat = accounted_msat
@@ -650,5 +655,40 @@ mod tests {
             peer,
             b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nOrigin: \xff\r\n\r\n"
         ));
+    }
+
+    #[test]
+    fn a_strike_needs_a_settled_input_payment_and_a_provider_that_walked_away() {
+        let settled = ExchangeProgress {
+            input_settled: true,
+            ..ExchangeProgress::default()
+        };
+        assert!(
+            settled.paid_undelivered(),
+            "took the prefill charge, no output"
+        );
+        for progress in [
+            // The provider sent output, so it delivered what we paid for.
+            ExchangeProgress {
+                output_delivered: true,
+                ..settled.clone()
+            },
+            // The provider finished the exchange (an empty completion settles
+            // no output); a later local failure is ours, not a strike.
+            ExchangeProgress {
+                provider_completed: true,
+                ..settled.clone()
+            },
+            // We cancelled, so the missing output is our own doing.
+            ExchangeProgress {
+                cancelled: true,
+                ..settled.clone()
+            },
+            // The input payment never settled: this is a pre-payment failure,
+            // which the existing target-health cooldown already covers.
+            ExchangeProgress::default(),
+        ] {
+            assert!(!progress.paid_undelivered(), "{progress:?}");
+        }
     }
 }

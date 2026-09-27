@@ -1,9 +1,9 @@
 //! Local payee blocklist for "paid but undelivered" exchanges.
 //!
-//! A strike is recorded only when this node's input payment settled and the
-//! provider then ended the exchange without delivering any output, and the
-//! payer did not cancel. Repeated strikes against one provider endpoint block
-//! it from paid routing for a while.
+//! A strike is recorded only when this node's input payment settled, the
+//! provider then ended the exchange without delivering any output and without
+//! completing it, and the payer did not cancel. Repeated strikes against one
+//! provider endpoint block it from paid routing for a while.
 //!
 //! This is deliberately local, like `target_health`: it is never gossiped,
 //! because a shared blocklist would let any peer get an honest provider
@@ -14,9 +14,15 @@
 //! State lives next to the payments ledger (`payments/payee_strikes.json`) so a
 //! restart does not clear it. An operator clears a false positive by removing
 //! that payee's entry or the file.
+//!
+//! Paid routing consults the blocklist on every request, so reads go through
+//! the process-local [`READ_CACHE`] instead of touching the file each time.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +43,62 @@ struct Entry {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PayeeStrikes {
     payees: BTreeMap<String, Entry>,
+}
+
+/// What a cached read was loaded from. Size and modification time identify a
+/// rewrite by anything else on the machine; this process refreshes the cache
+/// from what it just wrote, so its own writes cannot be missed even when the
+/// filesystem timestamp has not moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Stamp {
+    bytes: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl Stamp {
+    fn read(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self {
+            bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+        })
+    }
+}
+
+/// One remembered read: what the file looked like, and the state read from it.
+struct CachedRead {
+    stamp: Option<Stamp>,
+    strikes: PayeeStrikes,
+}
+
+/// The last read of each payments directory. A host has one payments
+/// directory, so this normally holds a single entry, and a request that finds
+/// no blocklist costs one `stat` rather than a read and a JSON parse.
+static READ_CACHE: LazyLock<Mutex<HashMap<PathBuf, CachedRead>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Serialises strike read-modify-write cycles so two simultaneous failures
+/// cannot each read the same state and lose one another's strike.
+static WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+fn cached(path: &Path, stamp: &Option<Stamp>) -> Option<PayeeStrikes> {
+    let cache = READ_CACHE.lock().ok()?;
+    cache
+        .get(path)
+        .filter(|entry| &entry.stamp == stamp)
+        .map(|entry| entry.strikes.clone())
+}
+
+fn remember(path: PathBuf, stamp: Option<Stamp>, strikes: &PayeeStrikes) {
+    if let Ok(mut cache) = READ_CACHE.lock() {
+        cache.insert(
+            path,
+            CachedRead {
+                stamp,
+                strikes: strikes.clone(),
+            },
+        );
+    }
 }
 
 impl PayeeStrikes {
@@ -79,23 +141,49 @@ impl PayeeStrikes {
     /// Missing or unreadable state is treated as empty: the blocklist is an
     /// optimisation, and must never make paid routing fail.
     pub(crate) fn load(directory: &Path) -> Self {
-        std::fs::read(Self::path(directory))
+        let path = Self::path(directory);
+        let stamp = Stamp::read(&path);
+        if let Some(strikes) = cached(&path, &stamp) {
+            return strikes;
+        }
+        let strikes = std::fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        remember(path, stamp, &strikes);
+        strikes
     }
 
     pub(crate) fn save(&self, directory: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(directory)?;
         let path = Self::path(directory);
         let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
-        std::fs::rename(temp, path)
+        // Strikes are rare, so the sync is cheap insurance: without it a crash
+        // can leave the rename durable while the new content is not, and the
+        // payee silently stays unblocked. The parent directory is not synced
+        // (that is not portable); the worst case is losing the newest strike,
+        // which the next one repeats.
+        let mut file = File::create(&temp)?;
+        file.write_all(&serde_json::to_vec_pretty(self)?)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp, &path)?;
+        let stamp = Stamp::read(&path);
+        remember(path, stamp, self);
+        Ok(())
     }
+}
+
+/// The blocklist file, for logs and for the operator who has to clear it.
+pub(crate) fn state_path(directory: &Path) -> PathBuf {
+    PayeeStrikes::path(directory)
 }
 
 /// Load, record one strike, persist. Returns true if the payee is now blocked.
 pub(crate) fn record_strike(directory: &Path, payee: &str, now_ms: u64) -> std::io::Result<bool> {
+    let _writing = WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut strikes = PayeeStrikes::load(directory);
     let blocked = strikes.record(payee, now_ms);
     strikes.save(directory)?;
@@ -150,6 +238,51 @@ mod tests {
         assert_eq!(
             PayeeStrikes::load(directory.path()),
             PayeeStrikes::default()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cached_reads_still_follow_a_file_that_changes_underneath() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join(FILE_NAME);
+        // A missing file is cached as empty, and the first write is visible.
+        assert!(!PayeeStrikes::load(directory.path()).is_blocked("a", 0));
+        for at in 0..STRIKE_THRESHOLD as u64 {
+            record_strike(directory.path(), "a", at)?;
+        }
+        assert!(PayeeStrikes::load(directory.path()).is_blocked("a", STRIKE_THRESHOLD as u64));
+        // An operator deleting the file clears the block, even though this
+        // process cached the state it wrote.
+        std::fs::remove_file(&path)?;
+        assert!(!PayeeStrikes::load(directory.path()).is_blocked("a", 0));
+        // A replacement written by something else is re-read: the cached stamp
+        // no longer matches its size and modification time.
+        let edited = r#"{"payees":{"c":{"strikes":[1,2],"blocked_until_ms":9999999999999}}}"#;
+        std::fs::write(&path, edited)?;
+        assert!(PayeeStrikes::load(directory.path()).is_blocked("c", 0));
+        Ok(())
+    }
+
+    #[test]
+    fn simultaneous_strikes_are_all_recorded() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let recorded: Vec<_> = (0..STRIKE_THRESHOLD)
+            .map(|at| {
+                let directory = directory.path().to_path_buf();
+                std::thread::spawn(move || record_strike(&directory, "a", at as u64).unwrap())
+            })
+            .collect();
+        let mut blocking = 0;
+        for thread in recorded {
+            if thread.join().expect("strike thread panicked") {
+                blocking += 1;
+            }
+        }
+        assert_eq!(blocking, 1, "exactly one strike reaches the threshold");
+        assert!(
+            PayeeStrikes::load(directory.path()).is_blocked("a", STRIKE_THRESHOLD as u64),
+            "no strike was lost to a concurrent read-modify-write"
         );
         Ok(())
     }
