@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
@@ -155,21 +155,21 @@ impl SystemOneJsonObject {
             .collect()
     }
 
-    fn insert(&mut self, key: String, value: SystemOneJson) {
-        match self.0.iter_mut().find(|(existing, _)| *existing == key) {
-            Some(entry) => entry.1 = value,
-            None => self.0.push((key, value)),
-        }
-    }
-}
-
-impl<const N: usize> From<[(&str, SystemOneJson); N]> for SystemOneJsonObject {
-    fn from(entries: [(&str, SystemOneJson); N]) -> Self {
-        let mut object = Self::default();
+    /// Builds an object from entries in document order. A repeated key keeps
+    /// its first position and its last value, as a Python `dict` would.
+    fn from_entries(entries: impl IntoIterator<Item = (String, SystemOneJson)>) -> Self {
+        let mut ordered: Vec<(String, SystemOneJson)> = Vec::new();
+        let mut positions: HashMap<String, usize> = HashMap::new();
         for (key, value) in entries {
-            object.insert(key.to_string(), value);
+            match positions.get(&key) {
+                Some(&position) => ordered[position].1 = value,
+                None => {
+                    positions.insert(key.clone(), ordered.len());
+                    ordered.push((key, value));
+                }
+            }
         }
-        object
+        Self(ordered)
     }
 }
 
@@ -291,11 +291,13 @@ impl<'de> Visitor<'de> for SystemOneJsonVisitor {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut object = SystemOneJsonObject::default();
-        while let Some((key, value)) = map.next_entry::<String, SystemOneJson>()? {
-            object.insert(key, value);
+        let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some(entry) = map.next_entry::<String, SystemOneJson>()? {
+            entries.push(entry);
         }
-        Ok(SystemOneJson::Object(object))
+        Ok(SystemOneJson::Object(SystemOneJsonObject::from_entries(
+            entries,
+        )))
     }
 }
 

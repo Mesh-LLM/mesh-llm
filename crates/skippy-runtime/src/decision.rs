@@ -120,10 +120,15 @@ impl<'de> serde::de::Visitor<'de> for DecisionValueVisitor {
 
     fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
         let mut entries: Vec<(String, DecisionValue)> = Vec::new();
+        let mut positions: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         while let Some((key, value)) = map.next_entry::<String, DecisionValue>()? {
-            match entries.iter_mut().find(|(existing, _)| *existing == key) {
-                Some(entry) => entry.1 = value,
-                None => entries.push((key, value)),
+            match positions.get(&key) {
+                Some(&position) => entries[position].1 = value,
+                None => {
+                    positions.insert(key.clone(), entries.len());
+                    entries.push((key, value));
+                }
             }
         }
         Ok(DecisionValue::Object(entries))

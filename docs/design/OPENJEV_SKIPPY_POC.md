@@ -229,8 +229,8 @@ There is no chat template, answer canvas, or text generation.
 
 The native side ports the draft upstream support
 ([ggml-org/llama.cpp#29363](https://github.com/ggml-org/llama.cpp/pull/29363))
-through the patch queue (`model_support/0006`) and exposes it through a narrow
-Skippy ABI (`model_support/0007`, `skippy/laya.h`, feature bit 40). Laya does
+in one family patch (`model_support/0006`), which also exposes it through a
+narrow Skippy ABI (`skippy/laya.h`, feature bit 40). Laya does
 not load through `skippy_model_open`; the host recognizes
 `general.architecture = "laya"` and opens it through its own entry point,
 skipping KV and context planning. The runtime keeps its weights on the node's

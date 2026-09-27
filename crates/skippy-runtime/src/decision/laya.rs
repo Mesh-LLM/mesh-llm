@@ -20,6 +20,13 @@ const MIN_OPTION_BUDGET: usize = 16;
 const MIN_HEAD_TOKENS: usize = 8;
 const NOUL_FALSE_DEFAULT: &str = "no, the statement does not hold";
 const NOUL_TRUE_DEFAULT: &str = "yes, the statement holds";
+/// Most input bytes handed to the tokenizer per token a field can keep.
+///
+/// The Laya tokenizer's merge loop is quadratic in word length, and a field
+/// is truncated to its token budget only after tokenizing. Cutting the text
+/// first bounds that work. Real tokens average well under 16 bytes, so a cut
+/// this generous only drops text the budget would have dropped anyway.
+const MAX_BYTES_PER_TOKEN: usize = 16;
 
 impl DecisionModel for LayaModel {
     fn decide(&self, request: &DecisionRequest) -> Result<DecisionOutput, DecisionError> {
@@ -156,15 +163,14 @@ fn assemble_sequence(
     mut tokenize: impl FnMut(&str) -> Result<Vec<i32>, DecisionError>,
 ) -> Result<LayaSequence, DecisionError> {
     let instructions = instructions.replace("[MASK]", " ");
-    let mut head = tokenize(&format!(
-        "{} question: {instructions}",
-        type_name(question_type)
-    ))?;
+    let head_text = format!("{} question: {instructions}", type_name(question_type));
+    let mut head = tokenize(bounded(&head_text, layout.head_max_len))?;
 
     let mut option_ids = Vec::with_capacity(options.len());
     for option in options {
         let mut ids = vec![layout.mask];
-        let mut text = tokenize(&format!(" {}", option.replace("[MASK]", " ")))?;
+        let option_text = format!(" {}", option.replace("[MASK]", " "));
+        let mut text = tokenize(bounded(&option_text, MAX_OPTION_TOKENS))?;
         text.truncate(MAX_OPTION_TOKENS);
         ids.extend(text);
         option_ids.push(ids);
@@ -194,7 +200,8 @@ fn assemble_sequence(
     tokens.push(layout.sep);
 
     let room = layout.max_len.saturating_sub(tokens.len() + 1);
-    let mut state_ids = tokenize(&state.replace("[MASK]", " "))?;
+    let state_text = state.replace("[MASK]", " ");
+    let mut state_ids = tokenize(bounded(&state_text, room))?;
     state_ids.truncate(room);
     tokens.extend(state_ids);
     tokens.push(layout.sep);
@@ -215,6 +222,24 @@ fn assemble_sequence(
         question_type,
         markers,
     })
+}
+
+/// The longest prefix of `text` worth tokenizing for `tokens` tokens. It ends
+/// at whitespace when one is near the cut, so the last kept word tokenizes as
+/// it would in the full text.
+fn bounded(text: &str, tokens: usize) -> &str {
+    let cap = tokens.saturating_mul(MAX_BYTES_PER_TOKEN);
+    if text.len() <= cap {
+        return text;
+    }
+    let mut end = cap;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    match text[..end].rfind(char::is_whitespace) {
+        Some(space) if space > end / 2 => &text[..space],
+        _ => &text[..end],
+    }
 }
 
 /// A missing GGUF temperature is 1; a present one is clamped to [0.5, 5].
@@ -475,6 +500,36 @@ mod tests {
         .expect("sequence");
         assert_eq!(sequence.tokens.len(), LAYOUT.max_len);
         assert_eq!(*sequence.tokens.last().unwrap(), LAYOUT.sep);
+    }
+
+    #[test]
+    fn tokenizer_input_is_bounded_by_the_token_budget() {
+        let mut longest = 0;
+        let sequence = assemble_sequence(
+            LAYOUT,
+            LayaQuestionType::Noul,
+            "q",
+            &["a".to_string(), "b".to_string()],
+            &"z".repeat(1_000_000),
+            |text| {
+                longest = longest.max(text.len());
+                char_tokens(text)
+            },
+        )
+        .expect("sequence");
+        assert!(longest <= LAYOUT.max_len * MAX_BYTES_PER_TOKEN, "{longest}");
+        assert_eq!(sequence.tokens.len(), LAYOUT.max_len);
+    }
+
+    #[test]
+    fn bounded_prefers_a_word_boundary_and_respects_utf8() {
+        assert_eq!(bounded("short", 4), "short");
+        let words = "alpha beta gamma delta ".repeat(10);
+        let cut = bounded(&words, 2);
+        assert!(cut.len() <= 2 * MAX_BYTES_PER_TOKEN);
+        assert!(words[cut.len()..].starts_with(' '));
+        let wide = "满".repeat(40);
+        assert!(bounded(&wide, 1).chars().all(|character| character == '满'));
     }
 
     #[test]

@@ -1,28 +1,54 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: ZhangYu <zhangyub@uniontech.com>
-Date: Sun, 27 Sep 2026 18:41:47 +1000
-Subject: [PATCH] llama: port Laya decision model support
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Sun, 27 Sep 2026 21:12:21 +1000
+Subject: [PATCH] models: add Laya decision model support
 
 Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
 the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
 converter, and the self-contained tools/laya encoder + decision-head runtime
-with llama-laya-cli. The upstream test fixtures are omitted from the patch.
+with llama-laya-cli. The upstream test fixtures are omitted.
+
+Expose it through a narrow Skippy ABI (skippy/laya.h): open a Laya GGUF,
+report its sequence budgets and special tokens, tokenize with its own
+Metaspace + BPE tokenizer, and run one packed read returning raw scorer and
+action-head logits per question. Reads over 4,096 tokens run as several
+passes split between sequences.
+
+Changes from the upstream draft:
+- Compile the runtime into libllama and export its API with LLAMA_API, so
+  shared builds of llama-laya-cli link.
+- Keep weights on the first accelerator, with the CPU backend behind it in
+  the scheduler, instead of CPU only; set threads through the backend
+  registry rather than linking ggml-cpu directly.
+- Take the act-head top-1/top-2 indices from per-question strided views of a
+  descending argsort. The upstream 1-D views read the third-ranked option as
+  top-2, and gave every question after the first another question's ranking.
+
+Co-authored-by: ZhangYu <zhangyub@uniontech.com>
 ---
  conversion/__init__.py         |    1 +
  conversion/laya.py             |  122 ++++
  gguf-py/gguf/constants.py      |   67 ++
  gguf-py/gguf/gguf_writer.py    |   21 +
  gguf-py/gguf/tensor_mapping.py |   40 ++
+ include/skippy.h               |    1 +
+ include/skippy/common.h        |    4 +-
+ include/skippy/laya.h          |  128 ++++
+ src/CMakeLists.txt             |    4 +-
  src/llama-arch.cpp             |   32 +
  src/llama-arch.h               |   20 +
- src/llama-model.cpp            |    5 +
+ src/llama-model.cpp            |    7 +
+ src/skippy/abi.cpp             |    3 +-
+ src/skippy/laya.cpp            |  250 ++++++++
  tools/CMakeLists.txt           |    1 +
- tools/laya/CMakeLists.txt      |   32 +
- tools/laya/laya-cli.cpp        |  665 ++++++++++++++++++++
- tools/laya/laya.cpp            | 1061 ++++++++++++++++++++++++++++++++
- tools/laya/laya.h              |  102 +++
- 13 files changed, 2169 insertions(+)
+ tools/laya/CMakeLists.txt      |   23 +
+ tools/laya/laya-cli.cpp        |  665 +++++++++++++++++++
+ tools/laya/laya.cpp            | 1101 ++++++++++++++++++++++++++++++++
+ tools/laya/laya.h              |  106 +++
+ 19 files changed, 2593 insertions(+), 3 deletions(-)
  create mode 100644 conversion/laya.py
+ create mode 100644 include/skippy/laya.h
+ create mode 100644 src/skippy/laya.cpp
  create mode 100644 tools/laya/CMakeLists.txt
  create mode 100644 tools/laya/laya-cli.cpp
  create mode 100644 tools/laya/laya.cpp
@@ -378,6 +404,195 @@ index 3b1732e88..cf474a5c0 100644
          MODEL_ARCH.ARCTIC: {
              MODEL_TENSOR.FFN_NORM: (
                  "model.layers.{bid}.residual_layernorm",
+diff --git a/include/skippy.h b/include/skippy.h
+index 571841a60..ac091dd24 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -26,5 +26,6 @@
+ #include "skippy/signals.h"
+ #include "skippy/workloads.h"
+ #include "skippy/system_one.h"
++#include "skippy/laya.h"
+ 
+ #endif // SKIPPY_H
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 0ff24e80b..343ff1616 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 64
++#define SKIPPY_ABI_VERSION_PATCH 65
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+@@ -108,6 +108,8 @@ enum skippy_feature {
+ #define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
+ 
+ #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
++/** @brief Full-model Laya decision reads (`skippy/laya.h`). */
++#define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
+ 
+ enum skippy_status {
+     SKIPPY_STATUS_OK                      = 0,
+diff --git a/include/skippy/laya.h b/include/skippy/laya.h
+new file mode 100644
+index 000000000..9cb6f5148
+--- /dev/null
++++ b/include/skippy/laya.h
+@@ -0,0 +1,128 @@
++#ifndef SKIPPY_LAYA_H
++#define SKIPPY_LAYA_H
++
++/**
++ * @file skippy/laya.h
++ * @brief Full-model Laya decision reads (encoder + typed decision head).
++ *
++ * Laya is non-autoregressive: one forward pass scores every option of every
++ * question. It does not load through `skippy_model_open`; it owns its GGUF,
++ * tokenizer, and CPU execution context. Callers build the per-question token
++ * sequences (see `skippy_laya_tokenize`) and read raw scorer and action-head
++ * logits back; temperature and softmax stay on the caller side.
++ */
++
++#include "common.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define SKIPPY_LAYA_INFO_V1_ABI_VERSION 1
++#define SKIPPY_LAYA_QTYPE_COUNT 3
++
++struct skippy_laya_model;
++
++/** @brief Question types, in the order the decision head was trained with. */
++enum skippy_laya_qtype {
++    SKIPPY_LAYA_QTYPE_CHOICE = 0,
++    SKIPPY_LAYA_QTYPE_SCORE  = 1,
++    SKIPPY_LAYA_QTYPE_NOUL   = 2,
++};
++
++/** @brief Sequence budgets, special tokens, and temperatures of an opened Laya model. */
++struct skippy_laya_info_v1 {
++    uint32_t struct_size;
++    uint32_t abi_version;
++    int32_t  max_len;          /**< maximum tokens per question sequence */
++    int32_t  head_max_len;     /**< token budget for the head and options region */
++    int32_t  max_markers;      /**< maximum options per question */
++    int32_t  n_act;            /**< action-head classes */
++    int32_t  cls_token_id;
++    int32_t  sep_token_id;
++    int32_t  mask_token_id;
++    int32_t  n_embd;
++    int32_t  n_layer;
++    int64_t  parameter_count;
++    /** Per-qtype temperature from the GGUF; 0 when absent. */
++    float    temperature[SKIPPY_LAYA_QTYPE_COUNT];
++};
++
++/** @brief One question sequence inside a packed read. */
++struct skippy_laya_sequence {
++    size_t  token_offset;   /**< first token in the packed token array */
++    size_t  token_count;
++    int32_t qtype;          /**< `enum skippy_laya_qtype` */
++    size_t  marker_offset;  /**< first marker in the packed marker array */
++    size_t  marker_count;   /**< 1..max_markers option markers */
++};
++
++/**
++ * @brief Opens a Laya GGUF with its own loader; not a `skippy_model`.
++ *
++ * Weights go to the first accelerator when one exists, with the CPU backend
++ * behind it for any unsupported op. `n_threads` sizes the CPU backend.
++ */
++LLAMA_API enum skippy_status skippy_laya_model_open(
++        const char * model_path,
++        int32_t n_threads,
++        struct skippy_laya_model ** out_model,
++        struct skippy_error ** out_error);
++
++/** @brief Releases a model returned by `skippy_laya_model_open`. */
++LLAMA_API void skippy_laya_model_free(struct skippy_laya_model * model);
++
++/**
++ * @brief Reports the model's sequence budgets, special tokens, and temperatures.
++ *
++ * `out_info` must be initialized with its `struct_size` and `abi_version`.
++ */
++LLAMA_API enum skippy_status skippy_laya_model_info_v1(
++        const struct skippy_laya_model * model,
++        struct skippy_laya_info_v1 * out_info,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Tokenizes UTF-8 text with the model's own Metaspace + BPE tokenizer.
++ *
++ * No special tokens are added. Returns SKIPPY_STATUS_BUFFER_TOO_SMALL with
++ * `out_token_count` set to the required length when `capacity` is short.
++ */
++LLAMA_API enum skippy_status skippy_laya_tokenize(
++        const struct skippy_laya_model * model,
++        const char * text,
++        size_t text_len,
++        int32_t * out_tokens,
++        size_t capacity,
++        size_t * out_token_count,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Scores every question's options in one packed forward pass.
++ *
++ * `marker_positions` are sequence-local token indices. Outputs are row-major
++ * per sequence: `out_logits` holds `sequence_count * max_markers` scorer
++ * logits (unused markers are 0) and `out_act_logits` holds
++ * `sequence_count * n_act` action-head logits. Calls are serialized per
++ * model, and a read larger than 4,096 tokens runs as several passes split
++ * between sequences, because each pass builds dense attention masks.
++ */
++LLAMA_API enum skippy_status skippy_laya_read(
++        struct skippy_laya_model * model,
++        const int32_t * tokens,
++        size_t token_count,
++        const int32_t * marker_positions,
++        size_t marker_count,
++        const struct skippy_laya_sequence * sequences,
++        size_t sequence_count,
++        float * out_logits,
++        size_t logits_capacity,
++        float * out_act_logits,
++        size_t act_logits_capacity,
++        struct skippy_error ** out_error);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // SKIPPY_LAYA_H
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index f393339ed..5a8961392 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -88,6 +88,8 @@ add_library(llama
+             skippy/tokenization.cpp
+             skippy/events.cpp
+             skippy/system_one.cpp
++            skippy/laya.cpp
++            ../tools/laya/laya.cpp
+             unicode.h
+             ${LLAMA_MODELS_SOURCES}
+             )
+@@ -112,7 +114,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+ 
+ configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
+ 
+-target_include_directories(llama PRIVATE . ../common ${CMAKE_CURRENT_BINARY_DIR})
++target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
+ target_include_directories(llama PUBLIC ../include)
+ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
+ # Upstream added a models.h PCH for the llama target. The Skippy stage
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
 index 1160e3c30..0d5458b10 100644
 --- a/src/llama-arch.cpp
@@ -488,7 +703,7 @@ index 4c271709f..9691bae52 100644
      LLM_TENSOR_CONVNEXT_DW,
      LLM_TENSOR_CONVNEXT_NORM,
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 650cbd25f..1d9a9d24c 100644
+index 650cbd25f..680e1a0f8 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -348,6 +348,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -503,6 +718,292 @@ index 650cbd25f..1d9a9d24c 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
+@@ -2407,6 +2412,7 @@ llama_memory_i * llama_model::create_memory(
+         case LLM_ARCH_EUROBERT:
+         case LLM_ARCH_WAVTOKENIZER_DEC:
+         case LLM_ARCH_MODERN_BERT:
++        case LLM_ARCH_LAYA:
+         case LLM_ARCH_GEMMA_EMBEDDING:
+         case LLM_ARCH_DREAM:
+         case LLM_ARCH_LLADA:
+@@ -3156,6 +3162,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_BERT:
+         case LLM_ARCH_JINA_BERT_V3:
+         case LLM_ARCH_MODERN_BERT:
++        case LLM_ARCH_LAYA:
+         case LLM_ARCH_NOMIC_BERT:
+         case LLM_ARCH_NOMIC_BERT_MOE:
+         case LLM_ARCH_EUROBERT:
+diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
+index 1e1d2d7c8..f806cdbdc 100644
+--- a/src/skippy/abi.cpp
++++ b/src/skippy/abi.cpp
+@@ -47,7 +47,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_UNLOAD_EVENTS |
+            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
+            SKIPPY_FEATURE_SYSTEM_ONE |
+-           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
++           SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
++           SKIPPY_FEATURE_LAYA_DECISIONS;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
+diff --git a/src/skippy/laya.cpp b/src/skippy/laya.cpp
+new file mode 100644
+index 000000000..5256c8808
+--- /dev/null
++++ b/src/skippy/laya.cpp
+@@ -0,0 +1,250 @@
++#include "skippy/laya.h"
++
++#include "skippy/errors.h"
++
++#include "laya.h"
++
++#include <algorithm>
++#include <cstdint>
++#include <cstring>
++#include <limits>
++#include <mutex>
++#include <string>
++#include <vector>
++
++struct skippy_laya_model {
++    laya_model * model = nullptr;
++    laya_context * context = nullptr;
++    // laya_encode reuses one scheduler and its compute buffers.
++    std::mutex lane;
++
++    ~skippy_laya_model() {
++        if (context != nullptr) {
++            laya_free(context);
++        }
++        if (model != nullptr) {
++            laya_model_free(model);
++        }
++    }
++};
++
++namespace {
++
++// Each packed pass builds two dense [n_tokens, n_tokens] f32 attention masks,
++// so bound the tokens per pass and split larger reads by sequence.
++constexpr size_t LAYA_MAX_TOKENS_PER_PASS = 4096;
++
++enum skippy_status laya_fail(
++        skippy_error ** out_error,
++        enum skippy_status status,
++        const std::string & message) {
++    skippy_set_error(out_error, status, message.c_str());
++    return status;
++}
++
++} // namespace
++
++extern "C" enum skippy_status skippy_laya_model_open(
++        const char * model_path,
++        int32_t n_threads,
++        struct skippy_laya_model ** out_model,
++        struct skippy_error ** out_error) {
++    if (model_path == nullptr || out_model == nullptr) {
++        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model_path and out_model are required");
++    }
++    *out_model = nullptr;
++    auto * handle = new skippy_laya_model();
++    const bool loaded = skippy_contain_native_failure(out_error, [&] {
++        handle->model = laya_model_load_from_file(model_path);
++        handle->context = laya_init(handle->model, std::max(1, n_threads));
++    });
++    if (!loaded) {
++        delete handle;
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    *out_model = handle;
++    return skippy_success(out_error);
++}
++
++extern "C" void skippy_laya_model_free(struct skippy_laya_model * model) {
++    delete model;
++}
++
++extern "C" enum skippy_status skippy_laya_model_info_v1(
++        const struct skippy_laya_model * model,
++        struct skippy_laya_info_v1 * out_info,
++        struct skippy_error ** out_error) {
++    if (model == nullptr || model->model == nullptr || out_info == nullptr) {
++        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_info are required");
++    }
++    if (out_info->struct_size != sizeof(skippy_laya_info_v1) ||
++            out_info->abi_version != SKIPPY_LAYA_INFO_V1_ABI_VERSION) {
++        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "laya info descriptor uses an incompatible ABI");
++    }
++    const laya_hparams & hp = laya_model_hparams(model->model);
++    out_info->max_len = hp.max_len > 0 ? hp.max_len : 1024;
++    out_info->head_max_len = hp.head_max_len > 0 ? hp.head_max_len : 256;
++    out_info->max_markers = LAYA_MAX_MARKERS;
++    out_info->n_act = hp.n_act;
++    out_info->cls_token_id = laya_vocab_bos(model->model);
++    out_info->sep_token_id = laya_vocab_sep(model->model);
++    out_info->mask_token_id = laya_vocab_mask(model->model);
++    out_info->n_embd = hp.n_embd;
++    out_info->n_layer = hp.n_layer;
++    out_info->parameter_count = laya_model_n_params(model->model);
++    for (int i = 0; i < SKIPPY_LAYA_QTYPE_COUNT; ++i) {
++        out_info->temperature[i] = i < (int) hp.temperature.size() ? hp.temperature[i] : 0.0f;
++    }
++    return skippy_success(out_error);
++}
++
++extern "C" enum skippy_status skippy_laya_tokenize(
++        const struct skippy_laya_model * model,
++        const char * text,
++        size_t text_len,
++        int32_t * out_tokens,
++        size_t capacity,
++        size_t * out_token_count,
++        struct skippy_error ** out_error) {
++    if (model == nullptr || model->model == nullptr || out_token_count == nullptr ||
++            (text == nullptr && text_len != 0) || (out_tokens == nullptr && capacity != 0)) {
++        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid laya tokenize arguments");
++    }
++    std::vector<int32_t> tokens;
++    const bool ok = skippy_contain_native_failure(out_error, [&] {
++        tokens = laya_tokenize(model->model, std::string(text == nullptr ? "" : text, text_len));
++    });
++    if (!ok) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    *out_token_count = tokens.size();
++    if (tokens.size() > capacity) {
++        return laya_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "laya token buffer is too small");
++    }
++    if (!tokens.empty()) {
++        std::memcpy(out_tokens, tokens.data(), tokens.size() * sizeof(int32_t));
++    }
++    return skippy_success(out_error);
++}
++
++extern "C" enum skippy_status skippy_laya_read(
++        struct skippy_laya_model * model,
++        const int32_t * tokens,
++        size_t token_count,
++        const int32_t * marker_positions,
++        size_t marker_count,
++        const struct skippy_laya_sequence * sequences,
++        size_t sequence_count,
++        float * out_logits,
++        size_t logits_capacity,
++        float * out_act_logits,
++        size_t act_logits_capacity,
++        struct skippy_error ** out_error) {
++    if (model == nullptr || model->model == nullptr || model->context == nullptr ||
++            tokens == nullptr || marker_positions == nullptr || sequences == nullptr ||
++            out_logits == nullptr || out_act_logits == nullptr || sequence_count == 0) {
++        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid laya read arguments");
++    }
++    const laya_hparams & hp = laya_model_hparams(model->model);
++    const size_t n_act = (size_t) std::max(0, hp.n_act);
++    const size_t max_len = (size_t) (hp.max_len > 0 ? hp.max_len : 1024);
++    if (logits_capacity < sequence_count * LAYA_MAX_MARKERS || act_logits_capacity < sequence_count * n_act) {
++        return laya_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "laya output buffers are too small");
++    }
++    for (size_t s = 0; s < sequence_count; ++s) {
++        const skippy_laya_sequence & seq = sequences[s];
++        if (seq.token_count == 0 || seq.token_count > max_len ||
++                seq.token_offset > token_count || seq.token_count > token_count - seq.token_offset) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "laya sequence " + std::to_string(s) + " has an invalid token range");
++        }
++        if (seq.qtype < 0 || seq.qtype >= SKIPPY_LAYA_QTYPE_COUNT) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "laya sequence " + std::to_string(s) + " has an unknown question type");
++        }
++        if (seq.marker_count == 0 || seq.marker_count > LAYA_MAX_MARKERS ||
++                seq.marker_offset > marker_count || seq.marker_count > marker_count - seq.marker_offset) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "laya sequence " + std::to_string(s) + " has an invalid marker range");
++        }
++        for (size_t m = 0; m < seq.marker_count; ++m) {
++            const int32_t position = marker_positions[seq.marker_offset + m];
++            if (position < 0 || (size_t) position >= seq.token_count) {
++                return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                        "laya sequence " + std::to_string(s) + " has a marker outside its tokens");
++            }
++        }
++    }
++
++    std::lock_guard<std::mutex> lane(model->lane);
++    size_t first = 0;
++    while (first < sequence_count) {
++        size_t last = first;
++        size_t pass_tokens = 0;
++        while (last < sequence_count &&
++                (last == first || pass_tokens + sequences[last].token_count <= LAYA_MAX_TOKENS_PER_PASS)) {
++            pass_tokens += sequences[last].token_count;
++            ++last;
++        }
++        const size_t n_seqs = last - first;
++
++        std::vector<int32_t> batch_tokens(pass_tokens);
++        std::vector<int32_t> positions(pass_tokens);
++        std::vector<int32_t> seq_id(pass_tokens);
++        std::vector<int32_t> qtype(pass_tokens);
++        std::vector<int32_t> marker_pos(LAYA_MAX_MARKERS * n_seqs, 0);
++        std::vector<int32_t> marker_mask(LAYA_MAX_MARKERS * n_seqs, 0);
++        std::vector<int32_t> seq_start(n_seqs);
++
++        size_t t = 0;
++        for (size_t s = 0; s < n_seqs; ++s) {
++            const skippy_laya_sequence & seq = sequences[first + s];
++            seq_start[s] = (int32_t) t;
++            for (size_t i = 0; i < seq.token_count; ++i) {
++                batch_tokens[t] = tokens[seq.token_offset + i];
++                positions[t] = (int32_t) i;
++                seq_id[t] = (int32_t) s;
++                qtype[t] = seq.qtype;
++                ++t;
++            }
++            for (size_t m = 0; m < seq.marker_count; ++m) {
++                marker_pos[m + LAYA_MAX_MARKERS * s] = seq_start[s] + marker_positions[seq.marker_offset + m];
++                marker_mask[m + LAYA_MAX_MARKERS * s] = 1;
++            }
++        }
++
++        laya_batch batch;
++        batch.n_tokens = (int32_t) pass_tokens;
++        batch.n_seqs = (int32_t) n_seqs;
++        batch.tokens = batch_tokens.data();
++        batch.positions = positions.data();
++        batch.seq_id = seq_id.data();
++        batch.qtype = qtype.data();
++        batch.marker_pos = marker_pos.data();
++        batch.marker_mask = marker_mask.data();
++        batch.seq_start = seq_start.data();
++
++        laya_result result;
++        int rc = 1;
++        const bool ok = skippy_contain_native_failure(out_error, [&] {
++            rc = laya_encode(model->context, batch, result);
++        });
++        if (!ok) {
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        if (rc != 0 || result.n_markers_max != LAYA_MAX_MARKERS || (size_t) result.n_act != n_act ||
++                result.logits.size() != n_seqs * LAYA_MAX_MARKERS || result.act_logits.size() != n_seqs * n_act) {
++            return laya_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "laya forward pass failed");
++        }
++        for (size_t s = 0; s < n_seqs; ++s) {
++            const size_t markers = sequences[first + s].marker_count;
++            float * logits = out_logits + (first + s) * LAYA_MAX_MARKERS;
++            for (size_t m = 0; m < LAYA_MAX_MARKERS; ++m) {
++                logits[m] = m < markers ? result.logits[s * LAYA_MAX_MARKERS + m] : 0.0f;
++            }
++        }
++        std::memcpy(out_act_logits + first * n_act, result.act_logits.data(), n_seqs * n_act * sizeof(float));
++        first = last;
++    }
++    return skippy_success(out_error);
++}
 diff --git a/tools/CMakeLists.txt b/tools/CMakeLists.txt
 index c8ad1db43..df418958f 100644
 --- a/tools/CMakeLists.txt
@@ -517,30 +1018,21 @@ index c8ad1db43..df418958f 100644
      endif()
 diff --git a/tools/laya/CMakeLists.txt b/tools/laya/CMakeLists.txt
 new file mode 100644
-index 000000000..9c136f661
+index 000000000..608e677b8
 --- /dev/null
 +++ b/tools/laya/CMakeLists.txt
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,23 @@
 +# laya
 +
 +# Self-contained laya model (encoder + typed decision head) that loads its own
 +# GGUF and builds the inference graph with ggml directly, following the
-+# tools/mtmd pattern. The library only links the public ggml/llama libraries
-+# (llama is used for nothing here; the CLI borrows the vocab from libllama).
++# tools/mtmd pattern.
++# The runtime (laya.cpp) is compiled into libllama so the Skippy ABI can
++# expose it; this interface target only carries the header path.
++add_library(laya INTERFACE)
 +
-+add_library(laya STATIC
-+            laya.cpp
-+            laya.h)
-+
-+target_link_libraries     (laya PUBLIC ggml llama)
-+target_include_directories(laya PUBLIC .)
-+target_compile_features   (laya PRIVATE cxx_std_17)
-+
-+if (BUILD_SHARED_LIBS)
-+    set_target_properties     (laya PROPERTIES POSITION_INDEPENDENT_CODE ON)
-+    target_compile_definitions(laya PRIVATE LLAMA_BUILD)
-+    target_compile_definitions(laya PUBLIC  LLAMA_SHARED)
-+endif()
++target_link_libraries     (laya INTERFACE llama)
++target_include_directories(laya INTERFACE .)
 +
 +# Gate the CLI on LLAMA_BUILD_TOOLS so that library-only builds skip it.
 +if (LLAMA_BUILD_TOOLS)
@@ -1226,17 +1718,16 @@ index 000000000..66ff95626
 +}
 diff --git a/tools/laya/laya.cpp b/tools/laya/laya.cpp
 new file mode 100644
-index 000000000..a67435064
+index 000000000..dc67ec1f8
 --- /dev/null
 +++ b/tools/laya/laya.cpp
-@@ -0,0 +1,1061 @@
+@@ -0,0 +1,1101 @@
 +#include "laya.h"
 +
 +#include "ggml.h"
 +#include "ggml-cpp.h"
 +#include "ggml-alloc.h"
 +#include "ggml-backend.h"
-+#include "ggml-cpu.h"
 +#include "gguf.h"
 +
 +#include <algorithm>
@@ -1343,7 +1834,8 @@ index 000000000..a67435064
 +struct laya_context {
 +    const laya_model * model = nullptr;
 +
-+    ggml_backend_t         backend     = nullptr;
++    ggml_backend_t         backend     = nullptr; // primary compute backend
++    ggml_backend_t         backend_gpu = nullptr;
 +    ggml_backend_t         backend_cpu = nullptr;
 +    ggml_backend_sched_ptr sched;
 +
@@ -1619,10 +2111,13 @@ index 000000000..a67435064
 +    model->act_head_2   = get_tensor("act_head.2.weight");
 +    model->act_head_2_b = get_tensor("act_head.2.bias");
 +
-+    // backend
-+    model->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
++    // backend: prefer an accelerator (Metal/CUDA/...) and fall back to the CPU
++    model->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
 +    if (!model->backend) {
-+        throw std::runtime_error("failed to initialize CPU backend");
++        model->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
++    }
++    if (!model->backend) {
++        throw std::runtime_error("failed to initialize a laya backend");
 +    }
 +
 +    // alloc weights and read tensor data from file
@@ -1664,6 +2159,8 @@ index 000000000..a67435064
 +    if (!model) {
 +        return;
 +    }
++    // release the weight buffer before the backend that owns its device
++    model->buf.reset();
 +    if (model->backend) {
 +        ggml_backend_free(model->backend);
 +    }
@@ -1672,6 +2169,14 @@ index 000000000..a67435064
 +
 +const laya_hparams & laya_model_hparams(const laya_model * model) {
 +    return model->hparams;
++}
++
++int64_t laya_model_n_params(const laya_model * model) {
++    int64_t n = 0;
++    for (ggml_tensor * t = ggml_get_first_tensor(model->ctx_data.get()); t; t = ggml_get_next_tensor(model->ctx_data.get(), t)) {
++        n += ggml_nelements(t);
++    }
++    return n;
 +}
 +
 +int32_t laya_vocab_bos (const laya_model * model) { return model->bos_id; }
@@ -1808,16 +2313,36 @@ index 000000000..a67435064
 +    if (!ctx->backend_cpu) {
 +        throw std::runtime_error("failed to initialize CPU backend");
 +    }
-+    ctx->backend = ctx->backend_cpu;
++    // run on the device holding the weights; the CPU backend stays last in the
++    // scheduler so any op the accelerator lacks falls back to it
++    ggml_backend_dev_t weights_dev = ggml_backend_get_device(model->backend);
++    if (weights_dev && ggml_backend_dev_type(weights_dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
++        ctx->backend_gpu = ggml_backend_dev_init(weights_dev, nullptr);
++    }
++    ctx->backend = ctx->backend_gpu ? ctx->backend_gpu : ctx->backend_cpu;
 +
-+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx->backend);
-+    ctx->sched.reset(ggml_backend_sched_new(&ctx->backend, &buft, 1, 8192, false, true));
++    std::vector<ggml_backend_t> backends;
++    std::vector<ggml_backend_buffer_type_t> bufts;
++    if (ctx->backend_gpu) {
++        backends.push_back(ctx->backend_gpu);
++        bufts.push_back(ggml_backend_get_default_buffer_type(ctx->backend_gpu));
++    }
++    backends.push_back(ctx->backend_cpu);
++    bufts.push_back(ggml_backend_get_default_buffer_type(ctx->backend_cpu));
++    ctx->sched.reset(ggml_backend_sched_new(backends.data(), bufts.data(), (int) backends.size(), 8192, false, true));
 +    if (!ctx->sched.get()) {
 +        throw std::runtime_error("failed to initialize backend scheduler");
 +    }
 +
 +    ctx->n_threads = std::max(1, n_threads);
-+    ggml_backend_cpu_set_n_threads(ctx->backend_cpu, ctx->n_threads);
++    // resolve the thread setter through the backend registry so the library
++    // does not require a direct link against ggml-cpu (dynamic backends)
++    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
++    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
++    auto set_n_threads = reg ? (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads") : nullptr;
++    if (set_n_threads) {
++        set_n_threads(ctx->backend_cpu, ctx->n_threads);
++    }
 +
 +    return ctx.release();
 +}
@@ -1825,6 +2350,11 @@ index 000000000..a67435064
 +void laya_free(laya_context * ctx) {
 +    if (!ctx) {
 +        return;
++    }
++    // the scheduler references the backends, so release it first
++    ctx->sched.reset();
++    if (ctx->backend_gpu) {
++        ggml_backend_free(ctx->backend_gpu);
 +    }
 +    if (ctx->backend_cpu) {
 +        ggml_backend_free(ctx->backend_cpu);
@@ -2152,10 +2682,12 @@ index 000000000..a67435064
 +            ggml_neg(ctx0, ggml_sum_rows(ctx0, ggml_mul(ctx0, probs, ggml_log(ctx0, p_clamped)))),
 +            ggml_log(ctx0, k));
 +
-+    // top-2 probability values per question (argsort desc along the marker dim)
-+    ggml_tensor * topk_idx = ggml_argsort_top_k(ctx0, probs, 2);       // I32 [2, n_seqs]
-+    ggml_tensor * top1_idx = ggml_view_1d(ctx0, topk_idx, n_seqs, 0);
-+    ggml_tensor * top2_idx = ggml_view_1d(ctx0, topk_idx, n_seqs, 2*sizeof(int32_t));
++    // top-2 probability values per question: sort each question's row in
++    // descending order and take its first two entries through strided views,
++    // so every question uses its own ranking
++    ggml_tensor * sort_idx = ggml_argsort(ctx0, probs, GGML_SORT_ORDER_DESC);   // I32 [n_markers_max, n_seqs]
++    ggml_tensor * top1_idx = ggml_cont(ctx0, ggml_view_2d(ctx0, sort_idx, 1, n_seqs, sort_idx->nb[1], 0));
++    ggml_tensor * top2_idx = ggml_cont(ctx0, ggml_view_2d(ctx0, sort_idx, 1, n_seqs, sort_idx->nb[1], sort_idx->nb[0]));
 +
 +    ggml_tensor * probs4 = ggml_reshape_4d(ctx0, probs, 1, LAYA_MAX_MARKERS, n_seqs, 1);
 +    ggml_tensor * b1 = ggml_reshape_4d(ctx0, top1_idx, 1, n_seqs, 1, 1);
@@ -2293,10 +2825,10 @@ index 000000000..a67435064
 +}
 diff --git a/tools/laya/laya.h b/tools/laya/laya.h
 new file mode 100644
-index 000000000..69c1589aa
+index 000000000..74cb74f21
 --- /dev/null
 +++ b/tools/laya/laya.h
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,106 @@
 +#pragma once
 +
 +// Self-contained laya model: a ModernBERT encoder + a typed decision head for
@@ -2311,6 +2843,7 @@ index 000000000..69c1589aa
 +
 +#include "ggml.h"
 +#include "ggml-backend.h"
++#include "llama.h"
 +
 +#include <cstdint>
 +#include <memory>
@@ -2370,11 +2903,14 @@ index 000000000..69c1589aa
 +struct laya_context;
 +
 +// load a laya GGUF (F16 or quantized; dequantization happens inside ggml mul_mat)
-+laya_model * laya_model_load_from_file(const char * fname);
++LLAMA_API laya_model * laya_model_load_from_file(const char * fname);
 +
-+void laya_model_free(laya_model * model);
++LLAMA_API void laya_model_free(laya_model * model);
 +
-+const laya_hparams & laya_model_hparams(const laya_model * model);
++LLAMA_API const laya_hparams & laya_model_hparams(const laya_model * model);
++
++// total parameters across all loaded tensors
++LLAMA_API int64_t laya_model_n_params(const laya_model * model);
 +
 +// ---- tokenizer (modern-bert / mmBERT: Metaspace pre-tokenizer + BPE) ----
 +// The reference checkpoint uses a Metaspace-style pre-tokenizer with the
@@ -2385,20 +2921,20 @@ index 000000000..69c1589aa
 +// `tokenizer(text, add_special_tokens=False)["input_ids"]` from the reference.
 +
 +// tokenize with add_special_tokens=False (no <bos>/<eos>)
-+std::vector<int32_t> laya_tokenize(const laya_model * model, const std::string & text);
++LLAMA_API std::vector<int32_t> laya_tokenize(const laya_model * model, const std::string & text);
 +
 +// special token ids from the GGUF tokenizer metadata
-+int32_t laya_vocab_bos (const laya_model * model);
-+int32_t laya_vocab_sep (const laya_model * model);
-+int32_t laya_vocab_mask(const laya_model * model);
++LLAMA_API int32_t laya_vocab_bos (const laya_model * model);
++LLAMA_API int32_t laya_vocab_sep (const laya_model * model);
++LLAMA_API int32_t laya_vocab_mask(const laya_model * model);
 +
-+laya_context * laya_init(const laya_model * model, int n_threads);
++LLAMA_API laya_context * laya_init(const laya_model * model, int n_threads);
 +
 +
-+void laya_free(laya_context * ctx);
++LLAMA_API void laya_free(laya_context * ctx);
 +
 +// run one forward pass; returns 0 on success, non-zero on failure
-+int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
++LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
 -- 
 2.54.0 (Apple Git-157)
 
