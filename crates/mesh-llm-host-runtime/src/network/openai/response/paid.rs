@@ -193,6 +193,7 @@ async fn start(
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
     let evidence = exchange_id.map(|id| (node.clone(), id.to_owned()));
     let strike_node = node.clone();
+    let classification = cancellation.clone();
     tokio::spawn(async move {
         let mut progress = ExchangeProgress::default();
         let result = exchange_tracked(
@@ -211,6 +212,10 @@ async fn start(
             &mut progress,
         )
         .await;
+        // The exchange's own cancellation branch can lose a race with a
+        // provider read error, so let the live watch value decide whether this
+        // request was cancelled rather than whichever branch happened to run.
+        progress.observe_cancellation(&classification);
         if result.is_err() && progress.paid_undelivered() {
             record_paid_undelivered(&strike_node, peer).await;
         }
@@ -283,18 +288,31 @@ async fn validate_initial_invoice(
 pub(crate) struct ExchangeProgress {
     input_settled: bool,
     output_delivered: bool,
-    provider_completed: bool,
     cancelled: bool,
 }
 
 impl ExchangeProgress {
-    /// Our input payment settled, the provider sent no output and never
-    /// completed the exchange, and we did not cancel: the provider took the
-    /// prefill charge and walked away. A provider that completes — even with
-    /// an empty completion, which settles no output — is not striking: what
-    /// fails after that is this node's own finishing work, not its delivery.
+    /// Our input payment settled, the provider sent no output and we did not
+    /// cancel: it took the prefill charge and delivered nothing, whether it
+    /// hung up mid-exchange or closed the exchange with no output at all. An
+    /// empty completion is indistinguishable from the second case here, which
+    /// is a bounded false positive the strike threshold tames. What this must
+    /// never blame the provider for is a failure after it delivered output, or
+    /// after we cancelled it.
     pub(crate) fn paid_undelivered(&self) -> bool {
-        self.input_settled && !self.output_delivered && !self.provider_completed && !self.cancelled
+        self.input_settled && !self.output_delivered && !self.cancelled
+    }
+
+    /// Adopt the live cancellation state. A client disconnect and a provider
+    /// read failure can race inside tokio's select, whose ready branches have no
+    /// priority, so the read-error branch can return before the cancellation
+    /// branch runs. Reading the watch value here keeps our own disconnect from
+    /// becoming a strike against the provider.
+    pub(crate) fn observe_cancellation(
+        &mut self,
+        cancellation: &tokio::sync::watch::Receiver<bool>,
+    ) {
+        self.cancelled |= *cancellation.borrow();
     }
 }
 
@@ -461,18 +479,25 @@ pub(crate) async fn exchange_tracked(
                 output_settled = true;
             }
             Frame::Complete => {
-                progress.provider_completed = true;
                 if !input_settled {
                     let payment = input_payment.await.context("input payment task failed")??;
                     accounted_msat = accounted_msat
                         .saturating_add(payment.amount_msat)
                         .saturating_add(payment.fee_msat);
                     observations.settled(0, &payment);
+                    progress.input_settled = true;
                 }
                 let _: Empty = payments
                     .call(ops::FINISH, &IdRequest { id: id.clone() })
                     .await?;
                 observations.final_amount(accounted_msat);
+                // Closing the exchange does not make it a delivery: a provider
+                // that ends it having sent no output kept the input charge and
+                // returned nothing, which is the abuse this blocklist is for.
+                ensure!(
+                    cancelled || progress.output_delivered,
+                    "provider completed the exchange without delivering output"
+                );
                 return Ok(());
             }
             _ => bail!("invalid payment exchange frame"),
@@ -658,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn a_strike_needs_a_settled_input_payment_and_a_provider_that_walked_away() {
+    fn a_strike_needs_a_settled_input_payment_and_no_delivered_output() {
         let settled = ExchangeProgress {
             input_settled: true,
             ..ExchangeProgress::default()
@@ -668,15 +693,10 @@ mod tests {
             "took the prefill charge, no output"
         );
         for progress in [
-            // The provider sent output, so it delivered what we paid for.
+            // The provider sent output, so it delivered what we paid for even
+            // if the exchange then failed on our side.
             ExchangeProgress {
                 output_delivered: true,
-                ..settled.clone()
-            },
-            // The provider finished the exchange (an empty completion settles
-            // no output); a later local failure is ours, not a strike.
-            ExchangeProgress {
-                provider_completed: true,
                 ..settled.clone()
             },
             // We cancelled, so the missing output is our own doing.
@@ -690,5 +710,19 @@ mod tests {
         ] {
             assert!(!progress.paid_undelivered(), "{progress:?}");
         }
+    }
+
+    #[test]
+    fn a_cancellation_that_arrives_after_the_read_error_still_exempts_the_provider() {
+        let (cancel, cancellation) = tokio::sync::watch::channel(false);
+        let mut progress = ExchangeProgress {
+            input_settled: true,
+            ..ExchangeProgress::default()
+        };
+        // The read-error branch won the race and returned before the
+        // cancellation branch ran; the watch value still exempts the provider.
+        cancel.send(true).expect("the receiver is alive");
+        progress.observe_cancellation(&cancellation);
+        assert!(!progress.paid_undelivered());
     }
 }

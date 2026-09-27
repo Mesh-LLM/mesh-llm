@@ -158,16 +158,21 @@ impl PayeeStrikes {
         std::fs::create_dir_all(directory)?;
         let path = Self::path(directory);
         let temp = path.with_extension("json.tmp");
-        // Strikes are rare, so the sync is cheap insurance: without it a crash
-        // can leave the rename durable while the new content is not, and the
-        // payee silently stays unblocked. The parent directory is not synced
-        // (that is not portable); the worst case is losing the newest strike,
-        // which the next one repeats.
+        // Strikes are rare, so the syncs are cheap insurance: without them a
+        // crash can leave the rename durable while the new content is not, and
+        // the payee silently stays unblocked.
         let mut file = File::create(&temp)?;
         file.write_all(&serde_json::to_vec_pretty(self)?)?;
         file.sync_all()?;
         drop(file);
         std::fs::rename(&temp, &path)?;
+        // Syncing the file does not make the rename itself durable: the
+        // directory entry needs a sync too. Opening a directory is not
+        // portable (Windows refuses it), so this is best-effort — where it
+        // works the newest strike survives a power loss, and where it does not
+        // the worst case is losing that one strike, which the next repeats.
+        #[cfg(unix)]
+        let _ = File::open(directory).and_then(|directory| directory.sync_all());
         let stamp = Stamp::read(&path);
         remember(path, stamp, self);
         Ok(())

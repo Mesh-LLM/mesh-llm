@@ -1,12 +1,34 @@
 use super::*;
 use mesh_llm_payments::ledger::RequestTerms;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payment_handoff_preserves_correlation_and_never_retries_after_submission() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(20), handed_off(false, false)).await?
+/// How the fake provider ends a handed-off exchange.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProviderEnding {
+    /// Hangs up mid-exchange, which the payer sees as EOF.
+    Drop,
+    /// Closes the protocol with `Complete` and no output at all.
+    EmptyComplete,
 }
 
-async fn handed_off(hold: bool, fallback: bool) -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn payment_handoff_preserves_correlation_and_never_retries_after_submission() -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        handed_off(false, false, ProviderEnding::Drop),
+    )
+    .await?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn provider_that_completes_without_output_is_struck() -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        handed_off(false, false, ProviderEnding::EmptyComplete),
+    )
+    .await?
+}
+
+async fn handed_off(hold: bool, fallback: bool, ending: ProviderEnding) -> Result<()> {
     let (_dir, network, service, payer) = payer_fixture(hold).await?;
     let (provider, price) = advertised_provider(&payer).await?;
     let (listener, mut application, mut client) = client_socket().await?;
@@ -17,6 +39,7 @@ async fn handed_off(hold: bool, fallback: bool) -> Result<()> {
         price,
         service.clone(),
         hold,
+        ending,
         fallback.then(|| attempts.clone()),
     ));
     cache_connection(&payer, &provider).await?;
@@ -274,6 +297,7 @@ async fn fake_paid_provider(
     price: Pricing,
     service: Arc<PaymentService>,
     hold: bool,
+    ending: ProviderEnding,
     prior_attempts: Option<Arc<AtomicUsize>>,
 ) -> Result<()> {
     let connection = provider.endpoint.accept().await.unwrap().await?;
@@ -319,6 +343,9 @@ async fn fake_paid_provider(
     } {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+    if ending == ProviderEnding::EmptyComplete {
+        wire::write(&mut send, &Frame::Complete).await?;
+    }
     send.finish()?;
     let _ = send.stopped().await;
     Ok(())
@@ -326,12 +353,20 @@ async fn fake_paid_provider(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn payment_inflight_at_provider_drop_is_terminal_and_retains_reservation() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(20), handed_off(true, false)).await?
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        handed_off(true, false, ProviderEnding::Drop),
+    )
+    .await?
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prefill_failure_uses_existing_router_to_reach_second_paid_provider() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(20), handed_off(false, true)).await?
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        handed_off(false, true, ProviderEnding::Drop),
+    )
+    .await?
 }
 
 async fn accept_payment_stream(
