@@ -209,3 +209,18 @@ fn capped_target_idle_sessions_clamps_to_the_configured_bound() {
 fn capped_target_idle_sessions_is_unbounded_when_unset() {
     assert_eq!(capped_target_idle_sessions(10, None), 10);
 }
+
+#[test]
+fn disabling_idle_sessions_caps_future_retention_at_zero() {
+    let mut runtime = RuntimeState::new_modelless_for_test(1);
+    runtime.max_idle_sessions = Some(4);
+
+    runtime.disable_idle_sessions();
+
+    assert_eq!(runtime.max_idle_sessions, Some(0));
+    assert!(runtime.idle_sessions.is_empty());
+    assert_eq!(
+        capped_target_idle_sessions(10, runtime.max_idle_sessions),
+        0
+    );
+}

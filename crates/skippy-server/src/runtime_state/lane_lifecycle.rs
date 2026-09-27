@@ -6,8 +6,11 @@ impl RuntimeState {
         target_idle_sessions: usize,
     ) -> Result<RuntimeSessionStats> {
         // A System One read claims the model's execution lane itself; an idle
-        // session parked on it would make every read fail as busy.
+        // session parked on it would make every read fail as busy. Drain any
+        // retained sessions defensively and keep the pool capped at zero so a
+        // later non-System-One request cannot park a lane again.
         let target_idle_sessions = if self.serves_system_one() {
+            self.disable_idle_sessions();
             0
         } else {
             capped_target_idle_sessions(target_idle_sessions, self.max_idle_sessions)
@@ -25,6 +28,15 @@ impl RuntimeState {
     /// Only DiffusionGemma reports a System One canvas.
     fn serves_system_one(&self) -> bool {
         self.model.system_one_canvas_length().is_ok()
+    }
+
+    fn disable_idle_sessions(&mut self) {
+        while let Some(lane_session) = self.idle_sessions.pop() {
+            let lane_index = lane_session.index;
+            drop(lane_session);
+            self.free_lane_indices.push(lane_index);
+        }
+        self.max_idle_sessions = Some(0);
     }
 
     pub(crate) fn warmup_generation_graph(&self) -> Result<bool> {
