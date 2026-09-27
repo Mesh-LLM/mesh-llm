@@ -728,6 +728,42 @@ def wait_for_model(
     )
 
 
+def wait_for_runtime_context(
+    required: int,
+    timeout: float,
+    process: Optional[subprocess.Popen[bytes]] = None,
+) -> tuple[dict[str, Any], int]:
+    """Wait until the management projection identifies the serving model's stages."""
+    deadline = time.monotonic() + timeout
+    last_error = "runtime stages not ready"
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(
+                "inference server exited before runtime metadata became ready "
+                f"with status {process.returncode}"
+            )
+        try:
+            with urllib.request.urlopen(
+                "http://127.0.0.1:3131/api/runtime", timeout=30
+            ) as response:
+                document = json.load(response)
+            stages = document.get("stages", [])
+            model_ids = {stage.get("model_id") for stage in stages}
+            if stages and len(model_ids) == 1:
+                return document, runtime_context(document, required)
+            last_error = (
+                "runtime projection has no stages"
+                if not stages
+                else f"runtime projection identifies {len(model_ids)} models"
+            )
+        except (OSError, json.JSONDecodeError) as error:
+            last_error = str(error)
+        time.sleep(1)
+    raise TimeoutError(
+        f"runtime metadata did not become ready after {timeout}s: {last_error}"
+    )
+
+
 def percentile(values: Sequence[float], fraction: float) -> Optional[float]:
     if not values:
         return None
@@ -1630,12 +1666,10 @@ def preflight_long_context(args, build, cohorts, output):
             build, args.model, state, target / "mesh.log", args.hf_home
         )
         model_id = wait_for_model(DEFAULT_BASE_URL, args.startup_timeout, process)
-        with urllib.request.urlopen(
-            "http://127.0.0.1:3131/api/runtime", timeout=30
-        ) as response:
-            runtime = json.load(response)
+        runtime, context = wait_for_runtime_context(
+            args.minimum_context_tokens, args.startup_timeout, process
+        )
         write_json(target / "runtime.json", runtime)
-        context = runtime_context(runtime, args.minimum_context_tokens)
         if not args.expected_model_sha256 or any(
             stage.get("source_model_sha256") != args.expected_model_sha256
             for stage in runtime["stages"]
@@ -1735,12 +1769,10 @@ def run_arm_pass(
         )
         model_id = wait_for_model(DEFAULT_BASE_URL, args.startup_timeout, process)
         if args.minimum_context_tokens:
-            with urllib.request.urlopen(
-                "http://127.0.0.1:3131/api/runtime", timeout=30
-            ) as response:
-                current_runtime = json.load(response)
+            current_runtime, _ = wait_for_runtime_context(
+                args.minimum_context_tokens, args.startup_timeout, process
+            )
             write_json(pass_dir / "runtime.json", current_runtime)
-            runtime_context(current_runtime, args.minimum_context_tokens)
             if any(
                 stage.get("source_model_sha256") != args.expected_model_sha256
                 for stage in current_runtime["stages"]
