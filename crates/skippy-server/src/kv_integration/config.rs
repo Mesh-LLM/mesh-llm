@@ -16,9 +16,9 @@ use skippy_protocol::{
 use skippy_runtime::{ModelStateKind, RuntimeKvPageDesc};
 
 use super::{
-    EXACT_STATE_RECORD_CAPACITY, ExactStateByteLimits, KvLifecycleEvent, KvLifecycleObserver,
-    KvStageIntegration, PendingExactStateRecord, RadixExactEntry, ResidentSequencePool,
-    StageKvMode, StagePrefixCachePayload,
+    EXACT_STATE_RECORD_CAPACITY, EXACT_STATE_RECORD_QUEUE_BYTES, ExactStateByteLimits,
+    KvLifecycleEvent, KvLifecycleObserver, KvStageIntegration, PendingExactStateRecord,
+    RadixExactEntry, ResidentSequencePool, StageKvMode, StagePrefixCachePayload,
     model_capability::{ModelKvCapability, loaded_model_kv_capability},
     output_tokens::OutputTokenCache,
 };
@@ -261,6 +261,7 @@ impl KvStageIntegration {
         let (durable_spill_tx, durable_spill_task) = start_durable_spill_worker(
             worker_l3.clone(),
             worker_cachegen,
+            EXACT_STATE_RECORD_QUEUE_BYTES,
             &config.stage_id,
             #[cfg(test)]
             worker_l3_spill_received,
@@ -291,13 +292,11 @@ impl KvStageIntegration {
                         },
                         worker_observer.as_ref(),
                         pending,
-                        |mut pending| {
+                        |pending| {
                             // The serving worker owns only L1/L2 publication.
                             // Durable I/O runs on its own bounded fail-open
                             // worker so an early page spill cannot head-of-line
                             // block later page records needed by a repeat.
-                            let defer_l3_spill = pending.write_through_l3;
-                            pending.write_through_l3 = false;
                             let durable_spill = store_exact_radix_record_with_codec(
                                 &worker_radix,
                                 &worker_exact_blobs,
@@ -307,7 +306,6 @@ impl KvStageIntegration {
                                 DurableRecordTarget {
                                     l3: None,
                                     cachegen_enabled: worker_cachegen,
-                                    defer_l3_spill,
                                     #[cfg(test)]
                                     before_l3_spill: None,
                                 },
@@ -661,7 +659,6 @@ fn store_exact_radix_record(
         DurableRecordTarget {
             l3,
             cachegen_enabled: false,
-            defer_l3_spill: false,
             before_l3_spill: None,
         },
         pending,
@@ -681,7 +678,6 @@ fn store_exact_radix_record_with_codec(
     let DurableRecordTarget {
         l3,
         cachegen_enabled,
-        defer_l3_spill,
         #[cfg(test)]
         before_l3_spill,
     } = durable;
@@ -780,7 +776,7 @@ fn store_exact_radix_record_with_codec(
     // or failing disk must not delay or invalidate the in-memory record. The
     // refusal reason lands in the tier's status; one warning per process keeps
     // a full disk from flooding the log.
-    let durable_spill = (write_through_l3 || defer_l3_spill).then_some(PendingDurableSpill {
+    let durable_spill = write_through_l3.then_some(PendingDurableSpill {
         page_id,
         payload,
         extra,
@@ -1167,7 +1163,6 @@ mod tests {
             DurableRecordTarget {
                 l3: Some(&tier),
                 cachegen_enabled: true,
-                defer_l3_spill: false,
                 before_l3_spill: None,
             },
             pending_kv("cachegen", &tokens, desc.clone(), &budget),
@@ -1215,7 +1210,6 @@ mod tests {
             DurableRecordTarget {
                 l3: Some(&tier),
                 cachegen_enabled: true,
-                defer_l3_spill: false,
                 before_l3_spill: None,
             },
             pending_kv("native", &tokens, desc, &budget),

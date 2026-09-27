@@ -4,8 +4,6 @@ use super::*;
 pub(super) struct DurableRecordTarget<'a> {
     pub(super) l3: Option<&'a L3Tier>,
     pub(super) cachegen_enabled: bool,
-    /// Return a deduplicated payload to the caller for asynchronous spilling.
-    pub(super) defer_l3_spill: bool,
     #[cfg(test)]
     pub(super) before_l3_spill: Option<&'a dyn Fn()>,
 }
@@ -21,8 +19,67 @@ pub(super) struct PendingDurableSpill {
     pub(super) l3_cost: Option<skippy_cache::policy::CostSample>,
 }
 
+struct DurableSpillReservation {
+    bytes: u64,
+    held_bytes: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Drop for DurableSpillReservation {
+    fn drop(&mut self) {
+        self.held_bytes
+            .fetch_sub(self.bytes, std::sync::atomic::Ordering::Release);
+    }
+}
+
+struct QueuedDurableSpill {
+    pending: PendingDurableSpill,
+    _reservation: DurableSpillReservation,
+}
+
+#[derive(Clone)]
+pub(super) struct DurableSpillSender {
+    tx: std::sync::mpsc::SyncSender<QueuedDurableSpill>,
+    held_bytes: Arc<std::sync::atomic::AtomicU64>,
+    byte_cap: u64,
+}
+
+impl DurableSpillSender {
+    fn new(tx: std::sync::mpsc::SyncSender<QueuedDurableSpill>, byte_cap: u64) -> Self {
+        Self {
+            tx,
+            held_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            byte_cap,
+        }
+    }
+
+    /// Queue one spill without ever blocking the serving worker.
+    ///
+    /// The reservation remains live while the spill is queued and while the
+    /// durable worker is writing it. A single oversized spill is admitted only
+    /// when no other spill bytes are outstanding, matching record admission.
+    pub(super) fn try_send(&self, pending: PendingDurableSpill) -> bool {
+        let bytes = pending.payload.byte_len();
+        let held = self
+            .held_bytes
+            .fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
+        if !super::super::record_fits_queue(held, bytes, self.byte_cap) {
+            self.held_bytes
+                .fetch_sub(bytes, std::sync::atomic::Ordering::Release);
+            return false;
+        }
+        let queued = QueuedDurableSpill {
+            pending,
+            _reservation: DurableSpillReservation {
+                bytes,
+                held_bytes: Arc::clone(&self.held_bytes),
+            },
+        };
+        self.tx.try_send(queued).is_ok()
+    }
+}
+
 type DurableSpillWorker = (
-    Option<std::sync::mpsc::SyncSender<PendingDurableSpill>>,
+    Option<DurableSpillSender>,
     Option<std::thread::JoinHandle<()>>,
 );
 
@@ -30,6 +87,7 @@ type DurableSpillWorker = (
 pub(super) fn start_durable_spill_worker(
     l3: Option<Arc<L3Tier>>,
     cachegen_enabled: bool,
+    byte_cap: u64,
     stage_id: &str,
     #[cfg(test)] received: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)] pause: Arc<std::sync::atomic::AtomicBool>,
@@ -37,12 +95,16 @@ pub(super) fn start_durable_spill_worker(
     let Some(l3) = l3 else {
         return Ok((None, None));
     };
-    let (tx, rx) =
-        std::sync::mpsc::sync_channel::<PendingDurableSpill>(EXACT_STATE_RECORD_CAPACITY);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<QueuedDurableSpill>(EXACT_STATE_RECORD_CAPACITY);
+    let sender = DurableSpillSender::new(tx, byte_cap);
     let task = std::thread::Builder::new()
         .name(format!("skippy-l3-spill-{stage_id}"))
         .spawn(move || {
-            while let Ok(pending) = rx.recv() {
+            while let Ok(queued) = rx.recv() {
+                let QueuedDurableSpill {
+                    pending,
+                    _reservation,
+                } = queued;
                 #[cfg(test)]
                 received.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                 #[cfg(test)]
@@ -52,7 +114,7 @@ pub(super) fn start_durable_spill_worker(
                 spill_exact_record_to_l3(&l3, cachegen_enabled, pending);
             }
         })?;
-    Ok((Some(tx), Some(task)))
+    Ok((Some(sender), Some(task)))
 }
 
 /// Persists one exact-state payload without affecting its already-published L1 entry.
@@ -135,5 +197,47 @@ pub(super) fn spill_exact_record_to_l3(
                 context: Some(format!("page_id={page_id} reason={error:#}")),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending(bytes: usize) -> PendingDurableSpill {
+        PendingDurableSpill {
+            page_id: format!("spill-{bytes}"),
+            payload: skippy_cache::ExactStatePayload::full_state(vec![7; bytes]),
+            extra: super::super::super::ExactStateExtra::default(),
+            namespace: "model".to_string(),
+            token_ids: vec![1, 2],
+            l3_cost: None,
+        }
+    }
+
+    #[test]
+    fn spill_byte_reservation_covers_queued_and_active_payloads() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(2);
+        let sender = DurableSpillSender::new(tx, 10);
+
+        assert!(sender.try_send(pending(8)));
+        assert!(!sender.try_send(pending(8)));
+        assert_eq!(
+            sender.held_bytes.load(std::sync::atomic::Ordering::Acquire),
+            8
+        );
+
+        let active = rx.recv().unwrap();
+        assert_eq!(
+            sender.held_bytes.load(std::sync::atomic::Ordering::Acquire),
+            8
+        );
+        drop(active);
+        assert_eq!(
+            sender.held_bytes.load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+
+        assert!(sender.try_send(pending(8)));
     }
 }

@@ -35,7 +35,6 @@ fn l1_is_visible_while_l3_spill_is_blocked() {
                 DurableRecordTarget {
                     l3: Some(worker_tier),
                     cachegen_enabled: false,
-                    defer_l3_spill: false,
                     before_l3_spill: Some(&before_l3_spill),
                 },
                 pending("first", &[1, 2], b"first-exact-state", worker_budget),
@@ -197,16 +196,24 @@ fn blocked_l3_spill_does_not_head_of_line_block_later_l1_records() {
     );
     kv.wait_for_exact_state_recording(wait)
         .expect("second L1 record must not wait for the first L3 spill");
-    let both_visible = {
+    let (both_visible, promotion_eligible) = {
         let mut radix = kv.radix.lock().unwrap();
-        radix.recurrent_exact("model", &[1, 2]).is_some()
-            && radix.recurrent_exact("model", &[1, 2, 3]).is_some()
+        let both_visible = radix.recurrent_exact("model", &[1, 2]).is_some()
+            && radix.recurrent_exact("model", &[1, 2, 3]).is_some();
+        let promotion_eligible = radix
+            .peek_recurrent("model", &[1, 2, 3])
+            .is_some_and(|entry| entry.value.l3_promotion_eligible);
+        (both_visible, promotion_eligible)
     };
     drop(spill_pause_guard);
 
     assert!(
         both_visible,
         "both L1 records must be visible while the first durable spill is blocked"
+    );
+    assert!(
+        promotion_eligible,
+        "an async spill refusal must leave the L1 entry eligible for later promotion"
     );
     drop(kv);
     let _ = std::fs::remove_dir_all(root);
