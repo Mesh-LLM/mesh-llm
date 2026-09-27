@@ -282,7 +282,7 @@ pub(super) async fn run_runtime_cli(
     // publishes readiness well before the serving loops await the signal, so a
     // handler installed at loop entry can miss a SIGTERM that arrives in
     // between and leave the daemon running until it is killed (#1812).
-    super::shutdown_signal::install_shutdown_signals();
+    super::shutdown_signal::install_shutdown_signals()?;
 
     options.validate_discovery_mode_args()?;
 

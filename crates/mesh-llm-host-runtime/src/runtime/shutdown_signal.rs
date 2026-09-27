@@ -92,17 +92,16 @@ struct InstallState {
 
 /// Register the process termination-signal handlers once.
 ///
-/// Idempotent, and safe to call from any async context in the process. Failures
-/// are reported rather than fatal: without a handler the platform default
-/// disposition terminates the process, which is the outcome a graceful
-/// shutdown reaches anyway.
-pub(crate) fn install_shutdown_signals() {
+/// Idempotent, and safe to call from any async context in the process. An
+/// incomplete installation returns an error so startup cannot advertise
+/// readiness before termination signals can be observed.
+pub(crate) fn install_shutdown_signals() -> io::Result<()> {
     let mut installation = INSTALL.lock().unwrap_or_else(PoisonError::into_inner);
     if DELIVERY.get().is_some() {
-        return;
+        return Ok(());
     }
     if forwarder_is_still_starting(&mut installation) {
-        return;
+        return Err(forwarder_start_timeout(FORWARDER_START_TIMEOUT));
     }
     let delivery = installation
         .delivery
@@ -112,7 +111,14 @@ pub(crate) fn install_shutdown_signals() {
     let forwarder = std::thread::Builder::new()
         .name(FORWARDER_THREAD_NAME.to_owned())
         .spawn(move || run_shutdown_forwarder(delivery, started_tx));
-    wait_for_forwarder_start(&mut installation, forwarder, started_rx);
+    wait_for_forwarder_start(&mut installation, forwarder, started_rx)
+}
+
+fn forwarder_start_timeout(timeout: Duration) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("termination-signal forwarder did not start within {timeout:?}"),
+    )
 }
 
 /// A timed-out start can still finish later. Avoid spawning another observer
@@ -145,53 +151,37 @@ fn wait_for_forwarder_start(
     installation: &mut InstallState,
     forwarder: io::Result<std::thread::JoinHandle<()>>,
     started: mpsc::Receiver<Result<(), String>>,
-) {
+) -> io::Result<()> {
     // Detached on purpose: the forwarder observes signals for the life of the
     // process, and an unjoined thread does not hold the process open.
-    let _forwarder = match forwarder {
-        Ok(forwarder) => forwarder,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                "could not start the termination-signal forwarder; the platform default disposition applies"
-            );
-            return;
-        }
-    };
-    record_forwarder_start_result(installation, started);
+    let _forwarder = forwarder?;
+    record_forwarder_start_result(installation, started, FORWARDER_START_TIMEOUT)
 }
 
 /// Retain a timed-out attempt so a later caller does not spawn a second one.
 fn record_forwarder_start_result(
     installation: &mut InstallState,
     started: mpsc::Receiver<Result<(), String>>,
-) {
-    match started.recv_timeout(FORWARDER_START_TIMEOUT) {
-        Ok(result) => report_forwarder_start_result(result),
-        Err(mpsc::RecvTimeoutError::Disconnected) => tracing::warn!(
-            "the termination-signal forwarder exited before registering its signal streams; \
-             the platform default disposition applies"
-        ),
+    timeout: Duration,
+) -> io::Result<()> {
+    match started.recv_timeout(timeout) {
+        Ok(result) => result.map_err(io::Error::other),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "termination-signal forwarder exited before registering its signal streams",
+        )),
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            tracing::warn!("timed out waiting for the termination-signal forwarder to start");
             installation.starting = Some(started);
+            Err(forwarder_start_timeout(timeout))
         }
-    }
-}
-
-/// Report a startup failure while leaving installation available for retry.
-fn report_forwarder_start_result(result: Result<(), String>) {
-    if let Err(cause) = result {
-        tracing::warn!(
-            %cause,
-            "the termination-signal forwarder could not start; the platform default disposition applies"
-        );
     }
 }
 
 /// Wait for a termination signal, including one delivered before this call.
 pub(crate) async fn wait_for_shutdown_signal() -> &'static str {
-    install_shutdown_signals();
+    if let Err(error) = install_shutdown_signals() {
+        tracing::warn!(%error, "termination-signal installation incomplete; retaining the fallback");
+    }
     match DELIVERY.get() {
         Some(delivery) => delivery.wait().await,
         None => {
@@ -368,6 +358,20 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    #[test]
+    fn startup_times_out_when_the_forwarder_has_not_registered() {
+        let mut installation = InstallState {
+            delivery: None,
+            starting: None,
+        };
+        let (_started_tx, started_rx) = mpsc::channel();
+        let error =
+            record_forwarder_start_result(&mut installation, started_rx, Duration::from_millis(10))
+                .expect_err("startup must not continue without registered signal streams");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(installation.starting.is_some(), "retain the late forwarder");
+    }
+
     /// A signal delivered while nothing is awaiting the shutdown signal must
     /// still be observed by the next waiter.
     #[tokio::test]
@@ -457,7 +461,7 @@ mod tests {
             .build()
             .expect("a runtime to install the handlers from");
         installing.block_on(async {
-            super::install_shutdown_signals();
+            super::install_shutdown_signals().expect("the forwarder to register its streams");
         });
         assert!(
             DELIVERY.get().is_some(),
