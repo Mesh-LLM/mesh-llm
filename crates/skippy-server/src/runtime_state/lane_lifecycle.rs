@@ -5,8 +5,13 @@ impl RuntimeState {
         &mut self,
         target_idle_sessions: usize,
     ) -> Result<RuntimeSessionStats> {
-        let target_idle_sessions =
-            capped_target_idle_sessions(target_idle_sessions, self.max_idle_sessions);
+        // A System One read claims the model's execution lane itself; an idle
+        // session parked on it would make every read fail as busy.
+        let target_idle_sessions = if self.serves_system_one() {
+            0
+        } else {
+            capped_target_idle_sessions(target_idle_sessions, self.max_idle_sessions)
+        };
         while self.idle_sessions.len() < target_idle_sessions {
             if self.sessions.len() + self.idle_sessions.len() >= self.lane_count as usize {
                 break;
@@ -17,6 +22,11 @@ impl RuntimeState {
         Ok(self.session_stats())
     }
 
+    /// Only DiffusionGemma reports a System One canvas.
+    fn serves_system_one(&self) -> bool {
+        self.model.system_one_canvas_length().is_ok()
+    }
+
     pub(crate) fn warmup_generation_graph(&self) -> Result<bool> {
         if self.model.input_activation_boundary().is_some()
             || self.model.output_activation_boundary().is_some()
@@ -25,7 +35,7 @@ impl RuntimeState {
         }
         // DiffusionGemma runs non-causally with no KV memory, so a decode
         // step has no graph to warm and the reset would fail.
-        if self.model.system_one_canvas_length().is_ok() {
+        if self.serves_system_one() {
             return Ok(false);
         }
         let token_id = self
