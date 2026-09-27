@@ -4,6 +4,8 @@ use super::*;
 pub(super) struct DurableRecordTarget<'a> {
     pub(super) l3: Option<&'a L3Tier>,
     pub(super) cachegen_enabled: bool,
+    /// Return a deduplicated payload to the caller for asynchronous spilling.
+    pub(super) defer_l3_spill: bool,
     #[cfg(test)]
     pub(super) before_l3_spill: Option<&'a dyn Fn()>,
 }

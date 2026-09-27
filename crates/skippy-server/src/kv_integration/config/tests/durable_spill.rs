@@ -35,6 +35,7 @@ fn l1_is_visible_while_l3_spill_is_blocked() {
                 DurableRecordTarget {
                     l3: Some(worker_tier),
                     cachegen_enabled: false,
+                    defer_l3_spill: false,
                     before_l3_spill: Some(&before_l3_spill),
                 },
                 pending("first", &[1, 2], b"first-exact-state", worker_budget),

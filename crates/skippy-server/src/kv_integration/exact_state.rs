@@ -596,6 +596,7 @@ impl KvStageIntegration {
                 }
             };
         let probation_recurrence = already_recorded
+            && write_through_l3
             && l3_cost.is_some()
             && self.l3.as_ref().is_some_and(|l3| {
                 l3.benefit_tracks_prefix(&identity.namespace, &identity.token_ids)
