@@ -159,7 +159,7 @@ fn smoke_inline_contracts_bind_each_physical_occurrence() -> DynResult<()> {
     let validated = observed.iter().map(|row| row.id.clone()).collect();
 
     let graph = report(root.as_path(), &files, &observed, &validated, &[path])?;
-    for line in [37, 46, 123, 150, 280] {
+    for line in [39, 48, 139, 166, 296] {
         let edge = graph
             .edges
             .iter()
@@ -175,12 +175,12 @@ fn smoke_inline_contracts_bind_each_physical_occurrence() -> DynResult<()> {
         graph
             .edges
             .iter()
-            .find(|edge| edge.line == 46)
+            .find(|edge| edge.line == 48)
             .and_then(|edge| edge.contract_source.as_ref()),
         graph
             .edges
             .iter()
-            .find(|edge| edge.line == 280)
+            .find(|edge| edge.line == 296)
             .and_then(|edge| edge.contract_source.as_ref())
     );
     Ok(())
