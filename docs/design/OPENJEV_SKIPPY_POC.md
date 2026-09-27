@@ -213,7 +213,16 @@ full-model worker in the mesh is the shortest honest proof.
 
 [Laya](https://huggingface.co/convaiinnovations/laya-multilingual) is a
 second System One backend behind the same `POST /systemone` route, request
-validation, aliases, and answer mapping. It is a 322M-parameter mmBERT encoder
+validation, aliases, and answer mapping.
+
+Both backends implement one `skippy_runtime::DecisionModel`: they take a
+`DecisionRequest` (state plus typed `noul` / `choice` / `score` questions,
+options in request order, and a per-request seed) and return one
+distribution per question. Each backend builds its own native input behind
+that interface — the DiffusionGemma answer canvas, or one Laya encoder
+sequence per question — so the HTTP frontend holds only the Jev contract.
+Moving that interface into the native ABI is a follow-up, planned after the
+System One image work lands. It is a 322M-parameter mmBERT encoder
 with a typed decision head: each question becomes one encoder sequence, and
 every option is scored at its own `[MASK]` marker in a single forward pass.
 There is no chat template, answer canvas, or text generation.

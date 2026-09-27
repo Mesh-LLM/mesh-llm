@@ -6,6 +6,7 @@ mod activation;
 mod capability_probe;
 mod checkpoint;
 mod config;
+mod decision;
 mod devices;
 mod error;
 mod gguf_writer;
@@ -35,6 +36,10 @@ pub use config::{
     GGML_TYPE_Q8_0, GlmDsaPolicy, LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH,
     MtpSource, RuntimeConfig, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SplitMode, parse_cache_type,
 };
+pub use decision::{
+    DecisionError, DecisionModel, DecisionOutput, DecisionQuestion, DecisionQuestionKind,
+    DecisionRequest, DecisionValue,
+};
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub(crate) use error::ensure_ok;
 pub use gguf_writer::{
@@ -42,7 +47,7 @@ pub use gguf_writer::{
     write_gguf_metadata_from_parts,
 };
 pub use kv_pages::{decode_cachegen_kv_page, encode_cachegen_kv_page};
-pub use laya::{LayaModel, LayaModelInfo, LayaQuestionType, LayaReadOutput, LayaSequence};
+pub use laya::{LayaModel, LayaModelInfo};
 pub use logging::{
     LLAMA_LOG_LEVEL_DEBUG, MeasuredNativeBuffers, NativeLogEvent, NativeLogParserMode,
     NativeLogParserPolicy, configure_native_log_parser, disable_verbose_native_logs,

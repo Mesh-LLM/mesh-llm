@@ -9,7 +9,7 @@ use crate::path_cstring::path_to_cstring;
 
 /// Question types the Laya decision head distinguishes, in native order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LayaQuestionType {
+pub(crate) enum LayaQuestionType {
     Choice,
     Score,
     Noul,
@@ -17,7 +17,7 @@ pub enum LayaQuestionType {
 
 impl LayaQuestionType {
     /// The native qtype index; also the index into [`LayaModelInfo::temperature`].
-    pub fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         match self {
             Self::Choice => 0,
             Self::Score => 1,
@@ -45,20 +45,20 @@ pub struct LayaModelInfo {
 
 /// One question sequence: `[CLS] head [SEP] ([MASK] option)* [SEP] state [SEP]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LayaSequence {
-    pub tokens: Vec<i32>,
-    pub question_type: LayaQuestionType,
+pub(crate) struct LayaSequence {
+    pub(crate) tokens: Vec<i32>,
+    pub(crate) question_type: LayaQuestionType,
     /// Sequence-local positions of each option's `[MASK]` marker.
-    pub markers: Vec<u32>,
+    pub(crate) markers: Vec<u32>,
 }
 
 /// Raw per-question outputs of one Laya read.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LayaReadOutput {
+pub(crate) struct LayaReadOutput {
     /// One scorer logit per option marker.
-    pub logits: Vec<f32>,
+    pub(crate) logits: Vec<f32>,
     /// Action-head logits.
-    pub act_logits: Vec<f32>,
+    pub(crate) act_logits: Vec<f32>,
 }
 
 /// A loaded Laya decision model (encoder + typed decision head).
@@ -178,7 +178,7 @@ impl LayaModel {
     }
 
     /// Runs one decision read over every question sequence.
-    pub fn read(&self, sequences: &[LayaSequence]) -> Result<Vec<LayaReadOutput>> {
+    pub(crate) fn read(&self, sequences: &[LayaSequence]) -> Result<Vec<LayaReadOutput>> {
         if sequences.is_empty() {
             return Err(anyhow!("a Laya read needs at least one question"));
         }

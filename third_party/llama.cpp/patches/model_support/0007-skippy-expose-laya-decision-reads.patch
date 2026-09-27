@@ -15,7 +15,7 @@ ggml-cpu directly.
 ---
  include/skippy.h          |   1 +
  include/skippy/common.h   |   4 +-
- include/skippy/laya.h     | 111 +++++++++++++++++
+ include/skippy/laya.h     | 128 +++++++++++++++++++
  src/CMakeLists.txt        |   4 +-
  src/llama-model.cpp       |   2 +
  src/skippy/abi.cpp        |   3 +-
@@ -23,7 +23,7 @@ ggml-cpu directly.
  tools/laya/CMakeLists.txt |  21 +---
  tools/laya/laya.cpp       |  56 +++++++--
  tools/laya/laya.h         |   3 +
- 10 files changed, 428 insertions(+), 27 deletions(-)
+ 10 files changed, 445 insertions(+), 27 deletions(-)
  create mode 100644 include/skippy/laya.h
  create mode 100644 src/skippy/laya.cpp
 
@@ -62,10 +62,10 @@ index 0ff24e80b..343ff1616 100644
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/include/skippy/laya.h b/include/skippy/laya.h
 new file mode 100644
-index 000000000..1f8078a92
+index 000000000..9cb6f5148
 --- /dev/null
 +++ b/include/skippy/laya.h
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,128 @@
 +#ifndef SKIPPY_LAYA_H
 +#define SKIPPY_LAYA_H
 +
@@ -91,13 +91,14 @@ index 000000000..1f8078a92
 +
 +struct skippy_laya_model;
 +
-+/** Question types in the order the decision head was trained with. */
++/** @brief Question types, in the order the decision head was trained with. */
 +enum skippy_laya_qtype {
 +    SKIPPY_LAYA_QTYPE_CHOICE = 0,
 +    SKIPPY_LAYA_QTYPE_SCORE  = 1,
 +    SKIPPY_LAYA_QTYPE_NOUL   = 2,
 +};
 +
++/** @brief Sequence budgets, special tokens, and temperatures of an opened Laya model. */
 +struct skippy_laya_info_v1 {
 +    uint32_t struct_size;
 +    uint32_t abi_version;
@@ -115,7 +116,7 @@ index 000000000..1f8078a92
 +    float    temperature[SKIPPY_LAYA_QTYPE_COUNT];
 +};
 +
-+/** One question sequence inside a packed read. */
++/** @brief One question sequence inside a packed read. */
 +struct skippy_laya_sequence {
 +    size_t  token_offset;   /**< first token in the packed token array */
 +    size_t  token_count;
@@ -124,22 +125,35 @@ index 000000000..1f8078a92
 +    size_t  marker_count;   /**< 1..max_markers option markers */
 +};
 +
++/**
++ * @brief Opens a Laya GGUF with its own loader; not a `skippy_model`.
++ *
++ * Weights go to the first accelerator when one exists, with the CPU backend
++ * behind it for any unsupported op. `n_threads` sizes the CPU backend.
++ */
 +LLAMA_API enum skippy_status skippy_laya_model_open(
 +        const char * model_path,
 +        int32_t n_threads,
 +        struct skippy_laya_model ** out_model,
 +        struct skippy_error ** out_error);
 +
++/** @brief Releases a model returned by `skippy_laya_model_open`. */
 +LLAMA_API void skippy_laya_model_free(struct skippy_laya_model * model);
 +
++/**
++ * @brief Reports the model's sequence budgets, special tokens, and temperatures.
++ *
++ * `out_info` must be initialized with its `struct_size` and `abi_version`.
++ */
 +LLAMA_API enum skippy_status skippy_laya_model_info_v1(
 +        const struct skippy_laya_model * model,
 +        struct skippy_laya_info_v1 * out_info,
 +        struct skippy_error ** out_error);
 +
 +/**
-+ * Tokenizes UTF-8 text without special tokens using the model's own
-+ * Metaspace + BPE tokenizer. Returns SKIPPY_STATUS_BUFFER_TOO_SMALL with
++ * @brief Tokenizes UTF-8 text with the model's own Metaspace + BPE tokenizer.
++ *
++ * No special tokens are added. Returns SKIPPY_STATUS_BUFFER_TOO_SMALL with
 + * `out_token_count` set to the required length when `capacity` is short.
 + */
 +LLAMA_API enum skippy_status skippy_laya_tokenize(
@@ -152,11 +166,14 @@ index 000000000..1f8078a92
 +        struct skippy_error ** out_error);
 +
 +/**
-+ * Runs one packed forward pass. `marker_positions` are sequence-local token
-+ * indices. Outputs are row-major per sequence: `out_logits` holds
-+ * `sequence_count * max_markers` scorer logits (unused markers are 0) and
-+ * `out_act_logits` holds `sequence_count * n_act` action-head logits.
-+ * Calls are serialized per model.
++ * @brief Scores every question's options in one packed forward pass.
++ *
++ * `marker_positions` are sequence-local token indices. Outputs are row-major
++ * per sequence: `out_logits` holds `sequence_count * max_markers` scorer
++ * logits (unused markers are 0) and `out_act_logits` holds
++ * `sequence_count * n_act` action-head logits. Calls are serialized per
++ * model, and a read larger than 4,096 tokens runs as several passes split
++ * between sequences, because each pass builds dense attention masks.
 + */
 +LLAMA_API enum skippy_status skippy_laya_read(
 +        struct skippy_laya_model * model,
