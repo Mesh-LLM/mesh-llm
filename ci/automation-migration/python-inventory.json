@@ -3,15 +3,15 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
   "reproducible_reconciliation": "cargo xtool automation inventory --check compares tracked .py paths with files[].path and validates four source-bound candidate shards; this does not prove full interpreter reachability",
-  "tracked_file_count": 284,
+  "tracked_file_count": 285,
   "baseline_comparison": {
     "plan_hint": 260,
-    "actual": 284,
-    "mismatch": 24,
+    "actual": 285,
+    "mismatch": 25,
     "note": "Current exact path census supersedes the stale hint; former directory breakdown was not assumed."
   },
   "path_reconciliation": {
-    "method": "Independent sorted-set comparison of GIT_MASTER=1 git ls-files '*.py' against files[].path; current recorded evidence: 284 tracked, 284 ledger paths, 0 missing, 0 extra.",
+    "method": "Independent sorted-set comparison of GIT_MASTER=1 git ls-files '*.py' against files[].path; current recorded evidence: 285 tracked, 285 ledger paths, 0 missing, 0 extra.",
     "tracked_paths_are_authoritative": true,
     "dynamic_import_targets_are_not_counted_as_new_paths": true,
     "scope_note": "This reconciles file paths only; it does not prove invocation reachability or call-contract completeness."
@@ -190,6 +190,7 @@
     {"path":"scripts/tests/test_ci_workflow_container_shell_contract.py","classification":"generic workflow static contract test","required":true,"replacement_owner":"tools/xtask ci_validation","phase":2,"exception":null,"deletion_condition":"Shell/container contract remains tested by Rust parser."},
     {"path":"scripts/tests/test_ci_workflow_permission_contract.py","classification":"generic workflow permission test","required":true,"replacement_owner":"tools/xtask ci_validation","phase":2,"exception":null,"deletion_condition":"Permission graph test runs under required Rust suite."},
     {"path":"scripts/tests/test_ci_workflow_ternary_contract.py","classification":"generic workflow static contract test","required":true,"replacement_owner":"tools/xtask ci_validation","phase":2,"exception":null,"deletion_condition":"Expression contract coverage migrated."},
+    {"path":"scripts/tests/test_claude_compatibility_workflow.py","classification":"generic workflow contract test","required":true,"replacement_owner":"tools/xtask ci_validation","phase":2,"exception":null,"deletion_condition":"Claude Code PR integration and manual live-gate workflow contracts remain covered by Rust tests."},
     {"path":"scripts/tests/test_cleanup_self_hosted.py","classification":"generic cleanup safety test","required":true,"replacement_owner":"tools/xtask process tests","phase":2,"exception":null,"deletion_condition":"Bounded cleanup behavior covered in Rust and platform checks."},
     {"path":"scripts/tests/test_cli_inventory_contract.py","classification":"generic CLI contract test","required":true,"replacement_owner":"tools/xtask ci_validation","phase":2,"exception":null,"deletion_condition":"Generated CLI inventory check moved to Rust and remains required."},
     {"path":"scripts/tests/test_collect_ci_metrics.py","classification":"generic metrics evidence test","required":true,"replacement_owner":"tools/xtask automation evidence tests","phase":2,"exception":null,"deletion_condition":"Schema-v3 reports and failures match in Rust."},
