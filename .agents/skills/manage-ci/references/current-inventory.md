@@ -321,9 +321,9 @@ checks all four supported Node addon archives and checksum sidecars before
 creating the GitHub release, matching the downstream npm assembly matrix. It
 creates only the release-specific tag commit
 for generated Swift/SDK resources and enables GitHub-generated release notes.
-The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
-target; prerelease tags are excluded so RC and final notes use the same stable
-baseline.
+The comparison base is selected by `cargo xtool release notes-base` from the
+highest stable `vMAJOR.MINOR.PATCH` tag below the target; prerelease tags are
+excluded so RC and final notes use the same stable baseline.
 The stable crates.io preflight and publisher each download the versioned Linux x86_64 release
 archive and checksum sidecar after GitHub release publication, verifies the
 checksum and required native libraries (`libmtmd.so`, `libllama-common.so`,
@@ -332,7 +332,8 @@ verification. The resume workflow uses the same release-archive contract.
 
 The `release_notes` job runs after a successful stable publish with
 `contents: write` and regroups that published body into Keep a Changelog
-sections through `scripts/release-notes-generate.sh`. The deterministic
+sections through `scripts/release-notes-generate.sh`, which calls `cargo xtool
+release notes-link`, `notes-classify`, and `notes-regroup`. The deterministic
 classifier maps Conventional Commits types from the canonical commit range; the
 optional agent review pass runs only when `RELEASE_NOTES_AGENT_MODEL` is set,
 the agent CLI is installed, credentials exist, and a bounded liveness probe
