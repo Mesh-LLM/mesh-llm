@@ -166,6 +166,7 @@ async fn wait_for_shutdown_signal_installation_with(
     }
 }
 
+#[derive(Debug)]
 enum ForwarderStartState {
     Idle,
     Starting,
