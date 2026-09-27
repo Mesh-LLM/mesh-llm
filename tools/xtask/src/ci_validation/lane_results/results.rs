@@ -178,6 +178,8 @@ impl Planner<'_> {
         );
         let checks = !self.rows("platform_checks")?.is_empty();
         self.add(checks, &["platform_checks"]);
+        let smoke = !self.rows("smoke")?.is_empty();
+        self.add(smoke, &["product_smoke"]);
         Ok(())
     }
 }

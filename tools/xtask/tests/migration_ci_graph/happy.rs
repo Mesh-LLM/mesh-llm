@@ -84,6 +84,17 @@ fn migration_ci_graph_unplanned_skip_passes_and_missing_rows_default_to_empty() 
 }
 
 #[test]
+fn migration_ci_graph_windows_smoke_requires_success_when_selected() -> TestResult {
+    // Given: a Windows projection with only the smoke matrix selected.
+    let plan = r#"{"lane":"windows","required":true,"required_slices":[],"matrices":{"smoke":[{"id":"windows-cpu"}]}}"#;
+    // When: the smoke consumer succeeds.
+    let output = Call::lane(plan, r#"{"product_smoke":{"result":"success"}}"#).run()?;
+    // Then: the lane accepts the selected consumer.
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    Ok(())
+}
+
+#[test]
 fn migration_ci_graph_real_entrypoints_keep_five_native_lanes() -> TestResult {
     // Given: the checked-in PR, main and manual-full entrypoints.
     let workflows = repository_root().join(".github/workflows");
