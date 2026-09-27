@@ -23,8 +23,11 @@ mod tests;
 
 pub use apply::{ReduceOutcome, ReducerInput, apply, evict};
 pub use domain::{
-    CacheDomainState, DeviceDomainState, DomainState, ModelDomainState, RequestDomainState,
-    SessionRecentEntry, StageDomainState,
+    ACTIVE_WARNING_BOUND, CacheDomainState, DeviceDomainState, DiagnosticDomainState,
+    DiagnosticEntry, DomainState, EventSystemHealthDomainState, ModelDomainState,
+    NODE_CAPACITY_KEY_BOUND, NativeRuntimeDomainState, NodeAvailabilityDomainState,
+    RequestDomainState, RequestGenerationState, RequestPrefillState, SessionRecentEntry,
+    StageDomainState, WARNING_CORRELATION_KEY,
 };
 pub use rebuild::{RebuildError, RebuildOutcome, rebuild};
 pub use state::{OperationState, ReducerSnapshot, RejectReason};

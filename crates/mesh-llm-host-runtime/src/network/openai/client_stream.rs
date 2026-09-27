@@ -35,20 +35,43 @@ async fn wait_for_tcp_disconnect(stream: &TcpStream) -> TcpDisconnectWatch {
 /// authenticated QUIC bi-stream, which enters the same request path without
 /// opening a second plaintext loopback connection.
 pub(crate) enum ClientStream {
-    Tcp(TcpStream),
+    Tcp {
+        stream: TcpStream,
+        anthropic: bool,
+    },
     Quic {
         stream: QuicBiStream,
+        anthropic: bool,
         prefix: std::io::Cursor<Vec<u8>>,
     },
 }
 
 impl From<TcpStream> for ClientStream {
     fn from(stream: TcpStream) -> Self {
-        Self::Tcp(stream)
+        Self::Tcp {
+            stream,
+            anthropic: false,
+        }
     }
 }
 
 impl ClientStream {
+    pub(crate) fn set_client_path(&mut self, path: &str) {
+        let messages = matches!(
+            path.split('?').next(),
+            Some("/v1/messages" | "/v1/messages/count_tokens")
+        );
+        match self {
+            Self::Tcp { anthropic, .. } | Self::Quic { anthropic, .. } => *anthropic = messages,
+        }
+    }
+
+    pub(crate) fn is_anthropic(&self) -> bool {
+        match self {
+            Self::Tcp { anthropic, .. } | Self::Quic { anthropic, .. } => *anthropic,
+        }
+    }
+
     pub(crate) fn from_quic_with_prefix(
         recv: iroh::endpoint::RecvStream,
         send: iroh::endpoint::SendStream,
@@ -56,17 +79,18 @@ impl ClientStream {
     ) -> Self {
         Self::Quic {
             stream: tokio::io::join(recv, send),
+            anthropic: false,
             prefix: std::io::Cursor::new(prefix),
         }
     }
 
     pub(crate) async fn connect<A: tokio::net::ToSocketAddrs>(addr: A) -> std::io::Result<Self> {
-        TcpStream::connect(addr).await.map(Self::Tcp)
+        TcpStream::connect(addr).await.map(Self::from)
     }
 
     pub(crate) fn set_nodelay(&self, nodelay: bool) -> std::io::Result<()> {
         match self {
-            Self::Tcp(stream) => stream.set_nodelay(nodelay),
+            Self::Tcp { stream, .. } => stream.set_nodelay(nodelay),
             Self::Quic { .. } => Ok(()),
         }
     }
@@ -79,7 +103,7 @@ impl ClientStream {
     /// a locally finished response is not a disconnect signal.
     pub(crate) async fn wait_for_response_disconnect(&self) -> bool {
         match self {
-            Self::Tcp(stream) => match wait_for_tcp_disconnect(stream).await {
+            Self::Tcp { stream, .. } => match wait_for_tcp_disconnect(stream).await {
                 TcpDisconnectWatch::Disconnected => true,
                 TcpDisconnectWatch::PipelinedBytes => std::future::pending::<bool>().await,
             },
@@ -92,7 +116,7 @@ impl ClientStream {
 
     pub(crate) fn peer_addr(&self) -> std::io::Result<SocketAddr> {
         match self {
-            Self::Tcp(stream) => stream.peer_addr(),
+            Self::Tcp { stream, .. } => stream.peer_addr(),
             Self::Quic { .. } => Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "QUIC ingress does not expose a socket address",
@@ -108,8 +132,8 @@ impl AsyncRead for ClientStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
-            Self::Tcp(stream) => Pin::new(stream).poll_read(cx, buf),
-            Self::Quic { stream, prefix } => {
+            Self::Tcp { stream, .. } => Pin::new(stream).poll_read(cx, buf),
+            Self::Quic { stream, prefix, .. } => {
                 let position = prefix.position() as usize;
                 let bytes = prefix.get_ref();
                 if position < bytes.len() {
@@ -132,21 +156,21 @@ impl AsyncWrite for ClientStream {
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         match self.get_mut() {
-            Self::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Tcp { stream, .. } => Pin::new(stream).poll_write(cx, buf),
             Self::Quic { stream, .. } => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
-            Self::Tcp(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Tcp { stream, .. } => Pin::new(stream).poll_flush(cx),
             Self::Quic { stream, .. } => Pin::new(stream).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
-            Self::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Tcp { stream, .. } => Pin::new(stream).poll_shutdown(cx),
             Self::Quic { stream, .. } => Pin::new(stream).poll_shutdown(cx),
         }
     }

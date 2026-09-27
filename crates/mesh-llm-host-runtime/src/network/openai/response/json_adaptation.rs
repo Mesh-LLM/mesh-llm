@@ -34,31 +34,117 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
+    relay_translated_json(
+        tcp_stream,
+        reader,
+        probe,
+        retry_policy,
+        served_by,
+        route_observer,
+        false,
+    )
+    .await
+}
+
+pub(in crate::network::openai::response) async fn relay_translated_messages_json<
+    R: AsyncRead + Unpin,
+>(
+    tcp_stream: &mut ClientStream,
+    reader: &mut R,
+    probe: ResponseProbe,
+    retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> Result<RouteAttemptResult> {
+    relay_translated_json(
+        tcp_stream,
+        reader,
+        probe,
+        retry_policy,
+        served_by,
+        route_observer,
+        true,
+    )
+    .await
+}
+
+pub(in crate::network::openai::response) async fn relay_translated_json<R: AsyncRead + Unpin>(
+    tcp_stream: &mut ClientStream,
+    reader: &mut R,
+    probe: ResponseProbe,
+    retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
+    route_observer: OpenAiRouteObserver<'_>,
+    anthropic: bool,
+) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
 
-    if !(200..300).contains(&probe.status_code) {
+    if !anthropic && !(200..300).contains(&probe.status_code) {
         return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
     }
+    let status_code = if anthropic { probe.status_code } else { 200 };
     let mut buffered = probe.buffered;
     let parsed = try_parse_response_headers(&buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    let body_end = read_transformed_response_body(
-        reader,
-        &mut buffered,
-        parsed.header_end,
-        parsed.content_length,
-        TRANSFORMED_RESPONSE_READ_LIMITS,
-    )
-    .await?;
-    let body = &buffered[parsed.header_end..body_end];
+    let decoded;
+    let body = if parsed.chunked {
+        let mut framed = super::body_reader::BodyReader::new(
+            reader,
+            buffered[parsed.header_end..].to_vec(),
+            true,
+            None,
+        );
+        let mut output = Vec::new();
+        while let Some(bytes) =
+            tokio::time::timeout(TRANSFORMED_RESPONSE_READ_LIMITS.idle_timeout, framed.next())
+                .await??
+        {
+            if output.len().saturating_add(bytes.len())
+                > TRANSFORMED_RESPONSE_READ_LIMITS.max_body_bytes
+            {
+                return Err(anyhow!("upstream response exceeds body limit"));
+            }
+            output.extend(bytes);
+        }
+        decoded = output;
+        decoded.as_slice()
+    } else {
+        let body_end = read_transformed_response_body(
+            reader,
+            &mut buffered,
+            parsed.header_end,
+            parsed.content_length,
+            TRANSFORMED_RESPONSE_READ_LIMITS,
+        )
+        .await?;
+        &buffered[parsed.header_end..body_end]
+    };
     if let Some(result) = retryable_quality_result(body, retry_policy) {
         return Ok(result);
     }
-    let translated_body = response_adapter::translate_chat_completion_to_responses(body)?;
-    let usage = parse_token_usage_from_json_body(&translated_body);
+    let translated_body = if anthropic {
+        let value = match serde_json::from_slice::<serde_json::Value>(body) {
+            Ok(value) if (200..300).contains(&status_code) || value.get("error").is_some() => value,
+            Ok(_) => {
+                serde_json::json!({"error":{"type":"server_error","message":format!("upstream returned HTTP {status_code} without an error envelope")}})
+            }
+            Err(_) if !(200..300).contains(&status_code) => {
+                serde_json::json!({"error":{"type":"server_error","message":format!("upstream returned HTTP {status_code} without a JSON error body")}})
+            }
+            Err(error) => return Err(error.into()),
+        };
+        serde_json::to_vec(&openai_frontend::anthropic::translate_chat_value(&value)?)?
+    } else {
+        response_adapter::translate_chat_completion_to_responses(body)?
+    };
+    let usage = parse_token_usage_from_json_body(body);
     let cache_cost = parse_cache_cost_from_json_body(body);
+    let status = http::StatusCode::from_u16(status_code)
+        .ok()
+        .and_then(|status| status.canonical_reason())
+        .unwrap_or("Response");
     // The non-streamed body is fully in hand here: digest the REAL response
     // the host is about to serve. This branch reshapes to the Responses API,
     // whose tool_calls/reasoning live under different keys than the
@@ -68,7 +154,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     let output_digests =
         crate::plugin::openai_exchange::ExchangeOutputDigests::from_response_body(&translated_body);
     let mut header = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+        "HTTP/1.1 {status_code} {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
         translated_body.len()
     );
     append_capsule_nonce_headers(
@@ -83,7 +169,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     route_observer.capture_response_body(&translated_body, Some("application/json"));
     let _ = tcp_stream.shutdown().await;
     Ok(RouteAttemptResult::Delivered {
-        status_code: 200,
+        status_code,
         usage,
         cache_cost,
         output_digests,

@@ -96,6 +96,50 @@ pub const RUNTIME_EVENTS_CAPABILITY: RuntimeEventsCapability = RuntimeEventsCapa
     cursor: "rt1",
 };
 
+// ─── Runtime-Event Reducer Summary ────────────────────────────────────────────
+
+/// Reducer-derived node summary on `runtime.runtime_events`: what the
+/// runtime-event reducer currently believes about node availability, the
+/// native runtime, and diagnostics. Absent when no engine is installed or
+/// the reducer has observed none of these families.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RuntimeEventsStatusSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_state: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_runtime_status: Option<&'static str>,
+    pub diagnostics_degraded: bool,
+    pub fatal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fatal_reason_code: Option<String>,
+    pub active_warning_count: usize,
+}
+
+impl RuntimeEventsStatusSummary {
+    #[must_use]
+    pub fn from_domain(domain: &crate::runtime_events::reducer::DomainState) -> Option<Self> {
+        let diagnostics = domain.diagnostics();
+        let summary = Self {
+            node_state: domain.node_availability().state,
+            native_runtime_status: domain.native_runtime().status,
+            diagnostics_degraded: diagnostics.degraded,
+            fatal: diagnostics.fatal.is_some(),
+            fatal_reason_code: diagnostics
+                .fatal
+                .as_ref()
+                .and_then(|fatal| fatal.reason_code.clone()),
+            active_warning_count: diagnostics.active_warnings.len(),
+        };
+        (summary != Self::default()).then_some(summary)
+    }
+
+    #[must_use]
+    pub fn current() -> Option<Self> {
+        let engine = crate::runtime_events::runtime_event_engine()?;
+        Self::from_domain(engine.reducer_snapshot().domain())
+    }
+}
+
 // ─── Lifecycle Instance Payloads ──────────────────────────────────────────────
 
 /// Bounded lifecycle instance payload for API status output.
@@ -264,6 +308,11 @@ impl From<crate::runtime::activity_policy::ActivityPolicyState> for ActivityPoli
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_events::reducer::{ReduceOutcome, ReducerInput, ReducerSnapshot, apply};
+    use mesh_llm_runtime_event_contracts::{
+        DiagnosticEventKind, FactData, FamilyFact, NodeAvailabilityEventKind, OperationId,
+        OperationScope, Outcome, ReasonCode, RuntimeFact,
+    };
 
     // ─── Daemon State Derivation Matrix ──────────────────────────────────────
 
@@ -381,6 +430,63 @@ mod tests {
         assert_eq!(summary.durable_count, 0);
         assert_eq!(summary.session_count, 0);
         assert!(summary.recent_errors.is_empty());
+    }
+
+    // ─── Runtime-Event Reducer Summary ───────────────────────────────────────
+
+    fn reduced(facts: Vec<RuntimeFact>) -> std::sync::Arc<ReducerSnapshot> {
+        let mut snapshot = ReducerSnapshot::empty();
+        for (sequence, fact) in (0u64..).zip(facts) {
+            let input = ReducerInput {
+                scope: OperationScope::root_only(OperationId::new()),
+                ingress_sequence: sequence,
+                native_sequence: None,
+                wall_clock_hint: None,
+                synthesized: false,
+                reserved: false,
+                fact,
+            };
+            let ReduceOutcome::Applied(next) = apply(&snapshot, input) else {
+                panic!("fact {sequence} must apply");
+            };
+            snapshot = next;
+        }
+        snapshot
+    }
+
+    #[test]
+    fn runtime_events_summary_is_absent_for_an_empty_reducer() {
+        assert_eq!(
+            RuntimeEventsStatusSummary::from_domain(ReducerSnapshot::empty().domain()),
+            None
+        );
+    }
+
+    #[test]
+    fn runtime_events_summary_reports_node_state_degraded_and_fatal() {
+        let snapshot = reduced(vec![
+            RuntimeFact::NodeAvailability(FamilyFact::new(
+                NodeAvailabilityEventKind::NodeAcceptingRequests,
+            )),
+            RuntimeFact::Diagnostic(FamilyFact::new(
+                DiagnosticEventKind::DegradedOperationEntered,
+            )),
+            RuntimeFact::Diagnostic(FamilyFact::with_data(
+                DiagnosticEventKind::FatalNativeFailure,
+                FactData {
+                    outcome: Some(Outcome::Failure),
+                    reason: Some(ReasonCode::OutOfMemory),
+                    ..FactData::default()
+                },
+            )),
+        ]);
+
+        let summary = RuntimeEventsStatusSummary::from_domain(snapshot.domain())
+            .expect("summary present once families are observed");
+        assert_eq!(summary.node_state, Some("accepting_requests"));
+        assert!(summary.diagnostics_degraded);
+        assert!(summary.fatal);
+        assert_eq!(summary.fatal_reason_code.as_deref(), Some("out_of_memory"));
     }
 
     // ─── Activity Policy Status Defaults ────────────────────────────────────

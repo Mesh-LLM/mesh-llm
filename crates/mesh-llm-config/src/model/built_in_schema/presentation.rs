@@ -333,7 +333,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         "runtime.lifecycle_log_parser" => Some(
             sp(
                 "Lifecycle log parser",
-                "Use parsed native log summaries only when the loaded runtime lacks the matching structured event family. Enabled forces compatibility output; disabled proves structured coverage.",
+                "Auto forwards parsed native log summaries for categories the loaded runtime cannot report through structured events and always keeps the model category as a SafeTensors fallback. Enabled forwards parsed summaries for every category as debug-only output. Disabled forwards none.",
                 RUNTIME_POLICY_CATEGORY,
                 5,
             )

@@ -234,6 +234,11 @@ jobs:
         with:
           path: ${{ runner.temp }}/skippy-correctness-model
           key: ${{ steps.skippy_correctness_model_cache.outputs.cache-primary-key }}
+      - name: Install pinned Claude Code integration client
+        if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'mesh-llm-host-runtime') }}
+        run: |
+          npm install --global @anthropic-ai/claude-code@2.1.273
+          test "$(claude --version | awk '{print $1}')" = "2.1.273"
       - name: Run isolated Cargo tests for the batch
         env:
           TEST_CRATES: ${{ steps.resolve_batch_crates.outputs.crates }}
@@ -245,6 +250,13 @@ jobs:
             [[ "$crate" == "skippy-ffi" ]] && continue
             echo "::group::cargo test -p $crate"
             cargo test --locked -p "$crate"
+            if [[ "$crate" == "mesh-llm-host-runtime" ]]; then
+              echo "::group::Claude Code 2.1.273 real-client integration"
+              cargo test --locked -p "$crate" --no-default-features \
+                --features claude-code-integration \
+                claude_cli_executes_read_tool_through_host_ingress
+              echo "::endgroup::"
+            fi
             echo "::endgroup::"
           done
       - name: Capture Rust test cache evidence

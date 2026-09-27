@@ -712,7 +712,7 @@ fn acquire_root_lock(root: &Path) -> Result<fs::File> {
     fsinfo::restrict_to_owner(&path, 0o600)?;
 
     if let Err(error) = fs2::FileExt::try_lock_exclusive(&file) {
-        if error.kind() == std::io::ErrorKind::WouldBlock {
+        if fsinfo::is_lock_contended(&error) {
             bail!(
                 "cache root {} is already owned by another manager",
                 root.display()

@@ -949,6 +949,7 @@ impl Drop for OperationReservation {
     }
 }
 
+#[derive(Clone)]
 pub struct ScopedIngress {
     engine: Arc<RuntimeEventEngine>,
     scope: OperationScope,
@@ -959,6 +960,12 @@ impl ScopedIngress {
     #[must_use]
     pub fn scope(&self) -> OperationScope {
         self.scope
+    }
+
+    /// The engine this ingress submits into.
+    #[must_use]
+    pub fn engine(&self) -> &Arc<RuntimeEventEngine> {
+        &self.engine
     }
 }
 

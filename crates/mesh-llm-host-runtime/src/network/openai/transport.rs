@@ -120,7 +120,9 @@ pub(super) fn record_moa_stream_lifecycle(
 ) {
     if !matches!(
         adapter,
-        ResponseAdapter::OpenAiChatCompletionsStream | ResponseAdapter::OpenAiResponsesStream
+        ResponseAdapter::OpenAiChatCompletionsStream
+            | ResponseAdapter::OpenAiResponsesStream
+            | ResponseAdapter::AnthropicMessagesStream
     ) {
         return;
     }
@@ -234,7 +236,10 @@ pub(crate) async fn reject_legacy_lifecycle_request(
 /// contain encoded media rather than text tokens. The audio backend performs
 /// the authoritative media/context validation after routing.
 pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u32> {
-    if request.is_tokenize_request() || request.is_audio_upload_request() {
+    if request.is_tokenize_request()
+        || request.is_anthropic_count_tokens_request()
+        || request.is_audio_upload_request()
+    {
         None
     } else {
         request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens)
@@ -1011,6 +1016,8 @@ fn proxy_provider_for_target(target: &'static str) -> Option<&'static str> {
 
 fn proxy_engine_for_response_adapter(adapter: ResponseAdapter) -> Option<&'static str> {
     match adapter {
+        ResponseAdapter::AnthropicMessagesJson => Some("messages"),
+        ResponseAdapter::AnthropicMessagesStream => Some("messages_stream"),
         ResponseAdapter::None => None,
         ResponseAdapter::OpenAiChatCompletionsJson => Some("chat_completion"),
         ResponseAdapter::OpenAiChatCompletionsStream => Some("chat_completion_stream"),

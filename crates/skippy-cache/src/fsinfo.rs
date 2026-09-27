@@ -27,7 +27,7 @@ pub fn available_bytes(path: &Path) -> Result<u64> {
 pub fn is_network_filesystem(path: &Path) -> Result<bool> {
     #[cfg(windows)]
     {
-        return windows::is_network_filesystem(path);
+        windows::is_network_filesystem(path)
     }
     #[cfg(not(windows))]
     let name = filesystem_type_name(path)?;
@@ -44,7 +44,7 @@ pub fn is_network_filesystem(path: &Path) -> Result<bool> {
 pub fn filesystem_type_name(path: &Path) -> Result<String> {
     #[cfg(windows)]
     {
-        return windows::filesystem_type_name(path);
+        windows::filesystem_type_name(path)
     }
     #[cfg(target_os = "macos")]
     {
@@ -87,13 +87,21 @@ pub fn touch(path: &Path) -> Result<()> {
         .with_context(|| format!("failed to touch {}", path.display()))
 }
 
+/// Whether a failed `try_lock_exclusive` means another holder. Unix reports
+/// `WouldBlock`; Windows reports `ERROR_LOCK_VIOLATION`, which has no
+/// `ErrorKind` of its own and which `fs2` exposes as its contended error.
+pub(crate) fn is_lock_contended(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+}
+
 /// Publish a fully written temporary file at `destination`, replacing an
 /// existing entry when necessary. Windows `rename` does not replace an
 /// existing file, so use the platform primitive with explicit replacement.
 pub fn replace_file(temp: &Path, destination: &Path) -> Result<()> {
     #[cfg(windows)]
     {
-        return windows::replace_file(temp, destination);
+        windows::replace_file(temp, destination)
     }
     #[cfg(not(windows))]
     {
@@ -109,7 +117,7 @@ pub fn restrict_to_owner(path: &Path, mode: u32) -> Result<()> {
     #[cfg(windows)]
     {
         let _ = mode;
-        return windows::restrict_to_owner(path);
+        windows::restrict_to_owner(path)
     }
     #[cfg(unix)]
     {
@@ -199,7 +207,7 @@ fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(windows))]
     false

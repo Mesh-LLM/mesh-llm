@@ -389,6 +389,13 @@ async fn remote_audio_upload_ignores_encoded_bytes_as_context_tokens() -> Result
     text_request.client_path = text_request.path.clone();
     text_request.body_len_bytes = 1_048_576;
     assert!(request_context_budget(&text_request).is_some());
+
+    let mut count_request = large_tokenize_request(model);
+    count_request.path = "/v1/chat/completions".to_owned();
+    count_request.client_path = "/v1/messages/count_tokens?beta=true".to_owned();
+    count_request.body_len_bytes = 1_048_576;
+    assert!(count_request.is_anthropic_count_tokens_request());
+    assert_eq!(request_context_budget(&count_request), None);
     Ok(())
 }
 

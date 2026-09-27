@@ -155,6 +155,13 @@ impl BufferedHttpRequest {
         is_tokenize_request(&self.method, &self.path)
     }
 
+    /// Token counting is a capability request, not generation, so its wire
+    /// size must not be treated as model context admission.
+    pub fn is_anthropic_count_tokens_request(&self) -> bool {
+        self.method == "POST"
+            && self.client_path.split('?').next() == Some("/v1/messages/count_tokens")
+    }
+
     /// Multipart audio bytes are encoded media, not prompt text. The proxy
     /// cannot infer their eventual model context size from the wire length.
     pub fn is_audio_upload_request(&self) -> bool {
@@ -216,7 +223,7 @@ impl BufferedHttpRequest {
             .unwrap_or(&self.client_path);
         matches!(
             path,
-            "/v1/chat/completions" | "/v1/completions" | "/v1/responses"
+            "/v1/chat/completions" | "/v1/completions" | "/v1/responses" | "/v1/messages"
         )
         .then_some(())
         .filter(|()| {
@@ -310,14 +317,21 @@ where
 
 /// Variant for host ingress boundaries that need to bind locally generated
 /// error responses to a safely established request lifecycle.
-pub(crate) async fn read_http_request_with_plugin_manager_with_context<S>(
-    stream: &mut S,
+pub(crate) async fn read_http_request_with_plugin_manager_with_context(
+    stream: &mut super::client_stream::ClientStream,
     plugin_manager: Option<&plugin::PluginManager>,
-) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    read_http_request_with_limits_with_context(stream, HTTP_READ_LIMITS, plugin_manager).await
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+    let result =
+        read_http_request_with_limits_with_context(stream, HTTP_READ_LIMITS, plugin_manager).await;
+    match &result {
+        Ok(request) => stream.set_client_path(&request.client_path),
+        Err(error) => {
+            if let Some(context) = error.context() {
+                stream.set_client_path(&context.client_path);
+            }
+        }
+    }
+    result
 }
 
 pub(super) async fn read_http_request_with_limits<S>(
@@ -546,6 +560,9 @@ async fn rewrite_request_body_for_forwarding(
 
     outcome.body_json = serde_json::from_slice(body).ok();
     let Some(body_json) = outcome.body_json.as_mut() else {
+        if path.split('?').next() == Some("/v1/messages") {
+            bail!("invalid Messages JSON body");
+        }
         return Ok(outcome);
     };
 

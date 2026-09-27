@@ -39,6 +39,7 @@ mod subscriber;
 mod tests;
 
 pub use coalescer::ProgressCoalescer;
+pub(crate) use projection::reason_code_str;
 pub use projection::{fact_projection_event, health_projection_event};
 pub use subscriber::{
     EmitEventSink, PresentationSink, attach, drive_presentation_subscriber,

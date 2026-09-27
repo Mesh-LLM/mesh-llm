@@ -1,3 +1,4 @@
+use crate::inference::skippy::NativeModelOpenEvents;
 use crate::runtime::operational_logging::{
     NativeSkippyOperationalEvent, record_native_skippy_operational_event,
 };
@@ -141,6 +142,27 @@ fn emit_skippy_native_runtime_event(event: SkippyNativeRuntimeEvent) {
         return;
     };
     let _ = emit_event(output_event);
+}
+
+mod reconcile;
+
+/// The host consumers for one native model open: the per-event reporter
+/// plus the post-return reconciler, both reporting into `progress_ingress`
+/// when the caller holds a load reservation.
+pub(super) fn skippy_native_model_open_events(
+    model_name: String,
+    progress_ingress: Option<ScopedIngress>,
+) -> NativeModelOpenEvents {
+    let reconciliation = reconcile::ModelOpenReconciliation {
+        model: model_name.clone(),
+        ingress: progress_ingress.clone(),
+    };
+    NativeModelOpenEvents {
+        reporter: skippy_native_model_open_event_reporter(model_name, progress_ingress),
+        reconcile: Box::new(move |observation, returned| {
+            reconciliation.reconcile(observation, returned);
+        }),
+    }
 }
 
 /// `progress_ingress` is `Some` only on the single-node runtime-load path

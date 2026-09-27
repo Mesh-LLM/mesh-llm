@@ -1,3 +1,4 @@
+pub mod anthropic;
 pub mod audio;
 pub mod backend;
 mod backend_lifecycle;
