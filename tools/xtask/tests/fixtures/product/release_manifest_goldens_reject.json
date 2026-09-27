@@ -1,0 +1,167 @@
+{
+  "empty_tag_version": {
+    "code": 1,
+    "json": {},
+    "paths": [
+      "dist/",
+      "dist/.keep"
+    ],
+    "stderr": "release tag must contain a version\n",
+    "stdout": ""
+  },
+  "missing_archive_never_rebuilt": {
+    "code": 1,
+    "json": {},
+    "paths": [
+      "dist/",
+      "dist/.keep"
+    ],
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: '{scratch}/dist/rt-linux.tar.gz'\n",
+    "stdout": ""
+  },
+  "missing_platform_field": {
+    "code": 1,
+    "json": {
+      "tmp/archive-0/rt-linux/manifest.json": "{\"runtime\": {\"id\": \"rt-linux\", \"mesh_version\": \"1.2.3\", \"skippy_abi\": 7, \"backend\": {}, \"files\": []}}"
+    },
+    "paths": [
+      "dist/",
+      "dist/rt-linux.tar.gz",
+      "tmp/",
+      "tmp/archive-0/",
+      "tmp/archive-0/rt-linux/",
+      "tmp/archive-0/rt-linux/lib/",
+      "tmp/archive-0/rt-linux/lib/libskippy.so",
+      "tmp/archive-0/rt-linux/manifest.json"
+    ],
+    "stderr": "{scratch}/dist/rt-linux.tar.gz is missing native runtime field(s): libraries, platform\n",
+    "stdout": ""
+  },
+  "mixed_mesh_version_prefix": {
+    "code": 1,
+    "json": {
+      "tmp/archive-0/rt-linux/manifest.json": "{\"runtime\": {\"id\": \"rt-linux\", \"mesh_version\": \"v1.2.3\", \"skippy_abi\": 7, \"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}",
+      "tmp/archive-1/rt-a-mac/manifest.json": "{\"runtime\": {\"id\": \"rt-a-mac\", \"mesh_version\": \"1.2.3\", \"skippy_abi\": 7, \"platform\": {\"os\": \"macos\", \"arch\": \"aarch64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}"
+    },
+    "paths": [
+      "dist/",
+      "dist/rt-a-mac.tar.gz",
+      "dist/rt-linux.tar.gz",
+      "tmp/",
+      "tmp/archive-0/",
+      "tmp/archive-0/rt-linux/",
+      "tmp/archive-0/rt-linux/lib/",
+      "tmp/archive-0/rt-linux/lib/libskippy.so",
+      "tmp/archive-0/rt-linux/manifest.json",
+      "tmp/archive-1/",
+      "tmp/archive-1/rt-a-mac/",
+      "tmp/archive-1/rt-a-mac/lib/",
+      "tmp/archive-1/rt-a-mac/lib/libskippy.so",
+      "tmp/archive-1/rt-a-mac/manifest.json"
+    ],
+    "stderr": "mixed mesh versions in native runtime artifacts: 1.2.3 != v1.2.3\n",
+    "stdout": ""
+  },
+  "mixed_skippy_abi": {
+    "code": 1,
+    "json": {
+      "tmp/archive-0/rt-linux/manifest.json": "{\"runtime\": {\"id\": \"rt-linux\", \"mesh_version\": \"v1.2.3\", \"skippy_abi\": 7, \"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}",
+      "tmp/archive-1/rt-a-mac/manifest.json": "{\"runtime\": {\"id\": \"rt-a-mac\", \"mesh_version\": \"v1.2.3\", \"skippy_abi\": 8, \"platform\": {\"os\": \"macos\", \"arch\": \"aarch64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}"
+    },
+    "paths": [
+      "dist/",
+      "dist/rt-a-mac.tar.gz",
+      "dist/rt-linux.tar.gz",
+      "tmp/",
+      "tmp/archive-0/",
+      "tmp/archive-0/rt-linux/",
+      "tmp/archive-0/rt-linux/lib/",
+      "tmp/archive-0/rt-linux/lib/libskippy.so",
+      "tmp/archive-0/rt-linux/manifest.json",
+      "tmp/archive-1/",
+      "tmp/archive-1/rt-a-mac/",
+      "tmp/archive-1/rt-a-mac/lib/",
+      "tmp/archive-1/rt-a-mac/lib/libskippy.so",
+      "tmp/archive-1/rt-a-mac/manifest.json"
+    ],
+    "stderr": "mixed Skippy ABI versions in native runtime artifacts: 8 != 7\n",
+    "stdout": ""
+  },
+  "no_archives": {
+    "code": 1,
+    "json": {},
+    "paths": [
+      "dist/",
+      "dist/.keep"
+    ],
+    "stderr": "no native runtime artifacts supplied\n",
+    "stdout": ""
+  },
+  "runtime_not_object": {
+    "code": 1,
+    "json": {
+      "tmp/archive-0/rt-linux/manifest.json": "{\"runtime\": [1]}"
+    },
+    "paths": [
+      "dist/",
+      "dist/rt-linux.tar.gz",
+      "tmp/",
+      "tmp/archive-0/",
+      "tmp/archive-0/rt-linux/",
+      "tmp/archive-0/rt-linux/lib/",
+      "tmp/archive-0/rt-linux/lib/libskippy.so",
+      "tmp/archive-0/rt-linux/manifest.json"
+    ],
+    "stderr": "{scratch}/dist/rt-linux.tar.gz is missing runtime manifest\n",
+    "stdout": ""
+  },
+  "tag_version_mismatch": {
+    "code": 1,
+    "json": {
+      "tmp/archive-0/rt-linux/manifest.json": "{\"runtime\": {\"id\": \"rt-linux\", \"mesh_version\": \"v1.2.4\", \"skippy_abi\": 7, \"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}"
+    },
+    "paths": [
+      "dist/",
+      "dist/rt-linux.tar.gz",
+      "tmp/",
+      "tmp/archive-0/",
+      "tmp/archive-0/rt-linux/",
+      "tmp/archive-0/rt-linux/lib/",
+      "tmp/archive-0/rt-linux/lib/libskippy.so",
+      "tmp/archive-0/rt-linux/manifest.json"
+    ],
+    "stderr": "{scratch}/dist/rt-linux.tar.gz mesh_version v1.2.4 does not match release tag v1.2.3\n",
+    "stdout": ""
+  },
+  "two_manifests": {
+    "code": 1,
+    "json": {
+      "tmp/archive-0/a/manifest.json": "{\"runtime\": {\"id\": \"rt-linux\", \"mesh_version\": \"1.2.3\", \"skippy_abi\": 7, \"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}",
+      "tmp/archive-0/b/manifest.json": "{\"runtime\": {\"id\": \"rt-linux\", \"mesh_version\": \"1.2.3\", \"skippy_abi\": 7, \"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cpu\"}, \"libraries\": [\"libskippy.so\"], \"files\": [\"lib/libskippy.so\"]}}"
+    },
+    "paths": [
+      "dist/",
+      "dist/rt-linux.tar.gz",
+      "tmp/",
+      "tmp/archive-0/",
+      "tmp/archive-0/a/",
+      "tmp/archive-0/a/manifest.json",
+      "tmp/archive-0/b/",
+      "tmp/archive-0/b/manifest.json"
+    ],
+    "stderr": "expected exactly one manifest.json in {scratch}/dist/rt-linux.tar.gz, found 2\n",
+    "stdout": ""
+  },
+  "unsafe_archive_member": {
+    "code": 1,
+    "json": {},
+    "paths": [
+      "dist/",
+      "dist/rt-linux.tar.gz",
+      "tmp/",
+      "tmp/archive-0/"
+    ],
+    "stderr": "unsafe or invalid tar archive: traversing archive member path is not allowed: ../escape.txt\nunsafe or invalid native runtime archive: {scratch}/dist/rt-linux.tar.gz\n",
+    "stdout": ""
+  }
+}

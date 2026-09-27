@@ -12,7 +12,7 @@
 mod abi_manifest;
 mod abi_stamp;
 mod html_modules;
-mod python_io;
+pub(crate) mod python_io;
 pub(crate) mod python_json;
 pub(crate) mod python_value;
 mod runtime_select;

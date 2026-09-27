@@ -120,7 +120,7 @@ fn occupied(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok() || path.exists()
 }
 
-fn safe_extract(archive_path: &str, destination: &str) -> Result<(), String> {
+pub(crate) fn safe_extract(archive_path: &str, destination: &str) -> Result<(), String> {
     let dest = Path::new(destination);
     mkdir_parents(dest, destination)?;
     if fs::symlink_metadata(dest).is_ok_and(|meta| meta.file_type().is_symlink()) {
