@@ -23,6 +23,11 @@ impl RuntimeState {
         {
             return Ok(false);
         }
+        // DiffusionGemma runs non-causally with no KV memory, so a decode
+        // step has no graph to warm and the reset would fail.
+        if self.model.system_one_canvas_length().is_ok() {
+            return Ok(false);
+        }
         let token_id = self
             .model
             .tokenize("", true)?
