@@ -293,6 +293,31 @@ pub(super) fn mmproj_path_for_model(model_name: &str) -> Option<PathBuf> {
     models::find_mmproj_path(model_name, &model_path)
 }
 
+/// Device bytes the multimodal projector will hold, as far as plan time can tell.
+///
+/// The projector shares the device pool with the model weights and is loaded
+/// *after* them, so it has to be charged to the fit: otherwise a plan can spend
+/// the last of the pool on weights and KV and leave the projector's allocation
+/// to fail, which upstream `mtmd` turns into a NULL-buffer abort instead of a
+/// load error (mesh-llm#1166).
+///
+/// This mirrors the loader for the two sources visible here — an explicit
+/// `--mmproj`, then the sidecar beside the GGUF — and reports the projector
+/// file's length. That is an upper bound on the tensor data the weights buffer
+/// holds, since the file stores those same tensors; upstream computes the exact
+/// per-device figure with `mtmd_get_memory_usage`, which is not exposed to this
+/// crate. A projector named only in the model configuration, or one that lives
+/// inside a package-v2 layer package, is resolved later than this plan and is
+/// therefore not charged here.
+fn planned_projector_bytes(spec: &LocalOpenAiModelStartSpec<'_>, model_name: &str) -> u64 {
+    spec.mmproj_override
+        .map(PathBuf::from)
+        .or_else(|| mmproj_path_for_model(model_name).filter(|path| path.exists()))
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
 fn pinned_skippy_device(
     gpu: &crate::runtime::StartupPinnedGpuTarget,
 ) -> skippy::SkippyDeviceDescriptor {
@@ -975,6 +1000,7 @@ pub(super) async fn start_local_openai_model(
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
         model_bytes: local_model_bytes,
+        projector_bytes: planned_projector_bytes(&spec, &model_name),
         vram_bytes: my_vram,
         metadata: compact_meta.as_ref(),
         kv_cache_quant,
