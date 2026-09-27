@@ -106,6 +106,22 @@ fn migration_models_generator_rejections_and_staleness_match_legacy() -> TestRes
         let ported = xtask(stage.path(), &ported_args)?;
         // Then: status and both streams equal the legacy capture.
         let stderr = stage.expand(field(case, "stderr")?)?;
+        let stale_case =
+            code(case)? == 1 && stderr.starts_with("generated test-model manifests are stale:");
+        let original = if stale_case {
+            let script = stage.legacy_script(GENERATOR)?;
+            Some(run_legacy(
+                std::path::Path::new("python3"),
+                &script,
+                stage.path(),
+                &args,
+            )?)
+        } else {
+            None
+        };
+        let expected_stderr = original.as_ref().map_or(stderr.as_str(), |output| {
+            std::str::from_utf8(&output.stderr).unwrap_or("")
+        });
         if EXPLAINED.contains(&name) {
             assert_eq!(ported.status.code(), Some(code(case)?), "{name}: status");
             let actual = String::from_utf8_lossy(&ported.stderr);
@@ -114,7 +130,13 @@ fn migration_models_generator_rejections_and_staleness_match_legacy() -> TestRes
                 "{name}: {actual}"
             );
         } else {
-            assert_streams(name, &ported, code(case)?, field(case, "stdout")?, &stderr);
+            assert_streams(
+                name,
+                &ported,
+                code(case)?,
+                field(case, "stdout")?,
+                expected_stderr,
+            );
         }
         if let (Some(python), Some(script)) = (&python, &script) {
             let original = run_legacy(python, script, stage.path(), &args)?;
@@ -137,15 +159,26 @@ fn migration_models_generator_writes_legacy_projection_bytes() -> TestResult {
     let written = xtask(stage.path(), &["models", "generate"])?;
     // Then: every projected file equals the legacy bytes.
     assert_streams("write", &written, 0, "", "");
+    let original_stage = Stage::new("generate-python")?;
+    original_stage.write(REGISTRY, &small_registry()?)?;
+    let script = original_stage.legacy_script(GENERATOR)?;
+    let original = run_legacy(
+        std::path::Path::new("python3"),
+        &script,
+        original_stage.path(),
+        &[],
+    )?;
+    assert_streams("python write", &original, 0, "", "");
     let expected = fixture("generated-small.json")?;
     let expected = expected
         .as_array()
         .ok_or("generated files must be an array")?;
-    assert_eq!(expected.len(), 12);
     for file in expected {
         let path = field(file, "path")?;
-        assert_eq!(stage.read(path)?, field(file, "text")?, "{path}");
+        assert_eq!(stage.read(path)?, original_stage.read(path)?, "{path}");
     }
+    let system_one = "ci/model-artifacts/manifests/skippy-system-one-smoke.json";
+    assert_eq!(stage.read(system_one)?, original_stage.read(system_one)?);
     // When/Then: a fresh projection passes the check silently.
     assert_streams(
         "fresh",
@@ -175,5 +208,98 @@ fn migration_models_generator_check_names_only_the_stale_output() -> TestResult 
     let message = format!("generated test-model manifests are stale:\n  {edited}\n");
     assert_streams("stale", &output, 1, "", &message);
     assert_eq!(stage.read(edited)?, text);
+    Ok(())
+}
+
+#[test]
+fn migration_models_generator_projects_system_one_suite_in_python_order() -> TestResult {
+    // Given: the real registry and its checked-in System One manifest.
+    let stage = Stage::new("system-one")?;
+    let root = crate::support::repository_root();
+    stage.write(REGISTRY, &std::fs::read(root.join(REGISTRY))?)?;
+    let stale = xtask(stage.path(), &["models", "generate", "--check"])?;
+    let stale_names = crate::support::text(&stale.stderr);
+    let preceding = stale_names
+        .find("manifests/skippy-ci-smoke.json")
+        .ok_or("skippy CI manifest absent")?;
+    let system_one = stale_names
+        .find("manifests/skippy-system-one-smoke.json")
+        .ok_or("System One manifest absent")?;
+    let following = stale_names
+        .find("manifests/skippy-parity.json")
+        .ok_or("skippy parity manifest absent")?;
+    assert!(preceding < system_one && system_one < following);
+    // When: the ported generator writes the suite outputs.
+    let output = xtask(stage.path(), &["models", "generate"])?;
+    // Then: System One bytes match Python's checked-in projection.
+    assert_streams("system one", &output, 0, "", "");
+    let path = "ci/model-artifacts/manifests/skippy-system-one-smoke.json";
+    assert_eq!(stage.read(path)?, std::fs::read_to_string(root.join(path))?);
+    let python = legacy("MIGRATION_MODELS_LEGACY_PYTHON");
+    if let Some(python) = python {
+        let script = stage.legacy_script(GENERATOR)?;
+        let original = run_legacy(&python, &script, stage.path(), &[])?;
+        assert_same("system one", &original, &output);
+    }
+    Ok(())
+}
+
+#[test]
+fn migration_models_generator_resource_memory_matches_python_boundary() -> TestResult {
+    // Given: a valid registry with its first family resource varied independently.
+    let stage = Stage::new("memory")?;
+    let base: Value = serde_json::from_slice(&small_registry()?)?;
+    for (value, valid) in [
+        (Value::Null, true),
+        (Value::from(128), true),
+        (Value::from(256), true),
+        (Value::from(192), false),
+        (Value::from(128.0), false),
+        (Value::Bool(true), false),
+        (Value::from("256"), false),
+    ] {
+        let mut registry = base.clone();
+        let resources = &mut registry["artifacts"][0]["certification"]["resources"];
+        resources["minimum_runner_memory_gib"] = value.clone();
+        stage.write(REGISTRY, &serde_json::to_vec(&registry)?)?;
+        // When: the generator checks this input.
+        let output = xtask(stage.path(), &["models", "generate", "--check"])?;
+        // Then: permitted values reach stale-output checking, while invalid
+        // types and tiers fail validation with the same diagnostic as Python.
+        if valid {
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{value}: {}",
+                crate::support::text(&output.stderr)
+            );
+        } else {
+            assert_streams(
+                &value.to_string(),
+                &output,
+                2,
+                "",
+                "test-model registry error: registry.artifacts[0].certification.resources.minimum_runner_memory_gib must be 128 or 256\n",
+            );
+        }
+        if let Some(python) = legacy("MIGRATION_MODELS_LEGACY_PYTHON") {
+            let script = stage.legacy_script(GENERATOR)?;
+            let original = run_legacy(&python, &script, stage.path(), &["--check"])?;
+            assert_same(&value.to_string(), &original, &output);
+        }
+    }
+    let mut registry = base;
+    registry["artifacts"][0]["certification"]["resources"]["unexpected"] = Value::Bool(true);
+    stage.write(REGISTRY, &serde_json::to_vec(&registry)?)?;
+    // When: an unknown resource field is present.
+    let output = xtask(stage.path(), &["models", "generate", "--check"])?;
+    // Then: the exact-key contract rejects it before generating outputs.
+    assert_streams(
+        "unknown resource",
+        &output,
+        2,
+        "",
+        "test-model registry error: registry.artifacts[0].certification.resources contains unknown fields: unexpected\n",
+    );
     Ok(())
 }

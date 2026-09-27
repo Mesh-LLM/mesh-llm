@@ -20,6 +20,7 @@
     "skippy-correctness",
     "safetensors-runtime-smoke",
     "skippy-ci-smoke",
+    "skippy-system-one-smoke",
     "skippy-parity",
     "competitive-benchmark",
     "radix-cache"
@@ -90,7 +91,8 @@
       "family": "qwen3-dense",
       "suites": [
         "llama-family-certification",
-        "skippy-ci-smoke"
+        "skippy-ci-smoke",
+        "skippy-system-one-smoke"
       ],
       "cadences": [
         "pull-request",
