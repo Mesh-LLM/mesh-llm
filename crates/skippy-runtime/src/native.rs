@@ -249,7 +249,7 @@ impl StageModel {
         let path = path.as_ref();
         if crate::checkpoint::is_safetensors_checkpoint(path) {
             if event_queue.is_some() {
-                write_native_log_note(
+                crate::logging::write_native_log_fallback_note(
                     "SafeTensors source loading does not yet emit native model-open events",
                 );
             }

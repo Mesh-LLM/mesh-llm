@@ -208,3 +208,124 @@ instead of producing a partial read. The next engineering step is to carry the
 diffusion canvas and zero-self-conditioning state across Skippy stages, then
 compute the selected label logits on the terminal stage. Until that lands, a
 full-model worker in the mesh is the shortest honest proof.
+
+## Laya backend
+
+[Laya](https://huggingface.co/convaiinnovations/laya-multilingual) is a
+second System One backend behind the same `POST /systemone` route, request
+validation, aliases, and answer mapping.
+
+Both backends implement one `skippy_runtime::DecisionModel`: they take a
+`DecisionRequest` (state plus typed `noul` / `choice` / `score` questions,
+options in request order, and a per-request seed) and return one
+distribution per question. Each backend builds its own native input behind
+that interface — the DiffusionGemma answer canvas, or one Laya encoder
+sequence per question — so the HTTP frontend holds only the Jev contract.
+Moving that interface into the native ABI is a follow-up, planned after the
+System One image work lands. It is a 322M-parameter mmBERT encoder
+with a typed decision head: each question becomes one encoder sequence, and
+every option is scored at its own `[MASK]` marker in a single forward pass.
+There is no chat template, answer canvas, or text generation.
+
+The native side ports the draft upstream support
+([ggml-org/llama.cpp#29363](https://github.com/ggml-org/llama.cpp/pull/29363))
+in one family patch (`model_support/0006`), which also exposes it through a
+narrow Skippy ABI (`skippy/laya.h`, feature bit 40). Laya does
+not load through `skippy_model_open`; the host recognizes
+`general.architecture = "laya"` and opens it through its own entry point.
+
+**Device and memory.** Laya follows the node's device policy: a configured
+`--device` or a pinned GPU places its weights on that device. With neither,
+it runs on the CPU backend, unless `MESH_LLM_LAYA_ACCELERATOR=1` opts into the
+first GPU. On a GPU the CPU backend stays behind it for any op the GPU lacks.
+
+Each read packs question sequences into passes of at most the model's
+`laya.max_len` tokens (1,024 for `laya-multilingual`); GGUFs declaring more
+than 4,096 are refused at open. A pass holds dense attention masks and scores
+over its tokens, so:
+
+- the capacity ledger reserves the weights plus a worst-case read estimate
+  (about 170 MB on top of 659 MB for `laya-multilingual`), and the load
+  records that as its memory plan's compute charge;
+- after opening, the runtime runs one full-length warm-up read and reports its
+  measured weight, compute-buffer and host-scratch bytes; the host logs them
+  against the plan and the reservation, and refuses the model if the measured
+  peak exceeds what was reserved.
+
+### Convert a checkpoint
+
+The upstream converter supports the `laya-multilingual` checkpoint. From a
+prepared llama.cpp checkout (`just llama-prepare`):
+
+```bash
+hf download convaiinnovations/laya-multilingual --local-dir /tmp/laya-multilingual
+python3 .deps/llama.cpp/convert_hf_to_gguf.py /tmp/laya-multilingual \
+  --outtype f16 --outfile /tmp/laya-multilingual-F16.gguf
+```
+
+Other published Laya GGUFs use different layouts: the `mys/laya-*-GGUF` files
+are built by the `ggmlc` compiler, and `fr0stbit3/laya-gguf` contains only the
+encoder with the head in a separate file. Use a GGUF written by this converter.
+
+### Serve and read
+
+```bash
+./target/debug/mesh-llm serve --gguf /tmp/laya-multilingual-F16.gguf --headless
+
+curl http://127.0.0.1:9337/systemone \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "laya-multilingual-F16",
+    "state": {"from": "user@example.com", "body": "I was charged twice this month."},
+    "questions": {
+      "is_billing": {"type": "noul", "instructions": "Is this a billing issue?"},
+      "team": {
+        "type": "choice",
+        "instructions": "Which team should handle it?",
+        "criteria": {"billing": "charges or refunds", "support": "technical troubleshooting"}
+      }
+    }
+  }'
+```
+
+Laya models are served from a single GGUF file (`--gguf` or a model reference
+that resolves to one); a layer package is refused with a clear error, since
+Laya has no stages, sessions, or KV cache to split. Use the model ID from `GET /v1/models`, or configure an `openjev-latest` alias
+as in the DiffusionGemma setup above. The node advertises the `decision` workload class, so chat, completion,
+embedding, and audio requests are never routed to it; `/systemone` routes by
+model name as it does for DiffusionGemma.
+
+### Check parity with the reference
+
+The upstream PyTorch golden fixtures are vendored in
+`ci/llama-canary/fixtures/laya-golden`. Compare a running node, or a
+`llama-laya-cli` build, against them:
+
+```bash
+python3 scripts/skippy-laya-parity.py --base-url http://127.0.0.1:9337 --model laya-multilingual-F16
+python3 scripts/skippy-laya-parity.py --cli path/to/llama-laya-cli --gguf /tmp/laya-multilingual-F16.gguf
+```
+
+Each fixture may differ from its golden by upstream's own CPU error on it plus
+0.005. `noul_zh` carries the largest budget (0.0579), because the upstream
+runtime itself misses it by that much.
+
+### How it differs from the DiffusionGemma read
+
+- **Order.** Choice options and object-valued `state` keep the order the
+  request lists them, rendered with Python `json.dumps` separators, because
+  that is how the reference implementation builds its sequences. The
+  DiffusionGemma read keeps its existing sorted choice order.
+- **Budgets.** Each question is capped at the GGUF's `max_len` tokens (1,024
+  for `laya-multilingual`) with options sharing a `head_max_len` region; long
+  state is truncated, as in the reference. A question can have at most 16
+  options.
+- **Usage.** `usage.input_tokens` counts every question sequence, since each
+  question re-reads the state.
+- **Action head.** The checkpoint's act/escalate head is computed but not
+  returned; the Jev response has no field for it and the model card reports it
+  carries little signal.
+- **Qualification.** Unit tests cover sequence assembly, rendering, and
+  answer mapping against a stub tokenizer. A live read against the converted
+  checkpoint and the upstream golden fixtures is not yet part of the System One
+  smoke.

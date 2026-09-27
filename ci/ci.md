@@ -368,11 +368,15 @@ Release efficiency TODOs:
   and per-phase timings on Linux amd64/arm64, macOS, and Windows.
 
 `scripts/release-version.sh` is the single owner of the tracked release-version
-surface. On a non-canary `release.yml` dispatch, the metadata job applies that
-script, creates a linear release-source commit when needed, and fast-forwards
-`main` before the build graph begins. `just release` only performs local
-preflight, dispatches that workflow, and waits for its result. Canary dispatches
-do not mutate `main` or publish. Release tags and releases are immutable on
+surface. It runs cargo, and `.cargo/config.toml` wraps `rustc` with sccache, so
+every release job that can reach cargo — including the canary-skipped
+`metadata` and `publish` jobs — initializes sccache before its first cargo
+call. The artifact-only composition jobs never call cargo, and `tools/xtask`
+enforces both halves. On a non-canary `release.yml` dispatch, the metadata job
+applies that script, creates a linear release-source commit when needed, and
+fast-forwards `main` before the build graph begins. `just release` only
+performs local preflight, dispatches that workflow, and waits for its result.
+Canary dispatches do not mutate `main` or publish. Release tags and releases are immutable on
 the manual release path: a non-canary dispatch refuses an already-existing tag
 and fails closed if it cannot verify the remote tag state. The release
 workflow is dispatch-only, so re-pushing a tag does not start a second release

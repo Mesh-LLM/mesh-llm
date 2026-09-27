@@ -1,0 +1,3159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Sun, 27 Sep 2026 21:12:21 +1000
+Subject: [PATCH] models: add Laya decision model support
+
+Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
+the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
+converter, and the self-contained tools/laya encoder + decision-head runtime
+with llama-laya-cli. The upstream test fixtures are omitted.
+
+Expose it through a narrow Skippy ABI (skippy/laya.h): open a Laya GGUF,
+report its sequence budgets and special tokens, tokenize with its own
+Metaspace + BPE tokenizer, and run one packed read returning raw scorer and
+action-head logits per question. A GGUF declaring laya.max_len above 4,096
+tokens is refused at open, and sequences are packed into passes of at most
+max_len tokens, because each pass builds dense attention masks. Every exported
+entry point runs inside the native exception containment.
+
+Changes from the upstream draft:
+- Compile the runtime into libllama and export its API with LLAMA_API, so
+  shared builds of llama-laya-cli link.
+- Let the caller name the device: none keeps the weights on the CPU as
+  upstream does, "auto" takes the first GPU, and any other value selects a
+  ggml backend device by name; on a GPU the CPU backend stays behind it in the
+  scheduler. llama-laya-cli defaults to "auto" and takes --cpu or --device.
+  Set threads through the backend registry rather than linking ggml-cpu
+  directly.
+- Report measured memory (skippy_laya_model_memory_v1): the weight buffer,
+  the scheduler's compute buffers after one full-length warm-up read, and the
+  host-side masks a full pass builds, so the host can reconcile a Laya load
+  against its reservation.
+- Take the act-head top-1/top-2 indices from per-question strided views of a
+  descending argsort. The upstream 1-D views read the third-ranked option as
+  top-2, and gave every question after the first another question's ranking.
+
+Co-authored-by: ZhangYu <zhangyub@uniontech.com>
+---
+ conversion/__init__.py         |    1 +
+ conversion/laya.py             |  122 ++++
+ gguf-py/gguf/constants.py      |   67 ++
+ gguf-py/gguf/gguf_writer.py    |   21 +
+ gguf-py/gguf/tensor_mapping.py |   40 ++
+ include/skippy.h               |    1 +
+ include/skippy/common.h        |    4 +-
+ include/skippy/laya.h          |  167 +++++
+ src/CMakeLists.txt             |    4 +-
+ src/llama-arch.cpp             |   32 +
+ src/llama-arch.h               |   20 +
+ src/llama-model.cpp            |    7 +
+ src/skippy/abi.cpp             |    3 +-
+ src/skippy/laya.cpp            |  372 +++++++++++
+ tools/CMakeLists.txt           |    1 +
+ tools/laya/CMakeLists.txt      |   23 +
+ tools/laya/laya-cli.cpp        |  670 +++++++++++++++++++
+ tools/laya/laya.cpp            | 1132 ++++++++++++++++++++++++++++++++
+ tools/laya/laya.h              |  119 ++++
+ 19 files changed, 2803 insertions(+), 3 deletions(-)
+ create mode 100644 conversion/laya.py
+ create mode 100644 include/skippy/laya.h
+ create mode 100644 src/skippy/laya.cpp
+ create mode 100644 tools/laya/CMakeLists.txt
+ create mode 100644 tools/laya/laya-cli.cpp
+ create mode 100644 tools/laya/laya.cpp
+ create mode 100644 tools/laya/laya.h
+
+diff --git a/conversion/__init__.py b/conversion/__init__.py
+index f50f7716e..8a7cee2cb 100644
+--- a/conversion/__init__.py
++++ b/conversion/__init__.py
+@@ -165,6 +165,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+     "Eagle3DraftModel": "llama",
+     "Eagle3Speculator": "llama",
+     "Eagle3LlamaForCausalLM": "llama",
++    "LayaModel": "laya",
+     "LlamaForCausalLMEagle3": "llama",
+     "LlavaForConditionalGeneration": "llama",
+     "LlavaStableLMEpochForCausalLM": "stablelm",
+diff --git a/conversion/laya.py b/conversion/laya.py
+new file mode 100644
+index 000000000..81fd642ae
+--- /dev/null
++++ b/conversion/laya.py
+@@ -0,0 +1,122 @@
++from __future__ import annotations
++
++import json
++
++from pathlib import Path
++from typing import Any, Callable, TYPE_CHECKING
++
++if TYPE_CHECKING:
++    from torch import Tensor
++
++from .base import ModelBase, gguf
++from .bert import ModernBertModel
++
++
++@ModelBase.register_hparams_loader(lambda dir_model: (dir_model / "rl_agent_config.json").is_file())
++def _load_laya_hparams(dir_model: Path) -> dict[str, Any]:
++    """Laya checkpoints ship no root config.json; the encoder config lives in
++    encoder/config.json and the RL-agent hyperparameters in rl_agent_config.json."""
++    with open(dir_model / "rl_agent_config.json", encoding="utf-8") as f:
++        rl_cfg = json.load(f)
++
++    enc_cfg: dict[str, Any] = {}
++    enc_cfg_path = dir_model / "encoder" / "config.json"
++    if enc_cfg_path.is_file():
++        with open(enc_cfg_path, encoding="utf-8") as f:
++            enc_cfg = json.load(f)
++
++    hparams = {
++        **enc_cfg,
++        # force the laya architecture (root config is absent)
++        "architectures": ["LayaModel"],
++        "model_type": "laya",
++    }
++    # RL-agent decision head hyperparameters
++    hparams["head_layers"]   = rl_cfg.get("head_layers", 2)
++    hparams["max_len"]       = rl_cfg.get("max_len", 1024)
++    hparams["head_max_len"]  = rl_cfg.get("head_max_len", 192)
++    hparams["n_qtype"]       = 3  # choice / score / noul
++    hparams["marker_token_id"] = 4  # <mask>
++    hparams["temperature"]   = rl_cfg.get("temperature", [1.0, 1.0, 1.0])
++    hparams["act_classes"]   = len(rl_cfg.get("act_costs", {})) + 1
++    return hparams
++
++
++@ModelBase.register("LayaModel")
++class LayaModel(ModernBertModel):
++    model_arch = gguf.MODEL_ARCH.LAYA
++
++    # laya checkpoints keep the tokenizer files under a tokenizer/ subdirectory
++    @property
++    def _tokenizer_dir(self) -> Path:
++        tok_dir = self.dir_model / "tokenizer"
++        return tok_dir if tok_dir.is_dir() else self.dir_model
++
++    def set_vocab(self):
++        self.gguf_writer.add_add_bos_token(True)
++        self.gguf_writer.add_add_eos_token(True)
++        self.gguf_writer.add_add_sep_token(True)
++        self.gguf_writer.add_marker_token_id(self.hparams["marker_token_id"])
++        self._set_vocab_gpt2()
++
++    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
++        # tokenizer.json / tokenizer_config.json live in the tokenizer/ subdir
++        saved = self.dir_model
++        self.dir_model = self._tokenizer_dir
++        try:
++            return super().get_vocab_base()
++        finally:
++            self.dir_model = saved
++
++    def _set_vocab_gpt2(self) -> None:
++        tokens, toktypes, tokpre = self.get_vocab_base()
++        self.gguf_writer.add_tokenizer_model("gpt2")
++        self.gguf_writer.add_tokenizer_pre(tokpre)
++        self.gguf_writer.add_token_list(tokens)
++        self.gguf_writer.add_token_types(toktypes)
++
++        special_vocab = gguf.SpecialVocab(self._tokenizer_dir, load_merges=True)
++        special_vocab.add_to_gguf(self.gguf_writer)
++
++        # the laya build_sequence always wraps with [CLS]/[SEP], so the llama.cpp
++        # side must add bos/sep the same way; SpecialVocab may have turned sep off
++        self.gguf_writer.add_add_bos_token(True)
++        self.gguf_writer.add_add_eos_token(True)
++        self.gguf_writer.add_add_sep_token(True)
++
++    def get_vocab_base_pre(self, tokenizer) -> str:
++        # The multilingual laya checkpoint reuses the ModernBERT (mmBERT) BPE
++        # pre-tokenizer: Metaspace with the U+2581 replacement glyph.
++        return "modern-bert"
++
++    def set_gguf_parameters(self):
++        super().set_gguf_parameters()
++
++        # decision head hyperparameters
++        self.gguf_writer.add_head_layers(self.hparams["head_layers"])
++        self.gguf_writer.add_n_qtype(self.hparams["n_qtype"])
++        self.gguf_writer.add_max_len(self.hparams["max_len"])
++        self.gguf_writer.add_head_max_len(self.hparams["head_max_len"])
++        self.gguf_writer.add_temperature(self.hparams["temperature"])
++        self.gguf_writer.add_act_classes(self.hparams["act_classes"])
++
++    @classmethod
++    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
++        name, gen = item
++
++        # the temperature buffer is persisted as a KV array, not as a tensor
++        if name == "temperature":
++            return None
++
++        # encoder tensors reuse the modern-bert naming (strip the encoder. prefix)
++        if name.startswith("encoder."):
++            name = name[len("encoder."):]
++
++        # PyTorch nn.MultiheadAttention uses in_proj_weight / in_proj_bias; the
++        # laya decision head maps them onto the fused qkv gguf tensor.
++        if name.endswith("self_attn.in_proj_weight"):
++            name = name[:-len("in_proj_weight")] + "in_proj.weight"
++        elif name.endswith("self_attn.in_proj_bias"):
++            name = name[:-len("in_proj_bias")] + "in_proj.bias"
++
++        return name, gen
+diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
+index e6a96308a..16a3568a2 100644
+--- a/gguf-py/gguf/constants.py
++++ b/gguf-py/gguf/constants.py
+@@ -157,6 +157,13 @@ class Keys:
+         SWIGLU_CLAMP_EXP                  = "{arch}.swiglu_clamp_exp"
+         SWIGLU_CLAMP_SHEXP                = "{arch}.swiglu_clamp_shexp"
+         HIDDEN_ACT                        = "{arch}.hidden_activation"
++        HEAD_LAYERS                       = "{arch}.head_layers"                  # laya: decision head transformer layers
++        N_QTYPE                           = "{arch}.n_qtype"                      # laya: question type count (choice/score/noul)
++        MARKER_TOKEN_ID                   = "{arch}.marker_token_id"              # laya: token id marking option positions
++        MAX_LEN                           = "{arch}.max_len"                      # laya: max sequence length
++        HEAD_MAX_LEN                      = "{arch}.head_max_len"                 # laya: max head (option region) length
++        TEMPERATURE                       = "{arch}.temperature"                  # laya: per-qtype temperature (3 floats)
++        ACT_CLASSES                       = "{arch}.act_classes"                  # laya: action head class count
+         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
+         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
+         TARGET_LAYERS                     = "{arch}.target_layers"
+@@ -647,6 +654,7 @@ class MODEL_ARCH(IntEnum):
+     QWEN3TTS         = auto()
+     POCKETTTS        = auto()
+     INKLING          = auto()
++    LAYA             = auto()
+ 
+ 
+ class VISION_PROJECTOR_TYPE(IntEnum):
+@@ -883,6 +891,18 @@ class MODEL_TENSOR(IntEnum):
+     CLS                  = auto() # classifier
+     CLS_OUT              = auto() # classifier output projection
+     CLS_NORM             = auto()
++    TYPE_EMB             = auto() # laya: question type embedding
++    HEAD_ATTN_QKV        = auto() # laya: decision head attention qkv
++    HEAD_ATTN_OUT        = auto() # laya: decision head attention output
++    HEAD_ATTN_NORM       = auto() # laya: decision head attention pre-norm
++    HEAD_FFN_NORM        = auto() # laya: decision head ffn pre-norm
++    HEAD_FFN_UP          = auto() # laya: decision head ffn up
++    HEAD_FFN_DOWN        = auto() # laya: decision head ffn down
++    SCORER_0             = auto() # laya: scorer LayerNorm
++    SCORER_1             = auto() # laya: scorer Linear(768,768)
++    SCORER_3             = auto() # laya: scorer Linear(768,1)
++    ACT_HEAD_0           = auto() # laya: act head Linear(d+4,256)
++    ACT_HEAD_2           = auto() # laya: act head Linear(256,2)
+     CONV1D               = auto()
+     CONVNEXT_DW          = auto()
+     CONVNEXT_NORM        = auto()
+@@ -1421,6 +1441,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+     MODEL_ARCH.QWEN3TTS:         "qwen3tts",
+     MODEL_ARCH.POCKETTTS:        "pockettts",
+     MODEL_ARCH.INKLING:          "inkling",
++    MODEL_ARCH.LAYA:             "laya",
+ }
+ 
+ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
+@@ -1655,6 +1676,18 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+     MODEL_TENSOR.CLS:                       "cls",
+     MODEL_TENSOR.CLS_OUT:                   "cls.output",
+     MODEL_TENSOR.CLS_NORM:                  "cls.norm",
++    MODEL_TENSOR.TYPE_EMB:                  "type_emb",
++    MODEL_TENSOR.HEAD_ATTN_QKV:             "head.{bid}.attn_qkv",
++    MODEL_TENSOR.HEAD_ATTN_OUT:             "head.{bid}.attn_output",
++    MODEL_TENSOR.HEAD_ATTN_NORM:            "head.{bid}.attn_norm",
++    MODEL_TENSOR.HEAD_FFN_NORM:             "head.{bid}.ffn_norm",
++    MODEL_TENSOR.HEAD_FFN_UP:               "head.{bid}.ffn_up",
++    MODEL_TENSOR.HEAD_FFN_DOWN:             "head.{bid}.ffn_down",
++    MODEL_TENSOR.SCORER_0:                  "scorer.0",
++    MODEL_TENSOR.SCORER_1:                  "scorer.1",
++    MODEL_TENSOR.SCORER_3:                  "scorer.3",
++    MODEL_TENSOR.ACT_HEAD_0:                "act_head.0",
++    MODEL_TENSOR.ACT_HEAD_2:                "act_head.2",
+     MODEL_TENSOR.CONV1D:                    "conv1d",
+     MODEL_TENSOR.CONVNEXT_DW:               "convnext.{bid}.dw",
+     MODEL_TENSOR.CONVNEXT_NORM:             "convnext.{bid}.norm",
+@@ -2514,6 +2547,31 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+         MODEL_TENSOR.CLS_OUT,
+         MODEL_TENSOR.CLS_NORM,
+     ],
++    MODEL_ARCH.LAYA: [
++        # encoder: mmBERT (modern-bert naming)
++        MODEL_TENSOR.TOKEN_EMBD,
++        MODEL_TENSOR.TOKEN_EMBD_NORM,
++        MODEL_TENSOR.OUTPUT_NORM,
++        MODEL_TENSOR.ATTN_NORM,
++        MODEL_TENSOR.ATTN_OUT,
++        MODEL_TENSOR.ATTN_QKV,
++        MODEL_TENSOR.FFN_UP,
++        MODEL_TENSOR.FFN_DOWN,
++        MODEL_TENSOR.FFN_NORM,
++        # decision head
++        MODEL_TENSOR.TYPE_EMB,
++        MODEL_TENSOR.HEAD_ATTN_QKV,
++        MODEL_TENSOR.HEAD_ATTN_OUT,
++        MODEL_TENSOR.HEAD_ATTN_NORM,
++        MODEL_TENSOR.HEAD_FFN_NORM,
++        MODEL_TENSOR.HEAD_FFN_UP,
++        MODEL_TENSOR.HEAD_FFN_DOWN,
++        MODEL_TENSOR.SCORER_0,
++        MODEL_TENSOR.SCORER_1,
++        MODEL_TENSOR.SCORER_3,
++        MODEL_TENSOR.ACT_HEAD_0,
++        MODEL_TENSOR.ACT_HEAD_2,
++    ],
+     MODEL_ARCH.NOMIC_BERT: [
+         MODEL_TENSOR.TOKEN_EMBD,
+         MODEL_TENSOR.TOKEN_EMBD_NORM,
+@@ -6040,6 +6098,15 @@ KEY_FEED_FORWARD_LENGTH   = Keys.LLM.FEED_FORWARD_LENGTH
+ KEY_USE_PARALLEL_RESIDUAL = Keys.LLM.USE_PARALLEL_RESIDUAL
+ KEY_TENSOR_DATA_LAYOUT    = Keys.LLM.TENSOR_DATA_LAYOUT
+ 
++# laya
++KEY_HEAD_LAYERS          = Keys.LLM.HEAD_LAYERS
++KEY_N_QTYPE              = Keys.LLM.N_QTYPE
++KEY_MARKER_TOKEN_ID      = Keys.LLM.MARKER_TOKEN_ID
++KEY_MAX_LEN              = Keys.LLM.MAX_LEN
++KEY_HEAD_MAX_LEN         = Keys.LLM.HEAD_MAX_LEN
++KEY_TEMPERATURE          = Keys.LLM.TEMPERATURE
++KEY_ACT_CLASSES          = Keys.LLM.ACT_CLASSES
++
+ # attention
+ KEY_ATTENTION_HEAD_COUNT        = Keys.Attention.HEAD_COUNT
+ KEY_ATTENTION_HEAD_COUNT_KV     = Keys.Attention.HEAD_COUNT_KV
+diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
+index c2236bef1..beea7084c 100644
+--- a/gguf-py/gguf/gguf_writer.py
++++ b/gguf-py/gguf/gguf_writer.py
+@@ -899,6 +899,27 @@ class GGUFWriter:
+     def add_hidden_act(self, value: str) -> None:
+         self.add_string(Keys.LLM.HIDDEN_ACT.format(arch=self.arch), value)
+ 
++    def add_head_layers(self, value: int) -> None:
++        self.add_uint32(Keys.LLM.HEAD_LAYERS.format(arch=self.arch), value)
++
++    def add_n_qtype(self, value: int) -> None:
++        self.add_uint32(Keys.LLM.N_QTYPE.format(arch=self.arch), value)
++
++    def add_marker_token_id(self, value: int) -> None:
++        self.add_uint32(Keys.LLM.MARKER_TOKEN_ID.format(arch=self.arch), value)
++
++    def add_max_len(self, value: int) -> None:
++        self.add_uint32(Keys.LLM.MAX_LEN.format(arch=self.arch), value)
++
++    def add_head_max_len(self, value: int) -> None:
++        self.add_uint32(Keys.LLM.HEAD_MAX_LEN.format(arch=self.arch), value)
++
++    def add_temperature(self, value: Sequence[float]) -> None:
++        self.add_array(Keys.LLM.TEMPERATURE.format(arch=self.arch), value)
++
++    def add_act_classes(self, value: int) -> None:
++        self.add_uint32(Keys.LLM.ACT_CLASSES.format(arch=self.arch), value)
++
+     def add_expert_group_scale(self, value: float) -> None:
+         self.add_float32(Keys.LLM.EXPERT_GROUP_SCALE.format(arch=self.arch), value)
+ 
+diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
+index 3b1732e88..cf474a5c0 100644
+--- a/gguf-py/gguf/tensor_mapping.py
++++ b/gguf-py/gguf/tensor_mapping.py
+@@ -1438,6 +1438,26 @@ class TensorNameMap:
+         MODEL_TENSOR.CLS_NORM: (
+             "head.norm", # modern-bert
+         ),
++
++        # laya decision head
++        MODEL_TENSOR.TYPE_EMB: (
++            "type_emb",
++        ),
++        MODEL_TENSOR.SCORER_0: (
++            "scorer.0",
++        ),
++        MODEL_TENSOR.SCORER_1: (
++            "scorer.1",
++        ),
++        MODEL_TENSOR.SCORER_3: (
++            "scorer.3",
++        ),
++        MODEL_TENSOR.ACT_HEAD_0: (
++            "act_head.0",
++        ),
++        MODEL_TENSOR.ACT_HEAD_2: (
++            "act_head.2",
++        ),
+         #############################################################################
+ 
+         MODEL_TENSOR.CONVNEXT_DW: (
+@@ -2810,6 +2830,26 @@ class TensorNameMap:
+                 "model.layers.{bid}.mlp.w2_md",
+             ),
+         },
++        MODEL_ARCH.LAYA: {
++            MODEL_TENSOR.HEAD_ATTN_QKV: (
++                "head.layers.{bid}.self_attn.in_proj",
++            ),
++            MODEL_TENSOR.HEAD_ATTN_OUT: (
++                "head.layers.{bid}.self_attn.out_proj",
++            ),
++            MODEL_TENSOR.HEAD_ATTN_NORM: (
++                "head.layers.{bid}.norm1",
++            ),
++            MODEL_TENSOR.HEAD_FFN_NORM: (
++                "head.layers.{bid}.norm2",
++            ),
++            MODEL_TENSOR.HEAD_FFN_UP: (
++                "head.layers.{bid}.linear1",
++            ),
++            MODEL_TENSOR.HEAD_FFN_DOWN: (
++                "head.layers.{bid}.linear2",
++            ),
++        },
+         MODEL_ARCH.ARCTIC: {
+             MODEL_TENSOR.FFN_NORM: (
+                 "model.layers.{bid}.residual_layernorm",
+diff --git a/include/skippy.h b/include/skippy.h
+index 571841a60..ac091dd24 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -26,5 +26,6 @@
+ #include "skippy/signals.h"
+ #include "skippy/workloads.h"
+ #include "skippy/system_one.h"
++#include "skippy/laya.h"
+ 
+ #endif // SKIPPY_H
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 0ff24e80b..343ff1616 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 64
++#define SKIPPY_ABI_VERSION_PATCH 65
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+@@ -108,6 +108,8 @@ enum skippy_feature {
+ #define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
+ 
+ #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
++/** @brief Full-model Laya decision reads (`skippy/laya.h`). */
++#define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
+ 
+ enum skippy_status {
+     SKIPPY_STATUS_OK                      = 0,
+diff --git a/include/skippy/laya.h b/include/skippy/laya.h
+new file mode 100644
+index 000000000..002fac598
+--- /dev/null
++++ b/include/skippy/laya.h
+@@ -0,0 +1,167 @@
++#ifndef SKIPPY_LAYA_H
++#define SKIPPY_LAYA_H
++
++/**
++ * @file skippy/laya.h
++ * @brief Full-model Laya decision reads (encoder + typed decision head).
++ *
++ * Laya is non-autoregressive: one forward pass scores every option of every
++ * question. It does not load through `skippy_model_open`; it owns its GGUF,
++ * tokenizer, and execution context, which runs on the CPU backend or on a
++ * device the caller names, with CPU fallback. Callers build the per-question token
++ * sequences (see `skippy_laya_tokenize`) and read raw scorer and action-head
++ * logits back; temperature and softmax stay on the caller side.
++ */
++
++#include "common.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define SKIPPY_LAYA_INFO_V1_ABI_VERSION 1
++#define SKIPPY_LAYA_QTYPE_COUNT 3
++#define SKIPPY_LAYA_MEMORY_V1_ABI_VERSION 1
++/**
++ * Longest question sequence a Laya GGUF may declare (`laya.max_len`). A model
++ * declaring more is refused at open, because each pass builds dense attention
++ * masks over up to `max_len` tokens.
++ */
++#define SKIPPY_LAYA_MAX_SEQUENCE_TOKENS 4096
++
++struct skippy_laya_model;
++
++/** @brief Question types, in the order the decision head was trained with. */
++enum skippy_laya_qtype {
++    SKIPPY_LAYA_QTYPE_CHOICE = 0,
++    SKIPPY_LAYA_QTYPE_SCORE  = 1,
++    SKIPPY_LAYA_QTYPE_NOUL   = 2,
++};
++
++/** @brief Sequence budgets, special tokens, and temperatures of an opened Laya model. */
++struct skippy_laya_info_v1 {
++    uint32_t struct_size;
++    uint32_t abi_version;
++    int32_t  max_len;          /**< maximum tokens per question sequence */
++    int32_t  head_max_len;     /**< token budget for the head and options region */
++    int32_t  max_markers;      /**< maximum options per question */
++    int32_t  n_act;            /**< action-head classes */
++    int32_t  cls_token_id;
++    int32_t  sep_token_id;
++    int32_t  mask_token_id;
++    int32_t  n_embd;
++    int32_t  n_layer;
++    int64_t  parameter_count;
++    /** Per-qtype temperature from the GGUF; 0 when absent. */
++    float    temperature[SKIPPY_LAYA_QTYPE_COUNT];
++};
++
++/** @brief Measured memory of an opened Laya model. */
++struct skippy_laya_memory_v1 {
++    uint32_t struct_size;
++    uint32_t abi_version;
++    uint64_t weights_bytes;     /**< the weight buffer */
++    uint64_t compute_bytes;     /**< scheduler buffers after a full-length read */
++    uint64_t host_scratch_bytes; /**< host-side attention masks one full pass builds */
++    bool     on_accelerator;    /**< weights live on a non-CPU device */
++};
++
++/** @brief One question sequence inside a packed read. */
++struct skippy_laya_sequence {
++    size_t  token_offset;   /**< first token in the packed token array */
++    size_t  token_count;
++    int32_t qtype;          /**< `enum skippy_laya_qtype` */
++    size_t  marker_offset;  /**< first marker in the packed marker array */
++    size_t  marker_count;   /**< 1..max_markers option markers */
++};
++
++/**
++ * @brief Opens a Laya GGUF with its own loader; not a `skippy_model`.
++ *
++ * `device` selects where the weights live: NULL or "" is the CPU backend,
++ * "auto" is the first GPU device when one exists, and any other value names a
++ * ggml backend device such as "CUDA0" or "MTL0". On a GPU the CPU backend
++ * stays behind it for any unsupported op. `n_threads` sizes the CPU backend.
++ * Fails
++ * with SKIPPY_STATUS_MODEL_ERROR when the GGUF declares a `laya.max_len` above
++ * SKIPPY_LAYA_MAX_SEQUENCE_TOKENS or a head budget larger than it.
++ */
++LLAMA_API enum skippy_status skippy_laya_model_open(
++        const char * model_path,
++        int32_t n_threads,
++        const char * device,
++        struct skippy_laya_model ** out_model,
++        struct skippy_error ** out_error);
++
++/** @brief Releases a model returned by `skippy_laya_model_open`. */
++LLAMA_API void skippy_laya_model_free(struct skippy_laya_model * model);
++
++/**
++ * @brief Reports the model's sequence budgets, special tokens, and temperatures.
++ *
++ * `out_info` must be initialized with its `struct_size` and `abi_version`.
++ */
++LLAMA_API enum skippy_status skippy_laya_model_info_v1(
++        const struct skippy_laya_model * model,
++        struct skippy_laya_info_v1 * out_info,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Measures the model's memory at its largest read.
++ *
++ * The first call runs one read of a full `max_len`-token sequence, so the
++ * scheduler reserves the buffers the biggest pass needs, then reports them
++ * with the weight buffer. `out_info` must be initialized with its
++ * `struct_size` and `abi_version`.
++ */
++LLAMA_API enum skippy_status skippy_laya_model_memory_v1(
++        struct skippy_laya_model * model,
++        struct skippy_laya_memory_v1 * out_info,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Tokenizes UTF-8 text with the model's own Metaspace + BPE tokenizer.
++ *
++ * No special tokens are added. Returns SKIPPY_STATUS_BUFFER_TOO_SMALL with
++ * `out_token_count` set to the required length when `capacity` is short.
++ */
++LLAMA_API enum skippy_status skippy_laya_tokenize(
++        const struct skippy_laya_model * model,
++        const char * text,
++        size_t text_len,
++        int32_t * out_tokens,
++        size_t capacity,
++        size_t * out_token_count,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Scores every question's options in one packed forward pass.
++ *
++ * `marker_positions` are sequence-local token indices. Outputs are row-major
++ * per sequence: `out_logits` holds `sequence_count * max_markers` scorer
++ * logits (unused markers are 0) and `out_act_logits` holds
++ * `sequence_count * n_act` action-head logits. Calls are serialized per
++ * model. Sequences are packed into passes of at most `max_len` tokens (see
++ * `skippy_laya_model_info_v1`), which open caps at
++ * SKIPPY_LAYA_MAX_SEQUENCE_TOKENS, so a pass's attention masks are bounded by
++ * the model's own sequence budget.
++ */
++LLAMA_API enum skippy_status skippy_laya_read(
++        struct skippy_laya_model * model,
++        const int32_t * tokens,
++        size_t token_count,
++        const int32_t * marker_positions,
++        size_t marker_count,
++        const struct skippy_laya_sequence * sequences,
++        size_t sequence_count,
++        float * out_logits,
++        size_t logits_capacity,
++        float * out_act_logits,
++        size_t act_logits_capacity,
++        struct skippy_error ** out_error);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // SKIPPY_LAYA_H
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index f393339ed..5a8961392 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -88,6 +88,8 @@ add_library(llama
+             skippy/tokenization.cpp
+             skippy/events.cpp
+             skippy/system_one.cpp
++            skippy/laya.cpp
++            ../tools/laya/laya.cpp
+             unicode.h
+             ${LLAMA_MODELS_SOURCES}
+             )
+@@ -112,7 +114,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+ 
+ configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
+ 
+-target_include_directories(llama PRIVATE . ../common ${CMAKE_CURRENT_BINARY_DIR})
++target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
+ target_include_directories(llama PUBLIC ../include)
+ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
+ # Upstream added a models.h PCH for the llama target. The Skippy stage
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index 1160e3c30..0d5458b10 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -21,6 +21,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+     { LLM_ARCH_REFACT,           "refact"           },
+     { LLM_ARCH_BERT,             "bert"             },
+     { LLM_ARCH_MODERN_BERT,      "modern-bert"      },
++    { LLM_ARCH_LAYA,             "laya"             },
+     { LLM_ARCH_NOMIC_BERT,       "nomic-bert"       },
+     { LLM_ARCH_NOMIC_BERT_MOE,   "nomic-bert-moe"   },
+     { LLM_ARCH_NEO_BERT,         "neo-bert"         },
+@@ -226,6 +227,13 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+     { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                },
+     { LLM_KV_DEEPSTACK_MAPPING,                 "%s.deepstack_mapping"                 },
+     { LLM_KV_HIDDEN_ACT,                        "%s.hidden_activation"                 },
++    { LLM_KV_HEAD_LAYERS,                       "%s.head_layers"                       },
++    { LLM_KV_N_QTYPE,                           "%s.n_qtype"                           },
++    { LLM_KV_MARKER_TOKEN_ID,                   "%s.marker_token_id"                   },
++    { LLM_KV_MAX_LEN,                           "%s.max_len"                           },
++    { LLM_KV_HEAD_MAX_LEN,                      "%s.head_max_len"                      },
++    { LLM_KV_TEMPERATURE,                       "%s.temperature"                       },
++    { LLM_KV_ACT_CLASSES,                       "%s.act_classes"                       },
+     { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                      },
+     { LLM_KV_LOGIT_SCALE,                       "%s.logit_scale"                       },
+     { LLM_KV_DECODER_START_TOKEN_ID,            "%s.decoder_start_token_id"            },
+@@ -506,6 +514,18 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+     { LLM_TENSOR_CLS,                                    "cls" },
+     { LLM_TENSOR_CLS_OUT,                                "cls.output" },
+     { LLM_TENSOR_CLS_NORM,                               "cls.norm" },
++    { LLM_TENSOR_TYPE_EMB,                               "type_emb" },
++    { LLM_TENSOR_HEAD_ATTN_QKV,                          "head.%d.attn_qkv" },
++    { LLM_TENSOR_HEAD_ATTN_OUT,                          "head.%d.attn_output" },
++    { LLM_TENSOR_HEAD_ATTN_NORM,                         "head.%d.attn_norm" },
++    { LLM_TENSOR_HEAD_FFN_NORM,                          "head.%d.ffn_norm" },
++    { LLM_TENSOR_HEAD_FFN_UP,                            "head.%d.ffn_up" },
++    { LLM_TENSOR_HEAD_FFN_DOWN,                          "head.%d.ffn_down" },
++    { LLM_TENSOR_SCORER_0,                               "scorer.0" },
++    { LLM_TENSOR_SCORER_1,                               "scorer.1" },
++    { LLM_TENSOR_SCORER_3,                               "scorer.3" },
++    { LLM_TENSOR_ACT_HEAD_0,                             "act_head.0" },
++    { LLM_TENSOR_ACT_HEAD_2,                             "act_head.2" },
+     { LLM_TENSOR_ENC_OUTPUT_NORM,                        "enc.output_norm" },
+     { LLM_TENSOR_FFN_GATE_INP_SHEXP,                     "blk.%d.ffn_gate_inp_shexp" },
+     { LLM_TENSOR_SSM_A_NOSCAN,                           "blk.%d.ssm_a" },
+@@ -760,6 +780,18 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+     {LLM_TENSOR_CLS,                        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_CLS_OUT,                    {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_CLS_NORM,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
++    {LLM_TENSOR_TYPE_EMB,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
++    {LLM_TENSOR_HEAD_ATTN_QKV,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_HEAD_ATTN_OUT,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_HEAD_ATTN_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
++    {LLM_TENSOR_HEAD_FFN_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
++    {LLM_TENSOR_HEAD_FFN_UP,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_HEAD_FFN_DOWN,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_SCORER_0,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
++    {LLM_TENSOR_SCORER_1,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_SCORER_3,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_ACT_HEAD_0,                 {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_ACT_HEAD_2,                 {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_DENSE_2_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
+     {LLM_TENSOR_DENSE_3_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
+     {LLM_TENSOR_OUTPUT_NORM,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+diff --git a/src/llama-arch.h b/src/llama-arch.h
+index 4c271709f..9691bae52 100644
+--- a/src/llama-arch.h
++++ b/src/llama-arch.h
+@@ -26,6 +26,7 @@ enum llm_arch {
+     LLM_ARCH_REFACT,
+     LLM_ARCH_BERT,
+     LLM_ARCH_MODERN_BERT,
++    LLM_ARCH_LAYA,
+     LLM_ARCH_NOMIC_BERT,
+     LLM_ARCH_NOMIC_BERT_MOE,
+     LLM_ARCH_NEO_BERT,
+@@ -231,6 +232,13 @@ enum llm_kv {
+     LLM_KV_NUM_DEEPSTACK_LAYERS,
+     LLM_KV_DEEPSTACK_MAPPING,
+     LLM_KV_HIDDEN_ACT,
++    LLM_KV_HEAD_LAYERS,               // laya: decision head transformer layers
++    LLM_KV_N_QTYPE,                   // laya: question type count (choice/score/noul)
++    LLM_KV_MARKER_TOKEN_ID,           // laya: token id marking option positions
++    LLM_KV_MAX_LEN,                   // laya: max sequence length
++    LLM_KV_HEAD_MAX_LEN,              // laya: max head (option region) length
++    LLM_KV_TEMPERATURE,               // laya: per-qtype temperature (3 floats)
++    LLM_KV_ACT_CLASSES,               // laya: action head class count
+     LLM_KV_POOLING_TYPE,
+     LLM_KV_LOGIT_SCALE,
+     LLM_KV_DECODER_START_TOKEN_ID,
+@@ -677,6 +685,18 @@ enum llm_tensor {
+     LLM_TENSOR_CLS,
+     LLM_TENSOR_CLS_OUT,
+     LLM_TENSOR_CLS_NORM,
++    LLM_TENSOR_TYPE_EMB,              // laya: question type embedding
++    LLM_TENSOR_HEAD_ATTN_QKV,         // laya: decision head attention qkv
++    LLM_TENSOR_HEAD_ATTN_OUT,         // laya: decision head attention output
++    LLM_TENSOR_HEAD_ATTN_NORM,        // laya: decision head attention pre-norm
++    LLM_TENSOR_HEAD_FFN_NORM,         // laya: decision head ffn pre-norm
++    LLM_TENSOR_HEAD_FFN_UP,           // laya: decision head ffn up
++    LLM_TENSOR_HEAD_FFN_DOWN,         // laya: decision head ffn down
++    LLM_TENSOR_SCORER_0,              // laya: scorer LayerNorm
++    LLM_TENSOR_SCORER_1,              // laya: scorer Linear(768,768)
++    LLM_TENSOR_SCORER_3,              // laya: scorer Linear(768,1)
++    LLM_TENSOR_ACT_HEAD_0,            // laya: act head Linear(d+4,256)
++    LLM_TENSOR_ACT_HEAD_2,            // laya: act head Linear(256,2)
+     LLM_TENSOR_CONV1D,
+     LLM_TENSOR_CONVNEXT_DW,
+     LLM_TENSOR_CONVNEXT_NORM,
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 650cbd25f..680e1a0f8 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -348,6 +348,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+             return new llama_model_spark2_5(params);
+         case LLM_ARCH_INKLING:
+             return new llama_model_inkling(params);
++        case LLM_ARCH_LAYA:
++            // the laya encoder is a ModernBERT (mmBERT) encoder; reuse the
++            // modern-bert model class so that llama-quantize can instantiate
++            // the arch for M2 quantization (full inference graph lands in M3)
++            return new llama_model_modern_bert(params);
+         default:
+             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
+     }
+@@ -2407,6 +2412,7 @@ llama_memory_i * llama_model::create_memory(
+         case LLM_ARCH_EUROBERT:
+         case LLM_ARCH_WAVTOKENIZER_DEC:
+         case LLM_ARCH_MODERN_BERT:
++        case LLM_ARCH_LAYA:
+         case LLM_ARCH_GEMMA_EMBEDDING:
+         case LLM_ARCH_DREAM:
+         case LLM_ARCH_LLADA:
+@@ -3156,6 +3162,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_BERT:
+         case LLM_ARCH_JINA_BERT_V3:
+         case LLM_ARCH_MODERN_BERT:
++        case LLM_ARCH_LAYA:
+         case LLM_ARCH_NOMIC_BERT:
+         case LLM_ARCH_NOMIC_BERT_MOE:
+         case LLM_ARCH_EUROBERT:
+diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
+index 1e1d2d7c8..f806cdbdc 100644
+--- a/src/skippy/abi.cpp
++++ b/src/skippy/abi.cpp
+@@ -47,7 +47,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_UNLOAD_EVENTS |
+            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
+            SKIPPY_FEATURE_SYSTEM_ONE |
+-           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
++           SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
++           SKIPPY_FEATURE_LAYA_DECISIONS;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
+diff --git a/src/skippy/laya.cpp b/src/skippy/laya.cpp
+new file mode 100644
+index 000000000..9d9f26ecd
+--- /dev/null
++++ b/src/skippy/laya.cpp
+@@ -0,0 +1,372 @@
++#include "skippy/laya.h"
++
++#include "skippy/errors.h"
++
++#include "laya.h"
++
++#include <algorithm>
++#include <cstdint>
++#include <cstring>
++#include <mutex>
++#include <string>
++#include <vector>
++
++struct skippy_laya_model {
++    laya_model * model = nullptr;
++    laya_context * context = nullptr;
++    bool warmed_up = false;
++    // laya_encode reuses one scheduler and its compute buffers.
++    std::mutex lane;
++
++    ~skippy_laya_model() {
++        if (context != nullptr) {
++            laya_free(context);
++        }
++        if (model != nullptr) {
++            laya_model_free(model);
++        }
++    }
++};
++
++namespace {
++
++enum skippy_status laya_fail(
++        skippy_error ** out_error,
++        enum skippy_status status,
++        const std::string & message) {
++    skippy_set_error(out_error, status, message.c_str());
++    return status;
++}
++
++// Runs one exported entry point. Everything the body does, including building
++// error messages and allocating buffers, happens inside the containment, so no
++// C++ exception can unwind into the Rust caller.
++template <typename Body>
++enum skippy_status laya_entry(skippy_error ** out_error, Body && body) {
++    enum skippy_status status = SKIPPY_STATUS_RUNTIME_ERROR;
++    if (!skippy_contain_native_failure(out_error, [&] { status = body(); })) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    return status;
++}
++
++// Rejects a GGUF whose declared budgets would make a single pass unbounded:
++// each pass builds dense n x n attention masks, so n must stay small.
++enum skippy_status validate_budgets(const laya_hparams & hp, skippy_error ** out_error) {
++    const int32_t max_len = hp.max_len > 0 ? hp.max_len : 1024;
++    const int32_t head_max_len = hp.head_max_len > 0 ? hp.head_max_len : 256;
++    if (max_len > SKIPPY_LAYA_MAX_SEQUENCE_TOKENS) {
++        return laya_fail(out_error, SKIPPY_STATUS_MODEL_ERROR,
++                "laya.max_len " + std::to_string(max_len) + " exceeds the supported " +
++                std::to_string(SKIPPY_LAYA_MAX_SEQUENCE_TOKENS) + " tokens");
++    }
++    if (head_max_len > max_len) {
++        return laya_fail(out_error, SKIPPY_STATUS_MODEL_ERROR,
++                "laya.head_max_len " + std::to_string(head_max_len) + " exceeds laya.max_len " +
++                std::to_string(max_len));
++    }
++    if (hp.n_act <= 0) {
++        return laya_fail(out_error, SKIPPY_STATUS_MODEL_ERROR, "laya model declares no action classes");
++    }
++    return skippy_success(out_error);
++}
++
++} // namespace
++
++extern "C" enum skippy_status skippy_laya_model_open(
++        const char * model_path,
++        int32_t n_threads,
++        const char * device,
++        struct skippy_laya_model ** out_model,
++        struct skippy_error ** out_error) {
++    if (model_path == nullptr || out_model == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model_path and out_model are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *out_model = nullptr;
++    skippy_laya_model * handle = nullptr;
++    const enum skippy_status status = laya_entry(out_error, [&] {
++        handle = new skippy_laya_model();
++        handle->model = laya_model_load_from_file(model_path, device == nullptr ? "" : device);
++        const enum skippy_status budgets = validate_budgets(laya_model_hparams(handle->model), out_error);
++        if (budgets != SKIPPY_STATUS_OK) {
++            return budgets;
++        }
++        handle->context = laya_init(handle->model, std::max(1, n_threads));
++        return skippy_success(out_error);
++    });
++    if (status != SKIPPY_STATUS_OK) {
++        delete handle;
++        return status;
++    }
++    *out_model = handle;
++    return SKIPPY_STATUS_OK;
++}
++
++extern "C" void skippy_laya_model_free(struct skippy_laya_model * model) {
++    delete model;
++}
++
++extern "C" enum skippy_status skippy_laya_model_info_v1(
++        const struct skippy_laya_model * model,
++        struct skippy_laya_info_v1 * out_info,
++        struct skippy_error ** out_error) {
++    return laya_entry(out_error, [&] {
++        if (model == nullptr || model->model == nullptr || out_info == nullptr) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_info are required");
++        }
++        if (out_info->struct_size != sizeof(skippy_laya_info_v1) ||
++                out_info->abi_version != SKIPPY_LAYA_INFO_V1_ABI_VERSION) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "laya info descriptor uses an incompatible ABI");
++        }
++        const laya_hparams & hp = laya_model_hparams(model->model);
++        out_info->max_len = hp.max_len > 0 ? hp.max_len : 1024;
++        out_info->head_max_len = hp.head_max_len > 0 ? hp.head_max_len : 256;
++        out_info->max_markers = LAYA_MAX_MARKERS;
++        out_info->n_act = hp.n_act;
++        out_info->cls_token_id = laya_vocab_bos(model->model);
++        out_info->sep_token_id = laya_vocab_sep(model->model);
++        out_info->mask_token_id = laya_vocab_mask(model->model);
++        out_info->n_embd = hp.n_embd;
++        out_info->n_layer = hp.n_layer;
++        out_info->parameter_count = laya_model_n_params(model->model);
++        for (int i = 0; i < SKIPPY_LAYA_QTYPE_COUNT; ++i) {
++            out_info->temperature[i] = i < (int) hp.temperature.size() ? hp.temperature[i] : 0.0f;
++        }
++        return skippy_success(out_error);
++    });
++}
++
++extern "C" enum skippy_status skippy_laya_tokenize(
++        const struct skippy_laya_model * model,
++        const char * text,
++        size_t text_len,
++        int32_t * out_tokens,
++        size_t capacity,
++        size_t * out_token_count,
++        struct skippy_error ** out_error) {
++    return laya_entry(out_error, [&] {
++        if (model == nullptr || model->model == nullptr || out_token_count == nullptr ||
++                (text == nullptr && text_len != 0) || (out_tokens == nullptr && capacity != 0)) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid laya tokenize arguments");
++        }
++        const std::vector<int32_t> tokens =
++                laya_tokenize(model->model, std::string(text == nullptr ? "" : text, text_len));
++        *out_token_count = tokens.size();
++        if (tokens.size() > capacity) {
++            return laya_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "laya token buffer is too small");
++        }
++        if (!tokens.empty()) {
++            std::memcpy(out_tokens, tokens.data(), tokens.size() * sizeof(int32_t));
++        }
++        return skippy_success(out_error);
++    });
++}
++
++namespace {
++
++enum skippy_status validate_read(
++        const laya_hparams & hp,
++        size_t token_count,
++        const int32_t * marker_positions,
++        size_t marker_count,
++        const struct skippy_laya_sequence * sequences,
++        size_t sequence_count,
++        size_t logits_capacity,
++        size_t act_logits_capacity,
++        skippy_error ** out_error) {
++    const size_t n_act = (size_t) std::max(0, hp.n_act);
++    const size_t max_len = (size_t) (hp.max_len > 0 ? hp.max_len : 1024);
++    if (logits_capacity / LAYA_MAX_MARKERS < sequence_count ||
++            (n_act > 0 && act_logits_capacity / n_act < sequence_count)) {
++        return laya_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "laya output buffers are too small");
++    }
++    for (size_t s = 0; s < sequence_count; ++s) {
++        const skippy_laya_sequence & seq = sequences[s];
++        if (seq.token_count == 0 || seq.token_count > max_len ||
++                seq.token_offset > token_count || seq.token_count > token_count - seq.token_offset) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "laya sequence " + std::to_string(s) + " has an invalid token range");
++        }
++        if (seq.qtype < 0 || seq.qtype >= SKIPPY_LAYA_QTYPE_COUNT) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "laya sequence " + std::to_string(s) + " has an unknown question type");
++        }
++        if (seq.marker_count == 0 || seq.marker_count > LAYA_MAX_MARKERS ||
++                seq.marker_offset > marker_count || seq.marker_count > marker_count - seq.marker_offset) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "laya sequence " + std::to_string(s) + " has an invalid marker range");
++        }
++        for (size_t m = 0; m < seq.marker_count; ++m) {
++            const int32_t position = marker_positions[seq.marker_offset + m];
++            if (position < 0 || (size_t) position >= seq.token_count) {
++                return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                        "laya sequence " + std::to_string(s) + " has a marker outside its tokens");
++            }
++        }
++    }
++    return SKIPPY_STATUS_OK;
++}
++
++// Scores sequences [first, last) in one packed forward pass.
++enum skippy_status read_pass(
++        skippy_laya_model * model,
++        const int32_t * tokens,
++        const int32_t * marker_positions,
++        const struct skippy_laya_sequence * sequences,
++        size_t first,
++        size_t last,
++        size_t pass_tokens,
++        float * out_logits,
++        float * out_act_logits,
++        skippy_error ** out_error) {
++    const size_t n_seqs = last - first;
++    const size_t n_act = (size_t) std::max(0, laya_model_hparams(model->model).n_act);
++
++    std::vector<int32_t> batch_tokens(pass_tokens);
++    std::vector<int32_t> positions(pass_tokens);
++    std::vector<int32_t> seq_id(pass_tokens);
++    std::vector<int32_t> qtype(pass_tokens);
++    std::vector<int32_t> marker_pos(LAYA_MAX_MARKERS * n_seqs, 0);
++    std::vector<int32_t> marker_mask(LAYA_MAX_MARKERS * n_seqs, 0);
++    std::vector<int32_t> seq_start(n_seqs);
++
++    size_t t = 0;
++    for (size_t s = 0; s < n_seqs; ++s) {
++        const skippy_laya_sequence & seq = sequences[first + s];
++        seq_start[s] = (int32_t) t;
++        for (size_t i = 0; i < seq.token_count; ++i) {
++            batch_tokens[t] = tokens[seq.token_offset + i];
++            positions[t] = (int32_t) i;
++            seq_id[t] = (int32_t) s;
++            qtype[t] = seq.qtype;
++            ++t;
++        }
++        for (size_t m = 0; m < seq.marker_count; ++m) {
++            marker_pos[m + LAYA_MAX_MARKERS * s] = seq_start[s] + marker_positions[seq.marker_offset + m];
++            marker_mask[m + LAYA_MAX_MARKERS * s] = 1;
++        }
++    }
++
++    laya_batch batch;
++    batch.n_tokens = (int32_t) pass_tokens;
++    batch.n_seqs = (int32_t) n_seqs;
++    batch.tokens = batch_tokens.data();
++    batch.positions = positions.data();
++    batch.seq_id = seq_id.data();
++    batch.qtype = qtype.data();
++    batch.marker_pos = marker_pos.data();
++    batch.marker_mask = marker_mask.data();
++    batch.seq_start = seq_start.data();
++
++    laya_result result;
++    if (laya_encode(model->context, batch, result) != 0 || result.n_markers_max != LAYA_MAX_MARKERS ||
++            (size_t) result.n_act != n_act || result.logits.size() != n_seqs * LAYA_MAX_MARKERS ||
++            result.act_logits.size() != n_seqs * n_act) {
++        return laya_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "laya forward pass failed");
++    }
++    for (size_t s = 0; s < n_seqs; ++s) {
++        const size_t markers = sequences[first + s].marker_count;
++        float * logits = out_logits + (first + s) * LAYA_MAX_MARKERS;
++        for (size_t m = 0; m < LAYA_MAX_MARKERS; ++m) {
++            logits[m] = m < markers ? result.logits[s * LAYA_MAX_MARKERS + m] : 0.0f;
++        }
++    }
++    std::memcpy(out_act_logits + first * n_act, result.act_logits.data(), n_seqs * n_act * sizeof(float));
++    return SKIPPY_STATUS_OK;
++}
++
++} // namespace
++
++extern "C" enum skippy_status skippy_laya_read(
++        struct skippy_laya_model * model,
++        const int32_t * tokens,
++        size_t token_count,
++        const int32_t * marker_positions,
++        size_t marker_count,
++        const struct skippy_laya_sequence * sequences,
++        size_t sequence_count,
++        float * out_logits,
++        size_t logits_capacity,
++        float * out_act_logits,
++        size_t act_logits_capacity,
++        struct skippy_error ** out_error) {
++    return laya_entry(out_error, [&] {
++        if (model == nullptr || model->model == nullptr || model->context == nullptr ||
++                tokens == nullptr || marker_positions == nullptr || sequences == nullptr ||
++                out_logits == nullptr || out_act_logits == nullptr || sequence_count == 0) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid laya read arguments");
++        }
++        const enum skippy_status valid = validate_read(laya_model_hparams(model->model), token_count,
++                marker_positions, marker_count, sequences, sequence_count, logits_capacity,
++                act_logits_capacity, out_error);
++        if (valid != SKIPPY_STATUS_OK) {
++            return valid;
++        }
++
++        // Every sequence fits in max_len, which open capped at
++        // SKIPPY_LAYA_MAX_SEQUENCE_TOKENS, so packing sequences up to max_len
++        // tokens bounds every pass by the model's own sequence budget.
++        const laya_hparams & hp = laya_model_hparams(model->model);
++        const size_t pass_budget = (size_t) (hp.max_len > 0 ? hp.max_len : 1024);
++        std::lock_guard<std::mutex> lane(model->lane);
++        size_t first = 0;
++        while (first < sequence_count) {
++            size_t last = first;
++            size_t pass_tokens = 0;
++            while (last < sequence_count &&
++                    pass_tokens + sequences[last].token_count <= pass_budget) {
++                pass_tokens += sequences[last].token_count;
++                ++last;
++            }
++            const enum skippy_status pass = read_pass(model, tokens, marker_positions, sequences,
++                    first, last, pass_tokens, out_logits, out_act_logits, out_error);
++            if (pass != SKIPPY_STATUS_OK) {
++                return pass;
++            }
++            first = last;
++        }
++        return skippy_success(out_error);
++    });
++}
++
++extern "C" enum skippy_status skippy_laya_model_memory_v1(
++        struct skippy_laya_model * model,
++        struct skippy_laya_memory_v1 * out_info,
++        struct skippy_error ** out_error) {
++    return laya_entry(out_error, [&] {
++        if (model == nullptr || model->model == nullptr || model->context == nullptr || out_info == nullptr) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_info are required");
++        }
++        if (out_info->struct_size != sizeof(skippy_laya_memory_v1) ||
++                out_info->abi_version != SKIPPY_LAYA_MEMORY_V1_ABI_VERSION) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "laya memory descriptor uses an incompatible ABI");
++        }
++        const laya_hparams & hp = laya_model_hparams(model->model);
++        const size_t max_len = (size_t) (hp.max_len > 0 ? hp.max_len : 1024);
++        if (!model->warmed_up) {
++            // One full-length sequence makes the scheduler reserve the
++            // buffers of the largest pass a read can build.
++            std::vector<int32_t> tokens(max_len, laya_vocab_sep(model->model));
++            tokens[0] = laya_vocab_bos(model->model);
++            const int32_t marker = 1;
++            skippy_laya_sequence sequence = { 0, max_len, SKIPPY_LAYA_QTYPE_NOUL, 0, 1 };
++            std::vector<float> logits(LAYA_MAX_MARKERS);
++            std::vector<float> act((size_t) std::max(1, hp.n_act));
++            std::lock_guard<std::mutex> lane(model->lane);
++            const enum skippy_status status = read_pass(model, tokens.data(), &marker, &sequence, 0, 1,
++                    max_len, logits.data(), act.data(), out_error);
++            if (status != SKIPPY_STATUS_OK) {
++                return status;
++            }
++            model->warmed_up = true;
++        }
++        std::lock_guard<std::mutex> lane(model->lane);
++        out_info->weights_bytes = laya_model_weights_bytes(model->model);
++        out_info->compute_bytes = laya_context_compute_bytes(model->context);
++        // Two dense f32 [n, n] masks, built on the host for every pass.
++        out_info->host_scratch_bytes = (uint64_t) 2 * max_len * max_len * sizeof(float);
++        out_info->on_accelerator = laya_model_on_accelerator(model->model);
++        return skippy_success(out_error);
++    });
++}
+diff --git a/tools/CMakeLists.txt b/tools/CMakeLists.txt
+index c8ad1db43..df418958f 100644
+--- a/tools/CMakeLists.txt
++++ b/tools/CMakeLists.txt
+@@ -29,6 +29,7 @@ else()
+     add_subdirectory(tokenize)
+     add_subdirectory(tts)
+     add_subdirectory(mtmd)
++    add_subdirectory(laya)
+     if (GGML_RPC)
+         add_subdirectory(rpc)
+     endif()
+diff --git a/tools/laya/CMakeLists.txt b/tools/laya/CMakeLists.txt
+new file mode 100644
+index 000000000..608e677b8
+--- /dev/null
++++ b/tools/laya/CMakeLists.txt
+@@ -0,0 +1,23 @@
++# laya
++
++# Self-contained laya model (encoder + typed decision head) that loads its own
++# GGUF and builds the inference graph with ggml directly, following the
++# tools/mtmd pattern.
++# The runtime (laya.cpp) is compiled into libllama so the Skippy ABI can
++# expose it; this interface target only carries the header path.
++add_library(laya INTERFACE)
++
++target_link_libraries     (laya INTERFACE llama)
++target_include_directories(laya INTERFACE .)
++
++# Gate the CLI on LLAMA_BUILD_TOOLS so that library-only builds skip it.
++if (LLAMA_BUILD_TOOLS)
++    set(TARGET llama-laya-cli)
++    add_executable(${TARGET} laya-cli.cpp)
++    set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME llama-laya-cli)
++    if(LLAMA_TOOLS_INSTALL)
++        install(TARGETS ${TARGET} RUNTIME)
++    endif()
++    target_link_libraries  (${TARGET} PRIVATE llama-common laya Threads::Threads)
++    target_compile_features(${TARGET} PRIVATE cxx_std_17)
++endif()
+diff --git a/tools/laya/laya-cli.cpp b/tools/laya/laya-cli.cpp
+new file mode 100644
+index 000000000..b225ceff0
+--- /dev/null
++++ b/tools/laya/laya-cli.cpp
+@@ -0,0 +1,670 @@
++// llama-laya-cli: run the self-contained laya decision model.
++//
++// Loads a laya GGUF twice: once through the tools/laya library (self-contained
++// ggml graph) and once through libllama purely to borrow the vocabulary.
++// Reads a JSON file containing `state` + `questions`, ports the PyTorch
++// `build_sequence` tokenizer pipeline, runs one forward pass through the
++// encoder + decision head, and prints per-question answers
++// (choice/score/noul + probabilities + confidence + action) plus the raw
++// per-question outputs used to compare against tests/laya/golden.
++//
++// Usage:
++//   llama-laya-cli -m laya-f16.gguf -f input.json
++//
++// input.json format (same as the golden fixtures under tests/laya/golden):
++//   {
++//     "state": <string | dict | list>,
++//     "questions": {
++//       "q1": {"type": "choice", "instructions": "...", "criteria": {...}},
++//       "q2": {"type": "score",  "instructions": "...", "criteria": [...]},
++//       "q3": {"type": "noul",   "instructions": "..."}
++//     }
++//   }
++
++#include "common.h"
++#include "json.h"
++#include "llama.h"
++#include "laya.h"
++
++#include <algorithm>
++#include <chrono>
++#include <clocale>
++#include <cmath>
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <vector>
++
++static const char * QTYPE_NAMES[] = { "choice", "score", "noul" };
++
++// ---- JSON helpers (ports of laya/common.py) ----
++// Python's json.dumps uses ", " / ": " separators and ensure_ascii=False;
++// nlohmann's compact dump() removes the separator spaces, so a small
++// serializer is needed to reproduce the reference's serialize_state /
++// render_criterion byte-for-byte.
++
++static std::string json_escape(const std::string & s) {
++    std::string out;
++    out.reserve(s.size());
++    for (unsigned char c : s) {
++        switch (c) {
++            case '"':  out += "\\\""; break;
++            case '\\': out += "\\\\"; break;
++            case '\b': out += "\\b";  break;
++            case '\f': out += "\\f";  break;
++            case '\n': out += "\\n";  break;
++            case '\r': out += "\\r";  break;
++            case '\t': out += "\\t";  break;
++            default:
++                if (c < 0x20) {
++                    char buf[8];
++                    snprintf(buf, sizeof(buf), "\\u%04x", c);
++                    out += buf;
++                } else {
++                    out += (char) c;
++                }
++        }
++    }
++    return out;
++}
++
++static std::string python_dump(const common_json & v) {
++    if (v.is_string()) {
++        return "\"" + json_escape((std::string) v) + "\"";
++    }
++    if (v.is_array()) {
++        std::string out = "[";
++        bool first = true;
++        for (auto it = v.begin(); it != v.end(); ++it) {
++            if (!first) out += ", ";
++            first = false;
++            out += python_dump(*it);
++        }
++        out += "]";
++        return out;
++    }
++    if (v.is_object()) {
++        std::string out = "{";
++        bool first = true;
++        for (auto it = v.begin(); it != v.end(); ++it) {
++            if (!first) out += ", ";
++            first = false;
++            out += "\"" + json_escape(it.key()) + "\": " + python_dump(it.value());
++        }
++        out += "}";
++        return out;
++    }
++    if (v.is_boolean()) {
++        return v.get<bool>() ? "true" : "false";
++    }
++    if (v.is_null()) {
++        return "null";
++    }
++    if (v.is_number_integer()) {
++        return std::to_string(v.get<long long>());
++    }
++    if (v.is_number_float()) {
++        char buf[64];
++        snprintf(buf, sizeof(buf), "%.17g", v.get<double>());
++        return buf;
++    }
++    return "null";
++}
++
++static std::string serialize_state(const common_json & state) {
++    if (state.is_string()) {
++        return (std::string) state;
++    }
++    return python_dump(state);
++}
++
++static std::string render_criterion(const common_json & value) {
++    if (value.is_string()) {
++        return (std::string) value;
++    }
++    return python_dump(value);
++}
++
++static std::vector<std::string> render_options(const common_json & q) {
++    std::vector<std::string> opts;
++    const std::string t = q["type"];
++    const common_json crit = q.contains("criteria") ? q["criteria"] : common_json::object();
++    if (t == "choice") {
++        for (auto it = crit.begin(); it != crit.end(); ++it) {
++            const std::string k = it.key();
++            const std::string v = render_criterion(it.value());
++            opts.push_back(v.empty() ? k : k + ": " + v);
++        }
++    } else if (t == "score") {
++        int32_t i = 0;
++        for (auto it = crit.begin(); it != crit.end(); ++it, ++i) {
++            opts.push_back("level " + std::to_string(i) + ": " + render_criterion(it.value()));
++        }
++    } else { // noul
++        const std::string fc = crit.contains("false") ? render_criterion(crit["false"]) : "";
++        const std::string tc = crit.contains("true")  ? render_criterion(crit["true"])  : "";
++        opts.push_back("false: " + (fc.empty() ? "no, the statement does not hold" : fc));
++        opts.push_back("true: "  + (tc.empty() ? "yes, the statement holds"          : tc));
++    }
++    return opts;
++}
++
++static std::string replace_all(std::string s, const std::string & from, const std::string & to) {
++    size_t pos = 0;
++    while ((pos = s.find(from, pos)) != std::string::npos) {
++        s.replace(pos, from.length(), to);
++        pos += to.length();
++    }
++    return s;
++}
++
++// ---- build_sequence port (laya/common.py) ----
++// Format: [CLS] <type> instructions [SEP] [MASK] opt0 [MASK] opt1 ... [SEP] state [SEP]
++struct Seq {
++    std::vector<llama_token> ids;
++    std::vector<int32_t>     markers;
++    int32_t                  qtype = 0;
++};
++
++static Seq build_sequence(
++        const laya_model * model,
++        llama_token cls_token_id,
++        llama_token sep_token_id,
++        llama_token mask_token_id,
++        const common_json & state,
++        const common_json & q,
++        int32_t max_len,
++        int32_t head_max_len) {
++    const std::string t    = q["type"];
++    const std::string ins  = replace_all((std::string) q["instructions"], "[MASK]", " ");
++
++    std::vector<std::string> opts = render_options(q);
++
++    const auto tokenize = [&](const std::string & text) {
++        return laya_tokenize(model, text);
++    };
++
++    // head_ids = tokenizer("%s question: %s" % (t, ins), add_special_tokens=False)
++    std::vector<llama_token> head_ids = tokenize(t + " question: " + ins);
++
++    // opt_ids = [ [mask] + tokenizer(" " + opt)[:48] ... ]
++    std::vector<std::vector<llama_token>> opt_ids;
++    for (const auto & opt : opts) {
++        std::vector<llama_token> o = { mask_token_id };
++        std::vector<llama_token> tok = tokenize(" " + replace_all(opt, "[MASK]", " "));
++        if (tok.size() > 48) {
++            tok.resize(48);
++        }
++        o.insert(o.end(), tok.begin(), tok.end());
++        opt_ids.push_back(o);
++    }
++
++    int32_t opt_budget = head_max_len;
++    for (const auto & o : opt_ids) {
++        opt_budget -= (int32_t) o.size();
++    }
++    if (opt_budget < 16) {
++        const int32_t per = std::max(4, (head_max_len - 16) / std::max(1, (int32_t) opt_ids.size()));
++        for (auto & o : opt_ids) {
++            if ((int32_t) o.size() > per) o.resize(per);
++        }
++        opt_budget = head_max_len;
++        for (const auto & o : opt_ids) {
++            opt_budget -= (int32_t) o.size();
++        }
++    }
++    if ((int32_t) head_ids.size() > std::max(8, opt_budget)) {
++        head_ids.resize(std::max(8, opt_budget));
++    }
++
++    std::vector<llama_token> ids = { cls_token_id };
++    ids.insert(ids.end(), head_ids.begin(), head_ids.end());
++    ids.push_back(sep_token_id);
++
++    std::vector<int32_t> markers;
++    for (const auto & o : opt_ids) {
++        markers.push_back((int32_t) ids.size());
++        ids.insert(ids.end(), o.begin(), o.end());
++    }
++    ids.push_back(sep_token_id);
++
++    const int32_t room = std::max(0, max_len - (int32_t) ids.size() - 1);
++    std::vector<llama_token> st = tokenize(replace_all(serialize_state(state), "[MASK]", " "));
++    if ((int32_t) st.size() > room) {
++        st.resize(room);
++    }
++    ids.insert(ids.end(), st.begin(), st.end());
++    ids.push_back(sep_token_id);
++
++    if ((int32_t) ids.size() > max_len) {
++        ids.resize(max_len);
++    }
++
++    Seq seq;
++    seq.ids = ids;
++    for (int32_t m : markers) {
++        if (m < max_len) {
++            seq.markers.push_back(m);
++        }
++    }
++    return seq;
++}
++
++// ---- temperature / confidence (ports of laya/common.py + agent.py) ----
++
++static float clamp_temperature(float t) {
++    if (std::isnan(t) || std::isinf(t)) {
++        return 1.0f;
++    }
++    return std::min(5.0f, std::max(0.5f, t));
++}
++
++// temperature_by_options is not persisted in the GGUF, so only the base
++// per-qtype temperature applies (like the reference when the map is empty).
++static float temperature_for_qtype(const std::vector<float> & temperature, int32_t qtype) {
++    if (temperature.empty()) {
++        return 1.0f;
++    }
++    return clamp_temperature(temperature[qtype % (int32_t) temperature.size()]);
++}
++
++static float confidence_from_probs(const std::vector<float> & p) {
++    const int k = (int) p.size();
++    if (k < 2) {
++        return 1.0f;
++    }
++    float ent = 0.0f;
++    for (int i = 0; i < k; ++i) {
++        if (p[i] > 0.0f) {
++            ent -= p[i] * std::log(p[i]);
++        }
++    }
++    return std::min(1.0f, std::max(0.0f, 1.0f - ent / std::log((float) k)));
++}
++
++int main(int argc, char ** argv) {
++    setlocale(LC_ALL, "");
++
++    std::string model_path;
++    std::string input_path;
++    int n_threads = 1;
++    int n_bench   = 0; // >0: repeat the forward pass in-process for timing/stability
++    std::string device = "auto"; // --cpu or --device NAME
++
++    for (int i = 1; i < argc; ++i) {
++        const std::string arg = argv[i];
++        if (arg == "-m" || arg == "--model") {
++            if (i + 1 < argc) model_path = argv[++i];
++        } else if (arg == "-f" || arg == "--file") {
++            if (i + 1 < argc) input_path = argv[++i];
++        } else if (arg == "-t" || arg == "--threads") {
++            if (i + 1 < argc) n_threads = std::max(1, std::atoi(argv[++i]));
++        } else if (arg == "--cpu") {
++            device.clear();
++        } else if (arg == "--device") {
++            if (i + 1 < argc) device = argv[++i];
++        } else if (arg == "-b" || arg == "--bench") {
++            if (i + 1 < argc) n_bench = std::max(0, std::atoi(argv[++i]));
++        } else if (arg == "-h" || arg == "--help") {
++            printf("Usage: %s -m <laya-f16.gguf> -f <input.json> [-t threads] [-b bench_runs] [--cpu | --device NAME]\n", argv[0]);
++            return 0;
++        } else {
++            fprintf(stderr, "laya: unknown argument: %s\n", arg.c_str());
++            return 1;
++        }
++    }
++
++    if (model_path.empty() || input_path.empty()) {
++        fprintf(stderr, "laya: missing -m <model> or -f <input>\n");
++        return 1;
++    }
++
++    // load the self-contained model
++    laya_model * model = nullptr;
++    try {
++        model = laya_model_load_from_file(model_path.c_str(), device.c_str());
++    } catch (const std::exception & e) {
++        fprintf(stderr, "laya: failed to load model: %s\n", e.what());
++        return 1;
++    }
++    const laya_hparams & hp = laya_model_hparams(model);
++
++    // borrow the vocabulary from libllama (no inference / graph / batch API)
++    llama_model_params mparams = llama_model_default_params();
++    mparams.vocab_only = true; // only the tokenizer is needed, skip the weights
++    llama_model * vmodel = llama_model_load_from_file(model_path.c_str(), mparams);
++    if (!vmodel) {
++        fprintf(stderr, "laya: failed to load vocab from '%s'\n", model_path.c_str());
++        laya_model_free(model);
++        return 1;
++    }
++    const struct llama_vocab * vocab = llama_model_get_vocab(vmodel);
++
++    // read input JSON
++    FILE * fin = fopen(input_path.c_str(), "rb");
++    if (!fin) {
++        fprintf(stderr, "laya: failed to open input file '%s'\n", input_path.c_str());
++        llama_model_free(vmodel);
++        laya_model_free(model);
++        return 1;
++    }
++    fseek(fin, 0, SEEK_END);
++    const long fsize = ftell(fin);
++    fseek(fin, 0, SEEK_SET);
++    std::string text((size_t) fsize, '\0');
++    const size_t nread = fread(&text[0], 1, (size_t) fsize, fin);
++    fclose(fin);
++    text.resize(nread);
++
++    common_json input;
++    try {
++        input = common_json::parse(text);
++    } catch (const std::exception & e) {
++        fprintf(stderr, "laya: failed to parse JSON: %s\n", e.what());
++        llama_model_free(vmodel);
++        laya_model_free(model);
++        return 1;
++    }
++
++    const common_json & state = input["state"];
++    const common_json & questions = input["questions"];
++
++    // one sequence per question
++    const int32_t max_len      = hp.max_len > 0 ? hp.max_len : 1024;
++    const int32_t head_max_len = hp.head_max_len > 0 ? hp.head_max_len : 256;
++
++    std::vector<Seq> seqs;
++    for (auto it = questions.begin(); it != questions.end(); ++it) {
++        const common_json & q = it.value();
++        const std::string t = q["type"];
++        int32_t qtype = 0;
++        for (int i = 0; i < 3; ++i) {
++            if (t == QTYPE_NAMES[i]) {
++                qtype = i;
++            }
++        }
++        Seq seq = build_sequence(model, llama_vocab_bos(vocab), llama_vocab_sep(vocab),
++                                 llama_vocab_mask(vocab), state, q, max_len, head_max_len);
++        seq.qtype = qtype;
++        seqs.push_back(std::move(seq));
++    }
++
++    const int32_t n_seqs = (int32_t) seqs.size();
++    if (n_seqs == 0) {
++        fprintf(stderr, "laya: no questions in input\n");
++        llama_model_free(vmodel);
++        laya_model_free(model);
++        return 1;
++    }
++
++    for (int32_t s = 0; s < n_seqs; ++s) {
++        if ((int32_t) seqs[s].markers.size() > LAYA_MAX_MARKERS) {
++            fprintf(stderr, "laya: question %d has %d options > LAYA_MAX_MARKERS=%d\n",
++                    s, (int) seqs[s].markers.size(), LAYA_MAX_MARKERS);
++            llama_model_free(vmodel);
++            laya_model_free(model);
++            return 1;
++        }
++    }
++
++    // pack all sequences into one batch
++    int32_t n_tokens = 0;
++    for (const auto & s : seqs) {
++        n_tokens += (int32_t) s.ids.size();
++    }
++
++    std::vector<int32_t> tokens(n_tokens);
++    std::vector<int32_t> positions(n_tokens);
++    std::vector<int32_t> seq_id(n_tokens);
++    std::vector<int32_t> qtype(n_tokens);
++    std::vector<int32_t> marker_pos(LAYA_MAX_MARKERS * n_seqs, 0);
++    std::vector<int32_t> marker_mask(LAYA_MAX_MARKERS * n_seqs, 0);
++    std::vector<int32_t> seq_start(n_seqs);
++
++    int32_t t = 0;
++    for (int32_t s = 0; s < n_seqs; ++s) {
++        const Seq & seq = seqs[s];
++        seq_start[s] = t;
++        for (size_t i = 0; i < seq.ids.size(); ++i) {
++            tokens[t]   = seq.ids[i];
++            positions[t] = (int32_t) i;
++            seq_id[t]   = s;
++            qtype[t]    = seq.qtype;
++            ++t;
++        }
++        const int32_t k = (int32_t) seq.markers.size();
++        for (int32_t j = 0; j < k && j < LAYA_MAX_MARKERS; ++j) {
++            // row-major [n_markers_max, n_seqs]: index = m + n_markers_max * s
++            // marker positions are sequence-local; the flattened encoder output
++            // concatenates the sequences, so offset by this sequence's start.
++            marker_pos[j + LAYA_MAX_MARKERS * s]  = seq_start[s] + seq.markers[j];
++            marker_mask[j + LAYA_MAX_MARKERS * s] = 1;
++        }
++    }
++
++    laya_batch batch;
++    batch.n_tokens   = n_tokens;
++    batch.n_seqs     = n_seqs;
++    batch.tokens     = tokens.data();
++    batch.positions  = positions.data();
++    batch.seq_id     = seq_id.data();
++    batch.qtype      = qtype.data();
++    batch.marker_pos = marker_pos.data();
++    batch.marker_mask = marker_mask.data();
++    batch.seq_start  = seq_start.data();
++
++    laya_context * ctx = nullptr;
++    try {
++        ctx = laya_init(model, n_threads);
++    } catch (const std::exception & e) {
++        fprintf(stderr, "laya: failed to init context: %s\n", e.what());
++        llama_model_free(vmodel);
++        laya_model_free(model);
++        return 1;
++    }
++
++    laya_result result;
++    const int n_runs = n_bench > 0 ? n_bench : 1;
++    std::vector<double> run_ms;
++    bool deterministic = true;
++    std::vector<float> first_logits, first_act;
++    for (int run = 0; run < n_runs; ++run) {
++        const auto t0 = std::chrono::steady_clock::now();
++        if (laya_encode(ctx, batch, result) != 0) {
++            fprintf(stderr, "laya: forward pass failed\n");
++            laya_free(ctx);
++            llama_model_free(vmodel);
++            laya_model_free(model);
++            return 1;
++        }
++        const auto t1 = std::chrono::steady_clock::now();
++        run_ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
++        if (run == 0) {
++            first_logits = result.logits;
++            first_act    = result.act_logits;
++        } else if (result.logits != first_logits || result.act_logits != first_act) {
++            deterministic = false;
++        }
++    }
++
++    // bench statistics
++    double sum_ms = 0.0, min_ms = run_ms[0], max_ms = run_ms[0];
++    for (double v : run_ms) { sum_ms += v; min_ms = std::min(min_ms, v); max_ms = std::max(max_ms, v); }
++    const double mean_ms = sum_ms / run_ms.size();
++    double var_ms = 0.0;
++    for (double v : run_ms) { var_ms += (v - mean_ms) * (v - mean_ms); }
++    const double std_ms = std::sqrt(var_ms / run_ms.size());
++    std::vector<double> sorted_ms = run_ms;
++    std::sort(sorted_ms.begin(), sorted_ms.end());
++    const double median_ms = sorted_ms[sorted_ms.size() / 2];
++
++    if (n_bench > 0) {
++        fprintf(stderr,
++                "laya bench: tokens=%d seqs=%d runs=%d threads=%d  "
++                "mean=%.2fms median=%.2fms min=%.2fms max=%.2fms std=%.2fms  deterministic=%s\n",
++                n_tokens, n_seqs, n_runs, n_threads,
++                mean_ms, median_ms, min_ms, max_ms, std_ms, deterministic ? "yes" : "no");
++    }
++
++    const int32_t n_markers_max = result.n_markers_max;
++    const int32_t n_act         = result.n_act;
++    const std::vector<float> & temperature = hp.temperature;
++
++    // per-question answers
++    common_json answers = common_json::object();
++    common_json per_question = common_json::object();
++
++    int32_t qid = 0;
++    for (auto it = questions.begin(); it != questions.end(); ++it, ++qid) {
++        const std::string qid_name = it.key();
++        const common_json & q = it.value();
++        const std::string t = q["type"];
++        const Seq & seq = seqs[qid];
++        const int32_t k = (int32_t) seq.markers.size();
++        const int32_t qt = seq.qtype;
++
++        const float t_scale = temperature_for_qtype(temperature, qt);
++        std::vector<float> logits_k(k);
++        for (int32_t j = 0; j < k; ++j) {
++            logits_k[j] = result.logits[qid*n_markers_max + j] / t_scale;
++        }
++
++        // softmax
++        std::vector<float> p(k);
++        float max_l = logits_k[0];
++        for (int32_t j = 1; j < k; ++j) {
++            max_l = std::max(max_l, logits_k[j]);
++        }
++        float sum = 0.0f;
++        for (int32_t j = 0; j < k; ++j) {
++            p[j] = std::exp(logits_k[j] - max_l);
++            sum += p[j];
++        }
++        for (int32_t j = 0; j < k; ++j) {
++            p[j] /= sum;
++        }
++
++        const float conf = confidence_from_probs(p);
++
++        // action head softmax
++        std::vector<float> act(n_act);
++        float amax = result.act_logits[qid*n_act];
++        for (int32_t j = 0; j < n_act; ++j) {
++            act[j] = result.act_logits[qid*n_act + j];
++            amax = std::max(amax, act[j]);
++        }
++        float asum = 0.0f;
++        for (int32_t j = 0; j < n_act; ++j) {
++            act[j] = std::exp(act[j] - amax);
++            asum += act[j];
++        }
++        for (int32_t j = 0; j < n_act; ++j) {
++            act[j] /= asum;
++        }
++        const float act_probability = act[0];
++
++        common_json ans = common_json::object();
++        ans["type"] = t;
++        ans["confidence"] = (double) std::round(conf*10000.0)/10000.0;
++        ans["action"] = common_json::object();
++        ans["action"]["act_probability"] = (double) std::round(act_probability*10000.0)/10000.0;
++
++        if (t == "choice") {
++            const common_json & crit = q["criteria"];
++            std::vector<std::string> keys;
++            for (auto itc = crit.begin(); itc != crit.end(); ++itc) {
++                keys.push_back(itc.key());
++            }
++            int argmax = 0;
++            for (int32_t j = 1; j < k; ++j) {
++                if (p[j] > p[argmax]) {
++                    argmax = j;
++                }
++            }
++            ans["choice"] = keys[argmax];
++            common_json probs = common_json::object();
++            for (int32_t j = 0; j < k; ++j) {
++                probs[keys[j]] = (double) std::round(p[j]*10000.0)/10000.0;
++            }
++            ans["probabilities"] = probs;
++        } else if (t == "score") {
++            float exp_score = 0.0f;
++            for (int32_t j = 0; j < k; ++j) {
++                exp_score += j * p[j];
++            }
++            ans["score"] = (double) std::round(exp_score*10000.0)/10000.0;
++            common_json legend = common_json::object();
++            common_json probs = common_json::object();
++            for (int32_t j = 0; j < k; ++j) {
++                legend[std::to_string(j)] = render_options(q)[j];
++                probs[std::to_string(j)]  = (double) std::round(p[j]*10000.0)/10000.0;
++            }
++            ans["legend"] = legend;
++            ans["probabilities"] = probs;
++        } else { // noul
++            ans["noul"] = (double) std::round(p[1]*10000.0)/10000.0;
++        }
++
++        answers[qid_name] = ans;
++
++        // per-question raw outputs (for comparison with golden fixtures)
++        common_json pq = common_json::object();
++        pq["qtype"] = t;
++        common_json opt_arr = common_json::array();
++        for (const auto & o : render_options(q)) {
++            opt_arr.push_back(o);
++        }
++        pq["options"] = opt_arr;
++        common_json ids_arr = common_json::array();
++        for (auto tok : seq.ids) {
++            ids_arr.push_back((int64_t) tok);
++        }
++        pq["input_ids"] = ids_arr;
++        common_json mk_arr = common_json::array();
++        for (auto m : seq.markers) {
++            mk_arr.push_back((int64_t) m);
++        }
++        pq["marker_pos"] = mk_arr;
++        common_json rl_arr = common_json::array();
++        for (int32_t j = 0; j < k; ++j) {
++            rl_arr.push_back((double) result.logits[qid*n_markers_max + j]);
++        }
++        pq["raw_logits"] = rl_arr;
++        common_json al_arr = common_json::array();
++        for (int32_t j = 0; j < n_act; ++j) {
++            al_arr.push_back((double) act[j]);
++        }
++        pq["act_logits"] = al_arr;
++        pq["act_probability"] = (double) act_probability;
++        per_question[qid_name] = pq;
++    }
++
++    common_json out = common_json::object();
++    out["model"] = model_path;
++    out["state"] = state;
++    out["questions"] = questions;
++    out["per_question"] = per_question;
++    out["answers"] = answers;
++
++    if (n_bench > 0) {
++        common_json b = common_json::object();
++        b["runs"]   = n_runs;
++        b["tokens"] = n_tokens;
++        b["seqs"]   = n_seqs;
++        b["threads"] = n_threads;
++        b["mean_ms"] = mean_ms;
++        b["median_ms"] = median_ms;
++        b["min_ms"] = min_ms;
++        b["max_ms"] = max_ms;
++        b["std_ms"] = std_ms;
++        b["deterministic"] = deterministic;
++        out["bench"] = b;
++    }
++
++    printf("%s\n", out.dump(2).c_str());
++
++    laya_free(ctx);
++    llama_model_free(vmodel);
++    laya_model_free(model);
++    return 0;
++}
+diff --git a/tools/laya/laya.cpp b/tools/laya/laya.cpp
+new file mode 100644
+index 000000000..00b893a3c
+--- /dev/null
++++ b/tools/laya/laya.cpp
+@@ -0,0 +1,1132 @@
++#include "laya.h"
++
++#include "ggml.h"
++#include "ggml-cpp.h"
++#include "ggml-alloc.h"
++#include "ggml-backend.h"
++#include "gguf.h"
++
++#include <algorithm>
++#include <array>
++#include <cfloat>
++#include <cmath>
++#include <cstdarg>
++#include <cstdio>
++#include <cstring>
++#include <fstream>
++#include <map>
++#include <stdexcept>
++#include <string>
++#include <tuple>
++#include <unordered_map>
++#include <vector>
++
++// ======================================================================
++// Reference (PyTorch): laya/common.py -> DecisionModel
++//   h        = encoder(input_ids, attention_mask).last_hidden_state
++//   h        = h + type_emb(qtype)[:, None, :]
++//   for layer in head.layers: h = layer(h, src_key_padding_mask=pad)
++//   m        = gather(h, marker_pos)
++//   logits   = scorer(m).squeeze(-1); logits.masked_fill(~marker_mask, -1e4)
++//   p        = softmax(logits.detach(), -1)
++//   k        = marker_mask.sum(-1).clamp(min=2)
++//   ent      = -(p * log(p)).sum(-1) / log(k)
++//   top2     = p.topk(2, -1).values
++//   feats    = [top2[:,0], top2[:,0]-top2[:,1], ent, k/255]
++//   pooled   = h[:, 0]
++//   act_logits = act_head(cat([pooled, feats], -1))
++//
++// The encoder is a ModernBERT (mmBERT) body: bidirectional attention with a
++// per-layer dense/sliding window pattern, GeGLU FFN, RoPE (NEOX), norm_first
++// residual blocks. The decision head is 2 norm_first TransformerEncoderLayers
++// (full self-attention + ReLU FFN, like PyTorch nn.TransformerEncoderLayer),
++// a scorer and an action head.
++// ======================================================================
++
++struct laya_encoder_layer {
++    ggml_tensor * attn_norm = nullptr; // layer 0 is identity (may be null)
++    ggml_tensor * wqkv      = nullptr;
++    ggml_tensor * wo        = nullptr;
++    ggml_tensor * ffn_up    = nullptr;
++    ggml_tensor * ffn_down  = nullptr;
++    ggml_tensor * ffn_norm  = nullptr;
++};
++
++struct laya_head_layer {
++    ggml_tensor * attn_norm   = nullptr;
++    ggml_tensor * attn_norm_b = nullptr;
++    ggml_tensor * wqkv        = nullptr;
++    ggml_tensor * wqkv_b      = nullptr;
++    ggml_tensor * wo          = nullptr;
++    ggml_tensor * wo_b        = nullptr;
++    ggml_tensor * ffn_norm    = nullptr;
++    ggml_tensor * ffn_norm_b  = nullptr;
++    ggml_tensor * ffn_up      = nullptr;
++    ggml_tensor * ffn_up_b    = nullptr;
++    ggml_tensor * ffn_down    = nullptr;
++    ggml_tensor * ffn_down_b  = nullptr;
++};
++
++struct laya_model {
++    laya_hparams hparams;
++
++    ggml_context_ptr ctx_meta;   // tensor definitions from the gguf header
++    gguf_context_ptr ctx_gguf;
++    ggml_context_ptr ctx_data;   // data context holding the real tensors
++
++    ggml_backend_t         backend = nullptr;
++    ggml_backend_buffer_ptr buf;
++
++    // self-contained tokenizer data (mmBERT BPE)
++    struct pair_hash {
++        size_t operator()(const std::pair<std::string, std::string> & p) const {
++            return std::hash<std::string>{}(p.first) ^ (std::hash<std::string>{}(p.second) << 1);
++        }
++    };
++    std::unordered_map<std::string, int32_t> token_to_id;
++    std::unordered_map<std::pair<std::string, std::string>, uint32_t, pair_hash> merge_rank;
++    int32_t bos_id  = 2;
++    int32_t eos_id  = 1;
++    int32_t sep_id  = 1;
++    int32_t mask_id = 4;
++    int32_t unk_id  = 3;
++    int32_t pad_id  = 0;
++
++    ggml_tensor * tok_embd   = nullptr;
++    ggml_tensor * tok_norm   = nullptr;
++    ggml_tensor * output_norm = nullptr;
++
++    std::vector<laya_encoder_layer> layers;
++    ggml_tensor * type_emb = nullptr;
++    std::vector<laya_head_layer> head_layers;
++
++    ggml_tensor * scorer_0   = nullptr; ggml_tensor * scorer_0_b = nullptr;
++    ggml_tensor * scorer_1   = nullptr; ggml_tensor * scorer_1_b = nullptr;
++    ggml_tensor * scorer_3   = nullptr; ggml_tensor * scorer_3_b = nullptr;
++    ggml_tensor * act_head_0 = nullptr; ggml_tensor * act_head_0_b = nullptr;
++    ggml_tensor * act_head_2 = nullptr; ggml_tensor * act_head_2_b = nullptr;
++};
++
++struct laya_context {
++    const laya_model * model = nullptr;
++
++    ggml_backend_t         backend     = nullptr; // primary compute backend
++    ggml_backend_t         backend_gpu = nullptr;
++    ggml_backend_t         backend_cpu = nullptr;
++    ggml_backend_sched_ptr sched;
++
++    int n_threads = 1;
++};
++
++static void laya_log(const char * fmt, ...) {
++    va_list args;
++    va_start(args, fmt);
++    fprintf(stderr, "laya: ");
++    vfprintf(stderr, fmt, args);
++    va_end(args);
++}
++
++// ---- GGUF helpers ------------------------------------------------------
++
++static int64_t gguf_find_key_or(const gguf_context * ctx, const char * key) {
++    const int64_t id = gguf_find_key(ctx, key);
++    if (id < 0) {
++        throw std::runtime_error(std::string("missing GGUF key: ") + key);
++    }
++    return id;
++}
++
++static uint32_t gguf_get_u32(const gguf_context * ctx, const char * key, uint32_t def = 0) {
++    const int64_t id = gguf_find_key(ctx, key);
++    if (id < 0) {
++        return def;
++    }
++    return gguf_get_val_u32(ctx, id);
++}
++
++static int32_t gguf_get_i32(const gguf_context * ctx, const char * key, int32_t def = 0) {
++    const int64_t id = gguf_find_key(ctx, key);
++    if (id < 0) {
++        return def;
++    }
++    switch (gguf_get_kv_type(ctx, id)) {
++        case GGUF_TYPE_INT32: return gguf_get_val_i32(ctx, id);
++        case GGUF_TYPE_UINT32: return (int32_t) gguf_get_val_u32(ctx, id);
++        default: throw std::runtime_error(std::string("unexpected type for GGUF key: ") + key);
++    }
++}
++
++static float gguf_get_f32(const gguf_context * ctx, const char * key, float def = 0.0f) {
++    const int64_t id = gguf_find_key(ctx, key);
++    if (id < 0) {
++        return def;
++    }
++    return gguf_get_val_f32(ctx, id);
++}
++
++static bool gguf_get_bool(const gguf_context * ctx, const char * key, bool def = false) {
++    const int64_t id = gguf_find_key(ctx, key);
++    if (id < 0) {
++        return def;
++    }
++    return gguf_get_val_bool(ctx, id);
++}
++
++static std::vector<float> gguf_get_arr_f32(const gguf_context * ctx, const char * key) {
++    const int64_t id = gguf_find_key(ctx, key);
++    if (id < 0) {
++        return {};
++    }
++    if (gguf_get_kv_type(ctx, id) != GGUF_TYPE_ARRAY ||
++        gguf_get_arr_type(ctx, id) != GGUF_TYPE_FLOAT32) {
++        return {};
++    }
++    const size_t n = gguf_get_arr_n(ctx, id);
++    const float * data = (const float *) gguf_get_arr_data(ctx, id);
++    return std::vector<float>(data, data + n);
++}
++
++// ---- model loading ------------------------------------------------------
++
++laya_model * laya_model_load_from_file(const char * fname, const char * device) {
++    std::unique_ptr<laya_model> model(new laya_model());
++
++    struct ggml_context * meta = nullptr;
++    struct gguf_init_params params = {
++        /*.no_alloc = */ true,
++        /*.ctx      = */ &meta,
++    };
++
++    model->ctx_gguf.reset(gguf_init_from_file(fname, params));
++    if (!model->ctx_gguf.get()) {
++        throw std::runtime_error(std::string("failed to load laya model from ") + fname + " (does the file exist?)");
++    }
++    model->ctx_meta.reset(meta);
++
++    const gguf_context * ctx_gguf = model->ctx_gguf.get();
++
++    // architecture check
++    {
++        const int64_t id = gguf_find_key(ctx_gguf, "general.architecture");
++        if (id < 0 || std::string(gguf_get_val_str(ctx_gguf, id)) != "laya") {
++            throw std::runtime_error("not a laya GGUF (general.architecture != \"laya\")");
++        }
++    }
++
++    auto & hp = model->hparams;
++    hp.n_embd          = (int32_t) gguf_get_u32(ctx_gguf, "laya.embedding_length");
++    hp.n_layer         = (int32_t) gguf_get_u32(ctx_gguf, "laya.block_count");
++    hp.n_head          = (int32_t) gguf_get_u32(ctx_gguf, "laya.attention.head_count");
++    hp.n_ff            = (int32_t) gguf_get_u32(ctx_gguf, "laya.feed_forward_length");
++    hp.n_vocab         = (int32_t) gguf_get_u32(ctx_gguf, "laya.vocab_size");
++    hp.n_qtype         = (int32_t) gguf_get_u32(ctx_gguf, "laya.n_qtype", 3);
++    hp.marker_token_id = (int32_t) gguf_get_u32(ctx_gguf, "laya.marker_token_id");
++    hp.max_len         = (int32_t) gguf_get_u32(ctx_gguf, "laya.max_len", 1024);
++    hp.head_max_len    = (int32_t) gguf_get_u32(ctx_gguf, "laya.head_max_len", 256);
++    hp.n_act           = (int32_t) gguf_get_u32(ctx_gguf, "laya.act_classes", 2);
++    hp.n_head_layers   = (int32_t) gguf_get_u32(ctx_gguf, "laya.head_layers", 2);
++    hp.n_swa           = (int32_t) gguf_get_u32(ctx_gguf, "laya.attention.sliding_window", 0);
++    hp.swa_pattern     = (int32_t) gguf_get_u32(ctx_gguf, "laya.attention.sliding_window_pattern", 0);
++    hp.norm_eps        = gguf_get_f32(ctx_gguf, "laya.attention.layer_norm_rms_epsilon", 1e-5f);
++    hp.rope_freq_base    = gguf_get_f32(ctx_gguf, "laya.rope.freq_base", 10000.0f);
++    hp.rope_freq_base_swa = gguf_get_f32(ctx_gguf, "laya.rope.freq_base_swa", hp.rope_freq_base);
++
++    if (hp.n_embd == 0 || hp.n_layer == 0 || hp.n_head == 0) {
++        throw std::runtime_error("invalid laya hparams (missing encoder dims)");
++    }
++    if (hp.n_embd % hp.n_head != 0) {
++        throw std::runtime_error("n_embd not divisible by n_head");
++    }
++    hp.n_embd_head = hp.n_embd / hp.n_head;
++
++    // temperature array, padded to n_qtype with the last value (or 1.0)
++    hp.temperature = gguf_get_arr_f32(ctx_gguf, "laya.temperature");
++    if (hp.temperature.empty()) {
++        hp.temperature.assign(std::max(1, hp.n_qtype), 1.0f);
++    }
++    while ((int32_t) hp.temperature.size() < hp.n_qtype) {
++        hp.temperature.push_back(hp.temperature.back());
++    }
++
++    // ---- tokenizer data (mmBERT BPE) ----
++    {
++        auto get_special = [&](const char * key, int32_t def) {
++            const int64_t id = gguf_find_key(ctx_gguf, key);
++            return id < 0 ? def : (int32_t) gguf_get_val_u32(ctx_gguf, id);
++        };
++
++        model->bos_id  = get_special("tokenizer.ggml.bos_token_id", 2);
++        model->eos_id  = get_special("tokenizer.ggml.eos_token_id", 1);
++        model->sep_id  = get_special("tokenizer.ggml.seperator_token_id", model->eos_id);
++        model->mask_id = get_special("tokenizer.ggml.mask_token_id", 4);
++        model->unk_id  = get_special("tokenizer.ggml.unknown_token_id", 3);
++        model->pad_id  = get_special("tokenizer.ggml.padding_token_id", 0);
++
++        const int64_t tid = gguf_find_key(ctx_gguf, "tokenizer.ggml.tokens");
++        if (tid < 0) {
++            throw std::runtime_error("missing tokenizer.ggml.tokens in GGUF");
++        }
++        model->token_to_id.reserve(gguf_get_arr_n(ctx_gguf, tid));
++        for (int64_t i = 0; i < gguf_get_arr_n(ctx_gguf, tid); ++i) {
++            model->token_to_id.emplace(gguf_get_arr_str(ctx_gguf, tid, i), (int32_t) i);
++        }
++
++        const int64_t mid = gguf_find_key(ctx_gguf, "tokenizer.ggml.merges");
++        if (mid >= 0) {
++            const int64_t n_merges = gguf_get_arr_n(ctx_gguf, mid);
++            model->merge_rank.reserve((size_t) n_merges);
++            for (int64_t i = 0; i < n_merges; ++i) {
++                const std::string word = gguf_get_arr_str(ctx_gguf, mid, i);
++                const size_t pos = word.find(' ', 1);
++                if (pos == std::string::npos) {
++                    continue;
++                }
++                model->merge_rank.emplace(
++                        std::make_pair(word.substr(0, pos), word.substr(pos + 1)), (uint32_t) i);
++            }
++        }
++    }
++
++    // ---- create data context and duplicate tensors ----
++    {
++        struct ggml_init_params p = {
++            /*.mem_size =*/ static_cast<size_t>(gguf_get_n_tensors(ctx_gguf) + 1) * ggml_tensor_overhead(),
++            /*.mem_buffer =*/ nullptr,
++            /*.no_alloc =*/ true,
++        };
++        model->ctx_data.reset(ggml_init(p));
++        if (!model->ctx_data.get()) {
++            throw std::runtime_error("failed to init ggml data context");
++        }
++    }
++
++    std::map<std::string, size_t> tensor_offset;
++    for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf); ++i) {
++        tensor_offset[gguf_get_tensor_name(ctx_gguf, i)] =
++            gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i);
++    }
++
++    std::vector<ggml_tensor *> tensors_to_load;
++    std::vector<ggml_tensor *> tensors_data;
++
++    // weights stay in their native GGUF type (F16 for the reference F16 GGUF,
++    // quantized for the k-quant models); ggml mul_mat dequantizes internally.
++    auto get_tensor = [&](const std::string & name, bool required = true) -> ggml_tensor * {
++        ggml_tensor * cur = ggml_get_tensor(meta, name.c_str());
++        if (!cur) {
++            if (required) {
++                throw std::runtime_error("missing tensor: " + name);
++            }
++            return nullptr;
++        }
++        ggml_tensor * data_tensor = ggml_dup_tensor(model->ctx_data.get(), cur);
++        ggml_set_name(data_tensor, cur->name);
++        tensors_to_load.push_back(cur);
++        tensors_data.push_back(data_tensor);
++        return data_tensor;
++    };
++
++    // encoder
++    model->tok_embd   = get_tensor("token_embd.weight");
++    model->tok_norm   = get_tensor("token_embd_norm.weight", false);
++    model->output_norm = get_tensor("output_norm.weight", false);
++
++    model->layers.resize(hp.n_layer);
++    for (int32_t il = 0; il < hp.n_layer; ++il) {
++        auto & layer = model->layers[il];
++        char buf[64];
++        snprintf(buf, sizeof(buf), "blk.%d.", il);
++        const std::string p = buf;
++
++        // layer 0 uses an identity attn pre-norm (ModernBERT); the GGUF ships a
++        // blk.0.attn_norm.weight but it must NOT be applied (matches the
++        // reference, where layer 0 has no attn_norm parameter at all).
++        layer.attn_norm = il == 0 ? nullptr : get_tensor(p + "attn_norm.weight");
++        layer.wqkv      = get_tensor(p + "attn_qkv.weight");
++        layer.wo        = get_tensor(p + "attn_output.weight");
++        layer.ffn_up    = get_tensor(p + "ffn_up.weight");
++        layer.ffn_down  = get_tensor(p + "ffn_down.weight");
++        layer.ffn_norm  = get_tensor(p + "ffn_norm.weight");
++    }
++
++    // decision head
++    model->type_emb = get_tensor("type_emb.weight");
++
++    model->head_layers.resize(hp.n_head_layers);
++    for (int32_t il = 0; il < hp.n_head_layers; ++il) {
++        auto & layer = model->head_layers[il];
++        char buf[64];
++        snprintf(buf, sizeof(buf), "head.%d.", il);
++        const std::string p = buf;
++
++        layer.attn_norm   = get_tensor(p + "attn_norm.weight");
++        layer.attn_norm_b = get_tensor(p + "attn_norm.bias");
++        layer.wqkv        = get_tensor(p + "attn_qkv.weight");
++        layer.wqkv_b      = get_tensor(p + "attn_qkv.bias");
++        layer.wo          = get_tensor(p + "attn_output.weight");
++        layer.wo_b        = get_tensor(p + "attn_output.bias");
++        layer.ffn_norm    = get_tensor(p + "ffn_norm.weight");
++        layer.ffn_norm_b  = get_tensor(p + "ffn_norm.bias");
++        layer.ffn_up      = get_tensor(p + "ffn_up.weight");
++        layer.ffn_up_b    = get_tensor(p + "ffn_up.bias");
++        layer.ffn_down    = get_tensor(p + "ffn_down.weight");
++        layer.ffn_down_b  = get_tensor(p + "ffn_down.bias");
++    }
++
++    // scorer: LayerNorm(d) -> Linear(d, d) -> GELU -> Linear(d, 1)
++    model->scorer_0   = get_tensor("scorer.0.weight");
++    model->scorer_0_b = get_tensor("scorer.0.bias");
++    model->scorer_1   = get_tensor("scorer.1.weight");
++    model->scorer_1_b = get_tensor("scorer.1.bias");
++    model->scorer_3   = get_tensor("scorer.3.weight");
++    model->scorer_3_b = get_tensor("scorer.3.bias");
++
++    // act head: Linear(d+4, 256) -> GELU -> Linear(256, n_act)
++    model->act_head_0   = get_tensor("act_head.0.weight");
++    model->act_head_0_b = get_tensor("act_head.0.bias");
++    model->act_head_2   = get_tensor("act_head.2.weight");
++    model->act_head_2_b = get_tensor("act_head.2.bias");
++
++    // backend: the named device, the first accelerator for "auto", or the CPU
++    const std::string device_name = device ? device : "";
++    if (device_name == "auto") {
++        model->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
++    } else if (!device_name.empty()) {
++        ggml_backend_dev_t dev = ggml_backend_dev_by_name(device_name.c_str());
++        if (!dev) {
++            throw std::runtime_error("laya: no backend device named " + device_name);
++        }
++        model->backend = ggml_backend_dev_init(dev, nullptr);
++        if (!model->backend) {
++            throw std::runtime_error("laya: failed to initialize backend device " + device_name);
++        }
++    }
++    if (!model->backend) {
++        model->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
++    }
++    if (!model->backend) {
++        throw std::runtime_error("failed to initialize a laya backend");
++    }
++
++    // alloc weights and read tensor data from file
++    {
++        std::ifstream fin(fname, std::ios::binary);
++        if (!fin) {
++            throw std::runtime_error("failed to open " + std::string(fname));
++        }
++
++        ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(model->backend);
++        model->buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(model->ctx_data.get(), buft));
++        ggml_backend_buffer_set_usage(model->buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++
++        std::vector<uint8_t> read_buf;
++        for (size_t i = 0; i < tensors_to_load.size(); ++i) {
++            ggml_tensor * cur = tensors_data[i];
++            GGML_ASSERT(cur && "tensor not found in ctx_data");
++            auto it_off = tensor_offset.find(cur->name);
++            GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
++            fin.seekg(it_off->second, std::ios::beg);
++            if (!fin) {
++                throw std::runtime_error("failed to seek for tensor " + std::string(cur->name));
++            }
++            const size_t num_bytes = ggml_nbytes(cur);
++            if (ggml_backend_buft_is_host(buft)) {
++                fin.read((char *) cur->data, num_bytes);
++            } else {
++                read_buf.resize(num_bytes);
++                fin.read((char *) read_buf.data(), num_bytes);
++                ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
++            }
++        }
++    }
++
++    return model.release();
++}
++
++void laya_model_free(laya_model * model) {
++    if (!model) {
++        return;
++    }
++    // release the weight buffer before the backend that owns its device
++    model->buf.reset();
++    if (model->backend) {
++        ggml_backend_free(model->backend);
++    }
++    delete model;
++}
++
++size_t laya_model_weights_bytes(const laya_model * model) {
++    return model->buf ? ggml_backend_buffer_get_size(model->buf.get()) : 0;
++}
++
++bool laya_model_on_accelerator(const laya_model * model) {
++    ggml_backend_dev_t dev = model->backend ? ggml_backend_get_device(model->backend) : nullptr;
++    return dev && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU;
++}
++
++size_t laya_context_compute_bytes(const laya_context * ctx) {
++    size_t total = 0;
++    for (ggml_backend_t backend : { ctx->backend_gpu, ctx->backend_cpu }) {
++        if (backend) {
++            total += ggml_backend_sched_get_buffer_size(ctx->sched.get(), backend);
++        }
++    }
++    return total;
++}
++
++const laya_hparams & laya_model_hparams(const laya_model * model) {
++    return model->hparams;
++}
++
++int64_t laya_model_n_params(const laya_model * model) {
++    int64_t n = 0;
++    for (ggml_tensor * t = ggml_get_first_tensor(model->ctx_data.get()); t; t = ggml_get_next_tensor(model->ctx_data.get(), t)) {
++        n += ggml_nelements(t);
++    }
++    return n;
++}
++
++int32_t laya_vocab_bos (const laya_model * model) { return model->bos_id; }
++int32_t laya_vocab_sep (const laya_model * model) { return model->sep_id; }
++int32_t laya_vocab_mask(const laya_model * model) { return model->mask_id; }
++
++// ---- self-contained tokenizer (HF fast tokenizer port) ----
++// The reference checkpoint's tokenizer is a Metaspace pre-tokenizer
++// (replacement U+2581, prepend_scheme="always") on top of a byte-level BPE
++// with the mmBERT vocabulary. llama.cpp's built-in GPT-2 pre-tokenizer cannot
++// reproduce it for this vocab, so this is implemented here against the GGUF
++// tokenizer data.
++
++static const char LAYA_SPACE[] = "\xe2\x96\x81"; // U+2581 (▁)
++
++static uint32_t laya_cpt_from_utf8(const char * s, size_t n, size_t & len) {
++    const uint8_t * u = (const uint8_t *) s;
++    if (n == 0) { len = 0; return 0; }
++    if (u[0] < 0x80) { len = 1; return u[0]; }
++    if ((u[0] & 0xE0) == 0xC0 && n >= 2) { len = 2; return ((u[0] & 0x1F) << 6) | (u[1] & 0x3F); }
++    if ((u[0] & 0xF0) == 0xE0 && n >= 3) { len = 3; return ((u[0] & 0x0F) << 12) | ((u[1] & 0x3F) << 6) | (u[2] & 0x3F); }
++    if ((u[0] & 0xF8) == 0xF0 && n >= 4) { len = 4; return ((u[0] & 0x07) << 18) | ((u[1] & 0x3F) << 12) | ((u[2] & 0x3F) << 6) | (u[3] & 0x3F); }
++    len = 1;
++    return 0xFFFD; // replacement char for invalid bytes
++}
++
++// greedy byte-level BPE over the codepoint symbols of one word
++static void laya_bpe_encode(const laya_model * model, const std::string & word, std::vector<int32_t> & out) {
++    const auto & token_to_id = model->token_to_id;
++    const auto & merge_rank  = model->merge_rank;
++
++    std::vector<std::string> syms;
++    size_t i = 0;
++    while (i < word.size()) {
++        size_t len = 0;
++        const uint32_t cpt = laya_cpt_from_utf8(word.c_str() + i, word.size() - i, len);
++        const std::string ch = word.substr(i, len);
++        i += len;
++
++        if (token_to_id.find(ch) != token_to_id.end()) {
++            syms.push_back(ch);
++        } else {
++            // byte fallback
++            char buf[16];
++            for (unsigned char b : ch) {
++                snprintf(buf, sizeof(buf), "<0x%02X>", (int) b);
++                syms.push_back(buf);
++            }
++        }
++    }
++
++    while (syms.size() > 1) {
++        // find the adjacent pair with the lowest merge rank
++        int64_t best_rank = -1;
++        size_t  best_i = 0;
++        for (size_t k = 0; k + 1 < syms.size(); ++k) {
++            auto it = merge_rank.find(std::make_pair(syms[k], syms[k + 1]));
++            if (it != merge_rank.end() && (best_rank < 0 || (int64_t) it->second < best_rank)) {
++                best_rank = (int64_t) it->second;
++                best_i = k;
++            }
++        }
++        if (best_rank < 0) {
++            break;
++        }
++        const std::string a = syms[best_i];
++        const std::string b = syms[best_i + 1];
++        std::vector<std::string> merged;
++        merged.reserve(syms.size());
++        size_t k = 0;
++        while (k < syms.size()) {
++            if (k + 1 < syms.size() && syms[k] == a && syms[k + 1] == b) {
++                merged.push_back(a + b);
++                k += 2;
++            } else {
++                merged.push_back(syms[k]);
++                ++k;
++            }
++        }
++        syms.swap(merged);
++    }
++
++    for (const auto & s : syms) {
++        auto it = token_to_id.find(s);
++        if (it == token_to_id.end()) {
++            throw std::runtime_error("laya_tokenize: produced unknown symbol: " + s);
++        }
++        out.push_back(it->second);
++    }
++}
++
++std::vector<int32_t> laya_tokenize(const laya_model * model, const std::string & text) {
++    std::vector<int32_t> out;
++    if (text.empty()) {
++        return out;
++    }
++
++    // 1. normalizer: Replace(" ", "\u2581")
++    // 2. Metaspace: prepend "\u2581" if not already present
++    // 3. split on "\u2581"; every piece after a marker is a word (leading marker kept)
++    std::string norm;
++    norm.reserve(text.size() + 3);
++    for (char c : text) {
++        if (c == ' ') {
++            norm += LAYA_SPACE;
++        } else {
++            norm += c;
++        }
++    }
++    if (norm.compare(0, 3, LAYA_SPACE) != 0) {
++        norm = LAYA_SPACE + norm;
++    }
++
++    size_t pos = 0;
++    while (pos < norm.size()) {
++        // at pos we are at a word boundary (the leading marker)
++        size_t next = norm.find(LAYA_SPACE, pos + 3);
++        if (next == std::string::npos) {
++            next = norm.size();
++        }
++        const std::string word = norm.substr(pos, next - pos);
++        laya_bpe_encode(model, word, out);
++        pos = next;
++    }
++
++    return out;
++}
++
++laya_context * laya_init(const laya_model * model, int n_threads) {
++    std::unique_ptr<laya_context> ctx(new laya_context());
++    ctx->model = model;
++
++    ctx->backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
++    if (!ctx->backend_cpu) {
++        throw std::runtime_error("failed to initialize CPU backend");
++    }
++    // run on the device holding the weights; the CPU backend stays last in the
++    // scheduler so any op the accelerator lacks falls back to it
++    ggml_backend_dev_t weights_dev = ggml_backend_get_device(model->backend);
++    if (weights_dev && ggml_backend_dev_type(weights_dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
++        ctx->backend_gpu = ggml_backend_dev_init(weights_dev, nullptr);
++    }
++    ctx->backend = ctx->backend_gpu ? ctx->backend_gpu : ctx->backend_cpu;
++
++    std::vector<ggml_backend_t> backends;
++    std::vector<ggml_backend_buffer_type_t> bufts;
++    if (ctx->backend_gpu) {
++        backends.push_back(ctx->backend_gpu);
++        bufts.push_back(ggml_backend_get_default_buffer_type(ctx->backend_gpu));
++    }
++    backends.push_back(ctx->backend_cpu);
++    bufts.push_back(ggml_backend_get_default_buffer_type(ctx->backend_cpu));
++    ctx->sched.reset(ggml_backend_sched_new(backends.data(), bufts.data(), (int) backends.size(), 8192, false, true));
++    if (!ctx->sched.get()) {
++        throw std::runtime_error("failed to initialize backend scheduler");
++    }
++
++    ctx->n_threads = std::max(1, n_threads);
++    // resolve the thread setter through the backend registry so the library
++    // does not require a direct link against ggml-cpu (dynamic backends)
++    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
++    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
++    auto set_n_threads = reg ? (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads") : nullptr;
++    if (set_n_threads) {
++        set_n_threads(ctx->backend_cpu, ctx->n_threads);
++    }
++
++    return ctx.release();
++}
++
++void laya_free(laya_context * ctx) {
++    if (!ctx) {
++        return;
++    }
++    // the scheduler references the backends, so release it first
++    ctx->sched.reset();
++    if (ctx->backend_gpu) {
++        ggml_backend_free(ctx->backend_gpu);
++    }
++    if (ctx->backend_cpu) {
++        ggml_backend_free(ctx->backend_cpu);
++    }
++    delete ctx;
++}
++
++// ---- graph helpers ------------------------------------------------------
++
++static ggml_tensor * laya_norm(ggml_context * ctx0, ggml_tensor * cur,
++                               ggml_tensor * w, ggml_tensor * b, float eps) {
++    cur = ggml_norm(ctx0, cur, eps);
++    if (w) {
++        cur = ggml_mul(ctx0, cur, w);
++    }
++    if (b) {
++        cur = ggml_add(ctx0, cur, b);
++    }
++    return cur;
++}
++
++// bidirectional multi-head attention without KV cache.
++// q/k/v: [n_embd_head, n_head, n_tokens]; mask: [n_tokens, n_tokens, 1, 1]
++// returns [n_embd, n_tokens]
++static ggml_tensor * laya_attn(ggml_context * ctx0,
++                               ggml_tensor * Qcur, ggml_tensor * Kcur, ggml_tensor * Vcur,
++                               ggml_tensor * kq_mask, float kq_scale) {
++    ggml_tensor * q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);   // [n_embd_head, n_tokens, n_head, 1]
++    ggml_tensor * k = ggml_permute(ctx0, Kcur, 0, 2, 1, 3);
++    ggml_tensor * v = ggml_permute(ctx0, Vcur, 0, 2, 1, 3);
++
++    ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);              // [n_tokens, n_tokens, n_head, 1]
++    ggml_prec_set_acc(kq, GGML_PREC_F32);
++    kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, 0.0f);
++
++    v = ggml_cont(ctx0, ggml_transpose(ctx0, v));             // [n_tokens, n_embd_head, n_head, 1]
++
++    ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);            // [n_embd_head, n_tokens, n_head, 1]
++    ggml_tensor * cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);  // [n_embd_head, n_head, n_tokens, 1]
++    cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]); // [n_embd, n_tokens]
++
++    return cur;
++}
++
++// fused QKV projection + split into per-head views.
++// qkv: [3*n_embd, n_tokens] (already projected); b applied by the caller
++// returns contiguous per-head tensors [n_embd_head, n_head, n_tokens]
++static std::array<ggml_tensor *, 3> laya_qkv_views(ggml_context * ctx0,
++        ggml_tensor * qkv, int64_t n_embd_head, int64_t n_head, int64_t n_tokens) {
++    const int64_t n_embd = n_embd_head * n_head;
++
++    // extract contiguous Q / K / V blocks, then reshape into per-head views.
++    // (a strided view of the fused projection feeds RoPE/attention with
++    //  non-contiguous strides; materializing the blocks keeps every
++    //  downstream op contiguous and matches the reference numerically)
++    auto block = [&](int64_t offset) -> ggml_tensor * {
++        ggml_tensor * t = ggml_view_2d(ctx0, qkv, n_embd, n_tokens, qkv->nb[1], offset * ggml_row_size(qkv->type, n_embd));
++        t = ggml_cont(ctx0, t);
++        t = ggml_reshape_3d(ctx0, t, n_embd_head, n_head, n_tokens);
++        return t;
++    };
++
++    ggml_tensor * Qcur = block(0);
++    ggml_tensor * Kcur = block(1);
++    ggml_tensor * Vcur = block(2);
++
++    return { Qcur, Kcur, Vcur };
++}
++
++// RoPE (GPT-NeoX) on [n_embd_head, n_head, n_tokens] tensors.
++// ggml_rope_ext returns a new tensor, so the inputs are replaced in-place.
++static void laya_rope(ggml_context * ctx0,
++                      ggml_tensor ** Qcur, ggml_tensor ** Kcur,
++                      ggml_tensor * inp_pos,
++                      int n_dims, float freq_base, int n_ctx_orig) {
++    *Qcur = ggml_rope_ext(ctx0, *Qcur, inp_pos, nullptr, n_dims, GGML_ROPE_TYPE_NEOX, n_ctx_orig,
++                          freq_base, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
++    *Kcur = ggml_rope_ext(ctx0, *Kcur, inp_pos, nullptr, n_dims, GGML_ROPE_TYPE_NEOX, n_ctx_orig,
++                          freq_base, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
++}
++
++// is layer `il` a sliding-window layer? pattern: dense_first (layer 0 dense,
++// then every `pattern`-th layer dense)
++static bool laya_is_swa(int32_t il, int32_t pattern) {
++    if (pattern <= 0) {
++        return false;
++    }
++    return il % pattern != 0;
++}
++
++// build the dense / swa attention masks, matching the PyTorch reference:
++//   dense: 0.0 within the same sequence, -inf across sequences
++//   swa:   additionally mask |p_query - p_key| > n_swa/2 + 1
++static void laya_build_masks(const laya_batch & batch, int32_t n_swa,
++                             std::vector<float> & mask, std::vector<float> & mask_swa) {
++    const int64_t n = batch.n_tokens;
++    mask.assign((size_t) n * n, -INFINITY);
++    mask_swa.assign((size_t) n * n, -INFINITY);
++
++    const int32_t half = n_swa / 2 + 1; // reference: config.sliding_window = local_attention//2; +1 inclusive
++
++    for (int64_t i1 = 0; i1 < n; ++i1) {
++        const int32_t s1 = batch.seq_id[i1];
++        const int32_t p1 = batch.positions[i1];
++        for (int64_t i0 = 0; i0 < n; ++i0) {
++            if (batch.seq_id[i0] != s1) {
++                continue;
++            }
++            const int32_t p0 = batch.positions[i0];
++            mask[i1*n + i0] = 0.0f;
++            if (half <= 0 || std::abs(p1 - p0) <= half) {
++                mask_swa[i1*n + i0] = 0.0f;
++            }
++        }
++    }
++}
++
++// ---- graph building -----------------------------------------------------
++
++struct laya_graph {
++    ggml_context_ptr ctx;
++    ggml_cgraph * gf = nullptr;
++
++    ggml_tensor * inp_tokens = nullptr;
++    ggml_tensor * inp_pos    = nullptr;
++    ggml_tensor * inp_qtype  = nullptr;
++    ggml_tensor * kq_mask    = nullptr;
++    ggml_tensor * kq_mask_swa = nullptr;
++    ggml_tensor * marker_pos  = nullptr;
++    ggml_tensor * marker_mask = nullptr;
++    ggml_tensor * seq_start   = nullptr;
++
++    ggml_tensor * logits     = nullptr;
++    ggml_tensor * act_logits = nullptr;
++
++};
++
++static laya_graph laya_graph_build(const laya_model * model, const laya_batch & batch,
++                                   ggml_tensor * out_logits, ggml_tensor * out_act) {
++    const auto & hp = model->hparams;
++    const int64_t n_tokens = batch.n_tokens;
++    const int64_t n_seqs   = batch.n_seqs;
++
++    struct ggml_init_params params = {
++        /*.mem_size =*/ ggml_tensor_overhead() * 16384,
++        /*.mem_buffer =*/ nullptr,
++        /*.no_alloc =*/ true,
++    };
++
++    laya_graph g;
++    g.ctx.reset(ggml_init(params));
++    ggml_context * ctx0 = g.ctx.get();
++    g.gf = ggml_new_graph_custom(ctx0, 8192, false);
++
++    const float kq_scale = 1.0f / sqrtf((float) hp.n_embd_head);
++    const int   n_ctx_orig = 8192;
++
++    // ---- inputs ----
++    g.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
++    ggml_set_name(g.inp_tokens, "inp_tokens");
++    ggml_set_input(g.inp_tokens);
++
++    g.inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
++    ggml_set_name(g.inp_pos, "inp_pos");
++    ggml_set_input(g.inp_pos);
++
++    g.inp_qtype = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
++    ggml_set_name(g.inp_qtype, "inp_qtype");
++    ggml_set_input(g.inp_qtype);
++
++    g.kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens);
++    ggml_set_name(g.kq_mask, "kq_mask");
++    ggml_set_input(g.kq_mask);
++
++    g.kq_mask_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens);
++    ggml_set_name(g.kq_mask_swa, "kq_mask_swa");
++    ggml_set_input(g.kq_mask_swa);
++
++    g.marker_pos = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, LAYA_MAX_MARKERS, n_seqs);
++    ggml_set_name(g.marker_pos, "marker_pos");
++    ggml_set_input(g.marker_pos);
++
++    g.marker_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, LAYA_MAX_MARKERS, n_seqs);
++    ggml_set_name(g.marker_mask, "marker_mask");
++    ggml_set_input(g.marker_mask);
++
++    g.seq_start = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_seqs);
++    ggml_set_name(g.seq_start, "seq_start");
++    ggml_set_input(g.seq_start);
++
++    ggml_tensor * cur;
++    ggml_tensor * inpL;
++
++    // ---- input embeddings + embedding norm ----
++    // the token embedding rows are stored in F16; the reference runs the whole
++    // encoder in F32, so upcast the lookup to F32 before the embedding norm to
++    // avoid F16 activation error (the near-one-hot attention amplifies it).
++    inpL = ggml_cast(ctx0, ggml_get_rows(ctx0, model->tok_embd, g.inp_tokens), GGML_TYPE_F32); // [n_embd, n_tokens]
++    if (model->tok_norm) {
++        inpL = laya_norm(ctx0, inpL, model->tok_norm, nullptr, hp.norm_eps);
++    }
++
++    // ---- encoder (ModernBERT) ----
++    for (int32_t il = 0; il < hp.n_layer; ++il) {
++        const auto & layer = model->layers[il];
++        const bool is_swa = hp.n_swa > 0 && laya_is_swa(il, hp.swa_pattern);
++        const float freq_base = is_swa ? hp.rope_freq_base_swa : hp.rope_freq_base;
++
++        cur = inpL;
++        if (layer.attn_norm) {
++            cur = laya_norm(ctx0, inpL, layer.attn_norm, nullptr, hp.norm_eps);
++        }
++
++        ggml_tensor * qkv_full = ggml_mul_mat(ctx0, layer.wqkv, cur); // [3*n_embd, n_tokens]
++        auto qkv = laya_qkv_views(ctx0, qkv_full, hp.n_embd_head, hp.n_head, n_tokens);
++        laya_rope(ctx0, &qkv[0], &qkv[1], g.inp_pos, hp.n_embd_head, freq_base, n_ctx_orig);
++
++        cur = laya_attn(ctx0, qkv[0], qkv[1], qkv[2],
++                        is_swa ? g.kq_mask_swa : g.kq_mask, kq_scale);
++        cur = ggml_mul_mat(ctx0, layer.wo, cur);           // attn output projection (Wo)
++
++        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
++
++        cur = laya_norm(ctx0, ffn_inp, layer.ffn_norm, nullptr, hp.norm_eps);
++        cur = ggml_mul_mat(ctx0, layer.ffn_up, cur);      // [2*n_ff, n_tokens]
++        cur = ggml_geglu_erf(ctx0, cur);                  // GeGLU with erf GELU, matching PyTorch
++        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);    // [n_embd, n_tokens]
++
++        inpL = ggml_add(ctx0, cur, ffn_inp);
++    }
++
++    if (model->output_norm) {
++        inpL = laya_norm(ctx0, inpL, model->output_norm, nullptr, hp.norm_eps);
++    }
++
++    // ---- type embedding ----
++    // h = h + type_emb[qtype] broadcast over every token
++    inpL = ggml_add(ctx0, inpL, ggml_get_rows(ctx0, model->type_emb, g.inp_qtype));
++    ggml_set_name(inpL, "type_emb_out");
++
++    // ---- decision head transformer layers (norm_first, full self-attn) ----
++    for (int32_t il = 0; il < hp.n_head_layers; ++il) {
++        const auto & layer = model->head_layers[il];
++
++        // attn pre-norm
++        cur = laya_norm(ctx0, inpL, layer.attn_norm, layer.attn_norm_b, hp.norm_eps);
++
++        ggml_tensor * qkv_full = ggml_mul_mat(ctx0, layer.wqkv, cur);
++        if (layer.wqkv_b) {
++            qkv_full = ggml_add(ctx0, qkv_full, layer.wqkv_b);
++        }
++        auto qkv = laya_qkv_views(ctx0, qkv_full, hp.n_embd_head, hp.n_head, n_tokens);
++        // full self-attention, no RoPE, pad mask only
++        cur = laya_attn(ctx0, qkv[0], qkv[1], qkv[2], g.kq_mask, kq_scale);
++
++        cur = ggml_mul_mat(ctx0, layer.wo, cur);
++        if (layer.wo_b) {
++            cur = ggml_add(ctx0, cur, layer.wo_b);
++        }
++
++        ggml_tensor * res_inp = ggml_add(ctx0, cur, inpL);
++
++        // ffn pre-norm + FFN (ReLU, like nn.TransformerEncoderLayer default)
++        cur = laya_norm(ctx0, res_inp, layer.ffn_norm, layer.ffn_norm_b, hp.norm_eps);
++        cur = ggml_mul_mat(ctx0, layer.ffn_up, cur);      // [4*d, n_tokens]
++        if (layer.ffn_up_b) {
++            cur = ggml_add(ctx0, cur, layer.ffn_up_b);
++        }
++        cur = ggml_relu(ctx0, cur);
++        cur = ggml_mul_mat(ctx0, layer.ffn_down, cur);    // [d, n_tokens]
++        if (layer.ffn_down_b) {
++            cur = ggml_add(ctx0, cur, layer.ffn_down_b);
++        }
++
++        inpL = ggml_add(ctx0, cur, res_inp);
++    }
++
++    // ---- gather hidden states at marker positions ----
++    // ggml_get_rows only indexes the ne1 (row) dimension, so flatten the
++    // [n_markers_max, n_seqs] position tensor to a single row-vector of
++    // absolute token indices, then restore the 3D layout afterwards.
++    // marker_pos flat index = m + n_markers_max * s, matching a row-major
++    // [n_markers_max, n_seqs] input.
++    ggml_tensor * marker_pos_flat = ggml_reshape_2d(ctx0, g.marker_pos, LAYA_MAX_MARKERS * n_seqs, 1);
++    ggml_tensor * markers = ggml_get_rows(ctx0, inpL, marker_pos_flat);  // [n_embd, n_markers_max * n_seqs]
++    markers = ggml_reshape_3d(ctx0, markers, hp.n_embd, LAYA_MAX_MARKERS, n_seqs);
++    ggml_set_name(markers, "markers");
++
++    // ---- scorer: LayerNorm -> Linear -> GELU -> Linear(1) ----
++    cur = laya_norm(ctx0, markers, model->scorer_0, model->scorer_0_b, hp.norm_eps);
++    cur = ggml_mul_mat(ctx0, model->scorer_1, cur);
++    if (model->scorer_1_b) {
++        cur = ggml_add(ctx0, cur, model->scorer_1_b);
++    }
++    cur = ggml_gelu_erf(ctx0, cur);
++    cur = ggml_mul_mat(ctx0, model->scorer_3, cur);       // [1, n_markers, n_seqs]
++    if (model->scorer_3_b) {
++        cur = ggml_add(ctx0, cur, model->scorer_3_b);
++    }
++
++    ggml_tensor * logits = ggml_reshape_2d(ctx0, cur, LAYA_MAX_MARKERS, n_seqs);
++    ggml_set_name(logits, "logits");
++
++    // mask invalid markers with -1e4: logits = where(mask, logits, -1e4)
++    {
++        ggml_tensor * mask_f = ggml_cast(ctx0, g.marker_mask, GGML_TYPE_F32);
++        ggml_tensor * ones   = ggml_scale_bias(ctx0, mask_f, 0.0f, 1.0f);
++        logits = ggml_add(ctx0,
++                ggml_mul(ctx0, logits, mask_f),
++                ggml_scale(ctx0, ggml_sub(ctx0, ones, mask_f), -1e4f));
++        ggml_set_name(logits, "logits_masked");
++    }
++
++    // probabilities over markers (ne0)
++    ggml_tensor * probs = ggml_soft_max(ctx0, logits);
++
++    // ---- act head features ----
++    // k = marker_mask.sum(-1).clamp(min=2) -> [1, n_seqs]
++    ggml_tensor * k_f = ggml_cast(ctx0, g.marker_mask, GGML_TYPE_F32);
++    ggml_tensor * k = ggml_clamp(ctx0, ggml_sum_rows(ctx0, k_f), 2.0f, FLT_MAX);
++
++    // ent = -(p * log(p.clamp_min(1e-9))).sum(-1) / log(k)
++    ggml_tensor * p_clamped = ggml_clamp(ctx0, probs, 1e-9f, FLT_MAX);
++    ggml_tensor * ent = ggml_div(ctx0,
++            ggml_neg(ctx0, ggml_sum_rows(ctx0, ggml_mul(ctx0, probs, ggml_log(ctx0, p_clamped)))),
++            ggml_log(ctx0, k));
++
++    // top-2 probability values per question: sort each question's row in
++    // descending order and take its first two entries through strided views,
++    // so every question uses its own ranking
++    ggml_tensor * sort_idx = ggml_argsort(ctx0, probs, GGML_SORT_ORDER_DESC);   // I32 [n_markers_max, n_seqs]
++    ggml_tensor * top1_idx = ggml_cont(ctx0, ggml_view_2d(ctx0, sort_idx, 1, n_seqs, sort_idx->nb[1], 0));
++    ggml_tensor * top2_idx = ggml_cont(ctx0, ggml_view_2d(ctx0, sort_idx, 1, n_seqs, sort_idx->nb[1], sort_idx->nb[0]));
++
++    ggml_tensor * probs4 = ggml_reshape_4d(ctx0, probs, 1, LAYA_MAX_MARKERS, n_seqs, 1);
++    ggml_tensor * b1 = ggml_reshape_4d(ctx0, top1_idx, 1, n_seqs, 1, 1);
++    ggml_tensor * b2 = ggml_reshape_4d(ctx0, top2_idx, 1, n_seqs, 1, 1);
++
++    ggml_tensor * top1 = ggml_view_1d(ctx0, ggml_get_rows(ctx0, probs4, b1), n_seqs, 0);
++    ggml_tensor * top2 = ggml_view_1d(ctx0, ggml_get_rows(ctx0, probs4, b2), n_seqs, 0);
++
++    // feats = [top1, top1-top2, ent, k/255] -> [4, n_seqs]
++    ggml_tensor * f0 = ggml_reshape_2d(ctx0, top1, 1, n_seqs);
++    ggml_tensor * f1 = ggml_reshape_2d(ctx0, ggml_sub(ctx0, top1, top2), 1, n_seqs);
++    ggml_tensor * f2 = ggml_reshape_2d(ctx0, ent, 1, n_seqs);
++    ggml_tensor * f3 = ggml_reshape_2d(ctx0, ggml_scale(ctx0, k, 1.0f/255.0f), 1, n_seqs);
++
++    ggml_tensor * feats = ggml_concat(ctx0,
++            ggml_concat(ctx0, ggml_concat(ctx0, f0, f1, 0), f2, 0), f3, 0);
++
++    // pooled = h[:, seq_start] -> [n_embd, n_seqs]
++    ggml_tensor * pooled = ggml_get_rows(ctx0, inpL, g.seq_start);
++
++    // act input: concat(pooled, feats) -> [n_embd+4, n_seqs]
++    ggml_tensor * act_in = ggml_concat(ctx0, pooled, feats, 0);
++
++    // act head: Linear(d+4, 256) -> GELU -> Linear(256, n_act)
++    cur = ggml_mul_mat(ctx0, model->act_head_0, act_in);
++    if (model->act_head_0_b) {
++        cur = ggml_add(ctx0, cur, model->act_head_0_b);
++    }
++    cur = ggml_gelu_erf(ctx0, cur);
++    cur = ggml_mul_mat(ctx0, model->act_head_2, cur);
++    if (model->act_head_2_b) {
++        cur = ggml_add(ctx0, cur, model->act_head_2_b);
++    }
++
++    g.act_logits = cur;
++    ggml_set_name(g.act_logits, "act_logits");
++
++    g.logits = logits;
++    // copy the results into pre-allocated output tensors: the scheduler may
++    // reuse the compute buffers of intermediate nodes, so reading the graph
++    // tensors directly after compute is not safe. ggml_cpy keeps the values
++    // in the dedicated output buffer.
++    if (out_logits && out_act) {
++        ggml_build_forward_expand(g.gf, ggml_cpy(ctx0, logits, out_logits));
++        ggml_build_forward_expand(g.gf, ggml_cpy(ctx0, cur, out_act));
++    }
++
++
++    return g;
++}
++
++int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result) {
++    const laya_model * model = ctx->model;
++
++    if (batch.n_tokens <= 0 || batch.n_seqs <= 0) {
++        return 1;
++    }
++
++    laya_graph g;
++
++    // dedicated output buffers (not reused by the scheduler)
++    ggml_context_ptr out_ctx;
++    ggml_backend_buffer_ptr out_buf;
++    ggml_tensor * out_logits = nullptr;
++    ggml_tensor * out_act    = nullptr;
++    {
++        struct ggml_init_params op = {
++            /*.mem_size =*/ 8 * ggml_tensor_overhead(),
++            /*.mem_buffer =*/ nullptr,
++            /*.no_alloc =*/ true,
++        };
++        out_ctx.reset(ggml_init(op));
++        out_logits = ggml_new_tensor_2d(out_ctx.get(), GGML_TYPE_F32, LAYA_MAX_MARKERS, batch.n_seqs);
++        out_act    = ggml_new_tensor_2d(out_ctx.get(), GGML_TYPE_F32, model->hparams.n_act, batch.n_seqs);
++        ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx->backend);
++        out_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(out_ctx.get(), buft));
++    }
++
++    ggml_backend_sched_reset(ctx->sched.get());
++    g = laya_graph_build(model, batch, out_logits, out_act);
++
++    if (!ggml_backend_sched_alloc_graph(ctx->sched.get(), g.gf)) {
++        laya_log("%s: failed to allocate compute graph\n", __func__);
++        return 1;
++    }
++
++    // debug: verify input buffers
++    {
++        ggml_tensor * inps[] = { g.inp_tokens, g.inp_pos, g.inp_qtype, g.kq_mask, g.kq_mask_swa,
++                                 g.marker_pos, g.marker_mask, g.seq_start };
++        for (auto * t : inps) {
++            if (!t->buffer) {
++                laya_log("%s: input tensor '%s' has no buffer\n", __func__, t->name);
++                return 1;
++            }
++        }
++    }
++
++    // set inputs
++    auto set_input = [&](ggml_tensor * t, const void * data) {
++        ggml_backend_tensor_set(t, data, 0, ggml_nbytes(t));
++    };
++
++    set_input(g.inp_tokens, batch.tokens);
++    set_input(g.inp_pos,    batch.positions);
++    set_input(g.inp_qtype,  batch.qtype);
++    set_input(g.marker_pos,  batch.marker_pos);
++    set_input(g.marker_mask, batch.marker_mask);
++    set_input(g.seq_start,   batch.seq_start);
++
++    std::vector<float> mask;
++    std::vector<float> mask_swa;
++    laya_build_masks(batch, model->hparams.n_swa, mask, mask_swa);
++    set_input(g.kq_mask, mask.data());
++    set_input(g.kq_mask_swa, mask_swa.data());
++
++    const auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), g.gf);
++    if (status != GGML_STATUS_SUCCESS) {
++        laya_log("%s: graph compute failed with status %d\n", __func__, (int) status);
++        return 1;
++    }
++
++
++    result.n_markers_max = LAYA_MAX_MARKERS;
++    result.n_seqs        = batch.n_seqs;
++    result.n_act         = model->hparams.n_act;
++
++    result.logits.resize((size_t) LAYA_MAX_MARKERS * batch.n_seqs);
++    result.act_logits.resize((size_t) model->hparams.n_act * batch.n_seqs);
++
++    ggml_backend_tensor_get(out_logits, result.logits.data(), 0, ggml_nbytes(out_logits));
++    ggml_backend_tensor_get(out_act, result.act_logits.data(), 0, ggml_nbytes(out_act));
++
++    return 0;
++}
+diff --git a/tools/laya/laya.h b/tools/laya/laya.h
+new file mode 100644
+index 000000000..8a713d563
+--- /dev/null
++++ b/tools/laya/laya.h
+@@ -0,0 +1,119 @@
++#pragma once
++
++// Self-contained laya model: a ModernBERT encoder + a typed decision head for
++// non-autoregressive decision making (choice / score / noul).
++//
++// This is a standalone ggml implementation following the tools/mtmd pattern:
++// the model loads its own GGUF via gguf_init_from_file and builds the
++// inference graph with ggml directly. It links the public ggml/llama
++// libraries, but calls no llama inference / graph / batch API.
++//
++// WARNING: This API is experimental and subject to change.
++
++#include "ggml.h"
++#include "ggml-backend.h"
++#include "llama.h"
++
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <vector>
++
++// number of marker (option) slots per sequence; must be >= max options per
++// question. The reference collates marker_pos / marker_mask to this width.
++#define LAYA_MAX_MARKERS 16
++
++struct laya_hparams {
++    int32_t n_embd            = 0;   // hidden size (768)
++    int32_t n_layer           = 0;   // encoder layers (22)
++    int32_t n_head            = 0;   // attention heads (12)
++    int32_t n_embd_head       = 0;   // head dim (64)
++    int32_t n_ff              = 0;   // encoder intermediate size (1152)
++    int32_t n_vocab           = 0;   // token embedding rows
++    int32_t n_qtype           = 0;   // question types (choice/score/noul = 3)
++    int32_t marker_token_id   = 0;   // <mask> token id
++    int32_t max_len           = 0;   // max sequence length
++    int32_t head_max_len      = 0;   // max option-region length
++    int32_t n_act             = 0;   // action head classes
++    int32_t n_head_layers     = 0;   // decision head transformer layers
++    int32_t n_swa             = 0;   // encoder sliding window (128)
++    int32_t swa_pattern       = 0;   // global_attn_every_n_layers (3)
++    float   norm_eps          = 1e-5f;
++    float   rope_freq_base    = 10000.0f;
++    float   rope_freq_base_swa = 10000.0f;
++    std::vector<float> temperature;  // per-qtype temperature (padded to n_qtype)
++};
++
++// One batched forward pass: n_tokens packed tokens across n_seqs sequences.
++// Sequences are packed without padding; separation is handled by an internal
++// block-diagonal attention mask built from seq_id/positions.
++struct laya_batch {
++    int32_t           n_tokens = 0;   // total tokens across all sequences
++    int32_t           n_seqs   = 0;   // number of sequences (questions)
++    const int32_t *   tokens   = nullptr;   // [n_tokens] token ids
++    const int32_t *   positions= nullptr;   // [n_tokens] per-token position
++    const int32_t *   seq_id   = nullptr;   // [n_tokens] sequence id per token
++    const int32_t *   qtype    = nullptr;   // [n_tokens] qtype id per token
++    const int32_t *   marker_pos  = nullptr; // [n_markers_max, n_seqs] absolute token indices
++    const int32_t *   marker_mask = nullptr; // [n_markers_max, n_seqs] 1 = valid marker
++    const int32_t *   seq_start   = nullptr; // [n_seqs] first global token index of each seq
++};
++
++// Outputs of one forward pass.
++struct laya_result {
++    std::vector<float> logits;       // [n_markers_max, n_seqs] scorer logits at marker positions
++    std::vector<float> act_logits;   // [n_act, n_seqs] raw action head logits
++    int32_t n_markers_max = 0;
++    int32_t n_seqs        = 0;
++    int32_t n_act         = 0;
++};
++
++struct laya_model;
++struct laya_context;
++
++// load a laya GGUF (F16 or quantized; dequantization happens inside ggml mul_mat).
++// device selects where the weights live: nullptr or "" keeps them on the CPU
++// backend, "auto" takes the first GPU device when one exists (CPU otherwise),
++// and any other value names a ggml backend device ("CUDA0", "MTL0", "CPU").
++LLAMA_API laya_model * laya_model_load_from_file(const char * fname, const char * device = "auto");
++
++// bytes held by the model's weight buffer
++LLAMA_API size_t laya_model_weights_bytes(const laya_model * model);
++
++// whether the weights live on a non-CPU device
++LLAMA_API bool laya_model_on_accelerator(const laya_model * model);
++
++LLAMA_API void laya_model_free(laya_model * model);
++
++LLAMA_API const laya_hparams & laya_model_hparams(const laya_model * model);
++
++// total parameters across all loaded tensors
++LLAMA_API int64_t laya_model_n_params(const laya_model * model);
++
++// ---- tokenizer (modern-bert / mmBERT: Metaspace pre-tokenizer + BPE) ----
++// The reference checkpoint uses a Metaspace-style pre-tokenizer with the
++// mmBERT BPE vocabulary, which llama.cpp's built-in GPT-2 pre-tokenizer cannot
++// reproduce for this vocab. This is a self-contained port of the HF fast
++// tokenizer: normalize " " -> U+2581, prepend U+2581, split into words, then
++// greedy byte-level BPE with the GGUF vocab/merges. Matches
++// `tokenizer(text, add_special_tokens=False)["input_ids"]` from the reference.
++
++// tokenize with add_special_tokens=False (no <bos>/<eos>)
++LLAMA_API std::vector<int32_t> laya_tokenize(const laya_model * model, const std::string & text);
++
++// special token ids from the GGUF tokenizer metadata
++LLAMA_API int32_t laya_vocab_bos (const laya_model * model);
++LLAMA_API int32_t laya_vocab_sep (const laya_model * model);
++LLAMA_API int32_t laya_vocab_mask(const laya_model * model);
++
++LLAMA_API laya_context * laya_init(const laya_model * model, int n_threads);
++
++
++LLAMA_API void laya_free(laya_context * ctx);
++
++// bytes the context's scheduler holds for compute, across its backends; grows
++// to the largest graph run so far
++LLAMA_API size_t laya_context_compute_bytes(const laya_context * ctx);
++
++// run one forward pass; returns 0 on success, non-zero on failure
++LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
+-- 
+2.54.0 (Apple Git-157)
+

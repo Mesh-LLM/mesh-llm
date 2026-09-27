@@ -371,6 +371,14 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Keep PR sccache job-local unless a provider proves safe isolation. A cache
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
+- Every `release.yml` job that can reach cargo — directly, or through
+  `scripts/release-version.sh` or `scripts/publish-crates.sh` — initializes
+  sccache (`mozilla-actions/sccache-action` plus `configure-sccache-gha`)
+  before its first compiler probe, because `.cargo/config.toml` makes sccache
+  the repository-wide `rustc` wrapper. Only composition-only jobs skip it, and
+  they stay cargo-free. `tools/xtask` rejects a cargo caller without
+  initialization and any cargo call inside a composition-only job, because a
+  canary cannot exercise the canary-skipped jobs.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad

@@ -1,5 +1,5 @@
 use skippy_ffi::{
-    FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS, FEATURE_KV_EVENTS,
+    FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS, FEATURE_KV_EVENTS, FEATURE_LAYA_DECISIONS,
     FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_NON_CHAT_WORKLOADS, FEATURE_RUNTIME_EVENT_REPORTER,
     FEATURE_RUNTIME_EVENTS, FEATURE_UNLOAD_EVENTS,
 };
@@ -12,7 +12,7 @@ use crate::runtime_events::abi_features_bitmask;
 /// specific family, and is reported once rather than disabling anything.
 /// It tracks the highest `FEATURE_*` bit `skippy_ffi` defines, family or
 /// not: a bit this build names is not reserved to a future one.
-const MAX_KNOWN_FEATURE_BIT: u32 = 39;
+const MAX_KNOWN_FEATURE_BIT: u32 = 40;
 
 struct FamilySpec {
     bit: u64,
@@ -70,6 +70,18 @@ const FAMILIES: &[FamilySpec] = &[
             b"skippy_session_embed\0",
             b"skippy_session_rerank\0",
             b"skippy_session_encode_prompt\0",
+        ],
+    },
+    FamilySpec {
+        bit: FEATURE_LAYA_DECISIONS,
+        name: "laya_decisions",
+        required_symbols: &[
+            b"skippy_laya_model_open\0",
+            b"skippy_laya_model_free\0",
+            b"skippy_laya_model_info_v1\0",
+            b"skippy_laya_model_memory_v1\0",
+            b"skippy_laya_tokenize\0",
+            b"skippy_laya_read\0",
         ],
     },
 ];
@@ -153,7 +165,7 @@ pub(crate) fn symbol_available(name: &[u8]) -> bool {
 }
 
 /// Probes the loaded native runtime's family bit+symbol groups
-/// (bits 24 and 31-37), logging one bounded health record per malformed
+/// (bits 24, 31-37, and 40), logging one bounded health record per malformed
 /// family plus at most one for reserved bits. Callers must have already
 /// confirmed exact ABI compatibility; this probe never runs that check
 /// itself.
@@ -306,7 +318,7 @@ mod tests {
 
     #[test]
     fn malformed_reserved_bits_emit_one_message_without_disabling_a_family() {
-        let reserved_bit = 1u64 << 40;
+        let reserved_bit = 1u64 << (MAX_KNOWN_FEATURE_BIT + 1);
         let report = build_report(FEATURE_KV_EVENTS | reserved_bit, |_| true);
         assert!(report.family_confirmed(FEATURE_KV_EVENTS));
         assert_eq!(report.health_messages.len(), 1);
