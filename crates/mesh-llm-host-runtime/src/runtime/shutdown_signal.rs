@@ -26,7 +26,8 @@
 
 use std::io;
 use std::sync::mpsc;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
 use tokio::sync::watch;
 
 /// Signal name reported when no handler could be registered and only the
@@ -74,9 +75,20 @@ impl ShutdownDelivery {
 
 /// Name of the process-lifetime thread that owns the signal streams.
 const FORWARDER_THREAD_NAME: &str = "mesh-llm-shutdown-forwarder";
+const FORWARDER_START_TIMEOUT: Duration = Duration::from_secs(1);
 
-static DELIVERY: OnceLock<ShutdownDelivery> = OnceLock::new();
-static INSTALL: Mutex<()> = Mutex::new(());
+static DELIVERY: OnceLock<Arc<ShutdownDelivery>> = OnceLock::new();
+static INSTALL: Mutex<InstallState> = Mutex::new(InstallState {
+    delivery: None,
+    starting: None,
+});
+
+/// Keep one channel across startup attempts so waiters also observe a
+/// forwarder that finishes registration after the synchronous wait times out.
+struct InstallState {
+    delivery: Option<Arc<ShutdownDelivery>>,
+    starting: Option<mpsc::Receiver<Result<(), String>>>,
+}
 
 /// Register the process termination-signal handlers once.
 ///
@@ -85,28 +97,52 @@ static INSTALL: Mutex<()> = Mutex::new(());
 /// disposition terminates the process, which is the outcome a graceful
 /// shutdown reaches anyway.
 pub(crate) fn install_shutdown_signals() {
-    let _guard = INSTALL.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut installation = INSTALL.lock().unwrap_or_else(PoisonError::into_inner);
     if DELIVERY.get().is_some() {
         return;
     }
-    let delivery = ShutdownDelivery::new();
-    let sender = delivery.sender.clone();
-    // Waiting on the forwarder here costs a thread spawn plus a runtime build,
-    // once per process, before any serving work, on a path that already spawns
-    // that thread synchronously.
+    if forwarder_is_still_starting(&mut installation) {
+        return;
+    }
+    let delivery = installation
+        .delivery
+        .get_or_insert_with(|| Arc::new(ShutdownDelivery::new()))
+        .clone();
     let (started_tx, started_rx) = mpsc::channel();
     let forwarder = std::thread::Builder::new()
         .name(FORWARDER_THREAD_NAME.to_owned())
-        .spawn(move || run_shutdown_forwarder(sender, started_tx));
-    publish_delivery_after_forwarder_starts(delivery, forwarder, started_rx);
+        .spawn(move || run_shutdown_forwarder(delivery, started_tx));
+    wait_for_forwarder_start(&mut installation, forwarder, started_rx);
 }
 
-/// Publish the delivery once the forwarder reports its signal streams exist.
-///
-/// Any other outcome leaves the delivery unpublished, which keeps every waiter
-/// on the ctrl-c fallback rather than on a channel nobody will ever signal.
-fn publish_delivery_after_forwarder_starts(
-    delivery: ShutdownDelivery,
+/// A timed-out start can still finish later. Avoid spawning another observer
+/// until it reports success or failure.
+fn forwarder_is_still_starting(installation: &mut InstallState) -> bool {
+    let Some(started) = installation.starting.as_ref() else {
+        return false;
+    };
+    match started.try_recv() {
+        Err(mpsc::TryRecvError::Empty) => true,
+        Ok(Ok(())) => {
+            installation.starting = None;
+            DELIVERY.get().is_some()
+        }
+        Ok(Err(cause)) => {
+            tracing::warn!(%cause, "the termination-signal forwarder could not start");
+            installation.starting = None;
+            false
+        }
+        Err(mpsc::TryRecvError::Disconnected) => {
+            tracing::warn!("the termination-signal forwarder exited before registering");
+            installation.starting = None;
+            false
+        }
+    }
+}
+
+/// Bound the synchronous install wait without abandoning late signal delivery.
+fn wait_for_forwarder_start(
+    installation: &mut InstallState,
     forwarder: io::Result<std::thread::JoinHandle<()>>,
     started: mpsc::Receiver<Result<(), String>>,
 ) {
@@ -122,30 +158,34 @@ fn publish_delivery_after_forwarder_starts(
             return;
         }
     };
-    if forwarder_registered_its_streams(&started) {
-        let _ = DELIVERY.set(delivery);
+    record_forwarder_start_result(installation, started);
+}
+
+/// Retain a timed-out attempt so a later caller does not spawn a second one.
+fn record_forwarder_start_result(
+    installation: &mut InstallState,
+    started: mpsc::Receiver<Result<(), String>>,
+) {
+    match started.recv_timeout(FORWARDER_START_TIMEOUT) {
+        Ok(result) => report_forwarder_start_result(result),
+        Err(mpsc::RecvTimeoutError::Disconnected) => tracing::warn!(
+            "the termination-signal forwarder exited before registering its signal streams; \
+             the platform default disposition applies"
+        ),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            tracing::warn!("timed out waiting for the termination-signal forwarder to start");
+            installation.starting = Some(started);
+        }
     }
 }
 
-/// Whether the forwarder got as far as registering its signal streams, logging
-/// the reason when it did not.
-fn forwarder_registered_its_streams(started: &mpsc::Receiver<Result<(), String>>) -> bool {
-    match started.recv() {
-        Ok(Ok(())) => true,
-        Ok(Err(cause)) => {
-            tracing::warn!(
-                %cause,
-                "the termination-signal forwarder could not start; the platform default disposition applies"
-            );
-            false
-        }
-        Err(_) => {
-            tracing::warn!(
-                "the termination-signal forwarder exited before registering its signal streams; \
-                 the platform default disposition applies"
-            );
-            false
-        }
+/// Report a startup failure while leaving installation available for retry.
+fn report_forwarder_start_result(result: Result<(), String>) {
+    if let Err(cause) = result {
+        tracing::warn!(
+            %cause,
+            "the termination-signal forwarder could not start; the platform default disposition applies"
+        );
     }
 }
 
@@ -154,7 +194,27 @@ pub(crate) async fn wait_for_shutdown_signal() -> &'static str {
     install_shutdown_signals();
     match DELIVERY.get() {
         Some(delivery) => delivery.wait().await,
-        None => resolve_fallback_registration(tokio::signal::ctrl_c().await).await,
+        None => {
+            let pending = INSTALL
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .delivery
+                .clone();
+            match pending {
+                Some(delivery) => wait_for_pending_delivery_or_fallback(&delivery).await,
+                None => resolve_fallback_registration(tokio::signal::ctrl_c().await).await,
+            }
+        }
+    }
+}
+
+/// Keep observing a late forwarder while the ctrl-c fallback is available.
+async fn wait_for_pending_delivery_or_fallback(delivery: &ShutdownDelivery) -> &'static str {
+    tokio::select! {
+        signal = delivery.wait() => signal,
+        signal = async {
+            resolve_fallback_registration(tokio::signal::ctrl_c().await).await
+        } => signal,
     }
 }
 
@@ -187,7 +247,7 @@ async fn resolve_fallback_registration(result: io::Result<()>) -> &'static str {
 /// thread therefore registers its own, and the platform's process-wide handler
 /// makes that registration equivalent to the first one.
 fn run_shutdown_forwarder(
-    sender: watch::Sender<Option<&'static str>>,
+    delivery: Arc<ShutdownDelivery>,
     started: mpsc::Sender<Result<(), String>>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -208,9 +268,10 @@ fn run_shutdown_forwarder(
                 return;
             }
         };
-        // Reported only now, so a published delivery always has a live observer
-        // behind it and installation can leave the ctrl-c fallback in place when
-        // there is none.
+        // Publish only after registration. A waiter using the pending channel
+        // after an install timeout still receives signals from this forwarder.
+        let sender = delivery.sender.clone();
+        let _ = DELIVERY.set(delivery);
         let _ = started.send(Ok(()));
         forward_shutdown_signals(signals, &sender).await;
     });
@@ -338,6 +399,24 @@ mod tests {
         assert_eq!(observed, "SIGINT");
     }
 
+    /// A forwarder that registers after the bounded install wait must still
+    /// reach a waiter that already entered the fallback path.
+    #[tokio::test]
+    async fn a_late_forwarder_delivery_reaches_a_pending_waiter() {
+        let delivery = ShutdownDelivery::new();
+        let deliver = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            delivery.sender.send(Some("SIGTERM"))
+        };
+        let (observed, delivered) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(wait_for_pending_delivery_or_fallback(&delivery), deliver)
+        })
+        .await
+        .expect("the pending waiter must observe a late forwarder delivery");
+        delivered.expect("the retained receiver keeps the delivery channel open");
+        assert_eq!(observed, "SIGTERM");
+    }
+
     /// A fallback registration error must not be reported as a shutdown
     /// request: returning the fallback name there starts a shutdown nobody
     /// asked for, and every waiter acts on it (#1969 review).
@@ -380,6 +459,10 @@ mod tests {
         installing.block_on(async {
             super::install_shutdown_signals();
         });
+        assert!(
+            DELIVERY.get().is_some(),
+            "the forwarder must register before this test raises SIGTERM"
+        );
         drop(installing);
 
         // Raised as soon as installation returns, with nothing waited on in
