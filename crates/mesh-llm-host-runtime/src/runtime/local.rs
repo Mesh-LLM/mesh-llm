@@ -1001,11 +1001,16 @@ pub(super) async fn start_local_openai_model(
         .flatten()
     };
 
-    if package.is_none()
-        && compact_meta
-            .as_ref()
-            .is_some_and(|meta| meta.architecture == LAYA_ARCHITECTURE)
+    if compact_meta
+        .as_ref()
+        .is_some_and(|meta| meta.architecture == LAYA_ARCHITECTURE)
     {
+        // Laya has no stages, sessions, or KV cache for a layer package to
+        // carry; it opens from one GGUF file.
+        anyhow::ensure!(
+            package.is_none(),
+            "Laya models must be served from a GGUF file, not a layer package"
+        );
         return start_local_laya_model(spec, model_name, compact_meta.as_ref()).await;
     }
 

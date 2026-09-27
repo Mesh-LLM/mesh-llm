@@ -273,7 +273,9 @@ curl http://127.0.0.1:9337/systemone \
   }'
 ```
 
-Use the model ID from `GET /v1/models`, or configure an `openjev-latest` alias
+Laya models are served from a single GGUF file (`--gguf` or a model reference
+that resolves to one); a layer package is refused with a clear error, since
+Laya has no stages, sessions, or KV cache to split. Use the model ID from `GET /v1/models`, or configure an `openjev-latest` alias
 as in the DiffusionGemma setup above. The node advertises the `decision` workload class, so chat, completion,
 embedding, and audio requests are never routed to it; `/systemone` routes by
 model name as it does for DiffusionGemma.

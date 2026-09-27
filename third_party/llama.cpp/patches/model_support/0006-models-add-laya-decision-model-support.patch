@@ -11,8 +11,10 @@ with llama-laya-cli. The upstream test fixtures are omitted.
 Expose it through a narrow Skippy ABI (skippy/laya.h): open a Laya GGUF,
 report its sequence budgets and special tokens, tokenize with its own
 Metaspace + BPE tokenizer, and run one packed read returning raw scorer and
-action-head logits per question. Reads over 4,096 tokens run as several
-passes split between sequences.
+action-head logits per question. A GGUF declaring laya.max_len above 4,096
+tokens is refused at open, and sequences are packed into passes of at most
+4,096 tokens, because each pass builds dense attention masks. Every exported
+entry point runs inside the native exception containment.
 
 Changes from the upstream draft:
 - Compile the runtime into libllama and export its API with LLAMA_API, so
@@ -33,19 +35,19 @@ Co-authored-by: ZhangYu <zhangyub@uniontech.com>
  gguf-py/gguf/tensor_mapping.py |   40 ++
  include/skippy.h               |    1 +
  include/skippy/common.h        |    4 +-
- include/skippy/laya.h          |  128 ++++
+ include/skippy/laya.h          |  138 ++++
  src/CMakeLists.txt             |    4 +-
  src/llama-arch.cpp             |   32 +
  src/llama-arch.h               |   20 +
  src/llama-model.cpp            |    7 +
  src/skippy/abi.cpp             |    3 +-
- src/skippy/laya.cpp            |  250 ++++++++
+ src/skippy/laya.cpp            |  326 ++++++++++
  tools/CMakeLists.txt           |    1 +
  tools/laya/CMakeLists.txt      |   23 +
  tools/laya/laya-cli.cpp        |  665 +++++++++++++++++++
  tools/laya/laya.cpp            | 1101 ++++++++++++++++++++++++++++++++
  tools/laya/laya.h              |  106 +++
- 19 files changed, 2593 insertions(+), 3 deletions(-)
+ 19 files changed, 2679 insertions(+), 3 deletions(-)
  create mode 100644 conversion/laya.py
  create mode 100644 include/skippy/laya.h
  create mode 100644 src/skippy/laya.cpp
@@ -439,10 +441,10 @@ index 0ff24e80b..343ff1616 100644
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/include/skippy/laya.h b/include/skippy/laya.h
 new file mode 100644
-index 000000000..9cb6f5148
+index 000000000..964c53943
 --- /dev/null
 +++ b/include/skippy/laya.h
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,138 @@
 +#ifndef SKIPPY_LAYA_H
 +#define SKIPPY_LAYA_H
 +
@@ -452,7 +454,8 @@ index 000000000..9cb6f5148
 + *
 + * Laya is non-autoregressive: one forward pass scores every option of every
 + * question. It does not load through `skippy_model_open`; it owns its GGUF,
-+ * tokenizer, and CPU execution context. Callers build the per-question token
++ * tokenizer, and execution context, which runs on the first accelerator when
++ * one exists and falls back to the CPU backend. Callers build the per-question token
 + * sequences (see `skippy_laya_tokenize`) and read raw scorer and action-head
 + * logits back; temperature and softmax stay on the caller side.
 + */
@@ -465,6 +468,12 @@ index 000000000..9cb6f5148
 +
 +#define SKIPPY_LAYA_INFO_V1_ABI_VERSION 1
 +#define SKIPPY_LAYA_QTYPE_COUNT 3
++/**
++ * Longest question sequence a Laya GGUF may declare (`laya.max_len`), and the
++ * most tokens one forward pass reads. A model declaring more is refused at
++ * open, because each pass builds dense attention masks over its tokens.
++ */
++#define SKIPPY_LAYA_MAX_SEQUENCE_TOKENS 4096
 +
 +struct skippy_laya_model;
 +
@@ -506,7 +515,9 @@ index 000000000..9cb6f5148
 + * @brief Opens a Laya GGUF with its own loader; not a `skippy_model`.
 + *
 + * Weights go to the first accelerator when one exists, with the CPU backend
-+ * behind it for any unsupported op. `n_threads` sizes the CPU backend.
++ * behind it for any unsupported op. `n_threads` sizes the CPU backend. Fails
++ * with SKIPPY_STATUS_MODEL_ERROR when the GGUF declares a `laya.max_len` above
++ * SKIPPY_LAYA_MAX_SEQUENCE_TOKENS or a head budget larger than it.
 + */
 +LLAMA_API enum skippy_status skippy_laya_model_open(
 +        const char * model_path,
@@ -549,8 +560,9 @@ index 000000000..9cb6f5148
 + * per sequence: `out_logits` holds `sequence_count * max_markers` scorer
 + * logits (unused markers are 0) and `out_act_logits` holds
 + * `sequence_count * n_act` action-head logits. Calls are serialized per
-+ * model, and a read larger than 4,096 tokens runs as several passes split
-+ * between sequences, because each pass builds dense attention masks.
++ * model. Sequences are packed into passes of at most
++ * SKIPPY_LAYA_MAX_SEQUENCE_TOKENS tokens; a single sequence never exceeds
++ * that because `max_len` is capped at open.
 + */
 +LLAMA_API enum skippy_status skippy_laya_read(
 +        struct skippy_laya_model * model,
@@ -750,10 +762,10 @@ index 1e1d2d7c8..f806cdbdc 100644
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/laya.cpp b/src/skippy/laya.cpp
 new file mode 100644
-index 000000000..5256c8808
+index 000000000..52e17d7c9
 --- /dev/null
 +++ b/src/skippy/laya.cpp
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,326 @@
 +#include "skippy/laya.h"
 +
 +#include "skippy/errors.h"
@@ -763,7 +775,6 @@ index 000000000..5256c8808
 +#include <algorithm>
 +#include <cstdint>
 +#include <cstring>
-+#include <limits>
 +#include <mutex>
 +#include <string>
 +#include <vector>
@@ -786,16 +797,45 @@ index 000000000..5256c8808
 +
 +namespace {
 +
-+// Each packed pass builds two dense [n_tokens, n_tokens] f32 attention masks,
-+// so bound the tokens per pass and split larger reads by sequence.
-+constexpr size_t LAYA_MAX_TOKENS_PER_PASS = 4096;
-+
 +enum skippy_status laya_fail(
 +        skippy_error ** out_error,
 +        enum skippy_status status,
 +        const std::string & message) {
 +    skippy_set_error(out_error, status, message.c_str());
 +    return status;
++}
++
++// Runs one exported entry point. Everything the body does, including building
++// error messages and allocating buffers, happens inside the containment, so no
++// C++ exception can unwind into the Rust caller.
++template <typename Body>
++enum skippy_status laya_entry(skippy_error ** out_error, Body && body) {
++    enum skippy_status status = SKIPPY_STATUS_RUNTIME_ERROR;
++    if (!skippy_contain_native_failure(out_error, [&] { status = body(); })) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    return status;
++}
++
++// Rejects a GGUF whose declared budgets would make a single pass unbounded:
++// each pass builds dense n x n attention masks, so n must stay small.
++enum skippy_status validate_budgets(const laya_hparams & hp, skippy_error ** out_error) {
++    const int32_t max_len = hp.max_len > 0 ? hp.max_len : 1024;
++    const int32_t head_max_len = hp.head_max_len > 0 ? hp.head_max_len : 256;
++    if (max_len > SKIPPY_LAYA_MAX_SEQUENCE_TOKENS) {
++        return laya_fail(out_error, SKIPPY_STATUS_MODEL_ERROR,
++                "laya.max_len " + std::to_string(max_len) + " exceeds the supported " +
++                std::to_string(SKIPPY_LAYA_MAX_SEQUENCE_TOKENS) + " tokens");
++    }
++    if (head_max_len > max_len) {
++        return laya_fail(out_error, SKIPPY_STATUS_MODEL_ERROR,
++                "laya.head_max_len " + std::to_string(head_max_len) + " exceeds laya.max_len " +
++                std::to_string(max_len));
++    }
++    if (hp.n_act <= 0) {
++        return laya_fail(out_error, SKIPPY_STATUS_MODEL_ERROR, "laya model declares no action classes");
++    }
++    return skippy_success(out_error);
 +}
 +
 +} // namespace
@@ -806,20 +846,27 @@ index 000000000..5256c8808
 +        struct skippy_laya_model ** out_model,
 +        struct skippy_error ** out_error) {
 +    if (model_path == nullptr || out_model == nullptr) {
-+        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model_path and out_model are required");
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model_path and out_model are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +    *out_model = nullptr;
-+    auto * handle = new skippy_laya_model();
-+    const bool loaded = skippy_contain_native_failure(out_error, [&] {
++    skippy_laya_model * handle = nullptr;
++    const enum skippy_status status = laya_entry(out_error, [&] {
++        handle = new skippy_laya_model();
 +        handle->model = laya_model_load_from_file(model_path);
++        const enum skippy_status budgets = validate_budgets(laya_model_hparams(handle->model), out_error);
++        if (budgets != SKIPPY_STATUS_OK) {
++            return budgets;
++        }
 +        handle->context = laya_init(handle->model, std::max(1, n_threads));
++        return skippy_success(out_error);
 +    });
-+    if (!loaded) {
++    if (status != SKIPPY_STATUS_OK) {
 +        delete handle;
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
++        return status;
 +    }
 +    *out_model = handle;
-+    return skippy_success(out_error);
++    return SKIPPY_STATUS_OK;
 +}
 +
 +extern "C" void skippy_laya_model_free(struct skippy_laya_model * model) {
@@ -830,28 +877,30 @@ index 000000000..5256c8808
 +        const struct skippy_laya_model * model,
 +        struct skippy_laya_info_v1 * out_info,
 +        struct skippy_error ** out_error) {
-+    if (model == nullptr || model->model == nullptr || out_info == nullptr) {
-+        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_info are required");
-+    }
-+    if (out_info->struct_size != sizeof(skippy_laya_info_v1) ||
-+            out_info->abi_version != SKIPPY_LAYA_INFO_V1_ABI_VERSION) {
-+        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "laya info descriptor uses an incompatible ABI");
-+    }
-+    const laya_hparams & hp = laya_model_hparams(model->model);
-+    out_info->max_len = hp.max_len > 0 ? hp.max_len : 1024;
-+    out_info->head_max_len = hp.head_max_len > 0 ? hp.head_max_len : 256;
-+    out_info->max_markers = LAYA_MAX_MARKERS;
-+    out_info->n_act = hp.n_act;
-+    out_info->cls_token_id = laya_vocab_bos(model->model);
-+    out_info->sep_token_id = laya_vocab_sep(model->model);
-+    out_info->mask_token_id = laya_vocab_mask(model->model);
-+    out_info->n_embd = hp.n_embd;
-+    out_info->n_layer = hp.n_layer;
-+    out_info->parameter_count = laya_model_n_params(model->model);
-+    for (int i = 0; i < SKIPPY_LAYA_QTYPE_COUNT; ++i) {
-+        out_info->temperature[i] = i < (int) hp.temperature.size() ? hp.temperature[i] : 0.0f;
-+    }
-+    return skippy_success(out_error);
++    return laya_entry(out_error, [&] {
++        if (model == nullptr || model->model == nullptr || out_info == nullptr) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_info are required");
++        }
++        if (out_info->struct_size != sizeof(skippy_laya_info_v1) ||
++                out_info->abi_version != SKIPPY_LAYA_INFO_V1_ABI_VERSION) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "laya info descriptor uses an incompatible ABI");
++        }
++        const laya_hparams & hp = laya_model_hparams(model->model);
++        out_info->max_len = hp.max_len > 0 ? hp.max_len : 1024;
++        out_info->head_max_len = hp.head_max_len > 0 ? hp.head_max_len : 256;
++        out_info->max_markers = LAYA_MAX_MARKERS;
++        out_info->n_act = hp.n_act;
++        out_info->cls_token_id = laya_vocab_bos(model->model);
++        out_info->sep_token_id = laya_vocab_sep(model->model);
++        out_info->mask_token_id = laya_vocab_mask(model->model);
++        out_info->n_embd = hp.n_embd;
++        out_info->n_layer = hp.n_layer;
++        out_info->parameter_count = laya_model_n_params(model->model);
++        for (int i = 0; i < SKIPPY_LAYA_QTYPE_COUNT; ++i) {
++            out_info->temperature[i] = i < (int) hp.temperature.size() ? hp.temperature[i] : 0.0f;
++        }
++        return skippy_success(out_error);
++    });
 +}
 +
 +extern "C" enum skippy_status skippy_laya_tokenize(
@@ -862,49 +911,40 @@ index 000000000..5256c8808
 +        size_t capacity,
 +        size_t * out_token_count,
 +        struct skippy_error ** out_error) {
-+    if (model == nullptr || model->model == nullptr || out_token_count == nullptr ||
-+            (text == nullptr && text_len != 0) || (out_tokens == nullptr && capacity != 0)) {
-+        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid laya tokenize arguments");
-+    }
-+    std::vector<int32_t> tokens;
-+    const bool ok = skippy_contain_native_failure(out_error, [&] {
-+        tokens = laya_tokenize(model->model, std::string(text == nullptr ? "" : text, text_len));
++    return laya_entry(out_error, [&] {
++        if (model == nullptr || model->model == nullptr || out_token_count == nullptr ||
++                (text == nullptr && text_len != 0) || (out_tokens == nullptr && capacity != 0)) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid laya tokenize arguments");
++        }
++        const std::vector<int32_t> tokens =
++                laya_tokenize(model->model, std::string(text == nullptr ? "" : text, text_len));
++        *out_token_count = tokens.size();
++        if (tokens.size() > capacity) {
++            return laya_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "laya token buffer is too small");
++        }
++        if (!tokens.empty()) {
++            std::memcpy(out_tokens, tokens.data(), tokens.size() * sizeof(int32_t));
++        }
++        return skippy_success(out_error);
 +    });
-+    if (!ok) {
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    *out_token_count = tokens.size();
-+    if (tokens.size() > capacity) {
-+        return laya_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "laya token buffer is too small");
-+    }
-+    if (!tokens.empty()) {
-+        std::memcpy(out_tokens, tokens.data(), tokens.size() * sizeof(int32_t));
-+    }
-+    return skippy_success(out_error);
 +}
 +
-+extern "C" enum skippy_status skippy_laya_read(
-+        struct skippy_laya_model * model,
-+        const int32_t * tokens,
++namespace {
++
++enum skippy_status validate_read(
++        const laya_hparams & hp,
 +        size_t token_count,
 +        const int32_t * marker_positions,
 +        size_t marker_count,
 +        const struct skippy_laya_sequence * sequences,
 +        size_t sequence_count,
-+        float * out_logits,
 +        size_t logits_capacity,
-+        float * out_act_logits,
 +        size_t act_logits_capacity,
-+        struct skippy_error ** out_error) {
-+    if (model == nullptr || model->model == nullptr || model->context == nullptr ||
-+            tokens == nullptr || marker_positions == nullptr || sequences == nullptr ||
-+            out_logits == nullptr || out_act_logits == nullptr || sequence_count == 0) {
-+        return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid laya read arguments");
-+    }
-+    const laya_hparams & hp = laya_model_hparams(model->model);
++        skippy_error ** out_error) {
 +    const size_t n_act = (size_t) std::max(0, hp.n_act);
 +    const size_t max_len = (size_t) (hp.max_len > 0 ? hp.max_len : 1024);
-+    if (logits_capacity < sequence_count * LAYA_MAX_MARKERS || act_logits_capacity < sequence_count * n_act) {
++    if (logits_capacity / LAYA_MAX_MARKERS < sequence_count ||
++            (n_act > 0 && act_logits_capacity / n_act < sequence_count)) {
 +        return laya_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "laya output buffers are too small");
 +    }
 +    for (size_t s = 0; s < sequence_count; ++s) {
@@ -931,78 +971,126 @@ index 000000000..5256c8808
 +            }
 +        }
 +    }
++    return SKIPPY_STATUS_OK;
++}
 +
-+    std::lock_guard<std::mutex> lane(model->lane);
-+    size_t first = 0;
-+    while (first < sequence_count) {
-+        size_t last = first;
-+        size_t pass_tokens = 0;
-+        while (last < sequence_count &&
-+                (last == first || pass_tokens + sequences[last].token_count <= LAYA_MAX_TOKENS_PER_PASS)) {
-+            pass_tokens += sequences[last].token_count;
-+            ++last;
-+        }
-+        const size_t n_seqs = last - first;
++// Scores sequences [first, last) in one packed forward pass.
++enum skippy_status read_pass(
++        skippy_laya_model * model,
++        const int32_t * tokens,
++        const int32_t * marker_positions,
++        const struct skippy_laya_sequence * sequences,
++        size_t first,
++        size_t last,
++        size_t pass_tokens,
++        float * out_logits,
++        float * out_act_logits,
++        skippy_error ** out_error) {
++    const size_t n_seqs = last - first;
++    const size_t n_act = (size_t) std::max(0, laya_model_hparams(model->model).n_act);
 +
-+        std::vector<int32_t> batch_tokens(pass_tokens);
-+        std::vector<int32_t> positions(pass_tokens);
-+        std::vector<int32_t> seq_id(pass_tokens);
-+        std::vector<int32_t> qtype(pass_tokens);
-+        std::vector<int32_t> marker_pos(LAYA_MAX_MARKERS * n_seqs, 0);
-+        std::vector<int32_t> marker_mask(LAYA_MAX_MARKERS * n_seqs, 0);
-+        std::vector<int32_t> seq_start(n_seqs);
++    std::vector<int32_t> batch_tokens(pass_tokens);
++    std::vector<int32_t> positions(pass_tokens);
++    std::vector<int32_t> seq_id(pass_tokens);
++    std::vector<int32_t> qtype(pass_tokens);
++    std::vector<int32_t> marker_pos(LAYA_MAX_MARKERS * n_seqs, 0);
++    std::vector<int32_t> marker_mask(LAYA_MAX_MARKERS * n_seqs, 0);
++    std::vector<int32_t> seq_start(n_seqs);
 +
-+        size_t t = 0;
-+        for (size_t s = 0; s < n_seqs; ++s) {
-+            const skippy_laya_sequence & seq = sequences[first + s];
-+            seq_start[s] = (int32_t) t;
-+            for (size_t i = 0; i < seq.token_count; ++i) {
-+                batch_tokens[t] = tokens[seq.token_offset + i];
-+                positions[t] = (int32_t) i;
-+                seq_id[t] = (int32_t) s;
-+                qtype[t] = seq.qtype;
-+                ++t;
-+            }
-+            for (size_t m = 0; m < seq.marker_count; ++m) {
-+                marker_pos[m + LAYA_MAX_MARKERS * s] = seq_start[s] + marker_positions[seq.marker_offset + m];
-+                marker_mask[m + LAYA_MAX_MARKERS * s] = 1;
-+            }
++    size_t t = 0;
++    for (size_t s = 0; s < n_seqs; ++s) {
++        const skippy_laya_sequence & seq = sequences[first + s];
++        seq_start[s] = (int32_t) t;
++        for (size_t i = 0; i < seq.token_count; ++i) {
++            batch_tokens[t] = tokens[seq.token_offset + i];
++            positions[t] = (int32_t) i;
++            seq_id[t] = (int32_t) s;
++            qtype[t] = seq.qtype;
++            ++t;
 +        }
-+
-+        laya_batch batch;
-+        batch.n_tokens = (int32_t) pass_tokens;
-+        batch.n_seqs = (int32_t) n_seqs;
-+        batch.tokens = batch_tokens.data();
-+        batch.positions = positions.data();
-+        batch.seq_id = seq_id.data();
-+        batch.qtype = qtype.data();
-+        batch.marker_pos = marker_pos.data();
-+        batch.marker_mask = marker_mask.data();
-+        batch.seq_start = seq_start.data();
-+
-+        laya_result result;
-+        int rc = 1;
-+        const bool ok = skippy_contain_native_failure(out_error, [&] {
-+            rc = laya_encode(model->context, batch, result);
-+        });
-+        if (!ok) {
-+            return SKIPPY_STATUS_RUNTIME_ERROR;
++        for (size_t m = 0; m < seq.marker_count; ++m) {
++            marker_pos[m + LAYA_MAX_MARKERS * s] = seq_start[s] + marker_positions[seq.marker_offset + m];
++            marker_mask[m + LAYA_MAX_MARKERS * s] = 1;
 +        }
-+        if (rc != 0 || result.n_markers_max != LAYA_MAX_MARKERS || (size_t) result.n_act != n_act ||
-+                result.logits.size() != n_seqs * LAYA_MAX_MARKERS || result.act_logits.size() != n_seqs * n_act) {
-+            return laya_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "laya forward pass failed");
-+        }
-+        for (size_t s = 0; s < n_seqs; ++s) {
-+            const size_t markers = sequences[first + s].marker_count;
-+            float * logits = out_logits + (first + s) * LAYA_MAX_MARKERS;
-+            for (size_t m = 0; m < LAYA_MAX_MARKERS; ++m) {
-+                logits[m] = m < markers ? result.logits[s * LAYA_MAX_MARKERS + m] : 0.0f;
-+            }
-+        }
-+        std::memcpy(out_act_logits + first * n_act, result.act_logits.data(), n_seqs * n_act * sizeof(float));
-+        first = last;
 +    }
-+    return skippy_success(out_error);
++
++    laya_batch batch;
++    batch.n_tokens = (int32_t) pass_tokens;
++    batch.n_seqs = (int32_t) n_seqs;
++    batch.tokens = batch_tokens.data();
++    batch.positions = positions.data();
++    batch.seq_id = seq_id.data();
++    batch.qtype = qtype.data();
++    batch.marker_pos = marker_pos.data();
++    batch.marker_mask = marker_mask.data();
++    batch.seq_start = seq_start.data();
++
++    laya_result result;
++    if (laya_encode(model->context, batch, result) != 0 || result.n_markers_max != LAYA_MAX_MARKERS ||
++            (size_t) result.n_act != n_act || result.logits.size() != n_seqs * LAYA_MAX_MARKERS ||
++            result.act_logits.size() != n_seqs * n_act) {
++        return laya_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "laya forward pass failed");
++    }
++    for (size_t s = 0; s < n_seqs; ++s) {
++        const size_t markers = sequences[first + s].marker_count;
++        float * logits = out_logits + (first + s) * LAYA_MAX_MARKERS;
++        for (size_t m = 0; m < LAYA_MAX_MARKERS; ++m) {
++            logits[m] = m < markers ? result.logits[s * LAYA_MAX_MARKERS + m] : 0.0f;
++        }
++    }
++    std::memcpy(out_act_logits + first * n_act, result.act_logits.data(), n_seqs * n_act * sizeof(float));
++    return SKIPPY_STATUS_OK;
++}
++
++} // namespace
++
++extern "C" enum skippy_status skippy_laya_read(
++        struct skippy_laya_model * model,
++        const int32_t * tokens,
++        size_t token_count,
++        const int32_t * marker_positions,
++        size_t marker_count,
++        const struct skippy_laya_sequence * sequences,
++        size_t sequence_count,
++        float * out_logits,
++        size_t logits_capacity,
++        float * out_act_logits,
++        size_t act_logits_capacity,
++        struct skippy_error ** out_error) {
++    return laya_entry(out_error, [&] {
++        if (model == nullptr || model->model == nullptr || model->context == nullptr ||
++                tokens == nullptr || marker_positions == nullptr || sequences == nullptr ||
++                out_logits == nullptr || out_act_logits == nullptr || sequence_count == 0) {
++            return laya_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid laya read arguments");
++        }
++        const enum skippy_status valid = validate_read(laya_model_hparams(model->model), token_count,
++                marker_positions, marker_count, sequences, sequence_count, logits_capacity,
++                act_logits_capacity, out_error);
++        if (valid != SKIPPY_STATUS_OK) {
++            return valid;
++        }
++
++        // Every sequence fits in max_len <= SKIPPY_LAYA_MAX_SEQUENCE_TOKENS, so
++        // grouping sequences up to that many tokens bounds every pass.
++        std::lock_guard<std::mutex> lane(model->lane);
++        size_t first = 0;
++        while (first < sequence_count) {
++            size_t last = first;
++            size_t pass_tokens = 0;
++            while (last < sequence_count &&
++                    pass_tokens + sequences[last].token_count <= SKIPPY_LAYA_MAX_SEQUENCE_TOKENS) {
++                pass_tokens += sequences[last].token_count;
++                ++last;
++            }
++            const enum skippy_status pass = read_pass(model, tokens, marker_positions, sequences,
++                    first, last, pass_tokens, out_logits, out_act_logits, out_error);
++            if (pass != SKIPPY_STATUS_OK) {
++                return pass;
++            }
++            first = last;
++        }
++        return skippy_success(out_error);
++    });
 +}
 diff --git a/tools/CMakeLists.txt b/tools/CMakeLists.txt
 index c8ad1db43..df418958f 100644

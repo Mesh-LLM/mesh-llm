@@ -57,8 +57,6 @@ pub(crate) struct LayaSequence {
 pub(crate) struct LayaReadOutput {
     /// One scorer logit per option marker.
     pub(crate) logits: Vec<f32>,
-    /// Action-head logits.
-    pub(crate) act_logits: Vec<f32>,
 }
 
 /// A loaded Laya decision model (encoder + typed decision head).
@@ -136,7 +134,18 @@ impl LayaModel {
         };
         Ok(LayaModelInfo {
             max_len: positive(raw.max_len, "max_len")?,
-            head_max_len: positive(raw.head_max_len, "head_max_len")?,
+            head_max_len: positive(raw.head_max_len, "head_max_len").and_then(|head| {
+                // Native open enforces this too; a smaller sequence than
+                // its head would cut option markers.
+                if head > usize::try_from(raw.max_len).unwrap_or(0) {
+                    Err(anyhow!(
+                        "Laya model's head budget {head} exceeds max_len {}",
+                        raw.max_len
+                    ))
+                } else {
+                    Ok(head)
+                }
+            })?,
             max_markers: positive(raw.max_markers, "marker capacity")?,
             action_classes: positive(raw.n_act, "action class count")?,
             cls_token_id: raw.cls_token_id,
@@ -233,10 +242,8 @@ impl LayaModel {
             .enumerate()
             .map(|(index, sequence)| {
                 let row = index * max_markers;
-                let act_row = index * action_classes;
                 LayaReadOutput {
                     logits: logits[row..row + sequence.markers.len()].to_vec(),
-                    act_logits: act_logits[act_row..act_row + action_classes].to_vec(),
                 }
             })
             .collect())

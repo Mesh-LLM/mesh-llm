@@ -207,16 +207,17 @@ fn assemble_sequence(
     tokens.push(layout.sep);
     tokens.truncate(layout.max_len);
 
-    let markers = markers
-        .into_iter()
-        .filter(|marker| *marker < layout.max_len)
-        .map(|marker| u32::try_from(marker).unwrap_or(u32::MAX))
-        .collect::<Vec<_>>();
-    if markers.is_empty() {
+    // Every option needs its marker inside the sequence: a partly scored
+    // question would return a distribution over the wrong options.
+    if markers.iter().any(|marker| *marker >= layout.max_len) {
         return Err(DecisionError::InvalidRequest(
             "question options do not fit in the Laya sequence budget".into(),
         ));
     }
+    let markers = markers
+        .into_iter()
+        .map(|marker| u32::try_from(marker).unwrap_or(u32::MAX))
+        .collect::<Vec<_>>();
     Ok(LayaSequence {
         tokens,
         question_type,
@@ -338,6 +339,13 @@ fn python_string(text: &str, out: &mut String) {
 
 /// Python `repr(float)`: shortest round-trip digits, always with a fraction or
 /// exponent, and exponents written as `e+NN`/`e-NN` outside [1e-4, 1e16).
+///
+/// This follows the Python reference the checkpoint was trained with, not
+/// `llama-laya-cli`, which prints floats with `%.17g` (`0.1` becomes
+/// `0.10000000000000001`). A state or criterion holding a float therefore
+/// tokenizes differently in the two, and a comparison against the CLI is
+/// only exact for inputs without floats. Integers beyond `u64` arrive from
+/// `serde_json` as floats and render as floats, where Python keeps the digits.
 fn python_float(value: f64) -> String {
     let magnitude = value.abs();
     if magnitude != 0.0 && !(1e-4..1e16).contains(&magnitude) {
@@ -397,6 +405,38 @@ mod tests {
         assert_eq!(python_float(-2.5), "-2.5");
         assert_eq!(python_float(1e20), "1e+20");
         assert_eq!(python_float(1.5e-7), "1.5e-07");
+    }
+
+    #[test]
+    fn python_rendering_of_numbers_is_pinned() {
+        // Python: json.dumps({"a": 0.1, "b": 1e-05, "c": 3, "d": -0.0, "e": 12345678901234567890})
+        let value = parse(r#"{"a":0.1,"b":1e-05,"c":3,"d":-0.0,"e":12345678901234567890}"#);
+        assert_eq!(
+            python_text(&value),
+            r#"{"a": 0.1, "b": 1e-05, "c": 3, "d": -0.0, "e": 12345678901234567890}"#
+        );
+    }
+
+    #[test]
+    fn a_question_is_refused_when_any_option_marker_is_cut() {
+        // A malformed budget (head larger than the sequence) cuts the second
+        // marker: the question must fail rather than be scored over one option.
+        // The head is cut to 8 tokens, so the markers land at 10 and 14.
+        let layout = SequenceLayout {
+            max_len: 12,
+            head_max_len: 16,
+            ..LAYOUT
+        };
+        let error = assemble_sequence(
+            layout,
+            LayaQuestionType::Noul,
+            "",
+            &["a".repeat(3), "b".repeat(3)],
+            "",
+            char_tokens,
+        )
+        .expect_err("second marker is past max_len");
+        assert!(matches!(error, DecisionError::InvalidRequest(_)));
     }
 
     #[test]

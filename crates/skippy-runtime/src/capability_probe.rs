@@ -164,7 +164,7 @@ pub(crate) fn symbol_available(name: &[u8]) -> bool {
 }
 
 /// Probes the loaded native runtime's family bit+symbol groups
-/// (bits 24 and 31-37), logging one bounded health record per malformed
+/// (bits 24, 31-37, and 40), logging one bounded health record per malformed
 /// family plus at most one for reserved bits. Callers must have already
 /// confirmed exact ABI compatibility; this probe never runs that check
 /// itself.
