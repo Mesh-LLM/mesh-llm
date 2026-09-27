@@ -1,4 +1,4 @@
-From 6715e250780ba6a8baecf8310f9fc7945ee95ddf Mon Sep 17 00:00:00 2001
+From 48e22903a86914eceae17c4069c89a8572a84850 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 27 Sep 2026 16:49:17 +1000
 Subject: [PATCH] fix(skippy): reuse backend sampler across requests
@@ -9,10 +9,10 @@ Subject: [PATCH] fix(skippy): reuse backend sampler across requests
  src/llama-context.h                 |   4 +
  src/skippy/sampling.cpp             |  54 +++++++++--
  src/skippy/session.cpp              |  18 ++--
- src/skippy/tests/runtime_events.cpp | 137 +++++++++++++++++++++++++++-
+ src/skippy/tests/runtime_events.cpp | 142 +++++++++++++++++++++++++++-
  src/skippy/workloads.cpp            |  12 ++-
  src/skippy/workloads_internal.h     |   8 ++
- 8 files changed, 221 insertions(+), 23 deletions(-)
+ 8 files changed, 226 insertions(+), 23 deletions(-)
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
@@ -226,7 +226,7 @@ index 37b0b9c5b..a4dc6b559 100644
      }
      skippy_mtp_clear_session_state(session);
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
-index 60357184a..a7e1d73f5 100644
+index 60357184a..e8660af1a 100644
 --- a/src/skippy/tests/runtime_events.cpp
 +++ b/src/skippy/tests/runtime_events.cpp
 @@ -1,7 +1,9 @@
@@ -239,7 +239,7 @@ index 60357184a..a7e1d73f5 100644
  
  #include <atomic>
  #include <cstdio>
-@@ -342,16 +344,145 @@ int test_native_model_load_production(const char * fixture_path) {
+@@ -342,16 +344,150 @@ int test_native_model_load_production(const char * fixture_path) {
      sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
      sampling.repeat_penalty = 1.0f;
      CHECK(skippy_session_configure_chat_sampling(
@@ -302,6 +302,11 @@ index 60357184a..a7e1d73f5 100644
 +    CHECK(!session->sampling_backend_enabled);
 +    CHECK(session->sampling_backend_retired);
 +
++    CHECK(skippy_session_configure_chat_sampling(
++            session, &sampling, "{\"grammar\":\"\"}", 2,
++            &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
++
 +    // Embedding and rerank batches request every output row. Their shared
 +    // preparation boundary must detach a sampler retained by the chat path,
 +    // after which a multi-output decode is valid.
@@ -322,8 +327,8 @@ index 60357184a..a7e1d73f5 100644
 +    skippy_mark_context_work_pending(session->stage_model);
 +
 +    // CPU-only sampler chains never enter the backend graph. Rebuilding or
-+    // clearing them must not call llama_set_sampler(nullptr), which would
-+    // otherwise force an unrelated scheduler reservation on the next decode.
++    // clearing them must preserve that invariant and leave the scheduler's
++    // reservation count unchanged on the next decode.
 +    skippy_sampling_config cpu_sampling = sampling;
 +    cpu_sampling.temperature = 0.75f;
 +    cpu_sampling.top_p = 0.9f;
