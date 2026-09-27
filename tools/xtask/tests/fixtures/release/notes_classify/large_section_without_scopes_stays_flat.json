@@ -1,0 +1,29 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--version",
+    "1.0.0",
+    "--date",
+    "2026-01-01",
+    "--out",
+    "plan.json"
+  ],
+  "code": 0,
+  "gh_argv": [],
+  "git_argv": [
+    [
+      "cwd={root}",
+      "log",
+      "--format=%s%x1f%b%x1e",
+      "v1.0.0..v1.0.1"
+    ]
+  ],
+  "outputs": {
+    "plan.json": "{\n  \"version\": \"1.0.0\",\n  \"date\": \"2026-01-01\",\n  \"sections\": [\n    {\n      \"title\": \"Fixed\",\n      \"prs\": [\n        1,\n        2,\n        3,\n        4,\n        5,\n        6,\n        7,\n        8,\n        9,\n        10,\n        11,\n        12,\n        13,\n        14,\n        15,\n        16,\n        17,\n        18,\n        19,\n        20,\n        21\n      ]\n    }\n  ]\n}\n"
+  },
+  "stderr": "",
+  "stdout": "classified 21/21 entries deterministically (0 in 'Other changes')\n"
+}

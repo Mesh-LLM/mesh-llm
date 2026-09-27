@@ -1,0 +1,31 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--version",
+    "1.0.0",
+    "--date",
+    "2026-01-01",
+    "--out",
+    "plan.json",
+    "--links",
+    "links.json"
+  ],
+  "code": 0,
+  "gh_argv": [],
+  "git_argv": [
+    [
+      "cwd={root}",
+      "log",
+      "--format=%s%x1f%b%x1e",
+      "v1.0.0..v1.0.1"
+    ]
+  ],
+  "outputs": {
+    "plan.json": "{\n  \"version\": \"1.0.0\",\n  \"date\": \"2026-01-01\",\n  \"sections\": [\n    {\n      \"title\": \"Added\",\n      \"prs\": [\n        2\n      ]\n    },\n    {\n      \"title\": \"Fixed\",\n      \"prs\": [\n        1\n      ]\n    }\n  ],\n  \"internal\": {\n    \"summary\": \"CI, build, test, and repository work with no user-facing behavior change\",\n    \"groups\": [\n      {\n        \"title\": \"CI and release engineering\",\n        \"prs\": [\n          3\n        ]\n      }\n    ]\n  }\n}\n"
+  },
+  "stderr": "",
+  "stdout": "classified 3/3 entries deterministically (0 in 'Other changes')\n"
+}

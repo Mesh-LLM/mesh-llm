@@ -1,0 +1,22 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--version",
+    "1.0.0",
+    "--date",
+    "2026-01-01",
+    "--out",
+    "plan.json"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {
+    "plan.json": null
+  },
+  "stderr": "Traceback (most recent call last):\nUnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 12: invalid start byte\n",
+  "stdout": ""
+}

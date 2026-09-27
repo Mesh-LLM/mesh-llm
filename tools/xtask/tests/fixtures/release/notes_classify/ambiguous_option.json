@@ -1,0 +1,12 @@
+{
+  "args": [
+    "--r",
+    "x"
+  ],
+  "code": 2,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "usage: release-notes-classify.py [-h] --body BODY [--range RANGE]\n                                 [--version VERSION] [--date DATE] [--out OUT]\n                                 [--repo-root REPO_ROOT] [--has-entries]\n                                 [--links LINKS]\nrelease-notes-classify.py: error: ambiguous option: --r could match --range, --repo-root\n",
+  "stdout": ""
+}

@@ -1,0 +1,53 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--repo",
+    "o/r",
+    "--out-body",
+    "body.linked.md",
+    "--out-links",
+    "links.json"
+  ],
+  "code": 0,
+  "gh_argv": [
+    [
+      "api",
+      "repos/o/r/commits/a/pulls",
+      "--jq",
+      "[.[].number]"
+    ],
+    [
+      "api",
+      "repos/o/r/commits/b/pulls",
+      "--jq",
+      "[.[].number]"
+    ],
+    [
+      "pr",
+      "view",
+      "1733",
+      "--repo",
+      "o/r",
+      "--json",
+      "title,author"
+    ]
+  ],
+  "git_argv": [
+    [
+      "cwd={root}",
+      "log",
+      "--reverse",
+      "--format=%H%x1f%s%x1f%b%x1e",
+      "v1.0.0..v1.0.1"
+    ]
+  ],
+  "outputs": {
+    "body.linked.md": "## What's Changed\n* fix: rolled up by @someone in https://github.com/o/r/pull/10\n* fix(openai): répair  by @i386 in https://github.com/o/r/pull/1733\n\n**Full Changelog**: compare\n",
+    "links.json": "{\n  \"1733\": {\n    \"subject\": \"fix(openai): repair a thing\",\n    \"trailers\": {\n      \"release-notes\": \"Fixed\",\n      \"security\": \"CVE-1\",\n      \"breaking change\": \"api: gone\"\n    }\n  }\n}\n"
+  },
+  "stderr": "",
+  "stdout": "linked 2 commit(s) to a pull request through the API; recovered 1 entry(ies) GitHub did not credit (1 published)\n"
+}
