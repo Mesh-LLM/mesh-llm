@@ -205,7 +205,7 @@ jobs:
 
           release_notes_base="$(
             git tag --list 'v*' |
-              python3 scripts/select-release-notes-base.py "$RELEASE_TAG"
+              cargo xtool release notes-base "$RELEASE_TAG"
           )"
           if [[ -n "$release_notes_base" ]]; then
             echo "GitHub release notes will compare $release_notes_base...$RELEASE_TAG."
