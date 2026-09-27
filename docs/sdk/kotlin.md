@@ -57,6 +57,23 @@ client.inference.chatFlow(
 client.stop()
 ```
 
+## Agent streaming
+
+```kotlin
+client.inference.streamChatCompletions(
+    Json.parseToJsonElement(
+        """{"model":"Qwen3-8B","messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather"}}]}""",
+    ).jsonObject,
+).collect { event ->
+    if (event is OpenAIStreamEvent.Sse && !event.isDone) {
+        println("${event.event}: ${event.data}")
+    }
+}
+```
+
+The flow retains named and raw SSE frames, incremental tool-call arguments,
+and future JSON fields. Cancelling collection cancels the native request.
+
 ## Client: Private Mesh
 
 ```kotlin

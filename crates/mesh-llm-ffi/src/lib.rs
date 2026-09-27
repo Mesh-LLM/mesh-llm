@@ -27,7 +27,7 @@ mod runtime_blocking;
 
 pub use client::{create_auto_client, create_client};
 pub use errors::FfiError;
-pub use events::ClientEvent;
+pub use events::{ClientEvent, OpenAiStreamEventNative};
 pub use handles::{ConsoleHandle, MeshClientHandle, MeshNodeHandle};
 pub use identity::generate_owner_keypair_hex;
 pub use model_types::{
@@ -45,7 +45,7 @@ pub use native_runtime_types::{
     EventListener, InstalledNativeRuntimeNative, NativeRuntimeDownloadProgressNative,
     NativeRuntimeInstallOptionsNative, NativeRuntimeInstallOutcomeNative,
     NativeRuntimeProgressListener, NativeRuntimePruneModeNative, NativeRuntimePruneResultNative,
-    NativeRuntimeVerificationPolicyNative,
+    NativeRuntimeVerificationPolicyNative, OpenAiStreamListener,
 };
 pub use node::{create_auto_node, create_node};
 pub use public_mesh::discover_public_meshes;

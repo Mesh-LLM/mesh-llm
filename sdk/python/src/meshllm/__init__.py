@@ -3,28 +3,28 @@ from __future__ import annotations
 from ._binding import native
 from .client import Client, Inference, Node
 from .types import (
-    InferenceEvent,
     MeshError,
     Model,
     OpenAIRequestError,
     OpenAIResponse,
-    RequestCompleted,
+    OpenAIStreamChunk,
+    OpenAIStreamEvent,
+    OpenAIStreamStarted,
     Status,
-    TextDelta,
 )
 
 __all__ = [
     "Client",
     "Inference",
-    "InferenceEvent",
     "MeshError",
     "Model",
     "Node",
     "OpenAIRequestError",
     "OpenAIResponse",
-    "RequestCompleted",
+    "OpenAIStreamChunk",
+    "OpenAIStreamEvent",
+    "OpenAIStreamStarted",
     "Status",
-    "TextDelta",
     "generate_owner_keypair_hex",
 ]
 

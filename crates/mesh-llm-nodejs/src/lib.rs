@@ -4,7 +4,7 @@
 
 #[cfg(feature = "embedded-runtime")]
 use mesh_llm_sdk::embedded_runtime::{EmbeddedChatMessage, EmbeddedServingController};
-use mesh_llm_sdk::events::{Event, EventListener};
+use mesh_llm_sdk::events::{Event, EventListener, OpenAiStreamEvent, OpenAiStreamListener};
 use mesh_llm_sdk::node as sdk_node;
 use mesh_llm_sdk::node::{
     ChatMessage, ChatRequest, DevicePolicy, DownloadOptions, InviteToken, LoadModelOptions,
@@ -233,6 +233,39 @@ impl Node {
                 .collect(),
         )
         .to_string())
+    }
+
+    #[napi(js_name = "openaiRequestJson")]
+    pub async fn openai_request_json(&self, path: String, body_json: String) -> Result<String> {
+        let response = self
+            .node
+            .inference()
+            .openai_request(&path, body_json)
+            .await
+            .map_err(to_napi_error)?;
+        Ok(json!({
+            "statusCode": response.status_code,
+            "contentType": response.content_type,
+            "body": response.body,
+        })
+        .to_string())
+    }
+
+    #[napi(js_name = "openaiStream")]
+    pub async fn openai_stream(
+        &self,
+        path: String,
+        body_json: String,
+        callback: ThreadsafeFunction<String>,
+    ) -> Result<String> {
+        let listener = Arc::new(NodeOpenAiStreamListener { callback });
+        Ok(self
+            .node
+            .inference()
+            .openai_stream(&path, body_json, listener)
+            .await
+            .map_err(to_napi_error)?
+            .0)
     }
 
     #[napi(js_name = "chatJson")]
@@ -594,6 +627,62 @@ impl EventListener for EventCollector {
     }
 }
 
+struct NodeOpenAiStreamListener {
+    callback: ThreadsafeFunction<String>,
+}
+
+impl OpenAiStreamListener for NodeOpenAiStreamListener {
+    fn on_event(&self, event: OpenAiStreamEvent) {
+        let _ = self.callback.call(
+            Ok(openai_stream_event_json(event).to_string()),
+            ThreadsafeFunctionCallMode::NonBlocking,
+        );
+    }
+}
+
+fn openai_stream_event_json(event: OpenAiStreamEvent) -> Value {
+    match event {
+        OpenAiStreamEvent::Started {
+            request_id,
+            status_code,
+            content_type,
+        } => json!({
+            "type": "started",
+            "requestId": request_id,
+            "statusCode": status_code,
+            "contentType": content_type,
+        }),
+        OpenAiStreamEvent::Sse {
+            request_id,
+            event_type,
+            data,
+            raw,
+        } => json!({
+            "type": "sse",
+            "requestId": request_id,
+            "event": event_type,
+            "data": data,
+            "raw": raw,
+        }),
+        OpenAiStreamEvent::Completed { request_id } => json!({
+            "type": "completed",
+            "requestId": request_id,
+        }),
+        OpenAiStreamEvent::Failed {
+            request_id,
+            status_code,
+            error,
+            body,
+        } => json!({
+            "type": "failed",
+            "requestId": request_id,
+            "statusCode": status_code,
+            "error": error,
+            "body": body,
+        }),
+    }
+}
+
 fn parse_owner_keypair(value: &str) -> Result<OwnerKeypair> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -925,4 +1014,43 @@ fn new_request_id() -> String {
         "node-local-{}",
         NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_sse_event_preserves_agent_payload_and_raw_frame() {
+        let data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]}}]}"#;
+        let raw = format!("event: response.output_item.delta\ndata: {data}\n\n");
+        let value = openai_stream_event_json(OpenAiStreamEvent::Sse {
+            request_id: "req-1".to_string(),
+            event_type: Some("response.output_item.delta".to_string()),
+            data: data.to_string(),
+            raw: raw.clone(),
+        });
+
+        assert_eq!(value["type"], "sse");
+        assert_eq!(value["requestId"], "req-1");
+        assert_eq!(value["event"], "response.output_item.delta");
+        assert_eq!(value["data"], data);
+        assert_eq!(value["raw"], raw);
+    }
+
+    #[test]
+    fn openai_failure_event_preserves_status_and_body() {
+        let value = openai_stream_event_json(OpenAiStreamEvent::Failed {
+            request_id: "req-2".to_string(),
+            status_code: Some(429),
+            error: "request failed with HTTP 429".to_string(),
+            body: Some(r#"{"error":"rate limited"}"#.to_string()),
+        });
+
+        assert_eq!(value["type"], "failed");
+        assert_eq!(value["requestId"], "req-2");
+        assert_eq!(value["statusCode"], 429);
+        assert_eq!(value["error"], "request failed with HTTP 429");
+        assert_eq!(value["body"], r#"{"error":"rate limited"}"#);
+    }
 }

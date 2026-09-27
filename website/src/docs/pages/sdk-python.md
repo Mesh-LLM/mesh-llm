@@ -51,7 +51,7 @@ Persist the owner keypair in the host application's secure storage. Generating o
 
 ## Agent requests
 
-`chat_completions()` and `responses()` use the protocol-preserving request path. The SDK sends the complete JSON object through Mesh and returns the complete OpenAI-compatible response, instead of converting it to a text-only SDK model.
+`chat_completions()` and `responses()` use the protocol-preserving request path. The SDK sends the complete JSON object through Mesh and returns the complete OpenAI-compatible response, instead of converting it to a text-only SDK model. Their streaming counterparts preserve complete SSE events the same way.
 
 This is the recommended path for Hermes and other agents because it preserves:
 
@@ -93,24 +93,36 @@ raw = await client.inference.request(
 payload = raw.json()
 ```
 
-The rich request path currently completes a non-streaming OpenAI request and then returns its full response. The typed `chat()` and `text_response()` APIs are async iterators for simple text deltas, but their native event contract does not represent tool-call deltas. Use non-streaming `chat_completions()` or `responses()` for agent turns until rich incremental SSE events land.
+## Stream agent events
 
-## Typed text streaming
+`stream_chat_completions()` yields complete SSE events, including incremental tool-call arguments, reasoning, text, usage, finish reasons, and provider extensions. The SDK does not flatten the event into a text token, so new OpenAI-compatible fields remain available without an SDK release.
 
 ```python
-from meshllm import RequestCompleted, TextDelta
+from meshllm import OpenAIStreamChunk
 
-async for event in client.inference.chat(
-    model="Qwen3-8B",
-    messages=[{"role": "user", "content": "Write one sentence."}],
-):
-    if isinstance(event, TextDelta):
-        print(event.text, end="", flush=True)
-    elif isinstance(event, RequestCompleted):
-        print()
+arguments = ""
+async for event in client.inference.stream_chat_completions({
+    "model": "Qwen3-8B",
+    "messages": [{"role": "user", "content": "What is the weather in Sydney?"}],
+    "tools": tools,
+}):
+    if not isinstance(event, OpenAIStreamChunk) or event.done:
+        continue
+
+    chunk = event.json()
+    for choice in chunk.get("choices", []):
+        delta = choice.get("delta", {})
+        if content := delta.get("content"):
+            print(content, end="", flush=True)
+        for call in delta.get("tool_calls", []):
+            arguments += call.get("function", {}).get("arguments", "")
+
+print(arguments)
 ```
 
-Closing the iterator early cancels the native request. Network and bridge work runs off the asyncio event-loop thread.
+For the Responses API, use `stream_responses()`. Its named SSE event is available as `event.event`, its `data:` payload through `event.json()`, and the exact original frame through `event.raw`. A `[DONE]` sentinel has `event.done == True`.
+
+Closing either iterator early cancels the native request and interrupts a blocked transport read. Network and bridge work runs off the asyncio event-loop thread.
 
 ## Embed a node
 

@@ -591,6 +591,8 @@ def _uniffi_check_api_checksums(lib):
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request() != 11900:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_stream() != 63190:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 33566:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses() != 1844:
@@ -620,6 +622,8 @@ def _uniffi_check_api_checksums(lib):
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 61505:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 19585:
+        raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream() != 40368:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     if lib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 24829:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
@@ -736,6 +740,9 @@ _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_mo
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_stream.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_stream.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect.restype = ctypes.c_uint16
@@ -781,6 +788,9 @@ _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status.
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request.restype = ctypes.c_uint16
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream.argtypes = (
+)
+_UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream.restype = ctypes.c_uint16
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache.argtypes = (
 )
 _UniffiLib.uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache.restype = ctypes.c_uint16
@@ -933,6 +943,14 @@ _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_request.argtypes
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_request.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_stream.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    _UniffiRustBuffer,
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_stream.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_reconnect.argtypes = (
     ctypes.c_uint64,
     ctypes.POINTER(_UniffiRustCallStatus),
@@ -1021,6 +1039,14 @@ _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_request.argtypes =
     ctypes.POINTER(_UniffiRustCallStatus),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_request.restype = _UniffiRustBuffer
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_stream.argtypes = (
+    ctypes.c_uint64,
+    _UniffiRustBuffer,
+    _UniffiRustBuffer,
+    ctypes.c_uint64,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_stream.restype = _UniffiRustBuffer
 _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_prune_derived_cache.argtypes = (
     ctypes.c_uint64,
     _UniffiRustBuffer,
@@ -1178,6 +1204,23 @@ _UniffiLib.uniffi_meshllm_ffi_fn_init_callback_vtable_nativeruntimeprogressliste
     ctypes.POINTER(_UniffiVTableCallbackInterfaceMeshFfiNativeRuntimeProgressListener),
 )
 _UniffiLib.uniffi_meshllm_ffi_fn_init_callback_vtable_nativeruntimeprogresslistener.restype = None
+_UNIFFI_CALLBACK_INTERFACE_MESH_FFI_OPEN_AI_STREAM_LISTENER_METHOD0 = ctypes.CFUNCTYPE(None,ctypes.c_uint64,_UniffiRustBuffer,ctypes.c_void_p,
+    ctypes.POINTER(_UniffiRustCallStatus),
+)
+_UNIFFI_CALLBACK_INTERFACE_CLONE_MESH_FFI_OPEN_AI_STREAM_LISTENER = ctypes.CFUNCTYPE(ctypes.c_uint64,ctypes.c_uint64,
+)
+_UNIFFI_CALLBACK_INTERFACE_FREE_MESH_FFI_OPEN_AI_STREAM_LISTENER = ctypes.CFUNCTYPE(None,ctypes.c_uint64,
+)
+class _UniffiVTableCallbackInterfaceMeshFfiOpenAiStreamListener(ctypes.Structure):
+    _fields_ = [
+        ("uniffi_free", _UNIFFI_CALLBACK_INTERFACE_FREE_MESH_FFI_OPEN_AI_STREAM_LISTENER),
+        ("uniffi_clone", _UNIFFI_CALLBACK_INTERFACE_CLONE_MESH_FFI_OPEN_AI_STREAM_LISTENER),
+        ("on_event", _UNIFFI_CALLBACK_INTERFACE_MESH_FFI_OPEN_AI_STREAM_LISTENER_METHOD0),
+    ]
+_UniffiLib.uniffi_meshllm_ffi_fn_init_callback_vtable_openaistreamlistener.argtypes = (
+    ctypes.POINTER(_UniffiVTableCallbackInterfaceMeshFfiOpenAiStreamListener),
+)
+_UniffiLib.uniffi_meshllm_ffi_fn_init_callback_vtable_openaistreamlistener.restype = None
 
 _uniffi_check_contract_api_version(_UniffiLib)
 # _uniffi_check_api_checksums(_UniffiLib)
@@ -4115,6 +4158,264 @@ class _UniffiFfiConverterTypeNativeRuntimePruneModeNative(_UniffiConverterRustBu
 
 
 
+class OpenAiStreamEventNative:
+    def __init__(self):
+        raise RuntimeError("OpenAiStreamEventNative cannot be instantiated directly")
+
+    # Each enum variant is a nested class of the enum itself.
+    @dataclass
+    class STARTED:
+
+        def __init__(self, request_id:str, status_code:int, content_type:typing.Optional[str]):
+            self.request_id = request_id
+
+
+            self.status_code = status_code
+
+
+            self.content_type = content_type
+
+
+            pass
+
+
+
+
+
+        def __str__(self):
+            return "OpenAiStreamEventNative.STARTED(request_id={}, status_code={}, content_type={})".format(self.request_id, self.status_code, self.content_type)
+        def __eq__(self, other):
+            if not isinstance(other, OpenAiStreamEventNative):
+                return NotImplemented
+            if not other.is_STARTED():
+                return False
+            if self.request_id != other.request_id:
+                return False
+            if self.status_code != other.status_code:
+                return False
+            if self.content_type != other.content_type:
+                return False
+            return True
+
+    @dataclass
+    class SSE:
+
+        def __init__(self, request_id:str, event_type:typing.Optional[str], data:str, raw:str):
+            self.request_id = request_id
+
+
+            self.event_type = event_type
+
+
+            self.data = data
+
+
+            self.raw = raw
+
+
+            pass
+
+
+
+
+
+        def __str__(self):
+            return "OpenAiStreamEventNative.SSE(request_id={}, event_type={}, data={}, raw={})".format(self.request_id, self.event_type, self.data, self.raw)
+        def __eq__(self, other):
+            if not isinstance(other, OpenAiStreamEventNative):
+                return NotImplemented
+            if not other.is_SSE():
+                return False
+            if self.request_id != other.request_id:
+                return False
+            if self.event_type != other.event_type:
+                return False
+            if self.data != other.data:
+                return False
+            if self.raw != other.raw:
+                return False
+            return True
+
+    @dataclass
+    class COMPLETED:
+
+        def __init__(self, request_id:str):
+            self.request_id = request_id
+
+
+            pass
+
+
+
+
+
+        def __str__(self):
+            return "OpenAiStreamEventNative.COMPLETED(request_id={})".format(self.request_id)
+        def __eq__(self, other):
+            if not isinstance(other, OpenAiStreamEventNative):
+                return NotImplemented
+            if not other.is_COMPLETED():
+                return False
+            if self.request_id != other.request_id:
+                return False
+            return True
+
+    @dataclass
+    class FAILED:
+
+        def __init__(self, request_id:str, status_code:typing.Optional[int], error:str, body:typing.Optional[str]):
+            self.request_id = request_id
+
+
+            self.status_code = status_code
+
+
+            self.error = error
+
+
+            self.body = body
+
+
+            pass
+
+
+
+
+
+        def __str__(self):
+            return "OpenAiStreamEventNative.FAILED(request_id={}, status_code={}, error={}, body={})".format(self.request_id, self.status_code, self.error, self.body)
+        def __eq__(self, other):
+            if not isinstance(other, OpenAiStreamEventNative):
+                return NotImplemented
+            if not other.is_FAILED():
+                return False
+            if self.request_id != other.request_id:
+                return False
+            if self.status_code != other.status_code:
+                return False
+            if self.error != other.error:
+                return False
+            if self.body != other.body:
+                return False
+            return True
+
+
+
+    # For each variant, we have `is_NAME` and `is_name` methods for easily checking
+    # whether an instance is that variant.
+    def is_STARTED(self) -> bool:
+        return isinstance(self, OpenAiStreamEventNative.STARTED)
+    def is_started(self) -> bool:
+        return isinstance(self, OpenAiStreamEventNative.STARTED)
+    def is_SSE(self) -> bool:
+        return isinstance(self, OpenAiStreamEventNative.SSE)
+    def is_sse(self) -> bool:
+        return isinstance(self, OpenAiStreamEventNative.SSE)
+    def is_COMPLETED(self) -> bool:
+        return isinstance(self, OpenAiStreamEventNative.COMPLETED)
+    def is_completed(self) -> bool:
+        return isinstance(self, OpenAiStreamEventNative.COMPLETED)
+    def is_FAILED(self) -> bool:
+        return isinstance(self, OpenAiStreamEventNative.FAILED)
+    def is_failed(self) -> bool:
+        return isinstance(self, OpenAiStreamEventNative.FAILED)
+
+
+# Now, a little trick - we make each nested variant class be a subclass of the main
+# enum class, so that method calls and instance checks etc will work intuitively.
+# We might be able to do this a little more neatly with a metaclass, but this'll do.
+OpenAiStreamEventNative.STARTED = type("OpenAiStreamEventNative.STARTED", (OpenAiStreamEventNative.STARTED, OpenAiStreamEventNative,), {})  # type: ignore
+OpenAiStreamEventNative.SSE = type("OpenAiStreamEventNative.SSE", (OpenAiStreamEventNative.SSE, OpenAiStreamEventNative,), {})  # type: ignore
+OpenAiStreamEventNative.COMPLETED = type("OpenAiStreamEventNative.COMPLETED", (OpenAiStreamEventNative.COMPLETED, OpenAiStreamEventNative,), {})  # type: ignore
+OpenAiStreamEventNative.FAILED = type("OpenAiStreamEventNative.FAILED", (OpenAiStreamEventNative.FAILED, OpenAiStreamEventNative,), {})  # type: ignore
+
+
+
+
+class _UniffiFfiConverterTypeOpenAiStreamEventNative(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        variant = buf.read_i32()
+        if variant == 1:
+            return OpenAiStreamEventNative.STARTED(
+                _UniffiFfiConverterString.read(buf),
+                _UniffiFfiConverterUInt16.read(buf),
+                _UniffiFfiConverterOptionalString.read(buf),
+            )
+        if variant == 2:
+            return OpenAiStreamEventNative.SSE(
+                _UniffiFfiConverterString.read(buf),
+                _UniffiFfiConverterOptionalString.read(buf),
+                _UniffiFfiConverterString.read(buf),
+                _UniffiFfiConverterString.read(buf),
+            )
+        if variant == 3:
+            return OpenAiStreamEventNative.COMPLETED(
+                _UniffiFfiConverterString.read(buf),
+            )
+        if variant == 4:
+            return OpenAiStreamEventNative.FAILED(
+                _UniffiFfiConverterString.read(buf),
+                _UniffiFfiConverterOptionalUInt16.read(buf),
+                _UniffiFfiConverterString.read(buf),
+                _UniffiFfiConverterOptionalString.read(buf),
+            )
+        raise InternalError("Raw enum value doesn't match any cases")
+
+    @staticmethod
+    def check_lower(value):
+        if value.is_STARTED():
+            _UniffiFfiConverterString.check_lower(value.request_id)
+            _UniffiFfiConverterUInt16.check_lower(value.status_code)
+            _UniffiFfiConverterOptionalString.check_lower(value.content_type)
+            return
+        if value.is_SSE():
+            _UniffiFfiConverterString.check_lower(value.request_id)
+            _UniffiFfiConverterOptionalString.check_lower(value.event_type)
+            _UniffiFfiConverterString.check_lower(value.data)
+            _UniffiFfiConverterString.check_lower(value.raw)
+            return
+        if value.is_COMPLETED():
+            _UniffiFfiConverterString.check_lower(value.request_id)
+            return
+        if value.is_FAILED():
+            _UniffiFfiConverterString.check_lower(value.request_id)
+            _UniffiFfiConverterOptionalUInt16.check_lower(value.status_code)
+            _UniffiFfiConverterString.check_lower(value.error)
+            _UniffiFfiConverterOptionalString.check_lower(value.body)
+            return
+        raise ValueError(value)
+
+    @staticmethod
+    def write(value, buf):
+        if value.is_STARTED():
+            buf.write_i32(1)
+            _UniffiFfiConverterString.write(value.request_id, buf)
+            _UniffiFfiConverterUInt16.write(value.status_code, buf)
+            _UniffiFfiConverterOptionalString.write(value.content_type, buf)
+        if value.is_SSE():
+            buf.write_i32(2)
+            _UniffiFfiConverterString.write(value.request_id, buf)
+            _UniffiFfiConverterOptionalString.write(value.event_type, buf)
+            _UniffiFfiConverterString.write(value.data, buf)
+            _UniffiFfiConverterString.write(value.raw, buf)
+        if value.is_COMPLETED():
+            buf.write_i32(3)
+            _UniffiFfiConverterString.write(value.request_id, buf)
+        if value.is_FAILED():
+            buf.write_i32(4)
+            _UniffiFfiConverterString.write(value.request_id, buf)
+            _UniffiFfiConverterOptionalUInt16.write(value.status_code, buf)
+            _UniffiFfiConverterString.write(value.error, buf)
+            _UniffiFfiConverterOptionalString.write(value.body, buf)
+
+
+
+
+
+
+
+
 class UnloadTarget:
     def __init__(self):
         raise RuntimeError("UnloadTarget cannot be instantiated directly")
@@ -4364,6 +4665,57 @@ class _UniffiTraitImplEventListenerImpl:
 _UniffiFfiConverterTypeEventListener = _UniffiCallbackInterfaceFfiConverter()
 
 
+
+
+class OpenAiStreamListener(typing.Protocol):
+
+    def on_event(self, event: OpenAiStreamEventNative) -> None:
+        raise NotImplementedError
+# Put all the bits inside a class to keep the top-level namespace clean
+class _UniffiTraitImplOpenAiStreamListenerImpl:
+    # For each method, generate a callback function to pass to Rust
+
+    @_UNIFFI_CALLBACK_INTERFACE_MESH_FFI_OPEN_AI_STREAM_LISTENER_METHOD0
+    def on_event(
+            uniffi_handle,
+            event,
+            uniffi_out_return,
+            uniffi_call_status_ptr,
+        ):
+        uniffi_obj = _UniffiFfiConverterTypeOpenAiStreamListener._handle_map.get(uniffi_handle)
+        def make_call():
+            uniffi_args = (_UniffiFfiConverterTypeOpenAiStreamEventNative.lift(event), )
+            uniffi_method = uniffi_obj.on_event
+            return uniffi_method(*uniffi_args)
+        write_return_value = lambda v: None
+        _uniffi_trait_interface_call(
+                uniffi_call_status_ptr.contents,
+                make_call,
+                write_return_value,
+        )
+
+    @_UNIFFI_CALLBACK_INTERFACE_FREE_MESH_FFI_OPEN_AI_STREAM_LISTENER
+    def _uniffi_free(uniffi_handle):
+        _UniffiFfiConverterTypeOpenAiStreamListener._handle_map.remove(uniffi_handle)
+
+    @_UNIFFI_CALLBACK_INTERFACE_CLONE_MESH_FFI_OPEN_AI_STREAM_LISTENER
+    def _uniffi_clone(uniffi_handle):
+        return _UniffiFfiConverterTypeOpenAiStreamListener._handle_map.clone(uniffi_handle)
+
+    # Generate the FFI VTable.  This has a field for each callback interface method.
+    _uniffi_vtable = _UniffiVTableCallbackInterfaceMeshFfiOpenAiStreamListener(
+        _uniffi_free,
+        _uniffi_clone,
+        on_event,
+    )
+    # Send Rust a pointer to the VTable.  Note: this means we need to keep the struct alive forever,
+    # or else bad things will happen when Rust tries to access it.
+    _UniffiLib.uniffi_meshllm_ffi_fn_init_callback_vtable_openaistreamlistener(ctypes.byref(_uniffi_vtable))
+
+# The _UniffiConverter which transforms the Callbacks in to Handles to pass to Rust.
+_UniffiFfiConverterTypeOpenAiStreamListener = _UniffiCallbackInterfaceFfiConverter()
+
+
 class MeshClientHandleProtocol(typing.Protocol):
 
     def cancel(self, request_id: str) -> None:
@@ -4373,6 +4725,8 @@ class MeshClientHandleProtocol(typing.Protocol):
     def inference_list_models(self, ) -> typing.List[ModelNative]:
         raise NotImplementedError
     def openai_request(self, path: str,body_json: str) -> OpenAiResponseNative:
+        raise NotImplementedError
+    def openai_stream(self, path: str,body_json: str,listener: OpenAiStreamListener) -> str:
         raise NotImplementedError
     def reconnect(self, ) -> None:
         raise NotImplementedError
@@ -4469,6 +4823,27 @@ class MeshClientHandle(MeshClientHandleProtocol):
         _uniffi_ffi_result = _uniffi_rust_call_with_error(
             _uniffi_error_converter,
             _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_request,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def openai_stream(self, path: str,body_json: str,listener: OpenAiStreamListener) -> str:
+
+        _UniffiFfiConverterString.check_lower(path)
+
+        _UniffiFfiConverterString.check_lower(body_json)
+
+        _UniffiFfiConverterTypeOpenAiStreamListener.check_lower(listener)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterString.lower(path),
+            _UniffiFfiConverterString.lower(body_json),
+            _UniffiFfiConverterTypeOpenAiStreamListener.lower(listener),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterString.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_stream,
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
@@ -4636,6 +5011,8 @@ class MeshNodeHandleProtocol(typing.Protocol):
     def model_cache_status(self, ) -> ModelCacheStatus:
         raise NotImplementedError
     def openai_request(self, path: str,body_json: str) -> OpenAiResponseNative:
+        raise NotImplementedError
+    def openai_stream(self, path: str,body_json: str,listener: OpenAiStreamListener) -> str:
         raise NotImplementedError
     def prune_derived_cache(self, policy: PrunePolicy) -> PruneResult:
         raise NotImplementedError
@@ -4844,6 +5221,27 @@ class MeshNodeHandle(MeshNodeHandleProtocol):
         _uniffi_ffi_result = _uniffi_rust_call_with_error(
             _uniffi_error_converter,
             _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_request,
+            *_uniffi_lowered_args,
+        )
+        return _uniffi_lift_return(_uniffi_ffi_result)
+    def openai_stream(self, path: str,body_json: str,listener: OpenAiStreamListener) -> str:
+
+        _UniffiFfiConverterString.check_lower(path)
+
+        _UniffiFfiConverterString.check_lower(body_json)
+
+        _UniffiFfiConverterTypeOpenAiStreamListener.check_lower(listener)
+        _uniffi_lowered_args = (
+            self._uniffi_clone_handle(),
+            _UniffiFfiConverterString.lower(path),
+            _UniffiFfiConverterString.lower(body_json),
+            _UniffiFfiConverterTypeOpenAiStreamListener.lower(listener),
+        )
+        _uniffi_lift_return = _UniffiFfiConverterString.lift
+        _uniffi_error_converter = _UniffiFfiConverterTypeFfiError
+        _uniffi_ffi_result = _uniffi_rust_call_with_error(
+            _uniffi_error_converter,
+            _UniffiLib.uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_stream,
             *_uniffi_lowered_args,
         )
         return _uniffi_lift_return(_uniffi_ffi_result)
@@ -5436,6 +5834,7 @@ __all__ = [
     "ClientEvent",
     "FfiError",
     "NativeRuntimePruneModeNative",
+    "OpenAiStreamEventNative",
     "UnloadTarget",
     "ChatMessageNative",
     "ChatRequestNative",
@@ -5487,5 +5886,6 @@ __all__ = [
     "MeshNodeHandle",
     "MeshNodeHandleProtocol",
     "EventListener",
+    "OpenAiStreamListener",
     "NativeRuntimeProgressListener",
 ]

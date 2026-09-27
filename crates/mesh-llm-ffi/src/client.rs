@@ -5,14 +5,14 @@ use mesh_llm_sdk::{
 };
 
 use crate::errors::{FfiError, map_mesh_api_error, map_openai_error};
-use crate::events::EventListenerBridge;
+use crate::events::{EventListenerBridge, OpenAiStreamListenerBridge};
 use crate::identity::parse_owner_keypair;
 use crate::request_types::{
     ChatRequestNative, ClientStatus, ModelNative, OpenAiResponseNative, PublicMeshQuery,
     ResponsesRequestNative,
 };
 use crate::runtime_blocking::block_on;
-use crate::{EventListener, MeshClientHandle};
+use crate::{EventListener, MeshClientHandle, OpenAiStreamListener};
 
 #[uniffi::export]
 pub fn create_auto_client(
@@ -105,6 +105,23 @@ impl MeshClientHandle {
                 .await
         })
         .map(OpenAiResponseNative::from)
+        .map_err(map_openai_error)
+    }
+
+    pub fn openai_stream(
+        &self,
+        path: String,
+        body_json: String,
+        listener: Box<dyn OpenAiStreamListener>,
+    ) -> Result<String, FfiError> {
+        let bridge = Arc::new(OpenAiStreamListenerBridge { inner: listener });
+        block_on(async {
+            self.client
+                .lock()
+                .await
+                .openai_stream(&path, body_json, bridge)
+        })
+        .map(|request_id| request_id.0)
         .map_err(map_openai_error)
     }
 

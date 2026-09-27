@@ -8,6 +8,8 @@ SWIFT_NODE="$ROOT/sdk/swift/Sources/MeshLLM/Node.swift"
 SWIFT_STREAM="$ROOT/sdk/swift/Sources/MeshLLM/EventStream.swift"
 KOTLIN_NODE="$ROOT/sdk/kotlin/src/main/kotlin/ai/meshllm/Node.kt"
 NODE_SDK="$ROOT/sdk/node/index.js"
+NODE_INFERENCE="$ROOT/sdk/node/inference.js"
+NODE_NATIVE="$ROOT/crates/mesh-llm-nodejs/src/lib.rs"
 NODE_TYPES="$ROOT/sdk/node/index.d.ts"
 PYTHON_SDK="$ROOT/sdk/python/src/meshllm/client.py"
 PYTHON_TYPES="$ROOT/sdk/python/src/meshllm/types.py"
@@ -55,6 +57,11 @@ swift_patterns=(
     "public func listModels()"
     "public func chat(_ request: ChatRequest)"
     "public func responses(_ request: ResponsesRequest)"
+    "public func request(path: String, body: [String: Any])"
+    "public func responses(_ body: [String: Any])"
+    "public func stream(path: String, body: [String: Any])"
+    "public func streamChatCompletions(_ body: [String: Any])"
+    "public func streamResponses(_ body: [String: Any])"
     "public func cancel(_ requestId: RequestId)"
     "public func recommended()"
     "public func search(_ query: ModelSearchQuery)"
@@ -90,6 +97,11 @@ kotlin_patterns=(
     "suspend fun listModels()"
     "fun chat(request: ChatRequest"
     "fun responses(request: ResponsesRequest"
+    "suspend fun request(path: String, body: JsonObject)"
+    "suspend fun responses(body: JsonObject)"
+    "fun stream(path: String, body: JsonObject)"
+    "fun streamChatCompletions(body: JsonObject)"
+    "fun streamResponses(body: JsonObject)"
     "fun cancel(requestId: RequestId)"
     "fun chatFlow(request: ChatRequest)"
     "fun responsesFlow(request: ResponsesRequest)"
@@ -120,9 +132,6 @@ node_patterns=(
     "class Client"
     "class Node"
     "static create(options)"
-    "listModels()"
-    "chat(request"
-    "responses(request"
     "recommended()"
     "search(query)"
     "show(modelRef)"
@@ -138,6 +147,26 @@ for pattern in "${node_patterns[@]}"; do
     require "$NODE_SDK" "$pattern" "node: $pattern"
 done
 
+node_inference_patterns=(
+    "class OpenAIRequestError"
+    "async listModels()"
+    "async chat(request"
+    "async responsesText(request"
+    "async request(path, body"
+    "async chatCompletions(body)"
+    "async responses(body)"
+    "async *stream(path, body)"
+    "streamChatCompletions(body)"
+    "streamResponses(body)"
+)
+
+for pattern in "${node_inference_patterns[@]}"; do
+    require "$NODE_INFERENCE" "$pattern" "node inference: $pattern"
+done
+
+require "$NODE_NATIVE" 'js_name = "openaiRequestJson"' "node native: buffered OpenAI request"
+require "$NODE_NATIVE" 'js_name = "openaiStream"' "node native: OpenAI stream"
+
 node_type_patterns=(
     "export declare class Client"
     "export declare class Node"
@@ -148,6 +177,10 @@ node_type_patterns=(
     "export declare function installNativeRuntime"
     "export declare function resolveNativeRuntime"
     "export declare function defaultConsoleAssetDir"
+    "export declare class Inference"
+    "responses(body: OpenAIRequestBody)"
+    "streamChatCompletions(body: OpenAIRequestBody)"
+    "streamResponses(body: OpenAIRequestBody)"
     "servingEnabled?: boolean"
     "load(modelRef: string"
 )
@@ -168,8 +201,9 @@ python_patterns=(
     "async def chat_completions(self"
     "async def responses(self"
     "async def request("
-    "async def chat("
-    "async def text_response("
+    "async def stream("
+    "async def stream_chat_completions("
+    "async def stream_responses("
 )
 
 for pattern in "${python_patterns[@]}"; do
@@ -180,8 +214,8 @@ python_type_patterns=(
     "class MeshError"
     "class OpenAIRequestError"
     "class OpenAIResponse"
-    "class TextDelta"
-    "class RequestCompleted"
+    "class OpenAIStreamStarted"
+    "class OpenAIStreamChunk"
 )
 
 for pattern in "${python_type_patterns[@]}"; do

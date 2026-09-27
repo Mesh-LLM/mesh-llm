@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from ._binding import native
 from .types import (
-    InferenceEvent,
-    MeshError,
     Model,
     OpenAIRequestError,
     OpenAIResponse,
-    RequestCompleted,
+    OpenAIStreamChunk,
+    OpenAIStreamEvent,
+    OpenAIStreamStarted,
     Status,
-    TextDelta,
 )
 
 
@@ -69,61 +68,83 @@ class Inference:
 
     async def chat_completions(self, body: Mapping[str, Any]) -> dict[str, Any]:
         request = dict(body)
-        request.setdefault("stream", False)
+        request["stream"] = False
         return (await self.request("/v1/chat/completions", request)).json()
 
     async def responses(self, body: Mapping[str, Any]) -> dict[str, Any]:
         request = dict(body)
-        request.setdefault("stream", False)
+        request["stream"] = False
         return (await self.request("/v1/responses", request)).json()
 
-    async def chat(
-        self,
-        *,
-        model: str,
-        messages: Sequence[Mapping[str, str]],
-    ) -> AsyncIterator[InferenceEvent]:
-        """Use the typed text stream convenience API.
+    async def stream(
+        self, path: str, body: Mapping[str, Any]
+    ) -> AsyncIterator[OpenAIStreamEvent]:
+        """Stream complete OpenAI-compatible SSE events through the mesh.
 
-        Agent applications should use :meth:`chat_completions` so rich message
-        and response fields remain intact.
+        Each SSE payload remains unprojected. Text, reasoning, tool-call
+        arguments, usage, provider extensions, and future event types are all
+        available through :class:`OpenAIStreamChunk`.
         """
-        binding = native()
-        request = binding.ChatRequestNative(
-            model=model,
-            messages=[
-                binding.ChatMessageNative(role=message["role"], content=message["content"])
-                for message in messages
-            ],
-        )
-        async for event in self._event_stream("chat", request):
-            yield event
-
-    async def text_response(self, *, model: str, input: str) -> AsyncIterator[InferenceEvent]:
-        binding = native()
-        request = binding.ResponsesRequestNative(model=model, input=input)
-        async for event in self._event_stream("responses", request):
-            yield event
-
-    async def _event_stream(self, method: str, request: object) -> AsyncIterator[InferenceEvent]:
+        request = dict(body)
+        request["stream"] = True
         loop = asyncio.get_running_loop()
         sink = _EventSink(loop)
-        request_id = await asyncio.to_thread(getattr(self._handle, method), request, sink)
+        request_id = await asyncio.to_thread(
+            self._handle.openai_stream,
+            path,
+            json.dumps(request, separators=(",", ":")),
+            sink,
+        )
         finished = False
         try:
             while True:
                 event = await sink.next()
-                if event.is_token_delta():
-                    yield TextDelta(request_id=event.request_id, text=event.delta)
+                if event.is_started():
+                    yield OpenAIStreamStarted(
+                        request_id=event.request_id,
+                        status_code=event.status_code,
+                        content_type=event.content_type,
+                    )
+                elif event.is_sse():
+                    yield OpenAIStreamChunk(
+                        request_id=event.request_id,
+                        event=event.event_type,
+                        data=event.data,
+                        raw=event.raw,
+                    )
                 elif event.is_completed():
-                    yield RequestCompleted(request_id=event.request_id)
                     finished = True
                     return
                 elif event.is_failed():
-                    raise MeshError(event.error)
+                    finished = True
+                    raise OpenAIRequestError(
+                        event.status_code,
+                        event.body,
+                        message=event.error,
+                    )
         finally:
             if not finished:
                 await asyncio.to_thread(self._handle.cancel, request_id)
+
+    async def stream_chat_completions(
+        self, body: Mapping[str, Any]
+    ) -> AsyncIterator[OpenAIStreamEvent]:
+        stream = self.stream("/v1/chat/completions", body)
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            await stream.aclose()
+
+    async def stream_responses(
+        self, body: Mapping[str, Any]
+    ) -> AsyncIterator[OpenAIStreamEvent]:
+        stream = self.stream("/v1/responses", body)
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            await stream.aclose()
 
 
 class _Lifecycle:

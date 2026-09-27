@@ -80,7 +80,25 @@ val recommended = node.models.recommended()
 val serving = node.serving.status()
 
 node.start()
+
+val body = Json.parseToJsonElement("""{
+  "model":"Qwen3-8B",
+  "messages":[{"role":"user","content":"What is the weather?"}],
+  "tools":[{"type":"function","function":{"name":"get_weather"}}]
+}""".trimIndent()).jsonObject
+
+node.inference.streamChatCompletions(body).collect { event ->
+    when (event) {
+        is OpenAIStreamEvent.Sse -> if (!event.isDone) println(event.data)
+        is OpenAIStreamEvent.Started -> println("HTTP ${event.statusCode}")
+    }
+}
 ```
+
+`chatCompletions()` and `responses()` return complete OpenAI-shaped JSON.
+The streaming flows preserve each event name, raw SSE frame, and arbitrary JSON
+payload, including incremental tool-call arguments. Cancelling collection
+cancels the native request.
 
 Local serving follows the same lifecycle:
 

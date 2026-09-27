@@ -44,6 +44,25 @@ try {
 
 The current package expects an invite token selected by the app or service. Use the same `Client` lifecycle for public or private meshes; only the token source changes.
 
+## Stream agent turns
+
+The rich API passes OpenAI-compatible JSON through without narrowing tools,
+multimodal content, structured outputs, reasoning, usage, or future fields:
+
+```js
+for await (const event of client.inference.streamChatCompletions({
+  model: models[0].id,
+  messages: [{ role: 'user', content: 'What is the weather in Sydney?' }],
+  tools: [{ type: 'function', function: { name: 'get_weather' } }]
+})) {
+  if (event.type === 'sse' && !event.done) console.log(event.event, event.json())
+}
+```
+
+Use `chatCompletions()` or `responses()` for a complete response, and
+`streamChatCompletions()` or `streamResponses()` for named, raw SSE frames.
+Breaking out of a stream cancels its native request.
+
 ## Embed local serving
 
 Serving needs a verified native runtime artifact. Bundle one with the app or explicitly allow the SDK to download a compatible release runtime:

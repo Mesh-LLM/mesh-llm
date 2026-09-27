@@ -103,6 +103,9 @@ interface MeshClientHandle {
     OpenAiResponseNative openai_request(string path, string body_json);
 
     [Throws=FfiError]
+    string openai_stream(string path, string body_json, OpenAiStreamListener listener);
+
+    [Throws=FfiError]
     string chat(ChatRequestNative request, EventListener listener);
 
     [Throws=FfiError]
@@ -128,6 +131,9 @@ interface MeshNodeHandle {
 
     [Throws=FfiError]
     OpenAiResponseNative openai_request(string path, string body_json);
+
+    [Throws=FfiError]
+    string openai_stream(string path, string body_json, OpenAiStreamListener listener);
 
     [Throws=FfiError]
     string chat(ChatRequestNative request, EventListener listener);
@@ -192,6 +198,10 @@ interface MeshNodeHandle {
 
 callback interface EventListener {
     void on_event(ClientEvent event);
+};
+
+callback interface OpenAiStreamListener {
+    void on_event(OpenAiStreamEventNative event);
 };
 
 callback interface NativeRuntimeProgressListener {
@@ -417,6 +427,14 @@ interface ClientEvent {
     Completed(string request_id);
     Failed(string request_id, string error);
     Disconnected(string reason);
+};
+
+[Enum]
+interface OpenAiStreamEventNative {
+    Started(string request_id, u16 status_code, string? content_type);
+    Sse(string request_id, string? event_type, string data, string raw);
+    Completed(string request_id);
+    Failed(string request_id, u16? status_code, string error, string? body);
 };
 
 [Enum]

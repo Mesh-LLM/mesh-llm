@@ -742,6 +742,8 @@ public protocol MeshClientHandleProtocol: AnyObject, Sendable {
 
     func openaiRequest(path: String, bodyJson: String) throws  -> OpenAiResponseNative
 
+    func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener) throws  -> String
+
     func reconnect() throws
 
     func responses(request: ResponsesRequestNative, listener: EventListener) throws  -> String
@@ -842,6 +844,18 @@ open func openaiRequest(path: String, bodyJson: String)throws  -> OpenAiResponse
             self.uniffiCloneHandle(),
         FfiConverterString.lower(path),
         FfiConverterString.lower(bodyJson),uniffiCallStatus
+    )
+})
+}
+
+open func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_stream(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),
+        FfiConverterString.lower(bodyJson),
+        FfiConverterCallbackInterfaceOpenAiStreamListener_lower(listener),uniffiCallStatus
     )
 })
 }
@@ -961,6 +975,8 @@ public protocol MeshNodeHandleProtocol: AnyObject, Sendable {
     func modelCacheStatus() throws  -> ModelCacheStatus
 
     func openaiRequest(path: String, bodyJson: String) throws  -> OpenAiResponseNative
+
+    func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener) throws  -> String
 
     func pruneDerivedCache(policy: PrunePolicy) throws  -> PruneResult
 
@@ -1144,6 +1160,18 @@ open func openaiRequest(path: String, bodyJson: String)throws  -> OpenAiResponse
             self.uniffiCloneHandle(),
         FfiConverterString.lower(path),
         FfiConverterString.lower(bodyJson),uniffiCallStatus
+    )
+})
+}
+
+open func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_stream(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),
+        FfiConverterString.lower(bodyJson),
+        FfiConverterCallbackInterfaceOpenAiStreamListener_lower(listener),uniffiCallStatus
     )
 })
 }
@@ -3983,6 +4011,106 @@ public func FfiConverterTypeNativeRuntimeVerificationPolicyNative_lower(_ value:
 
 
 
+public enum OpenAiStreamEventNative: Equatable, Hashable {
+
+    case started(requestId: String, statusCode: UInt16, contentType: String?
+    )
+    case sse(requestId: String, eventType: String?, data: String, raw: String
+    )
+    case completed(requestId: String
+    )
+    case failed(requestId: String, statusCode: UInt16?, error: String, body: String?
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension OpenAiStreamEventNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOpenAiStreamEventNative: FfiConverterRustBuffer {
+    typealias SwiftType = OpenAiStreamEventNative
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OpenAiStreamEventNative {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .started(requestId: try FfiConverterString.read(from: &buf), statusCode: try FfiConverterUInt16.read(from: &buf), contentType: try FfiConverterOptionString.read(from: &buf)
+        )
+
+        case 2: return .sse(requestId: try FfiConverterString.read(from: &buf), eventType: try FfiConverterOptionString.read(from: &buf), data: try FfiConverterString.read(from: &buf), raw: try FfiConverterString.read(from: &buf)
+        )
+
+        case 3: return .completed(requestId: try FfiConverterString.read(from: &buf)
+        )
+
+        case 4: return .failed(requestId: try FfiConverterString.read(from: &buf), statusCode: try FfiConverterOptionUInt16.read(from: &buf), error: try FfiConverterString.read(from: &buf), body: try FfiConverterOptionString.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: OpenAiStreamEventNative, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case let .started(requestId,statusCode,contentType):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(requestId, into: &buf)
+            FfiConverterUInt16.write(statusCode, into: &buf)
+            FfiConverterOptionString.write(contentType, into: &buf)
+
+
+        case let .sse(requestId,eventType,data,raw):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(requestId, into: &buf)
+            FfiConverterOptionString.write(eventType, into: &buf)
+            FfiConverterString.write(data, into: &buf)
+            FfiConverterString.write(raw, into: &buf)
+
+
+        case let .completed(requestId):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(requestId, into: &buf)
+
+
+        case let .failed(requestId,statusCode,error,body):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(requestId, into: &buf)
+            FfiConverterOptionUInt16.write(statusCode, into: &buf)
+            FfiConverterString.write(error, into: &buf)
+            FfiConverterOptionString.write(body, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOpenAiStreamEventNative_lift(_ buf: RustBuffer) throws -> OpenAiStreamEventNative {
+    return try FfiConverterTypeOpenAiStreamEventNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOpenAiStreamEventNative_lower(_ value: OpenAiStreamEventNative) -> RustBuffer {
+    return FfiConverterTypeOpenAiStreamEventNative.lower(value)
+}
+
+
+
+
 public enum ServingModelState: Equatable, Hashable {
 
     case loading
@@ -4418,6 +4546,141 @@ public func FfiConverterCallbackInterfaceNativeRuntimeProgressListener_lift(_ ha
 #endif
 public func FfiConverterCallbackInterfaceNativeRuntimeProgressListener_lower(_ v: NativeRuntimeProgressListener) -> UInt64 {
     return FfiConverterCallbackInterfaceNativeRuntimeProgressListener.lower(v)
+}
+
+
+
+
+public protocol OpenAiStreamListener: AnyObject, Sendable {
+
+    func onEvent(event: OpenAiStreamEventNative)
+
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceOpenAiStreamListener {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceOpenAiStreamListener = UniffiVTableCallbackInterfaceOpenAiStreamListener(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceOpenAiStreamListener.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface OpenAiStreamListener: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceOpenAiStreamListener.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface OpenAiStreamListener: handle missing in uniffiClone")
+            }
+        },
+        onEvent: { (
+            uniffiHandle: UInt64,
+            event: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceOpenAiStreamListener.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onEvent(
+                     event: try FfiConverterTypeOpenAiStreamEventNative_lift(event)
+                )
+            }
+
+
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceOpenAiStreamListener> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceOpenAiStreamListener>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitOpenAiStreamListener() {
+    uniffi_meshllm_ffi_fn_init_callback_vtable_openaistreamlistener(UniffiCallbackInterfaceOpenAiStreamListener.vtablePtr)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceOpenAiStreamListener {
+    fileprivate static let handleMap = UniffiHandleMap<OpenAiStreamListener>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceOpenAiStreamListener : FfiConverter {
+    typealias SwiftType = OpenAiStreamListener
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceOpenAiStreamListener_lift(_ handle: UInt64) throws -> OpenAiStreamListener {
+    return try FfiConverterCallbackInterfaceOpenAiStreamListener.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceOpenAiStreamListener_lower(_ v: OpenAiStreamListener) -> UInt64 {
+    return FfiConverterCallbackInterfaceOpenAiStreamListener.lower(v)
 }
 
 #if swift(>=5.8)
@@ -4908,162 +5171,172 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_auto_client() != 12117) {
+    if (uniffi_meshllm_ffi_checksum_func_create_auto_client() != 62041) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_auto_node() != 62467) {
+    if (uniffi_meshllm_ffi_checksum_func_create_auto_node() != 850) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_client() != 14950) {
+    if (uniffi_meshllm_ffi_checksum_func_create_client() != 55438) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_node() != 577) {
+    if (uniffi_meshllm_ffi_checksum_func_create_node() != 84) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 41756) {
+    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 50997) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 53670) {
+    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 63557) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_discover_public_meshes() != 64489) {
+    if (uniffi_meshllm_ffi_checksum_func_discover_public_meshes() != 37324) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 15846) {
+    if (uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 56015) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 48746) {
+    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 10411) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 16961) {
+    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 6385) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 11380) {
+    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 43279) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 54339) {
+    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 6828) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 39251) {
+    if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 24687) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_consolehandle_url() != 61491) {
+    if (uniffi_meshllm_ffi_checksum_method_consolehandle_url() != 59091) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel() != 32002) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel() != 6671) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat() != 2872) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat() != 36123) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models() != 39744) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models() != 43178) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request() != 11900) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request() != 20166) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 33566) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_stream() != 23571) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses() != 1844) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 39153) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_start() != 48685) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses() != 48676) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_status() != 33476) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_start() != 21105) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop() != 3388) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_status() != 42860) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 32259) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop() != 62273) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat() != 34892) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 63362) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models() != 1157) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat() != 47286) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model() != 2627) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models() != 1378) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model() != 20595) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model() != 42636) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 41613) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model() != 24332) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models() != 9575) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 32986) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model() != 31620) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models() != 40175) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 61505) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model() != 38763) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 19585) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 44993) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 24829) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 65095) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models() != 11606) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream() != 24624) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect() != 60843) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 12315) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses() != 29255) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models() != 59349) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models() != 40369) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect() != 9842) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models() != 26496) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses() != 61480) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status() != 49590) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models() != 20273) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy() != 8567) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models() != 46217) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model() != 35584) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status() != 3309) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 46124) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy() != 42971) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console() != 34773) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model() != 2410) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 48531) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 16152) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 10537) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console() != 52588) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance() != 1091) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 9399) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model() != 45229) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 25964) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id() != 9451) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance() != 55061) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_eventlistener_on_event() != 53401) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model() != 17553) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 40900) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id() != 57560) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_eventlistener_on_event() != 39203) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 47323) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_openaistreamlistener_on_event() != 60558) {
         return InitializationResult.apiChecksumMismatch
     }
 
     uniffiCallbackInitEventListener()
     uniffiCallbackInitNativeRuntimeProgressListener()
+    uniffiCallbackInitOpenAiStreamListener()
     return InitializationResult.ok
 }()
 

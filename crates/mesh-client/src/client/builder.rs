@@ -11,9 +11,19 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Notify;
+
+mod openai_stream;
 
 type CancelFlagMap =
     Arc<Mutex<HashMap<String, (Arc<AtomicBool>, Arc<dyn crate::events::EventListener>)>>>;
+type OpenAiStreamMap = Arc<Mutex<HashMap<String, ActiveOpenAiStream>>>;
+
+struct ActiveOpenAiStream {
+    cancelled: Arc<AtomicBool>,
+    cancel_notify: Arc<Notify>,
+    listener: Arc<dyn crate::events::OpenAiStreamListener>,
+}
 
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 const MAX_MESH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
@@ -113,6 +123,7 @@ impl ClientBuilder {
             config: self.config,
             connected: false,
             cancel_flags: Arc::new(Mutex::new(HashMap::new())),
+            openai_streams: Arc::new(Mutex::new(HashMap::new())),
             listeners: Arc::new(Mutex::new(HashMap::new())),
             reconnect_attempts: 0,
             user_disconnected: false,
@@ -125,6 +136,7 @@ pub struct MeshClient {
     pub(crate) config: ClientConfig,
     pub(crate) connected: bool,
     pub(crate) cancel_flags: CancelFlagMap,
+    openai_streams: OpenAiStreamMap,
     pub listeners: Arc<Mutex<HashMap<String, Arc<dyn crate::events::EventListener>>>>,
     pub reconnect_attempts: u32,
     pub user_disconnected: bool,
@@ -168,20 +180,73 @@ impl MeshClient {
         path: &str,
         body_json: String,
     ) -> Result<OpenAiResponse, ClientError> {
-        validate_openai_path(path).map_err(ClientError::Endpoint)?;
-        let body = serde_json::from_str::<serde_json::Value>(&body_json).map_err(|error| {
-            ClientError::Endpoint(format!("invalid JSON request body: {error}"))
-        })?;
-        if !body.is_object() {
-            return Err(ClientError::Endpoint(
-                "OpenAI request body must be a JSON object".to_string(),
-            ));
-        }
+        let body_json =
+            prepare_openai_request(path, &body_json, false).map_err(ClientError::Endpoint)?;
 
         let response = request_post_bytes(&self.config, path, body_json)
             .await
             .map_err(ClientError::Endpoint)?;
         parse_openai_response(&response).map_err(ClientError::Endpoint)
+    }
+
+    /// Start a protocol-preserving OpenAI-compatible SSE request.
+    ///
+    /// Complete SSE events are delivered without projecting their JSON shape,
+    /// so text, reasoning, tool-call argument deltas, usage, and future event
+    /// types remain available to language bindings.
+    pub fn openai_stream(
+        &self,
+        path: &str,
+        body_json: String,
+        listener: Arc<dyn crate::events::OpenAiStreamListener>,
+    ) -> Result<RequestId, ClientError> {
+        let body_json =
+            prepare_openai_request(path, &body_json, true).map_err(ClientError::Endpoint)?;
+        let request_id = RequestId::new();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_notify = Arc::new(Notify::new());
+        self.openai_streams.lock().unwrap().insert(
+            request_id.0.clone(),
+            ActiveOpenAiStream {
+                cancelled: cancelled.clone(),
+                cancel_notify: cancel_notify.clone(),
+                listener: listener.clone(),
+            },
+        );
+
+        let config = self.config.clone();
+        let path = path.to_string();
+        let id = request_id.0.clone();
+        let streams = self.openai_streams.clone();
+        self.runtime.handle().spawn(async move {
+            let result = openai_stream::run(
+                &config,
+                &path,
+                body_json,
+                &id,
+                cancelled.clone(),
+                cancel_notify,
+                listener.clone(),
+            )
+            .await;
+            streams.lock().unwrap().remove(&id);
+            match result {
+                Ok(()) if !cancelled.load(Ordering::Acquire) => {
+                    listener
+                        .on_event(crate::events::OpenAiStreamEvent::Completed { request_id: id });
+                }
+                Err(error) if !error.cancelled && !cancelled.load(Ordering::Acquire) => {
+                    listener.on_event(crate::events::OpenAiStreamEvent::Failed {
+                        request_id: id,
+                        status_code: error.status_code,
+                        error: error.message,
+                        body: error.body,
+                    });
+                }
+                _ => {}
+            }
+        });
+        Ok(request_id)
     }
 
     /// Start a chat completion request. Sync — returns a `RequestId` immediately.
@@ -315,6 +380,21 @@ impl MeshClient {
                 request_id: request_id.0.clone(),
                 error: "cancelled".to_string(),
             });
+            return;
+        }
+
+        let entry = self.openai_streams.lock().unwrap().remove(&request_id.0);
+        if let Some(active) = entry {
+            active.cancelled.store(true, Ordering::Release);
+            active.cancel_notify.notify_one();
+            active
+                .listener
+                .on_event(crate::events::OpenAiStreamEvent::Failed {
+                    request_id: request_id.0,
+                    status_code: None,
+                    error: "cancelled".to_string(),
+                    body: None,
+                });
         }
     }
 
@@ -659,6 +739,17 @@ fn validate_openai_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn prepare_openai_request(path: &str, body_json: &str, stream: bool) -> Result<String, String> {
+    validate_openai_path(path)?;
+    let mut body = serde_json::from_str::<serde_json::Value>(body_json)
+        .map_err(|error| format!("invalid JSON request body: {error}"))?;
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| "OpenAI request body must be a JSON object".to_string())?;
+    object.insert("stream".to_string(), serde_json::Value::Bool(stream));
+    serde_json::to_string(&body).map_err(|error| format!("serialize JSON request body: {error}"))
+}
+
 fn parse_openai_response(response: &[u8]) -> Result<OpenAiResponse, String> {
     let header_end = response
         .windows(4)
@@ -836,7 +927,9 @@ mod socket_addr_tests {
 
 #[cfg(test)]
 mod openai_response_tests {
-    use super::{decode_chunked_body, parse_openai_response, validate_openai_path};
+    use super::{
+        decode_chunked_body, parse_openai_response, prepare_openai_request, validate_openai_path,
+    };
 
     #[test]
     fn parses_json_response_without_projecting_agent_fields() {
@@ -871,6 +964,34 @@ mod openai_response_tests {
         assert!(validate_openai_path("/admin").is_err());
         assert!(validate_openai_path("/v1/../admin").is_err());
         assert!(validate_openai_path("/v1/models\r\nX-Evil: yes").is_err());
+    }
+
+    #[test]
+    fn streaming_requests_force_the_protocol_stream_flag() {
+        let body = prepare_openai_request(
+            "/v1/chat/completions",
+            r#"{"model":"test","stream":false,"tools":[{"type":"function"}]}"#,
+            true,
+        )
+        .expect("streaming body is valid");
+        let value: serde_json::Value = serde_json::from_str(&body).expect("body remains JSON");
+
+        assert_eq!(value["stream"], true);
+        assert_eq!(value["tools"][0]["type"], "function");
+    }
+
+    #[test]
+    fn buffered_requests_disable_the_protocol_stream_flag() {
+        let body = prepare_openai_request(
+            "/v1/responses",
+            r#"{"model":"test","stream":true,"input":"hello"}"#,
+            false,
+        )
+        .expect("buffered body is valid");
+        let value: serde_json::Value = serde_json::from_str(&body).expect("body remains JSON");
+
+        assert_eq!(value["stream"], false);
+        assert_eq!(value["input"], "hello");
     }
 }
 

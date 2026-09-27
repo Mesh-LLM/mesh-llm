@@ -84,5 +84,5 @@ For offline or packaged applications, pass the artifact directory directly to th
 - Treat model downloads as application work: show progress, choose an app-owned cache, and handle cancellation.
 - Stop or reconnect nodes with the host application's lifecycle. On mobile, reconnect when returning to the foreground.
 - Handle typed errors, especially invalid tokens, discovery failures, model-management failures, stream failures, and unsupported serving.
-- Use the protocol-preserving OpenAI request API for agents. It carries tools, tool results, multimodal content, structured-output settings, usage, and future JSON fields without narrowing them to the typed text convenience API.
+- Use the protocol-preserving OpenAI request and stream APIs for agents. They carry tools, incremental tool-call arguments, tool results, multimodal content, structured-output settings, reasoning, usage, and future fields without narrowing the protocol to text.
 - Package console assets only when the app needs a local web console; the default native runtime should stay smaller without them.

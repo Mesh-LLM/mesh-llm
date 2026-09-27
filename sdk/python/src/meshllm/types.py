@@ -10,10 +10,21 @@ class MeshError(RuntimeError):
 
 
 class OpenAIRequestError(MeshError):
-    def __init__(self, status_code: int, body: str) -> None:
+    def __init__(
+        self,
+        status_code: int | None,
+        body: str | None,
+        *,
+        message: str | None = None,
+    ) -> None:
         self.status_code = status_code
         self.body = body
-        super().__init__(f"OpenAI-compatible request failed with HTTP {status_code}: {body}")
+        self.message = message
+        detail = message or body or "OpenAI-compatible request failed"
+        if status_code is None:
+            super().__init__(detail)
+        else:
+            super().__init__(f"OpenAI-compatible request failed with HTTP {status_code}: {detail}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,17 +40,30 @@ class Status:
 
 
 @dataclass(frozen=True, slots=True)
-class TextDelta:
+class OpenAIStreamStarted:
     request_id: str
-    text: str
+    status_code: int
+    content_type: str | None
 
 
 @dataclass(frozen=True, slots=True)
-class RequestCompleted:
+class OpenAIStreamChunk:
     request_id: str
+    event: str | None
+    data: str
+    raw: str
+
+    @property
+    def done(self) -> bool:
+        return self.data == "[DONE]"
+
+    def json(self) -> Any:
+        if self.done:
+            return None
+        return json.loads(self.data)
 
 
-InferenceEvent = TextDelta | RequestCompleted
+OpenAIStreamEvent = OpenAIStreamStarted | OpenAIStreamChunk
 
 
 @dataclass(frozen=True, slots=True)

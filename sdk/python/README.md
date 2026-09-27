@@ -44,13 +44,26 @@ asyncio.run(main())
 
 `chat_completions()` and `responses()` use the protocol-preserving request
 path: the SDK serializes the mapping without narrowing it to text-only fields
-and returns the full response object. This is the recommended API for agents.
+and returns the full response object. Their streaming counterparts preserve
+the full OpenAI-compatible SSE contract, including incremental tool-call
+arguments, reasoning, usage, and provider-specific fields:
 
-The typed `chat()` and `text_response()` async iterators remain available as
-simple text conveniences. Their current native contract emits text deltas only;
-they do not represent tool-call deltas. The protocol-preserving API currently
-uses non-streaming OpenAI responses. Incremental rich SSE delivery is planned
-as a follow-up contract extension.
+```python
+from meshllm import OpenAIStreamChunk
+
+async for event in client.inference.stream_chat_completions({
+    "model": "Qwen3-8B",
+    "messages": [{"role": "user", "content": "Call the weather tool."}],
+    "tools": tools,
+}):
+    if isinstance(event, OpenAIStreamChunk) and not event.done:
+        chunk = event.json()
+        print(chunk)  # includes text, reasoning, and tool-call deltas unchanged
+```
+
+Use `stream_responses()` for the Responses API, or `stream(path, body)` for
+another OpenAI-compatible SSE endpoint. Closing an iterator cancels the native
+request and interrupts an in-flight transport read.
 
 ## Building from a checkout
 

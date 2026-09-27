@@ -13,7 +13,7 @@ use crate::errors::{
 };
 #[cfg(feature = "embedded-runtime")]
 use crate::events::ClientEvent;
-use crate::events::EventListenerBridge;
+use crate::events::{EventListenerBridge, OpenAiStreamListenerBridge};
 use crate::handles::{ConsoleHandle, MeshNodeHandle};
 use crate::identity::parse_owner_keypair;
 use crate::model_types::{
@@ -22,7 +22,7 @@ use crate::model_types::{
     ModelSearchQuery, ModelSummary, PrunePolicy, PruneResult, ServedModel, ServingStatus,
     UnloadModelOptions, UnloadTarget,
 };
-use crate::native_runtime_types::EventListener;
+use crate::native_runtime_types::{EventListener, OpenAiStreamListener};
 use crate::request_types::{
     ChatRequestNative, ClientStatus, ConsoleOptionsNative, ModelNative, OpenAiResponseNative,
     PublicMeshQuery, ResponsesRequestNative,
@@ -159,6 +159,22 @@ impl MeshNodeHandle {
         block_on(self.node.inference().openai_request(&path, body_json))
             .map(OpenAiResponseNative::from)
             .map_err(map_openai_error)
+    }
+
+    pub fn openai_stream(
+        &self,
+        path: String,
+        body_json: String,
+        listener: Box<dyn OpenAiStreamListener>,
+    ) -> Result<String, FfiError> {
+        let bridge = Arc::new(OpenAiStreamListenerBridge { inner: listener });
+        block_on(
+            self.node
+                .inference()
+                .openai_stream(&path, body_json, bridge),
+        )
+        .map(|request_id| request_id.0)
+        .map_err(map_openai_error)
     }
 
     pub fn chat(

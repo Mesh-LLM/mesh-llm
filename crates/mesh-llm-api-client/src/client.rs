@@ -1,4 +1,4 @@
-use crate::events::{Event, EventListener};
+use crate::events::{Event, EventListener, OpenAiStreamEvent, OpenAiStreamListener};
 use crate::{InviteToken, OwnerKeypair};
 use mesh_client::ClientError;
 use std::sync::Arc;
@@ -128,6 +128,21 @@ impl MeshClient {
         Ok(OpenAiResponse::from(
             self.inner.openai_request(path, body_json).await?,
         ))
+    }
+
+    /// Start a protocol-preserving OpenAI-compatible SSE request.
+    pub fn openai_stream(
+        &self,
+        path: &str,
+        body_json: String,
+        listener: Arc<dyn OpenAiStreamListener>,
+    ) -> Result<RequestId, MeshApiError> {
+        let request_id = self.inner.openai_stream(
+            path,
+            body_json,
+            Arc::new(OpenAiStreamListenerAdapter { inner: listener }),
+        )?;
+        Ok(RequestId(request_id.0))
     }
 
     pub fn chat(&self, request: ChatRequest, listener: Arc<dyn EventListener>) -> RequestId {
@@ -284,6 +299,51 @@ impl Default for RequestId {
 
 struct EventListenerAdapter {
     inner: Arc<dyn EventListener>,
+}
+
+struct OpenAiStreamListenerAdapter {
+    inner: Arc<dyn OpenAiStreamListener>,
+}
+
+impl mesh_client::events::OpenAiStreamListener for OpenAiStreamListenerAdapter {
+    fn on_event(&self, event: mesh_client::events::OpenAiStreamEvent) {
+        self.inner.on_event(match event {
+            mesh_client::events::OpenAiStreamEvent::Started {
+                request_id,
+                status_code,
+                content_type,
+            } => OpenAiStreamEvent::Started {
+                request_id,
+                status_code,
+                content_type,
+            },
+            mesh_client::events::OpenAiStreamEvent::Sse {
+                request_id,
+                event_type,
+                data,
+                raw,
+            } => OpenAiStreamEvent::Sse {
+                request_id,
+                event_type,
+                data,
+                raw,
+            },
+            mesh_client::events::OpenAiStreamEvent::Completed { request_id } => {
+                OpenAiStreamEvent::Completed { request_id }
+            }
+            mesh_client::events::OpenAiStreamEvent::Failed {
+                request_id,
+                status_code,
+                error,
+                body,
+            } => OpenAiStreamEvent::Failed {
+                request_id,
+                status_code,
+                error,
+                body,
+            },
+        });
+    }
 }
 
 impl mesh_client::events::EventListener for EventListenerAdapter {

@@ -69,6 +69,26 @@ await client.stop()
 
 For a private mesh, initialize `Client` with `InviteToken(...)` and the app's persisted owner keypair instead of `Client.connectPublic(...)`.
 
+## Stream agent turns
+
+```swift
+let body: [String: Any] = [
+    "model": models[0].id,
+    "messages": [["role": "user", "content": "What is the weather?"]],
+    "tools": [["type": "function", "function": ["name": "get_weather"]]],
+]
+
+for try await event in client.inference.streamChatCompletions(body) {
+    if case .sse(let frame) = event, !frame.isDone {
+        print(frame.event as Any, try frame.jsonObject() as Any)
+    }
+}
+```
+
+The JSON and raw SSE frame remain available, so incremental tool-call arguments,
+reasoning, structured-output fields, usage, and future protocol fields survive.
+Ending iteration early cancels the native request.
+
 ## Embed local serving
 
 Resolve a matching native runtime before loading a local model:

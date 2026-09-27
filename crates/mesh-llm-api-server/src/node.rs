@@ -1,4 +1,4 @@
-use crate::events::EventListener;
+use crate::events::{EventListener, OpenAiStreamListener};
 use crate::{
     ChatRequest, ClientBuilder, InviteToken, MeshApiError, MeshClient, Model, OwnerKeypair,
     RequestId, ResponsesRequest, Status,
@@ -370,6 +370,19 @@ impl MeshInference {
             .await
             .openai_request(path, body_json)
             .await
+    }
+
+    pub async fn openai_stream(
+        &self,
+        path: &str,
+        body_json: String,
+        listener: Arc<dyn OpenAiStreamListener>,
+    ) -> Result<RequestId, MeshApiError> {
+        self.inner
+            .client
+            .lock()
+            .await
+            .openai_stream(path, body_json, listener)
     }
 
     pub async fn chat(

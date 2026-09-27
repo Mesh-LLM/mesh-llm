@@ -62,11 +62,18 @@ pip install mesh-llm
 ```
 
 Python agent integrations should use `client.inference.chat_completions(body)`
-or `responses(body)`. These methods preserve the complete OpenAI-compatible
-JSON request and response—including tools, multipart content, structured-output
-fields, finish reasons, and usage—instead of narrowing it to text.
+or `responses(body)`, and their `stream_*` counterparts for SSE. These methods
+preserve the complete OpenAI-compatible request, response, and stream—including
+incremental tool calls, multipart content, structured-output fields, finish
+reasons, reasoning, and usage—instead of narrowing it to text.
 
 See [Python SDK examples](sdk/python.md).
+
+The Swift, Kotlin, and Node bindings expose the same protocol-preserving
+contract: a buffered OpenAI-compatible request plus SSE streams that retain
+event names, raw frames, arbitrary JSON data, errors, and cancellation. This
+keeps text, reasoning, multimodal content, structured output, and incremental
+tool calls consistent across every language binding.
 
 ### Rust
 
