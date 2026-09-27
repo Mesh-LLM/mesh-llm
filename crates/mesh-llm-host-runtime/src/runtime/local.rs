@@ -508,13 +508,30 @@ impl ModelLoadSource {
 /// analytics label grammar; anything else, and every direct `--gguf` name, is
 /// `redacted`. The count and the source still land either way, which is what
 /// the question "which models actually get run" is asking.
-fn report_model_loaded_analytics(model: &str, source: ModelLoadSource) {
-    mesh_llm_analytics::capture(
-        mesh_llm_analytics::Event::ModelLoaded,
-        mesh_llm_analytics::Properties::new()
-            .with("model", model_loaded_label(model, source))
-            .with("source", source.as_str()),
-    );
+fn report_model_loaded_analytics(
+    model: &str,
+    source: ModelLoadSource,
+    metadata: Option<&models::gguf::GgufCompactMeta>,
+) {
+    let mut properties = mesh_llm_analytics::Properties::new()
+        .with("model", model_loaded_label(model, source))
+        .with("source", source.as_str());
+    if let Some(backend) = system_one_backend(metadata) {
+        properties = properties.with("system_one_backend", backend);
+    }
+    mesh_llm_analytics::capture(mesh_llm_analytics::Event::ModelLoaded, properties);
+}
+
+/// Which System One (OpenJEV) backend a loaded model is, if any.
+///
+/// Read from the GGUF architecture, never from the model name, so it stays a
+/// closed vocabulary even for a direct `--gguf` load whose name is redacted.
+fn system_one_backend(metadata: Option<&models::gguf::GgufCompactMeta>) -> Option<&'static str> {
+    match metadata?.architecture.as_str() {
+        LAYA_ARCHITECTURE => Some("laya"),
+        "diffusion-gemma" => Some("openjev"),
+        _ => None,
+    }
 }
 
 /// The `model` value `report_model_loaded_analytics` puts on the wire.
@@ -1092,7 +1109,7 @@ async fn start_local_laya_model(
         model: model_name.clone(),
         bytes: None,
     });
-    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf);
+    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf, compact_meta);
     let context_length = u32::try_from(model.info().max_len)
         .ok()
         .or_else(|| compact_meta.map(|meta| meta.context_length))
@@ -1210,7 +1227,7 @@ async fn start_local_skippy_model(
         model: model_name.clone(),
         bytes: None,
     });
-    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf);
+    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf, compact_meta);
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
@@ -1381,7 +1398,7 @@ async fn start_local_package_v2_model(
     .context("join load skippy package-v2 task")??;
     emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
     let workload_class = handle.workload_class()?;
-    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage);
+    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage, compact_meta);
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -1468,7 +1485,7 @@ mod tests {
     use super::{
         LocalRuntimeModelStartSpec, ModelLoadSource, RuntimeResourcePlanningProfile,
         model_loaded_label, openai_guardrail_policy_handle, resolved_model_name,
-        unix_nanos_to_unix_ms,
+        system_one_backend, unix_nanos_to_unix_ms,
     };
     use crate::inference::skippy;
     use crate::mesh;
@@ -1495,6 +1512,21 @@ mod tests {
             model_loaded_label(&name, ModelLoadSource::DirectGguf).as_str(),
             "redacted"
         );
+    }
+
+    #[test]
+    fn model_loaded_names_the_system_one_backend_from_the_architecture() {
+        let meta = |architecture: &str| crate::models::gguf::GgufCompactMeta {
+            architecture: architecture.to_string(),
+            ..Default::default()
+        };
+        assert_eq!(system_one_backend(Some(&meta("laya"))), Some("laya"));
+        assert_eq!(
+            system_one_backend(Some(&meta("diffusion-gemma"))),
+            Some("openjev")
+        );
+        assert_eq!(system_one_backend(Some(&meta("qwen3"))), None);
+        assert_eq!(system_one_backend(None), None);
     }
 
     #[test]
