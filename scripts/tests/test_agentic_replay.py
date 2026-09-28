@@ -590,6 +590,33 @@ class AgenticReplayTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
                 BENCH.verify_pinned_model(model, "0" * 64)
 
+    def test_pinned_relative_model_is_used_for_launch_from_another_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "harness"
+            worktree = root / "build-worktree"
+            harness.mkdir()
+            worktree.mkdir()
+            model = harness / "model.gguf"
+            model.write_bytes(b"pinned model")
+            args = SimpleNamespace(
+                model="model.gguf",
+                expected_model_sha256=BENCH.sha256(model),
+                minimum_context_tokens=131072,
+            )
+
+            with contextlib.chdir(harness):
+                digest = BENCH.pin_run_model(args)
+
+            command = BENCH.command_for_build(
+                {"engine": "mesh", "binary": worktree / "mesh-llm"},
+                args.model,
+            )
+
+            self.assertEqual(digest, BENCH.sha256(model))
+            self.assertEqual(Path(args.model), model.resolve())
+            self.assertEqual(Path(command[3]), model.resolve())
+
     def test_runtime_evidence_collects_logs_without_copying_identity_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1363,6 +1390,34 @@ class AgenticReplayTest(unittest.TestCase):
         self.assertEqual(plan["selection"]["warmup_unique_trajectory_count"], 12)
         self.assertIsNone(plan["workload"]["measured_requests_per_arm_pass"])
         self.assertIsNone(plan["workload"]["measured_requests_total"])
+
+    def test_plan_identity_includes_verified_model_digest(self) -> None:
+        args = SimpleNamespace(
+            repo=REPO,
+            backend="metal",
+            model="/models/model.gguf",
+            passes=1,
+            source_dataset=["swe-smith-claude-3-7-sonnet"],
+            framework=["swe-agent"],
+            trajectories_per_framework=2,
+            min_isl=8192,
+            max_isl=65536,
+            min_turns=5,
+            concurrency=[1],
+            max_output_tokens=2048,
+            warmup_turns=4,
+            replay_mode="all",
+        )
+
+        first = BENCH.benchmark_plan(
+            args, self.specs(), verified_model_sha256="a" * 64
+        )
+        second = BENCH.benchmark_plan(
+            args, self.specs(), verified_model_sha256="b" * 64
+        )
+
+        self.assertEqual(first["verified_model_sha256"], "a" * 64)
+        self.assertNotEqual(BENCH.stable_hash(first), BENCH.stable_hash(second))
 
     def test_plan_counts_total_sessions_without_framework_multiplier(self):
         args = BENCH.parse_args(

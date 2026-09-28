@@ -782,6 +782,15 @@ def verify_pinned_model(model: str | Path, expected_sha256: Optional[str]) -> Pa
     return path
 
 
+def pin_run_model(args: argparse.Namespace) -> Optional[str]:
+    """Resolve the verified model once and carry that identity through the run."""
+    if not getattr(args, "minimum_context_tokens", 0):
+        return None
+    path = verify_pinned_model(args.model, args.expected_model_sha256)
+    args.model = str(path)
+    return args.expected_model_sha256
+
+
 def percentile(values: Sequence[float], fraction: float) -> Optional[float]:
     if not values:
         return None
@@ -2552,6 +2561,7 @@ def benchmark_plan(
     specs: Sequence[RefSpec],
     engine_config: EngineConfig | None = None,
     version_sha256_by_label: Mapping[str, str] | None = None,
+    verified_model_sha256: str | None = None,
 ) -> dict[str, Any]:
     config = load_competitive_config()
     dataset = config["thoughtworks"]["dataset"]
@@ -2562,6 +2572,7 @@ def benchmark_plan(
     return {
         "schema_version": 3,
         "repo": str(args.repo),
+        "verified_model_sha256": verified_model_sha256,
         "refs": [spec.__dict__ for spec in specs],
         "engine_config": (
             {
@@ -2658,8 +2669,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         args.trajectory_manifest = args.trajectory_manifest.resolve()
     if args.hf_home is not None:
         args.hf_home = args.hf_home.resolve()
-    if args.minimum_context_tokens:
-        verify_pinned_model(args.model, args.expected_model_sha256)
+    verified_model_sha256 = pin_run_model(args)
     specs = parse_ref_specs(args.repo, args.ref)
     engine_config = external_config(args)
     external_builds = (
@@ -2672,6 +2682,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         specs,
         engine_config,
         version_sha256_by_label=verified_version_sha256_by_label(external_builds),
+        verified_model_sha256=verified_model_sha256,
     )
     order_specs = combined_specs(
         specs,
