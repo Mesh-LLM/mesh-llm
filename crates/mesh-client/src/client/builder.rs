@@ -410,6 +410,7 @@ impl MeshClient {
     }
 
     pub async fn disconnect(&mut self) {
+        self.cancel_openai_streams();
         self.user_disconnected = true;
         self.connected = false;
         self.emit_event(crate::events::Event::Disconnected {
@@ -434,6 +435,14 @@ impl MeshClient {
             .unwrap()
             .insert(listener_id.clone(), listener);
         listener_id
+    }
+
+    fn cancel_openai_streams(&self) {
+        let streams = std::mem::take(&mut *self.openai_streams.lock().unwrap());
+        for active in streams.into_values() {
+            active.cancelled.store(true, Ordering::Release);
+            active.cancel_notify.notify_one();
+        }
     }
 
     pub fn remove_event_listener(&self, listener_id: &str) {
@@ -1031,6 +1040,45 @@ mod model_list_tests {
 
         assert_eq!(response.data[0].metadata.context_length, Some(131_072));
         assert_eq!(response.data[1].metadata.context_length, None);
+    }
+}
+
+#[cfg(test)]
+mod openai_stream_lifecycle_tests {
+    use super::{ActiveOpenAiStream, ClientBuilder, InviteToken};
+    use crate::crypto::keys::OwnerKeypair;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+
+    #[tokio::test]
+    async fn disconnect_cancels_and_drains_openai_streams() {
+        let mut client = ClientBuilder::new(
+            OwnerKeypair::generate(),
+            InviteToken("test-invite".to_string()),
+        )
+        .build()
+        .expect("client builds");
+        let first_cancelled = Arc::new(AtomicBool::new(false));
+        let second_cancelled = Arc::new(AtomicBool::new(false));
+        for (request_id, cancelled) in [
+            ("stream-1", first_cancelled.clone()),
+            ("stream-2", second_cancelled.clone()),
+        ] {
+            client.openai_streams.lock().unwrap().insert(
+                request_id.to_string(),
+                ActiveOpenAiStream {
+                    cancelled,
+                    cancel_notify: Arc::new(Notify::new()),
+                },
+            );
+        }
+
+        client.disconnect().await;
+
+        assert!(first_cancelled.load(Ordering::Acquire));
+        assert!(second_cancelled.load(Ordering::Acquire));
+        assert!(client.openai_streams.lock().unwrap().is_empty());
     }
 }
 

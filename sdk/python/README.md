@@ -56,6 +56,19 @@ arguments, reasoning, usage, and provider-specific fields:
 ```python
 from meshllm import OpenAIStreamChunk
 
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}]
+
 async for event in client.inference.stream_chat_completions({
     "model": "Qwen3-8B",
     "messages": [{"role": "user", "content": "Call the weather tool."}],

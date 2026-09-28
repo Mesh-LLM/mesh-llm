@@ -21,9 +21,11 @@ use tokio::sync::Mutex;
 
 mod embedded_config;
 pub(crate) mod embedded_logging;
+mod embedded_openai;
 mod embedded_startup;
 
 pub use embedded_config::*;
+pub use embedded_openai::{EmbeddedOpenAiResponse, EmbeddedOpenAiStream, EmbeddedSseEvent};
 
 pub mod config {
     pub use mesh_llm_config::{
@@ -385,7 +387,7 @@ struct EmbeddedServingState {
 
 struct EmbeddedServedModel {
     served: ServedModel,
-    handle: Option<SkippyModelHandle>,
+    handle: Option<Arc<SkippyModelHandle>>,
 }
 
 impl Default for EmbeddedServingController {
@@ -534,7 +536,7 @@ impl ServingController for EmbeddedServingController {
                 (model_ref, profile),
                 Arc::new(EmbeddedServedModel {
                     served: served.clone(),
-                    handle: Some(handle),
+                    handle: Some(Arc::new(handle)),
                 }),
             );
             Ok(served)

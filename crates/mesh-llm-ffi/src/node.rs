@@ -1,3 +1,5 @@
+#[cfg(feature = "embedded-runtime")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mesh_llm_sdk::node as sdk_node;
@@ -12,8 +14,10 @@ use crate::errors::{
     map_stream_error,
 };
 #[cfg(feature = "embedded-runtime")]
-use crate::events::ClientEvent;
+use crate::events::{ClientEvent, OpenAiStreamEventNative};
 use crate::events::{EventListenerBridge, OpenAiStreamListenerBridge};
+#[cfg(feature = "embedded-runtime")]
+use crate::handles::LocalOpenAiStreamCancellation;
 use crate::handles::{ConsoleHandle, MeshNodeHandle};
 use crate::identity::parse_owner_keypair;
 use crate::model_types::{
@@ -48,6 +52,8 @@ pub fn create_auto_node(
                 node: result.node,
                 #[cfg(feature = "embedded-runtime")]
                 local_serving: None,
+                #[cfg(feature = "embedded-runtime")]
+                local_openai_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
             })
         })
         .map_err(map_mesh_api_error)
@@ -98,6 +104,8 @@ pub fn create_node(
         node,
         #[cfg(feature = "embedded-runtime")]
         local_serving,
+        #[cfg(feature = "embedded-runtime")]
+        local_openai_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
     }))
 }
 
@@ -108,6 +116,8 @@ impl MeshNodeHandle {
     }
 
     pub fn stop(&self) -> Result<(), FfiError> {
+        #[cfg(feature = "embedded-runtime")]
+        self.cancel_all_local_openai_streams();
         block_on(self.node.stop()).map_err(|error| FfiError::HostUnavailable(error.to_string()))
     }
 
@@ -161,6 +171,16 @@ impl MeshNodeHandle {
         path: String,
         body_json: String,
     ) -> Result<OpenAiResponseNative, FfiError> {
+        #[cfg(feature = "embedded-runtime")]
+        if let Some(controller) = self.local_controller_for_openai_body(&body_json) {
+            let response = block_on(controller.openai_request(&path, body_json))
+                .map_err(|error| FfiError::OpenAiRequestFailed(error.to_string()))?;
+            return Ok(OpenAiResponseNative {
+                status_code: response.status_code,
+                content_type: response.content_type,
+                body: response.body,
+            });
+        }
         block_on(self.node.inference().openai_request(&path, body_json))
             .map(OpenAiResponseNative::from)
             .map_err(map_openai_error)
@@ -172,6 +192,88 @@ impl MeshNodeHandle {
         body_json: String,
         listener: Box<dyn OpenAiStreamListener>,
     ) -> Result<String, FfiError> {
+        #[cfg(feature = "embedded-runtime")]
+        if let Some(controller) = self.local_controller_for_openai_body(&body_json) {
+            let mut stream = block_on(controller.openai_stream(&path, body_json))
+                .map_err(|error| FfiError::OpenAiRequestFailed(error.to_string()))?;
+            let request_id = new_request_id();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let cancel_notify = Arc::new(tokio::sync::Notify::new());
+            self.local_openai_streams.lock().unwrap().insert(
+                request_id.clone(),
+                LocalOpenAiStreamCancellation {
+                    cancelled: cancelled.clone(),
+                    cancel_notify: cancel_notify.clone(),
+                },
+            );
+            let streams = self.local_openai_streams.clone();
+            let id = request_id.clone();
+            crate::SDK_RUNTIME.spawn(async move {
+                let status_code = stream.status_code();
+                let content_type = stream.content_type().map(ToString::to_string);
+                let result = if !stream.is_success() {
+                    let body = stream.body_text().await.unwrap_or_default();
+                    Err((
+                        Some(status_code),
+                        format!("OpenAI stream returned HTTP {status_code}"),
+                        Some(body),
+                    ))
+                } else if !stream.is_event_stream() {
+                    listener.on_event(OpenAiStreamEventNative::Started {
+                        request_id: id.clone(),
+                        status_code,
+                        content_type,
+                    });
+                    let body = stream.body_text().await.unwrap_or_default();
+                    Err((
+                        Some(status_code),
+                        "streaming response did not use text/event-stream".to_string(),
+                        Some(body),
+                    ))
+                } else {
+                    listener.on_event(OpenAiStreamEventNative::Started {
+                        request_id: id.clone(),
+                        status_code,
+                        content_type,
+                    });
+                    loop {
+                        if cancelled.load(Ordering::Acquire) {
+                            break Err((None, "cancelled".to_string(), None));
+                        }
+                        tokio::select! {
+                            _ = cancel_notify.notified() => {
+                                break Err((None, "cancelled".to_string(), None));
+                            }
+                            event = stream.next_event() => match event {
+                                Ok(Some(event)) => listener.on_event(OpenAiStreamEventNative::Sse {
+                                    request_id: id.clone(),
+                                    event_type: event.event_type,
+                                    data: event.data,
+                                    raw: event.raw,
+                                }),
+                                Ok(None) => break Ok(()),
+                                Err(error) => break Err((None, error.to_string(), None)),
+                            }
+                        }
+                    }
+                };
+                streams.lock().unwrap().remove(&id);
+                match result {
+                    Ok(()) => {
+                        listener.on_event(OpenAiStreamEventNative::Completed { request_id: id })
+                    }
+                    Err((status_code, error, body)) => {
+                        listener.on_event(OpenAiStreamEventNative::Failed {
+                            request_id: id,
+                            status_code,
+                            error,
+                            body,
+                        })
+                    }
+                }
+            });
+            return Ok(request_id);
+        }
         let bridge = Arc::new(OpenAiStreamListenerBridge { inner: listener });
         block_on(
             self.node
@@ -248,6 +350,10 @@ impl MeshNodeHandle {
     }
 
     pub fn cancel(&self, request_id: String) -> Result<(), FfiError> {
+        #[cfg(feature = "embedded-runtime")]
+        if self.cancel_local_openai_stream(&request_id) {
+            return Ok(());
+        }
         block_on(self.node.inference().cancel(RequestId(request_id))).map_err(map_stream_error)
     }
 
@@ -420,6 +526,33 @@ impl MeshNodeHandle {
             .into_iter()
             .any(|(model_id, model_ref)| model_id == model || model_ref == model);
         is_loaded.then_some(controller)
+    }
+
+    fn local_controller_for_openai_body(
+        &self,
+        body_json: &str,
+    ) -> Option<Arc<EmbeddedServingController>> {
+        let controller = self.local_serving.as_ref()?;
+        block_on(controller.handles_openai_request(body_json)).then(|| controller.clone())
+    }
+
+    fn cancel_local_openai_stream(&self, request_id: &str) -> bool {
+        let active = self.local_openai_streams.lock().unwrap().remove(request_id);
+        if let Some(active) = active {
+            active.cancelled.store(true, Ordering::Release);
+            active.cancel_notify.notify_one();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn cancel_all_local_openai_streams(&self) {
+        let streams = std::mem::take(&mut *self.local_openai_streams.lock().unwrap());
+        for active in streams.into_values() {
+            active.cancelled.store(true, Ordering::Release);
+            active.cancel_notify.notify_one();
+        }
     }
 }
 
