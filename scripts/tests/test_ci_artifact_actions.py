@@ -2155,6 +2155,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "product must contain exactly its manifest-selected runtime",
             action,
         )
+        self.assertIn('runtime_path="${runtime_path%$\'\\r\'}"', action)
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
 

@@ -249,6 +249,7 @@ runs:
         )
         PY
         )
+        runtime_path="${runtime_path%$'\r'}"
         scripts/verify-native-runtime-package.sh "$extract_root/$runtime_path"
         python3 scripts/compose-product-bundle.py \
           --bundle "$extract_root" \
