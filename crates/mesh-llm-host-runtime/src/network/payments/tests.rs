@@ -445,7 +445,7 @@ async fn paid_exchange_on(
     let request = paid_request(requested)?;
     // Before the request is sent, so the seller's events are recorded.
     let provider_events =
-        crate::network::openai::ingress::record_paid_exchanges_for_test(&provider);
+        crate::network::openai::paid_exchange::record_paid_exchanges_for_test(&provider);
     let expected_request_digest =
         crate::plugin::openai_exchange::request_body_digest(&request.body, None);
     wire::write(

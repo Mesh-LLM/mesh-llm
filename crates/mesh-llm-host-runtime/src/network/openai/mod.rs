@@ -22,6 +22,8 @@ pub(crate) mod runtime_events;
 mod tool_call_ids;
 pub(crate) mod transport;
 
+#[cfg(feature = "payments")]
+pub(crate) mod paid_exchange;
 mod payment_routing;
 
 #[cfg(feature = "payments")]

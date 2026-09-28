@@ -128,7 +128,8 @@ async fn serve_inner(
     let _serving_guard = ServingGuard { gate: gate.clone() };
     // The same exchange events the free serving path publishes.
     let exchange =
-        crate::network::openai::ingress::PaidServedExchange::begin(node, &model_for_events).await;
+        crate::network::openai::paid_exchange::PaidServedExchange::begin(node, &model_for_events)
+            .await;
     let mut delivered = exchange.as_ref().map(|_| DeliveredCapture::default());
     let generated = generate(
         reader,
@@ -148,18 +149,19 @@ async fn serve_inner(
         // Once, with the watermark the close wrote, whatever the transport did.
         observations.delivered(*tokens);
     }
+    // A terminal event on every path, as on the free path: a failed
+    // generation or closure still ends the exchange the effective event
+    // opened, before the error is returned.
+    end_exchange(
+        node,
+        exchange.zip(delivered),
+        generated.is_ok() && closed.is_ok(),
+        &model_for_events,
+        request_digest.as_deref(),
+    )
+    .await;
     let transport_alive = generated?;
     closed?;
-    if let (Some(exchange), Some(delivered)) = (exchange, delivered) {
-        finish_exchange(
-            node,
-            &exchange,
-            delivered,
-            &model_for_events,
-            request_digest.as_deref(),
-        )
-        .await;
-    }
     // Generation is over. Release the runtime's in-flight slot (the gate
     // registration ended with generation) before waiting on the payer's wallet: those waits can last
     // up to the output invoice lifetime, and the debt they settle is already
@@ -208,22 +210,53 @@ async fn serve_inner(
     Ok(())
 }
 
-/// The terminal exchange event for what was delivered: the relay's own usage
-/// and digests over the delivered bytes, or none past the capture limit.
-async fn finish_exchange(
+/// Publish the terminal exchange event, when an effective one was published.
+async fn end_exchange(
     node: &Node,
-    exchange: &crate::network::openai::ingress::PaidServedExchange,
-    delivered: DeliveredCapture,
+    exchange: Option<(
+        crate::network::openai::paid_exchange::PaidServedExchange,
+        DeliveredCapture,
+    )>,
+    served: bool,
     model: &str,
     request_digest: Option<&str>,
 ) {
-    let outcome = match delivered.into_bytes() {
+    if let Some((exchange, delivered)) = exchange {
+        let outcome = exchange_outcome(served, delivered).await;
+        exchange.finish(node, model, &outcome, request_digest).await;
+    }
+}
+
+/// The terminal exchange event's outcome: what was delivered when serving
+/// completed, `Failed` when generation or closing serving failed.
+async fn exchange_outcome(
+    served: bool,
+    delivered: DeliveredCapture,
+) -> crate::network::openai::transport::RouteDispatchOutcome {
+    if served {
+        delivered_outcome(delivered).await
+    } else {
+        crate::network::openai::transport::RouteDispatchOutcome::Failed(
+            "paid serving failed before the response was delivered",
+        )
+    }
+}
+
+/// What was delivered, for the terminal exchange event: the relay's own
+/// usage and digests over the delivered bytes. Past the capture limit, only
+/// the response status, read off the kept head of the response.
+async fn delivered_outcome(
+    delivered: DeliveredCapture,
+) -> crate::network::openai::transport::RouteDispatchOutcome {
+    use crate::network::openai::transport::RouteDispatchOutcome;
+    let status = delivered.status();
+    match delivered.into_bytes() {
         Some(raw) => crate::network::openai::served_outcome_of_raw_response(&raw).await,
-        None => crate::network::openai::transport::RouteDispatchOutcome::Failed(
-            "served response exceeded the capture limit",
-        ),
-    };
-    exchange.finish(node, model, &outcome, request_digest).await;
+        None => match status {
+            Some(status) => RouteDispatchOutcome::Responded(status),
+            None => RouteDispatchOutcome::Failed("the served response had no HTTP status line"),
+        },
+    }
 }
 
 /// Runs the backend under the registered payment gate until its output is
@@ -255,12 +288,20 @@ async fn generate(
 struct DeliveredCapture {
     bytes: Vec<u8>,
     overflowed: bool,
+    /// The first bytes delivered, kept past the capture limit so the
+    /// response status is still known.
+    head: Vec<u8>,
 }
+
+/// Enough of the response to hold its status line (`HTTP/1.1 200 `).
+const RESPONSE_HEAD_BYTES: usize = 64;
 
 const MAX_CAPTURED_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 impl DeliveredCapture {
     fn push(&mut self, bytes: &[u8]) {
+        let room = RESPONSE_HEAD_BYTES.saturating_sub(self.head.len());
+        self.head.extend_from_slice(&bytes[..room.min(bytes.len())]);
         if self.overflowed || self.bytes.len() + bytes.len() > MAX_CAPTURED_RESPONSE_BYTES {
             self.overflowed = true;
             self.bytes = Vec::new();
@@ -271,6 +312,13 @@ impl DeliveredCapture {
 
     fn into_bytes(self) -> Option<Vec<u8>> {
         (!self.overflowed).then_some(self.bytes)
+    }
+
+    /// The HTTP status of the delivered response, from its status line.
+    fn status(&self) -> Option<u16> {
+        let line = self.head.strip_prefix(b"HTTP/1.")?;
+        let code = line.get(2..5)?;
+        std::str::from_utf8(code).ok()?.parse().ok()
     }
 }
 
@@ -459,5 +507,47 @@ impl Drop for ServingGuard {
         self.gate.runtime.spawn(async move {
             let _ = gate.close_serving().await;
         });
+    }
+}
+
+#[cfg(test)]
+mod delivered_capture_tests {
+    use super::*;
+    use crate::network::openai::transport::RouteDispatchOutcome;
+
+    const OK: &[u8] =
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
+
+    #[test]
+    fn the_status_is_read_off_the_first_bytes() {
+        let mut capture = DeliveredCapture::default();
+        capture.push(&OK[..5]);
+        capture.push(&OK[5..]);
+        assert_eq!(capture.status(), Some(200));
+        assert_eq!(DeliveredCapture::default().status(), None);
+        let mut not_http = DeliveredCapture::default();
+        not_http.push(b"garbage");
+        assert_eq!(not_http.status(), None);
+    }
+
+    #[tokio::test]
+    async fn past_the_capture_limit_the_status_is_kept_and_only_the_digests_dropped() {
+        let mut capture = DeliveredCapture::default();
+        capture.push(OK);
+        capture.push(&vec![b'x'; MAX_CAPTURED_RESPONSE_BYTES]);
+        assert!(matches!(
+            exchange_outcome(true, capture).await,
+            RouteDispatchOutcome::Responded(200)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_failed_serving_still_ends_the_exchange_with_a_terminal_failure() {
+        let mut capture = DeliveredCapture::default();
+        capture.push(OK);
+        assert!(matches!(
+            exchange_outcome(false, capture).await,
+            RouteDispatchOutcome::Failed(_)
+        ));
     }
 }

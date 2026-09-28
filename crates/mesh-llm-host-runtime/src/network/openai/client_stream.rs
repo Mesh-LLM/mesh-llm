@@ -53,6 +53,7 @@ pub(crate) enum ClientStream {
     /// `network::openai::response::replay`). The relay streams response bytes
     /// to a `ClientStream` by design, so it needs somewhere to write that
     /// isn't a client's socket.
+    #[cfg_attr(not(feature = "payments"), allow(dead_code))]
     Null,
 }
 
@@ -103,6 +104,7 @@ impl ClientStream {
     }
 
     /// A discard sink with no real downstream socket — see [`Self::Null`].
+    #[cfg_attr(not(feature = "payments"), allow(dead_code))]
     pub(crate) fn null() -> Self {
         Self::Null
     }
