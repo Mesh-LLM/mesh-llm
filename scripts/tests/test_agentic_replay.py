@@ -508,12 +508,12 @@ class AgenticReplayTest(unittest.TestCase):
                 str(root / "runtime-bundle"),
             )
 
-    def test_runtime_context_waits_for_stage_projection(self) -> None:
+    def test_runtime_context_waits_for_local_model_context(self) -> None:
         documents = [
-            {"stages": []},
+            {"models": [{"name": "model"}]},
             {
-                "stages": [
-                    {"model_id": "model", "ctx_size": 131072},
+                "models": [
+                    {"name": "model", "context_length": 131072},
                 ]
             },
         ]
@@ -543,17 +543,19 @@ class AgenticReplayTest(unittest.TestCase):
             urlopen.call_args_list,
             [
                 mock.call(
-                    "http://127.0.0.1:3131/api/runtime/stages", timeout=30
+                    "http://127.0.0.1:3131/api/runtime", timeout=30
                 ),
                 mock.call(
-                    "http://127.0.0.1:3131/api/runtime/stages", timeout=30
+                    "http://127.0.0.1:3131/api/runtime", timeout=30
                 ),
             ],
         )
         sleep.assert_called_once_with(1)
 
-    def test_runtime_context_rejects_stable_under_capacity_stage(self) -> None:
-        document = {"stages": [{"model_id": "model", "ctx_size": 32768}]}
+    def test_runtime_context_rejects_stable_under_capacity_model(self) -> None:
+        document = {
+            "models": [{"name": "model", "context_length": 32768}]
+        }
 
         class Response:
             def __enter__(self):
@@ -573,8 +575,20 @@ class AgenticReplayTest(unittest.TestCase):
                 BENCH.wait_for_runtime_context(131072, 10)
 
         urlopen.assert_called_once_with(
-            "http://127.0.0.1:3131/api/runtime/stages", timeout=30
+            "http://127.0.0.1:3131/api/runtime", timeout=30
         )
+
+    def test_pinned_model_verification_rejects_wrong_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "model.gguf"
+            model.write_bytes(b"pinned model")
+
+            self.assertEqual(
+                BENCH.verify_pinned_model(model, BENCH.sha256(model)),
+                model.resolve(),
+            )
+            with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                BENCH.verify_pinned_model(model, "0" * 64)
 
     def test_runtime_evidence_collects_logs_without_copying_identity_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -93,9 +93,7 @@ DEFAULT_HOST = DEFAULT_ENDPOINT.hostname or "127.0.0.1"
 DEFAULT_PORT = DEFAULT_ENDPOINT.port or 80
 MANAGEMENT_HOST = "127.0.0.1"
 MANAGEMENT_PORT = 3131
-MANAGEMENT_STAGES_URL = (
-    f"http://{MANAGEMENT_HOST}:{MANAGEMENT_PORT}/api/runtime/stages"
-)
+MANAGEMENT_RUNTIME_URL = f"http://{MANAGEMENT_HOST}:{MANAGEMENT_PORT}/api/runtime"
 FORBIDDEN_STARTUP_OPTIONS = (
     "--ctx-size",
     "--generation-concurrency",
@@ -736,7 +734,7 @@ def wait_for_runtime_context(
     timeout: float,
     process: Optional[subprocess.Popen[bytes]] = None,
 ) -> tuple[dict[str, Any], int]:
-    """Wait until the management projection identifies the serving model's stages."""
+    """Wait until the management projection reports one ready local model."""
     deadline = time.monotonic() + timeout
     last_error = "runtime stages not ready"
     while time.monotonic() < deadline:
@@ -747,17 +745,19 @@ def wait_for_runtime_context(
             )
         try:
             with urllib.request.urlopen(
-                MANAGEMENT_STAGES_URL, timeout=30
+                MANAGEMENT_RUNTIME_URL, timeout=30
             ) as response:
                 document = json.load(response)
-            stages = document.get("stages", [])
-            model_ids = {stage.get("model_id") for stage in stages}
-            if stages and len(model_ids) == 1:
+            models = document.get("models", [])
+            contexts = [model.get("context_length") for model in models]
+            if len(models) == 1 and all(type(value) is int for value in contexts):
                 return document, runtime_context(document, required)
             last_error = (
-                "runtime projection has no stages"
-                if not stages
-                else f"runtime projection identifies {len(model_ids)} models"
+                "runtime projection has no local models"
+                if not models
+                else "runtime projection has no effective context"
+                if len(models) == 1
+                else f"runtime projection identifies {len(models)} models"
             )
         except (OSError, json.JSONDecodeError) as error:
             last_error = str(error)
@@ -765,6 +765,21 @@ def wait_for_runtime_context(
     raise TimeoutError(
         f"runtime metadata did not become ready after {timeout}s: {last_error}"
     )
+
+
+def verify_pinned_model(model: str | Path, expected_sha256: Optional[str]) -> Path:
+    """Verify the exact local GGUF before any server is allowed to measure it."""
+    if not expected_sha256:
+        raise ValueError("long-context qualification requires a model SHA-256")
+    path = Path(model).resolve()
+    if not path.is_file():
+        raise ValueError(f"pinned model is not a local file: {path}")
+    actual = sha256(path)
+    if actual != expected_sha256:
+        raise ValueError(
+            f"model SHA-256 mismatch: {actual} != {expected_sha256}"
+        )
+    return path
 
 
 def percentile(values: Sequence[float], fraction: float) -> Optional[float]:
@@ -1665,6 +1680,7 @@ def preflight_long_context(args, build, cohorts, output):
     process = None
     result = {"passed": False, "cohorts": {}}
     try:
+        verify_pinned_model(args.model, args.expected_model_sha256)
         process, _ = start_server(
             build, args.model, state, target / "mesh.log", args.hf_home
         )
@@ -1673,17 +1689,12 @@ def preflight_long_context(args, build, cohorts, output):
             args.minimum_context_tokens, args.startup_timeout, process
         )
         write_json(target / "runtime.json", runtime)
-        if not args.expected_model_sha256 or any(
-            stage.get("source_model_sha256") != args.expected_model_sha256
-            for stage in runtime["stages"]
-        ):
-            raise ValueError("runtime model digest does not match the pinned GGUF")
         spec = importlib.util.spec_from_file_location(
             "replay_gguf", REPO / "scripts/skippy-llama-parity.py"
         )
         gguf = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(gguf)
-        model_path = Path(runtime["stages"][0]["source_model_path"])
+        model_path = Path(args.model).resolve()
         metadata = gguf.gguf_metadata(model_path)
         architecture = metadata.get("general.architecture")
         native_context = metadata.get(f"{architecture}.context_length")
@@ -1767,6 +1778,8 @@ def run_arm_pass(
     cells: list[dict[str, Any]] = []
     warmup: Optional[dict[str, Any]] = None
     try:
+        if args.minimum_context_tokens:
+            verify_pinned_model(args.model, args.expected_model_sha256)
         process, command = start_server(
             build, args.model, state_dir, log_path, args.hf_home
         )
@@ -1776,11 +1789,6 @@ def run_arm_pass(
                 args.minimum_context_tokens, args.startup_timeout, process
             )
             write_json(pass_dir / "runtime.json", current_runtime)
-            if any(
-                stage.get("source_model_sha256") != args.expected_model_sha256
-                for stage in current_runtime["stages"]
-            ):
-                raise ValueError("measured runtime differs from the qualified model")
         warmup = run_warmup(
             trajectories=cohorts["warmup"],
             model_id=model_id,
@@ -2650,6 +2658,8 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         args.trajectory_manifest = args.trajectory_manifest.resolve()
     if args.hf_home is not None:
         args.hf_home = args.hf_home.resolve()
+    if args.minimum_context_tokens:
+        verify_pinned_model(args.model, args.expected_model_sha256)
     specs = parse_ref_specs(args.repo, args.ref)
     engine_config = external_config(args)
     external_builds = (
