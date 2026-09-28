@@ -15,14 +15,9 @@ VERIFIER = ROOT / "scripts" / "verify-swift-xcframework.py"
 
 FULL_SLICES = [
     ("ios-arm64", "ios", "", ["arm64"]),
-    ("ios-arm64_x86_64-simulator", "ios", "simulator", ["arm64", "x86_64"]),
-    (
-        "ios-arm64_x86_64-maccatalyst",
-        "ios",
-        "maccatalyst",
-        ["arm64", "x86_64"],
-    ),
-    ("macos-arm64_x86_64", "macos", "", ["arm64", "x86_64"]),
+    ("ios-arm64-simulator", "ios", "simulator", ["arm64"]),
+    ("ios-arm64-maccatalyst", "ios", "maccatalyst", ["arm64"]),
+    ("macos-arm64", "macos", "", ["arm64"]),
 ]
 
 
@@ -141,13 +136,13 @@ class SwiftXCFrameworkVerifierTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("host-only mode", result.stdout)
 
-    def test_rejects_full_slice_missing_declared_x86_64(self) -> None:
+    def test_rejects_full_slice_with_unsupported_x86_64(self) -> None:
         slices = list(FULL_SLICES)
         slices[1] = (
-            "ios-arm64-simulator",
+            "ios-arm64_x86_64-simulator",
             "ios",
             "simulator",
-            ["arm64"],
+            ["arm64", "x86_64"],
         )
         self.write_info(slices)
 
@@ -160,7 +155,7 @@ class SwiftXCFrameworkVerifierTests(unittest.TestCase):
         libraries = []
         for identifier, platform, variant, architectures in FULL_SLICES:
             binary_architectures = (
-                ["arm64"]
+                ["arm64", "x86_64"]
                 if variant == "maccatalyst"
                 else architectures
             )

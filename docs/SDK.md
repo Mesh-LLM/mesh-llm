@@ -26,13 +26,13 @@ run inference but cannot currently serve local models.
 |---|---:|---:|---:|
 | Rust SDK on macOS | yes | yes | requires an attached `ServingController` |
 | Rust SDK on Linux | yes | yes | requires an attached `ServingController` |
-| Swift macOS | yes | yes | yes with a matching native runtime artifact |
-| Swift Mac Catalyst | yes | yes | not currently advertised |
-| Swift iOS | yes | limited by app filesystem policy | no |
+| Swift macOS (Apple Silicon) | yes | yes | yes with a matching native runtime artifact |
+| Swift Mac Catalyst (arm64) | yes | yes | not currently advertised |
+| Swift iOS (arm64 device/simulator) | yes | limited by app filesystem policy | no |
 | Kotlin JVM macOS | yes | yes | yes with a matching native runtime artifact |
 | Kotlin JVM Linux | yes | yes | yes with a matching native runtime artifact |
 | Kotlin Android | yes | yes | not currently advertised |
-| Node.js macOS | yes | yes | yes with a matching native runtime artifact |
+| Node.js macOS (Apple Silicon) | yes | yes | yes with a matching native runtime artifact |
 | Node.js Linux | yes | yes | yes with a matching native runtime artifact |
 | Node.js Windows | yes | yes | yes with a matching native runtime artifact |
 
@@ -47,6 +47,9 @@ The SDK packages are published from MeshLLM releases:
 | Swift | GitHub Swift package from tagged `Mesh-LLM/mesh-llm` releases |
 | Kotlin/Android | GitHub Packages Maven registry for `Mesh-LLM/mesh-llm` |
 | Native runtimes | GitHub release artifacts plus `native-runtimes.json` |
+
+Swift and Node.js release artifacts do not include Intel macOS support. Intel
+Apple machines are no longer supported and cannot run MeshLLM inference.
 
 ## Install
 

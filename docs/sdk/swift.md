@@ -19,6 +19,10 @@ targets: [
 ```
 
 Tagged releases resolve the prebuilt `MeshLLMFFI.xcframework` through SwiftPM.
+The release XCFramework supports arm64 macOS, Mac Catalyst, iOS devices, and
+iOS simulators. Intel Apple machines are not supported because they cannot run
+MeshLLM inference.
+
 For local checkout development, build the XCFramework first:
 
 ```bash

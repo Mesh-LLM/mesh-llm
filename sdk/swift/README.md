@@ -2,6 +2,10 @@
 
 Swift Package for connecting to mesh-llm meshes from iOS, Mac Catalyst, and macOS apps.
 
+Release XCFrameworks support arm64 only, including macOS, Mac Catalyst, and the
+iOS simulator. Intel Apple machines are not supported because they cannot run
+MeshLLM inference.
+
 The SDK usage guide, native runtime packaging notes, examples, and platform
 support matrix live in [`docs/SDK.md`](../../docs/SDK.md).
 
