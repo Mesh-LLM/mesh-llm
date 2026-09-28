@@ -6,6 +6,7 @@
 mod concurrent_roots;
 mod edge_cases;
 mod generation_lifecycle;
+mod lock_cost;
 mod privacy;
 mod session_prefill_kv;
 

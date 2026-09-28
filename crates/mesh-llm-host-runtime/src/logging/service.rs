@@ -848,11 +848,22 @@ impl LoggingService {
 
     /// Write one bounded operational audit record through the same replay and
     /// persistence hand-off as lifecycle records.
+    ///
+    /// This is ordinary logging, not fallback logging, so it deliberately does
+    /// not take the process-wide error-path recursion guard. That guard is
+    /// shared by every fallback entry, and the bus push inside `enqueue_audit`
+    /// is synchronous, so letting a concurrent fallback write (or a second
+    /// operational audit on another thread) hold the guard would drop this
+    /// record silently and permanently — a retry of the replay drain cannot
+    /// recover it. The guard stays reserved for `write_error_audit`, which is
+    /// the only path that can recurse into itself. The `catch_unwind` boundary
+    /// is kept so this still never panics.
     pub fn write_operational_audit(&self, record: OperationalAuditRecord) -> bool {
         let event_delivery = self.event_delivery();
-        self.writer.try_record_error(move || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             event_delivery.enqueue_audit(record);
-        })
+        }))
+        .is_ok()
     }
 
     /// Get total rejected entries and writer write drops. Replay-window evictions

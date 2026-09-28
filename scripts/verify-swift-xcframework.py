@@ -20,9 +20,9 @@ EXPECTED_ARCHITECTURES: dict[str, dict[PlatformKey, frozenset[str]]] = {
     },
     "full": {
         ("ios", ""): frozenset({"arm64"}),
-        ("ios", "maccatalyst"): frozenset({"arm64", "x86_64"}),
-        ("ios", "simulator"): frozenset({"arm64", "x86_64"}),
-        ("macos", ""): frozenset({"arm64", "x86_64"}),
+        ("ios", "maccatalyst"): frozenset({"arm64"}),
+        ("ios", "simulator"): frozenset({"arm64"}),
+        ("macos", ""): frozenset({"arm64"}),
     },
 }
 

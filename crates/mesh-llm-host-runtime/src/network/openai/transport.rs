@@ -120,7 +120,9 @@ pub(super) fn record_moa_stream_lifecycle(
 ) {
     if !matches!(
         adapter,
-        ResponseAdapter::OpenAiChatCompletionsStream | ResponseAdapter::OpenAiResponsesStream
+        ResponseAdapter::OpenAiChatCompletionsStream
+            | ResponseAdapter::OpenAiResponsesStream
+            | ResponseAdapter::AnthropicMessagesStream
     ) {
         return;
     }
@@ -232,9 +234,16 @@ pub(crate) async fn reject_legacy_lifecycle_request(
 /// Generation context cannot be estimated from every request body's byte size.
 /// Tokenizer requests use no target KV context, and multipart audio bodies
 /// contain encoded media rather than text tokens. The audio backend performs
-/// the authoritative media/context validation after routing.
+/// the authoritative media/context validation after routing. A System One read
+/// fits `state` into each question's bounded sequence (Laya truncates it to its
+/// `max_len`; DiffusionGemma refuses a prompt its context cannot hold), so the
+/// backend is the authority there too.
 pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u32> {
-    if request.is_tokenize_request() || request.is_audio_upload_request() {
+    if request.is_tokenize_request()
+        || request.is_anthropic_count_tokens_request()
+        || request.is_audio_upload_request()
+        || request.is_system_one_request()
+    {
         None
     } else {
         request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens)
@@ -593,13 +602,7 @@ async fn build_mesh_request_plan(
         }
     };
     if let Some(model) = effective_model.as_deref()
-        && let Some(workload) = workload_routing::request_workload_class(&request.client_path)
-        && !workload_routing::model_satisfies_request_workload(
-            model,
-            workload,
-            &request.client_path,
-            &descriptors,
-        )
+        && !workload_routing::model_satisfies_request(model, &request.client_path, &descriptors)
     {
         return Err(MeshRequestFailure::UnsupportedWorkload);
     }
@@ -649,36 +652,16 @@ async fn build_mesh_request_plan(
     )
     .await;
     if let Some(model) = effective_model.as_deref() {
-        let mut ranked = super::routing_rank::RankedCandidates {
-            ordered: target_hosts
-                .iter()
-                .copied()
-                .map(election::InferenceTarget::Remote)
-                .collect(),
-            equivalent_prefix: equivalent_hosts,
-        };
-        if super::payment_routing::rank(
+        let payment_ranked = super::payment_routing::rank_remote_hosts(
             node,
             model,
-            (request.body_len_bytes as u64).div_ceil(4),
-            u64::from(request.completion_tokens.unwrap_or(256)),
-            &mut ranked,
-            request.body_json.as_ref(),
+            request,
+            &mut target_hosts,
+            &mut equivalent_hosts,
         )
         .await
-        .map_err(MeshRequestFailure::PaymentRequired)?
-        {
-            target_hosts = ranked
-                .ordered
-                .into_iter()
-                .filter_map(|target| match target {
-                    election::InferenceTarget::Remote(peer) => Some(peer),
-                    _ => None,
-                })
-                .collect();
-            equivalent_hosts = ranked.equivalent_prefix;
-            prepared.affinity_applied = true;
-        }
+        .map_err(MeshRequestFailure::PaymentRequired)?;
+        prepared.affinity_applied |= payment_ranked;
     }
     Ok(MeshRequestPlan {
         effective_model,
@@ -1011,6 +994,8 @@ fn proxy_provider_for_target(target: &'static str) -> Option<&'static str> {
 
 fn proxy_engine_for_response_adapter(adapter: ResponseAdapter) -> Option<&'static str> {
     match adapter {
+        ResponseAdapter::AnthropicMessagesJson => Some("messages"),
+        ResponseAdapter::AnthropicMessagesStream => Some("messages_stream"),
         ResponseAdapter::None => None,
         ResponseAdapter::OpenAiChatCompletionsJson => Some("chat_completion"),
         ResponseAdapter::OpenAiChatCompletionsStream => Some("chat_completion_stream"),
@@ -1343,7 +1328,8 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     let with_caps =
         workload_routing::routing_candidates(node, served, &request.client_path, descriptors);
     if with_caps.is_empty()
-        && workload_routing::request_workload_class(&request.client_path).is_some()
+        && (workload_routing::request_workload_class(&request.client_path).is_some()
+            || workload_routing::is_system_one_path(&request.client_path))
     {
         return AutoModelResolution::UnsupportedWorkload;
     }

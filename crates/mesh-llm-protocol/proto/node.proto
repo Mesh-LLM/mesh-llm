@@ -354,6 +354,7 @@ enum ModelWorkloadClass {
   MODEL_WORKLOAD_CLASS_RERANK = 3;
   MODEL_WORKLOAD_CLASS_ENCODER_DECODER = 4;
   MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS = 5;
+  MODEL_WORKLOAD_CLASS_DECISION = 6;
 }
 
 message ServedModelIdentity {
@@ -375,6 +376,8 @@ message ModelCapabilities {
   bool moe = 4;
   bool multimodal = 5;
   CapabilityLevel audio = 6;
+  // Loaded backend support for the typed POST /systemone contract.
+  CapabilityLevel system_one = 7;
 }
 
 enum CapabilityLevel {

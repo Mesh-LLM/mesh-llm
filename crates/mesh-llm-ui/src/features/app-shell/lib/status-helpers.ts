@@ -19,6 +19,7 @@ import type { VramGpuInput } from '@/lib/vram'
 
 type GpuInventoryItem = VramGpuInput
 type GpuInventory = GpuInventoryItem[]
+type ClientSignalStatus = Pick<StatusPayload, 'node_state'> & { readonly is_client?: boolean }
 
 export function modelDisplayName(model?: MeshModel | null) {
   if (!model) return ''
@@ -41,8 +42,17 @@ export function peerRoutableModels(peer: Peer): string[] {
   return hosted
 }
 
+/**
+ * True only on a positive client signal: a client-only node has no local model runtime
+ * and no management API reachable from a remote browser. Unknown status is not a client.
+ */
+export function isClientOnlyNode(status: ClientSignalStatus | null | undefined): boolean {
+  if (!status) return false
+  return status.is_client === true || status.node_state === 'client'
+}
+
 export function localRoutableModels(status: StatusPayload | null): string[] {
-  if (!status || status.is_client || status.node_state === 'client') return []
+  if (!status || isClientOnlyNode(status)) return []
   const hosted = status.hosted_models?.filter(Boolean) ?? []
   if (hosted.length > 0) return hosted
   const serving = status.serving_models?.filter(Boolean) ?? []

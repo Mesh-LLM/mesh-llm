@@ -130,6 +130,10 @@ impl RuntimeResourcePlanSource {
 pub(super) struct RuntimeResourcePlanBreakdown {
     pub(super) vram_bytes: u64,
     pub(super) model_bytes: u64,
+    /// Projector bytes charged to the same pool as the weights (`0` when the
+    /// model has no projector). Reported separately from `model_bytes` so a
+    /// fit can be read back from production logs.
+    pub(super) projector_bytes: u64,
     /// KV budget selected by the active planner. Static planning applies the
     /// 85% utilization tax; measured planning applies its utilization target
     /// and then subtracts the lane-scaled measured compute charge.
@@ -161,6 +165,17 @@ pub(super) struct RuntimeResourcePlanInput<'a> {
     /// Model weight bytes **local to this node**.  For a split/layer-package
     /// load, pass only this node's share of the model weights.
     pub(super) model_bytes: u64,
+    /// Bytes the multimodal projector will hold in the same device pool as the
+    /// model weights. `0` when the model has no projector.
+    ///
+    /// The projector is loaded *after* the text model on the direct `--gguf`
+    /// path, and nothing charged it to the fit before this field existed: a
+    /// plan that spent the last of the pool on weights and KV left the
+    /// projector's allocation to fail, and upstream `mtmd` dereferences the
+    /// NULL buffer instead of returning an error (mesh-llm#1166). Charging it
+    /// here reserves the room, which is what upstream `llama-server` does with
+    /// `mtmd_get_memory_usage` charged into its fit target.
+    pub(super) projector_bytes: u64,
     pub(super) vram_bytes: u64,
     pub(super) metadata: Option<&'a GgufCompactMeta>,
     /// The KV cache quant that will be used.  Default is Q8_0 everywhere.
@@ -218,11 +233,11 @@ pub(super) fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> Run
                 .map(|bytes| scale_by_layer_fraction(bytes, &input))
         })
         .unwrap_or(0);
-    let estimated_kv_budget = usable_kv_cache_budget(input.vram_bytes, input.model_bytes);
-    let estimated_compute_charge = input
-        .vram_bytes
-        .saturating_sub(input.model_bytes)
-        .saturating_sub(estimated_kv_budget);
+    let estimated_kv_budget =
+        usable_kv_cache_budget(input.vram_bytes, input.model_bytes, input.projector_bytes);
+    let estimated_compute_charge =
+        free_bytes_after_weights(input.vram_bytes, input.model_bytes, input.projector_bytes)
+            .saturating_sub(estimated_kv_budget);
 
     let (
         context_length,
@@ -267,6 +282,7 @@ pub(super) fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> Run
         breakdown: Some(RuntimeResourcePlanBreakdown {
             vram_bytes: input.vram_bytes,
             model_bytes: input.model_bytes,
+            projector_bytes: input.projector_bytes,
             kv_budget_bytes,
             planned_kv_bytes,
             kv_bytes_per_token,
@@ -304,7 +320,8 @@ fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
     // own layers.  Scale the per-token cost by the local layer fraction.
     let kv_bytes_per_token = scale_by_layer_fraction(kv_bytes_per_token_full, input);
 
-    let kv_budget = usable_kv_cache_budget(input.vram_bytes, input.model_bytes);
+    let kv_budget =
+        usable_kv_cache_budget(input.vram_bytes, input.model_bytes, input.projector_bytes);
     if kv_bytes_per_token == 0 {
         return native_context;
     }
@@ -389,8 +406,17 @@ fn scale_by_layer_fraction(kv_bytes_per_token: u64, input: &RuntimeResourcePlanI
     }
 }
 
-fn usable_kv_cache_budget(vram_bytes: u64, model_bytes: u64) -> u64 {
-    let free_bytes = vram_bytes.saturating_sub(model_bytes);
+/// Device bytes left once the resident weights are accounted for: the model
+/// weights and the multimodal projector share one pool, and both are committed
+/// before any KV is allocated.
+fn free_bytes_after_weights(vram_bytes: u64, model_bytes: u64, projector_bytes: u64) -> u64 {
+    vram_bytes
+        .saturating_sub(model_bytes)
+        .saturating_sub(projector_bytes)
+}
+
+fn usable_kv_cache_budget(vram_bytes: u64, model_bytes: u64, projector_bytes: u64) -> u64 {
+    let free_bytes = free_bytes_after_weights(vram_bytes, model_bytes, projector_bytes);
     let budget = u128::from(free_bytes) * u128::from(KV_CACHE_BUDGET_NUMERATOR)
         / u128::from(KV_CACHE_BUDGET_DENOMINATOR);
     budget.min(u128::from(u64::MAX)) as u64
@@ -435,6 +461,7 @@ pub(super) fn reconcile_memory_plan_with_measurements(
             breakdown
                 .vram_bytes
                 .saturating_sub(breakdown.model_bytes)
+                .saturating_sub(breakdown.projector_bytes)
                 .saturating_sub(compute)
                 .saturating_sub(kv),
         ),
@@ -449,7 +476,8 @@ pub(super) fn reconcile_memory_plan_with_measurements(
 }
 
 fn fallback_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
-    let free_bytes = input.vram_bytes.saturating_sub(input.model_bytes);
+    let free_bytes =
+        free_bytes_after_weights(input.vram_bytes, input.model_bytes, input.projector_bytes);
     if free_bytes >= FALLBACK_CONTEXT_64K_FREE_BYTES {
         65_536
     } else if free_bytes >= FALLBACK_CONTEXT_32K_FREE_BYTES {
@@ -523,7 +551,8 @@ fn measured_context_plan(
     }
     let native_context = native_context.min(MAX_AUTO_CONTEXT_LENGTH);
 
-    let post_weight = input.vram_bytes.saturating_sub(input.model_bytes);
+    let post_weight =
+        free_bytes_after_weights(input.vram_bytes, input.model_bytes, input.projector_bytes);
     let utilised = u128::from(post_weight) * u128::from(DEFAULT_UTILIZATION_TARGET_NUMERATOR)
         / u128::from(DEFAULT_UTILIZATION_TARGET_DENOMINATOR);
     // Scale the measured compute charge by the lane ratio when the plan's
@@ -581,6 +610,7 @@ mod tests {
             ctx_size_override: Some(16_384),
             parallel_override: Some(7),
             model_bytes: 10_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 24_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -600,6 +630,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 80_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -625,6 +656,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: Some(1),
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 7_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::F16,
@@ -636,6 +668,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: Some(1),
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 7_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -658,6 +691,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 16_000_000_000,
             metadata: None,
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -682,6 +716,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 16_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -710,6 +745,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 80_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -743,6 +779,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 18_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -770,6 +807,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: Some(2),
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 80_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -801,6 +839,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             // 128GB free — plenty for many "per-lane" slots under the
             // old broken math.
             vram_bytes: 128_000_000_000,
@@ -832,6 +871,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override,
             model_bytes: 32_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 122_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -860,6 +900,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: Some(8),
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 128_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -892,6 +933,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: total_model_bytes,
+            projector_bytes: 0,
             vram_bytes: 206_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -905,6 +947,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: local_model_bytes,
+            projector_bytes: 0,
             vram_bytes: 206_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -940,6 +983,7 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 model_bytes: 5_000_000_000,
+                projector_bytes: 0,
                 vram_bytes: 80_000_000_000,
                 metadata: Some(&metadata),
                 kv_cache_quant: quant,
@@ -976,6 +1020,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 3 * 1024 * 1024 * 1024,
+            projector_bytes: 0,
             vram_bytes: 16 * 1024 * 1024 * 1024,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -1008,6 +1053,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 1024 * 1024 * 1024,
+            projector_bytes: 0,
             vram_bytes: 6 * 1024 * 1024 * 1024,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -1026,6 +1072,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 1024 * 1024 * 1024,
+            projector_bytes: 0,
             vram_bytes: 6 * 1024 * 1024 * 1024,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -1043,6 +1090,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
+            projector_bytes: 0,
             vram_bytes: 24_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -1089,6 +1137,7 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5 * 1024 * 1024 * 1024,
+            projector_bytes: 0,
             vram_bytes: 6 * 1024 * 1024 * 1024,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -1129,6 +1178,7 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override,
                 model_bytes: 3 * 1024 * 1024 * 1024,
+                projector_bytes: 0,
                 vram_bytes: 16 * 1024 * 1024 * 1024,
                 metadata: Some(&metadata),
                 kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -1157,6 +1207,7 @@ mod tests {
         let breakdown = RuntimeResourcePlanBreakdown {
             vram_bytes: 16 * 1024 * 1024 * 1024,
             model_bytes: 3 * 1024 * 1024 * 1024,
+            projector_bytes: 0,
             kv_budget_bytes: (13 * 1024 * 1024 * 1024) * 85 / 100,
             planned_kv_bytes: 2 * 1024 * 1024 * 1024,
             kv_bytes_per_token: 131_072,
@@ -1211,5 +1262,95 @@ mod tests {
             }),
         );
         assert_eq!(host_offloaded.residual_free_bytes, None);
+    }
+
+    fn projector_input(vram_bytes: u64, projector_bytes: u64) -> RuntimeResourcePlanInput<'static> {
+        RuntimeResourcePlanInput {
+            ctx_size_override: None,
+            parallel_override: None,
+            model_bytes: 5_000_000_000,
+            projector_bytes,
+            vram_bytes,
+            metadata: None,
+            kv_cache_quant: GgufKvCacheQuant::Q8_0,
+            local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+            measured_buffers: None,
+        }
+    }
+
+    #[test]
+    fn projector_bytes_are_charged_to_the_plan_and_shrink_the_context() {
+        // A 1 GiB projector shares the pool with the weights, so the fit has to
+        // reserve it. Before mesh-llm#1166 nothing charged it, and the projector
+        // was loaded after the text model into whatever the plan left over.
+        let metadata = gqa_metadata(131_072);
+        let plan_with = |projector_bytes: u64| {
+            plan_runtime_resources(RuntimeResourcePlanInput {
+                ctx_size_override: None,
+                parallel_override: None,
+                model_bytes: 5_000_000_000,
+                projector_bytes,
+                vram_bytes: 16_000_000_000,
+                metadata: Some(&metadata),
+                kv_cache_quant: GgufKvCacheQuant::Q8_0,
+                local_layer_fraction: None,
+                planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+                measured_buffers: None,
+            })
+        };
+
+        let without = plan_with(0);
+        let with = plan_with(1_073_741_824);
+
+        assert!(
+            with.context_length < without.context_length,
+            "charging the projector must leave it room: {} vs {}",
+            with.context_length,
+            without.context_length
+        );
+        let with_breakdown = with.breakdown.expect("plan carries a breakdown");
+        let without_breakdown = without.breakdown.expect("plan carries a breakdown");
+        assert_eq!(with_breakdown.projector_bytes, 1_073_741_824);
+        assert_eq!(without_breakdown.projector_bytes, 0);
+        assert!(
+            with_breakdown.kv_budget_bytes < without_breakdown.kv_budget_bytes,
+            "the projector is resident weight memory: {} vs {}",
+            with_breakdown.kv_budget_bytes,
+            without_breakdown.kv_budget_bytes
+        );
+    }
+
+    #[test]
+    fn projector_larger_than_the_pool_keeps_the_minimum_context() {
+        // A projector claim bigger than the whole pool must saturate, not
+        // underflow into a huge budget.
+        let metadata = gqa_metadata(131_072);
+        let plan = plan_runtime_resources(RuntimeResourcePlanInput {
+            metadata: Some(&metadata),
+            ..projector_input(16_000_000_000, 900_000_000_000)
+        });
+
+        assert_eq!(plan.context_length, MIN_AUTO_CONTEXT_LENGTH);
+        assert_eq!(
+            plan.breakdown
+                .expect("plan carries a breakdown")
+                .kv_budget_bytes,
+            0
+        );
+    }
+
+    #[test]
+    fn zero_projector_bytes_keep_the_previous_budget() {
+        // The field is additive: a model with no projector plans exactly as it
+        // did before.
+        let plan = plan_runtime_resources(projector_input(16_000_000_000, 0));
+
+        assert_eq!(
+            plan.breakdown
+                .expect("plan carries a breakdown")
+                .kv_budget_bytes,
+            usable_kv_cache_budget(16_000_000_000, 5_000_000_000, 0)
+        );
     }
 }

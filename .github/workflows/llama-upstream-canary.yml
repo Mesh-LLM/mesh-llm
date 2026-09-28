@@ -85,9 +85,53 @@ jobs:
             echo "certify=$certify"
           } >> "$GITHUB_OUTPUT"
 
-  repair-1:
+  preflight:
     needs: [resolve]
     if: ${{ needs.resolve.outputs.certify == 'true' }}
+    runs-on: [self-hosted, family-certify]
+    timeout-minutes: 30
+    env:
+      CANARY_SOURCE_ROOT: ${{ github.workspace }}${{ needs.resolve.outputs.mesh_source != '' && '/canary-source' || '' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.resolve.outputs.source }}
+          persist-credentials: false
+      - name: Check out explicitly trusted certification source
+        if: needs.resolve.outputs.mesh_source != ''
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.resolve.outputs.mesh_source }}
+          path: canary-source
+          persist-credentials: false
+      - uses: ./.github/actions/use-canary-cache
+      - name: Verify immutable family plan and pinned cache
+        run: |
+          set -euo pipefail
+          python3 scripts/llama-canary-family-evidence.py preflight \
+            --root "$CANARY_SOURCE_ROOT" --output "$RUNNER_TEMP/llama-canary-preflight/plan.json"
+      - name: Upload environment preflight evidence
+        id: upload_evidence
+        if: ${{ success() || failure() || cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-canary-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/llama-canary-preflight/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Clean environment preflight outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        env:
+          EVIDENCE_UPLOADED: ${{ steps.upload_evidence.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/cleanup-self-hosted.py --job canary-preflight \
+            --evidence-uploaded "$EVIDENCE_UPLOADED"
+
+  candidate:
+    needs: [resolve, preflight]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       source: ${{ needs.resolve.outputs.source }}
@@ -96,77 +140,21 @@ jobs:
       pass_id: repair-1
       mode: ${{ needs.resolve.outputs.mode }}
 
-  verify-1:
-    needs: [resolve, repair-1]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-1.outputs.green == 'true' }}
+  verification:
+    needs: [resolve, candidate]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.candidate.outputs.green == 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: verify-1
       mode: verify-build
-      previous_package: ${{ needs.repair-1.outputs.package }}
-      previous_identity: ${{ needs.repair-1.outputs.identity }}
-      previous_head: ${{ needs.repair-1.outputs.head }}
-
-  repair-2:
-    needs: [resolve, repair-1, verify-1]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-1.outputs.head != '' && needs.verify-1.outputs.green != 'true' }}
-    uses: ./.github/workflows/llama-canary-family-pass.yml
-    with:
-      source: ${{ needs.resolve.outputs.source }}
-      upstream: ${{ needs.resolve.outputs.upstream }}
-      pass_id: repair-2
-      mode: ${{ needs.resolve.outputs.mode }}
-      previous_package: ${{ needs.repair-1.outputs.package }}
-      previous_identity: ${{ needs.repair-1.outputs.identity }}
-      previous_head: ${{ needs.repair-1.outputs.head }}
-      feedback_pattern: llama-family-${{ github.run_id }}-*-*-*-1-*
-      feedback_build_pattern: llama-build-${{ github.run_id }}-*-*-1
-
-  verify-2:
-    needs: [resolve, repair-2]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-2.outputs.green == 'true' }}
-    uses: ./.github/workflows/llama-canary-family-pass.yml
-    with:
-      source: ${{ needs.resolve.outputs.source }}
-      upstream: ${{ needs.resolve.outputs.upstream }}
-      pass_id: verify-2
-      mode: verify-build
-      previous_package: ${{ needs.repair-2.outputs.package }}
-      previous_identity: ${{ needs.repair-2.outputs.identity }}
-      previous_head: ${{ needs.repair-2.outputs.head }}
-
-  repair-3:
-    needs: [resolve, repair-2, verify-2]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-2.outputs.head != '' && needs.verify-2.outputs.green != 'true' }}
-    uses: ./.github/workflows/llama-canary-family-pass.yml
-    with:
-      source: ${{ needs.resolve.outputs.source }}
-      upstream: ${{ needs.resolve.outputs.upstream }}
-      pass_id: repair-3
-      mode: ${{ needs.resolve.outputs.mode }}
-      previous_package: ${{ needs.repair-2.outputs.package }}
-      previous_identity: ${{ needs.repair-2.outputs.identity }}
-      previous_head: ${{ needs.repair-2.outputs.head }}
-      feedback_pattern: llama-family-${{ github.run_id }}-*-*-*-2-*
-      feedback_build_pattern: llama-build-${{ github.run_id }}-*-*-2
-
-  verify-3:
-    needs: [resolve, repair-3]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-3.outputs.green == 'true' }}
-    uses: ./.github/workflows/llama-canary-family-pass.yml
-    with:
-      source: ${{ needs.resolve.outputs.source }}
-      upstream: ${{ needs.resolve.outputs.upstream }}
-      pass_id: verify-3
-      mode: verify-build
-      previous_package: ${{ needs.repair-3.outputs.package }}
-      previous_identity: ${{ needs.repair-3.outputs.identity }}
-      previous_head: ${{ needs.repair-3.outputs.head }}
+      previous_package: ${{ needs.candidate.outputs.package }}
+      previous_identity: ${{ needs.candidate.outputs.identity }}
+      previous_head: ${{ needs.candidate.outputs.head }}
 
   result:
-    needs: [resolve, repair-1, verify-1, repair-2, verify-2, repair-3, verify-3]
+    needs: [resolve, preflight, candidate, verification]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     outputs:
@@ -190,29 +178,31 @@ jobs:
               raise SystemExit('trusted source resolution failed')
           if resolve['outputs']['certify'] != 'true':
               raise SystemExit(0)
+          if needs['preflight']['result'] != 'success':
+              raise SystemExit('canary environment preflight failed; candidate source was not evaluated')
           selected = resolve['outputs'].get('mesh_source')
+          candidate = needs['candidate']['outputs']
           if selected:
-              repair = needs['repair-1']['outputs']
-              if (resolve['outputs']['changed'] != 'false' or repair.get('green') != 'true'
-                      or repair.get('head') != selected):
+              if (resolve['outputs']['changed'] != 'false' or candidate.get('green') != 'true'
+                      or candidate.get('head') != selected):
                   raise SystemExit('selected MeshLLM revision certification failed')
               raise SystemExit(0)
           changed = resolve['outputs']['changed'] == 'true'
           if not changed:
-              if needs['repair-1']['outputs'].get('green') != 'true':
+              if candidate.get('green') != 'true':
                   raise SystemExit('unchanged-pin family certification failed')
               raise SystemExit(0)
-          for attempt in range(1, 4):
-              repair = needs[f'repair-{attempt}']['outputs']
-              verify = needs[f'verify-{attempt}']['outputs']
-              if repair.get('green') == verify.get('green') == 'true' and repair['head'] == verify['head']:
-                  with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-                      output.write('publish=true\n')
-                      for key in ('package', 'identity', 'head', 'branch'):
-                          output.write(f'{key}={verify[key]}\n')
-                  break
-          else:
-              raise SystemExit('repair or independent family verification exhausted three attempts; publication denied')
+          if candidate.get('green') != 'true':
+              failure_class = candidate.get('failure_class') or 'candidate'
+              failure_stage = candidate.get('failure_stage') or 'build-or-family-certification'
+              raise SystemExit(f'{failure_class} failure during {failure_stage}; publication denied')
+          verify = needs['verification']['outputs']
+          if verify.get('green') != 'true' or candidate['head'] != verify.get('head'):
+              raise SystemExit('independent family verification failed; publication denied')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('publish=true\n')
+              for key in ('package', 'identity', 'head', 'branch'):
+                  output.write(f'{key}={verify[key]}\n')
           PYCODE
 
   publish-certified-canary:

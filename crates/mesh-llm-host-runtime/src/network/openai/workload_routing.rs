@@ -20,6 +20,11 @@ pub(super) fn is_audio_upload_path(path: &str) -> bool {
     )
 }
 
+/// Recognize the typed System One endpoint independently of query parameters.
+pub(super) fn is_system_one_path(path: &str) -> bool {
+    path.split('?').next().unwrap_or(path) == "/systemone"
+}
+
 /// Map inference endpoints to native workloads; control paths impose no class.
 pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
     match path.split('?').next().unwrap_or(path) {
@@ -32,6 +37,25 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/rerank" => Some(ModelWorkloadClass::Rerank),
         "/v1/audio/speech" => Some(ModelWorkloadClass::SpeechSynthesis),
         _ => None,
+    }
+}
+
+/// Workload named in an admission error when an endpoint has no eligible model.
+/// System One remains capability-gated rather than class-gated, but uses the
+/// decision class to describe the failed request contract to clients.
+pub(super) fn required_request_workload(path: &str) -> Option<ModelWorkloadClass> {
+    request_workload_class(path)
+        .or_else(|| is_system_one_path(path).then_some(ModelWorkloadClass::Decision))
+}
+
+/// Explain endpoint admission failures without leaking routing implementation details.
+pub(super) fn unsupported_workload_message(path: &str, workload: ModelWorkloadClass) -> String {
+    if is_system_one_path(path) {
+        "no served model advertises System One support".to_string()
+    } else if is_audio_upload_path(path) {
+        "no served model advertises support for this audio-to-text endpoint".to_string()
+    } else {
+        format!("no served model advertises the required {workload:?} workload")
     }
 }
 
@@ -131,6 +155,22 @@ fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool 
         )
 }
 
+/// System One is a runtime-verified endpoint capability, independent of the
+/// model's primary workload class.
+fn descriptor_supports_system_one(descriptor: &ServedModelDescriptor) -> bool {
+    descriptor.capabilities_known && descriptor.capabilities.supports_system_one_runtime()
+}
+
+pub(super) fn model_satisfies_system_one(
+    model: &str,
+    descriptors: &[ServedModelDescriptor],
+) -> bool {
+    descriptors.iter().any(|descriptor| {
+        descriptor_matches_routable_name(descriptor, model)
+            && descriptor_supports_system_one(descriptor)
+    })
+}
+
 /// Apply endpoint-specific admission, including stricter audio upload metadata.
 pub(super) fn model_satisfies_request_workload(
     model: &str,
@@ -148,6 +188,22 @@ pub(super) fn model_satisfies_request_workload(
     }
 }
 
+/// Apply every endpoint-specific model requirement, including interfaces that
+/// do not map one-to-one onto a primary workload class.
+pub(super) fn model_satisfies_request(
+    model: &str,
+    path: &str,
+    descriptors: &[ServedModelDescriptor],
+) -> bool {
+    if is_system_one_path(path) {
+        model_satisfies_system_one(model, descriptors)
+    } else {
+        request_workload_class(path).is_none_or(|workload| {
+            model_satisfies_request_workload(model, workload, path, descriptors)
+        })
+    }
+}
+
 /// Select one matching descriptor that independently supports the endpoint.
 pub(super) fn descriptor_for_request<'a>(
     model: &str,
@@ -156,14 +212,7 @@ pub(super) fn descriptor_for_request<'a>(
 ) -> Option<&'a ServedModelDescriptor> {
     descriptors.iter().find(|descriptor| {
         descriptor_matches_routable_name(descriptor, model)
-            && request_workload_class(path).is_none_or(|workload| {
-                model_satisfies_request_workload(
-                    model,
-                    workload,
-                    path,
-                    std::slice::from_ref(*descriptor),
-                )
-            })
+            && model_satisfies_request(model, path, std::slice::from_ref(*descriptor))
     })
 }
 
@@ -194,11 +243,7 @@ pub(super) fn routing_candidates<'a>(
     let metrics = node.routing_metrics();
     models
         .iter()
-        .filter(|model| {
-            request_workload_class(path).is_none_or(|workload| {
-                model_satisfies_request_workload(model, workload, path, descriptors)
-            })
-        })
+        .filter(|model| model_satisfies_request(model, path, descriptors))
         .map(|model| {
             let descriptor = descriptor_for_request(model, path, descriptors);
             let caps = descriptor.map_or_else(
@@ -229,9 +274,9 @@ pub(super) async fn eligible_targets(
     path: &str,
     candidates: &[InferenceTarget],
 ) -> Vec<InferenceTarget> {
-    let Some(workload) = request_workload_class(path) else {
+    if request_workload_class(path).is_none() && !is_system_one_path(path) {
         return candidates.to_vec();
-    };
+    }
     let local = node.served_model_descriptors().await;
     let state = node.state.lock().await;
     candidates
@@ -245,7 +290,7 @@ pub(super) async fn eligible_targets(
                     .map_or(&[][..], |peer| peer.served_model_descriptors.as_slice()),
                 InferenceTarget::None => return false,
             };
-            model_satisfies_request_workload(model, workload, path, descriptors)
+            model_satisfies_request(model, path, descriptors)
         })
         .cloned()
         .collect()

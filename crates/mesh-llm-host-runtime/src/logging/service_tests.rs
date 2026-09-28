@@ -1583,6 +1583,48 @@ fn test_recursion_guard_depth_prevents_cross_thread_duplication() {
     assert!(writer.try_record_error(|| {}));
 }
 
+/// A normal operational audit must not be dropped just because some other entry
+/// holds the process-wide error-fallback recursion guard. The guard is shared
+/// by every fallback write, and the audit bus push is synchronous, so a
+/// suppressed audit is lost for good rather than delayed.
+#[test]
+fn operational_audit_is_not_suppressed_while_the_error_fallback_guard_is_held() {
+    let svc = Arc::new(make_service());
+    let writer = svc.writer_ref();
+
+    // Hold the guard exactly as a concurrent `write_error_audit` would, then
+    // write ordinary operational audits from inside it.
+    let held = Arc::clone(&svc);
+    assert!(writer.try_record_error(move || {
+        for code in ["cleanup_completed", "cleanup_failed"] {
+            assert!(
+                held.write_operational_audit(
+                    OperationalAuditRecord::builder("logging_service", code).build()
+                ),
+                "an operational audit must be accepted while a fallback write holds the guard"
+            );
+        }
+    }));
+
+    let codes: Vec<String> = svc
+        .bus_ref()
+        .drain()
+        .into_iter()
+        .map(|entry| {
+            let audit: serde_json::Value = serde_json::from_str(&entry.payload).unwrap();
+            audit["code"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(codes, vec!["cleanup_completed", "cleanup_failed"]);
+    assert_eq!(
+        writer
+            .fallback_guard_suppressions
+            .load(AtomicOrdering::Relaxed),
+        0,
+        "a normal audit must not be counted as a suppressed fallback write"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Additional: Bus drop-oldest preserves recent entries under pressure
 // ---------------------------------------------------------------------------

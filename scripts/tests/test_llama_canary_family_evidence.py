@@ -559,26 +559,28 @@ class WorkflowRerunContractTests(unittest.TestCase):
             result = subprocess.run(['bash', '-c', steps[gate]['run']], env={**os.environ, 'OUTCOME': outcome})
             self.assertEqual(result.returncode == 0, outcome == 'success')
 
-    def test_feedback_preserves_attempt_history(self):
-        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-upstream-canary.yml').read_text())
-        for name in ('repair-2', 'repair-3'):
-            inputs = workflow['jobs'][name]['with']
-            for key in ('feedback_pattern', 'feedback_build_pattern'):
-                self.assertNotIn('github.run_attempt', inputs[key])
-                self.assertIn('github.run_id', inputs[key])
+    def test_family_pass_has_no_cross_pass_feedback_loop(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
+        inputs = workflow[True]['workflow_call']['inputs']
+        self.assertNotIn('feedback_pattern', inputs)
+        self.assertNotIn('feedback_build_pattern', inputs)
+        self.assertNotIn('canary-feedback', (ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
 
 
 class WorkflowTerminalGateTests(unittest.TestCase):
-    def run_gate(self, *, changed=True, certify=True, repair=None, verify=None, mesh_source=""):
+    def run_gate(self, *, changed=True, certify=True, candidate=None, verify=None,
+                 mesh_source="", preflight="success"):
         workflow = yaml.safe_load((ROOT / '.github/workflows/llama-upstream-canary.yml').read_text())
         step = workflow['jobs']['result']['steps'][0]
         body = step['run'].split("python3 - <<'PYCODE'\n", 1)[1].rsplit('PYCODE', 1)[0]
-        needs = {'resolve': {'result': 'success', 'outputs': {
-            'changed': str(changed).lower(), 'certify': str(certify).lower(), 'mesh_source': mesh_source}}}
-        for attempt in range(1, 4):
-            for mode, values in (('repair', repair or {}), ('verify', verify or {})):
-                outputs = values.get(attempt, {})
-                needs[f'{mode}-{attempt}'] = {'result': 'success' if outputs else 'skipped', 'outputs': outputs}
+        needs = {
+            'resolve': {'result': 'success', 'outputs': {
+                'changed': str(changed).lower(), 'certify': str(certify).lower(),
+                'mesh_source': mesh_source}},
+            'preflight': {'result': preflight, 'outputs': {}},
+            'candidate': {'result': 'success' if candidate else 'skipped', 'outputs': candidate or {}},
+            'verification': {'result': 'success' if verify else 'skipped', 'outputs': verify or {}},
+        }
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'output'
             result = subprocess.run(['python3', '-c', body], env={**os.environ,
@@ -590,43 +592,42 @@ class WorkflowTerminalGateTests(unittest.TestCase):
         return {'green': 'true', 'head': head, 'package': 'candidate-package', 'identity': 'b'*64, 'branch': 'branch'}
 
     def test_success_requires_both_passes_on_same_commit(self):
-        code, out = self.run_gate(repair={1: self.green()}, verify={1: self.green()})
+        code, out = self.run_gate(candidate=self.green(), verify=self.green())
         self.assertEqual(code, 0)
         self.assertIn('publish=true', out)
-        code, out = self.run_gate(repair={1: self.green()}, verify={1: self.green('c'*40)})
+        code, out = self.run_gate(candidate=self.green(), verify=self.green('c'*40))
         self.assertNotEqual(code, 0)
         self.assertNotIn('publish=true', out)
 
-    def test_success_after_repair_uses_later_candidate(self):
-        code, out = self.run_gate(repair={1: {'head': 'a'*40}, 2: self.green('c'*40)},
-                                  verify={2: self.green('c'*40)})
-        self.assertEqual(code, 0)
-        self.assertIn('head='+'c'*40, out)
-
-    def test_missing_verification_and_exhaustion_deny_publication(self):
-        code, out = self.run_gate(repair={i: self.green() for i in range(1, 4)})
+    def test_missing_verification_denies_publication(self):
+        code, out = self.run_gate(candidate=self.green())
         self.assertNotEqual(code, 0)
         self.assertEqual(out, '')
 
     def test_unchanged_pin_requires_families_but_never_publishes(self):
-        code, out = self.run_gate(changed=False, repair={1: self.green()})
+        code, out = self.run_gate(changed=False, candidate=self.green())
         self.assertEqual(code, 0)
         self.assertEqual(out, '')
         code, _ = self.run_gate(changed=False)
         self.assertNotEqual(code, 0)
 
     def test_selected_source_requires_exact_head_and_never_publishes(self):
-        code, out = self.run_gate(changed=False, mesh_source='a'*40, repair={1: self.green()})
+        code, out = self.run_gate(changed=False, mesh_source='a'*40, candidate=self.green())
         self.assertEqual(code, 0)
         self.assertEqual(out, '')
         for changed, head in ((True, 'a'*40), (False, 'b'*40)):
-            code, out = self.run_gate(changed=changed, mesh_source='a'*40, repair={1: self.green(head)})
+            code, out = self.run_gate(changed=changed, mesh_source='a'*40, candidate=self.green(head))
             self.assertNotEqual(code, 0)
             self.assertEqual(out, '')
 
     def test_non_forced_unchanged_manual_is_read_only_noop(self):
-        code, out = self.run_gate(changed=False, certify=False)
+        code, out = self.run_gate(changed=False, certify=False, preflight="skipped")
         self.assertEqual(code, 0)
+        self.assertEqual(out, '')
+
+    def test_preflight_failure_is_reported_as_infrastructure(self):
+        code, out = self.run_gate(candidate=self.green(), verify=self.green(), preflight="failure")
+        self.assertNotEqual(code, 0)
         self.assertEqual(out, '')
 
 

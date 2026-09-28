@@ -16,11 +16,16 @@ use skippy_protocol::{
 use skippy_runtime::{ModelStateKind, RuntimeKvPageDesc};
 
 use super::{
-    EXACT_STATE_RECORD_CAPACITY, ExactStateByteLimits, KvLifecycleEvent, KvLifecycleObserver,
-    KvStageIntegration, PendingExactStateRecord, RadixExactEntry, ResidentSequencePool,
-    StageKvMode, StagePrefixCachePayload,
+    EXACT_STATE_RECORD_CAPACITY, EXACT_STATE_RECORD_QUEUE_BYTES, ExactStateByteLimits,
+    KvLifecycleEvent, KvLifecycleObserver, KvStageIntegration, PendingExactStateRecord,
+    RadixExactEntry, ResidentSequencePool, StageKvMode, StagePrefixCachePayload,
     model_capability::{ModelKvCapability, loaded_model_kv_capability},
     output_tokens::OutputTokenCache,
+};
+
+mod durable_spill;
+use durable_spill::{
+    DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
 
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
@@ -240,11 +245,30 @@ impl KvStageIntegration {
         let exact_state_worker_pause = Arc::new(std::sync::atomic::AtomicBool::new(false));
         #[cfg(test)]
         let worker_exact_state_pause = exact_state_worker_pause.clone();
+        #[cfg(test)]
+        let l3_spill_worker_received = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        #[cfg(test)]
+        let worker_l3_spill_received = l3_spill_worker_received.clone();
+        #[cfg(test)]
+        let l3_spill_worker_pause = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(test)]
+        let worker_l3_spill_pause = l3_spill_worker_pause.clone();
         let exact_state_record_worker_healthy = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let worker_exact_state_record_worker_healthy = exact_state_record_worker_healthy.clone();
         let exact_state_record_worker_panics = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_exact_state_record_worker_panics = exact_state_record_worker_panics.clone();
         let worker_observer = observer.clone();
+        let (durable_spill_tx, durable_spill_task) = start_durable_spill_worker(
+            worker_l3.clone(),
+            worker_cachegen,
+            EXACT_STATE_RECORD_QUEUE_BYTES,
+            &config.stage_id,
+            #[cfg(test)]
+            worker_l3_spill_received,
+            #[cfg(test)]
+            worker_l3_spill_pause,
+        )?;
+        let worker_durable_spill_tx = durable_spill_tx.clone();
         let exact_state_record_task = std::thread::Builder::new()
             .name(format!("skippy-exact-cache-{}", config.stage_id))
             .spawn(move || {
@@ -269,18 +293,33 @@ impl KvStageIntegration {
                         worker_observer.as_ref(),
                         pending,
                         |pending| {
-                            store_exact_radix_record_with_codec(
+                            // The serving worker owns only L1/L2 publication.
+                            // Durable I/O runs on its own bounded fail-open
+                            // worker so an early page spill cannot head-of-line
+                            // block later page records needed by a repeat.
+                            let durable_spill = store_exact_radix_record_with_codec(
                                 &worker_radix,
                                 &worker_exact_blobs,
                                 exact_max_entries,
                                 exact_byte_limits,
                                 worker_l2.as_ref(),
                                 DurableRecordTarget {
-                                    l3: worker_l3.as_deref(),
+                                    l3: None,
                                     cachegen_enabled: worker_cachegen,
+                                    #[cfg(test)]
+                                    before_l3_spill: None,
                                 },
                                 pending,
-                            )
+                            )?;
+                            if let (Some(tx), Some(durable_spill)) =
+                                (worker_durable_spill_tx.as_ref(), durable_spill)
+                            {
+                                // L3 is a durability floor, not a serving
+                                // dependency. A saturated or stopped spill
+                                // worker must leave the valid L1 record alone.
+                                let _ = tx.try_send(durable_spill);
+                            }
+                            Ok(())
                         },
                     );
                     if let Some(fill_claim) = fill_claim {
@@ -306,6 +345,7 @@ impl KvStageIntegration {
         let exact_state_record_worker = Arc::new(super::ExactStateRecordWorker::new(
             exact_state_record_tx,
             exact_state_record_task,
+            durable_spill_task,
         ));
         Ok(Some(Self {
             mode,
@@ -337,6 +377,10 @@ impl KvStageIntegration {
             exact_state_worker_received,
             #[cfg(test)]
             exact_state_worker_pause,
+            #[cfg(test)]
+            l3_spill_worker_received,
+            #[cfg(test)]
+            l3_spill_worker_pause,
             exact_state_record_worker_healthy,
             exact_state_record_worker_panics,
             cache_healthy: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -615,15 +659,11 @@ fn store_exact_radix_record(
         DurableRecordTarget {
             l3,
             cachegen_enabled: false,
+            before_l3_spill: None,
         },
         pending,
     )
-}
-
-#[derive(Clone, Copy)]
-struct DurableRecordTarget<'a> {
-    l3: Option<&'a L3Tier>,
-    cachegen_enabled: bool,
+    .map(|_| ())
 }
 
 fn store_exact_radix_record_with_codec(
@@ -634,132 +674,49 @@ fn store_exact_radix_record_with_codec(
     l2: Option<&super::l2_serving::StageL2>,
     durable: DurableRecordTarget<'_>,
     pending: PendingExactStateRecord,
-) -> Result<()> {
+) -> Result<Option<PendingDurableSpill>> {
     let DurableRecordTarget {
         l3,
         cachegen_enabled,
+        #[cfg(test)]
+        before_l3_spill,
     } = durable;
-    #[cfg(test)]
-    let stored_namespace = pending.namespace.clone();
-    // Write through to the durable tier before the payload is deduplicated
-    // into blocks, while its bytes are still contiguous. Best-effort: a full
-    // or failing disk must not fail the in-memory record. The refusal reason
-    // lands in the tier's status; one warning per process keeps a full disk
-    // from flooding the log.
-    if pending.write_through_l3
-        && let Some(l3) = l3
-    {
-        let kv_desc_json = pending
-            .extra
-            .kv_desc
-            .as_ref()
-            .and_then(|desc| serde_json::to_string(desc).ok());
-        let geometry = pending
-            .extra
-            .kv_desc
-            .as_ref()
-            .and_then(|desc| kv_page_geometry(desc, pending.payload.byte_len()));
-        let cachegen_spill = if cachegen_enabled {
-            match (
-                pending.extra.kv_desc.as_ref(),
-                pending.payload.kv_bytes().ok().flatten(),
-            ) {
-                (Some(desc), Some(kv))
-                    if !kv.is_empty() && cachegen_descriptor_is_qualified(desc) =>
-                {
-                    match skippy_runtime::encode_cachegen_kv_page(desc, kv.as_ref()) {
-                        Ok(archive) if archive.bytes.len() < kv.len() => {
-                            let calibration_digest = skippy_cache::segment_digest(&archive.bytes);
-                            Some(l3.spill_cachegen_with_cost(
-                                &pending.namespace,
-                                &pending.token_ids,
-                                &pending.payload,
-                                kv_desc_json.clone().unwrap_or_default(),
-                                skippy_cache::CacheGenKvPayload {
-                                    archive: archive.bytes,
-                                    decoded_len: desc.payload_bytes,
-                                    calibration_digest,
-                                },
-                                pending.l3_cost,
-                            ))
-                        }
-                        Ok(_) => None,
-                        Err(error) => {
-                            static WARNED_CACHEGEN: std::sync::atomic::AtomicBool =
-                                std::sync::atomic::AtomicBool::new(false);
-                            if !WARNED_CACHEGEN.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                                let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
-                                    message: "CacheGen encode declined; storing native KV page"
-                                        .to_string(),
-                                    context: Some(format!(
-                                        "page_id={} reason={error:#}",
-                                        pending.page_id
-                                    )),
-                                });
-                            }
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let spill = cachegen_spill.unwrap_or_else(|| {
-            l3.spill_with_cost(
-                &pending.namespace,
-                &pending.token_ids,
-                &pending.payload,
-                kv_desc_json,
-                geometry.as_ref(),
-                pending.l3_cost,
-            )
-        });
-        emit_l3_state_transitions(l3);
-        if let Err(error) = spill {
-            static WARNED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
-                    message: "Skippy L3 disk cache write refused; see kv-cache status".to_string(),
-                    context: Some(format!("page_id={} reason={error:#}", pending.page_id)),
-                });
-            }
-        }
-    }
-    if let (Some(l2), Some(payload_digest)) = (l2, pending.l2_promotion_digest.as_deref()) {
-        let _ = l2.promote(
-            &pending.namespace,
-            &pending.token_ids,
-            payload_digest,
-            &pending.payload,
-            &pending.extra,
-        );
-    }
-    let logical_bytes = pending.payload.byte_len();
-    let (payload, _) = pending.payload.dedupe_into(
+    let PendingExactStateRecord {
+        page_id,
+        payload,
+        extra,
+        namespace,
+        token_ids,
+        l3_fill_claim: _,
+        write_through_l3,
+        l2_promotion_digest,
+        l3_cost,
+        admission_credit: _admission_credit,
+    } = pending;
+    let logical_bytes = payload.byte_len();
+    let (payload, _) = payload.dedupe_into(
         &mut blobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     );
-    // Cloning retains the Arc-backed blocks without changing blob-store
-    // accounting, leaving `payload` available to roll that accounting back if
-    // the radix rejects the insert.
+    // Publish the serving tier before optional lower-tier work. `payload` and
+    // the radix value share Arc-backed blocks, so L2/L3 can retain the exact
+    // bytes without delaying an immediate repeat request's L1 lookup.
     let mut released = Vec::new();
     let insert_result = {
         let mut radix = radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let insert_result = radix.insert_recurrent(
-            pending.namespace,
-            &pending.token_ids,
+            namespace.clone(),
+            &token_ids,
             logical_bytes,
-            RadixExactEntry {
-                page_id: pending.page_id,
-                payload: payload.clone(),
-                extra: pending.extra,
-            },
+            RadixExactEntry::new(
+                page_id.clone(),
+                payload.clone(),
+                extra.clone(),
+                write_through_l3,
+            ),
         );
         match insert_result {
             Err(error) => Err(error),
@@ -810,8 +767,34 @@ fn store_exact_radix_record_with_codec(
     )?;
     evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1)?;
     #[cfg(test)]
-    crate::frontend::capture_trace::log_stored_identity(&stored_namespace, &pending.token_ids);
-    Ok(())
+    crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
+
+    if let (Some(l2), Some(payload_digest)) = (l2, l2_promotion_digest.as_deref()) {
+        let _ = l2.promote(&namespace, &token_ids, payload_digest, &payload, &extra);
+    }
+    // Durable write-through is best-effort after L1 publication: a slow, full,
+    // or failing disk must not delay or invalidate the in-memory record. The
+    // refusal reason lands in the tier's status; one warning per process keeps
+    // a full disk from flooding the log.
+    let durable_spill = write_through_l3.then_some(PendingDurableSpill {
+        page_id,
+        payload,
+        extra,
+        namespace,
+        token_ids,
+        l3_cost,
+    });
+    if write_through_l3 && let Some(l3) = l3 {
+        if let Some(durable_spill) = durable_spill {
+            #[cfg(test)]
+            if let Some(before_l3_spill) = before_l3_spill {
+                before_l3_spill();
+            }
+            spill_exact_record_to_l3(l3, cachegen_enabled, durable_spill);
+        }
+        return Ok(None);
+    }
+    Ok(durable_spill)
 }
 
 fn cachegen_serving_enabled(config: &StageConfig, codec: StageKvCacheCodec) -> bool {
@@ -1040,6 +1023,8 @@ mod tests {
     use super::*;
     use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
 
+    mod durable_spill;
+
     fn limits(soft_bytes: u64, hard_bytes: u64) -> ExactStateByteLimits {
         ExactStateByteLimits {
             soft_bytes,
@@ -1178,6 +1163,7 @@ mod tests {
             DurableRecordTarget {
                 l3: Some(&tier),
                 cachegen_enabled: true,
+                before_l3_spill: None,
             },
             pending_kv("cachegen", &tokens, desc.clone(), &budget),
         )
@@ -1224,6 +1210,7 @@ mod tests {
             DurableRecordTarget {
                 l3: Some(&tier),
                 cachegen_enabled: true,
+                before_l3_spill: None,
             },
             pending_kv("native", &tokens, desc, &budget),
         )
@@ -2406,11 +2393,12 @@ mod reserved_admission_harness {
                 chat_identity.namespace.clone(),
                 &chat_identity.token_ids,
                 32,
-                RadixExactEntry {
-                    page_id: "exact".to_string(),
-                    payload: ExactStatePayload::full_state(vec![9]),
-                    extra: ExactStateExtra::default(),
-                },
+                RadixExactEntry::new(
+                    "exact".to_string(),
+                    ExactStatePayload::full_state(vec![9]),
+                    ExactStateExtra::default(),
+                    true,
+                ),
             )
             .expect("seeding the radix must succeed");
 
@@ -2446,11 +2434,12 @@ mod reserved_admission_harness {
                 chat_identity.namespace.clone(),
                 &chat_identity.token_ids,
                 32,
-                RadixExactEntry {
-                    page_id: "pre-existing".to_string(),
-                    payload: ExactStatePayload::full_state(vec![9]),
-                    extra: ExactStateExtra::default(),
-                },
+                RadixExactEntry::new(
+                    "pre-existing".to_string(),
+                    ExactStatePayload::full_state(vec![9]),
+                    ExactStateExtra::default(),
+                    true,
+                ),
             )
             .expect("pre-seeding the radix must succeed");
         let result = kv.record_exact_state(

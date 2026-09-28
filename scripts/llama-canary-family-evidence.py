@@ -152,6 +152,20 @@ def preflight_battery(root: Path) -> None:
                        stdout=subprocess.DEVNULL)
 
 
+def preflight(args) -> None:
+    """Prove the immutable roster and cache are ready before candidate work starts."""
+    root = args.root.resolve()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    plan = source_plan(root, args.output, check_cache=True)
+    matrix = scheduling_matrix(plan)
+    write(args.output.parent / "summary.json", {
+        "families": len(plan["selected_models"]),
+        "matrix_jobs": len(matrix["include"]),
+        "status": "ready",
+    })
+    print(f"Canary environment ready: {len(plan['selected_models'])} families and pinned cache verified")
+
+
 def check_binary(path: Path) -> None:
     arches = subprocess.check_output(["lipo", "-archs", str(path)], text=True).strip()
     if arches != "arm64":
@@ -625,6 +639,9 @@ def main() -> None:
     for name in ("candidate", "base", "branch", "pass-id"):
         p.add_argument("--" + name, required=True)
     subs.add_parser("build")
+    p = subs.add_parser("preflight")
+    p.add_argument("--root", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
     for command in ("restore", "receipt", "aggregate", "publication", "certify"):
         p = subs.add_parser(command)
         p.add_argument("--package", type=Path, required=True)

@@ -59,6 +59,7 @@ fn proto_descriptor_to_local(
             reasoning: proto_capability_level_to_local(caps.reasoning),
             tool_use: proto_capability_level_to_local(caps.tool_use),
             moe: caps.moe,
+            system_one: proto_capability_level_to_local(caps.system_one),
         })
         .unwrap_or_default();
     Some(ServedModelDescriptor {
@@ -98,6 +99,25 @@ fn proto_descriptor_to_local(
 mod tests {
     use super::*;
     use crate::protocol::convert::proto_ann_to_local;
+
+    #[test]
+    fn system_one_capability_decodes_from_additive_proto_field() {
+        let descriptor = node::ServedModelDescriptor {
+            identity: Some(node::ServedModelIdentity {
+                model_name: "decision-model".to_string(),
+                ..Default::default()
+            }),
+            capabilities_known: Some(true),
+            capabilities: Some(node::ModelCapabilities {
+                system_one: node::CapabilityLevel::Supported as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let local = proto_descriptor_to_local(&descriptor).expect("valid descriptor");
+        assert!(local.capabilities.supports_system_one_runtime());
+    }
 
     /// Include both legacy fallback sources so malformed descriptors cannot hide the regression.
     fn announcement_with_legacy_routes() -> node::PeerAnnouncement {

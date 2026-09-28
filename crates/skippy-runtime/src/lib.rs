@@ -6,10 +6,12 @@ mod activation;
 mod capability_probe;
 mod checkpoint;
 mod config;
+mod decision;
 mod devices;
 mod error;
 mod gguf_writer;
 mod kv_pages;
+mod laya;
 mod logging;
 mod media;
 mod native;
@@ -34,6 +36,10 @@ pub use config::{
     GGML_TYPE_Q8_0, GlmDsaPolicy, LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH,
     MtpSource, RuntimeConfig, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SplitMode, parse_cache_type,
 };
+pub use decision::{
+    DecisionError, DecisionModel, DecisionOutput, DecisionQuestion, DecisionQuestionKind,
+    DecisionRequest, DecisionValue,
+};
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub(crate) use error::ensure_ok;
 pub use gguf_writer::{
@@ -41,6 +47,7 @@ pub use gguf_writer::{
     write_gguf_metadata_from_parts,
 };
 pub use kv_pages::{decode_cachegen_kv_page, encode_cachegen_kv_page};
+pub use laya::{LayaMemory, LayaModel, LayaModelInfo};
 pub use logging::{
     LLAMA_LOG_LEVEL_DEBUG, MeasuredNativeBuffers, NativeLogEvent, NativeLogParserMode,
     NativeLogParserPolicy, configure_native_log_parser, disable_verbose_native_logs,
@@ -58,12 +65,12 @@ pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};
 pub use runtime_event_reporter::{
     RECORD_RING_CAPACITY, buffered_runtime_events, clear_runtime_event_reporter,
     deliver_runtime_event_for_test, drain_runtime_events, dropped_runtime_events,
-    install_runtime_event_reporter,
+    install_runtime_event_reporter, rejected_runtime_events, runtime_event_reporter_installed,
 };
 pub use runtime_events::{
-    INLINE_DETAIL_BYTES, NativeEventRecord, OperationId, RuntimeEvent, RuntimeEventCategory,
-    RuntimeEventEmitterKind, RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit,
-    next_operation_id,
+    INLINE_DETAIL_BYTES, MODEL_OPEN_RECORD_CAPACITY, ModelOpenEventQueue, NativeEventRecord,
+    OperationId, RecordRejection, RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind,
+    RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit, next_operation_id,
 };
 pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;

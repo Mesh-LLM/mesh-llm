@@ -1,5 +1,4 @@
 use std::mem;
-use std::ptr;
 
 use skippy_ffi::{
     SkippyRuntimeEventCategory as RawRuntimeEventCategory,
@@ -9,6 +8,9 @@ use skippy_ffi::{
     SkippyRuntimeEventProgressUnit as RawRuntimeEventProgressUnit,
     SkippyRuntimeEventV1 as RawRuntimeEvent, Status,
 };
+
+#[cfg(test)]
+use super::NativeEventRecord;
 
 /// Safety bound on a native event's `detail_len`. A malformed or hostile
 /// value here must never drive an unbounded copy; anything past this is
@@ -422,82 +424,16 @@ assert_shared_field_offsets!(
 );
 
 impl RuntimeEvent {
+    /// Single validation path: the same checks the callback boundary applies
+    /// (see [`NativeEventRecord::from_raw_ptr`]), then expansion on the
+    /// caller's thread. Production code consumes records from a queue; this
+    /// one-shot form exists for tests.
+    #[cfg(test)]
     pub(crate) fn from_raw_ptr(event: *const RawRuntimeEvent) -> Option<Self> {
-        if event.is_null() {
-            return None;
-        }
-        // SAFETY: prefix-validate before any other field read. The
-        // versioned-struct ABI contract guarantees every allocation covers
-        // at least `struct_size`'s own offset; we read only that field via
-        // `read_unaligned` and refuse to form a full struct reference until
-        // it proves the allocation covers at least the base (pre-extension)
-        // known layout.
-        let struct_size = unsafe { ptr::read_unaligned(ptr::addr_of!((*event).struct_size)) };
-        let base_size = mem::size_of::<BaseRawRuntimeEvent>();
-        if (struct_size as usize) < base_size {
-            return None;
-        }
-        let covers_extension = (struct_size as usize) >= mem::size_of::<RawRuntimeEvent>();
-
-        // SAFETY: struct_size was just validated to cover at least
-        // `base_size`, and `BaseRawRuntimeEvent` is `repr(C)` with the exact
-        // same field prefix as `RawRuntimeEvent` (the C "common initial
-        // sequence" pattern) -- reading through this narrower reference
-        // never touches bytes past what struct_size proved is allocated,
-        // regardless of whether the extension fields exist.
-        let base = unsafe { &*event.cast::<BaseRawRuntimeEvent>() };
-        let detail_len = usize::try_from(base.detail_len).ok()?;
-        if detail_len > MAX_DETAIL_BYTES {
-            return None;
-        }
-        let detail_bytes = if detail_len == 0 || base.detail_ptr.is_null() {
-            Vec::new()
-        } else {
-            // SAFETY: detail_len is bound-checked above and detail_ptr is
-            // non-null; the reporter contract guarantees this byte range is
-            // valid and immutable for the callback's duration.
-            unsafe { std::slice::from_raw_parts(base.detail_ptr.cast::<u8>(), detail_len) }.to_vec()
-        };
-
-        let (numeric_summary_0, numeric_summary_1, numeric_summary_2, numeric_summary_3) =
-            if covers_extension {
-                // SAFETY: struct_size covers the full extended layout, so
-                // the caller's ABI contract guarantees this range is
-                // initialized and in-bounds.
-                let full = unsafe { &*event };
-                (
-                    Some(full.numeric_summary_0),
-                    Some(full.numeric_summary_1),
-                    Some(full.numeric_summary_2),
-                    Some(full.numeric_summary_3),
-                )
-            } else {
-                (None, None, None, None)
-            };
-
-        Some(Self {
-            abi_version: base.abi_version,
-            struct_size,
-            category: base.category.into(),
-            kind: base.kind.into(),
-            emitter: base.emitter.into(),
-            reserved0: base.reserved0,
-            sequence: base.sequence,
-            timestamp_mono_ns: base.timestamp_mono_ns,
-            model_id: base.model_id,
-            stage_id: base.stage_id,
-            session_id: base.session_id,
-            progress_current: base.progress_current,
-            progress_total: base.progress_total,
-            progress_unit: base.progress_unit.into(),
-            failure_code: base.failure_code.into(),
-            status: base.status,
-            reserved1: base.reserved1,
-            detail_bytes,
-            numeric_summary_0,
-            numeric_summary_1,
-            numeric_summary_2,
-            numeric_summary_3,
-        })
+        // SAFETY: callers pass null or a pointer honoring the reporter ABI
+        // contract, which is exactly `NativeEventRecord::from_raw_ptr`'s.
+        unsafe { NativeEventRecord::from_raw_ptr(event) }
+            .ok()
+            .map(|record| record.to_event())
     }
 }

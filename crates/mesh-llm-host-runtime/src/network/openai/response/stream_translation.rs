@@ -162,7 +162,7 @@ impl StreamedChatAssembly {
     }
 }
 
-async fn write_captured_sse_event(
+pub(super) async fn write_captured_sse_event(
     tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     event: Option<&str>,
@@ -888,8 +888,8 @@ mod tests {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
-                buffered: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
-                header_end: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".len(),
+                buffered: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".to_vec(),
+                header_end: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".len(),
                 status_code: 201,
                 retryable_context_overflow: false,
             };
@@ -971,7 +971,8 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let header =
+            b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
         let capture = Arc::new(Captures::default());
         let observer_capture: Arc<dyn OpenAiArtifactCapture> = capture.clone();
         let server_task = tokio::spawn(async move {
@@ -1077,7 +1078,7 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: frontend\r\n\r\n";
+        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: frontend\r\n\r\n";
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
@@ -1128,7 +1129,8 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let header =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
@@ -1181,7 +1183,8 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let header =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
@@ -1230,8 +1233,8 @@ mod tests {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
-                buffered: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
-                header_end: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".len(),
+                buffered: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".to_vec(),
+                header_end: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".len(),
                 status_code: 200,
                 retryable_context_overflow: false,
             };
@@ -1291,8 +1294,8 @@ mod tests {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
-                buffered: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
-                header_end: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".len(),
+                buffered: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".to_vec(),
+                header_end: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".len(),
                 status_code: 200,
                 retryable_context_overflow: false,
             };
@@ -1345,7 +1348,8 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let header =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();

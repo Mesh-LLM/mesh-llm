@@ -30,7 +30,7 @@
 
 use std::ffi::c_void;
 use std::mem;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use crossbeam_queue::ArrayQueue;
@@ -51,6 +51,8 @@ pub const RECORD_RING_CAPACITY: usize = 1024;
 
 static RECORDS: OnceLock<ArrayQueue<NativeEventRecord>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
+static REJECTED: AtomicU64 = AtomicU64::new(0);
+static INSTALLED: AtomicBool = AtomicBool::new(false);
 static REPORTER_LIFECYCLE: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn records() -> &'static ArrayQueue<NativeEventRecord> {
@@ -73,11 +75,15 @@ unsafe extern "C" fn runtime_reporter_trampoline(
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: the reporter ABI contract guarantees `event` is null or
         // points at a `SkippyRuntimeEventV1` valid for this call.
-        let Some(record) = (unsafe { NativeEventRecord::from_raw_ptr(event) }) else {
-            return;
-        };
-        if records().push(record).is_err() {
-            DROPPED.fetch_add(1, Ordering::Relaxed);
+        match unsafe { NativeEventRecord::from_raw_ptr(event) } {
+            Ok(record) => {
+                if records().push(record).is_err() {
+                    DROPPED.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Err(_) => {
+                REJECTED.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }));
 }
@@ -105,6 +111,13 @@ pub fn drain_runtime_events(out: &mut Vec<NativeEventRecord>, max: usize) -> usi
 #[must_use]
 pub fn dropped_runtime_events() -> u64 {
     DROPPED.load(Ordering::Relaxed)
+}
+
+/// Events refused at the callback boundary (null, short struct, wrong ABI
+/// version, oversized detail). Monotonic for the life of the process.
+#[must_use]
+pub fn rejected_runtime_events() -> u64 {
+    REJECTED.load(Ordering::Relaxed)
 }
 
 /// Records currently buffered for the consumer.
@@ -222,7 +235,17 @@ fn install_runtime_event_reporter_with_setter(set_fn: SetReporterFn) -> bool {
         callback: Some(runtime_reporter_trampoline),
         user_data: std::ptr::null_mut(),
     };
-    (unsafe { set_fn(&reporter) }) == skippy_ffi::Status::Ok
+    let installed = (unsafe { set_fn(&reporter) }) == skippy_ffi::Status::Ok;
+    INSTALLED.store(installed, Ordering::Release);
+    installed
+}
+
+/// Whether the process-global reporter is currently installed. A confirmed
+/// capability bit alone does not mean structured events are flowing: the
+/// native setter can still refuse the reporter.
+#[must_use]
+pub fn runtime_event_reporter_installed() -> bool {
+    INSTALLED.load(Ordering::Acquire)
 }
 
 /// Clears the runtime-scoped event reporter. Blocks (via the native
@@ -251,6 +274,7 @@ fn clear_runtime_event_reporter_with_clearer(clear_fn: Option<ClearReporterFn>) 
     if let Some(clear_fn) = clear_fn {
         unsafe { clear_fn() };
     }
+    INSTALLED.store(false, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -374,6 +398,30 @@ mod tests {
         undersized.struct_size = 8;
         unsafe { runtime_reporter_trampoline(&undersized, std::ptr::null_mut()) };
 
+        assert!(drain_all().is_empty());
+    }
+
+    /// Every refused event is counted, including a wrong ABI version, and
+    /// none of them is counted as a drop.
+    #[test]
+    fn the_global_reporter_counts_rejected_records() {
+        let _test_guard = test_guard();
+        let _ = drain_all();
+        let rejected_before = rejected_runtime_events();
+        let dropped_before = dropped_runtime_events();
+
+        let mut wrong_abi = raw_event();
+        wrong_abi.abi_version = 2;
+        let mut undersized = raw_event();
+        undersized.struct_size = 8;
+        unsafe {
+            runtime_reporter_trampoline(std::ptr::null(), std::ptr::null_mut());
+            runtime_reporter_trampoline(&undersized, std::ptr::null_mut());
+            runtime_reporter_trampoline(&wrong_abi, std::ptr::null_mut());
+        }
+
+        assert_eq!(rejected_runtime_events(), rejected_before + 3);
+        assert_eq!(dropped_runtime_events(), dropped_before);
         assert!(drain_all().is_empty());
     }
 

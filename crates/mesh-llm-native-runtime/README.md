@@ -20,9 +20,22 @@ matrix:
 - `rocm` with optional GFX targets
 - `vulkan`
 
-The hard compatibility boundary is exact Skippy ABI. `mesh_version` is still
-recorded and used for cache/prune layout, but a runtime is selected by
-`skippy_abi`, platform, and backend requirements.
+Selection is a hard match on four things, and failing any one of them is a
+rejection rather than a lower rank: `mesh_version`, `skippy_abi`, platform
+(OS, architecture, target triple, minimum glibc), and the backend
+requirements the host must satisfy. `resolver.rs` returns the reason as a
+structured `CandidateRejection`.
+
+`mesh_version` is not only cache layout. Installed runtimes live under
+`<cache-root>/<mesh_version>/<runtime-id>/`, `NativeRuntimeCache::install_manifest`
+writes the *manifest's* version into that path, and the prune policy removes
+non-active version directories. `mesh-llm-runtime-install` also treats
+`mesh_version` and `skippy_abi` together as the single "matches the current
+SDK" predicate. A runtime from a different MeshLLM release is therefore not
+selectable even when its Skippy ABI matches: it would be installed under a
+version directory the running host does not read. Expect a
+`MeshVersionMismatch` rejection (`MeshLLM version mismatch: expected X, found
+Y`) until the runtime is rebuilt or re-fetched for the host's own version.
 
 ## Artifact Manifest
 
@@ -32,7 +45,7 @@ Each packaged runtime directory contains `manifest.json`:
 {
   "runtime": {
     "id": "meshllm-native-runtime-linux-x86_64-cuda13-sm120",
-    "mesh_version": "0.76.1",
+    "mesh_version": "0.77.0",
     "skippy_abi": "0.1.25",
     "platform": {
       "os": "linux",
@@ -98,18 +111,18 @@ Release jobs publish `native-runtimes.json`:
 
 ```json
 {
-  "mesh_version": "0.76.1",
+  "mesh_version": "0.77.0",
   "skippy_abi": "0.1.25",
   "artifacts": [
     {
       "id": "meshllm-native-runtime-linux-x86_64-cpu",
-      "mesh_version": "0.76.1",
+      "mesh_version": "0.77.0",
       "skippy_abi": "0.1.25",
       "platform": { "os": "linux", "arch": "x86_64" },
       "backend": { "kind": "cpu" },
       "rank": 0,
       "libraries": ["lib/libllama.so"],
-      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.76.1/meshllm-native-runtime-linux-x86_64-cpu.tar.gz",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.77.0/meshllm-native-runtime-linux-x86_64-cpu.tar.gz",
       "sha256": "2f1c..."
     }
   ]
@@ -190,7 +203,7 @@ use std::path::PathBuf;
 #     manifest: NativeRuntimeReleaseManifest,
 # ) -> anyhow::Result<()> {
 let cache = NativeRuntimeCache::new("/tmp/mesh-llm/native-runtimes");
-let resolution = NativeRuntimeResolver::new("0.76.1", profile, manifest, cache)
+let resolution = NativeRuntimeResolver::new("0.77.0", profile, manifest, cache)
     .with_skippy_abi_version("0.1.25")
     .with_bundle_dirs(vec![PathBuf::from("./meshllm-native-runtime-linux-x86_64-cpu")])
     .resolve(&RuntimeSelection::Recommended)?;
@@ -289,7 +302,7 @@ Generate the release manifest:
 
 ```bash
 scripts/generate-native-runtime-release-manifest.sh \
-  --tag v0.76.1 \
+  --tag v0.77.0 \
   --out dist/native-runtimes/native-runtimes.json \
   dist/native-runtimes/*.tar.gz
 ```

@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 64;
+pub const ABI_VERSION_PATCH: u32 = 66;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -34,10 +34,12 @@ pub use abi::{
     BACKEND_DEVICE_CAP_HOST_BUFFER, BackendDevice, BackendDeviceType, Error,
     FEATURE_ACTIVATION_BOUNDARY, FEATURE_BACKEND_DEVICES, FEATURE_CACHEGEN_KV_PAGE,
     FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS, FEATURE_ITERATION_BATCH, FEATURE_KV_EVENTS,
-    FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_MODEL_SOURCE, FEATURE_MTP_MULTIMODAL,
-    FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT, FEATURE_NON_CHAT_WORKLOADS,
-    FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS, FEATURE_STAGE_PLAN, FEATURE_SYSTEM_ONE,
-    FEATURE_UNLOAD_EVENTS, IterationRequest, LlamaLogCallback, LlamaPerfContextData,
+    FEATURE_LAYA_DECISIONS, FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_MODEL_SOURCE,
+    FEATURE_MTP_MULTIMODAL, FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT,
+    FEATURE_NON_CHAT_WORKLOADS, FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS,
+    FEATURE_STAGE_PLAN, FEATURE_SYSTEM_ONE, FEATURE_UNLOAD_EVENTS, IterationRequest,
+    LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LAYA_QTYPE_COUNT, LayaInfoV1,
+    LayaMemoryV1, LayaModel, LayaSequence, LlamaLogCallback, LlamaPerfContextData,
     LlamaPerfContextFn, LoadMode, MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model, ModelImatrixEntryV1,
     ModelInfo, ModelReadTensorF32Callback, ModelTensorSourceV1, MtmdProgressCallback, MtpSource,
     NgramCache, Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn,
@@ -121,7 +123,9 @@ pub use dynamic::{
     skippy_detokenize, skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
     skippy_export_recurrent_state, skippy_export_state, skippy_import_cachegen_kv_page_v1,
     skippy_import_full_state, skippy_import_kv_page, skippy_import_recurrent_state,
-    skippy_import_state, skippy_iteration_batch_sampled, skippy_model_attach_mtp_draft_model_fn,
+    skippy_import_state, skippy_iteration_batch_sampled, skippy_laya_model_free,
+    skippy_laya_model_info_v1, skippy_laya_model_memory_v1, skippy_laya_model_open,
+    skippy_laya_read, skippy_laya_tokenize, skippy_model_attach_mtp_draft_model_fn,
     skippy_model_free, skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
     skippy_model_info_tensor_count, skippy_model_input_activation_boundary,
     skippy_model_llama_model, skippy_model_open, skippy_model_open_from_parts,
@@ -178,6 +182,8 @@ pub use static_bindings::{
     skippy_export_kv_page, skippy_export_recurrent_state, skippy_export_state,
     skippy_import_cachegen_kv_page_v1, skippy_import_full_state, skippy_import_kv_page,
     skippy_import_recurrent_state, skippy_import_state, skippy_iteration_batch_sampled,
+    skippy_laya_model_free, skippy_laya_model_info_v1, skippy_laya_model_memory_v1,
+    skippy_laya_model_open, skippy_laya_read, skippy_laya_tokenize,
     skippy_model_attach_mtp_draft_model, skippy_model_free, skippy_model_info_free,
     skippy_model_info_open, skippy_model_info_tensor_at, skippy_model_info_tensor_count,
     skippy_model_input_activation_boundary, skippy_model_llama_model, skippy_model_open,

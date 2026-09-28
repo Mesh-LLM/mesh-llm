@@ -85,9 +85,12 @@ pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 `llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
 one main source SHA and the upstream target before any hardware work. Unchanged
-scheduled/forced runs build once and certify the complete roster. Changed pins
-use up to three repair attempts, each followed (only when all families pass) by
-an independent build and complete verification pass on the exact same commit.
+scheduled/forced runs build once and certify the complete roster. Every
+certification first runs a deterministic immutable-plan and pinned-cache
+preflight. Changed pins then use one candidate pass followed (only when all
+families pass) by one independent build and complete verification pass on the
+exact same commit. A failed pass retains evidence and stops instead of starting
+another agent/candidate cycle.
 
 
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
@@ -153,8 +156,9 @@ job-result gate also rejects failed/cancelled jobs whose receipts never upload.
 Rebuilt producers have distinct identities and cannot reuse old receipts.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-Repair feedback includes attempt-labelled family/build history across reruns;
-these diagnostics never substitute for either complete certification pass.
+Reruns retain attempt-labelled family/build history; these diagnostics never
+substitute for either complete certification pass or trigger a new automatic
+repair candidate.
 
 `scripts/plan-family-battery.py` validates the versioned JSON family policy
 before native compilation: the three core parity lanes for certified causal
@@ -240,10 +244,10 @@ independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 
-Within a build job, Goose resumes the same session for prepare/build failures
-under the existing 11.5-hour coding-admission and 12-hour per-gate budgets. A
-failed distributed pass supplies its candidate plus family/build logs to a new
-session in the next bounded attempt. Candidates are local, uncertified commits
+Within the candidate build job, Goose resumes the same session for
+prepare/build failures under the existing 11.5-hour coding-admission and
+12-hour per-gate budgets. A failed distributed or independent-verification pass
+stops after preserving evidence. Candidates are local, uncertified commits
 until both full family passes are green. The separate GitHub-hosted publisher
 alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
 No Actions-write credential or dispatch controller is needed. Feature-ref
@@ -364,7 +368,7 @@ runner-contract update is active.
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |
-| `swift-sdk-artifact.yml` | Host-only/full XCFramework producer; full mode builds the seven Apple Rust targets as a bounded matrix (maximum four concurrent macOS runners) and joins their immutable libraries in one assembly job, while host-only remains a single producer. Trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
+| `swift-sdk-artifact.yml` | Host-only/full arm64 XCFramework producer; full mode builds the four Apple Silicon Rust targets as a bounded matrix (maximum four concurrent macOS runners) and joins their immutable libraries in one assembly job, while host-only remains a single Apple Silicon producer. Trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
 | `smoke.yml` | Artifact-based inference/OpenAI/split smoke |
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke with optional typed model context-size and recurrent-model inputs; recurrent models restore and save through a dedicated trust-scoped cache before the smoke runs |
 | `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
