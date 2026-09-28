@@ -6,6 +6,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -1699,6 +1700,109 @@ class AgenticReplayTest(unittest.TestCase):
             self.assertEqual(config.path, path.resolve())
             self.assertEqual(config.arms[0].label, "vllm")
 
+
+    def test_progress_reports_each_preflight_probe_with_its_cost_and_outcome(self):
+        self.assertEqual(
+            BENCH.probe_progress_line(
+                "8",
+                3,
+                16,
+                {
+                    "request_id": "session-1:0",
+                    "prompt_tokens": 131_072,
+                    "elapsed_seconds": 12.5,
+                    "finish_reason": "stop",
+                },
+            ),
+            "context preflight cohort 8 probe 3/16 session-1:0 "
+            "prompt_tokens=131072 elapsed=12.5s ok finish=stop",
+        )
+        failed = BENCH.probe_progress_line(
+            "8",
+            4,
+            16,
+            {
+                "request_id": "session-1:1",
+                "prompt_tokens": 131_100,
+                "elapsed_seconds": 900.0,
+                "error": "TimeoutError: timed out",
+            },
+        )
+        self.assertIn("context preflight cohort 8 probe 4/16 session-1:1", failed)
+        self.assertIn("elapsed=900.0s TimeoutError: timed out", failed)
+
+    def test_expected_probe_count_matches_the_probes_preflight_actually_issues(
+        self,
+    ):
+        trajectories = [
+            {
+                "session_id": "session-1",
+                "source_dataset": "source",
+                "agent_framework": "framework",
+                "recorded_model": "recorded-model",
+                "messages": [
+                    {"role": "user", "content": "task"},
+                    {"role": "assistant", "content": "first"},
+                    {"role": "user", "content": "observation"},
+                    {"role": "assistant", "content": "second"},
+                ],
+            },
+            {
+                "session_id": "session-2",
+                "source_dataset": "source",
+                "agent_framework": "framework",
+                "recorded_model": "recorded-model",
+                "messages": [{"role": "assistant", "content": "only"}],
+            },
+        ]
+        cohorts = {"8": trajectories}
+        original = BENCH.stream_request
+        BENCH.stream_request = lambda *args, **kwargs: {"request_id": args[0]}
+        try:
+            issued = [
+                probe
+                for trajectory in trajectories
+                for probe in BENCH.replay_trajectory(
+                    trajectory, "model", 1, 10, qualification_probe=True
+                )
+            ]
+        finally:
+            BENCH.stream_request = original
+
+        self.assertEqual(len(issued), 3)
+        self.assertEqual(len(issued), BENCH.expected_probe_count(cohorts))
+
+    def test_in_flight_heartbeat_reports_while_a_request_is_stalled(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            heartbeat = BENCH.InFlightHeartbeat("request session-1:0", interval=0.01)
+            heartbeat.start()
+            reported = False
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not reported:
+                reported = "still in flight" in output.getvalue()
+                time.sleep(0.01)
+            heartbeat.stop()
+
+        self.assertTrue(
+            reported,
+            f"heartbeat must report an in-flight request: {output.getvalue()!r}",
+        )
+        self.assertTrue(output.getvalue().startswith(BENCH.PROGRESS_PREFIX))
+
+    def test_a_completed_request_stops_its_heartbeat(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            heartbeat = BENCH.InFlightHeartbeat("request session-1:0", interval=0.01)
+            heartbeat.start()
+            heartbeat.stop()
+            time.sleep(0.05)
+
+        self.assertEqual(output.getvalue(), "")
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 if __name__ == "__main__":
     unittest.main()
