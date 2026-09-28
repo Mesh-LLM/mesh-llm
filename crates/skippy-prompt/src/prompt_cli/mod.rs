@@ -44,8 +44,5 @@ include!("speculative.rs");
 include!("wire_messages.rs");
 include!("draft.rs");
 include!("history.rs");
-include!("stage_config.rs");
-include!("remote_sync.rs");
 include!("formatting.rs");
-include!("topology.rs");
 include!("tests.rs");

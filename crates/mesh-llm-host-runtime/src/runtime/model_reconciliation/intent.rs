@@ -125,8 +125,6 @@ pub(crate) enum ModelIntent {
     },
 }
 
-impl ModelIntent {}
-
 // ─── Reconciliation candidate / action types ────────────────────────────────
 
 #[derive(Clone, Debug, Eq, PartialEq)]
