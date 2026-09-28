@@ -118,6 +118,22 @@ fn serve_properties(cli: &Cli) -> Properties {
             "model_requested",
             !cli.model.is_empty() || !cli.gguf.is_empty(),
         )
+        // Whether this node manages its own upgrades. Without it an
+        // auto-updating fleet and a hand-run node are indistinguishable.
+        .with("auto_update", cli.auto_update)
+        // Whether this process is the second half of a self-update.
+        //
+        // A self-update `exec`s a new binary, so one user session produces
+        // two `serve_started` and at most one `serve_stopped`. The first
+        // process may or may not have flushed before it was replaced, which
+        // makes the duplicate nondeterministic. Marking the continuation is
+        // what lets it be excluded instead of quietly inflating starts.
+        .with("post_update_restart", is_post_update_restart())
+}
+
+/// Whether the self-updater `exec`d this process.
+fn is_post_update_restart() -> bool {
+    std::env::var_os(mesh_llm_analytics::ENV_SELF_UPDATE_MARKER).is_some()
 }
 
 /// Report the shape of this machine, once per serving process.
@@ -184,9 +200,23 @@ fn hardware_properties(
             mesh_llm_analytics::bucket_gigabytes(system_ram),
         );
     }
-    if let Some(name) = survey.gpu_name.as_deref() {
-        properties = properties.with("gpu_model", mesh_llm_analytics::Label::slug_or_redact(name));
-    }
+    // Always set. Leaving the property absent when the probe returns no name
+    // collapses every such install into one unlabelled bucket, which reads as
+    // "unknown" when it usually means "no GPU at all" -- a different and more
+    // interesting answer. The two reasons it can be missing are split apart
+    // rather than merged.
+    properties = properties.with(
+        "gpu_model",
+        match survey.gpu_name.as_deref() {
+            Some(name) => {
+                mesh_llm_analytics::Value::from(mesh_llm_analytics::Label::slug_or_redact(name))
+            }
+            // No GPU was found, so there is no name to report.
+            None if survey.gpu_count == 0 => mesh_llm_analytics::Value::from("none"),
+            // A GPU exists but the platform probe did not name it.
+            None => mesh_llm_analytics::Value::from("unreported"),
+        },
+    );
     properties
 }
 
@@ -331,6 +361,9 @@ mod tests {
         assert!(rendered.contains("5-8"), "{rendered}");
     }
 
+    /// A GPU-less machine reports `gpu_model: none` rather than omitting the
+    /// property. An absent property groups every such install under one
+    /// unlabelled bucket, which is indistinguishable from a probe failure.
     #[test]
     fn hardware_properties_tolerate_a_machine_with_no_gpu() {
         let rendered = format!(
@@ -338,8 +371,52 @@ mod tests {
             hardware_properties(&survey(None, 0, 0, false), &metal_only())
         );
         assert!(rendered.contains("gpu_count"), "{rendered}");
-        assert!(!rendered.contains("gpu_model"), "{rendered}");
+        assert!(
+            rendered.contains("none"),
+            "no explicit no-GPU value: {rendered}"
+        );
         assert!(!rendered.contains("vram_total"), "{rendered}");
+    }
+
+    /// A GPU that exists but was not named is a probe gap, not an absence of
+    /// hardware, and the two must not collapse into the same bucket.
+    #[test]
+    fn an_unnamed_gpu_is_distinguished_from_having_no_gpu() {
+        let unnamed = format!(
+            "{:?}",
+            hardware_properties(&survey(None, 2, 48 << 30, false), &metal_only())
+        );
+        assert!(unnamed.contains("unreported"), "{unnamed}");
+
+        let absent = format!(
+            "{:?}",
+            hardware_properties(&survey(None, 0, 0, false), &metal_only())
+        );
+        assert!(!absent.contains("unreported"), "{absent}");
+    }
+
+    /// The flag that decides whether a node upgrades itself has to be on the
+    /// event, or an auto-updating fleet cannot be told from hand-run nodes.
+    #[test]
+    fn serve_properties_report_whether_the_node_self_updates() {
+        let updating = format!(
+            "{:?}",
+            serve_properties(&Cli::parse_from(["mesh-llm", "--auto-update"]))
+        );
+        assert!(updating.contains("auto_update"), "{updating}");
+        assert!(updating.contains("post_update_restart"), "{updating}");
+    }
+
+    /// `mesh-llm-analytics` reads the self-update marker by name rather than
+    /// depending on `mesh-llm-system`, which would drag the release-fetch and
+    /// hardware tree into a deliberately leaf crate. This crate sees both
+    /// definitions, so it is where the two are held together.
+    #[test]
+    fn the_self_update_marker_name_agrees_across_crates() {
+        assert_eq!(
+            mesh_llm_analytics::ENV_SELF_UPDATE_MARKER,
+            mesh_llm_system::autoupdate::SELF_UPDATE_ATTEMPTED_ENV,
+        );
     }
 
     #[test]

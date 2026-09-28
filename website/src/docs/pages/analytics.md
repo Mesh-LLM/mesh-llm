@@ -49,14 +49,16 @@ Every event carries:
 | `mesh_llm_version` | `0.76.0` | Which versions are actually in the field |
 | `build_channel` | `release`, `prerelease`, `development` | Whether pre-releases get real use |
 | `os`, `arch` | `macos`, `aarch64` | Which platforms to prioritize |
+| `exec_env` | `plain`, `container`, `ci`, `service` | Whether a run came from someone's machine or from throwaway infrastructure. A container gets a fresh home directory every run, so it looks like a brand new install each time; this is what separates those from real adoption. Detected from `/.dockerenv`, `/run/.containerenv`, and the `container`, `KUBERNETES_SERVICE_HOST`, `INVOCATION_ID`, and CI provider variables |
 
 And one of these events:
 
 | Event | Extra properties | What it answers |
 |---|---|---|
 | `install_first_run` | none | How many installs there are |
+| `install_updated` | `from_version` (the version previously recorded, or `redacted`), `trigger` (`self_update` when mesh-llm's own updater restarted the process, otherwise `external`) | Whether people actually upgrade, how fast a release spreads, and whether anyone is stranded on an old one. Sent once when a run sees a different version than the last run recorded |
 | `cli_command` | `family` (`models`, `runtime`, `diagnostics`, …), `outcome` (`completed`, `failed`, …) | Which commands are used, and which fail |
-| `serve_started` | `surface`, `auto`, `headless`, `publish`, `discover`, `joined_explicitly`, `model_requested` — all booleans | How nodes are started |
+| `serve_started` | `surface`, `auto`, `headless`, `publish`, `discover`, `joined_explicitly`, `model_requested`, `auto_update`, `post_update_restart` — all booleans | How nodes are started. `auto_update` is whether the node manages its own upgrades; `post_update_restart` marks the second half of a self-update, since updating restarts the process and would otherwise count as a second node start |
 | `serve_stopped` | `session_length` (bucketed: `under_1m`, `1m-15m`, …), `succeeded` | Whether nodes stay up |
 | `model_loaded` | `model` (catalog name, or `redacted`; always `redacted` when `source` is `direct_gguf`), `source` (`direct_gguf`, `layer_package`), and `system_one_backend` (`laya` or `openjev`, only when the model serves [System One](/docs/pages/system-one-api/) reads; read from the model architecture, never the file name) | Which models actually get run |
 | `model_download` | `model` (catalog name, or `redacted`), `succeeded` | Which models people try to get, including ones they fail to |
@@ -66,7 +68,7 @@ And one of these events:
 
 | Property | Example | Notes |
 |---|---|---|
-| `gpu_model` | `apple-m1-pro`, `nvidia-geforce-rtx-4090` | The device name, lowercased and hyphenated |
+| `gpu_model` | `apple-m1-pro`, `nvidia-geforce-rtx-4090`, `none`, `unreported` | The device name, lowercased and hyphenated. `none` means no GPU was found; `unreported` means one exists but the platform probe did not name it |
 | `gpu_count` | `1`, `3-4`, `33+` | Bucketed |
 | `vram_total` | `8-16`, `32-64` | Bucketed gigabytes across all GPUs |
 | `system_ram` | `16-32`, `64-128` | Bucketed gigabytes of system RAM, when the platform reports it |

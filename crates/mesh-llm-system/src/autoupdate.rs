@@ -22,7 +22,18 @@ use release_fetch::{
     resolve_release_info,
 };
 
-const SELF_UPDATE_ATTEMPTED_ENV: &str = "MESH_LLM_SELF_UPDATE_ATTEMPTED";
+/// Set on the binary the self-updater `exec`s, so the restarted process knows
+/// it is a continuation rather than a fresh start and does not update again.
+///
+/// The value is the version being replaced. It doubles as the only record of
+/// where the restart came from: `exec` discards the old process image, so
+/// anything that process had queued and not yet flushed is gone, and the new
+/// one cannot otherwise know it succeeded an older build.
+///
+/// Mirrored as `ENV_SELF_UPDATE_MARKER` in `mesh-llm-analytics`, which reads
+/// it without depending on this crate. `mesh-llm-commands` tests that the two
+/// agree.
+pub const SELF_UPDATE_ATTEMPTED_ENV: &str = "MESH_LLM_SELF_UPDATE_ATTEMPTED";
 
 struct UpdateTarget {
     exe: PathBuf,
@@ -333,7 +344,10 @@ async fn apply_update_if_available(
                 message: format!("✅ Updated to v{}; restarting", release.version),
                 version: Some(release.version.clone()),
             });
-            exec_current_binary(&target.exe, SELF_UPDATE_ATTEMPTED_ENV, "1")?;
+            // Carry the outgoing version across the `exec`. The restarted
+            // process reports the upgrade; this one cannot, because `exec`
+            // replaces it before anything it queued can be flushed.
+            exec_current_binary(&target.exe, SELF_UPDATE_ATTEMPTED_ENV, current_version)?;
         }
         Ok(InstallOutcome::ExitNow) => {
             let _ = emit_event(OutputEvent::AutoUpdate {

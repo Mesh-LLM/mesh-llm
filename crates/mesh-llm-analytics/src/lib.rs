@@ -33,6 +33,7 @@ mod event;
 mod install_id;
 mod notice;
 mod properties;
+mod version_state;
 
 pub use consent::{
     ConfigPreference, ConsentInputs, DEFAULT_POSTHOG_HOST, Disposition, ENV_ANALYTICS,
@@ -43,10 +44,22 @@ pub use event::{
 };
 pub use install_id::{INSTALL_ID_FILE, InstallId, load, load_or_create, state_dir};
 pub use notice::{NOTICE, NOTICE_MARKER_FILE};
-pub use properties::{BuildChannel, LIB_NAME, base_properties};
+pub use properties::{BuildChannel, LIB_NAME, base_properties, exec_env};
+pub use version_state::{VERSION_FILE, VersionTransition};
+
+/// Environment variable the self-updater sets on the binary it `exec`s.
+///
+/// Must stay in step with `SELF_UPDATE_ATTEMPTED_ENV` in
+/// `mesh-llm-system`'s `autoupdate`. That crate owns the restart; this one
+/// only reads the marker to tell a self-update apart from an upgrade that
+/// arrived some other way, and depending on it would drag the whole hardware
+/// and release-fetch tree into this leaf crate. `mesh-llm-commands` sees both
+/// constants and has a test that they match.
+pub const ENV_SELF_UPDATE_MARKER: &str = "MESH_LLM_SELF_UPDATE_ATTEMPTED";
 
 use chrono::Utc;
 use client::Envelope;
+use mesh_llm_build_info::BUILD_VERSION;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
@@ -173,6 +186,11 @@ pub fn init(config: ConfigPreference) -> Status {
         };
     };
 
+    // Recorded before the reporter is built, so the baseline is written even
+    // on a run that turns out to be unable to report. Otherwise a run that
+    // failed to report would leave the next one unable to see the upgrade.
+    let version = version_state::record(&dir, BUILD_VERSION);
+
     let endpoint = client::batch_endpoint(&ingestion_host());
     let status = Status {
         disposition,
@@ -219,9 +237,33 @@ pub fn init(config: ConfigPreference) -> Status {
 
     if install.is_first_run() {
         capture(Event::InstallFirstRun, Properties::new());
+    } else if let VersionTransition::Changed { from } = version {
+        // Only for an install we have seen before. A brand new install has no
+        // meaningful "from", and reporting both events for one run would
+        // double-count it.
+        capture(
+            Event::InstallUpdated,
+            Properties::new()
+                .with("from_version", Label::sanitize_or_redact(&from))
+                .with("trigger", update_trigger()),
+        );
     }
 
     status
+}
+
+/// How a version change most likely arrived.
+///
+/// `self_update` is authoritative: only mesh-llm's own updater sets the
+/// marker. `external` is a residual — `mesh-llm update`, `install.sh`, a
+/// package manager, or a hand-swapped binary all land there, because none of
+/// them leave a trace in this process's environment.
+fn update_trigger() -> &'static str {
+    if std::env::var_os(ENV_SELF_UPDATE_MARKER).is_some() {
+        "self_update"
+    } else {
+        "external"
+    }
 }
 
 /// Queue one event. Never blocks; drops the event if the queue is full.
