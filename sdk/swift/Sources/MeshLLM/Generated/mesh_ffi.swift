@@ -2271,12 +2271,14 @@ public func FfiConverterTypeModelDetails_lower(_ value: ModelDetails) -> RustBuf
 public struct ModelNative: Equatable, Hashable {
     public var id: String
     public var name: String
+    public var contextLength: UInt32?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String) {
+    public init(id: String, name: String, contextLength: UInt32?) {
         self.id = id
         self.name = name
+        self.contextLength = contextLength
     }
 
 
@@ -2296,13 +2298,15 @@ public struct FfiConverterTypeModelNative: FfiConverterRustBuffer {
         return
             try ModelNative(
                 id: FfiConverterString.read(from: &buf),
-                name: FfiConverterString.read(from: &buf)
+                name: FfiConverterString.read(from: &buf),
+                contextLength: FfiConverterOptionUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: ModelNative, into buf: inout [UInt8]) {
         FfiConverterString.write(value.id, into: &buf)
         FfiConverterString.write(value.name, into: &buf)
+        FfiConverterOptionUInt32.write(value.contextLength, into: &buf)
     }
 }
 
