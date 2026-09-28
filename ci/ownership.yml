@@ -174,7 +174,6 @@
         "crates/skippy-coordinator/**",
         "crates/skippy-correctness/**",
         "crates/skippy-model-package/**",
-        "crates/skippy-prompt/**",
         "crates/skippy-runtime/**",
         "crates/skippy-server/**",
         "crates/skippy-topology/**"
@@ -363,7 +362,6 @@
         "skippy/crates/skippy-coordinator/**",
         "skippy/crates/skippy-correctness/**",
         "skippy/crates/skippy-package-builder/**",
-        "skippy/crates/skippy-prompt/**",
         "skippy/crates/skippy-runtime/**",
         "skippy/crates/skippy-serving/**",
         "skippy/crates/skippy-cli/**",
@@ -516,7 +514,6 @@
         "skippy-coordinator",
         "skippy-correctness",
         "skippy-model-package",
-        "skippy-prompt",
         "skippy-runtime",
         "skippy-server",
         "skippy-topology"
