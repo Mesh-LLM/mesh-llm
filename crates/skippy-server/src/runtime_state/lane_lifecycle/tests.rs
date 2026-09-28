@@ -54,6 +54,15 @@ fn dropping_an_absent_session_notifies_nothing() {
     );
 }
 
+#[test]
+fn system_one_advertisement_requires_a_single_unsplit_runtime_lane() {
+    assert!(system_one_endpoint_is_runnable(true, false, false, 1));
+    assert!(!system_one_endpoint_is_runnable(true, false, false, 4));
+    assert!(!system_one_endpoint_is_runnable(true, true, false, 1));
+    assert!(!system_one_endpoint_is_runnable(true, false, true, 1));
+    assert!(!system_one_endpoint_is_runnable(false, false, false, 1));
+}
+
 /// `drop_session_timed`'s real reset/discard branches require a
 /// native `StageSession` (the same model-backed requirement
 /// `evict_resident_prefix_for_tokens`'s native drop hit in the KV
@@ -208,4 +217,19 @@ fn capped_target_idle_sessions_clamps_to_the_configured_bound() {
 #[test]
 fn capped_target_idle_sessions_is_unbounded_when_unset() {
     assert_eq!(capped_target_idle_sessions(10, None), 10);
+}
+
+#[test]
+fn disabling_idle_sessions_caps_future_retention_at_zero() {
+    let mut runtime = RuntimeState::new_modelless_for_test(1);
+    runtime.max_idle_sessions = Some(4);
+
+    runtime.disable_idle_sessions();
+
+    assert_eq!(runtime.max_idle_sessions, Some(0));
+    assert!(runtime.idle_sessions.is_empty());
+    assert_eq!(
+        capped_target_idle_sessions(10, runtime.max_idle_sessions),
+        0
+    );
 }

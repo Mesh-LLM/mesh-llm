@@ -4,11 +4,12 @@ use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationPartDesc, CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16, CACHEGEN_RECORD_F16_TRANSPOSED,
     CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED, CACHEGEN_RECORD_Q4_0,
-    CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1, StagePlanDescV1,
-    StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStateKind, StagePlanStringRefV1,
-    StagePlanValueDescV1, StagePlannerConfigV1, StagePlannerProfileV1, StagePlannerTensorV1,
-    WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
-    runtime_abi_supported,
+    CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
+    LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1, LayaMemoryV1, LayaSequence,
+    StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStateKind,
+    StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1, StagePlannerProfileV1,
+    StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind,
+    WorkloadPooling, runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -292,4 +293,30 @@ fn native_mtmd_defaults_cross_the_ffi_boundary() {
     assert_eq!(params.batch_max_tokens, 1024);
     assert!(params.progress_callback.is_none());
     assert!(params.progress_callback_user_data.is_null());
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn laya_types_match_native_layout() {
+    assert_eq!(LAYA_INFO_V1_ABI_VERSION, 1);
+    assert_eq!(size_of::<LayaInfoV1>(), 72);
+    assert_eq!(offset_of!(LayaInfoV1, n_layer), 40);
+    assert_eq!(offset_of!(LayaInfoV1, parameter_count), 48);
+    assert_eq!(offset_of!(LayaInfoV1, temperature), 56);
+    let info = LayaInfoV1::default();
+    assert_eq!(info.struct_size, 72);
+    assert_eq!(info.abi_version, LAYA_INFO_V1_ABI_VERSION);
+
+    assert_eq!(LAYA_MEMORY_V1_ABI_VERSION, 1);
+    assert_eq!(size_of::<LayaMemoryV1>(), 40);
+    assert_eq!(offset_of!(LayaMemoryV1, weights_bytes), 8);
+    assert_eq!(offset_of!(LayaMemoryV1, compute_bytes), 16);
+    assert_eq!(offset_of!(LayaMemoryV1, host_scratch_bytes), 24);
+    assert_eq!(offset_of!(LayaMemoryV1, on_accelerator), 32);
+    assert_eq!(LayaMemoryV1::default().struct_size, 40);
+
+    assert_eq!(size_of::<LayaSequence>(), 40);
+    assert_eq!(offset_of!(LayaSequence, qtype), 16);
+    assert_eq!(offset_of!(LayaSequence, marker_offset), 24);
+    assert_eq!(offset_of!(LayaSequence, marker_count), 32);
 }

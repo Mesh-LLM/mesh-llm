@@ -5,8 +5,16 @@ impl RuntimeState {
         &mut self,
         target_idle_sessions: usize,
     ) -> Result<RuntimeSessionStats> {
-        let target_idle_sessions =
-            capped_target_idle_sessions(target_idle_sessions, self.max_idle_sessions);
+        // A System One read claims the model's execution lane itself; an idle
+        // session parked on it would make every read fail as busy. Drain any
+        // retained sessions defensively and keep the pool capped at zero so a
+        // later non-System-One request cannot park a lane again.
+        let target_idle_sessions = if self.serves_system_one() {
+            self.disable_idle_sessions();
+            0
+        } else {
+            capped_target_idle_sessions(target_idle_sessions, self.max_idle_sessions)
+        };
         while self.idle_sessions.len() < target_idle_sessions {
             if self.sessions.len() + self.idle_sessions.len() >= self.lane_count as usize {
                 break;
@@ -17,10 +25,40 @@ impl RuntimeState {
         Ok(self.session_stats())
     }
 
+    /// Only DiffusionGemma reports a System One canvas.
+    pub(crate) fn serves_system_one(&self) -> bool {
+        self.model.system_one_canvas_length().is_ok()
+    }
+
+    /// Whether this loaded runtime can execute the System One endpoint, not
+    /// merely whether its model has a decision canvas.
+    pub(crate) fn supports_system_one_endpoint(&self) -> bool {
+        system_one_endpoint_is_runnable(
+            self.serves_system_one(),
+            self.model.input_activation_boundary().is_some(),
+            self.model.output_activation_boundary().is_some(),
+            self.lane_count,
+        )
+    }
+
+    fn disable_idle_sessions(&mut self) {
+        while let Some(lane_session) = self.idle_sessions.pop() {
+            let lane_index = lane_session.index;
+            drop(lane_session);
+            self.free_lane_indices.push(lane_index);
+        }
+        self.max_idle_sessions = Some(0);
+    }
+
     pub(crate) fn warmup_generation_graph(&self) -> Result<bool> {
         if self.model.input_activation_boundary().is_some()
             || self.model.output_activation_boundary().is_some()
         {
+            return Ok(false);
+        }
+        // DiffusionGemma runs non-causally with no KV memory, so a decode
+        // step has no graph to warm and the reset would fail.
+        if self.serves_system_one() {
             return Ok(false);
         }
         let token_id = self
@@ -467,6 +505,15 @@ impl RuntimeState {
             resident_prefix: None,
         })
     }
+}
+
+fn system_one_endpoint_is_runnable(
+    has_canvas: bool,
+    has_input_boundary: bool,
+    has_output_boundary: bool,
+    lane_count: u32,
+) -> bool {
+    has_canvas && !has_input_boundary && !has_output_boundary && lane_count == 1
 }
 
 /// Clamps a requested idle-pool prewarm target to `model_fit.cache_idle_slots`

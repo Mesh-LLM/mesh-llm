@@ -25,6 +25,7 @@ pub(super) async fn rank(
     if prices.is_empty() {
         return Ok(false);
     }
+    drop_blocked_payees(node, &mut prices, candidates).await;
     // The provider never provisions an empty wallet merely because a paid
     // peer appeared, and reads the balance only when paid is permitted.
     let budget: RoutingBudgetResponse = crate::network::payments::client::call_node(
@@ -58,7 +59,7 @@ pub(super) async fn rank(
     candidates.ordered.retain(|target| key(target).is_some());
     if candidates.ordered.is_empty() {
         return Err(
-            "paid providers are unavailable under the current payment policy, wallet balance or daily budget",
+            "paid providers are unavailable under the current payment policy, local payee blocklist, wallet balance or daily budget",
         );
     }
     // No paid provider survived the policy filter, so every remaining target
@@ -87,6 +88,89 @@ pub(super) async fn rank(
         .take_while(|target| key(target) == first)
         .count();
     Ok(true)
+}
+
+/// Remove paid providers this node has blocked for repeatedly taking the input
+/// charge and delivering nothing. Free and local targets are never affected.
+/// The blocklist is local state (`payments/payee_strikes.json`); the dropped
+/// payees are logged so an operator can tell such an exclusion apart from a
+/// spending-policy or budget refusal.
+#[cfg(feature = "payments")]
+async fn drop_blocked_payees(
+    node: &Node,
+    prices: &mut std::collections::HashMap<
+        iroh::EndpointId,
+        mesh_llm_payments_types::pricing::Pricing,
+    >,
+    candidates: &mut RankedCandidates<InferenceTarget>,
+) {
+    let directory = node.config_state.lock().await.payment_directory();
+    let strikes = crate::network::payments::strikes::PayeeStrikes::load(&directory);
+    let now = mesh_llm_wallet::now_ms();
+    let blocked: Vec<_> = prices
+        .keys()
+        .filter(|peer| strikes.is_blocked(&peer.to_string(), now))
+        .copied()
+        .collect();
+    if blocked.is_empty() {
+        return;
+    }
+    // Name the payees and the state file: an operator asking why a paid
+    // provider is no longer used has to see the blocklist, or the policy
+    // wording in the routing error misleads them.
+    tracing::info!(
+        payees = ?blocked
+            .iter()
+            .map(|peer| peer.fmt_short().to_string())
+            .collect::<Vec<_>>(),
+        state = %crate::network::payments::strikes::state_path(&directory).display(),
+        "local payee blocklist excluded paid providers from routing"
+    );
+    let removed_prefix = candidates.ordered[..candidates.equivalent_prefix]
+        .iter()
+        .filter(|target| matches!(target, InferenceTarget::Remote(peer) if blocked.contains(peer)))
+        .count();
+    candidates.ordered.retain(
+        |target| !matches!(target, InferenceTarget::Remote(peer) if blocked.contains(peer)),
+    );
+    candidates.equivalent_prefix -= removed_prefix;
+    for peer in blocked {
+        prices.remove(&peer);
+    }
+}
+
+/// Apply payment eligibility to passive-client routes even when no paid tier
+/// survives. The boolean controls affinity, not whether filtering took effect.
+pub(super) async fn rank_remote_hosts(
+    node: &Node,
+    model: &str,
+    request: &super::request_parse::BufferedHttpRequest,
+    hosts: &mut Vec<iroh::EndpointId>,
+    equivalent_hosts: &mut usize,
+) -> Result<bool, &'static str> {
+    let mut ranked = RankedCandidates {
+        ordered: hosts.iter().copied().map(InferenceTarget::Remote).collect(),
+        equivalent_prefix: *equivalent_hosts,
+    };
+    let payment_ranked = rank(
+        node,
+        model,
+        (request.body_len_bytes as u64).div_ceil(4),
+        u64::from(request.completion_tokens.unwrap_or(256)),
+        &mut ranked,
+        request.body_json.as_ref(),
+    )
+    .await?;
+    *hosts = ranked
+        .ordered
+        .into_iter()
+        .filter_map(|target| match target {
+            InferenceTarget::Remote(peer) => Some(peer),
+            _ => None,
+        })
+        .collect();
+    *equivalent_hosts = ranked.equivalent_prefix;
+    Ok(payment_ranked)
 }
 
 /// Wallets compiled out: no payment tiers exist, so candidate ordering is left
@@ -167,6 +251,26 @@ mod tests {
             ],
             equivalent_prefix: 2,
         };
+        // Exercise the passive-client adapter, not just rank: false must
+        // still publish the filtered list and its surviving equivalence run.
+        let body = r#"{"model":"test","messages":[]}"#;
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        use tokio::io::AsyncWriteExt;
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        writer.write_all(raw.as_bytes()).await?;
+        let request = super::super::request_parse::read_http_request(&mut reader).await?;
+        let mut hosts = vec![seller.id(), free];
+        let mut equivalent_hosts = 2;
+        assert!(
+            !rank_remote_hosts(&node, "test", &request, &mut hosts, &mut equivalent_hosts,)
+                .await
+                .unwrap()
+        );
+        assert_eq!(hosts, vec![free]);
+        assert_eq!(equivalent_hosts, 1);
         // Only free targets remain, so the route is left unranked by price.
         assert!(
             !rank(&node, "test", 1, 1, &mut candidates, None)
@@ -221,6 +325,45 @@ mod tests {
         ));
         node.endpoint.close().await;
         seller.endpoint.close().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn blocked_payee_is_dropped_before_price_ranking() -> anyhow::Result<()> {
+        use crate::network::payments::strikes::{PayeeStrikes, STRIKE_THRESHOLD};
+        let directory = tempfile::tempdir()?;
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        *node.config_state.lock().await =
+            crate::runtime::config_state::ConfigState::load(&directory.path().join("config.toml"))?;
+        let [bad, good, free] = [(); 3].map(|_| iroh::SecretKey::generate().public());
+        let mut strikes = PayeeStrikes::default();
+        let now = mesh_llm_wallet::now_ms();
+        for _ in 0..STRIKE_THRESHOLD {
+            strikes.record(&bad.to_string(), now);
+        }
+        strikes.save(&node.config_state.lock().await.payment_directory())?;
+        let price = Pricing {
+            input_msat_per_million: 1,
+            output_msat_per_million: 1,
+            minimum_invoice_msat: 1,
+        };
+        let mut prices = std::collections::HashMap::from([(bad, price.clone()), (good, price)]);
+        let mut candidates = RankedCandidates {
+            ordered: vec![
+                InferenceTarget::Remote(bad),
+                InferenceTarget::Remote(good),
+                InferenceTarget::Remote(free),
+            ],
+            equivalent_prefix: 2,
+        };
+        drop_blocked_payees(&node, &mut prices, &mut candidates).await;
+        assert_eq!(
+            candidates.ordered,
+            vec![InferenceTarget::Remote(good), InferenceTarget::Remote(free)]
+        );
+        assert_eq!(candidates.equivalent_prefix, 1);
+        assert!(!prices.contains_key(&bad) && prices.contains_key(&good));
+        node.endpoint.close().await;
         Ok(())
     }
 }

@@ -333,7 +333,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         "runtime.lifecycle_log_parser" => Some(
             sp(
                 "Lifecycle log parser",
-                "Auto shows parsed native log summaries only for categories the loaded runtime cannot report through structured events, so older runtimes keep them. Enabled forwards parsed summaries for every category as debug-only output. Disabled forwards none.",
+                "Auto forwards parsed native log summaries only for categories the loaded runtime cannot report through structured events; a dedicated SafeTensors compatibility note remains visible without forwarding every model summary. Enabled forwards parsed summaries for every category as debug-only output. Disabled forwards none.",
                 RUNTIME_POLICY_CATEGORY,
                 5,
             )
@@ -369,7 +369,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             ATTESTATION_CATEGORY,
             20,
         )
-        .placeholder("0.76.1")
+        .placeholder("0.77.0")
         .hint("text")),
         "mesh_requirements.min_protocol_version" => Some(sp(
             "Minimum protocol generation",

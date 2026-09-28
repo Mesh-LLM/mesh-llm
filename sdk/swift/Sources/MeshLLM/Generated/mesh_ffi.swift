@@ -2049,16 +2049,18 @@ public struct ModelCapabilities: Equatable, Hashable {
     public var reasoning: CapabilityLevel
     public var toolUse: CapabilityLevel
     public var moe: Bool
+    public var systemOne: CapabilityLevel
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(multimodal: Bool, vision: CapabilityLevel, audio: CapabilityLevel, reasoning: CapabilityLevel, toolUse: CapabilityLevel, moe: Bool) {
+    public init(multimodal: Bool, vision: CapabilityLevel, audio: CapabilityLevel, reasoning: CapabilityLevel, toolUse: CapabilityLevel, moe: Bool, systemOne: CapabilityLevel) {
         self.multimodal = multimodal
         self.vision = vision
         self.audio = audio
         self.reasoning = reasoning
         self.toolUse = toolUse
         self.moe = moe
+        self.systemOne = systemOne
     }
 
 
@@ -2082,7 +2084,8 @@ public struct FfiConverterTypeModelCapabilities: FfiConverterRustBuffer {
                 audio: FfiConverterTypeCapabilityLevel.read(from: &buf),
                 reasoning: FfiConverterTypeCapabilityLevel.read(from: &buf),
                 toolUse: FfiConverterTypeCapabilityLevel.read(from: &buf),
-                moe: FfiConverterBool.read(from: &buf)
+                moe: FfiConverterBool.read(from: &buf),
+                systemOne: FfiConverterTypeCapabilityLevel.read(from: &buf)
         )
     }
 
@@ -2093,6 +2096,7 @@ public struct FfiConverterTypeModelCapabilities: FfiConverterRustBuffer {
         FfiConverterTypeCapabilityLevel.write(value.reasoning, into: &buf)
         FfiConverterTypeCapabilityLevel.write(value.toolUse, into: &buf)
         FfiConverterBool.write(value.moe, into: &buf)
+        FfiConverterTypeCapabilityLevel.write(value.systemOne, into: &buf)
     }
 }
 

@@ -1,12 +1,34 @@
 use super::*;
 use mesh_llm_payments::ledger::RequestTerms;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payment_handoff_preserves_correlation_and_never_retries_after_submission() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(20), handed_off(false, false)).await?
+/// How the fake provider ends a handed-off exchange.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProviderEnding {
+    /// Hangs up mid-exchange, which the payer sees as EOF.
+    Drop,
+    /// Closes the protocol with `Complete` and no output at all.
+    EmptyComplete,
 }
 
-async fn handed_off(hold: bool, fallback: bool) -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn payment_handoff_preserves_correlation_and_never_retries_after_submission() -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        handed_off(false, false, ProviderEnding::Drop),
+    )
+    .await?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn provider_that_completes_without_output_is_struck() -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        handed_off(false, false, ProviderEnding::EmptyComplete),
+    )
+    .await?
+}
+
+async fn handed_off(hold: bool, fallback: bool, ending: ProviderEnding) -> Result<()> {
     let (_dir, network, service, payer) = payer_fixture(hold).await?;
     let (provider, price) = advertised_provider(&payer).await?;
     let (listener, mut application, mut client) = client_socket().await?;
@@ -17,6 +39,7 @@ async fn handed_off(hold: bool, fallback: bool) -> Result<()> {
         price,
         service.clone(),
         hold,
+        ending,
         fallback.then(|| attempts.clone()),
     ));
     cache_connection(&payer, &provider).await?;
@@ -49,11 +72,52 @@ async fn handed_off(hold: bool, fallback: bool) -> Result<()> {
         .await
     };
     verify_handoff(&service, &network, retryable, fallback, hold).await?;
+    // The provider took the input payment and closed without output: that is a
+    // paid-but-undelivered strike against it. With `hold`, the payment only
+    // settles after the drop, so the exchange never observed it: no strike.
+    //
+    // Asserted while this client is still connected, because dropping it first
+    // would cancel the request from our side and legitimately exempt the
+    // provider — the test would then be measuring its own timing.
+    if !hold {
+        assert_paid_undelivered_strike(&payer, &provider).await?;
+    }
     drop(client);
     let mut response = String::new();
     application.read_to_string(&mut response).await?;
     assert!(response.contains("402"));
     server.await??;
+    payer_cleanup(failing, &payer, &provider).await
+}
+
+async fn assert_paid_undelivered_strike(payer: &Node, provider: &Node) -> Result<()> {
+    let directory = payer.config_state.lock().await.payment_directory();
+    let now = mesh_llm_wallet::now_ms();
+    use crate::network::payments::strikes::{PayeeStrikes, STRIKE_THRESHOLD};
+    let mut recorded = false;
+    for _ in 0..200 {
+        let strikes = PayeeStrikes::load(&directory);
+        // One real strike plus THRESHOLD-1 synthetic ones reaches a block
+        // only if the real one was recorded for this provider.
+        let mut probe = strikes.clone();
+        for _ in 1..STRIKE_THRESHOLD {
+            probe.record(&provider.id().to_string(), now);
+        }
+        if probe.is_blocked(&provider.id().to_string(), now) {
+            recorded = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(recorded, "paid-but-undelivered strike was not recorded");
+    Ok(())
+}
+
+async fn payer_cleanup(
+    failing: Option<(Node, FailingProviderTask)>,
+    payer: &Node,
+    provider: &Node,
+) -> Result<()> {
     if let Some((first, task)) = failing {
         first.endpoint.close().await;
         task.await??;
@@ -103,6 +167,9 @@ async fn payer_fixture(
     )?);
     allow_paid(&service)?;
     let payer = Node::new_for_tests(NodeRole::Client).await?;
+    // Keep node-local payment state (the payee blocklist) inside the fixture.
+    *payer.config_state.lock().await =
+        crate::runtime::config_state::ConfigState::load(&dir.path().join("config.toml"))?;
     payer
         .payments
         .set(service.clone())
@@ -234,6 +301,7 @@ async fn fake_paid_provider(
     price: Pricing,
     service: Arc<PaymentService>,
     hold: bool,
+    ending: ProviderEnding,
     prior_attempts: Option<Arc<AtomicUsize>>,
 ) -> Result<()> {
     let connection = provider.endpoint.accept().await.unwrap().await?;
@@ -259,6 +327,8 @@ async fn fake_paid_provider(
         network: network.clone(),
     };
     let invoice = seller.create_invoice(Some(1), 3600).await?;
+    // The input invoice's hash keys the charge in this payer's ledger.
+    let input_charge = invoice.payment_hash.clone();
     let terms = RequestTerms {
         exchange_id: None,
         id,
@@ -272,12 +342,24 @@ async fn fake_paid_provider(
         expires_at_ms: invoice.expires_at_ms,
     };
     wire::write(&mut send, &Frame::InputInvoice { terms, invoice }).await?;
-    while if hold {
-        service.ledger.pending_charges()?.is_empty()
+    if hold {
+        while service.ledger.pending_charges()?.is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     } else {
-        network.payments.load(Ordering::SeqCst) == 0
-    } {
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        // Hang up only once this payer's own ledger has settled the input
+        // charge, and then let the exchange observe that settlement. Closing
+        // as soon as the wallet reports the send decides the strike on a
+        // scheduling race: the provider dropping before the payer observes
+        // settlement is the documented no-strike gap, and here the exchange is
+        // parked on a read with the payment reply still in flight.
+        while service.ledger.charge_state(&input_charge)?.as_deref() != Some("succeeded") {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    if ending == ProviderEnding::EmptyComplete {
+        wire::write(&mut send, &Frame::Complete).await?;
     }
     send.finish()?;
     let _ = send.stopped().await;
@@ -286,12 +368,20 @@ async fn fake_paid_provider(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn payment_inflight_at_provider_drop_is_terminal_and_retains_reservation() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(20), handed_off(true, false)).await?
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        handed_off(true, false, ProviderEnding::Drop),
+    )
+    .await?
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prefill_failure_uses_existing_router_to_reach_second_paid_provider() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(20), handed_off(false, true)).await?
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        handed_off(false, true, ProviderEnding::Drop),
+    )
+    .await?
 }
 
 async fn accept_payment_stream(

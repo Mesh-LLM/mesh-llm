@@ -42,7 +42,7 @@ fn capability_report(confirmed: u64, health: &[&str]) -> skippy_runtime::Capabil
 
 #[test]
 #[serial_test::serial]
-fn parser_auto_with_full_coverage_forwards_nothing() {
+fn parser_auto_with_full_coverage_forwards_no_parsed_categories() {
     let _reset = ParserStateReset;
 
     let policy = configure_lifecycle_log_parser(
@@ -55,6 +55,7 @@ fn parser_auto_with_full_coverage_forwards_nothing() {
             .iter()
             .all(|category| !policy.forwards(category))
     );
+    assert!(policy.forwards_model_fallback_note());
 }
 
 #[test]

@@ -89,7 +89,14 @@ pub(super) enum RuntimeEvent {
 
 pub(super) enum LocalRuntimeBackendHandle {
     Skippy {
-        model: skippy::SkippyModelHandle,
+        model: Box<skippy::SkippyModelHandle>,
+        http: skippy::SkippyHttpHandle,
+        _death_tx: tokio::sync::oneshot::Sender<()>,
+    },
+    /// A Laya decision model: no sessions, KV cache, or guardrails, only
+    /// System One reads through its own HTTP server.
+    Laya {
+        _model: Arc<skippy_runtime::LayaModel>,
         http: skippy::SkippyHttpHandle,
         _death_tx: tokio::sync::oneshot::Sender<()>,
     },
@@ -108,7 +115,9 @@ pub(super) struct LocalRuntimeModelHandle {
 impl LocalRuntimeModelHandle {
     pub(super) fn pid(&self) -> u32 {
         match &self.inner {
-            LocalRuntimeBackendHandle::Skippy { .. } => std::process::id(),
+            LocalRuntimeBackendHandle::Skippy { .. } | LocalRuntimeBackendHandle::Laya { .. } => {
+                std::process::id()
+            }
         }
     }
 
@@ -117,18 +126,21 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 Some(model.status().max_session_tokens)
             }
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
     pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
     pub(super) fn openai_server_status(&self) -> skippy_server::EmbeddedServerStatus {
         match &self.inner {
-            LocalRuntimeBackendHandle::Skippy { http, .. } => http.status(),
+            LocalRuntimeBackendHandle::Skippy { http, .. }
+            | LocalRuntimeBackendHandle::Laya { http, .. } => http.status(),
         }
     }
 
@@ -140,6 +152,7 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 model.set_openai_guardrail_mode(mode)
             }
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
@@ -187,6 +200,7 @@ impl LocalRuntimeModelHandle {
                         .collect(),
                 })
             }
+            LocalRuntimeBackendHandle::Laya { .. } => None,
         }
     }
 
@@ -195,6 +209,9 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, http, .. } => {
                 let _ = http.shutdown().await;
                 model.shutdown();
+            }
+            LocalRuntimeBackendHandle::Laya { http, .. } => {
+                let _ = http.shutdown().await;
             }
         }
     }
@@ -491,13 +508,30 @@ impl ModelLoadSource {
 /// analytics label grammar; anything else, and every direct `--gguf` name, is
 /// `redacted`. The count and the source still land either way, which is what
 /// the question "which models actually get run" is asking.
-fn report_model_loaded_analytics(model: &str, source: ModelLoadSource) {
-    mesh_llm_analytics::capture(
-        mesh_llm_analytics::Event::ModelLoaded,
-        mesh_llm_analytics::Properties::new()
-            .with("model", model_loaded_label(model, source))
-            .with("source", source.as_str()),
-    );
+pub(super) fn report_model_loaded_analytics(
+    model: &str,
+    source: ModelLoadSource,
+    metadata: Option<&models::gguf::GgufCompactMeta>,
+) {
+    let mut properties = mesh_llm_analytics::Properties::new()
+        .with("model", model_loaded_label(model, source))
+        .with("source", source.as_str());
+    if let Some(backend) = system_one_backend(metadata) {
+        properties = properties.with("system_one_backend", backend);
+    }
+    mesh_llm_analytics::capture(mesh_llm_analytics::Event::ModelLoaded, properties);
+}
+
+/// Which System One (OpenJEV) backend a loaded model is, if any.
+///
+/// Read from the GGUF architecture, never from the model name, so it stays a
+/// closed vocabulary even for a direct `--gguf` load whose name is redacted.
+fn system_one_backend(metadata: Option<&models::gguf::GgufCompactMeta>) -> Option<&'static str> {
+    match metadata?.architecture.as_str() {
+        super::local_laya::LAYA_ARCHITECTURE => Some("laya"),
+        "diffusion-gemma" => Some("openjev"),
+        _ => None,
+    }
 }
 
 /// The `model` value `report_model_loaded_analytics` puts on the wire.
@@ -967,6 +1001,25 @@ pub(super) async fn start_local_openai_model(
         .flatten()
     };
 
+    if let Some(meta) = compact_meta
+        .as_ref()
+        .filter(|meta| super::local_laya::is_laya(Some(meta)))
+    {
+        // Laya has no stages, sessions, or KV cache for a layer package to
+        // carry; it opens from one GGUF file.
+        anyhow::ensure!(
+            package.is_none(),
+            "Laya models must be served from a GGUF file, not a layer package"
+        );
+        return super::local_laya::start_local_laya_model(
+            spec,
+            model_name,
+            total_model_bytes,
+            meta,
+        )
+        .await;
+    }
+
     let kv_cache = skippy::KvCachePolicy::from_publisher_defaults(
         package
             .as_ref()
@@ -1076,7 +1129,7 @@ async fn start_local_skippy_model(
         resolved.model_fit.cache_type_v.to_ascii_uppercase(),
         context_length / 1024,
     );
-    let capabilities = models::runtime_verified_model_capabilities(
+    let mut capabilities = models::runtime_verified_model_capabilities(
         &model_name,
         spec.model_path,
         models::runtime_media_capability_evidence(
@@ -1122,12 +1175,15 @@ async fn start_local_skippy_model(
     .await
     .context("join load skippy direct GGUF task")??;
     emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
+    if skippy_model.supports_system_one() {
+        capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
+    }
     let workload_class = skippy_model.workload_class()?;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_name.clone(),
         bytes: None,
     });
-    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf);
+    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf, compact_meta);
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
@@ -1141,7 +1197,7 @@ async fn start_local_skippy_model(
             capabilities,
             workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: skippy_model,
+                model: Box::new(skippy_model),
                 http,
                 _death_tx: death_tx,
             },
@@ -1217,7 +1273,7 @@ async fn start_local_package_v2_model(
         resolved.model_fit.cache_type_v.to_ascii_uppercase(),
         context_length / 1024,
     );
-    let capabilities = models::runtime_verified_model_capabilities(
+    let mut capabilities = models::runtime_verified_model_capabilities(
         &model_name,
         spec.model_path,
         models::runtime_media_capability_evidence(
@@ -1297,8 +1353,11 @@ async fn start_local_package_v2_model(
     .await
     .context("join load skippy package-v2 task")??;
     emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
+    if handle.supports_system_one() {
+        capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
+    }
     let workload_class = handle.workload_class()?;
-    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage);
+    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage, compact_meta);
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -1316,7 +1375,7 @@ async fn start_local_package_v2_model(
             capabilities,
             workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
-                model: handle,
+                model: Box::new(handle),
                 http,
                 _death_tx: death_tx,
             },
@@ -1385,7 +1444,7 @@ mod tests {
     use super::{
         LocalRuntimeModelStartSpec, ModelLoadSource, RuntimeResourcePlanningProfile,
         model_loaded_label, openai_guardrail_policy_handle, resolved_model_name,
-        unix_nanos_to_unix_ms,
+        system_one_backend, unix_nanos_to_unix_ms,
     };
     use crate::inference::skippy;
     use crate::mesh;
@@ -1412,6 +1471,21 @@ mod tests {
             model_loaded_label(&name, ModelLoadSource::DirectGguf).as_str(),
             "redacted"
         );
+    }
+
+    #[test]
+    fn model_loaded_names_the_system_one_backend_from_the_architecture() {
+        let meta = |architecture: &str| crate::models::gguf::GgufCompactMeta {
+            architecture: architecture.to_string(),
+            ..Default::default()
+        };
+        assert_eq!(system_one_backend(Some(&meta("laya"))), Some("laya"));
+        assert_eq!(
+            system_one_backend(Some(&meta("diffusion-gemma"))),
+            Some("openjev")
+        );
+        assert_eq!(system_one_backend(Some(&meta("qwen3"))), None);
+        assert_eq!(system_one_backend(None), None);
     }
 
     #[test]

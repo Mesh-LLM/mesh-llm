@@ -10,6 +10,7 @@ mod kv_cache;
 mod local_source;
 mod materialization;
 pub(crate) mod metal_pipeline_cache;
+mod model_capabilities;
 mod model_open_drain;
 mod package;
 mod resolver;
@@ -527,6 +528,41 @@ impl SkippyOpenAiGuardrailOptions {
     }
 }
 
+/// Loads a Laya decision model through its own native entry point, not
+/// `skippy_model_open`. `device` is `None` for the CPU backend, `"auto"` for the
+/// first GPU, or a ggml backend device name.
+pub(crate) fn load_laya_model(
+    path: &Path,
+    device: Option<&str>,
+) -> Result<Arc<skippy_runtime::LayaModel>> {
+    let threads = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4);
+    Ok(Arc::new(skippy_runtime::LayaModel::open(
+        path, threads, device,
+    )?))
+}
+
+/// Serves `POST /systemone` for a loaded Laya model on `bind_addr`.
+pub(crate) fn start_laya_http_on(
+    model_id: &str,
+    model: Arc<skippy_runtime::LayaModel>,
+    bind_addr: std::net::SocketAddr,
+) -> SkippyHttpHandle {
+    let lifecycle_observer = crate::network::openai::runtime_events::compose_lifecycle_observer(
+        crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+    );
+    let server = skippy_server::start_openai_backend_with_lifecycle_observer(
+        bind_addr,
+        Arc::new(skippy_server::LayaSystemOneBackend::new(model_id, model)),
+        lifecycle_observer,
+    );
+    SkippyHttpHandle {
+        port: bind_addr.port(),
+        server,
+    }
+}
+
 impl SkippyHttpHandle {
     pub(crate) fn port(&self) -> u16 {
         self.port
@@ -672,27 +708,6 @@ impl SkippyModelHandle {
         &self,
     ) -> Option<skippy_runtime::ActivationBoundaryDesc> {
         self.runtime.output_activation_boundary()
-    }
-
-    /// Classify the loaded native runtime, including speech-capable projectors.
-    pub(crate) fn workload_class(&self) -> Result<crate::mesh::ModelWorkloadClass> {
-        if self.runtime.supports_speech_synthesis() {
-            return Ok(crate::mesh::ModelWorkloadClass::SpeechSynthesis);
-        }
-        let workload = self
-            .runtime
-            .workload_info()
-            .context("read loaded model workload contract")?;
-        Ok(match workload.kind {
-            skippy_runtime::ModelWorkload::CausalGeneration => {
-                crate::mesh::ModelWorkloadClass::CausalGeneration
-            }
-            skippy_runtime::ModelWorkload::Embedding => crate::mesh::ModelWorkloadClass::Embedding,
-            skippy_runtime::ModelWorkload::Rerank => crate::mesh::ModelWorkloadClass::Rerank,
-            skippy_runtime::ModelWorkload::EncoderDecoder => {
-                crate::mesh::ModelWorkloadClass::EncoderDecoder
-            }
-        })
     }
 
     fn resolved_mtp_source(

@@ -255,6 +255,7 @@ dictionary ModelCapabilities {
     CapabilityLevel reasoning;
     CapabilityLevel tool_use;
     boolean moe;
+    CapabilityLevel system_one;
 };
 
 dictionary ModelSummary {

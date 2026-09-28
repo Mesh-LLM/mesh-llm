@@ -13,7 +13,7 @@ use crate::network::{affinity, metrics};
 use crate::plugin::PluginEndpointSummary;
 use crate::runtime::instance::LocalInstanceSnapshot;
 use crate::runtime::wakeable::WakeableInventoryEntry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::metrics::RuntimeLlamaRuntimeSnapshot;
 
@@ -125,6 +125,10 @@ pub(crate) struct StatusViewInput {
     pub publication_state: String,
     pub local_processes: Vec<RuntimeProcessPayload>,
     pub peers: Vec<PeerInfo>,
+    /// Ids with a live entry in `MeshState::connections`, as of this
+    /// snapshot. Used to keep peer reporting from calling a peer `Serving`
+    /// on announcement content alone (issue #1756).
+    pub connected_peer_ids: HashSet<iroh::EndpointId>,
     pub wakeable_nodes: Vec<WakeableInventoryEntry>,
     pub routing_affinity: affinity::AffinityStatsSnapshot,
     pub hardware: HardwareViewSnapshot,

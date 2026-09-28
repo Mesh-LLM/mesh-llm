@@ -40,6 +40,9 @@ pub struct ModelCapabilities {
     pub reasoning: CapabilityLevel,
     pub tool_use: CapabilityLevel,
     pub moe: bool,
+    /// The loaded backend implements the typed `POST /systemone` contract.
+    #[serde(default)]
+    pub system_one: CapabilityLevel,
 }
 
 impl Default for ModelCapabilities {
@@ -51,6 +54,7 @@ impl Default for ModelCapabilities {
             reasoning: CapabilityLevel::None,
             tool_use: CapabilityLevel::None,
             moe: false,
+            system_one: CapabilityLevel::None,
         }
     }
 }
@@ -66,6 +70,10 @@ impl ModelCapabilities {
 
     pub fn supports_audio_runtime(self) -> bool {
         self.audio.is_supported()
+    }
+
+    pub fn supports_system_one_runtime(self) -> bool {
+        self.system_one.is_supported()
     }
 
     pub fn multimodal_status(self) -> &'static str {
@@ -116,6 +124,14 @@ impl ModelCapabilities {
         self.tool_use.label()
     }
 
+    pub fn system_one_status(self) -> &'static str {
+        self.system_one.status()
+    }
+
+    pub fn system_one_label(self) -> Option<&'static str> {
+        self.system_one.label()
+    }
+
     pub fn upgrade_vision(&mut self, level: CapabilityLevel) {
         self.vision = self.vision.max(level);
         if self.vision != CapabilityLevel::None {
@@ -136,6 +152,10 @@ impl ModelCapabilities {
 
     pub fn upgrade_tool_use(&mut self, level: CapabilityLevel) {
         self.tool_use = self.tool_use.max(level);
+    }
+
+    pub fn upgrade_system_one(&mut self, level: CapabilityLevel) {
+        self.system_one = self.system_one.max(level);
     }
 
     pub fn normalize(mut self) -> Self {
@@ -489,6 +509,7 @@ mod tests {
                 audio: level,
                 reasoning: level,
                 tool_use: level,
+                system_one: level,
                 ..Default::default()
             };
 
@@ -500,7 +521,25 @@ mod tests {
             assert_eq!(caps.reasoning_label(), expected_label);
             assert_eq!(caps.tool_use_status(), expected_status);
             assert_eq!(caps.tool_use_label(), expected_label);
+            assert_eq!(caps.system_one_status(), expected_status);
+            assert_eq!(caps.system_one_label(), expected_label);
         }
+    }
+
+    #[test]
+    fn legacy_json_defaults_the_additive_system_one_capability() {
+        let caps: ModelCapabilities = serde_json::from_value(json!({
+            "multimodal": false,
+            "vision": "none",
+            "audio": "none",
+            "reasoning": "none",
+            "tool_use": "none",
+            "moe": false
+        }))
+        .expect("legacy capability payload");
+
+        assert_eq!(caps.system_one, CapabilityLevel::None);
+        assert!(!caps.supports_system_one_runtime());
     }
 
     #[test]

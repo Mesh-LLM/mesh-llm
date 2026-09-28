@@ -201,3 +201,6 @@ jobs:
       - name: Validate CLI explorer in desktop and mobile browsers
         working-directory: ${{ steps.layout.outputs.website_dir }}
         run: npm run test:cli-explorer
+      - name: Validate website data sources
+        working-directory: ${{ steps.layout.outputs.website_dir }}
+        run: npm run test:website-data

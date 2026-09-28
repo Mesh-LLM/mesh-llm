@@ -874,10 +874,10 @@
       "apply_mode": "static_on_load",
       "restart_scope": "process_restart",
       "visibility": "user",
-      "description": "Auto shows parsed native log summaries only for categories the loaded runtime cannot report through structured events, so older runtimes keep them. Enabled forwards parsed summaries for every category as debug-only output. Disabled forwards none.",
+      "description": "Auto forwards parsed native log summaries only for categories the loaded runtime cannot report through structured events; a dedicated SafeTensors compatibility note remains visible without forwarding every model summary. Enabled forwards parsed summaries for every category as debug-only output. Disabled forwards none.",
       "presentation": {
         "label": "Lifecycle log parser",
-        "help": "Auto shows parsed native log summaries only for categories the loaded runtime cannot report through structured events, so older runtimes keep them. Enabled forwards parsed summaries for every category as debug-only output. Disabled forwards none.",
+        "help": "Auto forwards parsed native log summaries only for categories the loaded runtime cannot report through structured events; a dedicated SafeTensors compatibility note remains visible without forwarding every model summary. Enabled forwards parsed summaries for every category as debug-only output. Disabled forwards none.",
         "category_id": "runtime-policy",
         "category_label": "Runtime Policy",
         "category_summary": "Runtime reconciliation behavior applied by the local process",
@@ -974,7 +974,7 @@
       "name": "blobstore",
       "enabled": true,
       "source_repository": "built-in",
-      "installed_version": "0.76.1",
+      "installed_version": "0.77.0",
       "last_status": "built-in",
       "has_config_schema": false,
       "allow_unvalidated_config": false

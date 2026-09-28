@@ -15,6 +15,7 @@ its runtime-probed workload class for safe routing.
 | OCR | `POST /v1/chat/completions` or `POST /v1/responses` with an image input | Causal trunk and projector colocated on one node |
 | Speech synthesis | `POST /v1/audio/speech` | Unsplit local full model and projector |
 | Speech recognition / translation | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | Causal trunk and audio projector colocated on one node |
+| Laya decision (encoder + decision head) | `POST /systemone` | Unsplit local full model; see [the OpenJEV runbook](design/OPENJEV_SKIPPY_POC.md#laya-backend) |
 
 Embedding, rerank, encoder-decoder, and speech-synthesis workloads do not
 silently enter the stage-split generation path. A filtered stage model returns

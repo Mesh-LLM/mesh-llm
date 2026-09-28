@@ -507,6 +507,23 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             publish,
         )
 
+    def test_node_release_excludes_unsupported_intel_macos(self) -> None:
+        document = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+        matrix = document["jobs"]["build_node_sdk_addon"]["strategy"]["matrix"][
+            "include"
+        ]
+        targets = [entry["target"] for entry in matrix]
+        producer = (
+            ROOT / ".github" / "workflows" / "node-sdk-addon-artifact.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            targets,
+            ["darwin-arm64", "linux-arm64", "linux-x64", "win32-x64"],
+        )
+        self.assertNotIn("darwin-x64", targets)
+        self.assertNotIn("darwin-x64", producer)
+
     def test_release_permissions_are_least_privilege(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         header = workflow[: workflow.index("\njobs:\n")]
