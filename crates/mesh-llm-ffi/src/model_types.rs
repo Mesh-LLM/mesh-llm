@@ -13,6 +13,7 @@ pub struct ModelCapabilities {
     pub reasoning: CapabilityLevel,
     pub tool_use: CapabilityLevel,
     pub moe: bool,
+    pub system_one: CapabilityLevel,
 }
 
 #[derive(uniffi::Record)]

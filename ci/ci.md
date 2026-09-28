@@ -678,10 +678,10 @@ consumers (`smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`,
 `.github/actions/run-laya-product-smoke` centralizes composed-product restore,
 immutable fixture verification, and the cross-platform Laya harness behind
 bounded backend/device/cadence inputs.
-The full Swift producer fans the seven Apple Rust targets into separately
+The full Swift producer fans the four arm64 Apple Rust targets into separately
 cached jobs, bounded by the lane's macOS `max-parallel` budget, then assembles
 their immutable static libraries into one verified XCFramework. Host-only PR
-production remains a single job.
+production remains a single Apple Silicon job.
 The Swift SDK smoke consumes the lane's immutable UI distribution with
 `--skip-build`; it does not install Node or pnpm and owns no package-manager
 cache.

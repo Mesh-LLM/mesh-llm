@@ -68,6 +68,7 @@ pub(super) fn merge_capabilities(
         reasoning: left.reasoning.max(right.reasoning),
         tool_use: left.tool_use.max(right.tool_use),
         moe: false,
+        system_one: left.system_one.max(right.system_one),
     }
 }
 

@@ -376,6 +376,8 @@ message ModelCapabilities {
   bool moe = 4;
   bool multimodal = 5;
   CapabilityLevel audio = 6;
+  // Loaded backend support for the typed POST /systemone contract.
+  CapabilityLevel system_one = 7;
 }
 
 enum CapabilityLevel {

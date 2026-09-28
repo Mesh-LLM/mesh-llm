@@ -13,8 +13,9 @@ path as the Swift and Kotlin SDKs.
 npm install @mesh-llm/sdk
 ```
 
-Release packages include prebuilt addons for macOS arm64/x64, Linux arm64/x64,
-and Windows x64.
+Release packages include prebuilt addons for macOS arm64, Linux arm64/x64, and
+Windows x64. Intel Macs are not supported because they cannot run MeshLLM
+inference.
 
 ## Build From Source
 

@@ -800,6 +800,7 @@ pub(crate) fn local_ann_to_proto_ann(
                 moe: descriptor.capabilities.moe,
                 multimodal: descriptor.capabilities.multimodal,
                 audio: local_capability_level_to_proto(descriptor.capabilities.audio),
+                system_one: local_capability_level_to_proto(descriptor.capabilities.system_one),
             }),
             topology: descriptor.topology.as_ref().map(|topology| {
                 crate::proto::node::ModelTopology {

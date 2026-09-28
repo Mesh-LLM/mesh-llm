@@ -369,7 +369,7 @@ runner-contract update is active.
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |
-| `swift-sdk-artifact.yml` | Host-only/full XCFramework producer; full mode builds the seven Apple Rust targets as a bounded matrix (maximum four concurrent macOS runners) and joins their immutable libraries in one assembly job, while host-only remains a single producer. Trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
+| `swift-sdk-artifact.yml` | Host-only/full arm64 XCFramework producer; full mode builds the four Apple Silicon Rust targets as a bounded matrix (maximum four concurrent macOS runners) and joins their immutable libraries in one assembly job, while host-only remains a single Apple Silicon producer. Trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
 | `smoke.yml` | Artifact-based inference/OpenAI/split smoke |
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke with optional typed model context-size and recurrent-model inputs; recurrent models restore and save through a dedicated trust-scoped cache before the smoke runs |
 | `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |

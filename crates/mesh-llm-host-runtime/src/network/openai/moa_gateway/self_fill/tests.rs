@@ -353,3 +353,41 @@ async fn context_ineligible_healthy_clones_do_not_block_spillover() {
     drop(selected);
     assert_eq!(affinity.stats_snapshot().reservation_active, 0);
 }
+
+/// Pool assembly must not undo payment exclusion when it expands one model
+/// into distinct physical workers, including differently named aliases.
+#[cfg(feature = "payments")]
+#[tokio::test]
+async fn self_fill_does_not_reintroduce_paid_replicas() {
+    for paid_alias in [BIG_MODELS[1].name, "unsloth/Qwen3-32B-GGUF:Q4_K_M"] {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .unwrap();
+        let free = fleet_peer_with_health(1, BIG_MODELS[1], None, Some(100_000));
+        let mut paid = fleet_peer_with_health(2, BIG_MODELS[1], None, Some(100_000));
+        rename_peer_model(&mut paid, paid_alias);
+        paid.lightning_offers.insert(
+            paid_alias.to_string(),
+            mesh_llm_payments_types::pricing::Pricing {
+                input_msat_per_million: 1,
+                output_msat_per_million: 1,
+                minimum_invoice_msat: 1,
+            },
+        );
+        let expected_name = free.http_routable_models()[0].clone();
+        let paid_id = paid.id;
+        node.insert_test_peer(free).await;
+        node.insert_test_peer(paid).await;
+        assert!(node.hosts_for_model(paid_alias).await.contains(&paid_id));
+        let (backends, models) =
+            assemble_worker_pool(&node, None, Some(13_000), &reqwest::Client::new(), None).await;
+        assert_eq!(
+            models.len(),
+            1,
+            "paid alias {paid_alias} re-entered self-fill"
+        );
+        assert_eq!(backends.len(), 1);
+        assert_eq!(models[0].name, expected_name);
+        node.endpoint.close().await;
+    }
+}

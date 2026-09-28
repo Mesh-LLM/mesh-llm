@@ -8,7 +8,8 @@ use crate::network::openai::automatic;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use crate::network::openai::workload_routing::{
-    self, is_audio_upload_path, model_satisfies_request_workload, request_workload_class,
+    self, is_audio_upload_path, model_satisfies_request, request_workload_class,
+    required_request_workload, unsupported_workload_message,
 };
 use crate::network::router;
 use crate::plugin::openai_exchange::{
@@ -519,8 +520,8 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
-        if let Some(workload) = requested_workload
-            && !model_satisfies_request_workload(model, workload, &request.client_path, descriptors)
+        if let Some(workload) = required_request_workload(&request.client_path)
+            && !model_satisfies_request(model, &request.client_path, descriptors)
         {
             return AutoRouteResolution::WorkloadUnsupported(workload);
         }
@@ -589,7 +590,7 @@ async fn resolve_auto_routed_model(
         descriptors,
     );
     if available.is_empty()
-        && let Some(workload) = requested_workload
+        && let Some(workload) = required_request_workload(&request.client_path)
     {
         return AutoRouteResolution::WorkloadUnsupported(workload);
     }
@@ -1627,11 +1628,7 @@ async fn send_workload_unsupported(
     path: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
-    let message = if is_audio_upload_path(path) {
-        "no served model advertises support for this audio-to-text endpoint".to_string()
-    } else {
-        format!("no served model advertises the required {workload:?} workload")
-    };
+    let message = unsupported_workload_message(path, workload);
     response_outcome(
         422,
         proxy::send_error_observed(tcp_stream, 422, &message, route_observer).await,
