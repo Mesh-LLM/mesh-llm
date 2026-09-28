@@ -442,6 +442,9 @@ pub struct ModelCapabilities {
     pub multimodal: bool,
     #[prost(enumeration = "CapabilityLevel", tag = "6")]
     pub audio: i32,
+    /// Loaded backend support for the typed POST /systemone contract.
+    #[prost(enumeration = "CapabilityLevel", tag = "7")]
+    pub system_one: i32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ModelTopology {
@@ -1109,6 +1112,7 @@ pub enum ModelWorkloadClass {
     Rerank = 3,
     EncoderDecoder = 4,
     SpeechSynthesis = 5,
+    Decision = 6,
 }
 impl ModelWorkloadClass {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1123,6 +1127,7 @@ impl ModelWorkloadClass {
             Self::Rerank => "MODEL_WORKLOAD_CLASS_RERANK",
             Self::EncoderDecoder => "MODEL_WORKLOAD_CLASS_ENCODER_DECODER",
             Self::SpeechSynthesis => "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS",
+            Self::Decision => "MODEL_WORKLOAD_CLASS_DECISION",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1134,6 +1139,7 @@ impl ModelWorkloadClass {
             "MODEL_WORKLOAD_CLASS_RERANK" => Some(Self::Rerank),
             "MODEL_WORKLOAD_CLASS_ENCODER_DECODER" => Some(Self::EncoderDecoder),
             "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS" => Some(Self::SpeechSynthesis),
+            "MODEL_WORKLOAD_CLASS_DECISION" => Some(Self::Decision),
             _ => None,
         }
     }

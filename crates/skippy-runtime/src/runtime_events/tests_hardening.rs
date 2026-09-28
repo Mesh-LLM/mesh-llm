@@ -1,7 +1,3 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
-use std::thread;
-
 use skippy_ffi::{
     SkippyRuntimeEventCategory as RawRuntimeEventCategory,
     SkippyRuntimeEventEmitterKind as RawRuntimeEventEmitterKind,
@@ -11,9 +7,7 @@ use skippy_ffi::{
     SkippyRuntimeEventV1 as RawRuntimeEvent,
 };
 
-use super::{
-    ModelOpenEventReporterRegistration, OperationId, RuntimeEvent, RuntimeEventKind, Status,
-};
+use super::{NativeEventRecord, RecordRejection, RuntimeEvent, RuntimeEventKind, Status};
 
 fn raw_event(kind: RawRuntimeEventKind, sequence: u64) -> RawRuntimeEvent {
     RawRuntimeEvent {
@@ -106,91 +100,57 @@ fn from_raw_ptr_preserves_unknown_kind_rather_than_dropping_it() {
 }
 
 #[test]
-fn trampoline_catches_panicking_ingress_without_unwinding_across_ffi() {
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let later_calls = Arc::new(AtomicUsize::new(0));
-    let attempts_handle = Arc::clone(&attempts);
-    let later_calls_handle = Arc::clone(&later_calls);
-    let registration =
-        ModelOpenEventReporterRegistration::new(OperationId(1), move |_event: RuntimeEvent| {
-            if attempts_handle.fetch_add(1, Ordering::SeqCst) == 0 {
-                panic!("ingress deliberately panics");
-            }
-            later_calls_handle.fetch_add(1, Ordering::SeqCst);
-        });
-    let callback = registration
-        .reporter_ptr()
-        .cast::<super::RawRuntimeEventReporter>();
-    let reporter = unsafe { &*callback };
-    let callback = reporter.callback.expect("callback installed");
-    let event = raw_event(RawRuntimeEventKind::MODEL_OPEN_STARTED, 1);
-    // No panic should escape either call; the first panic poisons the ingress
-    // mutex, but recovery in MutexIngress must preserve later callbacks.
-    unsafe { callback(&event, reporter.user_data) };
-    unsafe { callback(&event, reporter.user_data) };
-    assert_eq!(later_calls.load(Ordering::SeqCst), 1);
+fn rejects_wrong_abi_version() {
+    let mut event = raw_event(RawRuntimeEventKind::MODEL_OPEN_STARTED, 1);
+    event.abi_version = 2;
+    let rejection = unsafe { NativeEventRecord::from_raw_ptr(&event) };
+    assert_eq!(rejection, Err(RecordRejection::AbiVersion(2)));
+    assert!(RuntimeEvent::from_raw_ptr(&event).is_none());
+}
+
+/// A newer runtime may append fields; the record reads only the fields this
+/// build knows and ignores the tail.
+#[test]
+fn accepts_struct_size_larger_than_known_layout() {
+    #[repr(C)]
+    struct ExtendedEvent {
+        known: RawRuntimeEvent,
+        appended: [u8; 64],
+    }
+    let mut extended = ExtendedEvent {
+        known: raw_event(RawRuntimeEventKind::MODEL_OPEN_PROGRESS, 9),
+        appended: [0xAB; 64],
+    };
+    extended.known.struct_size = std::mem::size_of::<ExtendedEvent>() as u32;
+    extended.known.numeric_summary_2 = 42;
+
+    let record = unsafe { NativeEventRecord::from_raw_ptr(&extended.known) }
+        .expect("a larger struct_size is forward-compatible");
+
+    assert_eq!(record.sequence, 9);
+    assert_eq!(
+        record.struct_size as usize,
+        std::mem::size_of::<ExtendedEvent>()
+    );
+    assert_eq!(record.to_event().numeric_summary_2, Some(42));
 }
 
 #[test]
-fn trampoline_is_sound_under_concurrent_worker_thread_callbacks() {
-    let received: Arc<Mutex<Vec<(OperationId, u64)>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink_handle = Arc::clone(&received);
-    let registration = ModelOpenEventReporterRegistration::new(OperationId(7), move |event| {
-        sink_handle
-            .lock()
-            .expect("sink lock")
-            .push((OperationId(7), event.sequence));
-    });
-    let callback_ptr = registration
-        .reporter_ptr()
-        .cast::<super::RawRuntimeEventReporter>();
-    let reporter = unsafe { &*callback_ptr };
-    let callback = reporter.callback.expect("callback installed");
-    let user_data = reporter.user_data as usize;
+fn null_and_short_struct_are_distinct_rejections() {
+    let mut short = raw_event(RawRuntimeEventKind::MODEL_OPEN_STARTED, 1);
+    short.struct_size = std::mem::offset_of!(RawRuntimeEvent, numeric_summary_0) as u32 - 1;
 
-    const PER_THREAD: u64 = 500;
-    let barrier = Arc::new(Barrier::new(2));
-    let mut handles = Vec::new();
-    for thread_index in 0..2u64 {
-        let barrier = Arc::clone(&barrier);
-        handles.push(thread::spawn(move || {
-            let user_data = user_data as *mut std::ffi::c_void;
-            barrier.wait();
-            for sequence in 0..PER_THREAD {
-                let event = raw_event(
-                    RawRuntimeEventKind::MODEL_OPEN_PROGRESS,
-                    thread_index * PER_THREAD + sequence,
-                );
-                unsafe { callback(&event, user_data) };
-            }
-        }));
-    }
-    for handle in handles {
-        handle.join().expect("worker thread callback loop");
-    }
+    let null = unsafe { NativeEventRecord::from_raw_ptr(std::ptr::null()) };
+    let short = unsafe { NativeEventRecord::from_raw_ptr(&short) };
 
-    let received = received.lock().expect("sink lock");
-    assert_eq!(received.len(), (PER_THREAD * 2) as usize);
+    assert_eq!(null, Err(RecordRejection::Null));
+    assert_eq!(short, Err(RecordRejection::ShortStruct));
 }
 
 #[test]
-fn ingress_reports_exact_saturation_callback_count() {
-    let count = Arc::new(AtomicUsize::new(0));
-    let count_handle = Arc::clone(&count);
-    let registration = ModelOpenEventReporterRegistration::new(OperationId(3), move |_event| {
-        count_handle.fetch_add(1, Ordering::SeqCst);
-    });
-    let callback_ptr = registration
-        .reporter_ptr()
-        .cast::<super::RawRuntimeEventReporter>();
-    let reporter = unsafe { &*callback_ptr };
-    let callback = reporter.callback.expect("callback installed");
-
-    const CALLS: usize = 10_000;
-    for sequence in 0..CALLS as u64 {
-        let event = raw_event(RawRuntimeEventKind::MODEL_OPEN_PROGRESS, sequence);
-        unsafe { callback(&event, reporter.user_data) };
-    }
-
-    assert_eq!(count.load(Ordering::SeqCst), CALLS);
+fn oversized_detail_is_its_own_rejection() {
+    let mut event = raw_event(RawRuntimeEventKind::MODEL_OPEN_PROGRESS, 2);
+    event.detail_len = u64::MAX;
+    let rejection = unsafe { NativeEventRecord::from_raw_ptr(&event) };
+    assert_eq!(rejection, Err(RecordRejection::OversizedDetail));
 }

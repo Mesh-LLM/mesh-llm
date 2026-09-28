@@ -1,17 +1,21 @@
-use std::ffi::{c_char, c_void};
-use std::mem;
+use std::ffi::c_char;
+#[cfg(not(feature = "dynamic-native-runtime"))]
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, OnceLock};
 
 use skippy_ffi::{
     Error as RawError, Model as RawModel, SkippyRuntimeEventReporterV1 as RawRuntimeEventReporter,
-    SkippyRuntimeEventV1 as RawRuntimeEvent, Status,
+    Status,
 };
 
+mod model_open_queue;
 mod native_record;
 mod wire_types;
-pub use native_record::{INLINE_DETAIL_BYTES, NativeEventRecord};
+use model_open_queue::ModelOpenEventReporterRegistration;
+pub use model_open_queue::{MODEL_OPEN_RECORD_CAPACITY, ModelOpenEventQueue};
+pub use native_record::{INLINE_DETAIL_BYTES, NativeEventRecord, RecordRejection};
 pub use wire_types::{
     RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind, RuntimeEventFailureCode,
     RuntimeEventKind, RuntimeEventProgressUnit,
@@ -20,11 +24,9 @@ pub use wire_types::{
 pub(crate) const RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
 
 /// Correlates every runtime event emitted during one native model-open call.
-/// Callers of `open_with_events`/`open_from_parts_with_events` now supply
-/// this explicitly (task 9): the boundary's shape did not change, only the
-/// source moved from an internal mint to the call site, so a future
-/// host-assigned identity (e.g. from `mesh-llm-host-runtime`'s runtime-event
-/// engine) can be threaded in without another change here.
+/// Callers supply it when creating the [`ModelOpenEventQueue`] they pass to
+/// `open_with_events`/`open_from_parts_with_events`, so a host-assigned
+/// identity can be threaded in without another change here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OperationId(pub u64);
 
@@ -34,30 +36,6 @@ pub struct OperationId(pub u64);
 pub fn next_operation_id() -> OperationId {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     OperationId(NEXT.fetch_add(1, Ordering::Relaxed))
-}
-
-/// Sound ingress boundary for native callback threads: `Send + Sync` so a
-/// shared handle can be called concurrently from more than one native worker
-/// thread without any unsynchronized aliasing.
-pub trait ModelOpenEventIngress: Send + Sync {
-    fn submit(&self, operation_id: OperationId, event: RuntimeEvent);
-}
-
-/// Adapts an owned `FnMut` sink into a `Send + Sync` ingress by serializing
-/// concurrent callback-thread access behind a mutex.
-struct MutexIngress<F>(Mutex<F>);
-
-impl<F> ModelOpenEventIngress for MutexIngress<F>
-where
-    F: FnMut(RuntimeEvent) + Send,
-{
-    fn submit(&self, _operation_id: OperationId, event: RuntimeEvent) {
-        // A sink panic poisons this mutex while the FFI trampoline catches the
-        // unwind. Recover the guard so one bad callback does not silently
-        // disable every later event for the lifetime of this ingress.
-        let mut sink = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        (sink)(event);
-    }
 }
 
 pub(crate) type RawModelOpenWithEventsFn = unsafe extern "C" fn(
@@ -77,94 +55,28 @@ pub(crate) type RawModelOpenFromPartsWithEventsFn = unsafe extern "C" fn(
     out_error: *mut *mut RawError,
 ) -> Status;
 
-/// Data reachable from the native trampoline through an opaque `user_data`
-/// pointer. Holds only `Copy`/`Arc` data so shared, immutable access from
-/// concurrent native callback threads is sound; all mutation happens inside
-/// the `Send + Sync` ingress behind its own synchronization.
-struct ModelOpenEventBridge<'a> {
-    operation_id: OperationId,
-    ingress: Arc<dyn ModelOpenEventIngress + 'a>,
-}
-
-struct ModelOpenEventReporterRegistration<'a> {
-    _bridge: Box<ModelOpenEventBridge<'a>>,
-    reporter: RawRuntimeEventReporter,
-}
-
-impl<'a> ModelOpenEventReporterRegistration<'a> {
-    fn new<F>(operation_id: OperationId, event_reporter: F) -> Self
-    where
-        F: FnMut(RuntimeEvent) + Send + 'a,
-    {
-        let mut bridge = Box::new(ModelOpenEventBridge {
-            operation_id,
-            ingress: Arc::new(MutexIngress(Mutex::new(event_reporter))),
-        });
-        let reporter = RawRuntimeEventReporter {
-            abi_version: RUNTIME_EVENT_V1_ABI_VERSION,
-            struct_size: mem::size_of::<RawRuntimeEventReporter>() as u32,
-            callback: Some(model_open_event_trampoline),
-            user_data: bridge.as_mut() as *mut ModelOpenEventBridge<'a> as *mut c_void,
-        };
-        Self {
-            _bridge: bridge,
-            reporter,
-        }
-    }
-
-    fn reporter_ptr(&self) -> *const RawRuntimeEventReporter {
-        &self.reporter
-    }
-}
-
-/// Correlate-and-submit only: no formatting, logging, I/O, blocking, or
-/// direct subscriber fan-out runs on this native callback thread.
-unsafe extern "C" fn model_open_event_trampoline(
-    event: *const RawRuntimeEvent,
-    user_data: *mut c_void,
-) {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if user_data.is_null() {
-            return;
-        }
-        let Some(event) = RuntimeEvent::from_raw_ptr(event) else {
-            return;
-        };
-        // SAFETY: user_data was set by `ModelOpenEventReporterRegistration`
-        // to a live `Box<ModelOpenEventBridge>` for the duration of the
-        // registration; only a shared reference is taken, so concurrent
-        // native worker-thread callbacks race only inside the ingress's own
-        // synchronization, never on this pointer.
-        let bridge = unsafe { &*(user_data as *const ModelOpenEventBridge<'_>) };
-        bridge.ingress.submit(bridge.operation_id, event);
-    }));
-}
-
-fn collect_model_open_events<OpenFn, EventFn>(
-    operation_id: OperationId,
+fn collect_model_open_events<OpenFn>(
+    queue: &Arc<ModelOpenEventQueue>,
     open_fn: OpenFn,
-    event_reporter: EventFn,
 ) -> (*mut RawModel, Status, *mut RawError)
 where
     OpenFn:
         FnOnce(*const RawRuntimeEventReporter, *mut *mut RawModel, *mut *mut RawError) -> Status,
-    EventFn: FnMut(RuntimeEvent) + Send,
 {
-    let registration = ModelOpenEventReporterRegistration::new(operation_id, event_reporter);
+    let registration = ModelOpenEventReporterRegistration::new(queue);
     let mut raw = ptr::null_mut();
     let mut error = ptr::null_mut();
     let status = open_fn(registration.reporter_ptr(), &mut raw, &mut error);
     (raw, status, error)
 }
 
-/// `operation_id` correlates every event this call emits. Task 9: the
-/// caller now supplies it (see [`OperationId`]'s doc) instead of it being
-/// minted inside this function.
+/// Takes the `_with_events` path only when a queue is supplied AND the
+/// runtime supports events; otherwise the legacy open runs and the queue
+/// stays empty. The native status/error return is authoritative either way.
 pub(crate) fn run_model_open<OpenFn, OpenWithEventsFn>(
-    operation_id: OperationId,
     open_fn: OpenFn,
     open_with_events_fn: OpenWithEventsFn,
-    event_reporter: Option<&mut (dyn FnMut(RuntimeEvent) + Send)>,
+    queue: Option<&Arc<ModelOpenEventQueue>>,
     use_event_reporter: bool,
 ) -> (*mut RawModel, Status, *mut RawError)
 where
@@ -172,10 +84,8 @@ where
     OpenWithEventsFn:
         FnOnce(*const RawRuntimeEventReporter, *mut *mut RawModel, *mut *mut RawError) -> Status,
 {
-    match (event_reporter, use_event_reporter) {
-        (Some(event_reporter), true) => {
-            collect_model_open_events(operation_id, open_with_events_fn, event_reporter)
-        }
+    match (queue, use_event_reporter) {
+        (Some(queue), true) => collect_model_open_events(queue, open_with_events_fn),
         _ => {
             let mut raw = ptr::null_mut();
             let mut error = ptr::null_mut();

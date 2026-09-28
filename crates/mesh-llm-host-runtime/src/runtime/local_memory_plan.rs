@@ -85,6 +85,7 @@ pub(super) fn emit_memory_plan_resolved(
                 $($package_field)*
                 memory_plan.vram_bytes = breakdown.vram_bytes,
                 memory_plan.model_bytes = breakdown.model_bytes,
+                memory_plan.projector_bytes = breakdown.projector_bytes,
                 memory_plan.kv_budget_bytes = breakdown.kv_budget_bytes,
                 memory_plan.planned_kv_bytes = breakdown.planned_kv_bytes,
                 memory_plan.kv_bytes_per_token = breakdown.kv_bytes_per_token,
@@ -216,6 +217,7 @@ mod tests {
         let breakdown = RuntimeResourcePlanBreakdown {
             vram_bytes: 10_000,
             model_bytes: 2_000,
+            projector_bytes: 0,
             kv_budget_bytes: 6_000,
             planned_kv_bytes: 4_000,
             kv_bytes_per_token: 4,

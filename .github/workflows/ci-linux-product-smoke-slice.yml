@@ -7,6 +7,15 @@ on:
         description: Immutable product source revision.
         required: true
         type: string
+      original_event_name:
+        description: Original event used for model-cache publication policy.
+        required: false
+        default: ''
+        type: string
+      runtime_matrix:
+        description: JSON Linux runtime/product rows from the versioned CI plan.
+        required: true
+        type: string
       smoke_matrix:
         description: JSON platform smoke rows from the versioned CI plan.
         required: true
@@ -102,3 +111,124 @@ jobs:
       timeout_minutes: ${{ inputs.timeout_minutes }}
     secrets:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+  laya_cpu:
+    name: Laya smoke (Linux CPU)
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-cpu') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/run-laya-product-smoke
+        with:
+          artifact_name: ci-product-linux-amd64-cpu
+          artifact_path: ci-artifacts/laya-linux-cpu
+          staged_binary_path: target/release/mesh-llm
+          expected_backend: cpu
+          device: CPU
+          model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
+          save_model_cache: ${{ inputs.original_event_name == 'push' }}
+
+  laya_cuda:
+    name: Laya smoke (Linux CUDA)
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-cuda') && contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
+    runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia, mesh-llm-amd64]
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/run-laya-product-smoke
+        with:
+          artifact_name: ci-product-linux-amd64-cuda
+          artifact_path: ci-artifacts/laya-linux-cuda
+          staged_binary_path: target/release/mesh-llm
+          expected_backend: cuda
+          device: CUDA0
+          model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
+          save_model_cache: 'false'
+      - name: Clean self-hosted Laya smoke outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        env:
+          CLEANUP_ARTIFACT_PATH: ci-artifacts/laya-linux-cuda
+          CLEANUP_BINARY_PATH: target/release/mesh-llm
+        run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
+
+  laya_vulkan:
+    name: Laya smoke (Linux Vulkan)
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
+    runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia, mesh-llm-amd64]
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/run-laya-product-smoke
+        with:
+          artifact_name: ci-product-linux-amd64-vulkan
+          artifact_path: ci-artifacts/laya-linux-vulkan
+          staged_binary_path: target/release/mesh-llm
+          expected_backend: vulkan
+          device: Vulkan0
+          model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
+          save_model_cache: 'false'
+      - name: Clean self-hosted Laya smoke outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        env:
+          CLEANUP_ARTIFACT_PATH: ci-artifacts/laya-linux-vulkan
+          CLEANUP_BINARY_PATH: target/release/mesh-llm
+        run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
+
+  laya_rocm:
+    name: Laya smoke (Linux ROCm)
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED == 'true' }}
+    runs-on: [self-hosted, Linux, X64, amd64, gpu-amd, mesh-llm-amd64]
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/run-laya-product-smoke
+        with:
+          artifact_name: ci-product-linux-amd64-rocm
+          artifact_path: ci-artifacts/laya-linux-rocm
+          staged_binary_path: target/release/mesh-llm
+          expected_backend: rocm
+          device: ROCm0
+          model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
+          save_model_cache: 'false'
+      - name: Clean self-hosted Laya smoke outputs
+        if: ${{ success() || failure() || cancelled() }}
+        timeout-minutes: 5
+        env:
+          CLEANUP_ARTIFACT_PATH: ci-artifacts/laya-linux-rocm
+          CLEANUP_BINARY_PATH: target/release/mesh-llm
+        run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false

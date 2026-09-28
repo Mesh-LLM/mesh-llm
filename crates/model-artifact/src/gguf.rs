@@ -292,6 +292,10 @@ pub struct GgufCompactMeta {
     pub architecture: String,
     pub parameter_size: Option<String>,
     pub context_length: u32,
+    /// Declared per-sequence token budget (`<arch>.max_len`), for models such
+    /// as Laya whose reads are bounded by it rather than by a context window.
+    /// `0` when absent.
+    pub max_len: u32,
     pub vocab_size: u32,
     pub embedding_size: u32,
     pub head_count: u32,
@@ -565,6 +569,10 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
         } else if key.ends_with(".context_length") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.context_length = v;
+            }
+        } else if key.ends_with(".max_len") {
+            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
+                meta.max_len = v;
             }
         } else if key.ends_with(".embedding_length") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {

@@ -16,18 +16,13 @@
 
 use serde::Serialize;
 
+use super::node_projection::{NodeCounters, NodeProjection};
 #[cfg(test)]
 use crate::runtime_events::engine::RuntimeEventEngine;
 use crate::runtime_events::reducer::{
     CacheDomainState, DeviceDomainState, DomainState, ModelDomainState, RequestDomainState,
-    SessionRecentEntry, StageDomainState,
+    RequestGenerationState, RequestPrefillState, SessionRecentEntry, StageDomainState,
 };
-
-#[derive(Debug, Serialize)]
-pub(crate) struct NodeProjection {
-    pub(crate) rebuild_generation: u64,
-    pub(crate) tracked_operation_count: usize,
-}
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ModelProjection {
@@ -53,6 +48,8 @@ impl From<ModelDomainState> for ModelProjection {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct StageProjection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) topology_id: Option<String>,
     pub(crate) id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) index: Option<u32>,
@@ -65,6 +62,7 @@ pub(crate) struct StageProjection {
 impl From<StageDomainState> for StageProjection {
     fn from(stage: StageDomainState) -> Self {
         Self {
+            topology_id: stage.topology_id,
             id: stage.id,
             index: stage.index,
             state: stage.state,
@@ -95,10 +93,64 @@ pub(crate) struct SessionsProjection {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct RequestPrefillProjection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) phase: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cached_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) computed_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_restore: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) outcome: Option<&'static str>,
+}
+
+impl From<RequestPrefillState> for RequestPrefillProjection {
+    fn from(prefill: RequestPrefillState) -> Self {
+        Self {
+            phase: prefill.phase,
+            cached_tokens: prefill.cached_tokens,
+            computed_tokens: prefill.computed_tokens,
+            cache_restore: prefill.cache_restore,
+            outcome: prefill.outcome,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RequestGenerationProjection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) phase: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) generated_tokens: Option<u64>,
+    pub(crate) first_token: bool,
+    pub(crate) stop_condition_reached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) outcome: Option<&'static str>,
+}
+
+impl From<RequestGenerationState> for RequestGenerationProjection {
+    fn from(generation: RequestGenerationState) -> Self {
+        Self {
+            phase: generation.phase,
+            generated_tokens: generation.generated_tokens,
+            first_token: generation.first_token,
+            stop_condition_reached: generation.stop_condition_reached,
+            outcome: generation.outcome,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 pub(crate) struct RequestProjection {
     pub(crate) id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) prefill: Option<RequestPrefillProjection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) generation: Option<RequestGenerationProjection>,
 }
 
 impl From<RequestDomainState> for RequestProjection {
@@ -106,6 +158,8 @@ impl From<RequestDomainState> for RequestProjection {
         Self {
             id: request.id,
             state: request.state,
+            prefill: request.prefill.map(RequestPrefillProjection::from),
+            generation: request.generation.map(RequestGenerationProjection::from),
         }
     }
 }
@@ -201,18 +255,21 @@ pub(crate) fn build(engine: &RuntimeEventEngine) -> StateProjection {
 pub(crate) fn build_from_snapshot(
     snapshot: &crate::runtime_events::reducer::ReducerSnapshot,
 ) -> StateProjection {
-    let node = NodeProjection {
+    let counters = NodeCounters {
         rebuild_generation: snapshot.rebuild_generation,
         tracked_operation_count: snapshot.operation_count(),
     };
+    let node = NodeProjection::build(counters, snapshot.domain());
     build_from_domain(node, snapshot.domain())
 }
 
 #[cfg(test)]
 mod tests {
     use mesh_llm_runtime_event_contracts::{
-        FactData, FamilyFact, LogicalModelId, ModelAvailabilityEventKind, RuntimeEventIngress,
-        ScopeIdentities,
+        ChildOperationId, DiagnosticEventKind, EventSystemHealthEventKind, FactData, FamilyFact,
+        GenerationEventKind, LogicalModelId, ModelAvailabilityEventKind, NativeRuntimeEventKind,
+        NodeAvailabilityEventKind, OperationId, OperationScope, PrefillEventKind, RequestEventKind,
+        RequestId, RuntimeEventIngress, RuntimeFact, ScopeIdentities,
     };
 
     use super::*;
@@ -273,6 +330,131 @@ mod tests {
         let object = value.as_object().expect("sessions is a JSON object");
         let keys: std::collections::BTreeSet<&str> = object.keys().map(String::as_str).collect();
         assert_eq!(keys, ["active_count", "recent"].into_iter().collect());
+    }
+
+    fn key_set(value: &serde_json::Value) -> std::collections::BTreeSet<String> {
+        value
+            .as_object()
+            .expect("JSON object")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn reserve_and_submit(
+        engine: &std::sync::Arc<RuntimeEventEngine>,
+        scope: OperationScope,
+        facts: Vec<RuntimeFact>,
+    ) {
+        let reservation = match scope {
+            OperationScope::Root(root) => engine.reserve_root(root, stopped),
+            OperationScope::Child { root, child } => engine.reserve_child(root, child, stopped),
+        }
+        .expect("reserve");
+        for fact in facts {
+            reservation.ingress().try_submit(fact);
+        }
+        engine.drain();
+    }
+
+    fn stopped() -> RuntimeFact {
+        RuntimeFact::NativeRuntime(FamilyFact::new(NativeRuntimeEventKind::RuntimeStopped))
+    }
+
+    #[test]
+    fn a_fresh_node_projection_has_only_its_counters() {
+        let engine = RuntimeEventEngine::new();
+        let value = serde_json::to_value(&build(&engine).node).expect("serializable");
+        assert_eq!(
+            key_set(&value),
+            ["rebuild_generation", "tracked_operation_count"]
+                .map(String::from)
+                .into_iter()
+                .collect()
+        );
+    }
+
+    #[test]
+    fn node_family_facts_add_their_sub_objects_to_node() {
+        let engine = RuntimeEventEngine::new();
+        reserve_and_submit(
+            &engine,
+            OperationScope::root_only(OperationId::new()),
+            vec![
+                RuntimeFact::NativeRuntime(FamilyFact::new(
+                    NativeRuntimeEventKind::RuntimeInitialized,
+                )),
+                RuntimeFact::NodeAvailability(FamilyFact::new(
+                    NodeAvailabilityEventKind::NodeAcceptingRequests,
+                )),
+                RuntimeFact::Diagnostic(FamilyFact::new(
+                    DiagnosticEventKind::DegradedOperationEntered,
+                )),
+                RuntimeFact::EventSystemHealth(FamilyFact::new(
+                    EventSystemHealthEventKind::EventsSampled,
+                )),
+            ],
+        );
+
+        let value = serde_json::to_value(&build(&engine).node).expect("serializable");
+        assert_eq!(value["runtime"]["status"], "initialized");
+        assert_eq!(value["availability"]["state"], "accepting_requests");
+        assert_eq!(value["diagnostics"]["degraded"], true);
+        assert_eq!(value["event_system"]["counts_by_kind"]["events_sampled"], 1);
+    }
+
+    #[test]
+    fn request_rows_carry_prefill_and_generation_from_child_facts() {
+        let engine = RuntimeEventEngine::new();
+        let root = OperationId::new();
+        let request_id = root.to_string();
+        reserve_and_submit(
+            &engine,
+            OperationScope::root_only(root),
+            vec![RuntimeFact::Request(FamilyFact::with_data(
+                RequestEventKind::RequestReceived,
+                FactData {
+                    scope: ScopeIdentities {
+                        request_id: Some(RequestId::new(&request_id).expect("valid request id")),
+                        ..ScopeIdentities::default()
+                    },
+                    ..FactData::default()
+                },
+            ))],
+        );
+        reserve_and_submit(
+            &engine,
+            OperationScope::with_child(root, ChildOperationId::new()),
+            vec![
+                RuntimeFact::Prefill(FamilyFact::new(PrefillEventKind::PrefillStarted)),
+                RuntimeFact::Generation(FamilyFact::new(GenerationEventKind::FirstTokenProduced)),
+            ],
+        );
+
+        let projection = build(&engine);
+        let request = projection
+            .requests
+            .iter()
+            .find(|request| request.id == request_id)
+            .expect("request row");
+        let value = serde_json::to_value(request).expect("serializable");
+        assert_eq!(value["prefill"]["phase"], "started");
+        assert_eq!(value["generation"]["phase"], "streaming");
+        assert_eq!(value["generation"]["first_token"], true);
+    }
+
+    #[test]
+    fn a_request_row_without_execution_facts_omits_prefill_and_generation() {
+        let request = RequestProjection::from(RequestDomainState {
+            id: "plain".to_string(),
+            state: Some("received".to_string()),
+            ..RequestDomainState::default()
+        });
+        let value = serde_json::to_value(&request).expect("serializable");
+        assert_eq!(
+            key_set(&value),
+            ["id", "state"].map(String::from).into_iter().collect()
+        );
     }
 
     #[test]

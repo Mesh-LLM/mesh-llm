@@ -99,7 +99,7 @@ a macOS desktop app, supports image generation natively, and has broader API
 compatibility (Claude, Ollama formats). The project is Python-based, making it
 more accessible for developers who want to contribute or extend it.
 
-Mesh is newer (1.1k stars) but has invested in a formal layer-package ecosystem,
+Mesh is newer ({{ site.githubStarsFallback }} stars) but has invested in a formal layer-package ecosystem,
 agent integrations (Goose, Claude Code, OpenCode, Pi launchers), a public
 model catalog, and a plugin system (Flash-MoE, telemetry, blackboard). Its Rust
 foundation gives it performance characteristics suited for production serving.

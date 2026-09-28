@@ -429,10 +429,10 @@ async fn test_api_proxy_does_not_retry_after_successful_stream_starts() {
     let (stream_port, stream_rx, stream_handle) = spawn_streaming_upstream(
         "text/event-stream",
         vec![
-            (Duration::ZERO, br#"data: {"delta":"first"}\n\n"#.to_vec()),
+            (Duration::ZERO, b"data: {\"delta\":\"first\"}\n\n".to_vec()),
             (
                 Duration::from_millis(50),
-                br#"data: {"delta":"second"}\n\n"#.to_vec(),
+                b"data: {\"delta\":\"second\"}\n\n".to_vec(),
             ),
         ],
     )
@@ -458,17 +458,13 @@ async fn test_api_proxy_does_not_retry_after_successful_stream_starts() {
     stream.write_all(request.as_bytes()).await.unwrap();
     stream.shutdown().await.unwrap();
 
-    let first = read_until_contains(
-        &mut stream,
-        br#"data: {"delta":"first"}\n\n"#,
-        Duration::from_secs(2),
-    )
-    .await;
+    let first =
+        read_until_contains(&mut stream, b"\"delta\":\"first\"", Duration::from_secs(2)).await;
     let first_text = String::from_utf8_lossy(&first);
     let raw = String::from_utf8(stream_rx.await.unwrap()).unwrap();
 
     assert!(first_text.contains("HTTP/1.1 200 OK"));
-    assert!(first_text.contains(r#"data: {"delta":"first"}\n\n"#));
+    assert!(first_text.contains(r#""delta":"first""#));
     assert!(raw.contains("stream wins immediately"));
     assert!(
         tokio::time::timeout(Duration::from_millis(250), unused_rx)

@@ -12,12 +12,14 @@ use super::{
     records::add_reconstruct_stats,
 };
 
+const MAX_PREFIX_PROBES: usize = 64;
+
 fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Location) -> String {
     format!("{}:{}", l3.state_identity(), location.manifest_key)
 }
 
-fn resident_prefix_is_complete(matched_tokens: usize, requested_tokens: usize) -> bool {
-    matched_tokens >= requested_tokens
+fn resident_prefix_is_preferred(matched_tokens: usize, exact_tokens: Option<usize>) -> bool {
+    exact_tokens.is_none_or(|exact_tokens| matched_tokens > exact_tokens)
 }
 
 fn preflight_l3_kv_location(
@@ -163,6 +165,37 @@ impl Drop for ExactStateAdmissionCredit {
 }
 
 impl KvStageIntegration {
+    fn available_exact_prefix_tokens(
+        &self,
+        identities: &[PrefillKvIdentity],
+        shared_durable_fallback: bool,
+    ) -> Option<usize> {
+        identities
+            .iter()
+            .filter_map(|identity| {
+                let warm = self
+                    .radix
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .peek_recurrent(&identity.namespace, &identity.token_ids)
+                    .map(|exact| exact.matched_tokens);
+                if warm.is_some() {
+                    return warm;
+                }
+                let l3 = self.l3.as_ref()?;
+                let durable_token_ids = if shared_durable_fallback {
+                    self.durable_exact_lookup_token_ids(&identity.token_ids)
+                } else {
+                    &identity.token_ids
+                };
+                l3.locate_longest(&identity.namespace, durable_token_ids, MAX_PREFIX_PROBES)
+                    .ok()
+                    .flatten()
+                    .and_then(|location| usize::try_from(location.token_count).ok())
+            })
+            .max()
+    }
+
     pub(crate) fn l3_benefit_cost(
         &self,
         cold_prefill_cost: Option<f64>,
@@ -181,6 +214,19 @@ impl KvStageIntegration {
         self.restore_exact_state_with_cold_cost(runtime, session_id, identities, None)
     }
 
+    /// Restores the longest warm L1 prefix, but constrains a cold L3 fallback
+    /// to the canonical checkpoint shared by every stage in a split chain.
+    pub(crate) fn restore_exact_state_with_shared_durable_fallback(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identities: &[PrefillKvIdentity],
+    ) -> Result<Option<ExactStateRestore>> {
+        runtime.restore_transaction(session_id, |runtime| {
+            self.restore_exact_state_inner(runtime, session_id, identities, None, true)
+        })
+    }
+
     pub fn restore_exact_state_with_cold_cost(
         &self,
         runtime: &mut RuntimeState,
@@ -189,7 +235,13 @@ impl KvStageIntegration {
         cold_prefill_cost: Option<f64>,
     ) -> Result<Option<ExactStateRestore>> {
         runtime.restore_transaction(session_id, |runtime| {
-            self.restore_exact_state_inner(runtime, session_id, identities, cold_prefill_cost)
+            self.restore_exact_state_inner(
+                runtime,
+                session_id,
+                identities,
+                cold_prefill_cost,
+                false,
+            )
         })
     }
 
@@ -199,23 +251,28 @@ impl KvStageIntegration {
         session_id: &str,
         identities: &[PrefillKvIdentity],
         cold_prefill_cost: Option<f64>,
+        shared_durable_fallback: bool,
     ) -> Result<Option<ExactStateRestore>> {
         if !self.should_lookup() || self.exact_state_payload().is_none() {
             return Ok(None);
         }
         // Dense L3 uses serialized exact state only as the durable floor.
-        // Prefer a native resident-prefix hit whenever one is already warm;
-        // importing the serialized snapshot would otherwise make enabling L3
-        // slower than the ordinary L1 path on every repeated request.
-        if self.payload == StagePrefixCachePayload::ResidentKv
-            && identities.iter().any(|identity| {
-                self.probe_resident_prefix(identity)
-                    .is_some_and(|resident| {
-                        resident_prefix_is_complete(resident.token_count, identity.token_ids.len())
-                    })
-            })
-        {
-            return Ok(None);
+        // Compare the available serving paths before either mutates the lane:
+        // prefer warm native resident KV only when it restores a longer prefix,
+        // while an equal-length warm or durable exact checkpoint retains priority.
+        if self.payload == StagePrefixCachePayload::ResidentKv {
+            let resident_tokens = identities
+                .iter()
+                .filter_map(|identity| self.probe_resident_prefix(identity))
+                .map(|resident| resident.token_count)
+                .max();
+            if let Some(resident_tokens) = resident_tokens {
+                let exact_tokens =
+                    self.available_exact_prefix_tokens(identities, shared_durable_fallback);
+                if resident_prefix_is_preferred(resident_tokens, exact_tokens) {
+                    return Ok(None);
+                }
+            }
         }
         for identity in identities {
             let lookup_started = Instant::now();
@@ -245,6 +302,7 @@ impl KvStageIntegration {
                     identity,
                     lookup_started,
                     cold_prefill_cost,
+                    shared_durable_fallback,
                 )? {
                     return Ok(Some(restored));
                 }
@@ -394,13 +452,14 @@ impl KvStageIntegration {
                 drop(lease);
                 continue;
             }
-            let promote_to_l3 = self.l3.as_ref().is_some_and(|l3| {
-                l3.benefit_observe_memory_hit(
-                    &identity.namespace,
-                    &lookup.stored_tokens,
-                    cold_prefill_cost,
-                )
-            });
+            let promote_to_l3 = lookup.value.l3_promotion_eligible
+                && self.l3.as_ref().is_some_and(|l3| {
+                    l3.benefit_observe_memory_hit(
+                        &identity.namespace,
+                        &lookup.stored_tokens,
+                        cold_prefill_cost,
+                    )
+                });
             let page_id = lookup.value.page_id.clone();
             let promotion_payload = promote_to_l3.then(|| lookup.value.payload.clone());
             let promotion_extra = promote_to_l3.then(|| lookup.value.extra.clone());
@@ -495,6 +554,21 @@ impl KvStageIntegration {
         admission: CaptureAdmission,
         l3_cost: Option<skippy_cache::policy::CostSample>,
     ) -> Result<Option<ExactStateRecord>> {
+        self.record_exact_state_with_cost_and_durability(
+            runtime, session_id, identity, admission, l3_cost, true,
+        )
+    }
+
+    /// Records an exact state in L1 and optionally forwards it to durable L3.
+    pub(crate) fn record_exact_state_with_cost_and_durability(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        admission: CaptureAdmission,
+        l3_cost: Option<skippy_cache::policy::CostSample>,
+        write_through_l3: bool,
+    ) -> Result<Option<ExactStateRecord>> {
         let Some(exact_state_payload) = self.exact_state_payload() else {
             return Ok(None);
         };
@@ -559,6 +633,7 @@ impl KvStageIntegration {
                 }
             };
         let probation_recurrence = already_recorded
+            && write_through_l3
             && l3_cost.is_some()
             && self.l3.as_ref().is_some_and(|l3| {
                 l3.benefit_tracks_prefix(&identity.namespace, &identity.token_ids)
@@ -637,7 +712,7 @@ impl KvStageIntegration {
             namespace: identity.namespace.clone(),
             token_ids: identity.token_ids.clone(),
             l3_fill_claim: None,
-            write_through_l3: true,
+            write_through_l3,
             l2_promotion_digest: None,
             l3_cost,
             admission_credit,
@@ -692,8 +767,8 @@ impl KvStageIntegration {
         identity: &PrefillKvIdentity,
         lookup_started: Instant,
         cold_prefill_cost: Option<f64>,
+        shared_durable_fallback: bool,
     ) -> Result<Option<ExactStateRestore>> {
-        const MAX_PREFIX_PROBES: usize = 64;
         let Some(l3) = &self.l3 else {
             return Ok(None);
         };
@@ -701,8 +776,13 @@ impl KvStageIntegration {
         // load on the located entry's manifest key: same-length queries for
         // different prefixes never suppress each other, and different-length
         // queries resolving to one entry never load it twice.
+        let durable_token_ids = if shared_durable_fallback {
+            self.durable_exact_lookup_token_ids(&identity.token_ids)
+        } else {
+            &identity.token_ids
+        };
         let location =
-            match l3.locate_longest(&identity.namespace, &identity.token_ids, MAX_PREFIX_PROBES) {
+            match l3.locate_longest(&identity.namespace, durable_token_ids, MAX_PREFIX_PROBES) {
                 Ok(Some(location)) => location,
                 // Nothing stored, or a corrupt / identity-mismatched entry.
                 // Either way the miss path is the safe one; the tier has
@@ -1073,7 +1153,7 @@ mod tests {
     use skippy_cache::{L3Location, UnifiedRadixCache};
 
     use super::{
-        is_native_kv_unavailable, preflight_l3_kv_location, resident_prefix_is_complete,
+        is_native_kv_unavailable, preflight_l3_kv_location, resident_prefix_is_preferred,
         try_touch_exact_state,
     };
 
@@ -1083,10 +1163,11 @@ mod tests {
     >;
 
     #[test]
-    fn only_complete_resident_prefixes_skip_exact_restore() {
-        assert!(resident_prefix_is_complete(4_000, 4_000));
-        assert!(resident_prefix_is_complete(4_001, 4_000));
-        assert!(!resident_prefix_is_complete(200, 4_000));
+    fn longer_resident_prefixes_skip_exact_restore() {
+        assert!(resident_prefix_is_preferred(4_000, None));
+        assert!(resident_prefix_is_preferred(4_001, Some(4_000)));
+        assert!(!resident_prefix_is_preferred(4_000, Some(4_000)));
+        assert!(!resident_prefix_is_preferred(200, Some(4_000)));
     }
 
     #[test]

@@ -1,0 +1,97 @@
+name: Run Laya product smoke
+description: Restore one composed product and execute the pinned Laya golden battery.
+
+inputs:
+  artifact_name:
+    description: Run-scoped composed product artifact.
+    required: true
+  artifact_path:
+    description: Unique extraction directory for this smoke row.
+    required: true
+  staged_binary_path:
+    description: Destination for the restored mesh-llm executable.
+    required: true
+  expected_backend:
+    description: Backend required by the composed product manifest.
+    required: true
+  device:
+    description: Explicit runtime device selected for the Laya read.
+    required: true
+  model_cadence:
+    description: Registry cadence authorized for this invocation.
+    required: true
+  save_model_cache:
+    description: Whether this trusted invocation may publish the immutable model cache.
+    required: false
+    default: 'false'
+  startup_timeout_seconds:
+    description: Bounded product startup timeout.
+    required: false
+    default: '300'
+  read_timeout_seconds:
+    description: Bounded per-read timeout.
+    required: false
+    default: '300'
+
+runs:
+  using: composite
+  steps:
+    - name: Validate bounded Laya smoke inputs
+      shell: bash
+      env:
+        EXPECTED_BACKEND: ${{ inputs.expected_backend }}
+        DEVICE: ${{ inputs.device }}
+        MODEL_CADENCE: ${{ inputs.model_cadence }}
+        SAVE_MODEL_CACHE: ${{ inputs.save_model_cache }}
+      run: |
+        set -euo pipefail
+        case "$EXPECTED_BACKEND" in
+          cpu|cuda|rocm|vulkan|metal) ;;
+          *) echo "unsupported Laya smoke backend: $EXPECTED_BACKEND" >&2; exit 1 ;;
+        esac
+        case "$DEVICE" in
+          CPU|CUDA0|ROCm0|Vulkan0|MTL0) ;;
+          *) echo "unsupported Laya smoke device: $DEVICE" >&2; exit 1 ;;
+        esac
+        case "$MODEL_CADENCE" in
+          pull-request|main|manual) ;;
+          *) echo "unsupported Laya smoke cadence: $MODEL_CADENCE" >&2; exit 1 ;;
+        esac
+        case "$SAVE_MODEL_CACHE" in
+          true|false) ;;
+          *) echo "save_model_cache must be true or false" >&2; exit 1 ;;
+        esac
+
+    - name: Restore product and pinned Laya fixture
+      id: restore
+      uses: ./.github/actions/restore-smoke-inputs
+      with:
+        artifact_name: ${{ inputs.artifact_name }}
+        artifact_path: ${{ inputs.artifact_path }}
+        binary_name: ${{ runner.os == 'Windows' && 'mesh-llm.exe' || 'mesh-llm' }}
+        staged_binary_path: ${{ inputs.staged_binary_path }}
+        expected_backend: ${{ inputs.expected_backend }}
+        model_manifest: ci/model-artifacts/manifests/product-smoke.json
+        model_artifact_id: family-laya-multilingual
+        model_cadence: ${{ inputs.model_cadence }}
+        model_cache_scope: laya-multilingual-f16
+        cache_key_prefix: laya-${{ runner.os }}-${{ runner.arch }}
+        save_model_cache: ${{ inputs.save_model_cache }}
+
+    - name: Run Laya startup and golden reads
+      shell: bash
+      env:
+        MESH_BINARY: ${{ inputs.staged_binary_path }}
+        MODEL_PATH: ${{ steps.restore.outputs.model_path }}
+        DEVICE: ${{ inputs.device }}
+        STARTUP_TIMEOUT_SECONDS: ${{ inputs.startup_timeout_seconds }}
+        READ_TIMEOUT_SECONDS: ${{ inputs.read_timeout_seconds }}
+      run: |
+        set -euo pipefail
+        python scripts/ci-laya-smoke.py \
+          --mesh-binary "$MESH_BINARY" \
+          --model "$MODEL_PATH" \
+          --device "$DEVICE" \
+          --startup-timeout "$STARTUP_TIMEOUT_SECONDS" \
+          --read-timeout "$READ_TIMEOUT_SECONDS" \
+          --json-out "$RUNNER_TEMP/laya-parity.json"

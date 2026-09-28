@@ -52,7 +52,15 @@ pub(super) fn runtime_model_planning_bytes(model_path: &Path) -> Result<u64> {
     if skippy::is_layer_package_ref(&package_ref) {
         return Ok(skippy::identity_from_layer_package(&package_ref)?.source_model_bytes);
     }
-    Ok(election::total_model_bytes(model_path))
+    let weight_bytes = election::total_model_bytes(model_path);
+    // A Laya model holds a worst-case read reserve on top of its weights; the
+    // capacity ledger reserves from this, so charge it here.
+    Ok(match models::gguf::scan_gguf_compact_meta(model_path) {
+        Some(meta) if super::local_laya::is_laya(Some(&meta)) => {
+            super::local_laya::laya_resident_bytes(weight_bytes, &meta)
+        }
+        _ => weight_bytes,
+    })
 }
 pub(super) async fn split_runtime_compact_meta(
     package: &skippy::SkippyPackageIdentity,

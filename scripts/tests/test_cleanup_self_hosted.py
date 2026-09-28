@@ -36,7 +36,8 @@ class CleanupTests(unittest.TestCase):
         (path / 'payload').write_text('keep or remove')
 
     def test_profiles_remove_outputs_and_preserve_unrelated_files(self):
-        for profile in ('build', 'family', 'replay', 'cuda-release', 'smoke', 'runner-contract'):
+        for profile in ('build', 'family', 'replay', 'cuda-release', 'smoke', 'runner-contract',
+                        'canary-preflight'):
             with self.subTest(profile=profile):
                 paths = C.targets(self.env, profile, True, True)
                 for _, path in paths:
@@ -189,7 +190,7 @@ class CleanupTests(unittest.TestCase):
                 for status in ('success()', 'failure()', 'cancelled()'):
                     self.assertIn(status, step.get('if', ''))
                 self.assertEqual(step['timeout-minutes'], 5)
-        self.assertEqual(len(found), 6)
+        self.assertEqual(len(found), 10)
 
     def test_replay_builds_use_the_job_owned_worktree_root(self):
         spec = importlib.util.spec_from_file_location('replay_params', ROOT / 'scripts/agentic-replay-params.py')

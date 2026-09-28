@@ -148,6 +148,28 @@ run_for() {
     --seconds "$seconds" --label "$label" "${cleanup[@]}" -- "$@"
 }
 
+record_failure_class() {
+  local failure_class="$1" failure_stage="$2"
+  echo "canary failure: class=$failure_class stage=$failure_stage" >&2
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    {
+      echo "failure_class=$failure_class"
+      echo "failure_stage=$failure_stage"
+    } >> "$GITHUB_OUTPUT"
+  fi
+}
+
+check_family_cache() {
+  mkdir -p "$(dirname "$PLAN_PATH")"
+  python3 scripts/plan-family-battery.py \
+    --manifest ci/llama-canary/family-certified.json \
+    --shard-count 256 \
+    --check-cache \
+    --cache-root "$HF_CACHE" \
+    --output "$PLAN_PATH"
+  python3 scripts/plan-family-battery.py --verify-plan "$PLAN_PATH"
+}
+
 remaining_verification_seconds() {
   local remaining
   remaining="$((VERIFICATION_DEADLINE_AT - $(date +%s)))"
@@ -447,13 +469,23 @@ run_full_build() {
       bash -c 'cargo test -p skippy-server --lib --no-run --message-format=json > "$1"' \
       build-mm "$STATE_DIR/mm-build.jsonl" || return 1
   fi
-  # The System One smoke exit code is 0 for a NOT CERTIFIED full-model read and
-  # non-zero for a red contract part or a red declared-qualified read, so this
-  # gate blocks publication exactly when the lane is qualified to decide.
+  # The family-certify runner is a Metal execution lane. Both real decision
+  # models are mandatory here: Jev exercises the complete DiffusionGemma read
+  # through the staged Metal server, and Laya exercises the static native CLI
+  # on its explicit CPU device against the upstream golden fixtures. Platform
+  # Laya smokes separately prove the packaged Metal runtime.
   run_verification_logged "System One smoke" "$BUILD_LOG" env \
     WORK_DIR="$SYSTEMONE_SMOKE_DIR" \
     SYSTEMONE_SMOKE_CADENCE=llama-bump \
+    SYSTEMONE_SMOKE_BUILD_BACKEND=metal \
+    SYSTEMONE_SMOKE_CERTIFIED_BACKENDS=metal \
+    SYSTEMONE_SMOKE_REQUIRE_QUALIFIED=1 \
     scripts/skippy-system-one-smoke.sh || return 1
+  run_verification_logged "Laya smoke" "$BUILD_LOG" env \
+    WORK_DIR="$SYSTEMONE_SMOKE_DIR" \
+    LAYA_SMOKE_CADENCE=llama-bump \
+    LAYA_SMOKE_DEVICE=CPU \
+    scripts/skippy-laya-smoke.sh || return 1
 }
 
 # Local CLI compatibility path. CI uses *-build modes and separate family jobs.
@@ -506,9 +538,9 @@ run_candidate_gates() {
   fi
   validate_agent_manifest_changes || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
-    run_verification_logged "validate family cache before compilation" "$CERTIFY_LOG" \
+    run_verification_logged "validate family plan before compilation" "$CERTIFY_LOG" \
       python3 scripts/plan-family-battery.py --shard-count 256 \
-        --check-cache --cache-root "$HF_CACHE" --output "$PLAN_PATH" || return 1
+        --output "$PLAN_PATH" || return 1
   fi
   run_full_build || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
@@ -528,15 +560,18 @@ check_split_certification_roster() {
 }
 
 repair_candidate_until_green() {
-  local prompt
+  local prompt status
   REPAIR_DEADLINE_AT="$(( $(date +%s) + AGENT_TIMEOUT_SECONDS ))"
   prompt="$(agent_prompt)"
-  if [[ -n "${CANARY_FEEDBACK_DIR:-}" ]]; then
-    prompt+=" Prior distributed family evidence is at $CANARY_FEEDBACK_DIR. Read its receipt.json and failure logs before repairing the candidate."
-  fi
 
   while remaining_repair_seconds >/dev/null; do
-    agent_session_step "$prompt" || return 1
+    if agent_session_step "$prompt"; then
+      :
+    else
+      status=$?
+      record_failure_class infrastructure agent-runtime
+      return "$status"
+    fi
     assert_agent_control_unchanged || return 1
     # Coding turns may start only within the repair window. Once a turn
     # returns, give its complete gate sequence a fresh bounded pass, even
@@ -549,12 +584,14 @@ repair_candidate_until_green() {
     fi
     if ! remaining_repair_seconds >/dev/null; then
       echo "candidate remains red and the repair budget is exhausted" >&2
+      record_failure_class candidate trusted-gates
       return 124
     fi
     echo "candidate gates remain red; returning their logs to the same agent session"
     prompt="$(agent_feedback_prompt)"
   done
   echo "candidate remains red and the repair budget is exhausted" >&2
+  record_failure_class candidate trusted-gates
   return 124
 }
 
@@ -624,24 +661,22 @@ export_family_inputs() {
     --workload-oracles "${LLAMA_STAGE_BUILD_DIR:?}-workloads"
 }
 
+if ! check_family_cache; then
+  record_failure_class infrastructure model-cache
+  echo "pinned model cache is not ready; candidate source was not evaluated" >&2
+  exit 125
+fi
+
 if [[ "$HARNESS_MODE" == repair* ]]; then
-  # A previous distributed pass failed. Restore only its candidate source;
-  # orchestration stays at the frozen trusted base and logs are feedback.
-  if [[ -n "${CANARY_INPUT_BUNDLE:-}" ]]; then
-    load_candidate_bundle
-    git diff --binary "$BASE_HEAD" "$CERTIFIED_SHA" > "$STATE_DIR/previous.patch"
-    git apply "$STATE_DIR/previous.patch"
-    assert_agent_control_unchanged
-  fi
   write_repair_pin
   verify_repair_pin
-  if [[ -n "${CANARY_FEEDBACK_DIR:-}" ]]; then
-    find "$CANARY_FEEDBACK_DIR" -name receipt.json -exec cat {} \; > "$CERTIFY_LOG"
-  fi
   echo "starting agent repair/build gates; distributed families follow in separate jobs"
-  if ! repair_candidate_until_green; then
+  if repair_candidate_until_green; then
+    :
+  else
+    status=$?
     echo "agent task failed or timed out; no canary branch or pull request was published" >&2
-    exit 1
+    exit "$status"
   fi
   snapshot_candidate_tree
   write_candidate_bundle
@@ -665,9 +700,13 @@ trap cleanup_verification_worktree EXIT
 materialize_verification_tree
 VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
 echo "starting independent verification build of the exact candidate"
-if ! run_candidate_gates; then
+if run_candidate_gates; then
+  :
+else
+  status=$?
+  record_failure_class candidate independent-verification
   echo "final canary verification failed; no canary branch or pull request was published" >&2
-  exit 1
+  exit "$status"
 fi
 check_split_certification_roster
 if [[ "$HARNESS_MODE" == "verify-build" ]]; then

@@ -25,8 +25,8 @@ and are not touched by this change:
   document (and an earlier commit on this branch, since dropped) mistook
   a *different*, no-longer-primary code path
   (`network/openai/transport.rs::handle_mesh_request`, reached only via
-  the now-`#[expect(dead_code)]` "passive listener" lane —
-  `run_auto_model_path_or_shutdown` — that a large "daemon model
+  the since-removed "passive listener" lane
+  (`run_auto_model_path_or_shutdown`) that a large "daemon model
   lifecycle reconciliation" refactor superseded between this fork's base
   and current `main`) for the node's primary listener. It isn't; that
   patch was reverted as a no-op once the actual current architecture was
@@ -173,11 +173,10 @@ base (before a large "daemon model lifecycle reconciliation" feature and
 related refactors landed on upstream `main`), additionally patched
 `network/openai/transport.rs::handle_mesh_request` to merge plugin models
 into its own `/v1/models` response and to route matching requests
-directly to a plugin's loopback endpoint. That function is reached via
+directly to a plugin's loopback endpoint. That function was reached via
 `run_passive`, itself reached only through
-`run_auto_model_path_or_shutdown` — a function upstream has since marked
-`#[expect(dead_code, reason = "bridges the retained advertised-model and
-passive runtime compatibility lanes")]`. The refactor made every node's
+`run_auto_model_path_or_shutdown` — a lane upstream has since removed as
+dead code. The refactor made every node's
 own local ingress go through the already-plugin-aware
 `network/openai/ingress.rs` path unconditionally instead, which made that
 patch a no-op on current `main`. It was reverted once this was confirmed,

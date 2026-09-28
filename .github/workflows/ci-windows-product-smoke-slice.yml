@@ -1,0 +1,58 @@
+name: CI Windows Product Smoke Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      original_event_name:
+        description: Original event used for model-cache publication policy.
+        required: false
+        default: ''
+        type: string
+      runtime_matrix:
+        description: JSON Windows runtime/product rows from the versioned CI plan.
+        required: true
+        type: string
+      smoke_matrix:
+        description: JSON platform smoke rows from the versioned CI plan.
+        required: true
+        type: string
+      binary_target:
+        description: Product binary path used by the smoke harness.
+        required: true
+        type: string
+      timeout_minutes:
+        description: Bounded smoke timeout.
+        required: false
+        default: 25
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  laya_cpu:
+    name: Laya smoke (Windows CPU)
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'windows-cpu') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
+    runs-on: windows-2022
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/run-laya-product-smoke
+        with:
+          artifact_name: ci-product-windows-amd64-cpu
+          artifact_path: ci-artifacts/laya-windows-cpu
+          staged_binary_path: ${{ inputs.binary_target }}
+          expected_backend: cpu
+          device: CPU
+          model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
+          save_model_cache: ${{ inputs.original_event_name == 'push' }}

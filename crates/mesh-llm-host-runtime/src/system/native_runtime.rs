@@ -104,7 +104,7 @@ mod dynamic {
         // engine's own Drop mechanism -- acceptable here since the actual
         // failure reason is already captured by the returned `anyhow::Error`
         // and the tracing/audit surfaces this function's callers already use.
-        let resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
+        let mut resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
         let cache = default_native_runtime_cache()?;
         let profile = host_runtime_profile();
         let local_runtimes =
@@ -152,7 +152,7 @@ mod dynamic {
     pub(crate) async fn try_load_installed_native_runtime(
         startup_selection: NativeRuntimeStartupSelection,
     ) -> Result<Option<LoadedNativeRuntime>> {
-        let resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
+        let mut resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
         let outcome = try_load_installed_native_runtime_with(
             skippy_runtime::native_runtime_loaded,
             default_native_runtime_cache,
@@ -210,8 +210,9 @@ mod dynamic {
     }
 
     /// The installed callback (D7, `.omo/plans/event-system-fixes.md` task
-    /// 10). Runs on the native worker thread that raised the event: maps it
-    /// to a `RuntimeFact` (`native_family_fact`, a pure function -- no
+    /// 10). Runs on the engine driver thread inside the pre-drain ingest
+    /// pass, never on a native thread (the native callback only copies into
+    /// the ring). Maps each drained record to a `RuntimeFact` (`native_family_fact`, a pure function -- no
     /// I/O, no logging, every byte it allocates becomes part of the
     /// returned fact) and submits it (`submit_native_family_fact`). Kind
     /// values 1-5 (`SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_*`) belong to the
@@ -248,6 +249,22 @@ mod dynamic {
         for record in records {
             runtime_scoped_native_event_sink(&record.to_event());
         }
+        if let Some(engine) = runtime_event_engine() {
+            fold_global_native_losses(engine.health());
+        }
+    }
+
+    static GLOBAL_NATIVE_LOSSES: crate::runtime_events::health::NativeLossCursor =
+        crate::runtime_events::health::NativeLossCursor::new();
+
+    /// Credit engine health with records the process-global ring dropped or
+    /// refused since the previous ingest pass.
+    fn fold_global_native_losses(health: &crate::runtime_events::health::EngineHealth) {
+        GLOBAL_NATIVE_LOSSES.fold(
+            health,
+            skippy_runtime::dropped_runtime_events(),
+            skippy_runtime::rejected_runtime_events(),
+        );
     }
 
     async fn try_load_installed_native_runtime_with<
@@ -2002,6 +2019,19 @@ mod dynamic {
         #[test]
         fn install_never_panics_without_a_confirmed_native_family() {
             install_runtime_scoped_event_reporter();
+        }
+
+        #[test]
+        fn global_ring_rejections_are_folded_into_engine_health_once() {
+            let health = crate::runtime_events::health::EngineHealth::default();
+            fold_global_native_losses(&health);
+            let baseline = health.snapshot().rejected_native;
+
+            unsafe { skippy_runtime::deliver_runtime_event_for_test(std::ptr::null()) };
+            fold_global_native_losses(&health);
+            fold_global_native_losses(&health);
+
+            assert_eq!(health.snapshot().rejected_native, baseline + 1);
         }
 
         #[test]

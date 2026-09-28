@@ -58,6 +58,7 @@ use tokio::time::MissedTickBehavior;
 use super::config::{SHUTDOWN_DRAIN_DEADLINE, TUI_RENDER_TICK};
 use super::engine::RuntimeEventEngine;
 use super::health::HealthDeliveryGate;
+use super::health_facts::HealthFactProducer;
 use super::presentation::health_projection_event;
 
 /// A handle which owns the engine-driver task.
@@ -157,19 +158,20 @@ async fn drive_engine(engine: Arc<RuntimeEventEngine>) {
     // presentation subscriber at all (see `presentation::subscriber`'s
     // module doc), so it is the only way the log line reaches that mode.
     let mut health_gate = HealthDeliveryGate::new();
+    // Issue #1167: the driver is also the one producer of
+    // `EventSystemHealth` facts, so `runtime_state.node.event_system`
+    // reflects engine health in every serving mode. Its facts are drained
+    // by the next pass, woken by their own accepted submission.
+    let mut health_facts = HealthFactProducer::new();
     loop {
         tokio::select! {
-            () = engine.notified() => {
-                run_pre_drain_ingest();
-                engine.drain();
-                maybe_emit_health_log_line(&engine, &mut health_gate);
-            }
-            _ = tick.tick() => {
-                run_pre_drain_ingest();
-                engine.drain();
-                maybe_emit_health_log_line(&engine, &mut health_gate);
-            }
+            () = engine.notified() => {}
+            _ = tick.tick() => {}
         }
+        run_pre_drain_ingest();
+        engine.drain();
+        maybe_emit_health_log_line(&engine, &mut health_gate);
+        health_facts.observe(&engine, Instant::now());
     }
 }
 

@@ -183,6 +183,17 @@ Runtime-event compatibility expectations are narrow on purpose:
   path in charge.
 - Event callbacks stay operation-scoped, and v1 guarantees no callback after
   the `_with_events` entrypoint returns.
+- On the Rust side the per-call callback runs no caller code. It rejects
+  events with a null pointer, a `struct_size` short of the base layout, an
+  `abi_version` other than `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION`, or an
+  oversized `detail_len`. Accepted events are copied into a fixed-size
+  `NativeEventRecord` and pushed into the caller's bounded, lock-free
+  `skippy_runtime::ModelOpenEventQueue`. Drops (full queue) and rejections
+  are counted on the queue. A larger `struct_size` is accepted, and only the
+  known fields are read. The callback does not lock, allocate, format, or
+  block. Callers drain the queue on their own thread. The native status and
+  error returned by the entrypoint stay authoritative for the outcome of the
+  open.
 
 ## Function Surface
 

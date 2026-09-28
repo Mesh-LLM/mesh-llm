@@ -34,6 +34,12 @@ pub struct EngineHealthSnapshot {
     pub reservation_exhausted: u64,
     pub terminal_delivery_failed: u64,
     pub dropped_progress: u64,
+    /// Progress snapshots superseded by a newer snapshot for the same
+    /// operation before their export window came due. This is the progress
+    /// lane's rate limit working as designed, not loss: the newest value
+    /// still publishes. Kept separate from `dropped_progress`, which counts
+    /// only progress that never reaches any consumer.
+    pub coalesced_progress: u64,
     pub dropped_diagnostic: u64,
     pub replay_evicted: u64,
     pub subscriber_disconnected: u64,
@@ -44,6 +50,13 @@ pub struct EngineHealthSnapshot {
     /// Reservation-bound state submissions rejected because their generation
     /// was stale or explicitly cancelled. This is not capacity loss.
     pub cancelled_reservation_rejected: u64,
+    /// Native runtime-event records lost because a bounded native-facing
+    /// queue (the process-global record ring or a per-call model-open
+    /// queue) was full when a native thread pushed.
+    pub dropped_native: u64,
+    /// Native runtime events refused at the callback boundary (null
+    /// pointer, short struct, wrong ABI version, oversized detail).
+    pub rejected_native: u64,
     /// Sticky signal that at least one accepted state observation could not
     /// be retained; callers must refresh from a canonical state source.
     pub state_degraded: bool,
@@ -59,6 +72,7 @@ struct Counters {
     reservation_exhausted: AtomicU64,
     terminal_delivery_failed: AtomicU64,
     dropped_progress: AtomicU64,
+    coalesced_progress: AtomicU64,
     dropped_diagnostic: AtomicU64,
     replay_evicted: AtomicU64,
     subscriber_disconnected: AtomicU64,
@@ -66,6 +80,8 @@ struct Counters {
     reducer_rejected: AtomicU64,
     state_transition_rejected: AtomicU64,
     cancelled_reservation_rejected: AtomicU64,
+    dropped_native: AtomicU64,
+    rejected_native: AtomicU64,
     state_degraded: AtomicBool,
     rebuild_required: AtomicBool,
     event_cutover_divergence: AtomicU64,
@@ -102,6 +118,19 @@ impl EngineHealth {
         self.counters
             .dropped_progress
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
+    }
+
+    /// Credit `count` progress snapshots superseded within the progress
+    /// lane (coalescing, not loss). `count == 0` is a no-op, including no
+    /// version bump.
+    pub fn bump_coalesced_progress_by(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        self.counters
+            .coalesced_progress
+            .fetch_add(count, Ordering::Relaxed);
         self.bump_version();
     }
 
@@ -186,6 +215,30 @@ impl EngineHealth {
         self.counters
             .cancelled_reservation_rejected
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
+    }
+
+    /// Credit `count` native records lost to a full native-facing queue.
+    /// `count == 0` is a no-op, including no version bump.
+    pub fn bump_dropped_native_by(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        self.counters
+            .dropped_native
+            .fetch_add(count, Ordering::Relaxed);
+        self.bump_version();
+    }
+
+    /// Credit `count` native events refused at the callback boundary.
+    /// `count == 0` is a no-op, including no version bump.
+    pub fn bump_rejected_native_by(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        self.counters
+            .rejected_native
+            .fetch_add(count, Ordering::Relaxed);
         self.bump_version();
     }
 
@@ -278,6 +331,7 @@ impl EngineHealth {
                 .terminal_delivery_failed
                 .load(Ordering::Relaxed),
             dropped_progress: self.counters.dropped_progress.load(Ordering::Relaxed),
+            coalesced_progress: self.counters.coalesced_progress.load(Ordering::Relaxed),
             dropped_diagnostic: self.counters.dropped_diagnostic.load(Ordering::Relaxed),
             replay_evicted: self.counters.replay_evicted.load(Ordering::Relaxed),
             subscriber_disconnected: self
@@ -294,6 +348,8 @@ impl EngineHealth {
                 .counters
                 .cancelled_reservation_rejected
                 .load(Ordering::Relaxed),
+            dropped_native: self.counters.dropped_native.load(Ordering::Relaxed),
+            rejected_native: self.counters.rejected_native.load(Ordering::Relaxed),
             state_degraded: self.counters.state_degraded.load(Ordering::Relaxed),
             rebuild_required: self.counters.rebuild_required.load(Ordering::Relaxed),
             event_cutover_divergence: self
@@ -305,6 +361,41 @@ impl EngineHealth {
                 .reducer_eviction_stalled
                 .load(Ordering::Relaxed),
         }
+    }
+}
+
+/// Folds a process-lifetime monotonic native loss total (the global record
+/// ring's `dropped_runtime_events`/`rejected_runtime_events`) into
+/// [`EngineHealth`] as deltas, so each lost record is credited exactly once
+/// however often the totals are sampled.
+///
+/// `fetch_max` rather than `swap`: two samplers racing with different
+/// totals can never move the high-water mark backwards and so can never
+/// credit the same loss twice.
+#[derive(Debug, Default)]
+pub struct NativeLossCursor {
+    dropped_seen: AtomicU64,
+    rejected_seen: AtomicU64,
+}
+
+impl NativeLossCursor {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            dropped_seen: AtomicU64::new(0),
+            rejected_seen: AtomicU64::new(0),
+        }
+    }
+
+    /// Credit `health` with whatever `dropped_total`/`rejected_total` grew
+    /// by since the last fold.
+    pub fn fold(&self, health: &EngineHealth, dropped_total: u64, rejected_total: u64) {
+        let dropped_before = self.dropped_seen.fetch_max(dropped_total, Ordering::AcqRel);
+        health.bump_dropped_native_by(dropped_total.saturating_sub(dropped_before));
+        let rejected_before = self
+            .rejected_seen
+            .fetch_max(rejected_total, Ordering::AcqRel);
+        health.bump_rejected_native_by(rejected_total.saturating_sub(rejected_before));
     }
 }
 
@@ -478,6 +569,7 @@ mod tests {
         health.bump_reservation_exhausted();
         health.bump_terminal_delivery_failed();
         health.bump_dropped_progress();
+        health.bump_coalesced_progress_by(4);
         health.bump_dropped_diagnostic();
         health.bump_replay_evicted();
         health.bump_subscriber_disconnected();
@@ -487,17 +579,20 @@ mod tests {
         health.bump_cancelled_reservation_rejected();
         health.bump_event_cutover_divergence();
         health.bump_reducer_eviction_stalled();
+        health.bump_dropped_native_by(3);
+        health.bump_rejected_native_by(2);
         health.set_rebuild_generation(2);
 
         let snapshot = health.snapshot();
         assert_eq!(
             snapshot,
             EngineHealthSnapshot {
-                version: 13,
+                version: 16,
                 rebuild_generation: 2,
                 reservation_exhausted: 1,
                 terminal_delivery_failed: 1,
                 dropped_progress: 1,
+                coalesced_progress: 4,
                 dropped_diagnostic: 1,
                 replay_evicted: 1,
                 subscriber_disconnected: 1,
@@ -505,11 +600,53 @@ mod tests {
                 reducer_rejected: 1,
                 state_transition_rejected: 1,
                 cancelled_reservation_rejected: 1,
+                dropped_native: 3,
+                rejected_native: 2,
                 state_degraded: true,
                 rebuild_required: true,
                 event_cutover_divergence: 1,
                 reducer_eviction_stalled: 1,
             }
         );
+    }
+
+    #[test]
+    fn dropped_native_bumps_by_the_reported_count_and_zero_is_a_no_op() {
+        let health = EngineHealth::default();
+        health.bump_dropped_native_by(0);
+        assert_eq!(health.snapshot().version, 0);
+
+        health.bump_dropped_native_by(5);
+
+        let snapshot = health.snapshot();
+        assert_eq!(snapshot.dropped_native, 5);
+        assert_eq!(snapshot.rejected_native, 0);
+        assert_eq!(snapshot.version, 1);
+    }
+
+    #[test]
+    fn native_loss_cursor_folds_only_the_growth_of_the_global_totals() {
+        let health = EngineHealth::default();
+        let cursor = NativeLossCursor::new();
+
+        cursor.fold(&health, 4, 1);
+        cursor.fold(&health, 4, 1);
+        cursor.fold(&health, 9, 3);
+
+        let snapshot = health.snapshot();
+        assert_eq!(snapshot.dropped_native, 9);
+        assert_eq!(snapshot.rejected_native, 3);
+    }
+
+    #[test]
+    fn native_loss_cursor_never_credits_a_stale_lower_sample() {
+        let health = EngineHealth::default();
+        let cursor = NativeLossCursor::new();
+
+        cursor.fold(&health, 7, 0);
+        cursor.fold(&health, 5, 0);
+        cursor.fold(&health, 8, 0);
+
+        assert_eq!(health.snapshot().dropped_native, 8);
     }
 }

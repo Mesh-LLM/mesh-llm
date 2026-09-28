@@ -153,7 +153,7 @@ pub(super) async fn self_fill_from_extra_instances(
             candidates.push((local.clone(), alias.clone()));
         }
         candidates.extend(
-            node.hosts_for_model(alias)
+            super::pool::exclude_paid_hosts(node, alias, node.hosts_for_model(alias).await)
                 .await
                 .into_iter()
                 .map(|peer_id| (InferenceTarget::Remote(peer_id), alias.clone())),

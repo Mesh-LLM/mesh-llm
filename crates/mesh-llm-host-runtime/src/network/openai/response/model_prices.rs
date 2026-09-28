@@ -14,14 +14,15 @@ pub(super) async fn attach_prices(
     let Some(items) = body.get_mut("data").and_then(Value::as_array_mut) else {
         return;
     };
-    let peers = node
-        .state
-        .lock()
-        .await
-        .peers
-        .values()
-        .cloned()
-        .collect::<Vec<_>>();
+    let peers = {
+        let state = node.state.lock().await;
+        state
+            .peers
+            .values()
+            .filter(|peer| peer.is_admitted() && state.peer_has_observed_liveness(peer))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
     let local_models = node.hosted_models.lock().await.clone();
     let local_prices = node.advertised_payment_offers().await;
     for model in models {
@@ -29,7 +30,7 @@ pub(super) async fn attach_prices(
         let id = public_model_id(base, descriptor_for_model(descriptors, base), profile);
         let mut offers = Vec::new();
         for peer in &peers {
-            if peer.is_admitted() && peer.routes_http_model(base) {
+            if peer.routes_http_model(base) {
                 offers.push(offer(
                     &peer.id.to_string(),
                     peer.lightning_offers.get(base),
@@ -109,6 +110,7 @@ mod tests {
                 Some(1),
             )
             .await;
+            node.update_peer_rtt(provider.id(), 1).await;
         }
         let mut body = json!({"data":[{"id":"test","sentinel":7},{"id":"unrelated"}]});
         attach_prices(&mut body, &["test".into()], &[], &node).await;
@@ -127,6 +129,33 @@ mod tests {
         node.endpoint.close().await;
         free.endpoint.close().await;
         paid.endpoint.close().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn listing_omits_offers_from_peers_without_observed_liveness() -> anyhow::Result<()> {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+        let departed = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 0 }).await?;
+        departed.set_models(vec!["test".into()]).await;
+        departed.set_hosted_models(vec!["test".into()]).await;
+        departed.set_serving_models(vec!["test".into()]).await;
+        let announcement =
+            departed.build_local_announcement(departed.snapshot_local_announcement_data().await);
+        node.add_peer_after_direct_requirements_validated(
+            departed.id(),
+            departed.endpoint.addr(),
+            &announcement,
+            Some(1),
+        )
+        .await;
+
+        let mut body = json!({"data":[{"id":"test"}]});
+        attach_prices(&mut body, &["test".into()], &[], &node).await;
+        assert_eq!(body["data"][0]["payment"]["offers"], json!([]));
+        assert_eq!(body["data"][0]["payment"]["free_available"], false);
+
+        node.endpoint.close().await;
+        departed.endpoint.close().await;
         Ok(())
     }
 

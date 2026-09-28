@@ -8,7 +8,8 @@ use crate::network::openai::automatic;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use crate::network::openai::workload_routing::{
-    self, is_audio_upload_path, model_satisfies_request_workload, request_workload_class,
+    self, is_audio_upload_path, model_satisfies_request, request_workload_class,
+    required_request_workload, unsupported_workload_message,
 };
 use crate::network::router;
 use crate::plugin::openai_exchange::{
@@ -519,8 +520,8 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
-        if let Some(workload) = requested_workload
-            && !model_satisfies_request_workload(model, workload, &request.client_path, descriptors)
+        if let Some(workload) = required_request_workload(&request.client_path)
+            && !model_satisfies_request(model, &request.client_path, descriptors)
         {
             return AutoRouteResolution::WorkloadUnsupported(workload);
         }
@@ -589,7 +590,7 @@ async fn resolve_auto_routed_model(
         descriptors,
     );
     if available.is_empty()
-        && let Some(workload) = requested_workload
+        && let Some(workload) = required_request_workload(&request.client_path)
     {
         return AutoRouteResolution::WorkloadUnsupported(workload);
     }
@@ -744,6 +745,7 @@ async fn try_pipeline_proxy(
     request: &mut proxy::BufferedHttpRequest,
     targets: &election::ModelTargets,
     strong_name: &str,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Option<proxy::RouteDispatchOutcome> {
     let (planner_name, planner_port, strong_port) = pipeline_local_ports(targets, strong_name)?;
 
@@ -774,6 +776,15 @@ async fn try_pipeline_proxy(
         strong_port,
         node,
         &capsule_nonce,
+        super::response::RouteAttemptLoggingContext {
+            exchange_id: None,
+            request_id: request.request_id,
+            response_adapter: request.response_adapter,
+            retry_policy: super::response::ResponseRetryPolicy::next_target_available(false),
+            route_observer,
+            served_by: None,
+            peer_capsule_id: None,
+        },
     )
     .await;
     match result {
@@ -1617,11 +1628,7 @@ async fn send_workload_unsupported(
     path: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
-    let message = if is_audio_upload_path(path) {
-        "no served model advertises support for this audio-to-text endpoint".to_string()
-    } else {
-        format!("no served model advertises the required {workload:?} workload")
-    };
+    let message = unsupported_workload_message(path, workload);
     response_outcome(
         422,
         proxy::send_error_observed(tcp_stream, 422, &message, route_observer).await,
@@ -1738,7 +1745,14 @@ fn pipeline_route_model<'a>(
         .as_ref()
         .map(pipeline::should_pipeline)
         .unwrap_or(false)
-        && request.response_adapter == proxy::ResponseAdapter::None;
+        && matches!(
+            request.response_adapter,
+            proxy::ResponseAdapter::None
+                | proxy::ResponseAdapter::OpenAiChatCompletionsJson
+                | proxy::ResponseAdapter::OpenAiChatCompletionsStream
+                | proxy::ResponseAdapter::AnthropicMessagesJson
+                | proxy::ResponseAdapter::AnthropicMessagesStream
+        );
     use_pipeline.then_some(routing_model).flatten()
 }
 
@@ -1858,9 +1872,18 @@ async fn try_pipeline_route(
     ctx: &IngressRouteContext<'_>,
     decision: &AutoRouteDecision,
     routing_model: Option<&str>,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Option<proxy::RouteDispatchOutcome> {
     let strong_name = pipeline_route_model(request, decision, routing_model)?;
-    try_pipeline_proxy(ctx.node, tcp_stream, request, ctx.targets, strong_name).await
+    try_pipeline_proxy(
+        ctx.node,
+        tcp_stream,
+        request,
+        ctx.targets,
+        strong_name,
+        route_observer,
+    )
+    .await
 }
 
 enum MoaInterceptResult {
@@ -2104,6 +2127,7 @@ async fn handle_buffered_api_request(
         &ctx.route,
         &decision,
         routing_model.as_deref(),
+        lifecycle.route_observer(),
     )
     .await
     {

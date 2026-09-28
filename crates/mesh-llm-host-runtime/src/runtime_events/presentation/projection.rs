@@ -69,7 +69,7 @@ fn outcome_str(outcome: Outcome) -> &'static str {
     }
 }
 
-fn reason_code_str(reason: &ReasonCode) -> String {
+pub(crate) fn reason_code_str(reason: &ReasonCode) -> String {
     match reason {
         ReasonCode::InvalidConfiguration => "invalid_configuration".to_string(),
         ReasonCode::UnsupportedCapability => "unsupported_capability".to_string(),
@@ -246,7 +246,8 @@ pub fn health_projection_event(
              bounds.reservation_table_capacity={} bounds.state_transition_lane_depth={} \
              bounds.diagnostic_lane_depth={} bounds.wake_list_depth={} \
              bounds.replay_max_frames={} bounds.subscriber_lag_max_frames={} \
-             bounds.max_concurrent_subscribers={} ingress_p99_us={}",
+             bounds.max_concurrent_subscribers={} ingress_p99_us={} \
+             coalesced_progress={} dropped_native={} rejected_native={}",
             snapshot.version,
             snapshot.reservation_exhausted,
             snapshot.terminal_delivery_failed,
@@ -269,6 +270,9 @@ pub fn health_projection_event(
             bounds.subscriber_lag_max_frames,
             bounds.max_concurrent_subscribers,
             ingress_p99_us.map_or_else(|| "null".to_string(), |value| value.to_string()),
+            snapshot.coalesced_progress,
+            snapshot.dropped_native,
+            snapshot.rejected_native,
         ),
         context: Some("event_system_health".to_string()),
     }

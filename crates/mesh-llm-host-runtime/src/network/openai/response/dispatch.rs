@@ -1,6 +1,8 @@
+use super::chat_stream::relay_translated_messages_stream;
 use super::common::{ResponseRetryPolicy, RouteAttemptResult, is_client_disconnect_error};
 use super::json_adaptation::{
-    relay_normalized_chat_completion_json, relay_translated_responses_json,
+    relay_normalized_chat_completion_json, relay_translated_messages_json,
+    relay_translated_responses_json,
 };
 use super::probe::{ResponseProbe, try_parse_response_headers};
 use super::relay::{relay_error_response, relay_success_response};
@@ -52,6 +54,17 @@ pub(in crate::network::openai::response) async fn relay_probed_response<R: Async
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
     if !(200..300).contains(&probe.status_code) {
+        if tcp_stream.is_anthropic() {
+            return relay_translated_messages_json(
+                tcp_stream,
+                reader,
+                probe,
+                retry_policy,
+                served_by,
+                route_observer,
+            )
+            .await;
+        }
         return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
     }
 
@@ -79,6 +92,28 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<Option<RouteAttemptResult>> {
     match response_adapter {
+        ResponseAdapter::AnthropicMessagesJson => Ok(Some(
+            relay_translated_messages_json(
+                tcp_stream,
+                reader,
+                probe,
+                retry_policy,
+                served_by,
+                route_observer,
+            )
+            .await?,
+        )),
+        ResponseAdapter::AnthropicMessagesStream => Ok(Some(
+            relay_translated_messages_stream(
+                tcp_stream,
+                reader,
+                probe,
+                retry_policy,
+                served_by,
+                route_observer,
+            )
+            .await?,
+        )),
         ResponseAdapter::OpenAiChatCompletionsJson => Ok(Some(
             relay_normalized_chat_completion_json(
                 tcp_stream,
@@ -178,6 +213,8 @@ pub(in crate::network::openai::response) async fn relay_attempted_response<R: As
 const fn is_streaming_response_adapter(response_adapter: ResponseAdapter) -> bool {
     matches!(
         response_adapter,
-        ResponseAdapter::OpenAiChatCompletionsStream | ResponseAdapter::OpenAiResponsesStream
+        ResponseAdapter::OpenAiChatCompletionsStream
+            | ResponseAdapter::OpenAiResponsesStream
+            | ResponseAdapter::AnthropicMessagesStream
     )
 }

@@ -198,6 +198,12 @@ pub struct KvStageIntegration {
     /// radix contention.
     #[cfg(test)]
     pub(crate) exact_state_worker_pause: Arc<AtomicBool>,
+    /// Test-only durable worker receipt/pause controls. They establish that
+    /// L1 publication continues while an earlier L3 spill is blocked.
+    #[cfg(test)]
+    pub(crate) l3_spill_worker_received: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) l3_spill_worker_pause: Arc<AtomicBool>,
     pub(crate) exact_state_record_worker_healthy: Arc<AtomicBool>,
     pub(crate) exact_state_record_worker_panics: Arc<AtomicU64>,
     pub(crate) cache_healthy: Arc<AtomicBool>,
@@ -278,14 +284,20 @@ pub(crate) struct PendingExactStateRecord {
 #[derive(Debug)]
 pub(crate) struct ExactStateRecordWorker {
     sender: Mutex<Option<SyncSender<PendingExactStateRecord>>>,
-    task: Mutex<Option<JoinHandle<()>>>,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl ExactStateRecordWorker {
-    pub(crate) fn new(sender: SyncSender<PendingExactStateRecord>, task: JoinHandle<()>) -> Self {
+    pub(crate) fn new(
+        sender: SyncSender<PendingExactStateRecord>,
+        record_task: JoinHandle<()>,
+        durable_task: Option<JoinHandle<()>>,
+    ) -> Self {
+        let mut tasks = vec![record_task];
+        tasks.extend(durable_task);
         Self {
             sender: Mutex::new(Some(sender)),
-            task: Mutex::new(Some(task)),
+            tasks: Mutex::new(tasks),
         }
     }
 
@@ -307,11 +319,11 @@ impl Drop for ExactStateRecordWorker {
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        if let Some(task) = self
-            .task
+        for task in self
+            .tasks
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+            .drain(..)
         {
             let _ = task.join();
         }
@@ -333,6 +345,24 @@ pub(crate) struct RadixExactEntry {
     pub(crate) page_id: String,
     pub(crate) payload: ExactStatePayload,
     pub(crate) extra: ExactStateExtra,
+    /// Whether a later resident hit may promote this entry into durable L3.
+    pub(crate) l3_promotion_eligible: bool,
+}
+
+impl RadixExactEntry {
+    pub(crate) fn new(
+        page_id: String,
+        payload: ExactStatePayload,
+        extra: ExactStateExtra,
+        l3_promotion_eligible: bool,
+    ) -> Self {
+        Self {
+            page_id,
+            payload,
+            extra,
+            l3_promotion_eligible,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -634,6 +664,12 @@ impl KvStageIntegration {
 
     pub(crate) fn payload_is_exact_state(&self) -> bool {
         self.exact_state_payload().is_some()
+    }
+
+    /// Whether the serving tier retains native resident prefixes independently
+    /// of any serialized exact-state payload used by durable tiers.
+    pub(crate) fn records_resident_prefixes(&self) -> bool {
+        self.payload == StagePrefixCachePayload::ResidentKv
     }
 
     pub(crate) fn exact_state_payload(&self) -> Option<StagePrefixCachePayload> {
@@ -1392,7 +1428,7 @@ mod exact_state_record_queue_tests {
                 worker_completed.fetch_add(1, Ordering::Release);
             }
         });
-        let worker = Arc::new(ExactStateRecordWorker::new(sender, task));
+        let worker = Arc::new(ExactStateRecordWorker::new(sender, task, None));
         let (total, best_effort) = budget();
         worker.with_sender(|sender| {
             sender

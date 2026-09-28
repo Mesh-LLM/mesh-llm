@@ -13,11 +13,8 @@ SWIFT_TARGET_OUTPUT_DIR="${SWIFT_TARGET_OUTPUT_DIR:-$REPO_ROOT/dist/swift-target
 APPLE_TARGETS=(
   aarch64-apple-ios
   aarch64-apple-ios-sim
-  x86_64-apple-ios
   aarch64-apple-ios-macabi
-  x86_64-apple-ios-macabi
   aarch64-apple-darwin
-  x86_64-apple-darwin
 )
 
 MODE="all"
@@ -156,9 +153,6 @@ build_target_by_name() {
     aarch64-apple-ios-sim)
       build_apple_target "$RUST_TARGET" iphonesimulator arm64 "iOS simulator" -DCMAKE_SYSTEM_NAME=iOS -DGGML_BLAS=OFF
       ;;
-    x86_64-apple-ios)
-      build_apple_target "$RUST_TARGET" iphonesimulator x86_64 "iOS simulator" -DCMAKE_SYSTEM_NAME=iOS -DGGML_BLAS=OFF
-      ;;
     aarch64-apple-ios-macabi)
       build_apple_target "$RUST_TARGET" macosx arm64 "Mac Catalyst" \
         -DCMAKE_SYSTEM_NAME=iOS \
@@ -169,21 +163,8 @@ build_target_by_name() {
         -DCMAKE_SHARED_LINKER_FLAGS=-target\ arm64-apple-ios16.0-macabi \
         -DCMAKE_MODULE_LINKER_FLAGS=-target\ arm64-apple-ios16.0-macabi
       ;;
-    x86_64-apple-ios-macabi)
-      build_apple_target "$RUST_TARGET" macosx x86_64 "Mac Catalyst" \
-        -DCMAKE_SYSTEM_NAME=iOS \
-        -DGGML_BLAS=OFF \
-        -DCMAKE_C_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
-        -DCMAKE_CXX_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
-        -DCMAKE_EXE_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
-        -DCMAKE_SHARED_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
-        -DCMAKE_MODULE_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi
-      ;;
     aarch64-apple-darwin)
       build_apple_target "$RUST_TARGET" macosx arm64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
-      ;;
-    x86_64-apple-darwin)
-      build_apple_target "$RUST_TARGET" macosx x86_64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
       ;;
     *)
       echo "ERROR: unsupported Apple Rust target: $RUST_TARGET" >&2
@@ -277,27 +258,6 @@ for name, value in checksums.items():
 swift_path.write_text(swift)
 PY
 
-echo "Creating fat library for iOS simulator..."
-mkdir -p "$TARGET_DIR/ios-sim-fat"
-lipo -create \
-  "$TARGET_DIR/aarch64-apple-ios-sim/release/libmeshllm_ffi.a" \
-  "$TARGET_DIR/x86_64-apple-ios/release/libmeshllm_ffi.a" \
-  -output "$TARGET_DIR/ios-sim-fat/libmeshllm_ffi.a"
-
-echo "Creating fat library for macOS..."
-mkdir -p "$TARGET_DIR/macos-fat"
-lipo -create \
-  "$TARGET_DIR/aarch64-apple-darwin/release/libmeshllm_ffi.a" \
-  "$TARGET_DIR/x86_64-apple-darwin/release/libmeshllm_ffi.a" \
-  -output "$TARGET_DIR/macos-fat/libmeshllm_ffi.a"
-
-echo "Creating fat library for Mac Catalyst..."
-mkdir -p "$TARGET_DIR/ios-macabi-fat"
-lipo -create \
-  "$TARGET_DIR/aarch64-apple-ios-macabi/release/libmeshllm_ffi.a" \
-  "$TARGET_DIR/x86_64-apple-ios-macabi/release/libmeshllm_ffi.a" \
-  -output "$TARGET_DIR/ios-macabi-fat/libmeshllm_ffi.a"
-
 create_framework() {
   local ARCH="$1"
   local LIB_PATH="$2"
@@ -387,9 +347,9 @@ PLIST
 
 echo "Assembling framework bundles..."
 create_framework "ios"     "$TARGET_DIR/aarch64-apple-ios/release/libmeshllm_ffi.a"
-create_framework "ios-sim" "$TARGET_DIR/ios-sim-fat/libmeshllm_ffi.a"
-create_framework "ios-macabi" "$TARGET_DIR/ios-macabi-fat/libmeshllm_ffi.a"
-create_framework "macos"   "$TARGET_DIR/macos-fat/libmeshllm_ffi.a"
+create_framework "ios-sim" "$TARGET_DIR/aarch64-apple-ios-sim/release/libmeshllm_ffi.a"
+create_framework "ios-macabi" "$TARGET_DIR/aarch64-apple-ios-macabi/release/libmeshllm_ffi.a"
+create_framework "macos"   "$TARGET_DIR/aarch64-apple-darwin/release/libmeshllm_ffi.a"
 
 echo "Creating XCFramework..."
 rm -rf "$XCFRAMEWORK_DIR/$FRAMEWORK_NAME.xcframework"

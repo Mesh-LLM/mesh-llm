@@ -27,12 +27,6 @@ on:
       previous_head:
         type: string
         default: ''
-      feedback_build_pattern:
-        type: string
-        default: ''
-      feedback_pattern:
-        type: string
-        default: ''
     outputs:
       green:
         value: ${{ jobs.aggregate.outputs.green }}
@@ -44,6 +38,10 @@ on:
         value: ${{ jobs.build.outputs.head }}
       branch:
         value: ${{ jobs.build.outputs.branch }}
+      failure_class:
+        value: ${{ jobs.build.outputs.failure_class }}
+      failure_stage:
+        value: ${{ jobs.build.outputs.failure_stage }}
 permissions:
   contents: read
 defaults:
@@ -64,6 +62,8 @@ jobs:
       identity: ${{ steps.build.outputs.identity_sha256 }}
       head: ${{ steps.build.outputs.candidate }}
       branch: ${{ steps.build.outputs.branch }}
+      failure_class: ${{ steps.build.outputs.failure_class }}
+      failure_stage: ${{ steps.build.outputs.failure_stage }}
       package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}
     env:
       MESH_LLM_REQUIRE_SCCACHE: '1'
@@ -85,24 +85,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-canary-runner
+        with:
+          require-agent: ${{ inputs.mode == 'repair-build' }}
       - name: Download previous candidate
         if: inputs.previous_package != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.previous_package }}
           path: ${{ runner.temp }}/canary-previous-${{ inputs.pass_id }}
-      - name: Download prior family failure evidence
-        if: inputs.feedback_pattern != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: ${{ inputs.feedback_pattern }}
-          path: ${{ runner.temp }}/canary-feedback-${{ inputs.pass_id }}
-      - name: Download prior build failure evidence
-        if: inputs.feedback_build_pattern != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: ${{ inputs.feedback_build_pattern }}
-          path: ${{ runner.temp }}/canary-feedback-${{ inputs.pass_id }}
       - name: Build exact candidate for distributed certification
         id: build
         env:
@@ -112,7 +102,6 @@ jobs:
           CANARY_PREVIOUS_PACKAGE: ${{ inputs.previous_package != '' && format('{0}/canary-previous-{1}', runner.temp, inputs.pass_id) || '' }}
           CANARY_PREVIOUS_IDENTITY: ${{ inputs.previous_identity }}
           CANARY_CANDIDATE_SHA: ${{ inputs.previous_head }}
-          CANARY_FEEDBACK_DIR: ${{ inputs.feedback_pattern != '' && format('{0}/canary-feedback-{1}', runner.temp, inputs.pass_id) || '' }}
           CANARY_EXPORT_DIR: ${{ runner.temp }}/canary-export-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
           CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'zai_coding_plan' }}
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
@@ -148,6 +137,25 @@ jobs:
             if [[ -f "$report" ]] && [[ "$(jq -r '.reasons | length' "$report" 2>/dev/null || echo 0)" != "0" ]]; then
               echo
               jq -r '.reasons[] | "- \(.)"' "$report"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Report Laya smoke result
+        if: ${{ !cancelled() }}
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          WORK_DIR: ${{ env.CANARY_SOURCE_ROOT }}/target/skippy-system-one-smoke
+        run: |
+          set -euo pipefail
+          report="$WORK_DIR/reports/laya.json"
+          {
+            echo "## Laya smoke"
+            echo
+            if [[ ! -f "$report" ]]; then
+              echo "No Laya smoke report was produced (build step outcome: ${BUILD_OUTCOME})."
+            elif [[ "$(jq -r '.passed' "$report")" == "true" ]]; then
+              echo "The pinned Laya Multilingual GGUF passed every upstream golden fixture on the explicit CPU device."
+            else
+              echo "The Laya golden battery failed."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload System One smoke evidence

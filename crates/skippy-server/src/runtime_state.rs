@@ -400,8 +400,7 @@ fn runtime_from_loaded_model(
 pub fn load_runtime_with_overrides_and_open_events(
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
-    operation_id: skippy_runtime::OperationId,
-    model_open_event_reporter: Option<&mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)>,
+    model_open_events: Option<&Arc<skippy_runtime::ModelOpenEventQueue>>,
     session_lifecycle_observer: Option<Arc<dyn SessionLifecycleObserver>>,
 ) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     reject_legacy_serving_package(config)?;
@@ -419,19 +418,13 @@ pub fn load_runtime_with_overrides_and_open_events(
         _ if !admitted_model_parts.is_empty() => open_stage_model_from_parts_with_events(
             &admitted_model_parts,
             &runtime_config,
-            operation_id,
-            model_open_event_reporter,
+            model_open_events,
         )?,
         _ => {
             let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
                 return Ok(None);
             };
-            open_stage_model_with_events(
-                model_path,
-                &runtime_config,
-                operation_id,
-                model_open_event_reporter,
-            )?
+            open_stage_model_with_events(model_path, &runtime_config, model_open_events)?
         }
     };
     Ok(Some(runtime_from_loaded_model(
@@ -617,13 +610,10 @@ fn open_stage_model(path: &std::path::Path, runtime_config: &RuntimeConfig) -> R
 fn open_stage_model_with_events(
     path: &std::path::Path,
     runtime_config: &RuntimeConfig,
-    operation_id: skippy_runtime::OperationId,
-    model_open_event_reporter: Option<&mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)>,
+    model_open_events: Option<&Arc<skippy_runtime::ModelOpenEventQueue>>,
 ) -> Result<StageModel> {
-    match model_open_event_reporter {
-        Some(event_reporter) => {
-            StageModel::open_with_events(path, runtime_config, operation_id, event_reporter)
-        }
+    match model_open_events {
+        Some(queue) => StageModel::open_with_events(path, runtime_config, queue),
         None => StageModel::open(path, runtime_config),
     }
 }
@@ -638,16 +628,10 @@ fn open_stage_model_from_parts(
 fn open_stage_model_from_parts_with_events(
     paths: &[std::path::PathBuf],
     runtime_config: &RuntimeConfig,
-    operation_id: skippy_runtime::OperationId,
-    model_open_event_reporter: Option<&mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)>,
+    model_open_events: Option<&Arc<skippy_runtime::ModelOpenEventQueue>>,
 ) -> Result<StageModel> {
-    match model_open_event_reporter {
-        Some(event_reporter) => StageModel::open_from_parts_with_events(
-            paths,
-            runtime_config,
-            operation_id,
-            event_reporter,
-        ),
+    match model_open_events {
+        Some(queue) => StageModel::open_from_parts_with_events(paths, runtime_config, queue),
         None => StageModel::open_from_parts(paths, runtime_config),
     }
 }

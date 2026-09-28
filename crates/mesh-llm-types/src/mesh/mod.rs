@@ -76,6 +76,9 @@ pub enum ModelWorkloadClass {
     Rerank,
     EncoderDecoder,
     SpeechSynthesis,
+    /// Typed System One decisions (`POST /systemone`) with no text generation,
+    /// such as a Laya encoder + decision head.
+    Decision,
     /// Explicit metadata from a newer peer that this node cannot interpret.
     /// Unlike absent legacy metadata, this never authorizes inference.
     #[serde(other)]

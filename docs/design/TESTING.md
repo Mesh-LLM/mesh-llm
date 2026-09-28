@@ -330,6 +330,14 @@ split targets plus six non-chat workloads. Trigger labels do not filter model
 coverage. Causal rows use product-approved topology cuts; non-chat rows require
 class-specific smoke and independent CPU oracle evidence, never split proof.
 
+The canary runs as a linear `preflight -> candidate -> verification -> publish`
+pipeline. Preflight validates the immutable plan and every pinned cache file
+before any coding agent starts. Changed pins get one candidate pass and one
+fresh independent verification pass on the exact candidate; a red family pass
+retains evidence and stops rather than creating another agent/candidate cycle.
+Process-supervision or cache-readiness failures are infrastructure failures and
+must not be presented to the coding agent as source repair work.
+
 ### 0g. Logging workflow certification
 
 Use the request logging checks after changing the trusted-local logging service,
