@@ -93,6 +93,9 @@ DEFAULT_HOST = DEFAULT_ENDPOINT.hostname or "127.0.0.1"
 DEFAULT_PORT = DEFAULT_ENDPOINT.port or 80
 MANAGEMENT_HOST = "127.0.0.1"
 MANAGEMENT_PORT = 3131
+MANAGEMENT_STAGES_URL = (
+    f"http://{MANAGEMENT_HOST}:{MANAGEMENT_PORT}/api/runtime/stages"
+)
 FORBIDDEN_STARTUP_OPTIONS = (
     "--ctx-size",
     "--generation-concurrency",
@@ -744,7 +747,7 @@ def wait_for_runtime_context(
             )
         try:
             with urllib.request.urlopen(
-                "http://127.0.0.1:3131/api/runtime", timeout=30
+                MANAGEMENT_STAGES_URL, timeout=30
             ) as response:
                 document = json.load(response)
             stages = document.get("stages", [])
