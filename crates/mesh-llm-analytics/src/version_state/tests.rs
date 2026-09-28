@@ -71,6 +71,22 @@ fn creates_the_state_directory_when_missing() {
     assert!(nested.join(VERSION_FILE).exists());
 }
 
+/// A state path that cannot be written must not look like an upgrade on every
+/// run. It reports `Fresh`, which callers treat as "nothing to report".
+///
+/// A regular file where the state directory belongs blocks the write for every
+/// user, root included, so this covers the contract in CI as well as on a
+/// workstation.
+#[test]
+fn an_unwritable_state_path_never_reports_a_change() {
+    let dir = TempDir::new().expect("tempdir");
+    let blocked = dir.path().join("blocked");
+    fs::write(&blocked, "not a directory").expect("seed");
+
+    assert_eq!(record(&blocked, "0.76.2"), VersionTransition::Fresh);
+    assert_eq!(record(&blocked, "0.77.0"), VersionTransition::Fresh);
+}
+
 /// An unwritable directory must not look like an upgrade on every run. It
 /// reports `Fresh`, which callers treat as "nothing to report".
 #[cfg(unix)]
@@ -82,6 +98,14 @@ fn an_unwritable_directory_never_reports_a_change() {
     let locked = dir.path().join("locked");
     fs::create_dir(&locked).expect("mkdir");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).expect("chmod");
+
+    if fs::write(locked.join("probe"), "").is_ok() {
+        // Root ignores the mode bits, so the directory is writable after all
+        // and there is nothing unwritable about it to assert on here.
+        let _ = fs::remove_file(locked.join("probe"));
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o700));
+        return;
+    }
 
     assert_eq!(record(&locked, "0.76.2"), VersionTransition::Fresh);
     assert_eq!(record(&locked, "0.77.0"), VersionTransition::Fresh);
