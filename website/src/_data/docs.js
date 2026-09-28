@@ -39,6 +39,7 @@ export default [
     description: "Use Mesh through OpenAI-compatible clients and model-serving features.",
     links: [
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
+      ["System One API", "/docs/pages/system-one-api/"],
       ["Automatic routing", "/docs/pages/automatic-routing/"],
       ["KV caching", "/docs/pages/kv-caching/"],
       ["Streaming", "/docs/pages/openai-compatible-api/#streaming"],

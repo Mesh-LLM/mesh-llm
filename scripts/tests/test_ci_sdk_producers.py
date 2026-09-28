@@ -808,11 +808,8 @@ class CiSdkProducersTests(RunnerSelectorMixin, unittest.TestCase):
         targets = (
             "aarch64-apple-ios",
             "aarch64-apple-ios-sim",
-            "x86_64-apple-ios",
             "aarch64-apple-ios-macabi",
-            "x86_64-apple-ios-macabi",
             "aarch64-apple-darwin",
-            "x86_64-apple-darwin",
         )
         workflow = yaml.safe_load(producer)
         target_job = workflow["jobs"]["swift_sdk_target"]
@@ -932,14 +929,15 @@ class CiSdkProducersTests(RunnerSelectorMixin, unittest.TestCase):
             producer,
         )
         self.assertIn(
-            "shared-key: ${{ format('swift-sdk-{0}', runner.arch == 'ARM64' "
-            "&& 'aarch64-apple-darwin' || 'x86_64-apple-darwin') }}",
+            "shared-key: swift-sdk-aarch64-apple-darwin",
             producer,
         )
         self.assertIn(
-            "path: ${{ format('.deps/llama-build/build-stage-abi-{0}-metal'",
+            "path: .deps/llama-build/build-stage-abi-aarch64-apple-darwin-metal",
             producer,
         )
+        self.assertNotIn("x86_64-apple-darwin", producer)
+        self.assertNotIn("x86_64-apple-darwin", host_builder)
         self.assertNotIn("runner.arch, inputs.mode, hashFiles(", producer)
         self.assertIn(
             "uses: ./.github/actions/resolve-native-toolchain-epoch",

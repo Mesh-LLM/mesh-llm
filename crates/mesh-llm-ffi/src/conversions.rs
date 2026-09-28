@@ -119,6 +119,7 @@ impl From<sdk_node::ModelCapabilities> for ModelCapabilities {
             reasoning: value.reasoning.into(),
             tool_use: value.tool_use.into(),
             moe: value.moe,
+            system_one: value.system_one.into(),
         }
     }
 }

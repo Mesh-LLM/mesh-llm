@@ -23,12 +23,8 @@ case "$HOST_ARCH" in
     RUST_TARGET="aarch64-apple-darwin"
     CMAKE_ARCH="arm64"
     ;;
-  x86_64)
-    RUST_TARGET="x86_64-apple-darwin"
-    CMAKE_ARCH="x86_64"
-    ;;
   *)
-    echo "Unsupported macOS host architecture: $HOST_ARCH" >&2
+    echo "Unsupported macOS host architecture: $HOST_ARCH; the Swift SDK requires Apple Silicon because Intel Macs cannot run MeshLLM inference." >&2
     exit 1
     ;;
 esac

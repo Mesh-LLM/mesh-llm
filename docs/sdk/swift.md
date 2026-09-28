@@ -6,7 +6,7 @@ Use the GitHub Swift package from tagged `Mesh-LLM/mesh-llm` releases.
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.76.1"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.77.0"),
 ],
 targets: [
     .target(
@@ -19,6 +19,10 @@ targets: [
 ```
 
 Tagged releases resolve the prebuilt `MeshLLMFFI.xcframework` through SwiftPM.
+The release XCFramework supports arm64 macOS, Mac Catalyst, iOS devices, and
+iOS simulators. Intel Apple machines are not supported because they cannot run
+MeshLLM inference.
+
 For local checkout development, build the XCFramework first:
 
 ```bash

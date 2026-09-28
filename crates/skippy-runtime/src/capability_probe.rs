@@ -260,15 +260,24 @@ mod tests {
             "/../skippy-ffi/src/abi.rs"
         ))
         .expect("skippy-ffi's abi.rs is in the workspace");
+        // Every FEATURE_* constant must be read, not skipped: a guard that
+        // drops a spelling it does not recognise stops guarding exactly when a
+        // new bit is written differently.
         let highest = abi
             .lines()
-            .filter_map(|line| line.trim().strip_prefix("pub const FEATURE_"))
-            .filter_map(|rest| rest.split_once(": u64 = 1 << "))
-            .map(|(_, shift)| {
-                shift
-                    .trim_end_matches(';')
-                    .parse::<u32>()
-                    .expect("feature bits are literal shifts")
+            .map(str::trim)
+            .filter(|line| line.starts_with("pub const FEATURE_"))
+            .map(|line| {
+                line.split_once(": u64 = ")
+                    .and_then(|(_, initializer)| initializer.strip_suffix(';'))
+                    .and_then(|initializer| initializer.strip_prefix("1 << "))
+                    .and_then(|shift| shift.parse::<u32>().ok())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "cannot read a feature bit from `{line}`: keep FEATURE_* \
+                             constants as `u64 = 1 << N;` or teach this guard the new form"
+                        )
+                    })
             })
             .max()
             .expect("skippy-ffi defines feature bits");
