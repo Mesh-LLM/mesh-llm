@@ -318,6 +318,11 @@ runs:
             }
             | .required = ([.matrices[] | length] | add) > 0
           ' ci-plan.json)"
+          # The Windows product smoke is gated on `runtime_product` succeeding,
+          # and that job only runs behind a planned Windows runtime row. The
+          # `core` smoke row is the Linux product-smoke row, so claiming it
+          # without a Windows product would mark the lane required for a job
+          # that can only ever be skipped, and fail the lane's own validator.
           echo "windows_lane_plan=$(jq -c '
             {
               lane: "windows",
@@ -330,7 +335,9 @@ runs:
                 hosts: [.matrices.hosts[] | select(.platform == "windows")],
                 runtime_products: [.matrices.runtime_products[] | select(.platform == "windows")],
                 platform_checks: [.matrices.platform_checks[] | select(.platform == "windows")],
-                smoke: [.matrices.smoke[] | select(.id == "core")]
+                smoke: (if ([.matrices.runtime_products[] | select(.platform == "windows")] | length) > 0
+                        then [.matrices.smoke[] | select(.id == "core")]
+                        else [] end)
               }
             }
             | .required = ([.matrices[] | length] | add) > 0
