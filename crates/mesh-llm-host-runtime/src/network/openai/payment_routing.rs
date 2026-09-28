@@ -139,6 +139,40 @@ async fn drop_blocked_payees(
     }
 }
 
+/// Apply payment eligibility to passive-client routes even when no paid tier
+/// survives. The boolean controls affinity, not whether filtering took effect.
+pub(super) async fn rank_remote_hosts(
+    node: &Node,
+    model: &str,
+    request: &super::request_parse::BufferedHttpRequest,
+    hosts: &mut Vec<iroh::EndpointId>,
+    equivalent_hosts: &mut usize,
+) -> Result<bool, &'static str> {
+    let mut ranked = RankedCandidates {
+        ordered: hosts.iter().copied().map(InferenceTarget::Remote).collect(),
+        equivalent_prefix: *equivalent_hosts,
+    };
+    let payment_ranked = rank(
+        node,
+        model,
+        (request.body_len_bytes as u64).div_ceil(4),
+        u64::from(request.completion_tokens.unwrap_or(256)),
+        &mut ranked,
+        request.body_json.as_ref(),
+    )
+    .await?;
+    *hosts = ranked
+        .ordered
+        .into_iter()
+        .filter_map(|target| match target {
+            InferenceTarget::Remote(peer) => Some(peer),
+            _ => None,
+        })
+        .collect();
+    *equivalent_hosts = ranked.equivalent_prefix;
+    Ok(payment_ranked)
+}
+
 /// Wallets compiled out: no payment tiers exist, so candidate ordering is left
 /// exactly as capability/context/health eligibility produced it.
 #[cfg(not(feature = "payments"))]
@@ -217,6 +251,26 @@ mod tests {
             ],
             equivalent_prefix: 2,
         };
+        // Exercise the passive-client adapter, not just rank: false must
+        // still publish the filtered list and its surviving equivalence run.
+        let body = r#"{"model":"test","messages":[]}"#;
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        use tokio::io::AsyncWriteExt;
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        writer.write_all(raw.as_bytes()).await?;
+        let request = super::super::request_parse::read_http_request(&mut reader).await?;
+        let mut hosts = vec![seller.id(), free];
+        let mut equivalent_hosts = 2;
+        assert!(
+            !rank_remote_hosts(&node, "test", &request, &mut hosts, &mut equivalent_hosts,)
+                .await
+                .unwrap()
+        );
+        assert_eq!(hosts, vec![free]);
+        assert_eq!(equivalent_hosts, 1);
         // Only free targets remain, so the route is left unranked by price.
         assert!(
             !rank(&node, "test", 1, 1, &mut candidates, None)
