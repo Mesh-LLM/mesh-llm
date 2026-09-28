@@ -1,4 +1,4 @@
-name: CI macOS Product Smoke Slice
+name: CI Windows Product Smoke Slice
 
 on:
   workflow_call:
@@ -13,11 +13,7 @@ on:
         default: ''
         type: string
       runtime_matrix:
-        description: JSON macOS runtime/product rows from the versioned CI plan.
-        required: true
-        type: string
-      architecture:
-        description: Selected macOS product architecture.
+        description: JSON Windows runtime/product rows from the versioned CI plan.
         required: true
         type: string
       smoke_matrix:
@@ -33,37 +29,16 @@ on:
         required: false
         default: 25
         type: number
-    secrets:
-      HF_TOKEN:
-        required: false
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
-  metal_model_load:
-    name: Metal model-load smoke
-    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'metal-model-load') }}
-    uses: ./.github/workflows/smoke.yml
-    with:
-      source_sha: ${{ inputs.source_sha }}
-      artifact_name: ci-product-macos-${{ inputs.architecture }}-metal
-      artifact_path: ci-artifacts/macos
-      mesh_binary_target: ${{ inputs.binary_target }}
-      cache_key_prefix: ""
-      runner: macos-15
-      timeout_minutes: ${{ inputs.timeout_minutes }}
-    secrets:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-
-  laya_metal:
-    name: Laya smoke (macOS Metal)
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'macos-metal') && contains(fromJson(inputs.smoke_matrix).*.id, 'metal-model-load') }}
-    runs-on: macos-15
+  laya_cpu:
+    name: Laya smoke (Windows CPU)
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'windows-cpu') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
+    runs-on: windows-2022
     timeout-minutes: ${{ inputs.timeout_minutes }}
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -74,10 +49,10 @@ jobs:
           python-version: '3.12'
       - uses: ./.github/actions/run-laya-product-smoke
         with:
-          artifact_name: ci-product-macos-${{ inputs.architecture }}-metal
-          artifact_path: ci-artifacts/laya-macos-metal
-          staged_binary_path: target/release/mesh-llm
-          expected_backend: metal
-          device: MTL0
+          artifact_name: ci-product-windows-amd64-cpu
+          artifact_path: ci-artifacts/laya-windows-cpu
+          staged_binary_path: ${{ inputs.binary_target }}
+          expected_backend: cpu
+          device: CPU
           model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
           save_model_cache: ${{ inputs.original_event_name == 'push' }}
