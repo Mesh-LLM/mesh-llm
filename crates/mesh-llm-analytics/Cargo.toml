@@ -1,6 +1,10 @@
 [package]
 name = "mesh-llm-analytics"
 edition.workspace = true
+# `version_state` locks the state directory with `std::fs::File::try_lock`,
+# stable since 1.89. The workspace declares no MSRV of its own, so the
+# requirement is recorded here rather than left for a build to discover.
+rust-version = "1.89"
 license.workspace = true
 version.workspace = true
 description = "Anonymous, opt-out product analytics for mesh-llm"
