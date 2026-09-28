@@ -138,7 +138,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-website-lane.yml": 2,
             "ci-linux-lane.yml": 10,
             "ci-macos-lane.yml": 9,
-            "ci-windows-lane.yml": 6,
+            "ci-windows-lane.yml": 7,
         }
         for workflow_name, expected_calls in lane_workflows.items():
             with self.subTest(workflow=workflow_name):
@@ -163,6 +163,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-macos-product-slice.yml",
             "ci-windows-runtime-slice.yml",
             "ci-windows-product-slice.yml",
+            "ci-windows-product-smoke-slice.yml",
             "ci-platform-checks-slice.yml",
             "static-abi-artifact.yml",
             "native-sdk-artifact.yml",
@@ -178,7 +179,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn("source_sha:", workflow)
                 checkout_ref = (
                     "ref: ${{ inputs.source_sha }}"
-                    if workflow_name == "ci-windows-runtime-slice.yml"
+                    if workflow_name in {
+                        "ci-windows-runtime-slice.yml",
+                        "ci-windows-product-smoke-slice.yml",
+                    }
                     else "ref: ${{ inputs.source_sha || github.sha }}"
                 )
                 self.assertIn(
@@ -216,6 +220,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
         )
         self.assertIn(
             'smoke: [.matrices.smoke[] | select(.id == "metal-model-load")]',
+            action,
+        )
+        self.assertIn(
+            'smoke: [.matrices.smoke[] | select(.id == "core")]',
             action,
         )
 
@@ -320,6 +328,9 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-macos-product-smoke-slice.yml": (
                 "metal-model-load",
             ),
+            "ci-windows-product-smoke-slice.yml": (
+                "core",
+            ),
         }
         for workflow_name, smoke_ids in smoke_workflows.items():
             workflow = self.workflow(workflow_name)
@@ -330,6 +341,34 @@ class CiLaneWorkflowTests(unittest.TestCase):
                         workflow,
                     )
             self.assertNotIn("contains(inputs.smoke_matrix,", workflow)
+
+    def test_laya_smoke_covers_each_hardware_backed_platform_lane(self) -> None:
+        linux = self.workflow("ci-linux-product-smoke-slice.yml")
+        for runtime_id, device in (
+            ("linux-cpu", "CPU"),
+            ("linux-cuda", "CUDA0"),
+            ("linux-rocm", "ROCm0"),
+            ("linux-vulkan", "Vulkan0"),
+        ):
+            with self.subTest(runtime_id=runtime_id):
+                self.assertIn(runtime_id, linux)
+                self.assertIn(f"device: {device}", linux)
+        self.assertIn("MESH_ROCM_INFERENCE_RUNNER_ENABLED", linux)
+        self.assertIn("gpu-amd", linux)
+        self.assertIn("gpu-nvidia", linux)
+
+        macos = self.workflow("ci-macos-product-smoke-slice.yml")
+        self.assertIn("macos-metal", macos)
+        self.assertIn("device: MTL0", macos)
+
+        windows = self.workflow("ci-windows-product-smoke-slice.yml")
+        self.assertIn("windows-cpu", windows)
+        self.assertIn("device: CPU", windows)
+        self.assertIn("uses: ./.github/actions/run-laya-product-smoke", windows)
+
+        windows_lane = self.workflow("ci-windows-lane.yml")
+        self.assertIn("uses: ./.github/workflows/ci-windows-product-smoke-slice.yml", windows_lane)
+        self.assertIn("product_smoke", windows_lane)
 
     def test_every_planned_smoke_id_matches_a_product_smoke_job(self) -> None:
         """Prevent planner rows from silently skipping their smoke jobs.

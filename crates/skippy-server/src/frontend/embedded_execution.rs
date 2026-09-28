@@ -543,24 +543,27 @@ fn downstream_reply_available(downstream: &TcpStream) -> OpenAiResult<bool> {
 /// semantics.
 const DIRECT_RETURN_PEEK_TIMEOUT: Duration = Duration::from_millis(1);
 
-struct DirectReturnFallbackTimeout {
-    downstream: TcpStream,
+/// Restores the downstream read timeout on the same handle that changed it.
+/// A `try_clone` is not a substitute: on Unix it shares the socket's options,
+/// but on Windows it is a separate socket handle with its own `SO_RCVTIMEO`,
+/// so restoring through a clone left the short peek timeout on this one.
+struct DirectReturnFallbackTimeout<'a> {
+    downstream: &'a TcpStream,
     previous_timeout: Option<Duration>,
     restored: bool,
 }
 
-impl DirectReturnFallbackTimeout {
+impl<'a> DirectReturnFallbackTimeout<'a> {
     /// Give the downstream socket a short read timeout so availability peeks
     /// return promptly while the reply wait blocks on the direct-return channel,
     /// without toggling nonblocking mode on the shared file description.
-    fn install(downstream: &TcpStream, peek_timeout: Duration) -> OpenAiResult<Self> {
+    fn install(downstream: &'a TcpStream, peek_timeout: Duration) -> OpenAiResult<Self> {
         let previous_timeout = downstream.read_timeout().map_err(openai_io_error)?;
-        let restore_stream = downstream.try_clone().map_err(openai_io_error)?;
         downstream
             .set_read_timeout(Some(peek_timeout))
             .map_err(openai_io_error)?;
         Ok(Self {
-            downstream: restore_stream,
+            downstream,
             previous_timeout,
             restored: false,
         })
@@ -575,7 +578,7 @@ impl DirectReturnFallbackTimeout {
     }
 }
 
-impl Drop for DirectReturnFallbackTimeout {
+impl Drop for DirectReturnFallbackTimeout<'_> {
     fn drop(&mut self) {
         if !self.restored {
             let _ = self.downstream.set_read_timeout(self.previous_timeout);
@@ -584,10 +587,10 @@ impl Drop for DirectReturnFallbackTimeout {
 }
 
 fn receive_downstream_stage_reply_one_of(
-    downstream: &mut TcpStream,
+    downstream: &TcpStream,
     expected_replies: &[WireReplyKind],
 ) -> OpenAiResult<StageReply> {
-    let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
+    let reply = recv_reply(downstream).map_err(openai_io_error)?;
     if !expected_replies.contains(&reply.kind) {
         return Err(OpenAiError::backend(format!(
             "expected one of {expected_replies:?} from downstream, got {:?}",

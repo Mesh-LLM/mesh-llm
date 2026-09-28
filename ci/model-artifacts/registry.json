@@ -5091,6 +5091,43 @@
       }
     },
     {
+      "id": "family-laya-multilingual",
+      "family": "laya",
+      "suites": [
+        "product-smoke",
+        "skippy-system-one-smoke"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "release",
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "capability_tags": [
+        "decision",
+        "gguf",
+        "laya",
+        "multilingual",
+        "system-one"
+      ],
+      "artifact": {
+        "repo": "meshllm/laya-multilingual-F16-GGUF",
+        "revision": "bcc99560232b5a5c91cb14d46b9496acbeae2c43",
+        "selector": "F16",
+        "files": [
+          {
+            "path": "laya-multilingual-F16.gguf",
+            "size_bytes": 658805088,
+            "sha256": "03881e45cdc5d0cf5e3a841cafe2ebdb8280e53e113c489e6847f7f45ca9c139"
+          }
+        ]
+      },
+      "notes": "Apache-2.0 Laya Multilingual converted by the pinned MeshLLM llama.cpp converter. Product lanes run the upstream golden read battery on Linux CPU/CUDA/ROCm/Vulkan, macOS Metal, and Windows CPU; the llama canary runs the same fixture through llama-laya-cli."
+    },
+    {
       "id": "family-diffusion-gemma",
       "family": "diffusion-gemma",
       "suites": [

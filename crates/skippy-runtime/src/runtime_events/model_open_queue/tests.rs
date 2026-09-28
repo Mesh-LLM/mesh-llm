@@ -11,8 +11,7 @@ use skippy_ffi::{
 };
 
 use super::{
-    MODEL_OPEN_RECORD_CAPACITY, ModelOpenEventQueue, ModelOpenEventReporterRegistration,
-    OperationId,
+    ModelOpenEventQueue, ModelOpenEventReporterRegistration, NATIVE_PROGRESS_STEPS, OperationId,
 };
 use crate::runtime_events::{NativeEventRecord, RUNTIME_EVENT_V1_ABI_VERSION, RuntimeEventKind};
 
@@ -175,13 +174,33 @@ fn registration_points_the_native_reporter_at_the_queue() {
 }
 
 #[test]
-fn default_capacity_holds_a_full_open_without_draining() {
+fn default_capacity_holds_a_worst_case_open_without_draining() {
+    // Every per-mille progress step the native loader can emit, wrapped in the
+    // lifecycle facts of an open, with nothing draining until it returns.
     let queue = ModelOpenEventQueue::new(OperationId(1));
-    for sequence in 0..MODEL_OPEN_RECORD_CAPACITY as u64 {
-        unsafe { queue.deliver_for_test(&progress(sequence)) };
+    let mut sequence = 0;
+    let mut deliver = |kind: RawRuntimeEventKind| {
+        sequence += 1;
+        unsafe { queue.deliver_for_test(&raw_event(kind, sequence)) };
+    };
+    deliver(RawRuntimeEventKind::MODEL_OPEN_STARTED);
+    deliver(RawRuntimeEventKind::MODEL_LOAD_PHASE_CHANGED);
+    deliver(RawRuntimeEventKind::MODEL_LOAD_MEMORY_ALLOCATED);
+    for _ in 0..NATIVE_PROGRESS_STEPS {
+        deliver(RawRuntimeEventKind::MODEL_OPEN_PROGRESS);
     }
-    assert_eq!(queue.len(), MODEL_OPEN_RECORD_CAPACITY);
+    deliver(RawRuntimeEventKind::MODEL_LOAD_TENSORS_OFFLOADED);
+    deliver(RawRuntimeEventKind::MODEL_LOAD_TOKENIZER_READY);
+    deliver(RawRuntimeEventKind::MODEL_LOAD_AUX_COMPONENT_READY);
+    deliver(RawRuntimeEventKind::MODEL_OPEN_FINISHED);
+
     assert_eq!(queue.dropped(), 0);
+    let records = drain_all(&queue);
+    assert_eq!(records.len(), NATIVE_PROGRESS_STEPS + 7);
+    assert_eq!(
+        records.last().map(|record| record.to_event().kind),
+        Some(RuntimeEventKind::ModelOpenFinished)
+    );
 }
 
 #[test]
