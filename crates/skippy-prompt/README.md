@@ -62,7 +62,6 @@ logs are attached to this REPL.
 ## Notes
 
 - Default local state lives under `/tmp/skippy-prompt`.
-- Remote runs stage inputs under `/tmp/skippy-remote-prompt` by default.
 - Activation frames always use raw little-endian f32 on the stage wire.
 - `--draft-model-path` enables draft-model speculative proposals.
 - Standalone cache and n-gram sidecars are not imported into mesh-llm; topology
