@@ -154,7 +154,8 @@
         "scripts/build-llama.sh",
         "scripts/package-native-runtime.sh",
         "scripts/verify-native-runtime-package.sh",
-        "crates/skippy-ffi/**"
+        "crates/skippy-ffi/**",
+        "crates/llama-quant-ffi/**"
       ]
     },
     {
@@ -336,12 +337,14 @@
     {
       "domain": "native-abi",
       "patterns": [
+        "skippy/third_party/llama.cpp/**",
         "skippy/llama_cpp/**",
         "skippy/scripts/prepare-llama.sh",
         "skippy/scripts/build-llama.sh",
         "skippy/scripts/package-native-runtime.sh",
         "skippy/scripts/verify-native-runtime-package.sh",
-        "skippy/crates/skippy-ffi/**"
+        "skippy/crates/skippy-ffi/**",
+        "skippy/crates/llama-quant-ffi/**"
       ]
     },
     {
@@ -494,7 +497,7 @@
     },
     {
       "domain": "native-abi",
-      "crates": ["skippy-ffi"]
+      "crates": ["llama-quant-ffi", "skippy-ffi"]
     },
     {
       "domain": "protocol",
@@ -580,6 +583,7 @@
       "domain": "runtime-product",
       "crates": [
         "mesh-llm-transport",
+        "skippy-openai-frontend",
         "skippy-inference-api"
       ]
     },
