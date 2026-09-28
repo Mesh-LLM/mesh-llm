@@ -28,6 +28,22 @@ fn is_internal_plugin_service(cli: &Cli) -> bool {
     cli.plugin.is_some()
 }
 
+/// Whether mesh-llm spawned this process as an internal helper.
+///
+/// The updater runs the freshly extracted binary with `--version` to verify a
+/// bundle before installing it. That child reaches the same entry point, so
+/// without this it reports a command, records the new build as the current
+/// version, and thereby steals the version transition from the restart that
+/// actually applies the update -- which then reads as `Unchanged` and gets
+/// classified `external`. Worse, an install that fails after verification
+/// leaves a recorded upgrade that never happened.
+///
+/// Same reasoning as [`is_internal_plugin_service`]: the process exists to
+/// serve a user action already being reported, so it reports nothing itself.
+fn is_internal_helper() -> bool {
+    std::env::var_os(mesh_llm_analytics::ENV_INTERNAL_HELPER).is_some()
+}
+
 /// Start reporting for this process, unless the command is itself an
 /// analytics command or an internal plugin service.
 ///
@@ -36,7 +52,10 @@ fn is_internal_plugin_service(cli: &Cli) -> bool {
 /// `mesh-llm analytics status` is excluded for the same reason — asking what
 /// is collected should not itself be collected.
 pub fn init_for_cli(cli: &Cli) {
-    if matches!(cli.command, Some(Command::Analytics { .. })) || is_internal_plugin_service(cli) {
+    if matches!(cli.command, Some(Command::Analytics { .. }))
+        || is_internal_plugin_service(cli)
+        || is_internal_helper()
+    {
         return;
     }
     mesh_llm_analytics::init(crate::analytics::config_preference(cli.config.as_deref()));
@@ -50,7 +69,7 @@ pub fn init_for_cli(cli: &Cli) {
 /// the parsed exclusion in [`init_for_cli`], so it is excluded here too —
 /// otherwise the one command family promised not to report would report.
 pub fn init_for_unparsed(raw_args: &[OsString], config_path: Option<&Path>) {
-    if mesh_llm_cli::raw_args_invoke_analytics(raw_args) {
+    if mesh_llm_cli::raw_args_invoke_analytics(raw_args) || is_internal_helper() {
         return;
     }
     mesh_llm_analytics::init(crate::analytics::config_preference(config_path));
@@ -205,19 +224,47 @@ fn hardware_properties(
     // "unknown" when it usually means "no GPU at all" -- a different and more
     // interesting answer. The two reasons it can be missing are split apart
     // rather than merged.
-    properties = properties.with(
-        "gpu_model",
-        match survey.gpu_name.as_deref() {
-            Some(name) => {
-                mesh_llm_analytics::Value::from(mesh_llm_analytics::Label::slug_or_redact(name))
-            }
-            // No GPU was found, so there is no name to report.
-            None if survey.gpu_count == 0 => mesh_llm_analytics::Value::from("none"),
-            // A GPU exists but the platform probe did not name it.
-            None => mesh_llm_analytics::Value::from("unreported"),
-        },
-    );
+    properties = properties.with("gpu_model", gpu_model(survey));
     properties
+}
+
+/// The `gpu_model` value for a survey.
+///
+/// A name is only reported when a naming probe actually stands behind it.
+/// `HardwareSurvey` documents that `hydrate_gpu_facts_with_identities`
+/// backfills placeholder `"GPU N"` names tagged [`GpuNameSource::Unknown`],
+/// and `CpuBrandString` is a CPU string kept only so older surveys still
+/// deserialize. Slugging either would invent a convincing-looking device --
+/// `gpu-0`, or a CPU model reported as a GPU -- so both are `unreported`.
+///
+/// "No GPU" is only claimed when nothing in the survey evidences one. The
+/// naming and counting probes fail independently of each other, so the
+/// per-device facts are consulted rather than trusting `gpu_count` alone.
+///
+/// `vram_bytes` is deliberately *not* evidence: it is a budget, not a device
+/// fact, and on a machine with no accelerator it is the RAM-offload credit,
+/// which is routinely non-zero. Treating it as a GPU would report `unreported`
+/// for every GPU-less Linux host.
+fn gpu_model(survey: &mesh_llm_system::hardware::HardwareSurvey) -> mesh_llm_analytics::Value {
+    use mesh_llm_system::hardware::GpuNameSource;
+
+    let probed_name = survey.gpu_name.as_deref().filter(|_| {
+        !matches!(
+            survey.gpu_name_source,
+            None | Some(GpuNameSource::Unknown) | Some(GpuNameSource::CpuBrandString)
+        )
+    });
+    if let Some(name) = probed_name {
+        return mesh_llm_analytics::Value::from(mesh_llm_analytics::Label::slug_or_redact(name));
+    }
+
+    let has_a_gpu = survey.gpu_count > 0 || !survey.gpus.is_empty() || !survey.gpu_vram.is_empty();
+    if has_a_gpu {
+        // A device is there; nothing trustworthy named it.
+        mesh_llm_analytics::Value::from("unreported")
+    } else {
+        mesh_llm_analytics::Value::from("none")
+    }
 }
 
 /// Record a model download attempt, which is the clearest signal of what
@@ -289,7 +336,22 @@ mod tests {
         vram_bytes: u64,
         is_soc: bool,
     ) -> mesh_llm_system::hardware::HardwareSurvey {
+        // A real naming probe stands behind a name unless a test says otherwise.
+        let source = gpu_name
+            .is_some()
+            .then_some(mesh_llm_system::hardware::GpuNameSource::NativeRuntimeDevice);
+        survey_named_by(gpu_name, source, gpu_count, vram_bytes, is_soc)
+    }
+
+    fn survey_named_by(
+        gpu_name: Option<&str>,
+        gpu_name_source: Option<mesh_llm_system::hardware::GpuNameSource>,
+        gpu_count: u8,
+        vram_bytes: u64,
+        is_soc: bool,
+    ) -> mesh_llm_system::hardware::HardwareSurvey {
         mesh_llm_system::hardware::HardwareSurvey {
+            gpu_name_source,
             vram_bytes,
             gpu_name: gpu_name.map(str::to_owned),
             gpu_count,
@@ -300,7 +362,6 @@ mod tests {
             gpu_vram: Vec::new(),
             gpu_reserved: Vec::new(),
             gpus: Vec::new(),
-            gpu_name_source: None,
             system_ram_bytes: None,
             ram_offload_bytes: 0,
         }
@@ -395,6 +456,75 @@ mod tests {
         assert!(!absent.contains("unreported"), "{absent}");
     }
 
+    /// `hydrate_gpu_facts_with_identities` backfills placeholder `"GPU N"`
+    /// names with no probe behind them. Slugging one would publish `gpu-0` as
+    /// though it were a real device.
+    #[test]
+    fn a_placeholder_gpu_name_is_not_reported_as_a_device() {
+        let rendered = format!(
+            "{:?}",
+            hardware_properties(
+                &survey_named_by(
+                    Some("GPU 0"),
+                    Some(mesh_llm_system::hardware::GpuNameSource::Unknown),
+                    1,
+                    8 << 30,
+                    false,
+                ),
+                &metal_only(),
+            )
+        );
+        assert!(
+            !rendered.contains("gpu-0"),
+            "placeholder published: {rendered}"
+        );
+        assert!(rendered.contains("unreported"), "{rendered}");
+    }
+
+    /// `CpuBrandString` is a CPU string retained only so older surveys still
+    /// deserialize. Reporting it would file a CPU model as a GPU.
+    #[test]
+    fn a_cpu_brand_string_is_not_reported_as_a_gpu() {
+        let rendered = format!(
+            "{:?}",
+            hardware_properties(
+                &survey_named_by(
+                    Some("Apple M1 Pro"),
+                    Some(mesh_llm_system::hardware::GpuNameSource::CpuBrandString),
+                    1,
+                    16 << 30,
+                    true,
+                ),
+                &metal_only(),
+            )
+        );
+        assert!(!rendered.contains("apple-m1-pro"), "{rendered}");
+        assert!(rendered.contains("unreported"), "{rendered}");
+    }
+
+    /// The counting probe can fail while the per-device facts survive, so a
+    /// zero count alone is not enough to claim there is no GPU.
+    #[test]
+    fn per_device_facts_outvote_a_zero_gpu_count() {
+        let mut survey = survey(None, 0, 24 << 30, false);
+        survey.gpu_vram = vec![24 << 30];
+        let rendered = format!("{:?}", hardware_properties(&survey, &metal_only()));
+        assert!(rendered.contains("unreported"), "{rendered}");
+    }
+
+    /// `vram_bytes` is a budget, not a device: on a GPU-less host it carries
+    /// the RAM-offload credit. Treating it as evidence would report
+    /// `unreported` for every CPU-only Linux box.
+    #[test]
+    fn a_ram_offload_budget_is_not_evidence_of_a_gpu() {
+        let rendered = format!(
+            "{:?}",
+            hardware_properties(&survey(None, 0, 12 << 30, false), &metal_only())
+        );
+        assert!(rendered.contains("none"), "{rendered}");
+        assert!(!rendered.contains("unreported"), "{rendered}");
+    }
+
     /// The flag that decides whether a node upgrades itself has to be on the
     /// event, or an auto-updating fleet cannot be told from hand-run nodes.
     #[test]
@@ -416,6 +546,10 @@ mod tests {
         assert_eq!(
             mesh_llm_analytics::ENV_SELF_UPDATE_MARKER,
             mesh_llm_system::autoupdate::SELF_UPDATE_ATTEMPTED_ENV,
+        );
+        assert_eq!(
+            mesh_llm_analytics::ENV_INTERNAL_HELPER,
+            mesh_llm_system::autoupdate::INTERNAL_HELPER_ENV,
         );
     }
 

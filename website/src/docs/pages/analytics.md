@@ -68,7 +68,7 @@ And one of these events:
 
 | Property | Example | Notes |
 |---|---|---|
-| `gpu_model` | `apple-m1-pro`, `nvidia-geforce-rtx-4090`, `none`, `unreported` | The device name, lowercased and hyphenated. `none` means no GPU was found; `unreported` means one exists but the platform probe did not name it |
+| `gpu_model` | `apple-m1-pro`, `nvidia-geforce-rtx-4090`, `none`, `unreported` | The device name, lowercased and hyphenated, and only when a naming probe actually produced it. `none` means no GPU was found. `unreported` means one exists but nothing named it — including when the survey holds a placeholder such as `GPU 0`, which is never published as though it were a real device |
 | `gpu_count` | `1`, `3-4`, `33+` | Bucketed |
 | `vram_total` | `8-16`, `32-64` | Bucketed gigabytes across all GPUs |
 | `system_ram` | `16-32`, `64-128` | Bucketed gigabytes of system RAM, when the platform reports it |
@@ -78,6 +78,12 @@ And one of these events:
 Counts and sizes are bucketed rather than exact (`3-4`, `9-16`, `33+`),
 because an exact VRAM figure or GPU count at the tail can identify a single
 deployment.
+
+Processes mesh-llm starts for its own purposes report nothing at all: the
+plugin services `serve` spawns, and the bundle-verification run the updater
+performs before installing a release. They exist to serve a user action that
+is already being reported, so counting them again would inflate installs,
+commands and node starts.
 
 ## What is never collected
 

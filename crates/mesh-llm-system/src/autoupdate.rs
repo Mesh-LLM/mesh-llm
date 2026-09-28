@@ -35,6 +35,16 @@ use release_fetch::{
 /// agree.
 pub const SELF_UPDATE_ATTEMPTED_ENV: &str = "MESH_LLM_SELF_UPDATE_ATTEMPTED";
 
+/// Set on processes this crate spawns that are not a user action.
+///
+/// Only the bundle-verification child uses it today: it runs the extracted
+/// binary with `--version` before the install commits, and that child must not
+/// report, record a version, or count as a command.
+///
+/// Mirrored as `ENV_INTERNAL_HELPER` in `mesh-llm-analytics`, which reads it.
+/// `mesh-llm-commands` tests that the two agree.
+pub const INTERNAL_HELPER_ENV: &str = "MESH_LLM_INTERNAL_HELPER";
+
 struct UpdateTarget {
     exe: PathBuf,
     install_dir: PathBuf,

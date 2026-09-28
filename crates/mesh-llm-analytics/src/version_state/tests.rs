@@ -1,6 +1,14 @@
 use super::*;
 use tempfile::TempDir;
 
+/// Read and persist in one step, the way an ordinary successful run does.
+fn record(dir: &Path, current: &str) -> VersionTransition {
+    let pending = begin(dir, current);
+    let transition = pending.transition().clone();
+    pending.commit();
+    transition
+}
+
 #[test]
 fn first_sighting_is_fresh_and_records_a_baseline() {
     let dir = TempDir::new().expect("tempdir");
@@ -112,4 +120,99 @@ fn an_unwritable_directory_never_reports_a_change() {
 
     // Restore so the tempdir can clean itself up.
     let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o700));
+}
+
+/// A successful commit says so, so the caller knows it may report.
+#[test]
+fn a_successful_commit_reports_success() {
+    let dir = TempDir::new().expect("tempdir");
+    assert!(begin(dir.path(), "0.77.0").commit());
+}
+
+/// Committing when the record already names this build writes nothing and
+/// returns false: there is no transition to report.
+#[test]
+fn committing_an_unchanged_version_is_not_a_transition() {
+    let dir = TempDir::new().expect("tempdir");
+    begin(dir.path(), "0.77.0").commit();
+
+    let pending = begin(dir.path(), "0.77.0");
+    assert_eq!(pending.transition(), &VersionTransition::Unchanged);
+    assert!(!pending.commit());
+}
+
+/// A transition that could not be persisted must not be reported, and must
+/// still be visible to the next run. Reporting it here would either lose the
+/// upgrade or repeat it on every run forever.
+///
+/// A directory where the temporary file belongs blocks the staged write for
+/// every user, root included.
+#[test]
+fn a_failed_commit_does_not_report_and_leaves_the_old_record() {
+    let dir = TempDir::new().expect("tempdir");
+    assert!(begin(dir.path(), "0.76.2").commit());
+    fs::create_dir(dir.path().join(VERSION_TEMP_FILE)).expect("block the staged write");
+
+    let pending = begin(dir.path(), "0.77.0");
+    assert_eq!(
+        pending.transition(),
+        &VersionTransition::Changed {
+            from: "0.76.2".to_owned()
+        }
+    );
+    assert!(!pending.commit(), "a failed write must not report success");
+
+    // The old record survived, so the upgrade is still there to be retried.
+    let retry = begin(dir.path(), "0.77.0");
+    assert_eq!(
+        retry.transition(),
+        &VersionTransition::Changed {
+            from: "0.76.2".to_owned()
+        }
+    );
+}
+
+/// Several mesh-llm processes can start at once after an upgrade. Only the
+/// one holding the lock may report it; the rest must stay silent rather than
+/// each emitting the same `install_updated`.
+#[test]
+fn only_one_holder_of_the_lock_sees_the_transition() {
+    let dir = TempDir::new().expect("tempdir");
+    assert!(begin(dir.path(), "0.76.2").commit());
+
+    let first = begin(dir.path(), "0.77.0");
+    let second = begin(dir.path(), "0.77.0");
+
+    assert_eq!(
+        second.transition(),
+        &VersionTransition::Fresh,
+        "a process that cannot take the lock must not see a transition",
+    );
+    assert!(!second.commit());
+
+    assert_eq!(
+        first.transition(),
+        &VersionTransition::Changed {
+            from: "0.76.2".to_owned()
+        }
+    );
+    assert!(first.commit());
+}
+
+/// Dropping without committing releases the lock, so an early return in
+/// `init` cannot wedge every later run out of reporting.
+#[test]
+fn dropping_without_committing_releases_the_lock() {
+    let dir = TempDir::new().expect("tempdir");
+    assert!(begin(dir.path(), "0.76.2").commit());
+
+    drop(begin(dir.path(), "0.77.0"));
+
+    let next = begin(dir.path(), "0.77.0");
+    assert_eq!(
+        next.transition(),
+        &VersionTransition::Changed {
+            from: "0.76.2".to_owned()
+        }
+    );
 }
