@@ -32,28 +32,6 @@ fn model_tiers() -> Vec<(String, f64)> {
     tiers
 }
 
-/// Pick the model to SERVE for `--auto` based on VRAM.
-/// Returns a single-element vec (the model this node should load).
-///
-/// One model per node. Biggest model that fits with 15% KV cache headroom.
-///
-/// Tiers:
-///   <8GB:    Qwen3-4B (2.5G)
-///   8-24GB:  Gemma-4-E4B-it (4.6G)
-///   24-50GB: Qwen3.5-27B (17G) — vision + text
-///   50-63GB: GLM-4.7-Flash (18G) — fast, tool calling
-///   63-179GB: Qwen3-Coder-Next (48G) — frontier coder ~85B
-///   179GB+:  MiniMax-M2.5 (138G) — flagship
-#[expect(
-    dead_code,
-    reason = "compatibility helper remains covered by model-pack tests"
-)]
-pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
-    let local_models = crate::models::scan_local_models();
-    let tiers = model_tiers();
-    auto_model_pack_with(vram_gb, &local_models, &tiers, &catalog_ref)
-}
-
 fn catalog_ref(name: &str) -> String {
     crate::models::find_remote_catalog_model_exact(name)
         .map(|model| crate::models::remote_catalog_model_ref(&model))

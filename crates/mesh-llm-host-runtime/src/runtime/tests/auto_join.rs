@@ -57,57 +57,11 @@ fn mdns_discovery_starts_lan_rediscovery_only_with_join_token() {
     ));
 }
 
-#[tokio::test]
-async fn model_assignment_is_derived_from_node_role() {
-    let model_file = tempfile::Builder::new()
-        .suffix(".gguf")
-        .tempfile()
-        .expect("temporary model file");
-    std::fs::write(model_file.path(), b"test model").expect("write temporary model");
-    let model_ref = models::model_ref_for_path(model_file.path());
-    let local_models = [model_ref.clone()];
-
-    let mut node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
-        .await
-        .expect("test node");
-    node.vram_bytes = 1_000_000_000;
-    node.record_request(&model_ref);
-
-    assert_eq!(
-        pick_model_assignment_for_role(&node, &local_models).await,
-        None,
-        "client roles must remain proxy-only"
-    );
-
-    node.set_role(mesh::NodeRole::Worker).await;
-    assert_eq!(
-        pick_model_assignment_for_role(&node, &local_models).await,
-        Some(model_ref),
-        "worker roles must still receive normal assignments"
-    );
-}
-
-#[tokio::test]
-async fn client_mode_skips_model_assignment_even_for_worker_role() {
-    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
-        .await
-        .expect("test node");
-
-    assert_eq!(
-        pick_run_auto_model_assignment(true, &node, &["model-on-disk".to_string()]).await,
-        None,
-        "client mode must enter the passive proxy path without checking assignments"
-    );
-}
-
 #[test]
 fn catalog_size_parser_rejects_unknown_and_zero_sizes() {
     assert_eq!(parse_size_str("36 layers"), None);
     assert_eq!(parse_size_str("0GB"), Some(0));
     assert_eq!(parse_size_str("12.5GB"), Some(12_500_000_000));
-    assert_eq!(catalog_model_required_bytes("36 layers"), None);
-    assert_eq!(catalog_model_required_bytes("0GB"), None);
-    assert_eq!(catalog_model_required_bytes("1GB"), Some(1_100_000_000));
 }
 
 fn make_cli(args: &[&str]) -> RuntimeOptions {

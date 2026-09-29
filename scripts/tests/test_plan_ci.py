@@ -267,14 +267,31 @@ class PlanCiTests(unittest.TestCase):
             plan["affected_crates"],
             ["mesh-llm-host-runtime", "mesh-llm"],
         )
-        self.assertEqual(plan["domains"], ["rust", "runtime-product"])
+        self.assertEqual(
+            plan["domains"], ["rust", "runtime-product", "platform-windows-cfg"]
+        )
         self.assertEqual(
             plan["required_slices"],
-            ["quality", "ui-artifact", "static-abi", "rust-tests", "runtime-product", "product-smoke"],
+            [
+                "quality",
+                "ui-artifact",
+                "static-abi",
+                "rust-tests",
+                "runtime-product",
+                "platform-checks",
+                "product-smoke",
+            ],
         )
         self.assertEqual(
             [row["id"] for row in plan["matrices"]["runtime_products"]],
             ["linux-cpu"],
+        )
+        # A shared host-runtime change must prove itself on Windows as well as
+        # Linux: `platform-windows-cfg` selects the `windows-unit` row, which
+        # already runs this crate as a shared owner.
+        self.assertEqual(
+            [row["id"] for row in plan["matrices"]["platform_checks"]],
+            ["windows-unit"],
         )
         self.assertEqual(
             plan["dependencies"]["runtime-product"],

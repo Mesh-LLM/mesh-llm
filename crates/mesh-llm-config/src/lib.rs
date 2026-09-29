@@ -313,16 +313,23 @@ skippy_abi = "0.1.25"
             crate::KvDiskCodec::Native
         );
 
-        let fixed = parse_config_toml(
+        // The directory must be absolute on the host running the test, and a
+        // drive letter is what makes a path absolute on Windows.
+        let directory = if cfg!(windows) {
+            r"C:\fast-disk\mesh-kv-cache"
+        } else {
+            "/fast-disk/mesh-kv-cache"
+        };
+        let fixed = parse_config_toml(&format!(
             r#"
 [runtime.kv_cache.disk]
 mode = "fixed"
-directory = "/fast-disk/mesh-kv-cache"
+directory = '{directory}'
 budget_mib = 32768
 minimum_free_mib = 16384
 codec = "cachegen"
-"#,
-        )
+"#
+        ))
         .expect("fixed disk-cache config should parse");
         assert_eq!(
             fixed.runtime.kv_cache.disk.mode,
