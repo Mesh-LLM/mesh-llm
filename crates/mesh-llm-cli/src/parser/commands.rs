@@ -411,6 +411,26 @@ impl SpeculativeNgramProposerCli {
     }
 }
 
+/// What to propose from when the N-gram proposer has no candidates.
+///
+/// `none` is spelled out rather than left implicit so a command line can switch
+/// the fallback back off when the config file or model defaults turned it on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SpeculativeNgramFallbackCli {
+    Draft,
+    #[value(name = "none")]
+    Off,
+}
+
+impl SpeculativeNgramFallbackCli {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Off => "none",
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "mesh-llm",
@@ -661,6 +681,16 @@ pub struct Cli {
     /// Number of in-flight pipelined verify windows.
     #[arg(long, hide = true)]
     pub speculative_verify_window_pipeline_depth: Option<u32>,
+
+    /// Admit pipelined verify windows by speculative-token budget instead of a
+    /// fixed depth. 0 keeps fixed-depth admission.
+    #[arg(long, hide = true)]
+    pub speculative_verify_window_runahead_tokens: Option<u32>,
+
+    /// Propose from the draft model when the N-gram proposer misses
+    /// (`draft` or `none`). Requires a draft model and pipeline depth > 1.
+    #[arg(long, hide = true, value_enum)]
+    pub speculative_ngram_fallback: Option<SpeculativeNgramFallbackCli>,
 
     /// Draft model for speculative decoding.
     #[arg(long, hide = true)]
@@ -1458,6 +1488,60 @@ mod tests {
         );
         assert_eq!(cli.speculative_ngram_min, Some(5));
         assert_eq!(cli.speculative_ngram_max, Some(32));
+    }
+
+    /// Both keys existed in `[models.speculative]` with no command-line
+    /// spelling, which left run-ahead admission — the strongest measured
+    /// speculation arm — reachable only from a config file.
+    #[test]
+    fn serve_parses_runahead_and_ngram_fallback() {
+        let normalized = crate::parser::normalize_runtime_surface_args([
+            "mesh-llm",
+            "serve",
+            "--speculative-verify-window-runahead-tokens",
+            "96",
+            "--speculative-ngram-fallback",
+            "draft",
+        ]);
+        let cli = Cli::try_parse_from(normalized.normalized).expect("clap parse");
+
+        assert_eq!(cli.speculative_verify_window_runahead_tokens, Some(96));
+        assert_eq!(
+            cli.speculative_ngram_fallback,
+            Some(SpeculativeNgramFallbackCli::Draft)
+        );
+    }
+
+    /// `none` is the documented off-switch, so a command line can countermand a
+    /// fallback that the config file or model defaults turned on.
+    #[test]
+    fn ngram_fallback_accepts_none_and_rejects_unknown_values() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "--speculative-ngram-fallback",
+            "none",
+            "--model",
+            "x.gguf",
+        ]);
+        assert_eq!(
+            cli.speculative_ngram_fallback,
+            Some(SpeculativeNgramFallbackCli::Off)
+        );
+        assert_eq!(
+            cli.speculative_ngram_fallback.map(|value| value.as_str()),
+            Some("none")
+        );
+
+        // `simple` was #1054's original fallback; it was consolidated away and
+        // `model_validation` now allows only `draft` and `none`.
+        Cli::try_parse_from([
+            "mesh-llm",
+            "--speculative-ngram-fallback",
+            "simple",
+            "--model",
+            "x.gguf",
+        ])
+        .expect_err("simple is no longer a supported fallback");
     }
 
     #[test]
