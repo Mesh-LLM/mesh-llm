@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import unittest
 
 
@@ -223,8 +224,138 @@ class CiLaneWorkflowTests(unittest.TestCase):
             action,
         )
         self.assertIn(
-            'smoke: [.matrices.smoke[] | select(.id == "core")]',
+            "([.matrices.runtime_products[] | select(.platform == \"windows\")] | length) > 0",
             action,
+        )
+        self.assertIn(
+            'then [.matrices.smoke[] | select(.id == "core")]',
+            action,
+        )
+
+    def test_windows_lane_smoke_requires_a_planned_windows_runtime_product(
+        self,
+    ) -> None:
+        """A claimed Windows smoke row without a Windows product is unsatisfiable.
+
+        ``ci-windows-lane.yml`` runs ``product_smoke`` only when
+        ``runtime_product`` succeeded, and ``runtime_product`` only runs behind a
+        planned Windows runtime row. The lane projection must therefore not claim
+        the Linux ``core`` smoke row on its own: doing so marks the lane
+        ``required`` and makes ``scripts/validate-ci-lane-results.py`` expect a
+        job that can only be skipped, which fails the Windows lane and cancels
+        its sibling PR lanes.
+        """
+        action = (ROOT / ".github" / "actions" / "plan-ci" / "action.yml").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(
+            r"windows_lane_plan=\$\(jq -c '(.*?)' ci-plan\.json\)", action, re.DOTALL
+        )
+        self.assertIsNotNone(match)
+        program = match.group(1)
+
+        def project(plan: dict) -> dict:
+            result = subprocess.run(
+                ["jq", "-c", program],
+                input=json.dumps(plan),
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            return json.loads(result.stdout)
+
+        def validate(lane_plan: dict, needs: dict) -> str:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "validate-ci-lane-results.py"),
+                    "--lane-plan",
+                    json.dumps(lane_plan),
+                    "--needs",
+                    json.dumps(needs),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            return result.stderr
+
+        def plan(runtime_products: list, hosts: list) -> dict:
+            return {
+                "profile": "pr-ready",
+                "domains": ["rust"],
+                "required_slices": [
+                    "quality",
+                    "rust-tests",
+                    "runtime-product",
+                    "product-smoke",
+                ],
+                "signals": {"rust_changed": True},
+                "budgets": {"windows_max_parallel": 1},
+                "matrices": {
+                    "hosts": hosts,
+                    "runtime_products": runtime_products,
+                    "platform_checks": [],
+                    "smoke": [
+                        {
+                            "id": "core",
+                            "kind": "core",
+                            "platform": "linux",
+                            "runner_role": "linux-build-4",
+                        }
+                    ],
+                },
+            }
+
+        windows_cpu = {
+            "id": "windows-cpu",
+            "platform": "windows",
+            "architecture": "amd64",
+            "backend": "cpu",
+            "runner_role": "windows-build",
+        }
+        windows_host = {
+            "id": "windows-amd64-host",
+            "platform": "windows",
+            "architecture": "amd64",
+            "runner_role": "windows-build",
+        }
+        lane_jobs = (
+            "ui_artifact",
+            "hosts",
+            "native_runtimes",
+            "runtime_product",
+            "platform_checks",
+            "product_smoke",
+        )
+
+        # A Linux-only change plans the core smoke row but no Windows product, so
+        # the lane must stay a no-op instead of requiring a smoke it cannot run.
+        linux_only = project(plan([], []))
+        self.assertIs(False, linux_only["required"])
+        self.assertEqual([], linux_only["matrices"]["smoke"])
+        self.assertEqual(
+            "",
+            validate(linux_only, {name: {"result": "skipped"} for name in lane_jobs}),
+        )
+
+        # A Windows change plans the product the smoke consumes, so the lane
+        # requires the full Windows product chain and satisfies its validator.
+        windows_only = project(plan([windows_cpu], [windows_host]))
+        self.assertIs(True, windows_only["required"])
+        self.assertEqual(
+            ["core"], [row["id"] for row in windows_only["matrices"]["smoke"]]
+        )
+        self.assertEqual(
+            "",
+            validate(
+                windows_only,
+                {
+                    name: {
+                        "result": "skipped" if name == "platform_checks" else "success"
+                    }
+                    for name in lane_jobs
+                },
+            ),
         )
 
     def test_pr_planner_uses_only_immutable_source_manifests(self) -> None:

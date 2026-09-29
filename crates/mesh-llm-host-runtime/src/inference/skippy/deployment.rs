@@ -1,15 +1,9 @@
-use std::collections::HashMap;
-
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig, StageDevice};
 
 use super::family_policy::FamilyPolicy;
 use super::materialization::StagePackageInfo;
 use super::topology::MeshStagePlan;
-use super::{
-    KvCachePolicy, StageLoadRequest, StageLoadRuntimeSettings, StagePeerDescriptor,
-    StageStatusSnapshot, StageStopRequest,
-};
-use crate::mesh;
+use super::{KvCachePolicy, StageLoadRequest, StageLoadRuntimeSettings, StagePeerDescriptor};
 
 pub(crate) struct StageDeploymentContext<'a> {
     pub(crate) topology_id: &'a str,
@@ -193,63 +187,6 @@ pub(crate) fn stage0_config(
         .family_policy
         .stage_kv_cache_config_for_package(&config, &context.package.package_dir);
     config
-}
-
-pub(crate) fn stage_stop_request(
-    context: &StageDeploymentContext<'_>,
-    stage: &MeshStagePlan,
-    shutdown_generation: u64,
-) -> StageStopRequest {
-    StageStopRequest {
-        topology_id: context.topology_id.to_string(),
-        run_id: context.run_id.to_string(),
-        stage_id: stage.stage_id.clone(),
-        shutdown_generation,
-        coordinator_term: 0,
-    }
-}
-
-pub(crate) fn stage_topology_instance(
-    context: &StageDeploymentContext<'_>,
-    stages: &[MeshStagePlan],
-    ready_statuses: &HashMap<String, StageStatusSnapshot>,
-    stage0_bind_addr: String,
-) -> mesh::StageTopologyInstance {
-    mesh::StageTopologyInstance {
-        topology_id: context.topology_id.to_string(),
-        run_id: context.run_id.to_string(),
-        model_id: context.model_id.to_string(),
-        package_ref: context.package.package_ref.clone(),
-        manifest_sha256: context.package.manifest_sha256.clone(),
-        admissions: Default::default(),
-        stages: stages
-            .iter()
-            .map(|stage| mesh::StageAssignment {
-                stage_id: stage.stage_id.clone(),
-                stage_index: stage.stage_index,
-                node_id: stage.node_id,
-                layer_start: stage.layer_start,
-                layer_end: stage.layer_end,
-                endpoint: mesh::StageEndpoint {
-                    bind_addr: ready_statuses
-                        .get(&stage.stage_id)
-                        .map(|status| status.bind_addr.clone())
-                        .unwrap_or_else(|| stage0_bind_addr.clone()),
-                },
-            })
-            .collect(),
-    }
-}
-
-pub(crate) fn pinned_stage_device(
-    pinned_gpu: Option<&crate::runtime::StartupPinnedGpuTarget>,
-) -> Option<StageDevice> {
-    pinned_gpu.map(|gpu| StageDevice {
-        backend_device: gpu.backend_device.clone(),
-        stable_id: Some(gpu.stable_id.clone()),
-        index: Some(gpu.index),
-        vram_bytes: Some(gpu.vram_bytes),
-    })
 }
 
 #[cfg(test)]

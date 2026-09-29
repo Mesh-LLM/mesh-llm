@@ -15,7 +15,7 @@ pub use auto::{AutoDecision, is_auto_eligible, score_mesh, smart_auto};
 pub use contracts::{DEFAULT_RELAYS, DiscoveredMesh, MeshListing};
 pub use discovery::{MeshFilter, discover};
 pub use keys::{load_or_create_keys, rotate_keys};
-pub use model_packs::{auto_model_pack, default_models_for_vram};
+pub use model_packs::default_models_for_vram;
 pub use publish::{
     PublishLoopConfig, PublishStateUpdate, Publisher, publish_loop, publish_watchdog,
 };

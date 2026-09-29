@@ -93,6 +93,7 @@ DEFAULT_HOST = DEFAULT_ENDPOINT.hostname or "127.0.0.1"
 DEFAULT_PORT = DEFAULT_ENDPOINT.port or 80
 MANAGEMENT_HOST = "127.0.0.1"
 MANAGEMENT_PORT = 3131
+MANAGEMENT_RUNTIME_URL = f"http://{MANAGEMENT_HOST}:{MANAGEMENT_PORT}/api/runtime"
 FORBIDDEN_STARTUP_OPTIONS = (
     "--ctx-size",
     "--generation-concurrency",
@@ -108,6 +109,73 @@ COLORS = (
     "#ea580c",
     "#0891b2",
 )
+
+
+# Progress reporting. A certified run takes hours, and every other progress
+# line below is emitted when something *finishes*: without these, a job log
+# shows nothing between startup and the final artifact, or between two
+# cohorts, so a saturated server and a stalled request look the same.
+PROGRESS_PREFIX = "[replay]"
+HEARTBEAT_SECONDS = 30.0
+
+
+def progress(message: str) -> None:
+    """Report harness progress on stdout, immediately."""
+    print(f"{PROGRESS_PREFIX} {message}", flush=True)
+
+
+class InFlightHeartbeat:
+    """Print a heartbeat for as long as one request is in flight.
+
+    A probe that is progressing and a probe that is stuck are otherwise
+    identical in the log until the request timeout fires, which can be 15
+    minutes later. The timer is a daemon thread, so it adds no work to the
+    request path and cannot hold the process open.
+    """
+
+    def __init__(self, label: str, interval: float = HEARTBEAT_SECONDS) -> None:
+        self._label = label
+        self._interval = interval
+        self._started = time.monotonic()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._beat, daemon=True)
+        self._thread.start()
+
+    def _beat(self) -> None:
+        while not self._stop.wait(self._interval):
+            progress(
+                f"{self._label} still in flight after "
+                f"{time.monotonic() - self._started:.0f}s"
+            )
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+
+def expected_probe_count(cohorts: Mapping[str, Sequence[dict[str, Any]]]) -> int:
+    """Formatted turns the long-context preflight will probe, before it runs."""
+    return sum(
+        assistant_turn_count(trajectory)
+        for trajectories in cohorts.values()
+        for trajectory in trajectories
+    )
+
+
+def probe_progress_line(
+    cohort: str, index: int, total: int, probe: Mapping[str, Any]
+) -> str:
+    """One line per completed context probe: identity, size, cost, outcome."""
+    outcome = probe.get("error") or f"ok finish={probe.get('finish_reason')}"
+    return (
+        f"context preflight cohort {cohort} probe {index}/{total} "
+        f"{probe.get('request_id')} prompt_tokens={probe.get('prompt_tokens')} "
+        f"elapsed={probe.get('elapsed_seconds', 0.0):.1f}s {outcome}"
+    )
 
 
 @dataclass(frozen=True)
@@ -733,7 +801,7 @@ def wait_for_runtime_context(
     timeout: float,
     process: Optional[subprocess.Popen[bytes]] = None,
 ) -> tuple[dict[str, Any], int]:
-    """Wait until the management projection identifies the serving model's stages."""
+    """Wait until the management projection reports one ready local model."""
     deadline = time.monotonic() + timeout
     last_error = "runtime stages not ready"
     while time.monotonic() < deadline:
@@ -744,17 +812,19 @@ def wait_for_runtime_context(
             )
         try:
             with urllib.request.urlopen(
-                "http://127.0.0.1:3131/api/runtime", timeout=30
+                MANAGEMENT_RUNTIME_URL, timeout=30
             ) as response:
                 document = json.load(response)
-            stages = document.get("stages", [])
-            model_ids = {stage.get("model_id") for stage in stages}
-            if stages and len(model_ids) == 1:
+            models = document.get("models", [])
+            contexts = [model.get("context_length") for model in models]
+            if len(models) == 1 and all(type(value) is int for value in contexts):
                 return document, runtime_context(document, required)
             last_error = (
-                "runtime projection has no stages"
-                if not stages
-                else f"runtime projection identifies {len(model_ids)} models"
+                "runtime projection has no local models"
+                if not models
+                else "runtime projection has no effective context"
+                if len(models) == 1
+                else f"runtime projection identifies {len(models)} models"
             )
         except (OSError, json.JSONDecodeError) as error:
             last_error = str(error)
@@ -762,6 +832,30 @@ def wait_for_runtime_context(
     raise TimeoutError(
         f"runtime metadata did not become ready after {timeout}s: {last_error}"
     )
+
+
+def verify_pinned_model(model: str | Path, expected_sha256: Optional[str]) -> Path:
+    """Verify the exact local GGUF before any server is allowed to measure it."""
+    if not expected_sha256:
+        raise ValueError("long-context qualification requires a model SHA-256")
+    path = Path(model).resolve()
+    if not path.is_file():
+        raise ValueError(f"pinned model is not a local file: {path}")
+    actual = sha256(path)
+    if actual != expected_sha256:
+        raise ValueError(
+            f"model SHA-256 mismatch: {actual} != {expected_sha256}"
+        )
+    return path
+
+
+def pin_run_model(args: argparse.Namespace) -> Optional[str]:
+    """Resolve the verified model once and carry that identity through the run."""
+    if not getattr(args, "minimum_context_tokens", 0):
+        return None
+    path = verify_pinned_model(args.model, args.expected_model_sha256)
+    args.model = str(path)
+    return args.expected_model_sha256
 
 
 def percentile(values: Sequence[float], fraction: float) -> Optional[float]:
@@ -838,6 +932,10 @@ def stream_request(
     finish_reason: str | None = None
     saw_done = False
     connection = http.client.HTTPConnection(DEFAULT_HOST, DEFAULT_PORT, timeout=timeout)
+    heartbeat = InFlightHeartbeat(
+        f"request {request_id} (prompt_tokens_unknown, timeout {timeout:.0f}s)"
+    )
+    heartbeat.start()
     payload = {
         "prompt_cache_key": metadata.get("session_id", request_id),
         "model": model_id,
@@ -943,6 +1041,7 @@ def stream_request(
             "error": f"{type(error).__name__}: {error}",
         }
     finally:
+        heartbeat.stop()
         connection.close()
     if not saw_done:
         return {
@@ -1290,6 +1389,10 @@ def run_trajectory_cell(
     write_request_records(raw_path, requests, concurrency)
     completeness = complete_sessions(trajectories, requests)
     summary = summarize_requests(requests, concurrency)
+    progress(
+        f"cell concurrency={concurrency} replay complete: {len(requests)} requests "
+        f"across {len(trajectories)} sessions"
+    )
     framework_counts: dict[str, int] = {}
     for trajectory in trajectories:
         framework = trajectory["agent_framework"]
@@ -1662,6 +1765,7 @@ def preflight_long_context(args, build, cohorts, output):
     process = None
     result = {"passed": False, "cohorts": {}}
     try:
+        verify_pinned_model(args.model, args.expected_model_sha256)
         process, _ = start_server(
             build, args.model, state, target / "mesh.log", args.hf_home
         )
@@ -1670,17 +1774,12 @@ def preflight_long_context(args, build, cohorts, output):
             args.minimum_context_tokens, args.startup_timeout, process
         )
         write_json(target / "runtime.json", runtime)
-        if not args.expected_model_sha256 or any(
-            stage.get("source_model_sha256") != args.expected_model_sha256
-            for stage in runtime["stages"]
-        ):
-            raise ValueError("runtime model digest does not match the pinned GGUF")
         spec = importlib.util.spec_from_file_location(
             "replay_gguf", REPO / "scripts/skippy-llama-parity.py"
         )
         gguf = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(gguf)
-        model_path = Path(runtime["stages"][0]["source_model_path"])
+        model_path = Path(args.model).resolve()
         metadata = gguf.gguf_metadata(model_path)
         architecture = metadata.get("general.architecture")
         native_context = metadata.get(f"{architecture}.context_length")
@@ -1696,12 +1795,32 @@ def preflight_long_context(args, build, cohorts, output):
         }
         result["started_at"] = utc_now()
         preflight_started = time.monotonic()
+        sessions = sum(len(items) for items in cohorts.values())
+        expected_probes = expected_probe_count(cohorts)
+        progress(
+            f"context preflight started: {len(cohorts)} cohorts, {sessions} sessions, "
+            f"{expected_probes} one-token probes, "
+            f"{args.request_timeout:.0f}s request timeout each"
+        )
         for name, trajectories in cohorts.items():
             probes = []
             path = target / f"{name}-probes.jsonl"
             path.write_text("")
+            cohort_probes = sum(
+                assistant_turn_count(trajectory) for trajectory in trajectories
+            )
+            progress(
+                f"context preflight cohort {name} started: "
+                f"{len(trajectories)} sessions, {cohort_probes} probes"
+            )
+            probe_index = 0
 
             def preserve(probe):
+                nonlocal probe_index
+                probe_index += 1
+                progress(
+                    probe_progress_line(name, probe_index, cohort_probes, probe)
+                )
                 with path.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(probe, sort_keys=True) + "\n")
 
@@ -1726,6 +1845,10 @@ def preflight_long_context(args, build, cohorts, output):
             )
             result["cohorts"][name] = evidence
             write_json(target / "eligibility.json", result)
+            progress(
+                f"context preflight cohort {name} complete: {len(probes)} probes, "
+                f"passed={evidence['passed']}"
+            )
         result["elapsed_seconds"] = time.monotonic() - preflight_started
         result["passed"] = all(item["passed"] for item in result["cohorts"].values())
         if not result["passed"]:
@@ -1763,7 +1886,14 @@ def run_arm_pass(
     command = command_for_build(build, args.model)
     cells: list[dict[str, Any]] = []
     warmup: Optional[dict[str, Any]] = None
+    started_monotonic = time.monotonic()
+    progress(
+        f"pass {pass_index + 1} arm {label} starting: "
+        f"engine={build.get('engine', 'mesh')} commit={build['commit'][:12]}"
+    )
     try:
+        if args.minimum_context_tokens:
+            verify_pinned_model(args.model, args.expected_model_sha256)
         process, command = start_server(
             build, args.model, state_dir, log_path, args.hf_home
         )
@@ -1773,11 +1903,6 @@ def run_arm_pass(
                 args.minimum_context_tokens, args.startup_timeout, process
             )
             write_json(pass_dir / "runtime.json", current_runtime)
-            if any(
-                stage.get("source_model_sha256") != args.expected_model_sha256
-                for stage in current_runtime["stages"]
-            ):
-                raise ValueError("measured runtime differs from the qualified model")
         warmup = run_warmup(
             trajectories=cohorts["warmup"],
             model_id=model_id,
@@ -1787,12 +1912,17 @@ def run_arm_pass(
             raw_path=pass_dir / "warmup-requests.jsonl",
         )
         write_json(pass_dir / "warmup.json", warmup)
+        progress(f"pass {pass_index + 1} arm {label} warm-up complete")
         concurrency_values = (
             args.concurrency
             if pass_index % 2 == 0
             else list(reversed(args.concurrency))
         )
         for concurrency in concurrency_values:
+            progress(
+                f"pass {pass_index + 1} arm {label} cell concurrency={concurrency} "
+                f"started: {len(cohorts[str(concurrency)])} sessions"
+            )
             cell = run_trajectory_cell(
                 trajectories=cohorts[str(concurrency)],
                 model_id=model_id,
@@ -1804,6 +1934,12 @@ def run_arm_pass(
             )
             cells.append(cell)
             write_json(pass_dir / f"c-{concurrency}.json", cell)
+            progress(
+                f"pass {pass_index + 1} arm {label} cell concurrency={concurrency} "
+                f"complete: {cell['requests']} requests, "
+                f"{cell['successful_requests']} ok, "
+                f"{len(cell['completeness']['problems'])} completeness problems"
+            )
     finally:
         try:
             if process is not None:
@@ -1862,6 +1998,10 @@ def run_arm_pass(
             problems.extend(cell["recurrent_state"]["problems"])
         cell["acceptance"] = {"passed": not problems, "problems": problems}
         write_json(pass_dir / f"c-{cell['concurrency']}.json", cell)
+    progress(
+        f"pass {pass_index + 1} arm {label} complete in "
+        f"{time.monotonic() - started_monotonic:.0f}s: {len(cells)} cells"
+    )
     return {
         "label": label,
         "ref": build["ref"],
@@ -2541,6 +2681,7 @@ def benchmark_plan(
     specs: Sequence[RefSpec],
     engine_config: EngineConfig | None = None,
     version_sha256_by_label: Mapping[str, str] | None = None,
+    verified_model_sha256: str | None = None,
 ) -> dict[str, Any]:
     config = load_competitive_config()
     dataset = config["thoughtworks"]["dataset"]
@@ -2551,6 +2692,7 @@ def benchmark_plan(
     return {
         "schema_version": 3,
         "repo": str(args.repo),
+        "verified_model_sha256": verified_model_sha256,
         "refs": [spec.__dict__ for spec in specs],
         "engine_config": (
             {
@@ -2647,6 +2789,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         args.trajectory_manifest = args.trajectory_manifest.resolve()
     if args.hf_home is not None:
         args.hf_home = args.hf_home.resolve()
+    verified_model_sha256 = pin_run_model(args)
     specs = parse_ref_specs(args.repo, args.ref)
     engine_config = external_config(args)
     external_builds = (
@@ -2659,6 +2802,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         specs,
         engine_config,
         version_sha256_by_label=verified_version_sha256_by_label(external_builds),
+        verified_model_sha256=verified_model_sha256,
     )
     order_specs = combined_specs(
         specs,

@@ -174,7 +174,6 @@
         "crates/skippy-coordinator/**",
         "crates/skippy-correctness/**",
         "crates/skippy-model-package/**",
-        "crates/skippy-prompt/**",
         "crates/skippy-runtime/**",
         "crates/skippy-server/**",
         "crates/skippy-topology/**"
@@ -339,6 +338,7 @@
       "domain": "native-abi",
       "patterns": [
         "skippy/third_party/llama.cpp/**",
+        "skippy/llama_cpp/**",
         "skippy/scripts/prepare-llama.sh",
         "skippy/scripts/build-llama.sh",
         "skippy/scripts/package-native-runtime.sh",
@@ -363,7 +363,6 @@
         "skippy/crates/skippy-coordinator/**",
         "skippy/crates/skippy-correctness/**",
         "skippy/crates/skippy-package-builder/**",
-        "skippy/crates/skippy-prompt/**",
         "skippy/crates/skippy-runtime/**",
         "skippy/crates/skippy-serving/**",
         "skippy/crates/skippy-cli/**",
@@ -516,7 +515,6 @@
         "skippy-coordinator",
         "skippy-correctness",
         "skippy-model-package",
-        "skippy-prompt",
         "skippy-runtime",
         "skippy-server",
         "skippy-topology"
@@ -558,7 +556,20 @@
     },
     {
       "domain": "platform-windows-cfg",
-      "crates": ["mesh-llm-plugin"]
+      "crates": [
+        "mesh-llm-analytics",
+        "mesh-llm-config",
+        "mesh-llm-events",
+        "mesh-llm-host-runtime",
+        "mesh-llm-identity",
+        "mesh-llm-payments",
+        "mesh-llm-plugin",
+        "mesh-llm-plugin-manager",
+        "mesh-llm-tui",
+        "mesh-llm-ui",
+        "mesh-llm-wallet",
+        "mesh-wallet-lexe"
+      ]
     },
     {
       "domain": "backend-cuda",
@@ -585,7 +596,8 @@
       "domain": "runtime-product",
       "crates": [
         "mesh-llm-transport",
-        "skippy-openai-frontend"
+        "skippy-openai-frontend",
+        "skippy-inference-api"
       ]
     },
     {
