@@ -2160,6 +2160,11 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
+        self.assertIn("sys.stdout.buffer.write(", action)
+        self.assertIn(
+            '("\\t".join((version, backend, host_path, runtime_path)) + "\\n").encode()',
+            action,
+        )
 
     @unittest.skipUnless(os.name == "posix", "requires Bash")
     def test_smoke_restore_extracts_composed_product(self) -> None:
