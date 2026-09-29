@@ -99,6 +99,11 @@ def main() -> int:
             # The smoke must consume only the runtime bundled beside the host.
             "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL": "http://127.0.0.1:9/native-runtimes.json",
         }
+        if args.device == "Vulkan0":
+            # The GPU smoke runner may lack vulkaninfo. Admit the explicit
+            # Vulkan selection; loading the model and golden reads still
+            # require a working Vulkan device and packaged runtime.
+            environment["MESH_LLM_VULKAN_AVAILABLE"] = "1"
         command = [
             str(binary),
             "--log-format",

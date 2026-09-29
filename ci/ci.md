@@ -615,6 +615,10 @@ runtime producers are not duplicated.
   read on Linux CPU/CUDA/Vulkan, conditional `gpu-amd` ROCm, macOS Metal, and
   Windows CPU. Each row consumes its composed backend product and selects the
   exact native device name, so an unavailable backend fails at model load.
+  The Vulkan Laya row enables the explicit Vulkan profile when the GPU runner
+  lacks `vulkaninfo`; model startup and golden reads still exercise the device.
+  Windows product restore passes LF-terminated manifest fields to Git Bash so
+  its runtime path does not retain Python's Windows carriage return.
   Windows CUDA/ROCm/Vulkan remain build-only because CI has no matching Windows
   accelerator runners. The core smoke restores the
   registry-derived dense SmolLM2-135M Q8 and recurrent IBM Granite 4.0 H 350M

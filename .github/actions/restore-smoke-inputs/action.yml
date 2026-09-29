@@ -240,12 +240,10 @@ runs:
             raise SystemExit(
                 "product must contain exactly its manifest-selected runtime"
             )
-        print(
-            version,
-            backend,
-            host_path,
-            runtime_path,
-            sep="\t",
+        # Git Bash does not remove the CR that Windows Python adds to print's
+        # final field. Write LF bytes so Bash receives the validated path.
+        sys.stdout.buffer.write(
+            ("\t".join((version, backend, host_path, runtime_path)) + "\n").encode()
         )
         PY
         )
