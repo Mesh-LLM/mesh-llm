@@ -16,6 +16,47 @@ use super::stale_discard::StaleDiscardRegistry;
 
 static BINARY_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+/// A framed-read source that can be abandoned while a frame is half read.
+///
+/// On Windows, shutting a socket down does not release a `recv` already
+/// pending on it, even on the exact handle the read uses, so a peer that sends
+/// a frame prefix and stalls would keep the reader thread, and `Drop`'s join,
+/// blocked. There the framed read runs under a short read timeout, and this
+/// retries each timed-out read until the reader is stopped. Retrying inside
+/// `read` keeps the bytes `read_exact` already has, so a frame that is only
+/// slow still arrives whole. On Unix no timeout is armed and the shutdown
+/// wakes the read as before.
+struct StoppableRead<'a> {
+    stream: &'a TcpStream,
+    stopped: &'a AtomicBool,
+    worker_control: &'a ConnectionWorkerControl,
+}
+
+impl io::Read for StoppableRead<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            match io::Read::read(&mut &*self.stream, buf) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    if self.stopped.load(Ordering::Acquire)
+                        || self.worker_control.is_shutting_down()
+                    {
+                        return Err(io::Error::new(
+                            io::ErrorKind::ConnectionAborted,
+                            "inbound message reader stopped mid-frame",
+                        ));
+                    }
+                }
+                other => return other,
+            }
+        }
+    }
+}
+
 pub(super) fn next_connection_session_id() -> u64 {
     BINARY_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
@@ -133,9 +174,19 @@ pub(super) fn spawn_message_reader(
                 }
             }
             // `&TcpStream` implements `Read`, so the framed read runs on the
-            // shared handle that `Drop` can shut down.
+            // shared handle that `Drop` can shut down. On Windows that shutdown
+            // does not release a read already pending on the handle, so the
+            // framed read keeps a short timeout and `StoppableRead` gives up
+            // once the reader is stopped.
+            #[cfg(windows)]
+            let _ = reader.set_read_timeout(Some(super::WORKER_SHUTDOWN_POLL));
+            let mut source = StoppableRead {
+                stream: &reader,
+                stopped: &reader_stopped,
+                worker_control: &worker_control,
+            };
             match read_stage_message_for_codec_policy(
-                &mut &*reader,
+                &mut source,
                 activation_width,
                 activation_codec,
                 activation_codec_policy,
@@ -380,6 +431,35 @@ mod tests {
             .expect("drop must interrupt a read stalled mid-frame, not block in join");
         dropper.join().expect("dropper thread");
         drop(peer);
+    }
+
+    /// The other side of the Windows read timeout: a frame that is only slow,
+    /// its body arriving well after that timeout, is still read whole.
+    #[test]
+    fn a_frame_slower_than_the_read_timeout_still_arrives_whole() {
+        let (mut peer, upstream) = connected_pair();
+        let registry = Arc::new(StaleDiscardRegistry::default());
+        let reader = spawn_test_message_reader(&upstream, 1, registry).expect("spawn");
+
+        let mut frame = Vec::new();
+        write_stage_message(
+            &mut frame,
+            &control_message(WireMessageKind::DiscardStaleWindows, vec![3, 9]),
+        )
+        .expect("encode");
+        peer.write_all(&frame[..4]).expect("write frame prefix");
+        peer.flush().expect("flush");
+        thread::sleep(super::super::WORKER_SHUTDOWN_POLL * 3);
+        peer.write_all(&frame[4..]).expect("write frame rest");
+        peer.flush().expect("flush");
+
+        let message = reader
+            .next(None, 0, 0)
+            .expect("a slow frame must not fail the read")
+            .expect("a message, not a closed connection");
+        assert_eq!(message.kind, WireMessageKind::DiscardStaleWindows);
+        assert_eq!((message.request_id, message.session_id), (7, 9));
+        drop(reader);
     }
 
     #[test]

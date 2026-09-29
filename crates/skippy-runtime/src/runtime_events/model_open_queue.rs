@@ -25,11 +25,22 @@ use skippy_ffi::{
 
 use super::{NativeEventRecord, OperationId, RUNTIME_EVENT_V1_ABI_VERSION};
 
+/// Most progress records one model open can emit. The native loader reports
+/// progress in per-mille steps and only when the step grows, so an open emits
+/// at most 1,000 of them, and a large model gets close: Qwen3-32B emits 344.
+const NATIVE_PROGRESS_STEPS: usize = 1_000;
+
+/// Room for an open's lifecycle facts (started, load phases, tokenizer and
+/// component readiness, finished or failed) on top of every progress step.
+/// Opens observed so far emit four.
+const LIFECYCLE_HEADROOM: usize = 64;
+
 /// Records one model-open queue holds before it starts dropping.
 ///
-/// A model open emits a handful of lifecycle facts plus bounded progress;
-/// this covers a full open without a consumer draining mid-call.
-pub const MODEL_OPEN_RECORD_CAPACITY: usize = 256;
+/// Sized to the native bound so a full open fits without a consumer draining
+/// mid-call: progress arrives in a burst of a few milliseconds, faster than
+/// any drain cadence, and the terminal record comes last.
+pub const MODEL_OPEN_RECORD_CAPACITY: usize = NATIVE_PROGRESS_STEPS + LIFECYCLE_HEADROOM;
 
 /// Bounded, lock-free record queue for one model-open operation.
 pub struct ModelOpenEventQueue {

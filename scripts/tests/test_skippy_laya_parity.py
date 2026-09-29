@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -56,6 +57,41 @@ class LayaParityTest(unittest.TestCase):
         joined = " ".join(failures["failures"])
         self.assertIn("choice", joined)
         self.assertIn("token ids", joined)
+
+    def test_cli_device_is_forwarded(self):
+        captured = {}
+
+        def fake_run(command, **kwargs):
+            captured["command"] = command
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps({"answers": {}, "per_question": {}}),
+                stderr="",
+            )
+
+        original = parity.subprocess.run
+        parity.subprocess.run = fake_run
+        try:
+            parity.read_via_cli("llama-laya-cli", "model.gguf", Path("fixture.json"), 1, "MTL0")
+        finally:
+            parity.subprocess.run = original
+        self.assertEqual(
+            ["llama-laya-cli", "-m", "model.gguf", "-f", "fixture.json", "--device", "MTL0"],
+            captured["command"],
+        )
+
+    def test_canary_prewarm_uses_the_pinned_fixture(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts" / "skippy-laya-smoke.sh"), "--prewarm"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("meshllm/laya-multilingual-F16-GGUF", result.stdout)
+        self.assertIn("bcc99560232b5a5c91cb14d46b9496acbeae2c43", result.stdout)
 
 
 if __name__ == "__main__":

@@ -90,9 +90,18 @@ def read_via_http(base_url: str, model: str, golden: dict[str, Any], timeout: fl
         return json.loads(response.read())["answers"]
 
 
-def read_via_cli(cli: str, gguf: str, fixture: Path, timeout: float) -> tuple[dict[str, Any], dict[str, list[int]]]:
+def read_via_cli(
+    cli: str,
+    gguf: str,
+    fixture: Path,
+    timeout: float,
+    device: str | None = None,
+) -> tuple[dict[str, Any], dict[str, list[int]]]:
+    command = [cli, "-m", gguf, "-f", str(fixture)]
+    if device:
+        command.extend(("--device", device))
     completed = subprocess.run(
-        [cli, "-m", gguf, "-f", str(fixture)], capture_output=True, text=True, timeout=timeout, check=True
+        command, capture_output=True, text=True, timeout=timeout, check=True
     )
     output = json.loads(completed.stdout)
     ids = {key: question["input_ids"] for key, question in output["per_question"].items()}
@@ -106,6 +115,7 @@ def main() -> int:
     parser.add_argument("--model", help="served model id or alias, with --base-url")
     parser.add_argument("--cli", help="llama-laya-cli binary")
     parser.add_argument("--gguf", help="converted laya-multilingual GGUF, with --cli")
+    parser.add_argument("--device", help="explicit llama-laya-cli backend device")
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
@@ -128,7 +138,7 @@ def main() -> int:
             if args.base_url:
                 answers, ids = read_via_http(args.base_url, args.model, golden, args.timeout), None
             else:
-                answers, ids = read_via_cli(args.cli, args.gguf, path, args.timeout)
+                answers, ids = read_via_cli(args.cli, args.gguf, path, args.timeout, args.device)
         except (urllib.error.URLError, subprocess.SubprocessError, OSError, KeyError, ValueError) as error:
             print(f"{path.stem}: could not read: {error}", file=sys.stderr)
             return 2
