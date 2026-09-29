@@ -6,6 +6,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -508,12 +509,12 @@ class AgenticReplayTest(unittest.TestCase):
                 str(root / "runtime-bundle"),
             )
 
-    def test_runtime_context_waits_for_stage_projection(self) -> None:
+    def test_runtime_context_waits_for_local_model_context(self) -> None:
         documents = [
-            {"stages": []},
+            {"models": [{"name": "model"}]},
             {
-                "stages": [
-                    {"model_id": "model", "ctx_size": 131072},
+                "models": [
+                    {"name": "model", "context_length": 131072},
                 ]
             },
         ]
@@ -530,7 +531,7 @@ class AgenticReplayTest(unittest.TestCase):
                 BENCH.urllib.request,
                 "urlopen",
                 side_effect=[Response(), Response()],
-            ),
+            ) as urlopen,
             mock.patch.object(BENCH.json, "load", side_effect=documents),
             mock.patch.object(BENCH.time, "monotonic", side_effect=[0, 0, 1]),
             mock.patch.object(BENCH.time, "sleep") as sleep,
@@ -539,10 +540,23 @@ class AgenticReplayTest(unittest.TestCase):
 
         self.assertEqual(document, documents[1])
         self.assertEqual(context, 131072)
+        self.assertEqual(
+            urlopen.call_args_list,
+            [
+                mock.call(
+                    "http://127.0.0.1:3131/api/runtime", timeout=30
+                ),
+                mock.call(
+                    "http://127.0.0.1:3131/api/runtime", timeout=30
+                ),
+            ],
+        )
         sleep.assert_called_once_with(1)
 
-    def test_runtime_context_rejects_stable_under_capacity_stage(self) -> None:
-        document = {"stages": [{"model_id": "model", "ctx_size": 32768}]}
+    def test_runtime_context_rejects_stable_under_capacity_model(self) -> None:
+        document = {
+            "models": [{"name": "model", "context_length": 32768}]
+        }
 
         class Response:
             def __enter__(self):
@@ -552,12 +566,57 @@ class AgenticReplayTest(unittest.TestCase):
                 return False
 
         with (
-            mock.patch.object(BENCH.urllib.request, "urlopen", return_value=Response()),
+            mock.patch.object(
+                BENCH.urllib.request, "urlopen", return_value=Response()
+            ) as urlopen,
             mock.patch.object(BENCH.json, "load", return_value=document),
             mock.patch.object(BENCH.time, "monotonic", side_effect=[0, 0]),
         ):
             with self.assertRaisesRegex(ValueError, "below required"):
                 BENCH.wait_for_runtime_context(131072, 10)
+
+        urlopen.assert_called_once_with(
+            "http://127.0.0.1:3131/api/runtime", timeout=30
+        )
+
+    def test_pinned_model_verification_rejects_wrong_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "model.gguf"
+            model.write_bytes(b"pinned model")
+
+            self.assertEqual(
+                BENCH.verify_pinned_model(model, BENCH.sha256(model)),
+                model.resolve(),
+            )
+            with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                BENCH.verify_pinned_model(model, "0" * 64)
+
+    def test_pinned_relative_model_is_used_for_launch_from_another_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "harness"
+            worktree = root / "build-worktree"
+            harness.mkdir()
+            worktree.mkdir()
+            model = harness / "model.gguf"
+            model.write_bytes(b"pinned model")
+            args = SimpleNamespace(
+                model="model.gguf",
+                expected_model_sha256=BENCH.sha256(model),
+                minimum_context_tokens=131072,
+            )
+
+            with contextlib.chdir(harness):
+                digest = BENCH.pin_run_model(args)
+
+            command = BENCH.command_for_build(
+                {"engine": "mesh", "binary": worktree / "mesh-llm"},
+                args.model,
+            )
+
+            self.assertEqual(digest, BENCH.sha256(model))
+            self.assertEqual(Path(args.model), model.resolve())
+            self.assertEqual(Path(command[3]), model.resolve())
 
     def test_runtime_evidence_collects_logs_without_copying_identity_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1333,6 +1392,34 @@ class AgenticReplayTest(unittest.TestCase):
         self.assertIsNone(plan["workload"]["measured_requests_per_arm_pass"])
         self.assertIsNone(plan["workload"]["measured_requests_total"])
 
+    def test_plan_identity_includes_verified_model_digest(self) -> None:
+        args = SimpleNamespace(
+            repo=REPO,
+            backend="metal",
+            model="/models/model.gguf",
+            passes=1,
+            source_dataset=["swe-smith-claude-3-7-sonnet"],
+            framework=["swe-agent"],
+            trajectories_per_framework=2,
+            min_isl=8192,
+            max_isl=65536,
+            min_turns=5,
+            concurrency=[1],
+            max_output_tokens=2048,
+            warmup_turns=4,
+            replay_mode="all",
+        )
+
+        first = BENCH.benchmark_plan(
+            args, self.specs(), verified_model_sha256="a" * 64
+        )
+        second = BENCH.benchmark_plan(
+            args, self.specs(), verified_model_sha256="b" * 64
+        )
+
+        self.assertEqual(first["verified_model_sha256"], "a" * 64)
+        self.assertNotEqual(BENCH.stable_hash(first), BENCH.stable_hash(second))
+
     def test_plan_counts_total_sessions_without_framework_multiplier(self):
         args = BENCH.parse_args(
             [
@@ -1613,6 +1700,109 @@ class AgenticReplayTest(unittest.TestCase):
             self.assertEqual(config.path, path.resolve())
             self.assertEqual(config.arms[0].label, "vllm")
 
+
+    def test_progress_reports_each_preflight_probe_with_its_cost_and_outcome(self):
+        self.assertEqual(
+            BENCH.probe_progress_line(
+                "8",
+                3,
+                16,
+                {
+                    "request_id": "session-1:0",
+                    "prompt_tokens": 131_072,
+                    "elapsed_seconds": 12.5,
+                    "finish_reason": "stop",
+                },
+            ),
+            "context preflight cohort 8 probe 3/16 session-1:0 "
+            "prompt_tokens=131072 elapsed=12.5s ok finish=stop",
+        )
+        failed = BENCH.probe_progress_line(
+            "8",
+            4,
+            16,
+            {
+                "request_id": "session-1:1",
+                "prompt_tokens": 131_100,
+                "elapsed_seconds": 900.0,
+                "error": "TimeoutError: timed out",
+            },
+        )
+        self.assertIn("context preflight cohort 8 probe 4/16 session-1:1", failed)
+        self.assertIn("elapsed=900.0s TimeoutError: timed out", failed)
+
+    def test_expected_probe_count_matches_the_probes_preflight_actually_issues(
+        self,
+    ):
+        trajectories = [
+            {
+                "session_id": "session-1",
+                "source_dataset": "source",
+                "agent_framework": "framework",
+                "recorded_model": "recorded-model",
+                "messages": [
+                    {"role": "user", "content": "task"},
+                    {"role": "assistant", "content": "first"},
+                    {"role": "user", "content": "observation"},
+                    {"role": "assistant", "content": "second"},
+                ],
+            },
+            {
+                "session_id": "session-2",
+                "source_dataset": "source",
+                "agent_framework": "framework",
+                "recorded_model": "recorded-model",
+                "messages": [{"role": "assistant", "content": "only"}],
+            },
+        ]
+        cohorts = {"8": trajectories}
+        original = BENCH.stream_request
+        BENCH.stream_request = lambda *args, **kwargs: {"request_id": args[0]}
+        try:
+            issued = [
+                probe
+                for trajectory in trajectories
+                for probe in BENCH.replay_trajectory(
+                    trajectory, "model", 1, 10, qualification_probe=True
+                )
+            ]
+        finally:
+            BENCH.stream_request = original
+
+        self.assertEqual(len(issued), 3)
+        self.assertEqual(len(issued), BENCH.expected_probe_count(cohorts))
+
+    def test_in_flight_heartbeat_reports_while_a_request_is_stalled(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            heartbeat = BENCH.InFlightHeartbeat("request session-1:0", interval=0.01)
+            heartbeat.start()
+            reported = False
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not reported:
+                reported = "still in flight" in output.getvalue()
+                time.sleep(0.01)
+            heartbeat.stop()
+
+        self.assertTrue(
+            reported,
+            f"heartbeat must report an in-flight request: {output.getvalue()!r}",
+        )
+        self.assertTrue(output.getvalue().startswith(BENCH.PROGRESS_PREFIX))
+
+    def test_a_completed_request_stops_its_heartbeat(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            heartbeat = BENCH.InFlightHeartbeat("request session-1:0", interval=0.01)
+            heartbeat.start()
+            heartbeat.stop()
+            time.sleep(0.05)
+
+        self.assertEqual(output.getvalue(), "")
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 if __name__ == "__main__":
     unittest.main()

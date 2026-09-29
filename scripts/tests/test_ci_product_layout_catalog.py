@@ -118,13 +118,19 @@ class ProductLayoutCatalogTests(unittest.TestCase):
         crate that matches no direct rule falls through to generic ``rust``
         routing and its runtime-product/artifact/smoke consumers are skipped.
 
-        The three exceptions below are the deferred catalog migration: those
+        The exceptions below are the deferred catalog migration: those
         successors have no ``crate_rules`` entry yet, and ``ci/ownership.yml``
         can only change on the protected branch (the PR plan step requires a PR's
         catalogs to match the protected copies byte for byte). This test locks
         that exact set, so adding a new successor or closing a gap without
         emptying this list fails until the catalog catches up. The successor may
         only ever lose coverage here, never gain it.
+
+        Four of them are host-runtime's extracted successors. ``platform-windows-cfg``
+        is consumed by a row that runs its crates literally, with no workspace
+        filter, so a successor can join that rule and the row only once the
+        extraction puts it in the workspace; until then the row keeps running it
+        through the legacy resolver, but no change to it selects the row.
         """
         reused_package_name = {("model-package", "skippy-model-package")}
         observed: dict[str, tuple[str, ...]] = {}
@@ -146,9 +152,13 @@ class ProductLayoutCatalogTests(unittest.TestCase):
         self.assertEqual(
             observed,
             {
-                "skippy-hf-hub": ("model-download",),
+                "mesh-llm-control-api": ("platform-windows-cfg",),
+                "mesh-llm-membership": ("platform-windows-cfg",),
+                "mesh-llm-skippy-adapter": ("platform-windows-cfg",),
+                "mesh-llm-transport": ("platform-windows-cfg",),
                 "skippy-api": ("split-serving",),
                 "skippy-events": ("split-serving",),
+                "skippy-hf-hub": ("model-download",),
             },
         )
 
