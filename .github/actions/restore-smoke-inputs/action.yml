@@ -95,17 +95,17 @@ runs:
         fi
 
         extract_root="$(mktemp -d)"
-        trap 'rm -rf -- "$extract_root"' EXIT
+        manifest_fields="$(mktemp)"
+        trap 'rm -rf -- "$extract_root" "$manifest_fields"' EXIT
         python3 scripts/safe-extract-tar.py "$archive" "$extract_root"
 
         product_manifest="$extract_root/product-manifest.json"
         test -s "$product_manifest"
-        IFS=$'\t' read -r version backend host_path runtime_path < <(
-          python3 - \
-            "$product_manifest" \
-            "$extract_root" \
-            "${{ inputs.binary_name }}" \
-            "${{ inputs.expected_backend }}" <<'PY'
+        python3 - \
+          "$product_manifest" \
+          "$extract_root" \
+          "${{ inputs.binary_name }}" \
+          "${{ inputs.expected_backend }}" > "$manifest_fields" <<'PY'
         import json
         from pathlib import Path, PurePosixPath
         import re
@@ -246,7 +246,7 @@ runs:
             ("\t".join((version, backend, host_path, runtime_path)) + "\n").encode()
         )
         PY
-        )
+        IFS=$'\t' read -r version backend host_path runtime_path < "$manifest_fields"
         scripts/verify-native-runtime-package.sh "$extract_root/$runtime_path"
         python3 scripts/compose-product-bundle.py \
           --bundle "$extract_root" \
