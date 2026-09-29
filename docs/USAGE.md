@@ -1055,6 +1055,60 @@ a request-local proposer and standalone strategy. See
 [Suffix N-gram Proposer](skippy/SUFFIX_NGRAM_PROPOSER.md) for the lookup
 contract, telemetry, and benchmark requirements.
 
+### Run-ahead admission
+
+`verify_window_pipeline_depth` admits a fixed number of verify windows. Setting
+`verify_window_runahead_tokens` instead admits by speculative-token budget: the
+scheduler keeps dispatching while in-flight speculative tokens stay under the
+budget, bounded by the native checkpoint-retention limit of 64 windows. `0` keeps
+fixed-depth admission.
+
+```toml
+[models.speculative]
+strategy = "ngram-suffix"
+ngram_proposer = "suffix"
+ngram_min = 5
+ngram_max = 32
+ngram_max_proposal_tokens = 48
+verify_window_max_tokens = 32
+verify_window_runahead_tokens = 96
+```
+
+Run-ahead also enables stale-tail cancellation: on divergence the driver sends a
+discard range so buffered stale windows are answered without executing. Fixed
+depth pays that recovery cost instead, which is why a deeper fixed depth can
+measure *slower* than a shallower one.
+
+Command line: `--speculative-verify-window-runahead-tokens 96`.
+
+### Falling back to a draft model on an N-gram miss
+
+A proposer miss otherwise costs a full round trip per token, which dominates
+freeform text on high-latency links. `ngram_fallback = "draft"` proposes from the
+configured draft model when the N-gram proposer has no candidates.
+
+```toml
+[models.speculative]
+strategy = "ngram-suffix"
+ngram_proposer = "suffix"
+ngram_min = 5
+ngram_max = 32
+draft_model = "…"
+ngram_fallback = "draft"
+verify_window_pipeline_depth = 2
+```
+
+It requires an N-gram proposer, a configured draft model, and pipeline depth
+greater than one — the serial draft loop is authoritative at depth 1. Each of
+those is rejected at validation rather than starting cleanly with a fallback that
+never fires. `none` is the default.
+
+Command line: `--speculative-ngram-fallback draft`.
+
+Both settings are workload-sensitive. The N-gram proposers pay off on
+input-grounded output and can be a net loss on freeform prose, so measure the
+target workload rather than assuming an uplift.
+
 For package-authoring rules, see
 [Layer Package Repositories](specs/layer-package-repos.md#generation-defaults).
 For the wire shape of the `generation.speculative_decoding` manifest field, see
