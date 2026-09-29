@@ -308,7 +308,10 @@ mod tests {
             ("--speculative-ngram-max-proposal-tokens", "48"),
             ("--speculative-extension-max-tokens", "8"),
             ("--speculative-native-mtp-reject-cooldown-tokens", "16"),
-            ("--speculative-native-mtp-suppress-cooldown-draft-limit", "2"),
+            (
+                "--speculative-native-mtp-suppress-cooldown-draft-limit",
+                "2",
+            ),
             ("--speculative-verify-window-min-tokens", "4"),
             ("--speculative-verify-window-max-tokens", "32"),
             ("--speculative-verify-window-pipeline-depth", "3"),
@@ -351,7 +354,11 @@ mod tests {
             );
             assert_eq!(
                 args.normalized,
-                vec![OsString::from("mesh-llm"), OsString::from(flag), OsString::from("--auto")]
+                vec![
+                    OsString::from("mesh-llm"),
+                    OsString::from(flag),
+                    OsString::from("--auto")
+                ]
             );
         }
     }
