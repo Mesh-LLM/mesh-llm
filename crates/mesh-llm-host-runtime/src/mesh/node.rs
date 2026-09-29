@@ -13,7 +13,7 @@ use startup::{
     advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime, startup_secret_key,
     wait_for_endpoint_online,
 };
-pub(crate) use startup::{default_plugin_event_source, startup_transport_config};
+pub(crate) use startup::{stamp_plugin_event_source, startup_transport_config};
 
 /// Upper bound on how long shutdown waits for one iroh endpoint to close.
 ///

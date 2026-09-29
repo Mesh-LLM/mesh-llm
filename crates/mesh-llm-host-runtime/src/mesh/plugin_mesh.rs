@@ -1,5 +1,5 @@
 use super::*;
-use crate::mesh::node::default_plugin_event_source;
+use crate::mesh::node::stamp_plugin_event_source;
 
 const PLUGIN_FRAME_PREFIX_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const PLUGIN_FRAME_BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -55,7 +55,7 @@ impl Node {
                 {
                     return Ok(());
                 }
-                default_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
+                stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
                 let frame = crate::plugin::proto::MeshChannelFrame {
                     plugin_id,
                     message_id: new_plugin_message_id(&message.source_peer_id),
@@ -76,7 +76,7 @@ impl Node {
                 {
                     return Ok(());
                 }
-                default_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
+                stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
                 let frame = crate::plugin::proto::MeshBulkFrame {
                     plugin_id,
                     message_id: new_plugin_message_id(&message.source_peer_id),
@@ -269,7 +269,7 @@ impl Node {
 
     pub(crate) async fn handle_plugin_channel_stream(
         &self,
-        _remote: EndpointId,
+        remote: EndpointId,
         mut send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
     ) -> Result<()> {
@@ -287,6 +287,20 @@ impl Node {
         let Some(message) = frame.message.clone() else {
             return Ok(());
         };
+        // `source_peer_id` arrives from the wire and no frame carries an origin
+        // signature yet, so a value that is not the sending peer is an
+        // unauthenticated claim. Record it; enforcement lands with plugin frame
+        // origin signing.
+        if !message.source_peer_id.is_empty()
+            && message.source_peer_id != endpoint_id_hex(remote)
+        {
+            tracing::warn!(
+                claimed_source = %message.source_peer_id,
+                sending_peer = %remote.fmt_short(),
+                channel = %message.channel,
+                "Plugin frame claims a source_peer_id that is not the sending peer"
+            );
+        }
         let local_peer_id = endpoint_id_hex(self.endpoint.id());
         let deliver_local =
             message.target_peer_id.is_empty() || message.target_peer_id == local_peer_id;
@@ -322,7 +336,7 @@ impl Node {
 
     pub(crate) async fn handle_plugin_bulk_stream(
         &self,
-        _remote: EndpointId,
+        remote: EndpointId,
         mut send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
     ) -> Result<()> {
@@ -340,6 +354,20 @@ impl Node {
         let Some(message) = frame.message.clone() else {
             return Ok(());
         };
+        // `source_peer_id` arrives from the wire and no frame carries an origin
+        // signature yet, so a value that is not the sending peer is an
+        // unauthenticated claim. Record it; enforcement lands with plugin frame
+        // origin signing.
+        if !message.source_peer_id.is_empty()
+            && message.source_peer_id != endpoint_id_hex(remote)
+        {
+            tracing::warn!(
+                claimed_source = %message.source_peer_id,
+                sending_peer = %remote.fmt_short(),
+                channel = %message.channel,
+                "Plugin frame claims a source_peer_id that is not the sending peer"
+            );
+        }
         let local_peer_id = endpoint_id_hex(self.endpoint.id());
         let deliver_local =
             message.target_peer_id.is_empty() || message.target_peer_id == local_peer_id;
