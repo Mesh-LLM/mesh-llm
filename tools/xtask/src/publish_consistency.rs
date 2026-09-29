@@ -397,8 +397,58 @@ fn check_publish_catalog_sync(repo_root: &Path) -> DynResult<()> {
     )
 }
 
+/// Expected `publish_crates_preflight` job body. The `{runner_image}` placeholder is
+/// replaced with the catalog's `release-crates-preflight` image reference, so a
+/// runner-image refresh cannot silently stale this expectation the way a hardcoded
+/// digest can.
+const PUBLISH_CRATES_PREFLIGHT_JOB: &str = "publish_crates_preflight:
+          name: Preflight crates.io packages
+          needs: [metadata, publish]
+          if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
+          runs-on: ubuntu-24.04
+          container:
+            image: {runner_image}
+          env:
+            SCCACHE_GHA_ENABLED: \"false\"
+            SCCACHE_MULTILEVEL_CHAIN: disk
+          steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                ref: ${{ needs.metadata.outputs.tag }}
+                persist-credentials: false
+            - name: Trust checkout directory
+              run: git config --global --add safe.directory \"$GITHUB_WORKSPACE\"
+            - uses: ./.github/actions/configure-sccache-gha
+              with:
+                allow_depot_remote_cache: \"false\"
+                allow_native_github_cache: \"false\"
+            - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+            - name: Prepare dispatched release version
+              if: github.event_name == 'workflow_dispatch'
+              env:
+                RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+              run: scripts/release-version.sh \"$RELEASE_TAG\"";
+
+/// Resolves the container image reference a consumer role is bound to in
+/// `ci/runner-images.json`, so checks compare against the catalog of record rather
+/// than a literal that a runner-image refresh can leave behind.
+fn runner_image_reference(catalog: &serde_json::Value, role_id: &str) -> DynResult<String> {
+    let image_id = catalog["consumer_roles"][role_id]["image_id"]
+        .as_str()
+        .ok_or_else(|| {
+            format!("ci/runner-images.json: missing consumer_roles.{role_id}.image_id")
+        })?;
+    let reference = catalog["images"][image_id]["reference"]
+        .as_str()
+        .ok_or_else(|| format!("ci/runner-images.json: missing images.{image_id}.reference"))?;
+    Ok(reference.to_owned())
+}
+
 fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     let release = fs::read_to_string(repo_root.join("RELEASE.md"))?;
+    let runner_images: serde_json::Value = serde_json::from_str(&fs::read_to_string(
+        repo_root.join("ci/runner-images.json"),
+    )?)?;
     let release_script = fs::read_to_string(repo_root.join("scripts/release.sh"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
     let quality_workflow =
@@ -462,33 +512,10 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     ensure_contains_normalized(
         &release_workflow,
-        "publish_crates_preflight:
-          name: Preflight crates.io packages
-          needs: [metadata, publish]
-          if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
-          runs-on: ubuntu-24.04
-          container:
-            image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
-          env:
-            SCCACHE_GHA_ENABLED: \"false\"
-            SCCACHE_MULTILEVEL_CHAIN: disk
-          steps:
-            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-              with:
-                ref: ${{ needs.metadata.outputs.tag }}
-                persist-credentials: false
-            - name: Trust checkout directory
-              run: git config --global --add safe.directory \"$GITHUB_WORKSPACE\"
-            - uses: ./.github/actions/configure-sccache-gha
-              with:
-                allow_depot_remote_cache: \"false\"
-                allow_native_github_cache: \"false\"
-            - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
-            - name: Prepare dispatched release version
-              if: github.event_name == 'workflow_dispatch'
-              env:
-                RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-              run: scripts/release-version.sh \"$RELEASE_TAG\"",
+        &PUBLISH_CRATES_PREFLIGHT_JOB.replace(
+            "{runner_image}",
+            &runner_image_reference(&runner_images, "release-crates-preflight")?,
+        ),
         "release workflow publish preflight dispatched version preparation",
     )?;
     ensure_contains(
