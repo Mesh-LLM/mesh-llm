@@ -311,6 +311,34 @@ describe('createMeshConnectionAdapter', () => {
     ])
   })
 
+  it('carries the client nonce the frontend echoed', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        createSSEStream([
+          'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
+          'data: {"type":"response.completed","response":{"id":"resp-1","model":"backend-model","usage":{"input_tokens":1,"output_tokens":1}}}\n',
+          'data: [DONE]\n'
+        ]),
+        {
+          status: 200,
+          headers: {
+            'x-capsule-client-nonce': '14af686f-86e5-4baa-bb6b-d3dd3c81cfec'
+          }
+        }
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const metadata: ChatResponseMetadata[] = []
+    const adapter = createMeshConnectionAdapter('model-a', (nextMetadata) => metadata.push(nextMetadata))
+
+    for await (const chunk of adapter.connect(createMessages(), undefined, undefined)) void chunk
+
+    expect(metadata).toHaveLength(1)
+    expect(metadata[0]).toMatchObject({
+      clientNonce: '14af686f-86e5-4baa-bb6b-d3dd3c81cfec'
+    })
+  })
+
   it('backfills missing completion timings from the local response stream clock', async () => {
     vi.spyOn(performance, 'now').mockReturnValueOnce(1000).mockReturnValueOnce(1749).mockReturnValueOnce(3277)
     const fetchMock = vi
@@ -343,6 +371,7 @@ describe('createMeshConnectionAdapter', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
+      headers: new Headers(),
       body: createExplodingReaderStream(
         'data: {"type":"response.output_text.delta","delta":"Partial"}\n',
         'stream exploded'
@@ -392,6 +421,7 @@ describe('createMeshConnectionAdapter', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
+      headers: new Headers(),
       body: stream
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -418,6 +448,7 @@ describe('createMeshConnectionAdapter', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
+      headers: new Headers(),
       body: stream
     })
     vi.stubGlobal('fetch', fetchMock)

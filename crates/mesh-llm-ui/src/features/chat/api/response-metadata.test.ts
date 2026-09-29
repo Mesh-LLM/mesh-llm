@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  clientNonceFromHeaders,
+  extractThreadMessageMetadata,
   mergeThreadMessageMetadata,
   responseMetadataToThreadMessage,
   threadMessageMetadataEquals
@@ -77,5 +79,26 @@ describe('threadMessageMetadataEquals', () => {
 
     expect(threadMessageMetadataEquals(base, { ...base })).toBe(true)
     expect(threadMessageMetadataEquals(base, { ...base, tokens: '44 tok' })).toBe(false)
+  })
+})
+
+describe('clientNonceFromHeaders', () => {
+  it('keeps the client nonce the serving frontend echoed', () => {
+    const headers = new Headers({ 'x-capsule-client-nonce': '14af686f-86e5-4baa-bb6b-d3dd3c81cfec' })
+    expect(clientNonceFromHeaders(headers)).toEqual({ clientNonce: '14af686f-86e5-4baa-bb6b-d3dd3c81cfec' })
+  })
+
+  it('leaves an absent or empty header absent', () => {
+    expect(clientNonceFromHeaders(new Headers())).toEqual({})
+    expect(clientNonceFromHeaders(new Headers({ 'x-capsule-client-nonce': '  ' }))).toEqual({})
+  })
+
+  it('the nonce is one of the fields a thread message keeps (extract -> merge round trip)', () => {
+    const metadata = responseMetadataToThreadMessage({ messageId: 'm1', clientNonce: 'nonce-1' })
+    const message: ThreadMessage = { id: 'm1', messageRole: 'assistant', timestamp: 't', body: 'b', ...metadata }
+    const kept = extractThreadMessageMetadata(message)
+    expect(kept).toMatchObject({ clientNonce: 'nonce-1' })
+    const reloaded = mergeThreadMessageMetadata({ id: 'm1', messageRole: 'assistant', timestamp: 't', body: 'b' }, kept)
+    expect(reloaded.clientNonce).toBe('nonce-1')
   })
 })
