@@ -314,8 +314,8 @@ mod tests {
             ("--speculative-verify-window-pipeline-depth", "3"),
             ("--speculative-verify-window-runahead-tokens", "96"),
         ] {
-            let args =
-                normalize_runtime_surface_args(["mesh-llm", flag, value, "serve", "--auto"]);
+            let argv = ["mesh-llm", flag, value, "serve", "--auto"];
+            let args = normalize_runtime_surface_args(argv);
             assert_eq!(
                 args.explicit_surface,
                 Some(RuntimeSurface::Serve),
@@ -342,7 +342,8 @@ mod tests {
             "--speculative-native-mtp-suppress-cooldown-drafts",
             "--speculative-native-mtp-allow-cooldown-drafts",
         ] {
-            let args = normalize_runtime_surface_args(["mesh-llm", flag, "serve", "--auto"]);
+            let argv = ["mesh-llm", flag, "serve", "--auto"];
+            let args = normalize_runtime_surface_args(argv);
             assert_eq!(
                 args.explicit_surface,
                 Some(RuntimeSurface::Serve),
@@ -350,11 +351,7 @@ mod tests {
             );
             assert_eq!(
                 args.normalized,
-                vec![
-                    OsString::from("mesh-llm"),
-                    OsString::from(flag),
-                    OsString::from("--auto"),
-                ]
+                vec![OsString::from("mesh-llm"), OsString::from(flag), OsString::from("--auto")]
             );
         }
     }
