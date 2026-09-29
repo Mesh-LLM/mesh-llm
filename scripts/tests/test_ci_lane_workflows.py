@@ -487,6 +487,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
         self.assertIn("MESH_ROCM_INFERENCE_RUNNER_ENABLED", linux)
         self.assertIn("gpu-amd", linux)
         self.assertIn("gpu-nvidia", linux)
+        vulkan_job = linux.split("\n  laya_vulkan:", 1)[1].split(
+            "\n  laya_rocm:", 1
+        )[0]
+        self.assertIn("MESH_LLM_VULKAN_AVAILABLE: '1'", vulkan_job)
 
         macos = self.workflow("ci-macos-product-smoke-slice.yml")
         self.assertIn("macos-metal", macos)
