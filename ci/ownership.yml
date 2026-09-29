@@ -560,6 +560,7 @@
         "mesh-llm-analytics",
         "mesh-llm-config",
         "mesh-llm-events",
+        "mesh-llm-host-runtime",
         "mesh-llm-identity",
         "mesh-llm-payments",
         "mesh-llm-plugin",
