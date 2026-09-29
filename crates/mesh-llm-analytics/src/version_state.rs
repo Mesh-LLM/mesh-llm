@@ -143,10 +143,17 @@ pub fn begin(dir: &Path, current: &str) -> PendingVersion {
         return PendingVersion::inert();
     }
 
-    let previous = fs::read_to_string(dir.join(VERSION_FILE))
-        .ok()
-        .map(|raw| raw.trim().to_owned())
-        .filter(|recorded| !recorded.is_empty());
+    let previous = match read_record(dir) {
+        Ok(record) => record,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => {
+            // The record exists but cannot be read (permissions, IO). That is
+            // not "no record": committing here would rename a new record over
+            // the unreadable one and destroy the previous version without the
+            // upgrade ever being reported. Step aside instead.
+            return PendingVersion::inert();
+        }
+    };
 
     let transition = match &previous {
         None => VersionTransition::Fresh,
@@ -168,6 +175,16 @@ pub fn begin(dir: &Path, current: &str) -> PendingVersion {
         target,
         _lock: Some(lock),
     }
+}
+
+/// Read the recorded version, or `None` when there is no record yet.
+///
+/// Separates "no record" (a missing or empty file) from "cannot read the
+/// record" so the caller can decline to overwrite a record it could not read.
+fn read_record(dir: &Path) -> std::io::Result<Option<String>> {
+    let raw = fs::read_to_string(dir.join(VERSION_FILE))?;
+    let recorded = raw.trim();
+    Ok((!recorded.is_empty()).then(|| recorded.to_owned()))
 }
 
 /// Replace the record by renaming a fully written temporary file over it.

@@ -122,6 +122,42 @@ fn an_unwritable_directory_never_reports_a_change() {
     let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o700));
 }
 
+/// A record that exists but cannot be read must not be treated as "no record".
+/// It would then be silently overwritten — the previous version destroyed, with
+/// no `install_updated` ever emitted, since the next run would read the new
+/// record as `Unchanged`.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_record_is_not_overwritten() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().expect("tempdir");
+    let record_path = dir.path().join(VERSION_FILE);
+    fs::write(&record_path, "0.76.2\n").expect("seed");
+    fs::set_permissions(&record_path, fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    if fs::read_to_string(&record_path).is_ok() {
+        // Root ignores the mode bits, so the record is readable after all and
+        // there is nothing unreadable about it to assert on here.
+        let _ = fs::set_permissions(&record_path, fs::Permissions::from_mode(0o600));
+        return;
+    }
+
+    let pending = begin(dir.path(), "0.77.0");
+    assert_eq!(pending.transition(), &VersionTransition::Fresh);
+    assert!(
+        !pending.commit(),
+        "an unreadable record must not be reported as a change"
+    );
+
+    // The record survived, so the upgrade is still there to be observed.
+    let _ = fs::set_permissions(&record_path, fs::Permissions::from_mode(0o600));
+    assert_eq!(
+        fs::read_to_string(&record_path).expect("record survived"),
+        "0.76.2\n"
+    );
+}
+
 /// A successful commit says so, so the caller knows it may report.
 #[test]
 fn a_successful_commit_reports_success() {
