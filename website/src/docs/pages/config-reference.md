@@ -250,6 +250,7 @@ per-tensor device overrides. None of these has a schema key yet.
 |---|---|---|---|---|---|---|
 | `throughput.parallel` | integer | `1` | both | model reload | wired | `--parallel` |
 | `throughput.continuous_batching` | bool-or-`auto` | `auto` | both | model reload | wired (disabled mode limits scheduler iterations to one active request; enabled/auto uses all configured lanes) | none |
+| `throughput.pipeline_decode_groups` | integer | `1` (no grouping); a count of at least 1 | both | model reload | wired (splits each coalesced decode wave into this many groups so a pipelined split keeps more than one batch in flight; `SKIPPY_PIPELINE_DECODE_GROUPS` still overrides it for benchmarking) | none |
 | `throughput.threads` | integer | `0` = auto from host CPU count | both | model reload | wired | `--threads` |
 | `throughput.threads_batch` | integer | `0` = defaults to `threads` | both | model reload | wired | none |
 | `throughput.priority` | integer-or-string | unsupported | both | not applicable | rejected (no model-scoped scheduling or OS-priority consumer) | none |

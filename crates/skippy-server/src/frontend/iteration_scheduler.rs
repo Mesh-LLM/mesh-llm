@@ -9,7 +9,7 @@ use self::cache_runtime::{
 };
 use self::direct_batch::{
     PIPELINE_DECODE_GROUPS_ENV, direct_coalesce_target, effective_scheduler_lane_count,
-    pipeline_decode_groups_from_value, pipeline_group_batch_size, scheduler_safe_mode_from_value,
+    pipeline_group_batch_size, resolve_pipeline_decode_groups, scheduler_safe_mode_from_value,
     should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
@@ -406,6 +406,7 @@ impl IterationScheduler {
         config: &StageConfig,
         queue_capacity: usize,
         continuous_batching: bool,
+        planned_pipeline_decode_groups: Option<usize>,
         telemetry: Telemetry,
     ) -> OpenAiResult<Self> {
         let (lane_count, kv_pool_tokens, compute_meter) = {
@@ -419,8 +420,10 @@ impl IterationScheduler {
             )
         };
         let safe_mode = scheduler_safe_mode_from_value(env::var(SAFE_MODE_ENV).ok().as_deref());
-        let pipeline_decode_groups =
-            pipeline_decode_groups_from_value(env::var(PIPELINE_DECODE_GROUPS_ENV).ok().as_deref());
+        let pipeline_decode_groups = resolve_pipeline_decode_groups(
+            env::var(PIPELINE_DECODE_GROUPS_ENV).ok().as_deref(),
+            planned_pipeline_decode_groups,
+        );
         let scheduler_lane_count =
             effective_scheduler_lane_count(lane_count, safe_mode, continuous_batching);
         let scheduler_config = build_scheduler_config(

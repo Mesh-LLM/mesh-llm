@@ -132,7 +132,7 @@ pub(super) fn local_openai_backend(
         crate::telemetry::TelemetryLevel::Off,
     );
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
+        IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())?;
     Ok(StageOpenAiBackend {
         runtime,
         workload: Default::default(),
