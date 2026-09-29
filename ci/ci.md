@@ -612,11 +612,14 @@ runtime producers are not duplicated.
   `ci-windows-product-smoke-slice.yml` — platform-local callers of the core,
   scripted, model-download, and Laya smokes. The registry-pinned Laya
   Multilingual F16 GGUF runs startup plus every upstream golden `/systemone`
-  read on Linux CPU/CUDA/Vulkan, conditional `gpu-amd` ROCm, macOS Metal, and
+  read on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm,
+  macOS Metal, and
   Windows CPU. Each row consumes its composed backend product and selects the
   exact native device name, so an unavailable backend fails at model load.
-  The Vulkan Laya row enables the explicit Vulkan profile when the GPU runner
-  lacks `vulkaninfo`; model startup and golden reads still exercise the device.
+  The Vulkan Laya row requires `MESH_VULKAN_INFERENCE_RUNNER_ENABLED=true`
+  after `verify-vulkan-device` passes in a live runner pod. It enables the
+  explicit Vulkan profile when that runner lacks `vulkaninfo`; model startup
+  and golden reads still exercise the device.
   Windows product restore passes LF-terminated manifest fields to Git Bash so
   its runtime path does not retain Python's Windows carriage return.
   Windows CUDA/ROCm/Vulkan remain build-only because CI has no matching Windows
@@ -821,7 +824,8 @@ release row no longer disables sccache.
 Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
 use Depot while the repository-wide gate and time-bounded cache-risk exception
 in `ci/DEPOT_PR_RISK_EXCEPTION.md` are active. The
-other current exception is uncredentialed CUDA or Vulkan smoke on the approved
+other current exception is uncredentialed CUDA smoke, plus Vulkan smoke when
+`MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly `true`, on the approved
 ephemeral `gpu-nvidia` scale set described above. A future ROCm row uses the
 repository-scoped `gpu-amd` role only when
 `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`. PRs use the same protected reusable

@@ -271,8 +271,10 @@ owning source, and update the inventory and topology in the same change.
   GitHub-hosted fallback. Tags, feature refs, external callers, credentialed
   smokes, macOS, Windows, and hardware-qualified GPU work stay on their
   explicitly approved provider until separately migrated.
-- Product-integration inference maps CUDA and Vulkan to the approved ephemeral
-  `gpu-nvidia` runner because that host provides both backends. ROCm maps only
+- Product-integration inference maps CUDA to the approved ephemeral
+  `gpu-nvidia` runner. Vulkan uses that runner only after its live pod passes
+  `verify-vulkan-device` and `MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly
+  `true`; an unset or different value skips the Vulkan Laya smoke. ROCm maps only
   to the repository-scoped `gpu-amd` role and must remain skipped unless
   `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; an unset or different
   value means no approved ROCm inference runner is available.

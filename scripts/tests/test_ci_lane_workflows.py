@@ -485,6 +485,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn(runtime_id, linux)
                 self.assertIn(f"device: {device}", linux)
         self.assertIn("MESH_ROCM_INFERENCE_RUNNER_ENABLED", linux)
+        self.assertIn("vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true'", linux)
         self.assertIn("gpu-amd", linux)
         self.assertIn("gpu-nvidia", linux)
 
