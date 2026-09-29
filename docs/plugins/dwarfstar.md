@@ -5,8 +5,10 @@
 others) as an alternative engine to Mesh's built-in runtime. Mesh starts and
 stops the bundled engine; clients use Mesh's normal OpenAI-compatible API.
 
-**Early access: Apple Silicon, Mesh v0.77.0+.** Models are large (DeepSeek V4
-Flash Q2 is ~81 GiB); pick one that fits your Mac's memory.
+**Early access: Apple Silicon, Mesh v0.77.0+.** Models are large: the DeepSeek
+V4 Flash Q2 weights are ~81 GiB — that much disk for the first download, and
+that much free unified memory to serve them, because the engine maps the
+weights into memory. Pick a model that fits both.
 
 ## Setup
 
