@@ -614,7 +614,14 @@ runtime producers are not duplicated.
   Multilingual F16 GGUF runs startup plus every upstream golden `/systemone`
   read on Linux CPU/CUDA/Vulkan, conditional `gpu-amd` ROCm, macOS Metal, and
   Windows CPU. Each row consumes its composed backend product and selects the
-  exact native device name, so an unavailable backend fails at model load.
+  exact native device name, so an unavailable backend fails at model load. The
+  Linux Vulkan row also needs a live pod that exposes a Vulkan device, which the
+  `gpu-nvidia` scale set has never provided: the resolver rejects the only
+  composed candidate there, so that row failed on every main and PR run since it
+  landed while the sibling CUDA row passed on the same pod. It stays skipped
+  until a live runner pod passes `verify-vulkan-device` and
+  `MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is `true`, the same shape as the ROCm
+  runner gate.
   Windows CUDA/ROCm/Vulkan remain build-only because CI has no matching Windows
   accelerator runners. The core smoke restores the
   registry-derived dense SmolLM2-135M Q8 and recurrent IBM Granite 4.0 H 350M

@@ -249,6 +249,16 @@ runs:
         )
         PY
         )
+        # Python's text-mode stdout ends that line with CRLF on Windows, so the
+        # tab-split read leaves a trailing carriage return on the last field and
+        # every path built from it silently stops matching: `...-cpu\r` is not a
+        # directory. Strip the carriage return from every field before use, the
+        # same Windows shell-boundary normalization `to_shell_path` applies in
+        # scripts/ci-compose-product-input.sh.
+        version="${version%$'\r'}"
+        backend="${backend%$'\r'}"
+        host_path="${host_path%$'\r'}"
+        runtime_path="${runtime_path%$'\r'}"
         scripts/verify-native-runtime-package.sh "$extract_root/$runtime_path"
         python3 scripts/compose-product-bundle.py \
           --bundle "$extract_root" \

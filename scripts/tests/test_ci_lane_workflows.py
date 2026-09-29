@@ -485,6 +485,9 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn(runtime_id, linux)
                 self.assertIn(f"device: {device}", linux)
         self.assertIn("MESH_ROCM_INFERENCE_RUNNER_ENABLED", linux)
+        # The live Vulkan device gate mirrors the ROCm runner gate: the row is
+        # planned on every main run, so an ungated failure there is a red main.
+        self.assertIn("MESH_VULKAN_INFERENCE_RUNNER_ENABLED", linux)
         self.assertIn("gpu-amd", linux)
         self.assertIn("gpu-nvidia", linux)
 

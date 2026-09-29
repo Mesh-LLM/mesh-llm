@@ -1973,6 +1973,29 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn('archive_path="$product_dir.tar.gz"', script)
         self.assertIn('tar -C "$product_dir" -czf "$archive_path" .', script)
 
+    def test_restore_smoke_inputs_normalizes_windows_path_fields(self) -> None:
+        """The composed-product line must not carry Windows carriage returns.
+
+        Python's text-mode stdout writes CRLF on Windows, so the last field of
+        the tab-split read keeps the carriage return and every path built from
+        it silently stops matching (`...-cpu\\r` is not a directory). This was
+        the Windows Laya smoke failure mode, and it is the same Windows
+        shell-boundary normalization the product composer applies.
+        """
+        action = self.read_action("restore-smoke-inputs")
+        carriage_return = "%$" + "'" + "\\r" + "'"
+
+        self.assertIn(
+            "IFS=$'\\t' read -r version backend host_path runtime_path",
+            action,
+        )
+        for field in ("version", "backend", "host_path", "runtime_path"):
+            with self.subTest(field=field):
+                self.assertIn(
+                    f'{field}="${{{field}{carriage_return}}}"',
+                    action,
+                )
+
     def test_product_composer_normalizes_windows_shell_boundaries(self) -> None:
         script = COMPOSE_SCRIPT.read_text(encoding="utf-8")
 
