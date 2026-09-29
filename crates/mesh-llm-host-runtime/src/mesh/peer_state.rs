@@ -545,19 +545,6 @@ pub(crate) const DEPARTED_PEER_TRANSITIVE_BLOCK_TTL: std::time::Duration =
     std::time::Duration::from_secs(3600); // 1 hour
 pub(crate) const PEER_DOWN_REPORTER_COOLDOWN_SECS: u64 = 600; // 10 minutes
 
-/// Throttle state for plugin-frame warnings from one sending peer.
-///
-/// A remote can open a fresh stream for every frame, so one warning per frame
-/// is log I/O that peer can drive without bound; the cooldown in
-/// `Node::plugin_frame_warn_slot` bounds it and `suppressed` keeps the volume
-/// visible in the warning that is eventually emitted.
-pub(crate) struct PluginFrameWarnState {
-    /// When this peer's last warning was emitted.
-    pub(crate) last_warn_at: std::time::Instant,
-    /// Warnings folded into this peer's next emitted warning.
-    pub(crate) suppressed: u32,
-}
-
 pub(crate) struct MeshState {
     pub(crate) peers: HashMap<EndpointId, PeerInfo>,
     pub(crate) connections: HashMap<EndpointId, Connection>,
@@ -584,11 +571,6 @@ pub(crate) struct MeshState {
     /// Last accepted direct-path dial-back request per peer. This keeps path
     /// maintenance targeted even if a peer repeatedly asks us to reverse-dial.
     pub(crate) direct_path_request_last_at: HashMap<EndpointId, std::time::Instant>,
-    /// Last plugin-frame warning per sending peer, with the warnings folded
-    /// into the next one. Bounds the log I/O a peer can provoke by sending
-    /// frames whose claimed source is not the sending peer; see
-    /// `Node::plugin_frame_warn_slot`.
-    pub(crate) plugin_frame_warn: HashMap<EndpointId, PluginFrameWarnState>,
     pub(crate) seen_plugin_messages: HashMap<String, std::time::Instant>,
     pub(crate) seen_plugin_message_order: VecDeque<(std::time::Instant, String)>,
     /// Last policy-rejection status per peer — used to suppress duplicate log lines.
@@ -620,7 +602,6 @@ impl MeshState {
             departed_peers: HashMap::new(),
             peer_down_rejections: HashMap::new(),
             direct_path_request_last_at: HashMap::new(),
-            plugin_frame_warn: HashMap::new(),
             seen_plugin_messages: HashMap::new(),
             seen_plugin_message_order: VecDeque::new(),
             policy_rejected_peers: HashMap::new(),

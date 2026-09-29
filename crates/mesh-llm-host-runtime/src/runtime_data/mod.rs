@@ -55,8 +55,8 @@ pub(crate) mod tests {
     use super::{RuntimeLlamaEndpointStatus, RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot};
     use crate::api::RuntimeProcessPayload;
     use crate::api::status::{
-        LocalInstance, NodeState, RuntimeStatusPayload, StatusPayload, build_gpus,
-        build_ownership_payload,
+        LocalInstance, NodeState, PluginFrameTelemetryPayload, RuntimeStatusPayload, StatusPayload,
+        build_gpus, build_ownership_payload,
     };
     use crate::inference::election;
     use crate::mesh::{MeshCatalogEntry, NodeRole, PeerInfo};
@@ -491,6 +491,7 @@ pub(crate) mod tests {
             first_joined_mesh_ts: Some(123),
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
         };
 
