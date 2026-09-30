@@ -708,9 +708,9 @@ bash -c './target/debug/mesh-llm serve --model "..." --auto > /tmp/mesh.log 2>&1
 3. Kill ALL processes on ALL nodes — `pkill -9 -f mesh-llm`
 4. Verify clean — `ps -eo pid,args | grep -E 'mesh-llm' | grep -v grep` must be empty.
 5. Deploy bundle — scp + tar + codesign on remote nodes.
-6. On every macOS node, complete the `deploy-macos` skill's Local Network
-   privacy preflight for the exact signed identity and launch context. Clear any
-   blocking desktop alert before remote diagnosis.
+6. If macOS peers on the same LAN connect only via relay, or a desktop Local
+   Network alert appears, follow the `deploy-macos` Local Network troubleshooting
+   section before diagnosing iroh. It is not a routine preflight.
 7. Verify version — `mesh-llm --version` on every node.
 
 ### After starting nodes
