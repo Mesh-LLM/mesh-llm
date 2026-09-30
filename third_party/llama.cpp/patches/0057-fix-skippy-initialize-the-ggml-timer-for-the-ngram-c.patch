@@ -1,0 +1,34 @@
+From 6920ae947253c8be5872e7ef4e470fda9c206902 Mon Sep 17 00:00:00 2001
+From: Virgile Pourchet <pourchetvirgile@gmail.com>
+Date: Wed, 30 Sep 2026 20:34:15 +0200
+Subject: [PATCH] fix(skippy): initialize the ggml timer for the ngram cache
+
+skippy_ngram_cache_update() calls common_ngram_cache_update(), which reads
+ggml_time_ms(). On Windows that divides by a timer frequency only
+ggml_time_init() sets, so a process that uses the ngram cache before any
+model open or device query dies with STATUS_INTEGER_DIVIDE_BY_ZERO.
+Initialize the timer when the cache is created: ggml_time_init() is
+once-only on Windows and a no-op elsewhere.
+---
+ common/ngram-cache.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/common/ngram-cache.cpp b/common/ngram-cache.cpp
+index bc3ab811b..6d97b2dd8 100644
+--- a/common/ngram-cache.cpp
++++ b/common/ngram-cache.cpp
+@@ -80,6 +80,11 @@ extern "C" SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_create(
+     if (out_cache == nullptr || !skippy_ngram_cache_valid_config(ngram_min, ngram_max)) {
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
++    // common_ngram_cache_update() reads ggml_time_ms(), which on Windows divides
++    // by a timer frequency that only ggml_time_init() sets. This cache can run
++    // before any model open or device query has initialized ggml, so initialize
++    // the timer here: it is once-only on Windows and a no-op elsewhere.
++    ggml_time_init();
+     *out_cache = new skippy_ngram_cache{ ngram_min, ngram_max, {}, {}, {}, {} };
+     return SKIPPY_STATUS_OK;
+ }
+-- 
+2.45.1.windows.1
+
