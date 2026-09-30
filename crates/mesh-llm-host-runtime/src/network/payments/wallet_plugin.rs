@@ -33,10 +33,26 @@ use tokio::sync::Mutex;
 
 use crate::plugin::PluginManager;
 
-/// Sub-directory under the payment directory handed to the wallet plugin.
-/// Kept as `lexe/` for on-disk compatibility with wallets provisioned by the
-/// in-process implementation this replaces.
-const WALLET_SUBDIR: &str = "lexe";
+/// Parent of every wallet plugin's data directory.
+const WALLETS_SUBDIR: &str = "wallets";
+
+/// The directory handed to `plugin` as its wallet state directory.
+///
+/// Each plugin gets its own, so switching wallets never hands one backend
+/// another's seed or credentials. Plugin names come from operator config, so
+/// anything that could escape the payments directory is refused.
+fn wallet_directory(payment_directory: &Path, plugin: &str) -> Result<PathBuf> {
+    let safe = !plugin.is_empty()
+        && plugin != "."
+        && plugin != ".."
+        && plugin
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !safe {
+        bail!("wallet plugin name '{plugin}' cannot be used as a directory name");
+    }
+    Ok(payment_directory.join(WALLETS_SUBDIR).join(plugin))
+}
 
 /// Where the factory finds the plugin manager. It is resolved at `open()`
 /// time, not construction time: the payment service can be created during
@@ -54,20 +70,6 @@ impl PluginWalletFactory {
         Self { plugin_manager }
     }
 
-    fn wallet_directory(payment_directory: &Path) -> PathBuf {
-        payment_directory.join(WALLET_SUBDIR)
-    }
-
-    /// A wallet provisioned by the in-process implementation this replaces
-    /// has a seed but no pin yet. It must still count as a wallet: paid
-    /// routing and the legacy-bridge ingress guard both key off this, and
-    /// reading "no wallet" after an upgrade would silently disable both.
-    fn legacy_wallet_present(payment_directory: &Path) -> bool {
-        Self::wallet_directory(payment_directory)
-            .join("seedphrase.txt")
-            .is_file()
-    }
-
     async fn plugin_manager(&self) -> Result<PluginManager> {
         self.plugin_manager.lock().await.clone().ok_or_else(|| {
             anyhow!("plugin manager is not running yet; retry once startup completes")
@@ -82,7 +84,6 @@ impl WalletFactory for PluginWalletFactory {
         // `open` refuses to proceed and reports why, which is safer than
         // pretending there is nothing to protect.
         !matches!(WalletPin::load(payment_directory), Ok(None))
-            || Self::legacy_wallet_present(payment_directory)
     }
 
     async fn open(&self, payment_directory: &Path) -> Result<Arc<dyn WalletProvider>> {
@@ -95,9 +96,9 @@ impl WalletFactory for PluginWalletFactory {
             })?;
         let wallet = PluginWalletProvider {
             plugin_manager,
+            wallet_directory: wallet_directory(payment_directory, &provider.plugin_name)?,
             plugin_name: provider.plugin_name,
             payment_directory: payment_directory.to_path_buf(),
-            wallet_directory: Self::wallet_directory(payment_directory),
             open_lock: Mutex::new(()),
         };
         wallet.open_and_pin().await?;

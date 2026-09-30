@@ -144,7 +144,8 @@ impl PluginRpcBridge for Arc<FakeWalletPlugin> {
                 ops::OPEN => {
                     let open: OpenRequest = serde_json::from_value(request.arguments).unwrap();
                     assert!(
-                        std::path::Path::new(&open.directory).ends_with("lexe"),
+                        std::path::Path::new(&open.directory)
+                            .ends_with(format!("wallets/{PLUGIN}")),
                         "{}",
                         open.directory
                     );
@@ -466,18 +467,23 @@ async fn invoice_expiry_is_sent_by_the_host_and_claiming_survives_the_wire() {
     assert_eq!(observed, arrived);
 }
 
-#[tokio::test]
-async fn legacy_seed_without_pin_counts_as_provisioned() {
-    let manager = PluginManager::for_test_bridge(&[], Arc::new(FakeWalletPlugin::new("x")));
-    let factory = PluginWalletFactory::new(slot(manager));
-    let dir = tempfile::tempdir().unwrap();
-    assert!(!factory.is_provisioned(dir.path()));
-    std::fs::create_dir_all(dir.path().join("lexe")).unwrap();
-    std::fs::write(dir.path().join("lexe/seedphrase.txt"), b"words").unwrap();
-    assert!(
-        factory.is_provisioned(dir.path()),
-        "an upgraded node with a pre-plugin wallet must not read as wallet-less"
+#[test]
+fn each_plugin_gets_its_own_directory() {
+    let payments = std::path::Path::new("/payments");
+    assert_eq!(
+        super::wallet_directory(payments, "wallet-lexe").unwrap(),
+        payments.join("wallets").join("wallet-lexe")
     );
+    assert_eq!(
+        super::wallet_directory(payments, "wallet-nwc").unwrap(),
+        payments.join("wallets").join("wallet-nwc")
+    );
+    for unsafe_name in ["", ".", "..", "../x", "a/b", "a\\b"] {
+        assert!(
+            super::wallet_directory(payments, unsafe_name).is_err(),
+            "{unsafe_name}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -225,13 +225,14 @@ seeing a paid provider does not provision one. The directory contains:
   approvals, reservations, invoices, payment outcomes, receivables and output
   delivery counts. SQLite uses WAL and synchronous FULL.
 - `wallet-provider.json`: the host-owned wallet pin described above.
-- `lexe/`: handed to the wallet plugin as its data directory. For
-  `mesh-wallet-lexe` it holds `seedphrase.txt`, recovery material persisted
-  before wallet provisioning with the SDK's exclusive creation and private file
-  permissions; the plugin re-asserts mode 0600 on the seed at every open. Unix
-  payment and wallet directories are mode 0700. Protect and back up this
-  directory; no seed export UI or encrypted-at-rest application keystore is
-  added by this PoC.
+- `wallets/<plugin>/`: handed to each wallet plugin as its data directory, so
+  switching wallets never exposes one backend's credentials to another. For
+  `mesh-wallet-lexe` (`wallets/wallet-lexe/`) it holds `seedphrase.txt`,
+  recovery material persisted before wallet provisioning with the SDK's
+  exclusive creation and private file permissions; the plugin re-asserts mode
+  0600 on the seed at every open. Unix payment and wallet directories are mode
+  0700. Protect and back up this directory; no seed export UI or
+  encrypted-at-rest application keystore is added by this PoC.
 - Process locks: one service per directory in the host, one wallet writer per
   directory in the plugin. CLI commands use the running node's API. When the
   node is not running, ledger-only commands (policy, pricing, pending) fall back
