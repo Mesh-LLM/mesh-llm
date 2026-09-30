@@ -73,29 +73,66 @@ payment hash, and asynchronous `wait_for_payment(payment_hash)` completion.
 `mesh-llm-payments` re-exports it under `mesh_llm_payments::wallet` and drives
 it from the ledger; neither crate links a wallet SDK.
 
-Concrete wallets are plugin processes that advertise the `wallet.v1`
-capability (`mesh-llm-wallet::contract`). The host resolves the provider by
-capability, never by plugin name. `mesh-wallet-lexe` is the built-in
-implementation, compiled out by default (opt in with `MESH_LLM_WALLET_LEXE=1`): Lexe 0.1.23 on mainnet, built into the `mesh-llm` executable
-behind the `wallet-lexe` cargo feature and served blobstore-style as
-`mesh-llm --plugin wallet-lexe`, auto-registered as the optional built-in
-plugin `wallet-lexe` when compiled in. No second binary ships. The process starts with the host
-but is idle until the first wallet operation; starting it never provisions or
-contacts a wallet. `[[plugin]] name = "wallet-lexe" enabled = false` turns it
-off at runtime (only `enabled` may be set on a built-in); a different
-`wallet.v1` implementation is configured as an ordinary external plugin under
-its own name, with the built-in disabled. A build without the `wallet-lexe`
-feature (the default, including release builds) accepts the same stanza and registers nothing.
-NWC, BOLT12 and multi-provider selection are deferred.
+### Build defaults are not spending policy
 
-Feature layering, so embedding applications never link a wallet SDK:
-`payments` (host-runtime, `mesh-llm`, `mesh-llm-embedded-runtime`,
-`mesh-llm-sdk`) is the ledger, gates and the `wallet.v1` adapter; `wallet-lexe`
-(host-runtime, `mesh-llm`) is the built-in Lexe implementation and the only
-feature that links Lexe. The shipped CLI enables `payments` only; `wallet-lexe` is opt-in via
-`MESH_LLM_WALLET_LEXE=1`, so release builds need an external `wallet.v1` plugin. `mesh-llm-sdk` with
-`serving` compiles neither; with `serving,payments` it compiles the ledger and
-adapter and expects an external `wallet.v1` plugin.
+Default CLI builds, including releases, include **payment infrastructure**
+(`payments`): the ledger, budgets, payment gates, recovery and the generic
+`wallet.v1` adapter. They exclude the **built-in Lexe wallet** (`wallet-lexe`)
+and its SDK. Compiling the infrastructure does not enable spending or supply
+an operational wallet.
+
+Without an available `wallet.v1` provider, wallet-dependent operations cannot
+create invoices or settle payments. Free inference does not require a wallet.
+A fresh profile uses `free_only` spending policy; installing or funding a wallet
+does not enable automatic paid inference. Paying requires a usable wallet and
+explicit spending authorization/budget. Charging for serving is configured
+separately through model pricing. Existing policy, pricing, ledger and wallet
+files are not reset by changing build features; pending settlement still needs
+the original wallet to become available again.
+
+Concrete wallets are plugin processes that advertise `wallet.v1`
+(`mesh-llm-wallet::contract`). The host resolves the provider by capability,
+never by plugin name. An installed external wallet uses the ordinary plugin
+loader; no Lexe-specific client API is required. Enable only one wallet provider.
+Existing wallet pins bind both plugin name and wallet identity: replacing a
+provider with a differently named plugin is not an automatic migration, even
+when it uses the same seed. Do not delete the pin to bypass that check.
+
+The retained `mesh-wallet-lexe` implementation uses Lexe 0.1.24 on mainnet.
+To compile it back into the host:
+
+```sh
+MESH_LLM_WALLET_LEXE=1 just build
+# Or a release build:
+MESH_LLM_WALLET_LEXE=1 just release-build
+```
+
+When compiled in, the host launches it as a separate child using
+`mesh-llm --plugin wallet-lexe`, like blobstore; this mode needs no separate
+wallet executable. It is registered as the optional built-in `wallet-lexe`.
+The process starts with the host but remains idle until the first wallet
+operation; startup alone never provisions or contacts a wallet. To disable
+this compiled-in provider at runtime:
+
+```toml
+[[plugin]]
+name = "wallet-lexe"
+enabled = false
+```
+
+Only `enabled` may be set on a built-in. A default build without `wallet-lexe`
+accepts this stanza but registers no built-in wallet. A runtime setting cannot
+restore code excluded at build time. NWC, BOLT12 and multi-provider selection
+are deferred.
+
+Feature layering: `payments` (host-runtime, `mesh-llm`,
+`mesh-llm-embedded-runtime`, `mesh-llm-sdk`) supplies the ledger, gates and
+`wallet.v1` adapter; `wallet-lexe` (host-runtime, `mesh-llm`) adds the built-in
+Lexe implementation. `mesh-llm-sdk` with `serving` compiles neither; with
+`serving,payments` it compiles payment infrastructure and expects an external
+wallet provider. Embedding apps that explicitly enable `wallet-lexe` still
+compile Lexe regardless of the CLI defaults. Apps can keep using the generic
+wallet operator API while distributing/installing a wallet plugin separately.
 
 Ownership: the host keeps token metering, output gating (host atomics on the
 decode thread) and response bytes, and talks to the payments engine only
