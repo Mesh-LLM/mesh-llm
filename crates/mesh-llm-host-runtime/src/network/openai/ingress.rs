@@ -2170,6 +2170,11 @@ async fn handle_api_proxy_connection(
     ingress_type: crate::runtime::IngressType,
 ) {
     let source_addr = tcp_stream.peer_addr().ok();
+    // The election snapshot predates any block the operator set since; drop
+    // blocked peers here so every route below sees the same filtered set.
+    let targets = node
+        .peer_blocks
+        .without_blocked(&targets, crate::network::peer_blocks::now_ms());
     let plugin_manager = node.plugin_manager().await;
     match proxy::read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,

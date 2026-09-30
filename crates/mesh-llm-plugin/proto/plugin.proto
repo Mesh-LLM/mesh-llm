@@ -30,6 +30,8 @@ message Envelope {
     InvokeServiceResponse invoke_service_response = 29;
     OpenMeshStreamRequest open_mesh_stream_request = 30;
     OpenMeshStreamResponse open_mesh_stream_response = 31;
+    PeerBlockRequest peer_block_request = 32;
+    PeerBlockResponse peer_block_response = 33;
   }
 }
 
@@ -645,6 +647,35 @@ message StreamError {
   string stream_id = 1;
   int32 code = 2;
   string message = 3;
+}
+
+// A plugin asks this node to stop (or resume) routing to a peer. The block is
+// local to this node, names the plugin as its requester, and a plugin can
+// re-block or undo only a block it requested. `reason_json` is opaque to the host: stored and
+// echoed on the `routing.choice.v1` event, never read.
+message PeerBlockRequest {
+  enum Change {
+    CHANGE_UNSPECIFIED = 0;
+    BLOCK = 1;
+    UNBLOCK = 2;
+  }
+  enum Length {
+    LENGTH_UNSPECIFIED = 0;
+    SEVEN_DAYS = 1;
+    UNTIL_UNDONE = 2;
+  }
+
+  Change change = 1;
+  // The peer's endpoint id, 64 hex characters.
+  string peer_id = 2;
+  // Required for BLOCK; ignored for UNBLOCK.
+  Length length = 3;
+  optional string reason_json = 4;
+}
+
+message PeerBlockResponse {
+  // The applied change, as published on `routing.choice.v1`.
+  string choice_json = 1;
 }
 
 message ErrorResponse {

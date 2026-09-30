@@ -1171,6 +1171,36 @@ These should use the generic plugin mesh transport rather than dedicated core st
 
 Core should not embed plugin-specific wire protocols in the main mesh transport when the behavior can live behind the generic plugin channel mechanism.
 
+## Peer Routing Blocks
+
+An operator can tell their own node to stop routing to a peer: `POST
+/api/peer-blocks` with `{ "peer": "<64-hex id>", "length": "seven_days" |
+"until_undone" }`, undone with `POST /api/peer-blocks/unblock`, listed with `GET
+/api/peer-blocks`. The routes are loopback-only. A block is local to this node:
+it is never gossiped or shared. While it holds, the router, the any-host
+fallback and consult-peer selection skip that peer; local targets are never
+affected.
+
+A plugin may request the same change with a `PeerBlockRequest`
+(`PluginContext::request_peer_block`). The host records the plugin as the
+requester (by the name the host knows the plugin connection by) and stores the
+plugin's optional `reason_json` without reading it. A plugin can re-block or
+undo only a block it requested, so it can never take over or lift the
+operator's block or another plugin's; the operator can change or undo any
+block. By design a plugin can block any peer, including all of them; blocks
+stay local to this node and the operator can lift them.
+
+Every change is published once, as JSON, on the local channel
+`routing.choice.v1` to the plugins that declare it:
+
+```json
+{ "change": "block", "peer": "<64-hex id>", "at_ms": 0, "until_ms": 0,
+  "requested_by": "operator | plugin:<id>", "reason": {} }
+```
+
+`until_ms` and `reason` are omitted when absent. The host keeps no ranking, no
+history of changes, and no shared lists.
+
 ## What The Host Owns
 
 The host is responsible for:

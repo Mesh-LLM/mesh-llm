@@ -461,6 +461,7 @@ async fn make_test_node_with_requirements(
         config_state: Arc::new(tokio::sync::Mutex::new(
             crate::runtime::config_state::ConfigState::default(),
         )),
+        peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
         config_revision_tx: {
             let (tx, _rx) = tokio::sync::watch::channel(0u64);
             Arc::new(tx)

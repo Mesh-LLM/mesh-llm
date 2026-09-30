@@ -161,6 +161,33 @@ impl<'a> PluginContext<'a> {
         }
     }
 
+    /// Ask the host to stop (or resume) routing to a peer. The host applies
+    /// it as a local block requested by this plugin; see `PeerBlockRequest`.
+    pub async fn request_peer_block(
+        &mut self,
+        request: proto::PeerBlockRequest,
+    ) -> Result<proto::PeerBlockResponse> {
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut pending_guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
+
+        self.send_payload(
+            proto::envelope::Payload::PeerBlockRequest(request),
+            request_id,
+        )
+        .await?;
+
+        let response = rx.await??;
+        pending_guard.disarm();
+        match response.payload {
+            Some(proto::envelope::Payload::PeerBlockResponse(response)) => Ok(response),
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected peer block response"),
+        }
+    }
+
     pub async fn connect_mesh_stream(
         &mut self,
         request: proto::OpenMeshStreamRequest,
