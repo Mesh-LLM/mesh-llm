@@ -1619,6 +1619,14 @@ impl Node {
         *self.display_name.lock().await = Some(name);
     }
 
+    /// Removes the plugin manager from this node. The in-process payments
+    /// runner holds a `Node` clone, so a manager left installed forms a
+    /// Node -> manager -> runner -> Node cycle that keeps the payments engine
+    /// (and its `service.lock`) alive after an embedded stop.
+    pub async fn take_plugin_manager(&self) -> Option<crate::plugin::PluginManager> {
+        self.plugin_manager.lock().await.take()
+    }
+
     pub async fn set_plugin_manager(&self, plugin_manager: crate::plugin::PluginManager) {
         let peers = {
             let state = self.state.lock().await;

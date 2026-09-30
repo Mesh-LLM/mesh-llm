@@ -193,6 +193,11 @@ fn write_throughput_fields(buffer: &mut Vec<u8>, throughput: &ThroughputConfig) 
         "continuous_batching",
         throughput.continuous_batching
     );
+    write_option!(
+        buffer,
+        "pipeline_decode_groups",
+        throughput.pipeline_decode_groups
+    );
     write_option!(buffer, "threads", throughput.threads);
     write_option!(buffer, "threads_batch", throughput.threads_batch);
     write_option!(buffer, "threads_http", throughput.threads_http);

@@ -468,6 +468,15 @@ fn runtime_defaults_presentation(rendered: &str) -> Option<SettingPresentation> 
             30,
         )
         .hint("segmented")),
+        "defaults.throughput.pipeline_decode_groups" => Some(sp(
+            "Pipeline decode groups",
+            "Split each decode wave into this many groups so a pipelined split keeps more \
+             than one batch in flight. 1 disables grouping.",
+            RUNTIME_CATEGORY,
+            32,
+        )
+        .unit("groups")
+        .hint("range")),
         "defaults.hardware.gpu_layers" => Some(sp(
             "GPU layers",
             "Set the GPU layer count, or use auto. The backend also accepts -1 to mean all layers.",

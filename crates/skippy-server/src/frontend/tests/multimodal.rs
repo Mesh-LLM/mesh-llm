@@ -530,8 +530,14 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         .context("create split smoke lane pool")?;
     let runtime = load_runtime(&stage0_config)?.context("load stage-0 smoke runtime")?;
     let ctx_size = usize::try_from(stage0_config.ctx_size).unwrap_or(usize::MAX);
-    let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &stage0_config, 1, true, telemetry.clone())?;
+    let iteration_scheduler = IterationScheduler::new(
+        runtime.clone(),
+        &stage0_config,
+        1,
+        true,
+        None,
+        telemetry.clone(),
+    )?;
     let backend = StageOpenAiBackend {
         runtime,
         workload: Default::default(),

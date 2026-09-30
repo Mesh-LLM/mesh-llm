@@ -411,6 +411,26 @@ impl SpeculativeNgramProposerCli {
     }
 }
 
+/// What to propose from when the N-gram proposer has no candidates.
+///
+/// `none` is spelled out rather than left implicit so a command line can switch
+/// the fallback back off when the config file or model defaults turned it on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SpeculativeNgramFallbackCli {
+    Draft,
+    #[value(name = "none")]
+    Off,
+}
+
+impl SpeculativeNgramFallbackCli {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Off => "none",
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "mesh-llm",
@@ -661,6 +681,16 @@ pub struct Cli {
     /// Number of in-flight pipelined verify windows.
     #[arg(long, hide = true)]
     pub speculative_verify_window_pipeline_depth: Option<u32>,
+
+    /// Admit pipelined verify windows by speculative-token budget instead of a
+    /// fixed depth. 0 keeps fixed-depth admission.
+    #[arg(long, hide = true)]
+    pub speculative_verify_window_runahead_tokens: Option<u32>,
+
+    /// Propose from the draft model when the N-gram proposer misses
+    /// (`draft` or `none`). Requires a draft model and pipeline depth > 1.
+    #[arg(long, hide = true, value_enum)]
+    pub speculative_ngram_fallback: Option<SpeculativeNgramFallbackCli>,
 
     /// Draft model for speculative decoding.
     #[arg(long, hide = true)]

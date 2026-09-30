@@ -538,6 +538,11 @@ pub struct ThroughputConfig {
     pub parallel: Option<usize>,
     #[serde(default)]
     pub continuous_batching: Option<BoolOrAuto>,
+    /// Split each coalesced decode wave into this many pipeline groups, so a
+    /// pipelined split keeps more than one batch in flight: group A computes on
+    /// one stage while group B computes on the next. `1` disables grouping.
+    #[serde(default)]
+    pub pipeline_decode_groups: Option<u32>,
     #[serde(default)]
     pub threads: Option<usize>,
     #[serde(default)]

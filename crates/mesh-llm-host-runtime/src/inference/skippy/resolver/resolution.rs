@@ -611,9 +611,19 @@ fn resolve_throughput_config(context: &ResolverContext<'_>) -> ResolvedThroughpu
             .and_then(|throughput| throughput.threads_batch),
     );
 
+    let pipeline_decode_groups = pick_owned(
+        context
+            .model_throughput
+            .and_then(|throughput| throughput.pipeline_decode_groups),
+        context
+            .global_throughput
+            .and_then(|throughput| throughput.pipeline_decode_groups),
+    );
+
     ResolvedThroughputConfig {
         parallel,
         continuous_batching,
+        pipeline_decode_groups,
         threads,
         threads_batch,
         tuning_profile: throughput.effective_profile,

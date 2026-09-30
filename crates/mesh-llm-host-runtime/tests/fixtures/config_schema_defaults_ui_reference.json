@@ -813,6 +813,13 @@
       }
     },
     {
+      "canonical_path": "defaults.throughput.pipeline_decode_groups",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.throughput.threads",
       "support": "supported",
       "source": {
