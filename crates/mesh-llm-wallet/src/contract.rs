@@ -12,9 +12,9 @@
 //! `wallet.v2`.
 //!
 //! The host, not the plugin, owns token metering, output gating, the ledger,
-//! budgets, settlement bookkeeping, invoice lifetimes and fee caps. The plugin
-//! only turns wallet intents into wallet facts: invoices, payments, balances
-//! and settlement observation.
+//! budgets, settlement bookkeeping, invoice lifetimes and fee headroom. The
+//! plugin only turns wallet intents into wallet facts: invoices, payments,
+//! balances and settlement observation.
 
 use serde::{Deserialize, Serialize};
 

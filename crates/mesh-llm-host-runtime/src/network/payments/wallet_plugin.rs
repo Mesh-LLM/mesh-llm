@@ -15,6 +15,11 @@
 //! 3. **Settlement waits carry no IPC deadline.** `wait_for_*` block on the
 //!    plugin for as long as the caller is willing to wait; the caller owns
 //!    cancellation by dropping the future.
+//! 4. **Fees count against the daily budget.** Each `pay` carries the fee
+//!    headroom the host authorized, and whatever fee the wallet reports is
+//!    recorded as spend. A wallet that cannot bound fees can exceed that
+//!    headroom, and so the daily budget and the request's cap; the overrun is
+//!    recorded after the fact, not prevented.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

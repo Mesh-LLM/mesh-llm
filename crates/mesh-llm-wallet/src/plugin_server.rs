@@ -206,7 +206,7 @@ pub fn wallet_operation_router<B: WalletBackend>(server: &Arc<WalletServer<B>>) 
         &mut router,
         server,
         ops::PAY,
-        "Pay an invoice within a fee cap.",
+        "Pay an invoice, keeping fees within the given headroom where the wallet can.",
         |s, req: PayRequest| async move {
             s.provider()
                 .await?

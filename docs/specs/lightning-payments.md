@@ -146,6 +146,18 @@ amount-less invoices. The host refuses amount-less `fund-wallet` invoices on a
 wallet that cannot make them. Plugins written before the field existed get the
 original contract's behavior: amount-less invoices.
 
+Every `wallet_pay` carries the fee headroom the host authorized
+(`max_total_msat`). A wallet that can bound routing fees must refuse a payment
+that would exceed it; one that cannot still pays. Either way the fee the wallet
+reports is recorded as spend. With a wallet that cannot bound fees, that fee can
+exceed the headroom, and the overrun is recorded after the fact, not prevented:
+
+- The day's spend can go past the daily budget. Later payments are refused
+  until the budget recovers.
+- The request's spend can go past its cap. If the input payment overran, the
+  output payment may no longer fit under the cap and is refused, so the seller
+  records the output invoice as unpaid debt.
+
 Feature layering: `payments` (host-runtime, `mesh-llm`,
 `mesh-llm-embedded-runtime`, `mesh-llm-sdk`) supplies the ledger, gates and
 `wallet.v1` adapter; `wallet-lexe` (host-runtime, `mesh-llm`) adds the built-in
@@ -362,9 +374,10 @@ The payer reserves a routing-fee allowance for each inference payment of
 `max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`), so a
 request's cap is both inference charges plus both allowances. Seller and payer
 compute the cap from the same function and the payer rejects terms that
-disagree. The wallet is told the resulting cap per payment and must not submit
-a payment whose amount plus fees exceeds it; Lexe preflights a route and
-submits that same route only when its total debit fits. Route minimums can
+disagree. The wallet is told the resulting cap per payment. A wallet that can
+bound fees must not submit a payment whose amount plus fees exceeds it; Lexe
+preflights a route and submits that same route only when its total debit fits.
+A wallet that cannot bound fees may exceed it (see the wallet contract above). Route minimums can
 increase the sent amount; that increase also counts against the cap. Actual
 outgoing amount and fees are recorded. Operators can choose a different cap for
 an explicit `wallet send`.
