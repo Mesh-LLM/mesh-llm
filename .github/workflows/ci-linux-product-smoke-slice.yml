@@ -191,6 +191,7 @@ jobs:
           staged_binary_path: target/release/mesh-llm
           expected_backend: vulkan
           device: Vulkan0
+          enable_vulkan_inference: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}
           model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
           save_model_cache: 'false'
       - name: Clean self-hosted Laya smoke outputs

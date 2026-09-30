@@ -32,6 +32,10 @@ inputs:
     description: Bounded per-read timeout.
     required: false
     default: '300'
+  enable_vulkan_inference:
+    description: Whether this runner has a verified Vulkan inference device.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -64,7 +68,7 @@ runs:
 
     - name: Restore product and pinned Laya fixture
       id: restore
-      if: ${{ inputs.device != 'Vulkan0' || vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}
+      if: ${{ inputs.device != 'Vulkan0' || inputs.enable_vulkan_inference == 'true' }}
       uses: ./.github/actions/restore-smoke-inputs
       with:
         artifact_name: ${{ inputs.artifact_name }}
@@ -80,7 +84,7 @@ runs:
         save_model_cache: ${{ inputs.save_model_cache }}
 
     - name: Run Laya startup and golden reads
-      if: ${{ inputs.device != 'Vulkan0' || vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}
+      if: ${{ inputs.device != 'Vulkan0' || inputs.enable_vulkan_inference == 'true' }}
       shell: bash
       env:
         MESH_BINARY: ${{ inputs.staged_binary_path }}
@@ -99,7 +103,7 @@ runs:
           --json-out "$RUNNER_TEMP/laya-parity.json"
 
     - name: Report uncertified Vulkan smoke skip
-      if: ${{ inputs.device == 'Vulkan0' && vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED != 'true' }}
+      if: ${{ inputs.device == 'Vulkan0' && inputs.enable_vulkan_inference != 'true' }}
       shell: bash
       run: |
         echo 'Vulkan Laya smoke skipped: MESH_VULKAN_INFERENCE_RUNNER_ENABLED is not true.' >> "$GITHUB_STEP_SUMMARY"
