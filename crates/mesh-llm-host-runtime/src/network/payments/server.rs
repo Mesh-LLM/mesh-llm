@@ -143,16 +143,11 @@ async fn serve_inner(
     .await;
     // Close serving on every path, before anything else can observe this
     // peer, so an interrupted request's delivered output counts as debt.
-    // Served only when the backend's response reached the payer in full:
-    // `Ok(false)` is a payer disconnect and a payer cancellation frame
-    // returns `Ok(true)` with `cancelled` set. Read before closing serving.
-    let completed = matches!(generated, Ok(true)) && !gate.cancelled.load(Ordering::Acquire);
+    // Whether the response reached the payer in full is read before closing.
+    let completed = delivered_in_full(&generated, &gate);
     let closed = gate.close_serving().await;
     let observations = gate.observations();
-    if let Ok(tokens) = &closed {
-        // Once, with the watermark the close wrote, whatever the transport did.
-        observations.delivered(*tokens);
-    }
+    observe_delivered(&observations, &closed);
     // A terminal event on every path, as on the free path: a failed
     // generation or closure still ends the exchange the effective event
     // opened, before the error is returned.
@@ -213,6 +208,21 @@ async fn serve_inner(
         wire::write(writer, &Frame::Complete).await?;
     }
     Ok(())
+}
+
+/// Served only when the backend's response reached the payer in full:
+/// `Ok(false)` is a payer disconnect and a payer cancellation frame returns
+/// `Ok(true)` with `cancelled` set.
+fn delivered_in_full(generated: &Result<bool>, gate: &InvoiceGate) -> bool {
+    matches!(generated, Ok(true)) && !gate.cancelled.load(Ordering::Acquire)
+}
+
+/// The delivered phase, once, with the watermark the close wrote, whatever
+/// the transport did.
+fn observe_delivered(observations: &super::lifecycle::Observations, closed: &Result<u64>) {
+    if let Ok(tokens) = closed {
+        observations.delivered(*tokens);
+    }
 }
 
 /// Publish the terminal exchange event, when an effective one was published.
