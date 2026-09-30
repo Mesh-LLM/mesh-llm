@@ -143,6 +143,10 @@ async fn serve_inner(
     .await;
     // Close serving on every path, before anything else can observe this
     // peer, so an interrupted request's delivered output counts as debt.
+    // Served only when the backend's response reached the payer in full:
+    // `Ok(false)` is a payer disconnect and a payer cancellation frame
+    // returns `Ok(true)` with `cancelled` set. Read before closing serving.
+    let completed = matches!(generated, Ok(true)) && !gate.cancelled.load(Ordering::Acquire);
     let closed = gate.close_serving().await;
     let observations = gate.observations();
     if let Ok(tokens) = &closed {
@@ -155,7 +159,8 @@ async fn serve_inner(
     end_exchange(
         node,
         exchange.zip(delivered),
-        generated.is_ok() && closed.is_ok(),
+        paid_response_adapter(&request),
+        completed && closed.is_ok(),
         &model_for_events,
         request_digest.as_deref(),
     )
@@ -217,12 +222,13 @@ async fn end_exchange(
         crate::network::openai::paid_exchange::PaidServedExchange,
         DeliveredCapture,
     )>,
+    adapter: crate::network::openai::transport::ResponseAdapter,
     served: bool,
     model: &str,
     request_digest: Option<&str>,
 ) {
     if let Some((exchange, delivered)) = exchange {
-        let outcome = exchange_outcome(served, delivered).await;
+        let outcome = exchange_outcome(served, delivered, adapter).await;
         exchange.finish(node, model, &outcome, request_digest).await;
     }
 }
@@ -232,9 +238,10 @@ async fn end_exchange(
 async fn exchange_outcome(
     served: bool,
     delivered: DeliveredCapture,
+    adapter: crate::network::openai::transport::ResponseAdapter,
 ) -> crate::network::openai::transport::RouteDispatchOutcome {
     if served {
-        delivered_outcome(delivered).await
+        delivered_outcome(delivered, adapter).await
     } else {
         crate::network::openai::transport::RouteDispatchOutcome::Failed(
             "paid serving failed before the response was delivered",
@@ -247,15 +254,39 @@ async fn exchange_outcome(
 /// the response status, read off the kept head of the response.
 async fn delivered_outcome(
     delivered: DeliveredCapture,
+    adapter: crate::network::openai::transport::ResponseAdapter,
 ) -> crate::network::openai::transport::RouteDispatchOutcome {
     use crate::network::openai::transport::RouteDispatchOutcome;
     let status = delivered.status();
     match delivered.into_bytes() {
-        Some(raw) => crate::network::openai::served_outcome_of_raw_response(&raw).await,
+        Some(raw) => crate::network::openai::served_outcome_of_raw_response(&raw, adapter).await,
         None => match status {
             Some(status) => RouteDispatchOutcome::Responded(status),
             None => RouteDispatchOutcome::Failed("the served response had no HTTP status line"),
         },
+    }
+}
+
+/// The adapter the payer's relay applies to this response, so the seller's
+/// replay computes the same usage and digests. Mirrors the payer's default
+/// for a chat request (`request_parse.rs`): a paid request arrives already
+/// normalized to the backend's chat shape.
+fn paid_response_adapter(
+    request: &PaidRequest,
+) -> crate::network::openai::transport::ResponseAdapter {
+    use crate::network::openai::transport::ResponseAdapter;
+    if request.path.split('?').next() != Some("/v1/chat/completions") {
+        return ResponseAdapter::None;
+    }
+    if request
+        .body
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        ResponseAdapter::OpenAiChatCompletionsStream
+    } else {
+        ResponseAdapter::OpenAiChatCompletionsJson
     }
 }
 
@@ -519,6 +550,30 @@ mod delivered_capture_tests {
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
 
     #[test]
+    fn replay_uses_the_normalized_paid_request_adapter() {
+        use crate::network::openai::transport::ResponseAdapter;
+        for (path, stream, expected) in [
+            (
+                "/v1/chat/completions",
+                true,
+                ResponseAdapter::OpenAiChatCompletionsStream,
+            ),
+            (
+                "/v1/chat/completions",
+                false,
+                ResponseAdapter::OpenAiChatCompletionsJson,
+            ),
+            ("/v1/completions", true, ResponseAdapter::None),
+            ("/v1/completions", false, ResponseAdapter::None),
+        ] {
+            let raw =
+                format!("POST {path} HTTP/1.1\r\n\r\n{{\"model\":\"test\",\"stream\":{stream}}}");
+            let request = PaidRequest::parse(raw.as_bytes()).unwrap();
+            assert_eq!(paid_response_adapter(&request), expected);
+        }
+    }
+
+    #[test]
     fn the_status_is_read_off_the_first_bytes() {
         let mut capture = DeliveredCapture::default();
         capture.push(&OK[..5]);
@@ -536,7 +591,12 @@ mod delivered_capture_tests {
         capture.push(OK);
         capture.push(&vec![b'x'; MAX_CAPTURED_RESPONSE_BYTES]);
         assert!(matches!(
-            exchange_outcome(true, capture).await,
+            exchange_outcome(
+                true,
+                capture,
+                crate::network::openai::transport::ResponseAdapter::None
+            )
+            .await,
             RouteDispatchOutcome::Responded(200)
         ));
     }
@@ -546,7 +606,12 @@ mod delivered_capture_tests {
         let mut capture = DeliveredCapture::default();
         capture.push(OK);
         assert!(matches!(
-            exchange_outcome(false, capture).await,
+            exchange_outcome(
+                false,
+                capture,
+                crate::network::openai::transport::ResponseAdapter::None
+            )
+            .await,
             RouteDispatchOutcome::Failed(_)
         ));
     }

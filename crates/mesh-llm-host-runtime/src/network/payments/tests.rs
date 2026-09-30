@@ -497,6 +497,8 @@ async fn paid_exchange_on(
             &provider.id().to_string(),
             output_tokens,
         );
+    } else {
+        assert_seller_did_not_claim_a_served_exchange(&provider_events.events());
     }
     assert_settlement(&network, &payer_service, &provider_service, output_tokens)?;
     assert_eq!(
@@ -506,6 +508,30 @@ async fn paid_exchange_on(
     payer.endpoint.close().await;
     provider.endpoint.close().await;
     Ok(())
+}
+
+/// A payer-cancelled exchange still ends with a terminal event, but never
+/// one claiming a served response: no status, usage or output digests.
+fn assert_seller_did_not_claim_a_served_exchange(
+    events: &[crate::plugin::openai_exchange::OpenAiExchangeEnvelope],
+) {
+    assert_eq!(events.len(), 2, "effective + terminal: {events:?}");
+    let terminal = &events[1];
+    assert_eq!(events[0].exchange_id, terminal.exchange_id);
+    let json = serde_json::to_value(terminal).unwrap();
+    assert_eq!(json["phase"], "terminal");
+    assert_eq!(terminal.status, None, "cancelled, not served: {json}");
+    for field in [
+        "usage",
+        "serving_provenance",
+        "response_digest",
+        "tool_calls_digest",
+    ] {
+        assert!(
+            json.get(field).is_none(),
+            "cancelled exchange carries {field}: {json}"
+        );
+    }
 }
 
 /// The seller's paid serving path publishes the same exchange events as the
