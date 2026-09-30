@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2024"
 
 [features]
-default = ["web-ui", "dynamic-native-runtime"]
+default = ["web-ui", "dynamic-native-runtime", "payments"]
 # Embed the React web console into the binary. Default on so the shipped
 # binary keeps shipping the console; turn off (`--no-default-features`)
 # for a lean variant that drops the embedded UI assets.
