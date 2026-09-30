@@ -133,7 +133,7 @@ def main() -> int:
 
     results = []
     for path in fixtures:
-        golden = json.loads(path.read_text())
+        golden = json.loads(path.read_text(encoding="utf-8"))
         try:
             if args.base_url:
                 answers, ids = read_via_http(args.base_url, args.model, golden, args.timeout), None

@@ -15,7 +15,7 @@ FIXTURES = ROOT / "ci" / "llama-canary" / "fixtures" / "laya-golden"
 
 
 def golden(name):
-    return json.loads((FIXTURES / f"{name}.json").read_text())
+    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
 
 
 class LayaParityTest(unittest.TestCase):
