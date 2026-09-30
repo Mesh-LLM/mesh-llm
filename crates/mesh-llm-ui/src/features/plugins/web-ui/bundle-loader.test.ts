@@ -4,6 +4,9 @@ import { assertPluginUiMountHandle, assertPluginUiRegistration } from '@/feature
 describe('plugin UI bundle runtime contract', () => {
   it('accepts registration maps and mount handles', () => {
     expect(() => assertPluginUiRegistration({ pages: {}, configSections: {} })).not.toThrow()
+    expect(() =>
+      assertPluginUiRegistration({ pages: {}, contributions: { note: () => ({ unmount() {} }) } })
+    ).not.toThrow()
     expect(() => assertPluginUiMountHandle({ unmount() {} })).not.toThrow()
   })
 
@@ -12,7 +15,9 @@ describe('plugin UI bundle runtime contract', () => {
     [{ pages: [], configSections: {} }, 'pages object'],
     [{ pages: {}, configSections: [] }, 'configSections'],
     [{ pages: { overview: true } }, "pages entry 'overview'"],
-    [{ pages: {}, configSections: { settings: null } }, "configSections entry 'settings'"]
+    [{ pages: {}, configSections: { settings: null } }, "configSections entry 'settings'"],
+    [{ pages: {}, contributions: [] }, 'contributions must be an object'],
+    [{ pages: {}, contributions: { note: 'note.js' } }, "contributions entry 'note'"]
   ])('rejects malformed registration %#', (registration, message) => {
     expect(() => assertPluginUiRegistration(registration)).toThrow(message)
   })

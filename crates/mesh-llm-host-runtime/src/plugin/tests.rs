@@ -25,6 +25,13 @@ fn web_ui_manifest() -> proto::PluginWebUiManifest {
             parent_tab: Some("integrations".into()),
             bundle_id: "main".into(),
         }],
+        contributions: vec![proto::PluginWebUiContributionManifest {
+            id: "note".into(),
+            slot: "logs_request".into(),
+            label: "Note".into(),
+            bundle_id: "main".into(),
+            entry_script: "assets/note.js".into(),
+        }],
         bundles: vec![proto::PluginWebUiBundleManifest {
             id: "main".into(),
             root_path: "web".into(),
@@ -44,6 +51,7 @@ fn plugin_manifest_overview_includes_web_ui_declaration() {
     let web_ui = overview.web_ui.expect("web UI overview should be present");
     assert_eq!(web_ui.pages[0].id, "home");
     assert_eq!(web_ui.config_sections[0].id, "settings");
+    assert_eq!(web_ui.contributions[0].slot, "logs_request");
 }
 
 #[test]

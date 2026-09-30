@@ -16,6 +16,8 @@ use crate::{
 };
 
 const PACKAGED_MANIFEST_FILE: &str = "plugin-manifest.json";
+/// Kept in step with `mesh_llm_plugin::WEB_UI_CONTRIBUTION_SLOTS`.
+const WEB_UI_CONTRIBUTION_SLOTS: [&str; 2] = ["chat_message", "logs_request"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtractedPluginArchive {
@@ -168,6 +170,26 @@ fn validate_web_ui_metadata(
             return Err("web UI config section parent_tab must be `integrations`".to_string());
         }
     }
+
+    for contribution in &web_ui.contributions {
+        validate_web_ui_non_empty("web UI contribution id", &contribution.id)?;
+        if !WEB_UI_CONTRIBUTION_SLOTS.contains(&contribution.slot.as_str()) {
+            return Err(format!(
+                "web UI contribution slot must be one of {}, got '{}'",
+                WEB_UI_CONTRIBUTION_SLOTS.join(", "),
+                contribution.slot
+            ));
+        }
+        validate_web_ui_non_empty("web UI contribution label", &contribution.label)?;
+        validate_web_ui_non_empty("web UI contribution bundle_id", &contribution.bundle_id)?;
+        if contribution.bundle_id != bundle.id {
+            return Err(format!(
+                "web UI contribution bundle_id must reference declared web UI bundle '{}', got '{}'",
+                bundle.id, contribution.bundle_id
+            ));
+        }
+        validate_web_ui_relative_path(&contribution.entry_script)?;
+    }
     Ok(())
 }
 
@@ -187,6 +209,12 @@ fn validate_web_ui_entry_scripts(
                 .config_sections
                 .iter()
                 .map(|section| section.entry_script.as_str()),
+        )
+        .chain(
+            web_ui
+                .contributions
+                .iter()
+                .map(|contribution| contribution.entry_script.as_str()),
         )
     {
         let path = asset_root.join(entry_script);
@@ -699,6 +727,103 @@ mod tests {
         assert_eq!(
             web_ui.validation.status,
             InstalledPluginWebUiValidationStatus::Valid
+        );
+    }
+
+    fn web_ui_manifest_with_contribution(slot: &str) -> Vec<u8> {
+        serde_json::json!({
+            "web_ui": {
+                "contributions": [{
+                    "id": "note",
+                    "slot": slot,
+                    "label": "Note",
+                    "bundle_id": "main",
+                    "entry_script": "assets/note.js"
+                }],
+                "bundles": [{
+                    "id": "main",
+                    "root_path": "web-ui"
+                }]
+            }
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn extract_web_ui_with_files(
+        manifest: &[u8],
+        files: &[(&str, &[u8])],
+    ) -> InstalledPluginWebUiMetadata {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("installed");
+        let archive_path = temp.path().join("demo.tar.gz");
+        let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
+        let mut entries: Vec<(&str, &[u8])> = vec![
+            ("plugin.toml", b"name = \"demo\""),
+            (executable_name.as_str(), b""),
+            (PACKAGED_MANIFEST_FILE, manifest),
+        ];
+        entries.extend_from_slice(files);
+        write_tar_gz(&archive_path, "demo", &entries).unwrap();
+
+        extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
+            .expect("archive should extract")
+            .manifest
+            .and_then(|manifest| manifest.web_ui)
+            .expect("web UI metadata should be stored")
+    }
+
+    #[test]
+    fn package_with_web_ui_contribution_records_valid_asset_root() {
+        let web_ui = extract_web_ui_with_files(
+            &web_ui_manifest_with_contribution("chat_message"),
+            &[("web-ui/assets/note.js", b"console.log('note')")],
+        );
+
+        assert_eq!(
+            web_ui.validation.status,
+            InstalledPluginWebUiValidationStatus::Valid
+        );
+        assert_eq!(web_ui.contributions[0].slot, "chat_message");
+    }
+
+    #[test]
+    fn missing_web_ui_contribution_entry_script_records_invalid_ui() {
+        let web_ui = extract_web_ui_with_files(
+            &web_ui_manifest_with_contribution("logs_request"),
+            &[("web-ui/index.html", b"<div></div>")],
+        );
+
+        assert_eq!(
+            web_ui.validation.status,
+            InstalledPluginWebUiValidationStatus::Invalid
+        );
+        assert!(
+            web_ui
+                .validation
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("note.js"))
+        );
+    }
+
+    #[test]
+    fn unknown_web_ui_contribution_slot_records_invalid_ui() {
+        let web_ui = extract_web_ui_with_files(
+            &web_ui_manifest_with_contribution("toolbar"),
+            &[("web-ui/assets/note.js", b"console.log('note')")],
+        );
+
+        assert_eq!(
+            web_ui.validation.status,
+            InstalledPluginWebUiValidationStatus::Invalid
+        );
+        assert!(
+            web_ui
+                .validation
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("slot must be one of"))
         );
     }
 

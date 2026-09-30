@@ -8,6 +8,7 @@ import { Footer } from '@/features/shell/components/Footer'
 import { TopNav } from '@/features/shell/components/TopNav'
 import type { TopNavPluginPageItem } from '@/features/shell/components/TopNavPluginPages'
 import { PreferencesPanel } from '@/features/shell/components/PreferencesPanel'
+import { PluginContributionsProvider } from '@/features/plugins/web-ui/PluginContributionSlot'
 import {
   getEnabledConfigurationTabIds,
   isConfigurationTabId,
@@ -26,6 +27,9 @@ import { env, hrefWithBasePath, stripBasePath } from '@/lib/env'
 import { useDataMode } from '@/lib/data-mode'
 import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import type { ShellHarnessData, AppTab } from '@/features/app-tabs/types'
+import type { PluginSummaryRaw } from '@/lib/api/plugin-types'
+
+const NO_PLUGINS: readonly PluginSummaryRaw[] = []
 
 function pathToTab(pathname: string): AppTab | null {
   if (pathname.startsWith('/chat')) return 'chat'
@@ -192,6 +196,8 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
     [partitionedPluginNavItems.auxiliary, toTopNavPluginPageItem]
   )
 
+  const pluginSummaries = liveMode && Array.isArray(pluginSummariesQuery.data) ? pluginSummariesQuery.data : NO_PLUGINS
+
   const onPluginPageChange = useCallback(
     (item: TopNavPluginPageItem) => {
       void router.navigate({
@@ -244,11 +250,13 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
           />
         ) : null}
         <ChatSessionProvider>
-          <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-            <div className="density-shell mx-auto flex min-h-full flex-col px-[var(--shell-pad-x)] pb-[var(--shell-pad-bottom)] pt-[var(--shell-pad-top)]">
-              <Outlet />
-            </div>
-          </main>
+          <PluginContributionsProvider summaries={pluginSummaries}>
+            <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+              <div className="density-shell mx-auto flex min-h-full flex-col px-[var(--shell-pad-x)] pb-[var(--shell-pad-bottom)] pt-[var(--shell-pad-top)]">
+                <Outlet />
+              </div>
+            </main>
+          </PluginContributionsProvider>
         </ChatSessionProvider>
         <Footer
           version={displayVersion}

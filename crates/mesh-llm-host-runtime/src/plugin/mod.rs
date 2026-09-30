@@ -23,8 +23,8 @@ pub use self::types::{
     ToolCallResult, ToolSummary,
 };
 pub use self::web_ui::{
-    PluginWebUiConfigSectionOverview, PluginWebUiManifestOverview, PluginWebUiPageOverview,
-    PluginWebUiState, PluginWebUiStateKind,
+    PluginWebUiConfigSectionOverview, PluginWebUiContributionOverview, PluginWebUiManifestOverview,
+    PluginWebUiPageOverview, PluginWebUiState, PluginWebUiStateKind,
 };
 pub(crate) use self::web_ui::{PluginWebUiStateInput, derive_plugin_web_ui_state};
 use self::web_ui::{

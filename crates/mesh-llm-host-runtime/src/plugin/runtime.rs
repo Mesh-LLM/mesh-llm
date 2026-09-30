@@ -1090,6 +1090,7 @@ pub(crate) mod tests {
                         parent_tab: Some("integrations".into()),
                         bundle_id: "main".into(),
                     }],
+                    contributions: Vec::new(),
                     bundles: vec![InstalledPluginWebUiBundleMetadata {
                         id: "main".into(),
                         root_path: "web".into(),

@@ -37,6 +37,8 @@ pub struct InstalledPluginWebUiMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_sections: Vec<InstalledPluginWebUiConfigSectionMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contributions: Vec<InstalledPluginWebUiContributionMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bundles: Vec<InstalledPluginWebUiBundleMetadata>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub asset_root: Option<PathBuf>,
@@ -78,6 +80,15 @@ pub struct InstalledPluginWebUiConfigSectionMetadata {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub parent_tab: Option<String>,
     pub bundle_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPluginWebUiContributionMetadata {
+    pub id: String,
+    pub slot: String,
+    pub label: String,
+    pub bundle_id: String,
+    pub entry_script: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

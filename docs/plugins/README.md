@@ -96,6 +96,7 @@ Use the typed builders from `mesh_llm_plugin::manifest`:
 - `web_ui`
 - `web_ui_page`
 - `web_ui_config_section`
+- `web_ui_contribution`
 - `web_ui_bundle`
 
 Rules for the declared bundle paths:
@@ -103,8 +104,9 @@ Rules for the declared bundle paths:
 - keep paths package-relative and below the package root; do not use an empty
   path or `.` as a bundle root
 - declare exactly one non-empty bundle id and one bundle root for v1 whenever
-  the block declares pages or config sections
-- set every page and config-section `bundle_id` to that declared bundle id
+  the block declares pages, config sections or contributions
+- set every page, config-section and contribution `bundle_id` to that declared
+  bundle id
 - give every page and config section a non-empty id and display label/title
 - keep page `route` values as slugs, not paths or URLs; do not include `/`,
   `\`, protocol syntax, or traversal-style dot prefixes
@@ -117,6 +119,7 @@ Rules for the declared bundle paths:
   console tab (default, if omitted, is `"auxiliary"`); this is only a request —
   see "Primary Tab Placement" below for what else must be true before the host
   honors it
+- set a contribution's `slot` to `chat_message` or `logs_request`
 
 ### Primary Tab Placement
 
@@ -232,6 +235,18 @@ either placement. The existing Configuration `Plugins` tab owns config-section
 projection, and only ready config sections in the `integrations` projection
 mount there.
 
+A plugin can also put a small element next to the host's own data, outside its
+pages. There are exactly two contribution slots:
+
+| Slot | Where the host mounts it | What the host passes (`subject`) |
+| --- | --- | --- |
+| `chat_message` | under each finished assistant chat message | `messageId`, and when known `clientNonce`, `model`, `servedBy` |
+| `logs_request` | in the Logs request inspector header | `requestId`, and when known `exchangeId` |
+
+The host passes ids only, mounts nothing plugin-specific, and leaves the slot
+empty when the projection is not ready or the bundle fails to load. What the
+element shows (a note, a link to the plugin's own page) is the plugin's.
+
 Plugin-owned settings declared in `config_schema` continue to render through
 the console's standard schema controls. A custom config-section bundle should
 add plugin-specific actions or context; it should not recreate a schema field
@@ -255,12 +270,15 @@ handlers for pages and config sections.
   fragments, backslashes, and `.`/`..` path segments are rejected
 - `host.network.json(...)` rejects non-2xx responses; use `fetchPlugin(...)`
   when the bundle needs to inspect a non-success status itself
-- registrations must return a `pages` object, optional `configSections` object,
-  and `{ unmount() }` from every mounted handler; malformed results surface as
+- registrations must return a `pages` object, optional `configSections` and
+  `contributions` objects, and `{ unmount() }` from every mounted handler; malformed results surface as
   host contract errors rather than failing later during cleanup
 - the host imports bundle code only after the projection is ready, enabled,
-  available, has a same-origin `asset_base_url`, and the requested page or
-  section exists
+  available, has a same-origin `asset_base_url`, and the requested page,
+  section or contribution exists
+- a contribution handler receives `{ element, host, contribution, subject }`;
+  the host unmounts it and mounts it again when any id in `subject` changes,
+  and it may mount once per chat message, so keep it small
 - ship browser-importable JavaScript; the host does not transpile TypeScript,
   JSX, CommonJS, or unresolved bare npm imports
 - use the exemplar's self-contained `bundle/host-contract.d.ts` for author
