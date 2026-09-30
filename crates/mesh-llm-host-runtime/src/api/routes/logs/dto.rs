@@ -38,6 +38,8 @@ pub(crate) struct RequestDto {
     caller_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     caller_path_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exchange_id: Option<String>,
     source: &'static str,
 }
 
@@ -57,6 +59,7 @@ impl RequestDto {
             caller_endpoint_id: record.caller_endpoint_id.as_deref().map(safe_metadata),
             caller_addr: record.caller_addr.as_deref().map(safe_metadata),
             caller_path_type: record.caller_path_type.as_deref().map(safe_metadata),
+            exchange_id: request.exchange_id.as_deref().map(safe_metadata),
             source: "durable",
         }
     }
@@ -76,6 +79,7 @@ impl RequestDto {
                 record.caller_endpoint_id.as_deref().map(safe_metadata),
                 record.caller_addr.as_deref().map(safe_metadata),
                 record.caller_path_type.as_deref().map(safe_metadata),
+                record.request.exchange_id.as_deref().map(safe_metadata),
             )
         });
         let (
@@ -87,6 +91,7 @@ impl RequestDto {
             caller_endpoint_id,
             caller_addr,
             caller_path_type,
+            exchange_id,
         ) = metadata.unwrap_or_default();
         let active_caller = (
             summary_metadata.caller_endpoint_id().map(safe_metadata),
@@ -114,6 +119,10 @@ impl RequestDto {
             caller_endpoint_id: caller.0,
             caller_addr: caller.1,
             caller_path_type: caller.2,
+            exchange_id: summary_metadata
+                .exchange_id()
+                .map(safe_metadata)
+                .or(exchange_id),
             source: "active",
         }
     }
@@ -530,6 +539,7 @@ mod tests {
                     caller_endpoint_id,
                     caller_addr,
                     caller_path_type,
+                    request.exchange_id.as_deref(),
                     &request.created_at,
                 ),
         };
@@ -638,6 +648,7 @@ mod tests {
                 provider: None,
                 engine: None,
                 status_code: None,
+                exchange_id: None,
             },
             (None, None, None),
         ));
@@ -699,6 +710,7 @@ mod tests {
                     provider: None,
                     engine: None,
                     status_code: Some(200),
+                    exchange_id: None,
                 },
                 (None, Some(caller_addr), Some("local_http")),
             ));
@@ -730,6 +742,7 @@ mod tests {
                 provider: None,
                 engine: None,
                 status_code: None,
+                exchange_id: None,
             },
             (None, Some("127.0.0.1:40123"), Some("local_http")),
         );
@@ -765,6 +778,7 @@ mod tests {
                 provider: None,
                 engine: None,
                 status_code: None,
+                exchange_id: None,
             },
             (
                 Some(endpoint_id),

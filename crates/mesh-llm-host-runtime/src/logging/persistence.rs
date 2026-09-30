@@ -152,6 +152,7 @@ impl PersistSink for LogStoreSink {
                 entry.metadata.caller_endpoint_id(),
                 entry.metadata.caller_addr(),
                 entry.metadata.caller_path_type(),
+                entry.metadata.exchange_id(),
                 &entry.created_at,
             )
         })

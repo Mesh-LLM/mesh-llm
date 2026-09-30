@@ -644,6 +644,22 @@ impl OpenAiLifecycleLoggingAdapter {
         }
     }
 
+    /// Merge the exchange join-key into the request's summary metadata, when
+    /// this terminal request carried one — a chat/responses completion
+    /// dispatched through the exchange-tracked path. Merged via
+    /// [`RequestSummaryMetadata::merge_missing`] semantics like every other
+    /// summary field: the first truthful value wins, so this is safe to call
+    /// even if some future caller ever tries to set it twice.
+    fn merge_exchange_id(&self, request_id: RequestId, exchange_id: Option<&str>) {
+        let Some(exchange_id) = exchange_id else {
+            return;
+        };
+        self.service.merge_request_metadata(
+            request_id,
+            RequestSummaryMetadata::with_exchange_id_only(exchange_id),
+        );
+    }
+
     fn terminal(&self, request_id: RequestId, outcome: TerminalOutcome) {
         let guard = {
             let mut tracked = lock_recover(&self.tracked);
@@ -729,7 +745,12 @@ impl OpenAiLifecycleObserver for OpenAiLifecycleLoggingAdapter {
                 context.request_id,
                 TerminalOutcome::Rejected(Some(rejection_label(*rejection).into())),
             ),
-            OpenAiLifecycleEvent::NonStreamTerminal { context, result } => {
+            OpenAiLifecycleEvent::NonStreamTerminal {
+                context,
+                result,
+                exchange_id,
+            } => {
+                self.merge_exchange_id(context.request_id, exchange_id.as_deref());
                 self.terminal(context.request_id, terminal_outcome(*result))
             }
             OpenAiLifecycleEvent::StreamTerminal { context, result } => {
@@ -935,10 +956,12 @@ mod tests {
         adapter.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context: context.clone(),
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
         adapter.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context,
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
 
         assert!(
@@ -974,6 +997,56 @@ mod tests {
         assert_eq!(adapter.tracked_len(), 1);
     }
 
+    /// a `NonStreamTerminal` carrying the exchange
+    /// join-key merges it into the request's summary metadata, so the Logs
+    /// record and other consumers of the exchange can be correlated by id.
+    #[test]
+    fn non_stream_terminal_with_exchange_id_merges_it_into_summary_metadata() {
+        let (service, adapter) = adapter();
+        let request_id = RequestId::new();
+        let context = context(request_id);
+
+        adapter.observe(&OpenAiLifecycleEvent::Admitted {
+            context: context.clone(),
+        });
+        adapter.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+            context,
+            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: Some("exch-abc123".to_string()),
+        });
+
+        let summary = service
+            .registry_ref()
+            .get_recent(&request_id.as_uuid().to_string())
+            .expect("terminal request summary");
+        assert_eq!(summary.metadata.exchange_id(), Some("exch-abc123"));
+    }
+
+    /// A terminal request that never carried an exchange (e.g. `/v1/completions`,
+    /// or chat completions dispatched without mesh hooks enabled) must leave
+    /// the summary's exchange id absent rather than fabricating one.
+    #[test]
+    fn non_stream_terminal_without_exchange_id_leaves_summary_metadata_absent() {
+        let (service, adapter) = adapter();
+        let request_id = RequestId::new();
+        let context = context(request_id);
+
+        adapter.observe(&OpenAiLifecycleEvent::Admitted {
+            context: context.clone(),
+        });
+        adapter.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+            context,
+            result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
+        });
+
+        let summary = service
+            .registry_ref()
+            .get_recent(&request_id.as_uuid().to_string())
+            .expect("terminal request summary");
+        assert_eq!(summary.metadata.exchange_id(), None);
+    }
+
     #[test]
     fn terminalization_releases_frontend_owner_without_disturbing_raw_owner() {
         let service = Arc::new(LoggingService::new_disabled(Default::default()));
@@ -997,10 +1070,12 @@ mod tests {
         adapter.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context: frontend_context.clone(),
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
         adapter.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context: frontend_context,
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
 
         assert!(!owners.is_claimed(frontend_request_id));

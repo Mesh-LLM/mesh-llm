@@ -19,11 +19,24 @@ struct MigrationPlan<'a> {
     migrations: &'a [Migration],
 }
 
-const MIGRATIONS: &[Migration] = &[];
+/// Adds the `exchange_id` column and its unique partial index to `summaries`.
+/// Fresh and existing databases both reach version 2 through this migration,
+/// so they end up with the same schema by the same code path.
+fn migrate_v2_add_exchange_id(connection: &Connection) -> Result<(), rusqlite::Error> {
+    connection.execute_batch(
+        "ALTER TABLE summaries ADD COLUMN exchange_id TEXT;
+         CREATE UNIQUE INDEX idx_summaries_exchange_id ON summaries (exchange_id) WHERE exchange_id IS NOT NULL;",
+    )
+}
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 2,
+    apply: migrate_v2_add_exchange_id,
+}];
 const APPLICATION_ID: u32 = 0x4D4C4F47;
 
 /// Current schema version for the integrated local logging feature.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SchemaClassification {

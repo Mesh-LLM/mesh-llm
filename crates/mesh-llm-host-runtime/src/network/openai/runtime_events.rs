@@ -351,7 +351,9 @@ impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
             OpenAiLifecycleEvent::BackendTerminal {
                 context, result, ..
             } => self.backend_terminal(context.request_id, *result),
-            OpenAiLifecycleEvent::NonStreamTerminal { context, result }
+            OpenAiLifecycleEvent::NonStreamTerminal {
+                context, result, ..
+            }
             | OpenAiLifecycleEvent::StreamTerminal { context, result } => {
                 self.resolve_root(
                     context.request_id,
@@ -486,6 +488,7 @@ mod tests {
         observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context,
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
         engine.drain();
 
@@ -555,6 +558,7 @@ mod tests {
         observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context,
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
         engine.drain();
         assert_eq!(engine.occupied_count(), 0);
@@ -580,6 +584,7 @@ mod tests {
         observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context: context.clone(),
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
         {
             let tracked = observer.lock();
@@ -646,6 +651,7 @@ mod tests {
         observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context,
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
         let tracked = observer.lock();
         assert!(tracked.requests.is_empty());
@@ -751,6 +757,7 @@ mod tests {
         observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context,
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
         // No assertions beyond "did not panic": there is no engine to
         // inspect, which is exactly the degraded-but-not-failing contract.
@@ -775,6 +782,7 @@ mod tests {
         observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context,
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
 
         assert_eq!(engine.occupied_count(), 0);
@@ -848,6 +856,7 @@ mod tests {
         observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
             context,
             result: OpenAiTerminalResult::Completed { status_code: 200 },
+            exchange_id: None,
         });
         engine.drain();
 

@@ -1,7 +1,7 @@
 use super::super::{RequestRecord, RequestRecordWithCaller};
 
 pub(super) const REQUEST_COLUMNS: &str = "request_id, state, created_at, terminal_at, route, model, provider, engine, status_code, \
-     caller_endpoint_id, caller_addr, caller_path_type";
+     caller_endpoint_id, caller_addr, caller_path_type, exchange_id";
 
 pub(super) fn request_record_with_caller(
     row: &rusqlite::Row<'_>,
@@ -17,6 +17,7 @@ pub(super) fn request_record_with_caller(
             provider: row.get(6)?,
             engine: row.get(7)?,
             status_code: row.get(8)?,
+            exchange_id: row.get(12)?,
         },
         caller_endpoint_id: row.get(9)?,
         caller_addr: row.get(10)?,

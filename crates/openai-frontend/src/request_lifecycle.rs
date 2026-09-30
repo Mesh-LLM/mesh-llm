@@ -33,7 +33,12 @@ impl RequestLifecycle {
         }
     }
 
-    pub(crate) fn finish_with_usage(&mut self, status: StatusCode, usage: Option<TokenUsage>) {
+    pub(crate) fn finish_with_usage(
+        &mut self,
+        status: StatusCode,
+        usage: Option<TokenUsage>,
+        exchange_id: Option<String>,
+    ) {
         if self.terminal_or_transferred {
             return;
         }
@@ -45,6 +50,7 @@ impl RequestLifecycle {
                     status_code: CLIENT_CLOSED_REQUEST_STATUS,
                     failure: OpenAiFailure::Cancelled,
                 },
+                exchange_id,
             }
         } else if status.is_client_error() {
             OpenAiLifecycleEvent::Rejected {
@@ -71,6 +77,7 @@ impl RequestLifecycle {
             OpenAiLifecycleEvent::NonStreamTerminal {
                 context: self.context.clone(),
                 result,
+                exchange_id,
             }
         };
         self.observe(&event);
@@ -170,7 +177,7 @@ mod tests {
         let observer = Arc::new(RecordingObserver::default());
         let mut lifecycle = RequestLifecycle::admit(Some(observer.clone()), context());
 
-        lifecycle.finish_with_usage(crate::lifecycle::client_closed_request_status(), None);
+        lifecycle.finish_with_usage(crate::lifecycle::client_closed_request_status(), None, None);
 
         assert!(matches!(
             observer.0.lock().expect("observer lock").as_slice(),

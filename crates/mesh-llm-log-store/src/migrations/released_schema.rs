@@ -33,7 +33,8 @@ fn import_with_hook(
     transaction.execute_batch(
         "ALTER TABLE summaries ADD COLUMN caller_endpoint_id TEXT;
          ALTER TABLE summaries ADD COLUMN caller_addr TEXT;
-         ALTER TABLE summaries ADD COLUMN caller_path_type TEXT;",
+         ALTER TABLE summaries ADD COLUMN caller_path_type TEXT;
+         ALTER TABLE summaries ADD COLUMN exchange_id TEXT;",
     )?;
     super::lineage::install(&transaction)?;
     super::set_application_id(&transaction, super::APPLICATION_ID)?;

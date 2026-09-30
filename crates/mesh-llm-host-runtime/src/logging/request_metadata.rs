@@ -37,6 +37,12 @@ pub(crate) struct RequestSummaryMetadata {
     caller_addr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     caller_path_type: Option<CallerPathType>,
+    /// The host-minted per-exchange join-key other consumers of the
+    /// exchange (plugins, the terminal event) can join on (`openai_frontend::hooks::ChatExchangeRoute::exchange_id`).
+    /// `None` for a request that never dispatched through the
+    /// exchange-tracked chat/responses path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exchange_id: Option<String>,
 }
 
 impl RequestSummaryMetadata {
@@ -57,6 +63,17 @@ impl RequestSummaryMetadata {
             caller_endpoint_id: None,
             caller_addr: None,
             caller_path_type: None,
+            exchange_id: None,
+        }
+    }
+
+    /// A metadata snapshot carrying only the exchange join-key — used to
+    /// merge it in once known, at the terminal lifecycle event, without
+    /// disturbing any other field already recorded for this request.
+    pub(crate) fn with_exchange_id_only(exchange_id: &str) -> Self {
+        Self {
+            exchange_id: bounded_metadata(Some(exchange_id)),
+            ..Self::default()
         }
     }
 
@@ -128,6 +145,10 @@ impl RequestSummaryMetadata {
         self.method.as_deref()
     }
 
+    pub(crate) fn exchange_id(&self) -> Option<&str> {
+        self.exchange_id.as_deref()
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.route.is_none()
             && self.model.is_none()
@@ -138,6 +159,7 @@ impl RequestSummaryMetadata {
             && self.caller_endpoint_id.is_none()
             && self.caller_addr.is_none()
             && self.caller_path_type.is_none()
+            && self.exchange_id.is_none()
     }
 
     /// Preserve the first truthful value for each field. A later source can
@@ -153,6 +175,7 @@ impl RequestSummaryMetadata {
             caller_endpoint_id,
             caller_addr,
             caller_path_type,
+            exchange_id,
         } = update;
         let mut changed = false;
         changed |= merge_field(&mut self.route, route);
@@ -161,6 +184,7 @@ impl RequestSummaryMetadata {
         changed |= merge_field(&mut self.engine, engine);
         changed |= merge_field(&mut self.source, source);
         changed |= merge_field(&mut self.method, method);
+        changed |= merge_field(&mut self.exchange_id, exchange_id);
         changed |= self.merge_missing_caller(caller_endpoint_id, caller_addr, caller_path_type);
         changed
     }

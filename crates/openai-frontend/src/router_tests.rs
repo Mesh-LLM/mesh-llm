@@ -334,6 +334,7 @@ impl OpenAiBackend for GuardrailRescueBackend {
             usage: Usage::new(3, 2),
             timings: None,
             capsule_marker: None,
+            exchange_id: None,
         })
     }
 
@@ -487,7 +488,17 @@ impl OpenAiBackend for FakeBackend {
                 usage: Usage::new(3, 2),
                 timings: None,
                 capsule_marker: None,
+                exchange_id: None,
             });
+        }
+        if request.model == "exchange-id" {
+            let mut response = ChatCompletionResponse::new(
+                request.model,
+                format!("echo: {}", messages_to_plain_prompt(&request.messages)),
+                Usage::new(3, 2),
+            );
+            response.exchange_id = Some("exch-fixture-01".to_string());
+            return Ok(response);
         }
         Ok(ChatCompletionResponse::new(
             request.model,
@@ -917,7 +928,7 @@ async fn healthz_observer_records_completed_terminal() {
         events.as_slice(),
         [
             OpenAiLifecycleEvent::Admitted { context },
-            OpenAiLifecycleEvent::NonStreamTerminal { context: terminal_context, result: OpenAiTerminalResult::Completed { status_code: 200 } },
+            OpenAiLifecycleEvent::NonStreamTerminal { context: terminal_context, result: OpenAiTerminalResult::Completed { status_code: 200 }, .. },
         ] if context.route == OpenAiFrontendRoute::Healthz
             && context.method == OpenAiRequestMethod::Get
             && context == terminal_context
@@ -997,7 +1008,7 @@ async fn timeout_observer_records_failed_terminal() {
                     failure: OpenAiFailure::Timeout,
                 },
             },
-            OpenAiLifecycleEvent::NonStreamTerminal { context: terminal_context, result: OpenAiTerminalResult::Failed { status_code: 504, failure: OpenAiFailure::Timeout } },
+            OpenAiLifecycleEvent::NonStreamTerminal { context: terminal_context, result: OpenAiTerminalResult::Failed { status_code: 504, failure: OpenAiFailure::Timeout }, .. },
         ] if context.route == OpenAiFrontendRoute::Readyz
             && context.method == OpenAiRequestMethod::Get
             && context == dispatched_context
@@ -1288,6 +1299,71 @@ async fn no_capsule_marker_means_no_x_capsule_id_header() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.headers().get("x-capsule-id").is_none());
+}
+
+/// the same header-plumbing hop as `X-Capsule-Id`
+/// above, for `response.exchange_id` -> `X-Exchange-Id`. Proves the value
+/// really rides out through the real axum router as a response header, not
+/// just as an in-process `ChatCompletionResponse` field.
+#[tokio::test]
+async fn backend_exchange_id_is_exposed_as_x_exchange_id_response_header() {
+    let app = router_for(Arc::new(FakeBackend));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "exchange-id",
+                        "messages": [{"role": "user", "content": "hi"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let header = response
+        .headers()
+        .get("x-exchange-id")
+        .expect("X-Exchange-Id header present")
+        .to_str()
+        .unwrap();
+    assert_eq!(header, "exch-fixture-01");
+}
+
+/// A response with no `exchange_id` must never produce the header — proves
+/// the wiring is conditional on the backend actually attaching one, not
+/// unconditional (mirroring `no_capsule_marker_means_no_x_capsule_id_header`).
+#[tokio::test]
+async fn no_exchange_id_means_no_x_exchange_id_header() {
+    let app = router_for(Arc::new(FakeBackend));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-mesh",
+                        "messages": [{"role": "user", "content": "hi"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("x-exchange-id").is_none());
 }
 
 #[tokio::test]

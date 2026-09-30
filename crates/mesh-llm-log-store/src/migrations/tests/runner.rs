@@ -126,19 +126,19 @@ fn preexisting_lineage_marker_makes_version_zero_nonfresh() {
 }
 
 #[test]
-fn production_rejects_version_two_without_mutation() {
+fn production_rejects_version_three_without_mutation() {
     let connection = Connection::open_in_memory().expect("open database");
     lineage::install(&connection).expect("seed lineage marker");
     connection
         .execute_batch(
             "CREATE TABLE sentinel (value TEXT); PRAGMA application_id = 0x4D4C4F47; \
-             PRAGMA user_version = 2;",
+             PRAGMA user_version = 3;",
         )
         .expect("seed future schema");
 
     assert!(apply_migrations(&connection).is_err());
 
-    assert_eq!(version(&connection), 2);
+    assert_eq!(version(&connection), 3);
     assert_eq!(user_objects(&connection), 2);
     assert!(lineage::is_valid(&connection).expect("inspect lineage"));
 }
