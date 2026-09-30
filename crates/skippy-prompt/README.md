@@ -5,8 +5,9 @@ Prompt REPL and diagnostics client for staged runtimes.
 `skippy-prompt` is the operator-facing CLI for driving interactive text
 generation against a running first stage. In mesh-llm, topology launch,
 materialization, metrics wiring, and lifecycle are owned by mesh, so the
-imported `prompt` launcher is retained only as a diagnostic planning surface.
-Use the `binary` subcommand against a mesh-managed first stage for live checks.
+imported `prompt` launcher is retired: it exits immediately and points at the
+`binary` subcommand. Use `binary` against a mesh-managed first stage for live
+checks.
 
 ## Architecture Role
 
@@ -54,12 +55,13 @@ sequenceDiagram
 skippy-prompt binary --model-path model.gguf --first-stage-addr 127.0.0.1:19031
 ```
 
-Useful REPL commands include `:history`, `:logs [name] [lines]`, and `:quit`.
+Useful REPL commands include `:history` and `:quit`. `:logs [name] [lines]` is
+still accepted, but it ignores its arguments and reports that no prompt-managed
+logs are attached to this REPL.
 
 ## Notes
 
 - Default local state lives under `/tmp/skippy-prompt`.
-- Remote runs stage inputs under `/tmp/skippy-remote-prompt` by default.
 - Activation frames always use raw little-endian f32 on the stage wire.
 - `--draft-model-path` enables draft-model speculative proposals.
 - Standalone cache and n-gram sidecars are not imported into mesh-llm; topology

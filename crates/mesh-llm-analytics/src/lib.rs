@@ -33,6 +33,7 @@ mod event;
 mod install_id;
 mod notice;
 mod properties;
+mod version_state;
 
 pub use consent::{
     ConfigPreference, ConsentInputs, DEFAULT_POSTHOG_HOST, Disposition, ENV_ANALYTICS,
@@ -43,10 +44,38 @@ pub use event::{
 };
 pub use install_id::{INSTALL_ID_FILE, InstallId, load, load_or_create, state_dir};
 pub use notice::{NOTICE, NOTICE_MARKER_FILE};
-pub use properties::{BuildChannel, LIB_NAME, base_properties};
+pub use properties::{BuildChannel, LIB_NAME, base_properties, exec_env};
+pub use version_state::{PendingVersion, VERSION_FILE, VersionTransition};
+
+/// Environment variable the self-updater sets on the binary it `exec`s.
+///
+/// Must stay in step with `SELF_UPDATE_ATTEMPTED_ENV` in
+/// `mesh-llm-system`'s `autoupdate`. That crate owns the restart; this one
+/// only reads the marker to tell a self-update apart from an upgrade that
+/// arrived some other way, and depending on it would drag the whole hardware
+/// and release-fetch tree into this leaf crate. `mesh-llm-commands` sees both
+/// constants and has a test that they match.
+pub const ENV_SELF_UPDATE_MARKER: &str = "MESH_LLM_SELF_UPDATE_ATTEMPTED";
+
+/// Environment variable marking a process mesh-llm spawned as an internal
+/// helper rather than something a person ran.
+///
+/// The updater executes the freshly extracted binary with `--version` to
+/// verify the bundle before installing it. That child reaches the same CLI
+/// entry point, so without a marker it initializes reporting, records the new
+/// build as the current version, and emits a `cli_command` -- all before the
+/// install has happened. The damage is two-fold: the real restart afterwards
+/// then sees `Unchanged` and is classified `external` instead of
+/// `self_update`, and an install that fails after verification leaves a
+/// recorded upgrade that never took place.
+///
+/// Mirrored as `INTERNAL_HELPER_ENV` in `mesh-llm-system`, which sets it.
+/// `mesh-llm-commands` tests that the two agree.
+pub const ENV_INTERNAL_HELPER: &str = "MESH_LLM_INTERNAL_HELPER";
 
 use chrono::Utc;
 use client::Envelope;
+use mesh_llm_build_info::BUILD_VERSION;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
@@ -173,6 +202,14 @@ pub fn init(config: ConfigPreference) -> Status {
         };
     };
 
+    // Read now, written only once there is somewhere to report it. Every
+    // path between here and reporter registration can bail out -- no key, no
+    // runtime -- and advancing the record on the way past would mark the
+    // upgrade as seen while queuing nothing, so the next run would find
+    // `Unchanged` and the upgrade would be lost for good. Dropping this
+    // without committing leaves the record alone and releases the lock.
+    let version = version_state::begin(&dir, BUILD_VERSION);
+
     let endpoint = client::batch_endpoint(&ingestion_host());
     let status = Status {
         disposition,
@@ -218,10 +255,52 @@ pub fn init(config: ConfigPreference) -> Status {
     }));
 
     if install.is_first_run() {
+        // A brand new install has no meaningful version to have come from,
+        // and reporting both events for one run would double-count it.
+        version.commit();
         capture(Event::InstallFirstRun, Properties::new());
+    } else {
+        report_version_transition(version);
     }
 
     status
+}
+
+/// Persist the transition and report it, in that order.
+///
+/// The commit is what licenses the event: it returns whether the record now
+/// actually names this build, and only then is the upgrade reported. A write
+/// that failed leaves the previous version in place, so the next run sees the
+/// same transition and can retry rather than this one reporting an upgrade it
+/// did not manage to record -- and then reporting it again every run after.
+fn report_version_transition(version: PendingVersion) {
+    let VersionTransition::Changed { from } = version.transition() else {
+        version.commit();
+        return;
+    };
+    let from = from.clone();
+    if version.commit() {
+        capture(
+            Event::InstallUpdated,
+            Properties::new()
+                .with("from_version", Label::sanitize_or_redact(&from))
+                .with("trigger", update_trigger()),
+        );
+    }
+}
+
+/// How a version change most likely arrived.
+///
+/// `self_update` is authoritative: only mesh-llm's own updater sets the
+/// marker. `external` is a residual — `mesh-llm update`, `install.sh`, a
+/// package manager, or a hand-swapped binary all land there, because none of
+/// them leave a trace in this process's environment.
+fn update_trigger() -> &'static str {
+    if std::env::var_os(ENV_SELF_UPDATE_MARKER).is_some() {
+        "self_update"
+    } else {
+        "external"
+    }
 }
 
 /// Queue one event. Never blocks; drops the event if the queue is full.

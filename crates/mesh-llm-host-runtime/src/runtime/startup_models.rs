@@ -1540,18 +1540,6 @@ pub(super) fn runtime_model_capacity_for_path(
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "reference capacity projection remains covered by startup planning tests"
-    )
-)]
-pub(super) fn runtime_model_capacity_for_ref(model: &str, vram_bytes: u64) -> RuntimeModelCapacity {
-    let model_path = models::find_model_path(model);
-    runtime_model_capacity_for_path(&model_path, vram_bytes)
-}
-
 pub(super) async fn find_remote_catalog_model_exact_blocking(
     query: String,
 ) -> Option<models::remote_catalog::RemoteCatalogModel> {

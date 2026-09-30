@@ -150,7 +150,6 @@ fn runtime_root_with_home(home: Option<PathBuf>) -> Result<PathBuf> {
 #[derive(Debug)]
 pub struct InstanceRuntime {
     dir: PathBuf,
-    pid: u32,
     _lock_file: File,
 }
 
@@ -226,7 +225,6 @@ impl InstanceRuntime {
 
         Ok(Self {
             dir,
-            pid,
             _lock_file: lock_file,
         })
     }
@@ -234,12 +232,6 @@ impl InstanceRuntime {
     /// Returns the runtime directory path (`{root}/{pid}/`).
     pub fn dir(&self) -> &Path {
         &self.dir
-    }
-
-    /// The PID this runtime slot was acquired for.
-    #[allow(dead_code)]
-    pub fn pid(&self) -> u32 {
-        self.pid
     }
 }
 

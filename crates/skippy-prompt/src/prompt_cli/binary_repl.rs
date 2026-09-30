@@ -212,15 +212,9 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
     let interrupt = install_prompt_interrupt_handler()?;
     let mut history = PromptHistory::load(args.history_path.as_deref())?;
     let mut prompt_input = prompt_input(&history)?;
-    if args.log_context.is_some() {
-        eprintln!(
-            "Type a prompt, use Up/Down for history, Ctrl-C to interrupt generation, :history, :logs [name] [lines], :rerun N, :noappend, :append, or :quit."
-        );
-    } else {
-        eprintln!(
-            "Type a prompt, use Up/Down for history, Ctrl-C to interrupt generation, :history, :rerun N, :noappend, :append, or :quit."
-        );
-    }
+    eprintln!(
+        "Type a prompt, use Up/Down for history, Ctrl-C to interrupt generation, :history, :rerun N, :noappend, :append, or :quit."
+    );
 
     let mut prompt_index = 0usize;
     let mut live_session = PromptLiveSession::default();
@@ -286,10 +280,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             continue;
         }
         if input == ":logs" || input.starts_with(":logs ") {
-            show_prompt_logs(
-                args.log_context.as_ref(),
-                input.trim_start_matches(":logs").trim(),
-            )?;
+            eprintln!("no prompt-managed logs are attached to this REPL");
             continue;
         }
         if let Some(index) = input.strip_prefix(":rerun ") {

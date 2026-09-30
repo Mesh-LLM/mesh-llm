@@ -195,6 +195,4 @@ pub struct BinaryReplArgs {
     pub thinking_token_budget: Option<usize>,
     #[arg(skip)]
     pub diagnostics_hint: Option<String>,
-    #[arg(skip)]
-    log_context: Option<PromptLogContext>,
 }
