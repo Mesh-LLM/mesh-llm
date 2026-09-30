@@ -147,6 +147,35 @@ fn builtin_wallet_is_served_by_this_executable_like_blobstore() {
 }
 
 #[test]
+fn builtin_plugin_arguments_follow_the_plugin_flag() {
+    let spec = super::config::builtin_plugin_spec(
+        BLOBSTORE_PLUGIN_ID,
+        &["--root".into(), "/srv/blobs".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        spec.args,
+        [
+            "--log-format",
+            "json",
+            "--plugin",
+            BLOBSTORE_PLUGIN_ID,
+            "--plugin-arg=--root",
+            "--plugin-arg=/srv/blobs",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn builtin_plugin_without_arguments_refuses_them() {
+    let error = run_plugin_process(BLOBSTORE_PLUGIN_ID.into(), vec!["--verbose".into()])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("takes no arguments"), "{error}");
+}
+
+#[test]
 fn builtin_wallet_is_not_registered_in_a_build_without_it() {
     let _build = WalletLexeBuild::absent();
     let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();

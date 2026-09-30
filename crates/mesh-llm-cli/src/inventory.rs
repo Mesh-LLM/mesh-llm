@@ -459,7 +459,7 @@ fn runtime_surface_allows_arg(surface: RuntimeSurface, arg: &Arg) -> bool {
     !runtime_surface_excluded_arg(surface, id)
 }
 
-const RUNTIME_SURFACE_ALWAYS_EXCLUDED_ARGS: &[&str] = &["client", "plugin"];
+const RUNTIME_SURFACE_ALWAYS_EXCLUDED_ARGS: &[&str] = &["client", "plugin", "plugin_args"];
 
 fn runtime_surface_excluded_arg(surface: RuntimeSurface, id: &str) -> bool {
     if RUNTIME_SURFACE_ALWAYS_EXCLUDED_ARGS.contains(&id) {

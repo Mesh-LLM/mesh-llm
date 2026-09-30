@@ -330,10 +330,10 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     append_installed_plugins(&mut externals, &mut inactive, &mut names);
 
     if blobstore_enabled {
-        externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID)?);
+        externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID, &[])?);
     }
     if wallet_lexe_enabled && wallet_lexe_compiled_in() {
-        externals.push(builtin_plugin_spec(WALLET_LEXE_PLUGIN_ID)?);
+        externals.push(builtin_plugin_spec(WALLET_LEXE_PLUGIN_ID, &[])?);
     }
     if payments_enabled && payments_compiled_in() {
         externals.push(in_process_builtin_spec(PAYMENTS_PLUGIN_ID));
@@ -422,22 +422,26 @@ thread_local! {
 }
 
 /// Launch spec for a plugin served by this executable: the host re-executes
-/// itself with `--plugin <name>`. Built-ins are optional so a failure to start
-/// one degrades that capability instead of blocking node startup.
-pub fn builtin_plugin_spec(name: &str) -> Result<ExternalPluginSpec> {
+/// itself with `--plugin <name>`, passing each of `plugin_args` as a
+/// `--plugin-arg=<arg>`. Built-ins are optional so a failure to start one
+/// degrades that capability instead of blocking node startup.
+pub fn builtin_plugin_spec(name: &str, plugin_args: &[String]) -> Result<ExternalPluginSpec> {
     let command = std::env::current_exe()
         .context("Cannot determine mesh-llm executable path")?
         .display()
         .to_string();
+    let mut args: Vec<String> = vec![
+        "--log-format".into(),
+        "json".into(),
+        "--plugin".into(),
+        name.into(),
+    ];
+    // `=` keeps an argument that starts with `-` bound to its flag.
+    args.extend(plugin_args.iter().map(|arg| format!("--plugin-arg={arg}")));
     Ok(ExternalPluginSpec {
         name: name.to_string(),
         command,
-        args: vec![
-            "--log-format".into(),
-            "json".into(),
-            "--plugin".into(),
-            name.into(),
-        ],
+        args,
         url: None,
         env: BTreeMap::new(),
         startup: PluginStartupOptions {

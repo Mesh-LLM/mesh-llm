@@ -240,9 +240,9 @@ pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) ->
 /// SIGTERM. The plugin lifecycle is otherwise driven by the host connection
 /// closing, so a branch that did not observe the shared delivery would consume
 /// the signal and leave the plugin running indefinitely (#1969 review).
-async fn run_plugin_until_shutdown(name: String) -> Result<()> {
+async fn run_plugin_until_shutdown(name: String, args: Vec<String>) -> Result<()> {
     let shutdown = super::shutdown_signal::wait_for_shutdown_signal();
-    run_plugin_until(plugin::run_plugin_process(name), shutdown).await
+    run_plugin_until(plugin::run_plugin_process(name, args), shutdown).await
 }
 
 /// Run `plugin` until it completes, or until `shutdown` observes a
@@ -297,7 +297,7 @@ pub(super) async fn run_runtime_cli(
     if let Some(name) = options.plugin.clone() {
         super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
         initialize_early_topology_audit_logging(&mut options)?;
-        return run_plugin_until_shutdown(name).await;
+        return run_plugin_until_shutdown(name, options.plugin_args.clone()).await;
     }
 
     let checked_updates = autoupdate::maybe_auto_update(autoupdate::AutoUpdateOptions {

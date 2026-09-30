@@ -501,6 +501,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         release_signer_key: cli.release_signer_key,
         name: cli.name,
         plugin: cli.plugin,
+        plugin_args: cli.plugin_args,
         auto_update: cli.auto_update,
         command_is_update: matches!(cli.command, Some(mesh_llm_cli::Command::Update { .. })),
         command_uses_machine_output: command_uses_machine_output(cli.command.as_ref()),

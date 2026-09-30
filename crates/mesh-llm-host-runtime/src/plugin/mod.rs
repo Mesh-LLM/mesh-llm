@@ -1552,7 +1552,13 @@ fn normalize_test_tool_result_content(result: &rmcp::model::CallToolResult) -> R
     serde_json::to_string(&result.content).map_err(Into::into)
 }
 
-pub async fn run_plugin_process(name: String) -> Result<()> {
+/// Serve the built-in plugin `name` in this process. `args` are the
+/// `[[plugin]]` stanza's `args`, which only a built-in that reads them may
+/// receive.
+pub async fn run_plugin_process(name: String, args: Vec<String>) -> Result<()> {
+    if !args.is_empty() {
+        bail!("Built-in plugin '{}' takes no arguments", name);
+    }
     match name.as_str() {
         BLOBSTORE_PLUGIN_ID => crate::plugins::blobstore::run_plugin(name).await,
         #[cfg(feature = "wallet-lexe")]
