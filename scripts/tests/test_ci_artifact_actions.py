@@ -12,6 +12,9 @@ import tarfile
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2158,6 +2161,48 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn('runtime_path="${runtime_path%$\'\\r\'}"', action)
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
+        self.assertIn("sys.stdout.buffer.write(", action)
+        self.assertIn(
+            '("\\t".join((version, backend, host_path, runtime_path)) + "\\n").encode()',
+            action,
+        )
+
+    @unittest.skipUnless(os.name == "posix", "requires Bash")
+    def test_smoke_restore_extracts_composed_product(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            with mock.patch.dict(os.environ, {"COPYFILE_DISABLE": "1"}):
+                result = self.run_product_composer(workspace)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            artifact = workspace / "artifact"
+            artifact.mkdir()
+            shutil.copy2(workspace / "product-input.tar.gz", artifact)
+            action = yaml.safe_load(self.read_action("restore-smoke-inputs"))
+            extract_step = next(
+                step for step in action["runs"]["steps"]
+                if step["name"] == "Extract and verify composed product"
+            )
+            script = extract_step["run"]
+            for name, value in {
+                "artifact_path": str(artifact),
+                "binary_name": "mesh-llm",
+                "expected_backend": "cpu",
+            }.items():
+                script = script.replace(f"${{{{ inputs.{name} }}}}", value)
+            result = subprocess.run(
+                [
+                    "/bin/bash", "--noprofile", "--norc", "-e",
+                    "-o", "pipefail", "-c", script,
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((artifact / "mesh-llm").is_file())
+            self.assertTrue((artifact / "product-manifest.json").is_file())
 
     def test_test_model_restore_is_optional_and_verified(self) -> None:
         """The shared model action: resolve, cache, download, verify.

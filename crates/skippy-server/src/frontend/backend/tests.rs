@@ -1219,7 +1219,7 @@ fn hooks_test_backend(hook_policy: Option<Arc<dyn OpenAiHookPolicy>>) -> StageOp
         crate::telemetry::TelemetryLevel::Off,
     );
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())
+        IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())
             .expect("iteration scheduler for hook lifecycle tests");
     StageOpenAiBackend {
         runtime: runtime.clone(),

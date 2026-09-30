@@ -130,6 +130,20 @@ Current-node service mix for requests fronted by this node. These shares are der
 | `fronted_request_count`, `locally_served_request_count`, `remotely_served_request_count`, `endpoint_request_count` | Service mix for requests fronted by this node |
 | `local_service_share`, `remote_service_share`, `endpoint_service_share` | Normalized shares for locally fronted traffic |
 
+### `/api/status` `plugin_frame_telemetry`
+
+Layer: **Information** | Scope: **local-only**
+
+Current-node counters for plugin-mesh frames received from a peer whose claimed
+`source_peer_id` is not the sending peer. This is not a routing metric and is not
+part of `ROUTING_METRIC_GROUPS`; it is the operator-visible volume behind the
+per-peer warning, which is throttled so a peer cannot drive unbounded log I/O.
+The counter and its throttle state live outside the mesh-wide state lock.
+
+| Field(s) | Meaning |
+| --- | --- |
+| `source_mismatch_total` | Received plugin-mesh channel/bulk frames whose non-empty claimed source was not the sending peer. Advanced on every occurrence, including those folded into a throttled warning. |
+
 ### `/api/models[]` `routing_metrics`
 
 Layer: **Information** | Scope: **local-only**

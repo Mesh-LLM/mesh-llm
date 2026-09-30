@@ -556,7 +556,20 @@
     },
     {
       "domain": "platform-windows-cfg",
-      "crates": ["mesh-llm-plugin"]
+      "crates": [
+        "mesh-llm-analytics",
+        "mesh-llm-config",
+        "mesh-llm-events",
+        "mesh-llm-host-runtime",
+        "mesh-llm-identity",
+        "mesh-llm-payments",
+        "mesh-llm-plugin",
+        "mesh-llm-plugin-manager",
+        "mesh-llm-tui",
+        "mesh-llm-ui",
+        "mesh-llm-wallet",
+        "mesh-wallet-lexe"
+      ]
     },
     {
       "domain": "backend-cuda",

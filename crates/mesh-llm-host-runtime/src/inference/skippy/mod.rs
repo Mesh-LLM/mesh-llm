@@ -609,6 +609,9 @@ fn embedded_openai_args_from(
         request_defaults: embedded_args.request_defaults,
         generation_concurrency: embedded_args.generation_concurrency,
         continuous_batching: embedded_args.continuous_batching,
+        pipeline_decode_groups: embedded_args
+            .pipeline_decode_groups
+            .map(|groups| groups as usize),
         adaptive_generation_min_concurrency: None,
         generation_queue_capacity: embedded_args
             .generation_concurrency

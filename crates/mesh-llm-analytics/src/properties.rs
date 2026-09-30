@@ -59,6 +59,58 @@ pub const fn os_family() -> &'static str {
     }
 }
 
+/// How this process was started, as a fixed string.
+///
+/// This exists because an install identifier is one *state directory*, not
+/// one machine. A container gets a fresh `$HOME` on every run, so it mints a
+/// new identifier and reports `install_first_run` every single time — which
+/// reads as organic adoption and is not. Labelling the environment keeps
+/// those runs in the data (they are real executions) while making them
+/// separable from someone's laptop.
+///
+/// Deliberately a label and not a new opt-out: suppressing these runs would
+/// silently discard data, and the honest fix for "is this a person?" is to
+/// let the question be asked rather than answered in advance.
+///
+/// Checked most-specific first. A CI job usually runs in a container too, and
+/// "ci" is the more useful of the two answers.
+#[must_use]
+pub fn exec_env() -> &'static str {
+    if crate::consent::detect_ci() {
+        "ci"
+    } else if in_container() {
+        "container"
+    } else if in_service_manager() {
+        "service"
+    } else {
+        "plain"
+    }
+}
+
+/// Files and variables that mark a container runtime.
+///
+/// `container` is set by podman, systemd-nspawn, and LXC;
+/// `KUBERNETES_SERVICE_HOST` is injected into every pod.
+fn in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+        || env_is_set("container")
+        || env_is_set("KUBERNETES_SERVICE_HOST")
+}
+
+/// Whether a service manager started this process rather than a person.
+///
+/// `INVOCATION_ID` is set by systemd for every unit it starts. launchd has no
+/// equivalent marker, so macOS agents fall through to `plain`; that is a known
+/// blind spot rather than a claim that none exist.
+fn in_service_manager() -> bool {
+    env_is_set("INVOCATION_ID")
+}
+
+fn env_is_set(key: &str) -> bool {
+    std::env::var_os(key).is_some_and(|value| !value.is_empty())
+}
+
 /// The CPU architecture, as a fixed string.
 #[must_use]
 pub const fn architecture() -> &'static str {
@@ -89,6 +141,7 @@ pub fn base_properties() -> Properties {
         )
         .with("os", os_family())
         .with("arch", architecture())
+        .with("exec_env", exec_env())
         .with("$lib", LIB_NAME)
         .with(
             "$lib_version",

@@ -79,12 +79,12 @@ def session_summaries(trajectories, requests):
 
 
 def runtime_context(document, required):
-    stages = document.get("stages", [])
-    if not stages or len({s.get("model_id") for s in stages}) != 1:
+    models = document.get("models", [])
+    if len(models) != 1:
         raise ValueError(
-            "context preflight requires one identified local model with stage metadata"
+            "context preflight requires one identified local runtime model"
         )
-    values = [s.get("ctx_size") for s in stages]
+    values = [model.get("context_length") for model in models]
     if any(type(v) is not int or v < required for v in values):
         raise ValueError(
             f"effective runtime context {values} is below required {required}"

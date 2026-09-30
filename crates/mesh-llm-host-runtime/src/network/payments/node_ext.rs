@@ -356,4 +356,45 @@ mod tests {
         manager.set_test_capability_providers(providers);
         Ok(manager)
     }
+
+    /// An embedded stop/start must release the ledger process lock so the
+    /// same payment directory can be reopened in the same process. The
+    /// in-process runner captures a Node clone; without detaching the manager
+    /// the cycle keeps `service.lock` held and the reopen fails with
+    /// "payment service is already running". Ledger-only: no wallet operation
+    /// runs, so the plugin wallet factory never opens a native wallet.
+    #[tokio::test]
+    async fn embedded_restart_reopens_same_payment_directory() -> anyhow::Result<()> {
+        let profile = tempfile::tempdir()?;
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        *node.config_state.lock().await =
+            crate::runtime::config_state::ConfigState::load(&profile.path().join("config.toml"))?;
+        let directory = node.config_state.lock().await.payment_directory();
+        assert!(directory.starts_with(profile.path()));
+        let manager = attach_payments_plugin(&node).await?;
+        let weak = Arc::downgrade(&node.payments);
+        drop(node.payment_engine().await?);
+        assert!(
+            mesh_llm_payments::service::PaymentService::open(&directory).is_err(),
+            "lock must be held while the engine is live"
+        );
+        manager.shutdown().await;
+        drop(manager);
+        drop(node.take_plugin_manager().await);
+        drop(node);
+        // Serving tasks unwind asynchronously; the leak never resolves.
+        for _ in 0..100 {
+            if weak.upgrade().is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            weak.upgrade().is_none(),
+            "payments slot leaked after shutdown"
+        );
+        mesh_llm_payments::service::PaymentService::open(&directory)
+            .map_err(|e| anyhow::anyhow!("reopen same payment directory failed: {e:#}"))?;
+        Ok(())
+    }
 }

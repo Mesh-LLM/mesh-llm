@@ -100,7 +100,12 @@ def main() -> int:
 
     api_port = free_port()
     console_port = free_port()
-    with tempfile.TemporaryDirectory(prefix="mesh-laya-smoke-") as directory:
+    # A Windows child may retain the inherited log handle briefly after the
+    # server exits. Preserve the actual smoke result instead of replacing it
+    # with WinError 32 while removing this disposable runner directory.
+    with tempfile.TemporaryDirectory(
+        prefix="mesh-laya-smoke-", ignore_cleanup_errors=sys.platform == "win32"
+    ) as directory:
         state = Path(directory)
         log_path = state / "mesh-llm.log"
         parity_path = args.json_out or state / "laya-parity.json"
@@ -112,6 +117,11 @@ def main() -> int:
             # The smoke must consume only the runtime bundled beside the host.
             "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL": "http://127.0.0.1:9/native-runtimes.json",
         }
+        if args.device == "Vulkan0":
+            # The GPU smoke runner may lack vulkaninfo. Admit the explicit
+            # Vulkan selection; loading the model and golden reads still
+            # require a working Vulkan device and packaged runtime.
+            environment["MESH_LLM_VULKAN_AVAILABLE"] = "1"
         command = [
             str(binary),
             "--log-format",

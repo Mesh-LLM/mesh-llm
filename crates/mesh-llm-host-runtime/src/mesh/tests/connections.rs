@@ -427,6 +427,7 @@ async fn make_test_node_with_requirements(
         )),
         swarm_capture: Arc::new(std::sync::Mutex::new(None)),
         local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
+        plugin_frame_telemetry: Arc::new(PluginFrameTelemetry::default()),
         runtime_data_producer,
         tunnel_tx,
         tunnel_http_tx,

@@ -176,6 +176,9 @@ impl SseDecoder {
     fn push(&mut self, input: &[u8]) -> Result<()> {
         self.buffer.extend_from_slice(input);
         while let Some(end) = sse_frame_end(&self.buffer) {
+            if end > MAX_SSE_EVENT_BYTES {
+                bail!("embedded OpenAI SSE event exceeds 8 MiB");
+            }
             let raw = self.buffer.drain(..end).collect::<Vec<_>>();
             if let Some(event) = parse_sse_event(raw)? {
                 self.ready.push_back(event);
@@ -190,6 +193,9 @@ impl SseDecoder {
     fn finish(&mut self) -> Result<()> {
         if self.buffer.is_empty() {
             return Ok(());
+        }
+        if self.buffer.len() > MAX_SSE_EVENT_BYTES {
+            bail!("embedded OpenAI SSE event exceeds 8 MiB");
         }
         let raw = std::mem::take(&mut self.buffer);
         if let Some(event) = parse_sse_event(raw)? {
@@ -262,7 +268,7 @@ fn parse_sse_event(raw: Vec<u8>) -> Result<Option<EmbeddedSseEvent>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SseDecoder, request_model};
+    use super::{MAX_SSE_EVENT_BYTES, SseDecoder, request_model};
 
     #[test]
     fn request_model_requires_a_non_empty_string() {
@@ -290,5 +296,25 @@ mod tests {
         );
         assert!(event.data.contains("Sydney"));
         assert!(event.raw.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn sse_decoder_rejects_oversized_complete_frame() {
+        let mut decoder = SseDecoder::default();
+        let mut frame = b"data: ".to_vec();
+        frame.resize(MAX_SSE_EVENT_BYTES, b'x');
+        frame.extend_from_slice(b"\n\n");
+        assert!(decoder.push(&frame).is_err());
+        assert!(decoder.pop().is_none());
+    }
+
+    #[test]
+    fn sse_decoder_rejects_oversized_frame_at_eof() {
+        let mut decoder = SseDecoder::default();
+        let mut frame = b"data: ".to_vec();
+        frame.resize(MAX_SSE_EVENT_BYTES + 1, b'x');
+        decoder.buffer = frame;
+        assert!(decoder.finish().is_err());
+        assert!(decoder.pop().is_none());
     }
 }

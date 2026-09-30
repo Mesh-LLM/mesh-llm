@@ -24,7 +24,19 @@ pub(crate) fn snapshot_validated_config(config_path: Option<&Path>) -> Result<Na
     crate::plugin::parse_config_toml(raw_text)
         .with_context(|| format!("Invalid config {}", resolved_path.display()))?;
 
-    let mut snapshot = NamedTempFile::new().context("create embedded config snapshot")?;
+    // ConfigState resolves durable payment state relative to the config's
+    // parent. A snapshot in the global temporary directory would redirect all
+    // embedded profiles to the same wallet/ledger instead of their own.
+    let directory = resolved_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(directory).context("create embedded config directory")?;
+    let mut snapshot = tempfile::Builder::new()
+        .prefix(".mesh-config-snapshot-")
+        .suffix(".toml")
+        .tempfile_in(directory)
+        .context("create embedded config snapshot in profile directory")?;
     snapshot
         .write_all(&raw)
         .context("write embedded config snapshot")?;
@@ -64,6 +76,37 @@ mod tests {
             format!("[logging]\nenabled = {enabled}\napplication_state_root = \"{root}\"\n"),
         )
         .expect("write embedded logging config");
+    }
+
+    #[test]
+    #[cfg(feature = "payments")]
+    fn snapshots_preserve_each_profiles_payment_directory() {
+        let root = tempfile::tempdir().expect("temporary profiles");
+        for name in ["first", "second"] {
+            let profile = root.path().join(name);
+            let path = profile.join("config.toml");
+            // A new profile without a config must retain the same state root.
+            let snapshot = snapshot_validated_config(Some(&path)).expect("snapshot");
+            let state = crate::runtime::config_state::ConfigState::load(snapshot.path())
+                .expect("load snapshot");
+            assert_eq!(state.payment_directory(), profile.join("payments"));
+            assert!(
+                !path.exists(),
+                "snapshot must not replace the user's config"
+            );
+            let snapshot_path = snapshot.path().to_path_buf();
+            drop(snapshot);
+            assert!(!snapshot_path.exists(), "snapshot must be cleaned up");
+        }
+    }
+
+    #[test]
+    fn invalid_config_does_not_leave_a_snapshot() {
+        let profile = tempfile::tempdir().expect("temporary profile");
+        let path = profile.path().join("config.toml");
+        std::fs::write(&path, "invalid = [").expect("write invalid config");
+        assert!(snapshot_validated_config(Some(&path)).is_err());
+        assert_eq!(std::fs::read_dir(profile.path()).unwrap().count(), 1);
     }
 
     #[tokio::test]

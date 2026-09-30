@@ -53,14 +53,17 @@ class SessionEvidenceTests(unittest.TestCase):
                     evidence.complete_sessions([trajectory()], invalid)["passed"]
                 )
 
-    def test_long_context_needs_effective_stage_window(self):
+    def test_long_context_needs_effective_runtime_model_window(self):
         self.assertEqual(
             evidence.runtime_context(
-                {"stages": [{"model_id": "m", "ctx_size": 131072}]}, 131072
+                {"models": [{"name": "m", "context_length": 131072}]}, 131072
             ),
             131072,
         )
-        for document in ({}, {"stages": [{"model_id": "m", "ctx_size": 32768}]}):
+        for document in (
+            {},
+            {"models": [{"name": "m", "context_length": 32768}]},
+        ):
             with self.assertRaises(ValueError):
                 evidence.runtime_context(document, 131072)
 

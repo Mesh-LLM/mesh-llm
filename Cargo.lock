@@ -9239,13 +9239,11 @@ dependencies = [
  "blake3",
  "clap",
  "ctrlc",
- "mesh-llm-client",
  "openai-frontend",
  "rustyline",
  "serde_json",
  "skippy-protocol",
  "skippy-runtime",
- "skippy-topology",
 ]
 
 [[package]]

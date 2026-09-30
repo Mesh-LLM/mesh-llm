@@ -171,7 +171,7 @@ jobs:
 
   laya_vulkan:
     name: Laya smoke (Linux Vulkan)
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') }}
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}
     runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia, mesh-llm-amd64]
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
@@ -192,6 +192,7 @@ jobs:
           staged_binary_path: target/release/mesh-llm
           expected_backend: vulkan
           device: Vulkan0
+          enable_vulkan_inference: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}
           model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
           save_model_cache: 'false'
       - name: Clean self-hosted Laya smoke outputs

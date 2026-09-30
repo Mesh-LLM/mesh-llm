@@ -179,6 +179,7 @@ pub use peer_state::{
     DisplayLatency, DisplayLatencySource, MeshCatalogEntry, NodeRole, OwnerRuntimeConfig,
     PeerAnnouncement, PeerInfo, PropagatedLatencyObservation,
 };
+pub(crate) use plugin_mesh::PluginFrameTelemetry;
 pub(crate) use stage_transport::{
     ConnectionCaptureEvent, HttpCaptureEvent, MeshBiStream, PeerLifecycleCaptureEvent,
     SelectedPathObservation, StageTopologyState,
