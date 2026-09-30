@@ -87,7 +87,12 @@ def main() -> int:
 
     api_port = free_port()
     console_port = free_port()
-    with tempfile.TemporaryDirectory(prefix="mesh-laya-smoke-") as directory:
+    # A Windows child may retain the inherited log handle briefly after the
+    # server exits. Preserve the actual smoke result instead of replacing it
+    # with WinError 32 while removing this disposable runner directory.
+    with tempfile.TemporaryDirectory(
+        prefix="mesh-laya-smoke-", ignore_cleanup_errors=sys.platform == "win32"
+    ) as directory:
         state = Path(directory)
         log_path = state / "mesh-llm.log"
         parity_path = args.json_out or state / "laya-parity.json"

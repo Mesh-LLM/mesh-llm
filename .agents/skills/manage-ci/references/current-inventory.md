@@ -818,8 +818,10 @@ rows remain exceptions. The documented `gpu-nvidia` ephemeral scale set is
 the sole currently verified uncredentialed, hardware-qualified same-repository
 PR exception. The typed Vulkan job remains skipped until
 `verify-vulkan-device` passes in a live pod and
-`MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly `true`. The typed ROCm job
-remains skipped unless
+`MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly `true`. The typed Vulkan job
+and source-checked Laya action both enforce that gate, including when an older
+protected workflow definition still admits the job. The typed ROCm job remains
+skipped unless
 `MESH_ROCM_INFERENCE_RUNNER_ENABLED` explicitly enables the repository-scoped
 `gpu-amd` role.
 

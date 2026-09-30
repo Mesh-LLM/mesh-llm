@@ -619,9 +619,14 @@ runtime producers are not duplicated.
   The Vulkan Laya row requires `MESH_VULKAN_INFERENCE_RUNNER_ENABLED=true`
   after `verify-vulkan-device` passes in a live runner pod. It enables the
   explicit Vulkan profile when that runner lacks `vulkaninfo`; model startup
-  and golden reads still exercise the device.
+  and golden reads still exercise the device. The source-checked Laya action
+  repeats the exact variable gate so an older protected workflow cannot run
+  the smoke on an uncertified PR runner before the workflow gate reaches main.
   Windows product restore passes LF-terminated manifest fields to Git Bash so
-  its runtime path does not retain Python's Windows carriage return.
+  its runtime path does not retain Python's Windows carriage return. The Laya
+  parity driver decodes golden fixtures as UTF-8 on Windows, and the smoke
+  harness preserves its result if a child briefly holds its log open during
+  temporary-directory cleanup.
   Windows CUDA/ROCm/Vulkan remain build-only because CI has no matching Windows
   accelerator runners. The core smoke restores the
   registry-derived dense SmolLM2-135M Q8 and recurrent IBM Granite 4.0 H 350M
