@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TopNav } from '@/features/shell/components/TopNav'
@@ -378,6 +378,71 @@ describe('TopNav', () => {
       href: '/plugins/blackboard/dashboard',
       active: true
     })
+  })
+
+  it('renders a promoted plugin page as a primary tab alongside Network and Chat', async () => {
+    const user = userEvent.setup()
+    const onPluginPageChange = vi.fn()
+
+    renderTopNav({
+      onPluginPageChange,
+      primaryPluginTabs: [
+        {
+          pluginName: 'blackboard',
+          pageId: 'dashboard',
+          label: 'Blackboard dashboard',
+          href: '/plugins/blackboard/dashboard',
+          active: true
+        }
+      ]
+    })
+
+    expect(screen.getByRole('link', { name: 'Network' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Chat' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Plugin pages' })).not.toBeInTheDocument()
+
+    const primaryPluginLink = screen.getByRole('link', { name: 'Blackboard dashboard' })
+    expect(primaryPluginLink).toHaveAttribute('href', '/plugins/blackboard/dashboard')
+    expect(primaryPluginLink).toHaveAttribute('aria-current', 'page')
+
+    await user.click(primaryPluginLink)
+
+    expect(onPluginPageChange).toHaveBeenCalledWith({
+      pluginName: 'blackboard',
+      pageId: 'dashboard',
+      label: 'Blackboard dashboard',
+      href: '/plugins/blackboard/dashboard',
+      active: true
+    })
+  })
+
+  it('keeps a promoted primary plugin tab separate from the auxiliary plugin menu', async () => {
+    const user = userEvent.setup()
+
+    renderTopNav({
+      primaryPluginTabs: [
+        {
+          pluginName: 'blackboard',
+          pageId: 'dashboard',
+          label: 'Blackboard dashboard',
+          href: '/plugins/blackboard/dashboard'
+        }
+      ],
+      pluginNavItems: [
+        { pluginName: 'notes', pageId: 'notes', label: 'Notes', href: '/plugins/notes/notes' },
+        { pluginName: 'docs', pageId: 'docs', label: 'Docs', href: '/plugins/docs/docs' }
+      ]
+    })
+
+    expect(screen.getByRole('link', { name: 'Blackboard dashboard' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Plugin pages' }))
+
+    const pluginMenu = within(await screen.findByRole('navigation', { name: 'Plugin pages' }))
+
+    expect(await pluginMenu.findByRole('link', { name: /Notes/ })).toBeInTheDocument()
+    expect(pluginMenu.getByRole('link', { name: /Docs/ })).toBeInTheDocument()
+    expect(pluginMenu.queryByRole('link', { name: /Blackboard dashboard/ })).not.toBeInTheDocument()
   })
 
   it('groups multiple plugin pages in the auxiliary navigation menu', async () => {

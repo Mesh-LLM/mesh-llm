@@ -19,6 +19,7 @@ pub struct PluginWebUiState {
     pub config_sections: Vec<PluginWebUiConfigSectionOverview>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_base_url: Option<String>,
+    pub primary_tab_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
@@ -49,6 +50,36 @@ pub struct PluginWebUiPageOverview {
     pub route: String,
     pub bundle_id: String,
     pub entry_script: String,
+    pub placement: PluginWebUiPagePlacement,
+}
+
+/// The page's manifest-declared placement request. This is a request, not
+/// a promotion decision: the console also requires the operator's
+/// persisted `primary_tab_enabled` preference (see
+/// `crate::api::routes::plugins::web_ui`) before it treats the page as a
+/// primary tab, and may still fall back to auxiliary when the tab bar is
+/// full.
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginWebUiPagePlacement {
+    #[default]
+    Auxiliary,
+    Primary,
+}
+
+impl From<mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement>
+    for PluginWebUiPagePlacement
+{
+    fn from(value: mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement) -> Self {
+        match value {
+            mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement::Auxiliary => {
+                Self::Auxiliary
+            }
+            mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement::Primary => {
+                Self::Primary
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -66,6 +97,7 @@ pub(crate) struct PluginWebUiStateInput<'a> {
     pub live_manifest: Option<&'a proto::PluginManifest>,
     pub installed_metadata: Option<&'a InstalledPluginMetadata>,
     pub web_ui_enabled: Option<bool>,
+    pub web_ui_primary_tab: bool,
     pub runtime_available: bool,
     pub runtime_unavailable_reason: Option<&'a str>,
 }
@@ -75,8 +107,9 @@ pub(crate) fn derive_plugin_web_ui_state(input: PluginWebUiStateInput<'_>) -> Pl
     let Some(declaration) = declaration else {
         return PluginWebUiState::default();
     };
+    let primary_tab_enabled = input.web_ui_primary_tab;
     let preference = plugin_web_ui_preference(input.web_ui_enabled, true);
-    match preference {
+    let mut state = match preference {
         PluginWebUiPreference::None => PluginWebUiState::default(),
         PluginWebUiPreference::Disabled => declaration.state(
             PluginWebUiStateKind::Disabled,
@@ -85,7 +118,9 @@ pub(crate) fn derive_plugin_web_ui_state(input: PluginWebUiStateInput<'_>) -> Pl
             Some("web UI disabled by configuration".into()),
         ),
         PluginWebUiPreference::Enabled => enabled_plugin_web_ui_state(input, declaration),
-    }
+    };
+    state.primary_tab_enabled = primary_tab_enabled;
+    state
 }
 
 fn enabled_plugin_web_ui_state(
@@ -120,6 +155,7 @@ pub(super) fn inactive_web_ui_state(
             live_manifest: None,
             installed_metadata: Some(&metadata),
             web_ui_enabled,
+            web_ui_primary_tab: summary.web_ui.primary_tab_enabled,
             runtime_available: summary.status == "running",
             runtime_unavailable_reason: summary.error.as_deref(),
         });
@@ -203,6 +239,8 @@ impl PluginWebUiDeclaration {
             pages: self.pages,
             config_sections: self.config_sections,
             asset_base_url: self.asset_base_url,
+            // Overwritten by `derive_plugin_web_ui_state` right after this call returns.
+            primary_tab_enabled: false,
         }
     }
 }
@@ -305,6 +343,10 @@ fn plugin_web_ui_page_from_proto(page: &proto::PluginWebUiPageManifest) -> Plugi
         route: page.route.clone(),
         bundle_id: page.bundle_id.clone(),
         entry_script: page.entry_script.clone(),
+        placement: match proto::PluginWebUiPagePlacement::try_from(page.placement) {
+            Ok(proto::PluginWebUiPagePlacement::Primary) => PluginWebUiPagePlacement::Primary,
+            _ => PluginWebUiPagePlacement::Auxiliary,
+        },
     }
 }
 
@@ -330,6 +372,7 @@ fn plugin_web_ui_page_from_installed(
         route: page.route.clone(),
         bundle_id: page.bundle_id.clone(),
         entry_script: page.entry_script.clone(),
+        placement: page.placement.into(),
     }
 }
 
@@ -374,6 +417,7 @@ pub(super) fn installed_metadata_with_web_ui(
                             route: "index.html".into(),
                             bundle_id: "main".into(),
                             entry_script: "assets/app.js".into(),
+                            placement: mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement::Auxiliary,
                         },
                     ],
                     config_sections: vec![
@@ -419,6 +463,7 @@ mod tests {
             live_manifest: None,
             installed_metadata,
             web_ui_enabled,
+            web_ui_primary_tab: false,
             runtime_available,
             runtime_unavailable_reason: Some("plugin process is not running"),
         })

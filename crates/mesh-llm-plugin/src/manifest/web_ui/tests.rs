@@ -363,3 +363,91 @@ fn web_ui_packaging_accepts_valid_slug_and_single_bundle_reference() {
     assert_eq!(packaged.pages[0].bundle_id, "main");
     assert_eq!(packaged.config_sections[0].bundle_id, "main");
 }
+
+#[test]
+fn web_ui_packaging_defaults_unset_placement_to_auxiliary() {
+    let manifest = proto::PluginWebUiManifest {
+        pages: vec![proto::PluginWebUiPageManifest {
+            id: "home".into(),
+            label: "Home".into(),
+            route: "home".into(),
+            bundle_id: "main".into(),
+            entry_script: "app.js".into(),
+            ..Default::default()
+        }],
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: "dist".into(),
+        }],
+        ..Default::default()
+    };
+
+    let packaged = PackagedPluginWebUi::try_from(&manifest).expect("valid web UI should pass");
+
+    assert_eq!(
+        packaged.pages[0].placement,
+        PackagedPluginWebUiPagePlacement::Auxiliary
+    );
+}
+
+#[test]
+fn web_ui_packaging_carries_primary_placement_hint() {
+    let manifest = proto::PluginWebUiManifest {
+        pages: vec![proto::PluginWebUiPageManifest {
+            id: "home".into(),
+            label: "Home".into(),
+            route: "home".into(),
+            bundle_id: "main".into(),
+            entry_script: "app.js".into(),
+            placement: proto::PluginWebUiPagePlacement::Primary as i32,
+            ..Default::default()
+        }],
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: "dist".into(),
+        }],
+        ..Default::default()
+    };
+
+    let packaged = PackagedPluginWebUi::try_from(&manifest).expect("valid web UI should pass");
+
+    assert_eq!(
+        packaged.pages[0].placement,
+        PackagedPluginWebUiPagePlacement::Primary
+    );
+}
+
+#[test]
+fn web_ui_packaging_rejects_unknown_placement_value() {
+    let manifest = proto::PluginWebUiManifest {
+        pages: vec![proto::PluginWebUiPageManifest {
+            id: "home".into(),
+            label: "Home".into(),
+            route: "home".into(),
+            bundle_id: "main".into(),
+            entry_script: "app.js".into(),
+            placement: 99,
+            ..Default::default()
+        }],
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: "dist".into(),
+        }],
+        ..Default::default()
+    };
+
+    let error =
+        PackagedPluginWebUi::try_from(&manifest).expect_err("unknown placement should fail");
+
+    assert!(error.to_string().contains("placement"), "{error}");
+}
+
+#[test]
+fn web_ui_page_builder_primary_placement_sets_proto_field() {
+    let page = web_ui_page("home", "Home", "home", "app.js").primary_placement();
+
+    assert_eq!(
+        proto::PluginWebUiPageManifest::from(page).placement,
+        proto::PluginWebUiPagePlacement::Primary as i32
+    );
+}

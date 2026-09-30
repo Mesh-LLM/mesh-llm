@@ -53,6 +53,21 @@ pub struct InstalledPluginWebUiPageMetadata {
     pub route: String,
     pub bundle_id: String,
     pub entry_script: String,
+    #[serde(default)]
+    pub placement: InstalledPluginWebUiPagePlacement,
+}
+
+/// A manifest-declared placement request, not a promotion decision: the
+/// host also requires the persisted `web_ui_primary_tab` operator
+/// preference before it renders a page as a primary tab. Absent on disk
+/// (a `plugin-manifest.json` packaged before this field existed) defaults
+/// to `Auxiliary` via `#[serde(default)]`, so older packages keep working.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledPluginWebUiPagePlacement {
+    #[default]
+    Auxiliary,
+    Primary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

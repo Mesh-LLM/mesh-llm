@@ -103,3 +103,9 @@ and LM Studio, release compatibility, and HTTP/authentication limitations.
 the console projection independently of `enabled`, which controls the plugin
 process. Set it to `false` to hide the UI without disabling the plugin's MCP,
 HTTP, inference, or capability contributions.
+
+`web_ui_primary_tab` promotes a declared web UI page to a primary console tab
+instead of the default auxiliary navigation item, but only when the page's own
+manifest also requests `placement = "primary"` — the preference alone does
+nothing. It defaults to off, is independent of `web_ui_enabled`, and the host
+may still fall back to auxiliary placement if the primary tab row is full.

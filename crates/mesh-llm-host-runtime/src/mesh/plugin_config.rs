@@ -33,6 +33,78 @@ impl Node {
                     name: plugin_name,
                     enabled: None,
                     web_ui_enabled: Some(enabled),
+                    web_ui_primary_tab: None,
+                    command: None,
+                    args: Vec::new(),
+                    url: None,
+                    settings: BTreeMap::new(),
+                    startup: crate::plugin::PluginStartupConfig::default(),
+                }),
+            }
+            let result = state.apply(config, expected_revision);
+            Ok((result, state.revision()))
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("plugin web UI config task panicked: {error}"))??;
+
+        match apply_result {
+            (ApplyResult::Applied { apply_mode, .. }, revision) => {
+                if apply_mode == ConfigApplyMode::Staged {
+                    let _ = revision_tx.send(revision);
+                }
+                Ok(())
+            }
+            (ApplyResult::AppliedWithRestartRequired { revision, .. }, _) => {
+                let _ = revision_tx.send(revision);
+                Ok(())
+            }
+            (
+                ApplyResult::PersistedWithRevisionTrackingError {
+                    revision, error, ..
+                },
+                _,
+            ) => {
+                let _ = revision_tx.send(revision);
+                anyhow::bail!(error)
+            }
+            (ApplyResult::RevisionConflict { current_revision }, _) => {
+                anyhow::bail!("config revision conflict at revision {current_revision}")
+            }
+            (ApplyResult::ValidationError { error, .. }, _)
+            | (ApplyResult::PersistError(error), _) => anyhow::bail!(error),
+        }
+    }
+
+    pub(crate) async fn set_plugin_web_ui_primary_tab(
+        &self,
+        plugin_name: &str,
+        primary_tab_enabled: bool,
+    ) -> anyhow::Result<()> {
+        let config_state = Arc::clone(&self.config_state);
+        let revision_tx = Arc::clone(&self.config_revision_tx);
+        let plugin_name = plugin_name.to_string();
+        let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let apply_serialization_lock = {
+                let state = config_state.blocking_lock();
+                state.apply_serialization_lock()
+            };
+            let _apply_serialization_guard = apply_serialization_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = config_state.blocking_lock();
+            let expected_revision = state.revision();
+            let mut config = state.config().clone();
+            match config
+                .plugins
+                .iter_mut()
+                .find(|plugin| plugin.name == plugin_name)
+            {
+                Some(plugin) => plugin.web_ui_primary_tab = Some(primary_tab_enabled),
+                None => config.plugins.push(crate::plugin::PluginConfigEntry {
+                    name: plugin_name,
+                    enabled: None,
+                    web_ui_enabled: None,
+                    web_ui_primary_tab: Some(primary_tab_enabled),
                     command: None,
                     args: Vec::new(),
                     url: None,
@@ -116,6 +188,7 @@ impl Node {
                         name: plugin_name.clone(),
                         enabled: None,
                         web_ui_enabled: None,
+                        web_ui_primary_tab: None,
                         command: None,
                         args: Vec::new(),
                         url: None,

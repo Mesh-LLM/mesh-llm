@@ -89,6 +89,62 @@ pub(super) async fn handle_enabled(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct WebUiPrimaryTabRequest {
+    enabled: bool,
+}
+
+pub(super) async fn handle_primary_tab(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let Some((plugin_name, PluginWebUiSubroute::PrimaryTab)) = parse_plugin_web_ui_route(path)
+    else {
+        return respond_error(stream, 404, "Not found").await;
+    };
+    let request: WebUiPrimaryTabRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
+    };
+    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+    let current = match plugin_manager.web_ui_state(plugin_name).await {
+        Ok(web_ui) => web_ui,
+        Err(error) => return respond_error(stream, 404, &error.to_string()).await,
+    };
+    if !current.declared {
+        return respond_error(stream, 400, "Plugin does not declare a web UI").await;
+    }
+    let web_ui = match plugin_manager
+        .set_web_ui_primary_tab(plugin_name, request.enabled)
+        .await
+    {
+        Ok(web_ui) => web_ui,
+        Err(error) => return respond_error(stream, 404, &error.to_string()).await,
+    };
+    if let Err(error) = state
+        .capture_node
+        .set_plugin_web_ui_primary_tab(plugin_name, request.enabled)
+        .await
+    {
+        if let Err(rollback_error) = plugin_manager
+            .set_web_ui_primary_tab(plugin_name, current.primary_tab_enabled)
+            .await
+        {
+            return respond_error(
+                stream,
+                500,
+                &format!("{error}; failed to roll back runtime web UI state: {rollback_error}"),
+            )
+            .await;
+        }
+        return respond_error(stream, 500, &error.to_string()).await;
+    }
+    respond_json(stream, 200, &web_ui).await?;
+    Ok(())
+}
+
 pub(super) async fn handle_asset(
     stream: &mut TcpStream,
     state: &MeshApi,
@@ -282,7 +338,13 @@ fn validate_setting_key(key: &str) -> Result<(), String> {
     }
     if matches!(
         trimmed,
-        "enabled" | "web_ui_enabled" | "command" | "args" | "url" | "startup"
+        "enabled"
+            | "web_ui_enabled"
+            | "web_ui_primary_tab"
+            | "command"
+            | "args"
+            | "url"
+            | "startup"
     ) {
         return Err(format!(
             "Plugin setting key '{trimmed}' targets a host-owned field"

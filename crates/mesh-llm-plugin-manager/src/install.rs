@@ -434,8 +434,9 @@ mod tests {
         InstalledPluginTextFormat, InstalledPluginValueKind, InstalledPluginValueSchema,
         InstalledPluginVisibility, InstalledPluginWebUiBundleMetadata,
         InstalledPluginWebUiConfigSectionMetadata, InstalledPluginWebUiMetadata,
-        InstalledPluginWebUiPageMetadata, InstalledPluginWebUiValidation,
-        InstalledPluginWebUiValidationStatus, SUPPORTED_PLUGIN_SCHEMA_VERSION,
+        InstalledPluginWebUiPageMetadata, InstalledPluginWebUiPagePlacement,
+        InstalledPluginWebUiValidation, InstalledPluginWebUiValidationStatus,
+        SUPPORTED_PLUGIN_SCHEMA_VERSION,
     };
 
     fn write_tar_gz(archive_path: &Path, plugin_name: &str, files: &[(&str, &[u8])]) -> Result<()> {
@@ -577,6 +578,7 @@ mod tests {
                     route: "dashboard".to_string(),
                     bundle_id: "main".to_string(),
                     entry_script: "assets/main.js".to_string(),
+                    placement: InstalledPluginWebUiPagePlacement::Auxiliary,
                 }],
                 config_sections: vec![InstalledPluginWebUiConfigSectionMetadata {
                     id: "settings".to_string(),

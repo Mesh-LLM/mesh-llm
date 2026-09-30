@@ -202,6 +202,18 @@ message PluginWebUiPageManifest {
   string route = 4;
   string bundle_id = 5;
   string entry_script = 6;
+  // Host-owned request, not a guarantee: the host promotes the page to a
+  // primary tab only when this is PRIMARY *and* the operator has opted in
+  // via the persisted `web_ui_primary_tab` preference. Absent/UNSPECIFIED
+  // (older plugins compiled against an earlier schema) is treated as
+  // AUXILIARY, so this field is additive and backward compatible.
+  PluginWebUiPagePlacement placement = 7;
+}
+
+enum PluginWebUiPagePlacement {
+  PLUGIN_WEB_UI_PAGE_PLACEMENT_UNSPECIFIED = 0;
+  AUXILIARY = 1;
+  PRIMARY = 2;
 }
 
 message PluginWebUiConfigSectionManifest {

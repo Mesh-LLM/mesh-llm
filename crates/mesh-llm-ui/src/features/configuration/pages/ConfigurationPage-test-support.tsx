@@ -240,7 +240,8 @@ function pluginSummary(name: string, webUi: PluginWebUiStateRaw, options: Plugin
 }
 
 function readyPluginWebUi(
-  section: { readonly parent_tab?: string } = { parent_tab: 'integrations' }
+  section: { readonly parent_tab?: string } = { parent_tab: 'integrations' },
+  page: { readonly placement?: 'primary' | 'auxiliary'; readonly primaryTabEnabled?: boolean } = {}
 ): PluginWebUiStateRaw {
   return {
     state: 'ready',
@@ -253,7 +254,8 @@ function readyPluginWebUi(
         label: 'Dashboard',
         route: 'dashboard',
         bundle_id: 'main',
-        entry_script: 'dashboard.js'
+        entry_script: 'dashboard.js',
+        placement: page.placement
       }
     ],
     config_sections: [
@@ -265,7 +267,8 @@ function readyPluginWebUi(
         bundle_id: 'main'
       }
     ],
-    asset_base_url: '/api/plugins/blackboard/web-ui/assets/'
+    asset_base_url: '/api/plugins/blackboard/web-ui/assets/',
+    primary_tab_enabled: page.primaryTabEnabled ?? false
   }
 }
 
@@ -302,7 +305,8 @@ function nonePluginWebUi(): PluginWebUiStateRaw {
     state: 'none',
     declared: false,
     enabled: false,
-    available: false
+    available: false,
+    primary_tab_enabled: false
   }
 }
 

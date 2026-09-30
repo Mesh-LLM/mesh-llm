@@ -1696,6 +1696,8 @@ pub struct PluginConfigEntry {
     pub enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_ui_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_ui_primary_tab: Option<bool>,
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]
@@ -1729,6 +1731,14 @@ impl PluginWebUiPreference {
 impl PluginConfigEntry {
     pub const fn web_ui_preference(&self, declares_web_ui: bool) -> PluginWebUiPreference {
         PluginWebUiPreference::resolve(self.web_ui_enabled, declares_web_ui)
+    }
+
+    /// Off unless the operator has explicitly opted in. Unlike
+    /// `web_ui_preference`, this never gates the web UI's availability —
+    /// it only asks whether a manifest page that requests
+    /// `placement = "primary"` should be promoted.
+    pub const fn web_ui_primary_tab_preference(&self) -> bool {
+        matches!(self.web_ui_primary_tab, Some(true))
     }
 }
 

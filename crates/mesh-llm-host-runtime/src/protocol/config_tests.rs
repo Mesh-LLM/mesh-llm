@@ -39,6 +39,7 @@ fn config_sync_full_config_roundtrip() {
             name: "demo".to_string(),
             enabled: Some(true),
             web_ui_enabled: Some(false),
+            web_ui_primary_tab: Some(true),
             command: Some("mesh-llm".to_string()),
             args: vec!["--plugin".to_string()],
             url: None,
@@ -70,6 +71,7 @@ fn config_sync_full_config_roundtrip() {
     assert_eq!(restored.plugins[0].name, "demo");
     assert_eq!(restored.plugins[0].enabled, Some(true));
     assert_eq!(restored.plugins[0].web_ui_enabled, Some(false));
+    assert_eq!(restored.plugins[0].web_ui_primary_tab, Some(true));
     assert_eq!(restored.plugins[0].command.as_deref(), Some("mesh-llm"));
     assert_eq!(restored.plugins[0].args, vec!["--plugin"]);
 }

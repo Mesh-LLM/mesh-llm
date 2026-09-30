@@ -1642,6 +1642,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "plugin.<name>.web_ui_primary_tab",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "plugin.<name>.command",
         status: WiringStatus::Wired,
         owner: "n/a",

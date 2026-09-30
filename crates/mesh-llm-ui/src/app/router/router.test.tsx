@@ -518,7 +518,8 @@ function readyPluginWebUi(): PluginWebUiStateRaw {
       }
     ],
     config_sections: [],
-    asset_base_url: '/api/plugins/blackboard/web-ui/assets/'
+    asset_base_url: '/api/plugins/blackboard/web-ui/assets/',
+    primary_tab_enabled: false
   }
 }
 
@@ -563,7 +564,8 @@ function nonePluginWebUi(): PluginWebUiStateRaw {
     state: 'none',
     declared: false,
     enabled: false,
-    available: false
+    available: false,
+    primary_tab_enabled: false
   }
 }
 

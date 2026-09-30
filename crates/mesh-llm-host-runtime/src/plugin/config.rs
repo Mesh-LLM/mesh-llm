@@ -280,6 +280,7 @@ pub struct ExternalPluginSpec {
     pub env: BTreeMap<String, String>,
     pub startup: PluginStartupOptions,
     pub web_ui_enabled: Option<bool>,
+    pub web_ui_primary_tab: Option<bool>,
     pub installed_metadata: Option<mesh_llm_plugin_manager::InstalledPluginMetadata>,
 }
 
@@ -411,6 +412,7 @@ pub fn in_process_builtin_spec(name: &str) -> ExternalPluginSpec {
             ..PluginStartupOptions::default()
         },
         web_ui_enabled: None,
+        web_ui_primary_tab: None,
         installed_metadata: None,
     }
 }
@@ -445,6 +447,7 @@ pub fn builtin_plugin_spec(name: &str) -> Result<ExternalPluginSpec> {
             ..PluginStartupOptions::default()
         },
         web_ui_enabled: None,
+        web_ui_primary_tab: None,
         installed_metadata: None,
     })
 }

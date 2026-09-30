@@ -113,6 +113,30 @@ Rules for the declared bundle paths:
 - reject remote URL schemes, absolute paths, and traversal segments
 - treat `parent_tab = "integrations"` as the only supported parent-tab value for
   config sections, or omit `parent_tab`
+- a page may set `placement = "primary"` to request promotion to a primary
+  console tab (default, if omitted, is `"auxiliary"`); this is only a request —
+  see "Primary Tab Placement" below for what else must be true before the host
+  honors it
+
+### Primary Tab Placement
+
+A page's `placement` hint never forces anything on its own. The host projects a
+page as a primary tab, next to `Network`/`Logs`/`Chat`/etc., only when BOTH of
+these are true:
+
+- the page's manifest declares `placement = "primary"`
+- the operator has turned on the plugin's persisted `web_ui_primary_tab`
+  preference (default off), alongside the existing `web_ui_enabled` preference,
+  in Configuration › Plugins
+
+If either is missing, the page renders as the existing auxiliary navigation
+item instead — a plugin cannot promote its own page unilaterally, and an
+operator preference alone does nothing until a page actually asks for it. At
+most one page per plugin promotes; a manifest that hints `primary` on more than
+one page only sees its first ready page promoted. The host also caps how many
+plugin pages the primary header row will hold at once; once that cap is
+reached, later-loaded plugins fall back to auxiliary placement even if both
+conditions are met, to protect header space for the console's own tabs.
 
 The manifest proto keeps the bundle field repeated as a forward-compatible wire
 shape. V1 validation intentionally permits only one bundle root so the host has
@@ -137,12 +161,21 @@ The web UI API uses the existing plugin namespace and these exact routes:
 
 - `GET /api/plugins/:plugin/web-ui`
 - `PATCH /api/plugins/:plugin/web-ui/enabled`
+- `PATCH /api/plugins/:plugin/web-ui/primary-tab`
 - `GET /api/plugins/:plugin/web-ui/config`
 - `PATCH /api/plugins/:plugin/web-ui/config`
 - `GET /api/plugins/:plugin/web-ui/assets/*asset`
 
 The toggle route changes only the persisted `web_ui_enabled` projection
 preference. It does not start, stop, or disable the plugin process.
+
+The primary-tab route changes only the persisted `web_ui_primary_tab`
+preference (`{ "enabled": bool }` in, the updated web UI state back). It is a
+separate route from `web-ui/enabled` because the two preferences are
+independent and separately host-owned: turning the web UI off should not
+silently clear a saved primary-tab preference, and setting the preference does
+nothing on its own unless the plugin's manifest also hints `placement =
+"primary"` on a page (see "Primary Tab Placement" above).
 
 Asset delivery is host-owned and same-origin. It serves only validated installed
 bundle assets and only when the projection is `ready`. Console mounts use the
@@ -173,7 +206,8 @@ The config route is also host-owned and plugin-scoped. `GET` returns:
 
 The `plugin` field must match the mounted plugin when present. Mutations may
 only touch plugin-owned `settings` keys; host-owned fields such as `enabled`,
-`web_ui_enabled`, `command`, `args`, `url`, and `startup` are rejected.
+`web_ui_enabled`, `web_ui_primary_tab`, `command`, `args`, `url`, and `startup`
+are rejected.
 Malformed requests return `400`; schema-invalid setting values return `422`;
 successful mutations return the newly visible plugin config.
 
@@ -181,13 +215,22 @@ The console route is static TanStack routing, not dynamic route injection:
 
 - `/plugins/$pluginName/$pageId`
 
-Plugin routes do not become a new primary `AppTab`. A ready plugin with one
-declared page receives a direct auxiliary navigation item labeled from its page
-manifest. When more than one plugin page is ready, the console groups those
-entries under the auxiliary `Plugins` menu to protect header space. Disabled,
-invalid, or stopped projections contribute no navigation item. The existing
-Configuration `Plugins` tab owns config-section projection, and only ready
-config sections in the `integrations` projection mount there.
+Plugin routes do not become a new primary `AppTab` — the fixed `AppTab` union
+(`network`, `reserves`, `logs`, `chat`, `configuration`) is unchanged. A ready
+plugin with one declared page receives a direct auxiliary navigation item
+labeled from its page manifest. When more than one plugin page is ready, the
+console groups those entries under the auxiliary `Plugins` menu to protect
+header space. A page whose manifest requests `placement = "primary"` and whose
+plugin has the `web_ui_primary_tab` preference on instead renders alongside the
+fixed tabs rather than joining the `AppTab` union (see "Primary Tab Placement"
+above), using its manifest label (hidden below the `md` breakpoint, same as
+the fixed tabs) and the same generic plugin icon as auxiliary placement — the
+page manifest's own `icon` is not rendered in either placement; everything
+else about it — the static route, the eligibility rules below — is unchanged.
+Disabled, invalid, or stopped projections contribute no navigation item, in
+either placement. The existing Configuration `Plugins` tab owns config-section
+projection, and only ready config sections in the `integrations` projection
+mount there.
 
 Plugin-owned settings declared in `config_schema` continue to render through
 the console's standard schema controls. A custom config-section bundle should

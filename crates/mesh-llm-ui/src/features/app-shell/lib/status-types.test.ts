@@ -127,7 +127,8 @@ describe('status type contracts', () => {
         }
       ],
       config_sections: [],
-      asset_base_url: '/api/plugins/blackboard/web-ui/assets/'
+      asset_base_url: '/api/plugins/blackboard/web-ui/assets/',
+      primary_tab_enabled: false
     } satisfies PluginWebUiState
     const statusPayload: StatusPayload = {
       node_id: 'node-1',

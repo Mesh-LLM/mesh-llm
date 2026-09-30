@@ -893,6 +893,15 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
             )
             .hint("toggle"),
         ),
+        "plugin.<plugin-name>.web_ui_primary_tab" => Some(
+            sp(
+                "Primary tab placement",
+                "Promote the plugin's web UI page to a primary top-level tab when its manifest requests it.",
+                PLUGIN_HOST_CATEGORY,
+                16,
+            )
+            .hint("toggle"),
+        ),
         "plugin.<plugin-name>.url" => Some(
             sp(
                 "Base URL",

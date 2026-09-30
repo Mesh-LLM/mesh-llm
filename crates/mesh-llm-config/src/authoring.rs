@@ -494,6 +494,7 @@ impl ConfigEditor {
                     name,
                     enabled: None,
                     web_ui_enabled: None,
+                    web_ui_primary_tab: None,
                     command: None,
                     args: Vec::new(),
                     url: None,
@@ -695,6 +696,11 @@ impl PluginConfigEditor<'_> {
 
     pub fn web_ui_enabled(&mut self, enabled: Option<bool>) -> &mut Self {
         self.plugin.web_ui_enabled = enabled;
+        self
+    }
+
+    pub fn web_ui_primary_tab(&mut self, enabled: Option<bool>) -> &mut Self {
+        self.plugin.web_ui_primary_tab = enabled;
         self
     }
 
@@ -1306,5 +1312,32 @@ ctx_size = 8192
 
         assert_eq!(config.plugins[0].enabled, Some(true));
         assert_eq!(config.plugins[0].web_ui_enabled, None);
+    }
+
+    #[test]
+    fn plugin_web_ui_primary_tab_roundtrips_absence_and_explicit_values() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor.upsert_plugin("default-placement").unwrap();
+        editor
+            .upsert_plugin("off-placement")
+            .unwrap()
+            .web_ui_primary_tab(Some(false));
+        editor
+            .upsert_plugin("on-placement")
+            .unwrap()
+            .web_ui_primary_tab(Some(true));
+
+        let config = editor.into_config();
+        let serialized = config_to_toml(&config).expect("should serialize");
+        let toml_str = serialized.to_string();
+
+        assert!(!toml_str.contains("default-placement\"\nweb_ui_primary_tab"));
+        assert!(toml_str.contains("name = \"off-placement\"\nweb_ui_primary_tab = false"));
+        assert!(toml_str.contains("name = \"on-placement\"\nweb_ui_primary_tab = true"));
+
+        let deserialized = parse_config_toml(&serialized).expect("should deserialize");
+        assert_eq!(deserialized.plugins[0].web_ui_primary_tab, None);
+        assert_eq!(deserialized.plugins[1].web_ui_primary_tab, Some(false));
+        assert_eq!(deserialized.plugins[2].web_ui_primary_tab, Some(true));
     }
 }

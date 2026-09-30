@@ -505,6 +505,7 @@ fn plugin_misplaced_key_diagnostics(raw_toml: Option<&str>) -> Vec<ConfigDiagnos
         "name",
         "enabled",
         "web_ui_enabled",
+        "web_ui_primary_tab",
         "command",
         "args",
         "url",
@@ -740,6 +741,29 @@ retention_days = 14
     }
 
     #[test]
+    fn plugin_web_ui_primary_tab_is_host_owned_and_not_a_custom_setting() {
+        let raw = r#"
+[[plugin]]
+name = "blackboard"
+web_ui_primary_tab = true
+
+[plugin.settings]
+retention_days = 14
+"#;
+        let config: crate::MeshConfig = toml::from_str(raw).unwrap();
+
+        let diagnostics = validate_plugin_entries_strict(&config.plugins, Some(raw), |_| {
+            PluginSchemaAvailability::Available(schema())
+        });
+
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == ConfigDiagnosticCode::MisplacedField)
+        );
+    }
+
+    #[test]
     fn plugin_url_rejects_unsupported_remote_control_schemes() {
         let config: crate::MeshConfig = toml::from_str(
             r#"
@@ -820,6 +844,7 @@ url = "udp://127.0.0.1:9000"
             name: "blackboard".to_string(),
             enabled: Some(false),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
             command: None,
             args: Vec::new(),
             url: None,

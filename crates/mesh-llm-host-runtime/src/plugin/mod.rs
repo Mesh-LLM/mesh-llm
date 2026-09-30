@@ -366,6 +366,7 @@ impl PluginManager {
                 live_manifest: None,
                 installed_metadata: spec.installed_metadata.as_ref(),
                 web_ui_enabled: spec.web_ui_enabled,
+                web_ui_primary_tab: spec.web_ui_primary_tab.unwrap_or(false),
                 runtime_available: false,
                 runtime_unavailable_reason: Some(&error_message),
             }),
@@ -509,6 +510,7 @@ impl PluginManager {
                             live_manifest: Some(&manifest),
                             installed_metadata: None,
                             web_ui_enabled: None,
+                            web_ui_primary_tab: false,
                             runtime_available: true,
                             runtime_unavailable_reason: None,
                         }),
@@ -556,6 +558,38 @@ impl PluginManager {
         if self.is_test_bridge_enabled(name) {
             let summary = self.plugin_summary(name).await?;
             let web_ui = projected_existing_web_ui_state(&summary, Some(enabled));
+            let mut updated = summary;
+            updated.web_ui = web_ui.clone();
+            self.publish_plugin_summary(&updated);
+            return Ok(web_ui);
+        }
+
+        anyhow::bail!("Unknown plugin '{name}'")
+    }
+
+    pub async fn set_web_ui_primary_tab(
+        &self,
+        name: &str,
+        primary_tab_enabled: bool,
+    ) -> Result<PluginWebUiState> {
+        if let Some(plugin) = self.inner.plugins.get(name) {
+            return Ok(plugin.set_web_ui_primary_tab(primary_tab_enabled).await);
+        }
+
+        if let Some(summary) = self.inner.inactive.get(name) {
+            let mut web_ui = summary.web_ui.clone();
+            web_ui.primary_tab_enabled = primary_tab_enabled;
+            let mut updated = summary.clone();
+            updated.web_ui = web_ui.clone();
+            self.publish_plugin_summary(&updated);
+            return Ok(web_ui);
+        }
+
+        #[cfg(test)]
+        if self.is_test_bridge_enabled(name) {
+            let summary = self.plugin_summary(name).await?;
+            let mut web_ui = summary.web_ui.clone();
+            web_ui.primary_tab_enabled = primary_tab_enabled;
             let mut updated = summary;
             updated.web_ui = web_ui.clone();
             self.publish_plugin_summary(&updated);
@@ -667,6 +701,7 @@ impl PluginManager {
                 live_manifest: Some(&manifest),
                 installed_metadata: None,
                 web_ui_enabled: None,
+                web_ui_primary_tab: false,
                 runtime_available: true,
                 runtime_unavailable_reason: None,
             }),

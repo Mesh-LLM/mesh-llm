@@ -14,6 +14,7 @@ fn external_plugin_startup_policy_is_resolved() {
             name: "metrics".into(),
             enabled: Some(true),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
             command: Some("mesh-llm-plugin-metrics".into()),
             args: Vec::new(),
             url: None,
@@ -49,6 +50,7 @@ fn optional_missing_installed_plugin_becomes_inactive_summary() {
             name: "missing-optional".into(),
             enabled: Some(true),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
             command: None,
             args: Vec::new(),
             url: None,
@@ -102,6 +104,7 @@ async fn required_plugin_load_failure_stops_manager_startup() {
             env: BTreeMap::new(),
             startup: PluginStartupOptions::default(),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
             installed_metadata: None,
         }],
         inactive: Vec::new(),
@@ -170,6 +173,7 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
                 env: BTreeMap::new(),
                 startup: PluginStartupOptions::default(),
                 web_ui_enabled: None,
+                web_ui_primary_tab: None,
                 installed_metadata: None,
             },
             ExternalPluginSpec {
@@ -180,6 +184,7 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
                 env: BTreeMap::new(),
                 startup: PluginStartupOptions::default(),
                 web_ui_enabled: None,
+                web_ui_primary_tab: None,
                 installed_metadata: None,
             },
         ],
@@ -214,6 +219,7 @@ async fn optional_plugin_load_failure_becomes_inactive_summary() {
                 ..PluginStartupOptions::default()
             },
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
             installed_metadata: None,
         }],
         inactive: Vec::new(),
@@ -255,6 +261,7 @@ async fn remote_connect_failures_honor_required_and_optional_policy() {
             ..PluginStartupOptions::default()
         },
         web_ui_enabled: None,
+        web_ui_primary_tab: None,
         installed_metadata: None,
     };
 
@@ -302,6 +309,7 @@ async fn lazy_start_plugin_does_not_block_manager_startup() {
                 ..PluginStartupOptions::default()
             },
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
             installed_metadata: None,
         }],
         inactive: Vec::new(),

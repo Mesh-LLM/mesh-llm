@@ -21,6 +21,7 @@ export type PluginWebUiEntry = {
   readonly pages: readonly PluginWebUiPageRaw[]
   readonly configSections: NonNullable<PluginWebUiStateRaw['config_sections']>
   readonly assetBaseUrl?: string
+  readonly primaryTabEnabled: boolean
 }
 
 export type PluginWebUiNavItem = {
@@ -40,6 +41,10 @@ function pluginWebUiEndpoint(pluginName: string): string {
 
 function pluginWebUiEnabledEndpoint(pluginName: string): string {
   return `${pluginWebUiEndpoint(pluginName)}/enabled`
+}
+
+function pluginWebUiPrimaryTabEndpoint(pluginName: string): string {
+  return `${pluginWebUiEndpoint(pluginName)}/primary-tab`
 }
 
 function pluginWebUiConfigEndpoint(pluginName: string): string {
@@ -91,6 +96,15 @@ export async function setPluginWebUiEnabled(pluginName: string, enabled: boolean
   return parseJsonResponse<PluginWebUiStateRaw>(response)
 }
 
+export async function setPluginWebUiPrimaryTab(pluginName: string, enabled: boolean): Promise<PluginWebUiStateRaw> {
+  const response = await fetch(pluginWebUiPrimaryTabEndpoint(pluginName), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  })
+  return parseJsonResponse<PluginWebUiStateRaw>(response)
+}
+
 export async function fetchPluginWebUiConfig(pluginName: string): Promise<PluginWebUiVisibleConfigRaw> {
   const response = await fetch(pluginWebUiConfigEndpoint(pluginName))
   return parseJsonResponse<PluginWebUiVisibleConfigRaw>(response)
@@ -133,7 +147,8 @@ export function adaptPluginSummaryToWebUiEntry(summary: PluginSummaryRaw): Plugi
     unavailableReason: summary.web_ui.unavailable_reason,
     pages: summary.web_ui.pages ?? [],
     configSections: summary.web_ui.config_sections ?? [],
-    assetBaseUrl: summary.web_ui.asset_base_url
+    assetBaseUrl: summary.web_ui.asset_base_url,
+    primaryTabEnabled: summary.web_ui.primary_tab_enabled
   }
 }
 
@@ -153,6 +168,50 @@ export function buildPluginWebUiNavItems(entries: readonly PluginWebUiEntry[]): 
       route: page.route
     }))
   })
+}
+
+/**
+ * A page is promoted to a primary tab only when the plugin's manifest requests it
+ * (`placement: 'primary'`) AND the operator has turned on the plugin's `web_ui_primary_tab`
+ * preference. At most one page per plugin promotes; the rest of that plugin's pages, and any
+ * plugin that runs out of primary header room, fall back to the auxiliary `Plugins` menu.
+ */
+export const MAX_PRIMARY_PLUGIN_TABS = 2
+
+export type PartitionedPluginWebUiNavItems = {
+  readonly primary: readonly PluginWebUiNavItem[]
+  readonly auxiliary: readonly PluginWebUiNavItem[]
+}
+
+export function partitionPluginWebUiNavItems(entries: readonly PluginWebUiEntry[]): PartitionedPluginWebUiNavItems {
+  const primary: PluginWebUiNavItem[] = []
+  const auxiliary: PluginWebUiNavItem[] = []
+
+  for (const entry of entries) {
+    if (!entry.navigationEligible) continue
+    let promotedForPlugin = false
+    for (const page of entry.pages) {
+      const item: PluginWebUiNavItem = {
+        pluginName: entry.pluginName,
+        pageId: page.id,
+        label: page.label,
+        route: page.route
+      }
+      const canPromote =
+        !promotedForPlugin &&
+        entry.primaryTabEnabled &&
+        page.placement === 'primary' &&
+        primary.length < MAX_PRIMARY_PLUGIN_TABS
+      if (canPromote) {
+        primary.push(item)
+        promotedForPlugin = true
+      } else {
+        auxiliary.push(item)
+      }
+    }
+  }
+
+  return { primary, auxiliary }
 }
 
 export function usePluginSummariesQuery(options?: { enabled?: boolean }) {
@@ -200,6 +259,19 @@ export function useSetPluginWebUiEnabledMutation(pluginName: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (enabled: boolean) => setPluginWebUiEnabled(pluginName, enabled),
+    onSuccess: (webUi) => {
+      queryClient.setQueryData(pluginKeys.webUi(pluginName), webUi)
+      void queryClient.invalidateQueries({ queryKey: pluginKeys.webUi(pluginName) })
+      void queryClient.invalidateQueries({ queryKey: pluginKeys.list() })
+      void queryClient.invalidateQueries({ queryKey: statusKeys.detail() })
+    }
+  })
+}
+
+export function useSetPluginWebUiPrimaryTabMutation(pluginName: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (enabled: boolean) => setPluginWebUiPrimaryTab(pluginName, enabled),
     onSuccess: (webUi) => {
       queryClient.setQueryData(pluginKeys.webUi(pluginName), webUi)
       void queryClient.invalidateQueries({ queryKey: pluginKeys.webUi(pluginName) })

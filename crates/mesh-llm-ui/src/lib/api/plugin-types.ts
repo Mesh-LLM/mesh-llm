@@ -1,5 +1,7 @@
 export type PluginWebUiStateKind = 'none' | 'ready' | 'disabled' | 'invalid' | 'plugin_not_running'
 
+export type PluginWebUiPlacementRaw = 'primary' | 'auxiliary'
+
 export type PluginWebUiPageRaw = {
   readonly id: string
   readonly label: string
@@ -7,6 +9,7 @@ export type PluginWebUiPageRaw = {
   readonly route: string
   readonly bundle_id: string
   readonly entry_script: string
+  readonly placement?: PluginWebUiPlacementRaw
 }
 
 export type PluginWebUiConfigSectionRaw = {
@@ -31,6 +34,7 @@ export type PluginWebUiStateRaw = {
   readonly pages?: readonly PluginWebUiPageRaw[]
   readonly config_sections?: readonly PluginWebUiConfigSectionRaw[]
   readonly asset_base_url?: string
+  readonly primary_tab_enabled: boolean
 }
 
 export type PluginWebUiVisibleConfigRaw = {

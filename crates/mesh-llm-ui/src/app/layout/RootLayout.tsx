@@ -17,7 +17,7 @@ import { DEFAULT_DEVELOPER_PLAYGROUND_TAB } from '@/features/developer/playgroun
 import { useStatusQuery } from '@/features/network/api/use-status-query'
 import {
   adaptPluginSummariesToWebUiEntries,
-  buildPluginWebUiNavItems,
+  partitionPluginWebUiNavItems,
   usePluginSummariesQuery
 } from '@/features/plugins/api/plugin-web-ui'
 import { useUIPreferences } from '@/features/shell/hooks/useUiPreferences'
@@ -164,16 +164,33 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
     [newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled, clientOnlyNode]
   )
 
-  const pluginNavItems = useMemo<readonly TopNavPluginPageItem[]>(() => {
-    if (!liveMode || !Array.isArray(pluginSummariesQuery.data)) return []
-    return buildPluginWebUiNavItems(adaptPluginSummariesToWebUiEntries(pluginSummariesQuery.data)).map((item) => ({
+  const partitionedPluginNavItems = useMemo(() => {
+    if (!liveMode || !Array.isArray(pluginSummariesQuery.data)) {
+      return { primary: [], auxiliary: [] }
+    }
+    return partitionPluginWebUiNavItems(adaptPluginSummariesToWebUiEntries(pluginSummariesQuery.data))
+  }, [liveMode, pluginSummariesQuery.data])
+
+  const toTopNavPluginPageItem = useCallback(
+    (item: { pluginName: string; pageId: string; label: string }): TopNavPluginPageItem => ({
       pluginName: item.pluginName,
       pageId: item.pageId,
       label: item.label,
       href: hrefWithBasePath(`/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`),
       active: pathname === `/plugins/${item.pluginName}/${item.pageId}`
-    }))
-  }, [liveMode, pathname, pluginSummariesQuery.data])
+    }),
+    [pathname]
+  )
+
+  const primaryPluginTabs = useMemo<readonly TopNavPluginPageItem[]>(
+    () => partitionedPluginNavItems.primary.map(toTopNavPluginPageItem),
+    [partitionedPluginNavItems.primary, toTopNavPluginPageItem]
+  )
+
+  const pluginNavItems = useMemo<readonly TopNavPluginPageItem[]>(
+    () => partitionedPluginNavItems.auxiliary.map(toTopNavPluginPageItem),
+    [partitionedPluginNavItems.auxiliary, toTopNavPluginPageItem]
+  )
 
   const onPluginPageChange = useCallback(
     (item: TopNavPluginPageItem) => {
@@ -206,6 +223,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
           joinCommands={topNavData.topNavJoinCommands}
           joinLinks={topNavData.topNavJoinLinks}
           pluginNavItems={pluginNavItems}
+          primaryPluginTabs={primaryPluginTabs}
           onPluginPageChange={onPluginPageChange}
           showDeveloperPlayground={showDevelopmentNavControls}
           onOpenDeveloperPlayground={showDevelopmentNavControls ? onOpenDeveloperPlayground : undefined}

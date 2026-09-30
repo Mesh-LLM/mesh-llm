@@ -1,5 +1,5 @@
 use crate::proto;
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path};
 
@@ -45,6 +45,7 @@ pub fn web_ui_page(
             route: route.into(),
             bundle_id: String::new(),
             entry_script: entry_script.into(),
+            placement: proto::PluginWebUiPagePlacement::Auxiliary as i32,
         },
     }
 }
@@ -107,6 +108,15 @@ impl PluginWebUiPageBuilder {
         self.inner.bundle_id = bundle_id.into();
         self
     }
+
+    /// Request promotion of this page to a primary tab. The host treats
+    /// this as a request, not a guarantee: promotion also requires the
+    /// operator's `web_ui_primary_tab` preference, and the host may still
+    /// fall back to auxiliary placement (e.g. when the tab bar is full).
+    pub fn primary_placement(mut self) -> Self {
+        self.inner.placement = proto::PluginWebUiPagePlacement::Primary as i32;
+        self
+    }
 }
 
 impl PluginWebUiConfigSectionBuilder {
@@ -164,6 +174,33 @@ pub(super) struct PackagedPluginWebUiPage {
     pub route: String,
     pub bundle_id: String,
     pub entry_script: String,
+    #[serde(default)]
+    pub placement: PackagedPluginWebUiPagePlacement,
+}
+
+/// Mirrors `proto::PluginWebUiPagePlacement`, minus the wire-only
+/// `Unspecified` variant: `try_from_i32` folds `Unspecified` into
+/// `Auxiliary` so plugins built before this field existed keep their
+/// current (auxiliary) placement rather than failing validation.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PackagedPluginWebUiPagePlacement {
+    #[default]
+    Auxiliary,
+    Primary,
+}
+
+impl PackagedPluginWebUiPagePlacement {
+    fn from_i32(value: i32) -> Result<Self> {
+        let placement = match proto::PluginWebUiPagePlacement::try_from(value)
+            .map_err(|_| anyhow!("unknown web UI page placement `{value}`"))?
+        {
+            proto::PluginWebUiPagePlacement::Unspecified => Self::Auxiliary,
+            proto::PluginWebUiPagePlacement::Auxiliary => Self::Auxiliary,
+            proto::PluginWebUiPagePlacement::Primary => Self::Primary,
+        };
+        Ok(placement)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -243,6 +280,7 @@ impl PackagedPluginWebUiPage {
         if let Some(icon) = &value.icon {
             validate_relative_path("web UI page icon", icon)?;
         }
+        let placement = PackagedPluginWebUiPagePlacement::from_i32(value.placement)?;
         Ok(Self {
             id: value.id.clone(),
             label: value.label.clone(),
@@ -250,6 +288,7 @@ impl PackagedPluginWebUiPage {
             route: value.route.clone(),
             bundle_id: value.bundle_id.clone(),
             entry_script: value.entry_script.clone(),
+            placement,
         })
     }
 }
