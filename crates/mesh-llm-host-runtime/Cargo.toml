@@ -9,7 +9,7 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
 
 [features]
-default = ["web-ui", "dynamic-native-runtime", "payments", "wallet-lexe"]
+default = ["web-ui", "dynamic-native-runtime"]
 # Paid-inference ledger, gates and the `wallet.v1` plugin adapter. Never links
 # a wallet SDK: the wallet is a plugin process resolved by capability.
 # Consumers that reach host-runtime with `default-features = false` (e.g. via

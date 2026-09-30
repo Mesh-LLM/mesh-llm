@@ -120,10 +120,15 @@ fi
 
 stamp_build_version
 
-# `payments` is the ledger + `wallet.v1` plugin adapter; `wallet-lexe` is the
-# built-in Lexe wallet served as `mesh-llm --plugin wallet-lexe` (like
+# Paid inference is compiled OFF by default. Set MESH_LLM_PAYMENTS=1 to build
+# `payments` (the ledger + `wallet.v1` plugin adapter) and `wallet-lexe` (the
+# built-in Lexe wallet served as `mesh-llm --plugin wallet-lexe`, like
 # blobstore). Neither adds a backend library to the host import surface.
-host_features="web-ui,dynamic-native-runtime,payments,wallet-lexe"
+host_features="web-ui,dynamic-native-runtime"
+if [[ "${MESH_LLM_PAYMENTS:-0}" == "1" ]]; then
+    host_features="$host_features,payments,wallet-lexe"
+    echo "Including paid inference (payments, wallet-lexe) because MESH_LLM_PAYMENTS=1."
+fi
 cargo_args=(build --locked -p mesh-llm --bin mesh-llm --no-default-features \
     --features "$host_features")
 if [[ "$BUILD_PROFILE" == "release" ]]; then
