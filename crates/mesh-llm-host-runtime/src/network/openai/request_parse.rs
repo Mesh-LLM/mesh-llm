@@ -36,6 +36,8 @@ pub(crate) const MESH_EXCLUDE_HEADER: &str = "x-mesh-exclude";
 /// pair; copied unread onto the routing node's exchange events, never
 /// forwarded to a peer.
 pub(crate) const MESH_TWIN_BRACKET_HEADER: &str = "x-mesh-twin-bracket";
+pub(crate) const MESH_REQUIRE_TEE_HEADER: &str = "x-mesh-require-tee";
+pub(crate) const MESH_TEE_LOCAL_ONLY_HEADER: &str = "x-mesh-tee-local-only";
 pub(super) const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_AUDIO_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
@@ -230,6 +232,53 @@ impl BufferedHttpRequest {
     pub fn twin_bracket_header_values(&self) -> Result<Vec<String>, String> {
         untrimmed_header_values_from_raw(&self.raw, MESH_TWIN_BRACKET_HEADER)
             .map_err(|()| format!("{MESH_TWIN_BRACKET_HEADER} header contains invalid UTF-8"))
+    }
+
+    pub(crate) fn tee_required(&self) -> Result<bool, String> {
+        self.boolean_header(MESH_REQUIRE_TEE_HEADER)
+    }
+
+    pub(crate) fn tee_local_only(&self) -> Result<bool, String> {
+        self.boolean_header(MESH_TEE_LOCAL_ONLY_HEADER)
+    }
+
+    fn boolean_header(&self, name: &str) -> Result<bool, String> {
+        let values = header_values_from_raw(&self.raw, name)
+            .map_err(|()| format!("{name} contains invalid UTF-8"))?;
+        match values.as_slice() {
+            [] => Ok(false),
+            [value] if value.eq_ignore_ascii_case("true") || value == "1" => Ok(true),
+            [value] if value.eq_ignore_ascii_case("false") || value == "0" => Ok(false),
+            _ => Err(format!("{name} must occur once with a boolean value")),
+        }
+    }
+
+    /// Mark the forwarded request so the attested endpoint must serve it on
+    /// its own local runtime. An attested first hop may not route onward.
+    pub(crate) fn require_tee_local_serving(&mut self) -> Result<(), String> {
+        if self.tee_local_only()? {
+            return Ok(());
+        }
+        if !header_values_from_raw(&self.raw, MESH_TEE_LOCAL_ONLY_HEADER)
+            .map_err(|()| "invalid TEE local-only header".to_string())?
+            .is_empty()
+        {
+            return Err("contradictory TEE local-only header".to_string());
+        }
+        let (end, line_ending) = http_header_terminator(&self.raw)
+            .ok_or_else(|| "malformed HTTP headers".to_string())?;
+        let header = [
+            MESH_TEE_LOCAL_ONLY_HEADER.as_bytes(),
+            b": true",
+            line_ending,
+        ]
+        .concat();
+        if end.saturating_add(header.len()) > MAX_HEADER_BYTES {
+            return Err("HTTP headers are too large for TEE routing".to_string());
+        }
+        self.raw
+            .splice(end - line_ending.len()..end - line_ending.len(), header);
+        Ok(())
     }
 
     /// The only semantic request media kind trusted by artifact capture.

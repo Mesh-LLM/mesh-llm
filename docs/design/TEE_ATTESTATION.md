@@ -1,7 +1,9 @@
 # Client-verifiable TEE inference
 
-Status: design and first manual Intel TDX verifier. Mesh does not yet offer a
-`TEE only` client setting or automatic attestation-aware routing.
+Status: draft Intel TDX single-host implementation. The Mesh client has an
+opt-in fail-closed route, but this has not yet been certified by a fresh
+hardware run. Other TEE families and confidential GPU routing remain plans,
+not supported capabilities.
 
 ## What a client must establish
 
@@ -112,48 +114,94 @@ expiry. The Phala trial used a development guest OS, and its model bytes were
 not independently tied to the quote; its old measurements are not a production
 allowlist.
 
-## Production Mesh contract
+## Draft in-Mesh Intel TDX path
 
-The following work is needed before a client can select `TEE only` without a
-manual verifier:
+On an approved dstack TDX guest, set `MESH_LLM_EPHEMERAL_KEY=1` before starting
+Mesh and point `MESH_TEE_DSTACK_SOCKET` at the guest-only dstack API socket.
+The TEE stream handler takes a client nonce, derives report data from its own
+iroh `EndpointId`, obtains raw `/GetQuote` and `/Info` data, and returns a
+bounded evidence frame. A node without that configuration cannot answer.
+This only creates a useful endpoint binding if the independently approved
+workload measurement covers the running Mesh code, its native runtime, key
+handling, and socket access policy. Merely setting these environment variables
+on an arbitrary host proves nothing.
 
-1. **Challenge service and evidence.** Add an optional, bounded attestation
-   request/response over an authenticated iroh peer connection. The request
-   carries a protocol version, 32-byte random nonce, and intended model or
-   serving-state epoch. The response carries raw evidence, platform type,
-   measured workload/model claims, and the peer ID. Generate the endpoint key
-   in the guest. The attested code must derive the peer ID from its own key,
-   not copy a value supplied by the caller. Use a versioned, domain-separated
-   `report_data` digest over nonce, peer ID, and serving-state claim. Bound
-   evidence size and verification time. Unknown/old peers may omit this
-   optional protocol; they must be ineligible for TEE-only requests.
-2. **Client-local appraisal.** Define a vendor-neutral verified-peer result
-   issued only after a platform verifier checks signed evidence and a local
-   allowlist. Intel TDX is the first verifier. Keep a short proof lifetime;
-   invalidate on key, model epoch, TCB, or policy changes. Discovery may carry
-   a cheap hint, but cannot issue a verified-peer result.
-3. **Fail-closed routing.** Add an explicit `require_tee` request/client policy.
-   Filter model/capacity candidates against fresh verified-peer results
-   *before* any prompt or tool content leaves the client. Connect to the
-   verified iroh identity and check the serving identity on the response.
-   No verified candidate, quote failure, expiry, or target substitution is an
-   error. Initially allow only single-host inference; reject MoA, split, and
-   plugin paths until every participant that can see prompt-derived data is
-   verified under the same policy. A TEE-only mesh admission rule can reuse
-   the verifier, but does not replace client-local appraisal when the client
-   distrusts the mesh operator.
-4. **Additional hardware.** Keep the challenge/routing contract and add an AMD
-   SEV-SNP or other CVM verifier with its own vendor roots and measurement
-   policy. For confidential GPU inference, appraise *both* the CVM and GPU
-   evidence, require GPU confidential-computing mode, and establish that the
-   GPU serving this session is the one appraised. An RTX PRO 6000 name alone
-   is not a claim. NVIDIA documents GPU evidence and local verification in
-   its [attestation SDK][nvidia-gpu]. Current
-   [dstack security guidance][dstack-security] says its Hopper/Blackwell
-   deployments cannot rule out a live relay to another genuine GPU without a
-   CPU-TEE-verifiable device
-   binding; that assurance must be treated as a platform capability, not
-   assumed from two passing quotes.
+On the client, set `MESH_TEE_TDX_POLICY` to a JSON file in the format above.
+Add `x-mesh-require-tee: true` to a local `/v1/chat/completions` request with
+an exact model ID; `MESH_TEE_REQUIRE_ALL=1` makes this the default for local
+inference ingress. The client obtains a **new** quote on an authenticated iroh
+connection to each candidate, checks the Intel signature/collateral and
+policy itself, and selects only a passing peer. It sends no prompt to a
+candidate that fails. The selected peer receives a local-serving-only marker
+and rejects re-routing, MoA, plugins, and an unavailable local model. The
+marker is a route restriction, **not** a hardware proof by itself. Non-TEE
+requests retain existing behavior. The temporary bootstrap tunnel cannot
+perform TEE appraisal and returns 503 for TEE-required or local-only requests
+until the full router is ready. This first route verifies **remote** peers; a
+local serving node is not automatically self-certified merely because its
+client ingress has TEE mode enabled.
+
+This first path deliberately rejects `model=auto`, `model=mesh`, split work,
+and other OpenAI endpoints. It has no verified model-byte digest or
+serving-state epoch, no proof cache, no offline collateral cache, and no
+confidential GPU proof. It proves only the selected endpoint and approved
+measured workload. The trial was deleted; archived evidence is useful for
+regression checking, not for claiming a live machine is currently attested.
+
+## Platform coverage plan
+
+Keep one Mesh challenge/routing contract but make the evidence producer and
+verifier explicit per platform. A TEE-only request must name an allowed
+platform policy. Unknown evidence formats, downgraded claims, a cloud-only
+software assertion when hardware proof is required, or any missing workload
+binding fail closed. Model bytes and every additional worker need their own
+measured or attested chain before a stronger claim is offered.
+
+| Family | Hardware evidence and workload policy to add | Mesh milestone |
+|---|---|---|
+| Intel TDX CVM | DCAP quote, Intel root/collateral/TCB, debug flag, MRTD/RTMR event replay and exact workload; bind nonce and iroh key in report data. | Draft single-host path here; fresh TDX end-to-end certification next. |
+| AMD SEV-SNP CVM | [SNP report][amd-snp] and AMD ARK/ASK plus VCEK/VLEK chain, TCB/security policy and launch measurement; attest the later boot/userspace chain too. [Google notes][google-roots] its vTPM measurements for these later stages are a separate, provider-controlled trust boundary. | Next CPU-TEE adapter and negative corpus. |
+| AWS Nitro Enclave | Verify [AWS-signed COSE attestation document][nitro], PCRs, nonce and public key; package the inference server and networking proxy so the key/prompt stay in the enclave. | Separate deployment and verifier adapter; no GPU claim. |
+| Cloud-managed SEV/vTPM | Verify provider-signed vTPM evidence and measured boot under an explicitly **provider-trusting** policy. Do not label this equivalent to vendor-root SNP/TDX evidence. | Separate trust-mode label and verifier. |
+| Arm CCA Realm | Verify [platform/Realm token][arm-cca] chain, challenge, RIM/REM measurements and workload/endpoint binding against trusted reference values. | Adapter when suitable Mesh hosting is available. |
+| Intel SGX enclave | Verify enclave quote, TCB/debug state, MRENCLAVE/MRSIGNER policy and endpoint binding; all code and prompt-bearing I/O must stay within its smaller enclave boundary. | Optional distinct runtime, not an interchangeable CVM flag. |
+| NVIDIA confidential GPU with a CVM | Verify **both** CPU CVM and [NVIDIA GPU device evidence][nvidia-gpu], supported confidential-computing mode and firmware, and the protected CPU–GPU session/device binding; attest every GPU/switch in multi-GPU mode. RTX PRO 6000 Blackwell Server Edition is a single-GPU CC option in [NVIDIA's current matrix][nvidia-platforms], but a GPU model name is never evidence. [Google G4][google-g4] uses AMD SEV and Google-managed vTPM evidence for its VM, so that deployment has a different CPU trust root from TDX/SNP. | CPU verifier first, then GPU verifier and binding test; fail closed meanwhile. |
+
+For NVIDIA, [local verification and Ready state][nvidia-cpp-sdk] are separate
+steps. Two independently valid quotes alone do not prove the verified GPU
+served this request. [dstack security guidance][dstack-security] explicitly
+describes a device-relay limitation for its Hopper/Blackwell deployments;
+Mesh must not claim a CPU–GPU binding until the deployment can establish it.
+This is an extensible platform plan, not a promise that every vendor or product
+marketed as a TEE has the evidence and deployment controls Mesh requires.
+
+## Remaining production Mesh contract
+
+The draft path above implements the first challenge, TDX appraisal and
+single-host route. The following work remains before it is production-ready
+and before other platform families can be selected:
+
+1. **Certify the first path on live hardware.** Rebuild an independently
+   approved, digest-pinned TDX workload; verify a fresh challenge, then make
+   real single-host inference to that same identity. Confirm the serving
+   process and QUIC key stay inside the measured guest. Record a sanitized
+   quote, policy, server identity, response identity, and failure cases.
+2. **Bind model state.** Have the measured loader verify exact model bytes and
+   an epoch/digest. Extend the quote's domain-separated report-data binding
+   and client policy with this claim, and invalidate any proof on load, unload,
+   update, key change, or policy change. Today the route proves the workload,
+   not the specific model weights.
+3. **Harden verification and operations.** Cache signed collateral without
+   trusting the cache; appraise expiry and revocation, add proof-rate limits,
+   concurrency limits and structured failure reasons. A vendor-neutral
+   verified-peer result can then support several verifier adapters. Discovery
+   remains an untrusted candidate source.
+4. **Extend execution topology.** Add platform adapters from the table above.
+   Permit MoA/split only after every prompt-bearing worker and link is
+   independently checked. For confidential GPU inference, prove the
+   CPU–GPU protected-session binding as well as each device quote. An
+   attestation-required mesh admission rule is useful but does not replace
+   client-local checks against a dishonest mesh operator.
 
 Negative tests must cover a forged discovery hint, wrong nonce, swapped peer
 key, altered quote, stale or advisory TCB, debug mode, wrong workload/model,
@@ -166,3 +214,10 @@ mixed-version meshes must continue working for ordinary requests.
 [dstack-tdx]: https://github.com/Dstack-TEE/dstack/blob/next/docs/attestation-tdx.md
 [dstack-security]: https://github.com/Dstack-TEE/dstack/blob/next/docs/security/security-model.md
 [nvidia-gpu]: https://docs.nvidia.com/attestation/attestation-client-tools-sdk/latest/gpu_and_switch_attestation.html
+[nvidia-cpp-sdk]: https://docs.nvidia.com/attestation/nv-attestation-sdk-cpp/latest/overview.html
+[amd-snp]: https://www.amd.com/content/dam/amd/en/documents/epyc-technical-docs/tuning-guides/58217_amd-epyc-9004-ug-platform-attestation-using-virtee-snp.pdf
+[google-roots]: https://docs.cloud.google.com/confidential-computing/confidential-vm/docs/attestation-overview
+[google-g4]: https://docs.cloud.google.com/confidential-computing/confidential-vm/docs/create-a-confidential-vm-instance-with-gpu
+[nitro]: https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html
+[arm-cca]: https://learn.arm.com/learning-paths/servers-and-cloud-computing/cca-veraison/attestation-token/
+[nvidia-platforms]: https://docs.nvidia.com/datacenter/cloud-native/confidential-containers/latest/supported-platforms.html

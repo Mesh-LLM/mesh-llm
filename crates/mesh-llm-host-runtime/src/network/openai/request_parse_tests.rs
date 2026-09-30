@@ -775,7 +775,9 @@ fn test_inject_mesh_hooks_enabled() {
     inject_mesh_hooks_flag(&mut raw, true);
     let body_start = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
     let body = std::str::from_utf8(&raw[body_start..]).unwrap();
-    assert!(body.starts_with("{\"mesh_hooks\":true,"), "body: {body}");
+    let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(parsed["mesh_hooks"], true);
+    assert_eq!(parsed["model"], "auto");
     // Content-Length must match actual body length
     let cl_line = std::str::from_utf8(&raw[..body_start])
         .unwrap()
@@ -792,7 +794,9 @@ fn test_inject_mesh_hooks_disabled() {
     inject_mesh_hooks_flag(&mut raw, false);
     let body_start = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
     let body = std::str::from_utf8(&raw[body_start..]).unwrap();
-    assert!(body.starts_with("{\"mesh_hooks\":false,"), "body: {body}");
+    let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(parsed["mesh_hooks"], false);
+    assert_eq!(parsed["model"], "auto");
 }
 
 #[test]
@@ -1117,6 +1121,39 @@ fn request_with_raw(raw: &[u8]) -> BufferedHttpRequest {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
     }
+}
+
+#[test]
+fn tee_requirement_header_rejects_ambiguous_values() {
+    let request = request_with_raw(
+        b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-require-tee: true\r\nx-mesh-require-tee: false\r\n\r\n{}",
+    );
+    assert!(request.tee_required().is_err());
+
+    let request = request_with_raw(
+        b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-require-tee: maybe\r\n\r\n{}",
+    );
+    assert!(request.tee_required().is_err());
+}
+
+#[test]
+fn tee_local_only_mark_is_forwarded_without_client_requirement_or_body_change() {
+    let body = br#"{"model":"test","messages":[{"role":"user","content":"private"}]}"#;
+    let mut raw = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-require-tee: true\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(body);
+    let mut request = request_with_raw(&raw);
+    request.require_tee_local_serving().unwrap();
+    assert!(request.tee_local_only().unwrap());
+    let forwarded = super::super::forwarded_request::prepare_peer_forwarded_request(&request.raw)
+        .expect("valid forwarded request");
+    let headers = String::from_utf8_lossy(&forwarded[..forwarded.len() - body.len()]);
+    assert!(!headers.contains("x-mesh-require-tee"));
+    assert!(headers.contains("x-mesh-tee-local-only: true"));
+    assert!(forwarded.ends_with(body));
 }
 
 #[test]

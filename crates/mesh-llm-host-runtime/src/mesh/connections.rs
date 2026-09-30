@@ -1126,6 +1126,7 @@ impl Node {
             STREAM_PLUGIN_BULK_TRANSFER => self.spawn_plugin_bulk_stream(remote, send, recv),
             STREAM_PLUGIN_MESH_STREAM => self.spawn_plugin_mesh_stream(remote, send, recv),
             STREAM_SUBPROTOCOL => self.spawn_subprotocol_stream(remote, send, recv),
+            STREAM_TEE_ATTESTATION => self.spawn_tee_attestation_stream(send, recv),
             other => tracing::warn!("Unknown stream type {other} from {}", remote.fmt_short()),
         }
     }

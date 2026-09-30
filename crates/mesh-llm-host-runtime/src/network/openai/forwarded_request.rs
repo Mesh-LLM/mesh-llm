@@ -183,6 +183,7 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         // The pairing is the client's and the routing node's business: a peer
         // never learns that its answer is one half of a comparison.
         super::request_parse::MESH_TWIN_BRACKET_HEADER,
+        super::request_parse::MESH_REQUIRE_TEE_HEADER,
     ];
     finalize_forwarded_request(raw, false, None, None, OMITTED_ON_PEER_FORWARD)
 }

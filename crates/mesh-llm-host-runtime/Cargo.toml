@@ -99,6 +99,7 @@ rustls = "0.23.36"
 mesh-llm-analytics = { path = "../mesh-llm-analytics", version = "0.77.0" }
 ryu = "1"
 reqwest = { version = "0.13", features = ["stream", "json"] }
+dcap-qvl = "0.6.5"
 futures-util = "0.3"
 semver = "1"
 sha2 = "0.11"

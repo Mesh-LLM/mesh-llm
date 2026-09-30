@@ -419,6 +419,23 @@ pub async fn handle_mesh_request(
         return;
     };
 
+    // The bootstrap tunnel predates the full ingress router. It cannot make
+    // the attestation-aware decision, and an attested serving peer must not
+    // use it to forward a local-only request while still starting up.
+    if let Some((status, message)) = bootstrap_tee_rejection(
+        request.tee_required(),
+        request.tee_local_only(),
+        std::env::var_os("MESH_TEE_REQUIRE_ALL").is_some(),
+    ) {
+        let outcome = response_outcome(
+            status,
+            send_error_observed(tcp_stream, status, message, lifecycle.route_observer()).await,
+        );
+        lifecycle.terminal(outcome.terminal_outcome());
+        release_request_objects(&node, &request.request_object_request_ids).await;
+        return;
+    }
+
     // MoA routing directive: `model: "mesh"` triggers mixture-of-agents
     // fan-out. Orchestration happens here, regardless of whether this node
     // is serving models locally — the worker pool is built from gossip.
@@ -492,6 +509,35 @@ pub async fn handle_mesh_request(
     };
     lifecycle.terminal(outcome);
     release_request_objects(&node, &request.request_object_request_ids).await;
+}
+
+fn bootstrap_tee_rejection(
+    required: Result<bool, String>,
+    local_only: Result<bool, String>,
+    require_all: bool,
+) -> Option<(u16, &'static str)> {
+    match (required, local_only) {
+        (Err(_), _) | (_, Err(_)) => Some((400, "invalid TEE routing header")),
+        (Ok(true), _) | (_, Ok(true)) => Some((503, "TEE routing unavailable during bootstrap")),
+        (Ok(false), Ok(false)) if require_all => {
+            Some((503, "TEE routing unavailable during bootstrap"))
+        }
+        (Ok(false), Ok(false)) => None,
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_tee_tests {
+    use super::bootstrap_tee_rejection;
+
+    #[test]
+    fn tee_requests_never_pass_through_bootstrap_tunnel() {
+        assert!(bootstrap_tee_rejection(Ok(true), Ok(false), false).is_some());
+        assert!(bootstrap_tee_rejection(Ok(false), Ok(true), false).is_some());
+        assert!(bootstrap_tee_rejection(Ok(false), Ok(false), true).is_some());
+        assert!(bootstrap_tee_rejection(Err("bad".into()), Ok(false), false).is_some());
+        assert!(bootstrap_tee_rejection(Ok(false), Ok(false), false).is_none());
+    }
 }
 
 // `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
