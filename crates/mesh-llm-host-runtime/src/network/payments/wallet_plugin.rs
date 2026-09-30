@@ -22,7 +22,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use mesh_llm_wallet::contract::{
     self, CAPABILITY, Empty, LookupResponse, OpenRequest, OpenResponse, PayRequest,
-    PaymentHashRequest, TransactionsRequest, WalletError, WalletErrorKind, ops,
+    PaymentHashRequest, TransactionsRequest, WalletError, WalletErrorKind, WalletFeatures, ops,
 };
 use mesh_llm_wallet::invoice::Invoice;
 use mesh_llm_wallet::provider::{Balance, PayError, Transaction, WalletProvider};
@@ -99,6 +99,7 @@ impl WalletFactory for PluginWalletFactory {
             wallet_directory: wallet_directory(payment_directory, &provider.plugin_name)?,
             plugin_name: provider.plugin_name,
             payment_directory: payment_directory.to_path_buf(),
+            features: std::sync::Mutex::new(WalletFeatures::default()),
             open_lock: Mutex::new(()),
         };
         wallet.open_and_pin().await?;
@@ -112,6 +113,8 @@ pub struct PluginWalletProvider {
     plugin_name: String,
     payment_directory: PathBuf,
     wallet_directory: PathBuf,
+    /// What the plugin reported it supports at the most recent open.
+    features: std::sync::Mutex<WalletFeatures>,
     /// Serializes re-opens. After a plugin restart every in-flight request
     /// observes `not_open` at once; only one of them should drive the open
     /// and the pin check.
@@ -169,7 +172,18 @@ impl PluginWalletProvider {
                 .context("persist wallet pin")?;
             }
         }
+        *self
+            .features
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = response.features;
         Ok(())
+    }
+
+    fn features(&self) -> WalletFeatures {
+        self.features
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Invoke one operation on the bound plugin and decode the result.
@@ -248,6 +262,12 @@ impl WalletProvider for PluginWalletProvider {
     }
 
     async fn create_invoice(&self, amount_msat: Option<u64>, expiry_secs: u32) -> Result<Invoice> {
+        if amount_msat.is_none() && !self.features().amountless_invoices {
+            bail!(
+                "wallet plugin '{}' cannot create amount-less invoices; specify an amount",
+                self.plugin_name
+            );
+        }
         self.call_reopening(
             ops::CREATE_INVOICE,
             &contract::CreateInvoiceRequest {

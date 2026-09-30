@@ -131,6 +131,11 @@ accepts this stanza but registers no built-in wallet. A runtime setting cannot
 restore code excluded at build time. NWC, BOLT12 and multi-provider selection
 are deferred.
 
+`wallet_open` also returns the wallet's `features`: whether it can create
+amount-less invoices. The host refuses amount-less `fund-wallet` invoices on a
+wallet that cannot make them. Plugins written before the field existed get the
+original contract's behavior: amount-less invoices.
+
 Feature layering: `payments` (host-runtime, `mesh-llm`,
 `mesh-llm-embedded-runtime`, `mesh-llm-sdk`) supplies the ledger, gates and
 `wallet.v1` adapter; `wallet-lexe` (host-runtime, `mesh-llm`) adds the built-in

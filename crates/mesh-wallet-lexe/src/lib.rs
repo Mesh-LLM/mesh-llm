@@ -21,6 +21,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use mesh_llm_plugin::PluginRuntime;
 use mesh_llm_wallet::backend::{OpenedWallet, WalletBackend};
+use mesh_llm_wallet::contract::WalletFeatures;
 use mesh_llm_wallet::plugin_server::wallet_plugin;
 
 /// Plugin name the host launches this implementation under.
@@ -41,6 +42,9 @@ impl WalletBackend for LexeBackend {
             identity: opened.identity,
             provider: Arc::new(opened.provider),
             created: opened.created,
+            features: WalletFeatures {
+                amountless_invoices: true,
+            },
         })
     }
 }

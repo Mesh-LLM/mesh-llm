@@ -10,7 +10,7 @@ use mesh_llm_payments::provisioning::{WalletFactory, WalletPin};
 use mesh_llm_payments::wallet::{PayError, PaymentStatus, Transaction};
 use mesh_llm_wallet::contract::{
     CAPABILITY, LookupResponse, OpenRequest, OpenResponse, WalletError, WalletErrorKind,
-    WalletIdentity, ops,
+    WalletFeatures, WalletIdentity, ops,
 };
 use rmcp::model::{CallToolResult, ErrorCode};
 use serde_json::json;
@@ -45,6 +45,7 @@ struct FakeWalletPlugin {
     /// host re-opens.
     open: std::sync::atomic::AtomicBool,
     identity: std::sync::Mutex<WalletIdentity>,
+    features: std::sync::Mutex<WalletFeatures>,
 }
 
 impl FakeWalletPlugin {
@@ -56,6 +57,7 @@ impl FakeWalletPlugin {
             opens: AtomicUsize::new(0),
             open: std::sync::atomic::AtomicBool::new(false),
             identity: std::sync::Mutex::new(identity(wallet_id)),
+            features: std::sync::Mutex::new(WalletFeatures::default()),
         })
     }
 
@@ -155,6 +157,7 @@ impl PluginRpcBridge for Arc<FakeWalletPlugin> {
                         serde_json::to_value(OpenResponse {
                             identity: this.identity.lock().unwrap().clone(),
                             created: false,
+                            features: this.features.lock().unwrap().clone(),
                         })
                         .unwrap(),
                     ))
@@ -553,4 +556,28 @@ async fn concurrent_queries_recover_after_restart_and_preserve_pin() {
     assert!((2..=4).contains(&opens), "opens={opens}");
     let pin = WalletPin::load(dir.path()).unwrap().unwrap();
     assert_eq!(pin.wallet_id, "w1");
+}
+
+#[tokio::test]
+async fn amountless_invoice_is_refused_before_reaching_a_wallet_that_cannot_make_one() {
+    let plugin = FakeWalletPlugin::new("w1");
+    plugin.features.lock().unwrap().amountless_invoices = false;
+    let manager = manager_for(&plugin).await;
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = PluginWalletFactory::new(slot(manager))
+        .open(dir.path())
+        .await
+        .unwrap();
+
+    let error = wallet
+        .create_invoice(None, 60)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("amount-less"), "{error}");
+    assert!(
+        !plugin.calls().iter().any(|op| op == ops::CREATE_INVOICE),
+        "{:?}",
+        plugin.calls()
+    );
 }

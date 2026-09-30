@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::contract::WalletIdentity;
+use crate::contract::{WalletFeatures, WalletIdentity};
 use crate::provider::WalletProvider;
 
 /// An opened wallet and the identity the host will pin.
@@ -21,6 +21,8 @@ pub struct OpenedWallet {
     pub provider: Arc<dyn WalletProvider>,
     /// True if `open` created a new wallet rather than loading one.
     pub created: bool,
+    /// What this wallet supports. See [`WalletFeatures`].
+    pub features: WalletFeatures,
 }
 
 #[async_trait]
