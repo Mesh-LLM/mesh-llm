@@ -49,6 +49,9 @@ pub struct PaymentService {
     /// Balance reads started by `prefetch`, consumed by `authorize`/`cancel`.
     pub(crate) prefetched:
         std::sync::Mutex<std::collections::HashMap<String, JoinHandle<Result<Balance>>>>,
+    /// Opened by [`Self::open`] with no way to reach a wallet. Its exclusive
+    /// `service.lock` proves no node is running on this ledger.
+    ledger_only: bool,
     _process_lock: std::fs::File,
 }
 
@@ -56,7 +59,10 @@ impl PaymentService {
     /// Ledger-only service. Wallet operations fail until a factory is injected
     /// with [`Self::with_factory`] or a provider with [`Self::with_provider`].
     pub fn open(directory: &Path) -> Result<Self> {
-        Self::with_factory(directory, Arc::new(crate::provisioning::NoWalletFactory))
+        let mut service =
+            Self::with_factory(directory, Arc::new(crate::provisioning::NoWalletFactory))?;
+        service.ledger_only = true;
+        Ok(service)
     }
 
     pub fn with_factory(
@@ -85,6 +91,7 @@ impl PaymentService {
             receivable_lock: Mutex::new(()),
             input_recovery_cursor: Mutex::new(0),
             prefetched: Default::default(),
+            ledger_only: false,
             _process_lock: process_lock,
         })
     }
@@ -92,7 +99,18 @@ impl PaymentService {
     pub fn with_provider(directory: &Path, wallet: Arc<dyn WalletProvider>) -> Result<Self> {
         let mut service = Self::open(directory)?;
         service.wallet = OnceCell::new_with(Some(wallet));
+        service.ledger_only = false;
         Ok(service)
+    }
+
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// Whether this service can never reach a wallet, which also means no
+    /// node is running on its ledger.
+    pub(crate) fn is_ledger_only(&self) -> bool {
+        self.ledger_only
     }
 
     pub fn has_wallet(&self) -> bool {

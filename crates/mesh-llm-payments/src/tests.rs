@@ -22,6 +22,7 @@ mod provisioning;
 mod recovery_boundaries;
 mod resubmission;
 mod review_regressions;
+mod unpin;
 
 fn invoice(number: u8, amount: u64) -> Invoice {
     invoice_with_expiry(number, amount, 3600)

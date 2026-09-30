@@ -100,7 +100,9 @@ never by plugin name. An installed external wallet uses the ordinary plugin
 loader; no Lexe-specific client API is required. Enable only one wallet provider.
 Existing wallet pins bind both plugin name and wallet identity: replacing a
 provider with a differently named plugin is not an automatic migration, even
-when it uses the same seed. Do not delete the pin to bypass that check.
+when it uses the same seed. Switch providers with `mesh-llm wallet unpin`
+(below), which refuses while anything outstanding depends on the pinned wallet;
+do not delete the pin by hand.
 
 The retained `mesh-wallet-lexe` implementation uses Lexe 0.1.24 on mainnet.
 To compile it back into the host:
@@ -191,7 +193,20 @@ The host pins the wallet identity. After the first successful open it writes
 and refuses to open a plugin or wallet that does not match, because outstanding
 reservations and receivables are only meaningful against the wallet that created
 them. `has_persisted_wallet` reads this pin; it is side-effect-free and never
-starts the plugin. Embedders can still inject their own `WalletFactory` through
+starts the plugin. `mesh-llm wallet unpin` removes the pin so the next wallet
+operation opens and pins another wallet. It only runs while the node is stopped,
+because a running node may be opening its wallet against the pin; through the
+running node's API it is refused. It is also refused while any outgoing payment
+is prepared or pending, or while the ledger records any issued invoice as unpaid,
+expired or not: the old wallet may still settle those, or may already have
+received a payment the ledger has not recorded. Run the node on the old wallet
+to let recovery resolve them, or forgive a peer's unpaid invoices with
+`mesh-llm wallet unblock`. Unpin neither moves funds nor cancels invoices: the
+old wallet keeps its balance, and a forgiven invoice that has not expired can
+still be paid into it after the switch, where the ledger will not see it. The
+old wallet's data directory is left in place, so switching back re-adopts the
+same identity. Embedders can still inject their own
+`WalletFactory` through
 `PaymentService::with_factory`; without a plugin manager the service is
 ledger-only and every wallet operation fails with a clear error.
 
@@ -443,6 +458,7 @@ mesh-llm wallet send lnbc... --amount-msat 10000 --max-fee-msat 1000
 mesh-llm wallet pending
 mesh-llm wallet blocked
 mesh-llm wallet unblock PEER_ID
+mesh-llm wallet unpin
 mesh-llm wallet policy --mode automatic --daily-budget-sats 100
 mesh-llm wallet policy --mode free-only
 mesh-llm wallet pricing MODEL --input-msat-per-million 500 --output-msat-per-million 1500
@@ -462,7 +478,8 @@ Applications POST JSON to `/api/wallet` on the local management port:
 
 Commands are `balance`, `transactions` (`limit`), `fund`, `inspect_invoice`
 (`invoice`), `send` (`invoice`, optional `amount_msat`, `max_fee_msat`), `pending`,
-`policy` (optional `value`), `pricing`, and `set_pricing`
+`blocked`, `unblock` (`peer`), `unpin`, `policy` (optional `value`), `pricing`, and
+`set_pricing`
 (`model`, nullable `value`). `expected_pid` and `expected_directory` are optional
 local destination checks. The balance response exposes `spendable_msat` and
 `available_for_inference_msat` after policy and reservations. `pending` returns

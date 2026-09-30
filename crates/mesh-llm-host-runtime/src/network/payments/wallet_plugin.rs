@@ -149,7 +149,8 @@ impl PluginWalletProvider {
                     bail!(
                         "wallet identity mismatch: ledger is pinned to plugin '{}' wallet '{}', \
                          but plugin '{}' opened wallet '{}'. Refusing to settle against a \
-                         different wallet.",
+                         different wallet; `mesh-llm wallet unpin` switches wallets once no \
+                         payment is outstanding.",
                         pin.plugin,
                         pin.wallet_id,
                         self.plugin_name,

@@ -26,5 +26,6 @@ host-runtime wallet feature.
 Wallet state lives under `<config-dir>/payments/wallets/wallet-lexe/`, like
 every wallet plugin's. A build without a wallet provider cannot use that wallet
 until a compatible provider is available. Host pins also bind the plugin name:
-switching to a differently named external plugin requires explicit
-identity-checked adoption, not deletion of the existing pin or wallet state.
+switch to a differently named external plugin with `mesh-llm wallet unpin`,
+which refuses while anything outstanding depends on the pinned wallet, rather
+than by deleting the pin or wallet state.
