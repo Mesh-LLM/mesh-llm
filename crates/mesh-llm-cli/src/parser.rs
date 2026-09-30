@@ -21,6 +21,9 @@ pub use validation::validate_discovery_mode_args;
 mod setup_tests;
 
 #[cfg(test)]
+mod speculative_tests;
+
+#[cfg(test)]
 mod uninstall_tests;
 
 #[cfg(test)]
