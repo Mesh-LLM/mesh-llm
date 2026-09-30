@@ -252,8 +252,15 @@ pub(super) fn init_owner_runtime(
     })
 }
 
-pub(crate) fn default_plugin_event_source(endpoint_id: EndpointId, source_peer_id: &mut String) {
-    if source_peer_id.is_empty() {
-        *source_peer_id = endpoint_id_hex(endpoint_id);
-    }
+/// Stamp the local endpoint id as a plugin event's source.
+///
+/// Receivers read `source_peer_id` as the originating node, so the host always
+/// overwrites whatever the plugin supplied: a local plugin must not be able to
+/// name another node as the source of an event it hands over. The plugin SDK
+/// leaves the field empty on the normal path.
+pub(crate) fn stamp_plugin_event_source(endpoint_id: EndpointId, source_peer_id: &mut String) {
+    // Always stamp the local endpoint id. Receivers treat `source_peer_id` as
+    // the originator, so a local plugin must never be able to name another node
+    // here; the plugin SDK leaves the field empty on the normal path.
+    *source_peer_id = endpoint_id_hex(endpoint_id);
 }

@@ -13,7 +13,7 @@ use startup::{
     advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime, startup_secret_key,
     wait_for_endpoint_online,
 };
-pub(crate) use startup::{default_plugin_event_source, startup_transport_config};
+pub(crate) use startup::{stamp_plugin_event_source, startup_transport_config};
 
 /// Upper bound on how long shutdown waits for one iroh endpoint to close.
 ///
@@ -127,6 +127,10 @@ pub struct Node {
         Arc<std::sync::Mutex<mesh_llm_routing::cache_inventory::CacheInventory>>,
     pub(crate) swarm_capture: Arc<std::sync::Mutex<Option<crate::capture::SwarmCaptureRecorder>>>,
     pub(crate) local_request_metrics: Arc<LocalRequestMetricsSampler>,
+    /// Local-only plugin-frame telemetry: the source-mismatch counter and the
+    /// per-peer warning throttle. It shares no lock with `state`, so a
+    /// plugin-frame decision never contends with the mesh-wide state mutex.
+    pub(crate) plugin_frame_telemetry: Arc<PluginFrameTelemetry>,
     pub(crate) runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
     pub(crate) tunnel_tx:
         tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
@@ -858,6 +862,7 @@ impl Node {
             )),
             swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
+            plugin_frame_telemetry: Arc::new(PluginFrameTelemetry::default()),
             runtime_data_producer,
             tunnel_tx,
             tunnel_http_tx,
@@ -1039,6 +1044,7 @@ impl Node {
             )),
             swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
+            plugin_frame_telemetry: Arc::new(PluginFrameTelemetry::default()),
             runtime_data_producer,
             tunnel_tx,
             tunnel_http_tx,
