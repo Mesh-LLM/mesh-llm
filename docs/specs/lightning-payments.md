@@ -75,24 +75,25 @@ it from the ledger; neither crate links a wallet SDK.
 
 Concrete wallets are plugin processes that advertise the `wallet.v1`
 capability (`mesh-llm-wallet::contract`). The host resolves the provider by
-capability, never by plugin name. `mesh-wallet-lexe` is the shipped
-implementation: Lexe 0.1.23 on mainnet, built into the `mesh-llm` executable
+capability, never by plugin name. `mesh-wallet-lexe` is the built-in
+implementation, compiled out by default (opt in with `MESH_LLM_WALLET_LEXE=1`): Lexe 0.1.23 on mainnet, built into the `mesh-llm` executable
 behind the `wallet-lexe` cargo feature and served blobstore-style as
 `mesh-llm --plugin wallet-lexe`, auto-registered as the optional built-in
-plugin `wallet-lexe`. No second binary ships. The process starts with the host
+plugin `wallet-lexe` when compiled in. No second binary ships. The process starts with the host
 but is idle until the first wallet operation; starting it never provisions or
 contacts a wallet. `[[plugin]] name = "wallet-lexe" enabled = false` turns it
 off at runtime (only `enabled` may be set on a built-in); a different
 `wallet.v1` implementation is configured as an ordinary external plugin under
 its own name, with the built-in disabled. A build without the `wallet-lexe`
-feature (SDK consumers) accepts the same stanza and registers nothing.
+feature (the default, including release builds) accepts the same stanza and registers nothing.
 NWC, BOLT12 and multi-provider selection are deferred.
 
 Feature layering, so embedding applications never link a wallet SDK:
 `payments` (host-runtime, `mesh-llm`, `mesh-llm-embedded-runtime`,
 `mesh-llm-sdk`) is the ledger, gates and the `wallet.v1` adapter; `wallet-lexe`
 (host-runtime, `mesh-llm`) is the built-in Lexe implementation and the only
-feature that links Lexe. The shipped CLI enables both. `mesh-llm-sdk` with
+feature that links Lexe. The shipped CLI enables `payments` only; `wallet-lexe` is opt-in via
+`MESH_LLM_WALLET_LEXE=1`, so release builds need an external `wallet.v1` plugin. `mesh-llm-sdk` with
 `serving` compiles neither; with `serving,payments` it compiles the ledger and
 adapter and expects an external `wallet.v1` plugin.
 
