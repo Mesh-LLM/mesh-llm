@@ -1,9 +1,8 @@
 # Lightning payments PoC
 
 > [!WARNING]
-> Work in progress: Lightning payments, paid inference, and wallet integrations
-> (including Lexe) are experimental features still being explored. These notes
-> describe ongoing development, not production-ready features or stable contracts.
+> Wallet implementations, including the Lexe wallet, are works in progress
+> still being explored.
 
 This branch implements two-payment inference over authenticated mesh QUIC
 connections, a provider-neutral wallet API, durable settlement, CLI controls, and
