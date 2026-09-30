@@ -145,14 +145,16 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
         .ok()
         .and_then(|status| status.canonical_reason())
         .unwrap_or("Response");
-    // The non-streamed body is fully in hand here: digest the REAL response
-    // the host is about to serve. This branch reshapes to the Responses API,
-    // whose tool_calls/reasoning live under different keys than the
-    // chat.completion shape `ExchangeOutputDigests` looks for, so those two
-    // sub-digests stay honestly absent on this path; the response digest is
-    // always real.
-    let output_digests =
-        crate::plugin::openai_exchange::ExchangeOutputDigests::from_response_body(&translated_body);
+    // Digest the chat.completion body the serving node served, normalized as
+    // `relay_normalized_chat_completion_json` normalizes it, never the
+    // Responses/Anthropic reshape sent on to the client: the serving node
+    // digests the chat.completion it served, so a digest of the reshape never
+    // matches it and every translated exchange reads as a disagreement.
+    let served_chat_body =
+        normalize_chat_completion_json_body(body).unwrap_or_else(|| body.to_vec());
+    let output_digests = crate::plugin::openai_exchange::ExchangeOutputDigests::from_response_body(
+        &served_chat_body,
+    );
     let mut header = format!(
         "HTTP/1.1 {status_code} {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
         translated_body.len()
@@ -502,5 +504,105 @@ mod tests {
         // absent (honest null); the response digest is still real.
         assert!(output_digests.tool_calls.is_none());
         assert!(output_digests.response.is_some());
+    }
+
+    /// Which relay a non-streamed upstream chat.completion goes through.
+    #[derive(Clone, Copy)]
+    enum Relay {
+        Chat,
+        Responses,
+        Anthropic,
+    }
+
+    /// Relays one non-streamed upstream chat.completion body and returns the
+    /// response digest the requester's terminal event carries for it.
+    async fn response_digest_via(relay: Relay, body: &'static [u8]) -> Option<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let header_end = header.len();
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let probe = ResponseProbe {
+                buffered: header.into_bytes(),
+                header_end,
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            let policy = ResponseRetryPolicy::next_target_available(false);
+            let observer = OpenAiRouteObserver::default();
+            match relay {
+                Relay::Chat => {
+                    relay_normalized_chat_completion_json(
+                        &mut client_socket,
+                        &mut upstream_reader,
+                        probe,
+                        policy,
+                        None,
+                        observer,
+                    )
+                    .await
+                }
+                Relay::Responses | Relay::Anthropic => {
+                    relay_translated_json(
+                        &mut client_socket,
+                        &mut upstream_reader,
+                        probe,
+                        policy,
+                        None,
+                        observer,
+                        matches!(relay, Relay::Anthropic),
+                    )
+                    .await
+                }
+            }
+            .expect("relay")
+        });
+        upstream_writer.write_all(body).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut output))
+            .await
+            .expect("relay closes the client")
+            .unwrap();
+        drop(upstream_writer);
+        let RouteAttemptResult::Delivered { output_digests, .. } = server_task.await.unwrap()
+        else {
+            panic!("expected Delivered");
+        };
+        output_digests.response.map(hex::encode)
+    }
+
+    const SERVED_CHAT_COMPLETION: &[u8] = br#"{"id":"chatcmpl-r","object":"chat.completion","created":1,"model":"qwen","choices":[{"index":0,"message":{"role":"assistant","content":"Blue"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}"#;
+
+    /// A requester asking through /v1/responses gets the
+    /// same response digest as one asking through /v1/chat/completions for
+    /// the same served answer -- the digest on the serving node's event -- so
+    /// the two events agree instead of reading as a disagreement.
+    #[tokio::test]
+    async fn a_responses_request_digests_the_served_chat_completion() {
+        let chat = response_digest_via(Relay::Chat, SERVED_CHAT_COMPLETION).await;
+        assert!(chat.is_some());
+        assert_eq!(
+            response_digest_via(Relay::Responses, SERVED_CHAT_COMPLETION).await,
+            chat
+        );
+    }
+
+    #[tokio::test]
+    async fn an_anthropic_request_digests_the_served_chat_completion() {
+        let chat = response_digest_via(Relay::Chat, SERVED_CHAT_COMPLETION).await;
+        assert!(chat.is_some());
+        assert_eq!(
+            response_digest_via(Relay::Anthropic, SERVED_CHAT_COMPLETION).await,
+            chat
+        );
     }
 }
