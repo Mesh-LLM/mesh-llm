@@ -4,7 +4,8 @@ use mesh_llm_events::logging::identifiers::RequestId;
 use crate::plugin::openai_exchange::{OpenAiExchangePhase, test_support::RecordingChannel};
 
 use super::{
-    affinity, election, handle_api_proxy_connection, mesh, proxy, publish_raw_proxy_terminal,
+    RawProxyTerminalFacts, affinity, election, handle_api_proxy_connection, mesh, proxy,
+    publish_raw_proxy_terminal,
 };
 
 #[tokio::test]
@@ -36,6 +37,7 @@ async fn parsed_missing_model_error_persists_the_client_visible_response_artifac
             election::ModelTargets::default(),
             affinity::AffinityRouter::new(),
             crate::runtime::IngressType::LocalOpenAi,
+            None,
         )
         .await;
     });
@@ -152,6 +154,7 @@ async fn ingress_body_parse_error_persists_a_response_only_after_complete_header
             election::ModelTargets::default(),
             affinity::AffinityRouter::new(),
             crate::runtime::IngressType::LocalOpenAi,
+            None,
         )
         .await;
     });
@@ -273,8 +276,11 @@ async fn publish_raw_proxy_terminal_attaches_full_provenance_and_usage_on_a_serv
         "exchange-1",
         "test-model",
         &outcome,
-        true,
-        Some("digest-abc"),
+        RawProxyTerminalFacts {
+            served_locally: true,
+            request_digest: Some("digest-abc"),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -316,6 +322,107 @@ async fn publish_raw_proxy_terminal_attaches_full_provenance_and_usage_on_a_serv
     assert_eq!(usage.total_tokens, 15);
 }
 
+/// A host-served exchange that arrived over the mesh tunnel names the node
+/// that asked, alongside (never instead of) this node as the server.
+#[tokio::test]
+async fn publish_raw_proxy_terminal_names_the_tunnel_requester_on_a_host_served_exchange() {
+    let node = node_with_hardware_and_descriptor("test-model").await;
+    let channel = RecordingChannel::default();
+    let requester = "b".repeat(64);
+    let outcome = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage::default(),
+        output_digests: Default::default(),
+    };
+
+    publish_raw_proxy_terminal(
+        &node,
+        &channel,
+        "exchange-1",
+        "test-model",
+        &outcome,
+        RawProxyTerminalFacts {
+            served_locally: true,
+            request_digest: None,
+            requested_by_node_id: Some(&requester),
+        },
+    )
+    .await;
+
+    let events = channel.events();
+    let provenance = events[0]
+        .serving_provenance
+        .as_ref()
+        .expect("host-served 2xx carries provenance");
+    assert_eq!(
+        provenance.requested_by_node_id.as_deref(),
+        Some(requester.as_str())
+    );
+    assert_eq!(provenance.served_by_node_id, node.id().to_string());
+    let wire = serde_json::to_value(provenance).expect("serialize provenance");
+    assert_eq!(wire["requested_by_node_id"], serde_json::json!(requester));
+}
+
+/// Without a requester (a local API request) the field is absent on the
+/// wire, never `null`.
+#[tokio::test]
+async fn publish_raw_proxy_terminal_omits_requested_by_on_the_wire_for_a_local_request() {
+    let node = node_with_hardware_and_descriptor("test-model").await;
+    let channel = RecordingChannel::default();
+    let outcome = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage::default(),
+        output_digests: Default::default(),
+    };
+
+    publish_raw_proxy_terminal(
+        &node,
+        &channel,
+        "exchange-1",
+        "test-model",
+        &outcome,
+        RawProxyTerminalFacts {
+            served_locally: true,
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let wire =
+        serde_json::to_value(channel.events()[0].serving_provenance.as_ref().unwrap()).unwrap();
+    assert!(wire.get("requested_by_node_id").is_none());
+}
+
+/// The plugin-served path attaches no provenance block, so a requester id
+/// handed to it never surfaces there either.
+#[tokio::test]
+async fn publish_raw_proxy_terminal_on_the_plugin_served_path_never_carries_a_requester() {
+    let node = node_with_hardware_and_descriptor("test-model").await;
+    let channel = RecordingChannel::default();
+    let outcome = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage::default(),
+        output_digests: Default::default(),
+    };
+    let requester = "b".repeat(64);
+
+    publish_raw_proxy_terminal(
+        &node,
+        &channel,
+        "exchange-1",
+        "test-model",
+        &outcome,
+        RawProxyTerminalFacts {
+            served_locally: false,
+            request_digest: None,
+            requested_by_node_id: Some(&requester),
+        },
+    )
+    .await;
+
+    assert!(channel.events()[0].serving_provenance.is_none());
+}
+
 /// A degraded 503 served nothing, so there is no hardware or model identity
 /// to report — but the client did get a real status, and the terminal event
 /// must carry it rather than leaving the outcome unaccounted for.
@@ -331,8 +438,11 @@ async fn publish_raw_proxy_terminal_on_a_503_has_no_provenance_but_keeps_the_sta
         "exchange-1",
         "test-model",
         &outcome,
-        true,
-        None,
+        RawProxyTerminalFacts {
+            served_locally: true,
+            request_digest: None,
+            ..Default::default()
+        },
     )
     .await;
 
@@ -357,8 +467,11 @@ async fn publish_raw_proxy_terminal_on_a_failed_outcome_has_no_provenance_and_no
         "exchange-1",
         "test-model",
         &outcome,
-        true,
-        None,
+        RawProxyTerminalFacts {
+            served_locally: true,
+            request_digest: None,
+            ..Default::default()
+        },
     )
     .await;
 
@@ -382,8 +495,11 @@ async fn publish_raw_proxy_terminal_on_a_dropped_outcome_has_no_provenance_and_n
         "exchange-1",
         "test-model",
         &outcome,
-        true,
-        None,
+        RawProxyTerminalFacts {
+            served_locally: true,
+            request_digest: None,
+            ..Default::default()
+        },
     )
     .await;
 
@@ -410,8 +526,10 @@ async fn publish_raw_proxy_terminal_on_the_plugin_served_path_omits_the_whole_bl
         "exchange-1",
         "test-model",
         &outcome,
-        false, // plugin-served
-        None,
+        RawProxyTerminalFacts {
+            served_locally: false, // plugin-served
+            ..Default::default()
+        },
     )
     .await;
 
@@ -452,8 +570,10 @@ async fn publish_raw_proxy_terminal_on_the_plugin_served_path_still_attaches_out
         "exchange-1",
         "test-model",
         &outcome,
-        false, // plugin-served
-        None,
+        RawProxyTerminalFacts {
+            served_locally: false, // plugin-served
+            ..Default::default()
+        },
     )
     .await;
 
@@ -507,8 +627,11 @@ async fn publish_raw_proxy_terminal_omits_model_identity_on_a_descriptor_miss() 
         "exchange-1",
         "test-model",
         &outcome,
-        true,
-        None,
+        RawProxyTerminalFacts {
+            served_locally: true,
+            request_digest: None,
+            ..Default::default()
+        },
     )
     .await;
 
@@ -546,8 +669,11 @@ async fn publish_raw_proxy_terminal_omits_vram_bytes_when_advertised_total_is_ze
         "exchange-1",
         "test-model",
         &outcome,
-        true,
-        None,
+        RawProxyTerminalFacts {
+            served_locally: true,
+            request_digest: None,
+            ..Default::default()
+        },
     )
     .await;
 

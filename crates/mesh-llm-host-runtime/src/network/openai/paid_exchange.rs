@@ -6,7 +6,7 @@
 //! terminal builder (`ingress::publish_raw_proxy_terminal`).
 
 use crate::mesh;
-use crate::network::openai::ingress::publish_raw_proxy_terminal;
+use crate::network::openai::ingress::{RawProxyTerminalFacts, publish_raw_proxy_terminal};
 use crate::network::openai::transport as proxy;
 use crate::plugin::openai_exchange::{
     OpenAiExchangeChannel, OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope,
@@ -52,15 +52,19 @@ impl PaidServedExchange {
         outcome: &proxy::RouteDispatchOutcome,
         request_digest: Option<&str>,
     ) {
-        // Served here, on this node's own weights.
+        // Served here, on this node's own weights. The payer is not named:
+        // it asked over the payments protocol, not the HTTP tunnel.
         publish_raw_proxy_terminal(
             node,
             self.channel.as_ref(),
             &self.exchange_id,
             model_name,
             outcome,
-            true,
-            request_digest,
+            RawProxyTerminalFacts {
+                served_locally: true,
+                request_digest,
+                requested_by_node_id: None,
+            },
         )
         .await;
     }
