@@ -1,5 +1,10 @@
 # Wallet boundaries and evidence
 
+> [!WARNING]
+> Work in progress: Lightning payments, paid inference, and wallet integrations
+> (including Lexe) are experimental features still being explored. These notes
+> describe ongoing development, not production-ready features or stable contracts.
+
 Decision record, September 2026. This captures the architectural reasoning and
 fixture expectations discussed during [PR #1926](https://github.com/Mesh-LLM/mesh-llm/pull/1926),
 not a live-test report or a claim that the proposed fixtures are implemented.

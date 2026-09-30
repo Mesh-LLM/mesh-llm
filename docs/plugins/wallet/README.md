@@ -1,5 +1,10 @@
 # Wallet engineering notes
 
+> [!WARNING]
+> Work in progress: Lightning payments, paid inference, and wallet integrations
+> (including Lexe) are experimental features still being explored. These notes
+> describe ongoing development, not production-ready features or stable contracts.
+
 Design decisions and evidence expectations for wallet plugins. These are
 maintainer notes, not a wallet setup guide or a record of private test systems.
 
