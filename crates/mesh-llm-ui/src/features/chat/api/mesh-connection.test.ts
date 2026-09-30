@@ -171,6 +171,24 @@ describe('createMeshConnectionAdapter', () => {
     ])
   })
 
+  it('sends x-mesh-target only while a target is set, reading its latest value', async () => {
+    const node = 'a70d3967bea3b22fa48a28f77c5d2b3764fc8bd5204a82c09ff8430f3f2a0a00'
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const target = { value: node }
+    const adapter = createMeshConnectionAdapter('model-a', undefined, undefined, target)
+
+    for await (const _chunk of adapter.connect(createMessages(), undefined, undefined)) void _chunk
+    target.value = ''
+    for await (const _chunk of adapter.connect(createMessages(), undefined, undefined)) void _chunk
+
+    const headersOf = (call: number) => fetchMock.mock.calls[call]?.[1]?.headers as Record<string, string>
+    expect(headersOf(0)['x-mesh-target']).toBe(node)
+    expect(headersOf(1)).not.toHaveProperty('x-mesh-target')
+  })
+
   it('emits first-class reasoning deltas before visible text', async () => {
     const fetchMock = vi
       .fn()

@@ -148,6 +148,7 @@ type UseChatLaneOptions = {
   responseMetadataByConversation: Record<string, Record<string, ThreadMessageMetadata>>
   setResponseMetadataByConversation: Dispatch<SetStateAction<Record<string, Record<string, ThreadMessageMetadata>>>>
   sessionModel: string
+  sessionTarget: string
   systemPrompt: string
   updateThread: ReturnType<typeof useConversations>['updateThread']
 }
@@ -160,6 +161,7 @@ function useChatLane({
   responseMetadataByConversation,
   setResponseMetadataByConversation,
   sessionModel,
+  sessionTarget,
   systemPrompt,
   updateThread
 }: UseChatLaneOptions): ChatLane {
@@ -187,6 +189,7 @@ function useChatLane({
     conversationId,
     model: sessionModel,
     systemPrompt,
+    target: sessionTarget,
     initialMessages: initialThread,
     onResponseMetadata: handleResponseMetadata
   })
@@ -263,6 +266,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
   const selectedLaneId = findChatLaneId(laneConversationIds, selectedConversationId)
   const visibleLaneId = selectedLaneId ?? activeLaneId
   const [sessionModel, setSessionModel] = useState('auto')
+  const [sessionTarget, setSessionTarget] = useState('')
   const [messageModels, setMessageModels] = useState<Record<string, string>>({})
   const { systemPrompt, setSystemPrompt } = usePersistentChatSystemPrompt()
   const [responseMetadataByConversation, setResponseMetadataByConversation] = useState<
@@ -285,6 +289,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
     responseMetadataByConversation,
     setResponseMetadataByConversation,
     sessionModel,
+    sessionTarget,
     systemPrompt,
     updateThread
   })
@@ -296,6 +301,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
     responseMetadataByConversation,
     setResponseMetadataByConversation,
     sessionModel,
+    sessionTarget,
     systemPrompt,
     updateThread
   })
@@ -389,6 +395,8 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
       setDraftConversationId,
       setMessageModels,
       setSessionModel,
+      sessionTarget,
+      setSessionTarget,
       setSystemPrompt,
       systemPrompt,
       streamingConversationIds,
@@ -407,6 +415,7 @@ export function ChatSessionProvider({ children, data = CHAT_HARNESS }: ChatSessi
       liveMessagesWithModels,
       liveMode,
       messageCounts,
+      sessionTarget,
       setSystemPrompt,
       streamingConversationIds,
       systemPrompt,

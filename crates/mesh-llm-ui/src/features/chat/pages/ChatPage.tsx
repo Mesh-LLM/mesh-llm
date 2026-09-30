@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearch } from '@tanstack/react-router'
 import { uiMessagesToThreadMessages } from '@/features/chat/api/use-chat-messages'
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { createChatDraftConversationId } from '@/features/chat/api/chat-session-ids'
@@ -47,9 +48,22 @@ import {
 } from '@/features/chat/pages/chat-page-submissions'
 import { useChatPageSubmittedAttachments } from '@/features/chat/pages/chat-page-submitted-attachments'
 
-type ChatPageProps = { data?: ChatHarnessData }
+type ChatPageProps = {
+  data?: ChatHarnessData
+  /** A node endpoint id: while set, chat requests go to that node only. */
+  target?: string
+  onClearTarget?: () => void
+}
 
-export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
+/** The `/chat` route: `?target=<node id>` points the chat at one node. */
+export function ChatRoutePage() {
+  const { target } = useSearch({ from: '/chat' })
+  const navigate = useNavigate({ from: '/chat' })
+  const clearTarget = useCallback(() => void navigate({ search: {} }), [navigate])
+  return <ChatPageContent target={target} onClearTarget={clearTarget} />
+}
+
+export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: ChatPageProps) {
   const { mode, setMode } = useDataMode()
   const liveMode = mode === 'live'
   const modelsQuery = useModelsQuery({ enabled: mode === 'live' })
@@ -120,6 +134,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     setDraftConversationId,
     setMessageModels,
     setSessionModel,
+    setSessionTarget,
     setSystemPrompt,
     streamingConversationIds,
     systemPrompt,
@@ -316,6 +331,10 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   useEffect(() => {
     setSessionModel(activeModelName)
   }, [activeModelName, setSessionModel])
+
+  useEffect(() => {
+    setSessionTarget(target ?? '')
+  }, [setSessionTarget, target])
 
   useEffect(() => {
     if (chatConversationId) focusComposer()
@@ -766,6 +785,8 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
       composerSendMode={composerShouldQueue ? 'queue' : 'send'}
       composerTextareaRef={composerTextareaRef}
       showSystemPromptButton={systemPromptButtonEnabled}
+      chatTarget={target}
+      onClearChatTarget={onClearTarget}
       canChat={canChat}
       activeConversation={activeConversation}
       latestTurnToken={latestTurnToken}

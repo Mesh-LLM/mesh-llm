@@ -23,6 +23,9 @@ export type ChatSessionContextValue = {
   setDraftConversationId: (conversationId: string) => void
   setMessageModels: Dispatch<SetStateAction<Record<string, string>>>
   setSessionModel: (model: string) => void
+  /** The node chat requests are sent to (`x-mesh-target`); '' routes as usual. */
+  sessionTarget: string
+  setSessionTarget: (target: string) => void
   setSystemPrompt: (systemPrompt: string) => void
   systemPrompt: string
   streamingConversationIds: readonly string[]

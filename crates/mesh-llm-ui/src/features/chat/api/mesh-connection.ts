@@ -23,11 +23,11 @@ function resolveModel(model: StringSource): string {
   return model.value
 }
 
-function resolveSystemPrompt(systemPrompt: StringSource | undefined): string {
-  if (!systemPrompt) return ''
-  if (typeof systemPrompt === 'function') return systemPrompt()
-  if (typeof systemPrompt === 'string') return systemPrompt
-  return systemPrompt.value
+function resolveOptionalString(value: StringSource | undefined): string {
+  if (!value) return ''
+  if (typeof value === 'function') return value()
+  if (typeof value === 'string') return value
+  return value.value
 }
 
 function parseChatSSEEvent(data: string) {
@@ -229,12 +229,21 @@ async function* parseSSEStream(
   }
 }
 
+/** Request headers for one chat request. A target sends it to that node only
+ *  (`x-mesh-target`); a node that doesn't serve the model refuses it. */
+export function chatRequestHeaders(target: string): Record<string, string> {
+  return target
+    ? { 'Content-Type': 'application/json', 'x-mesh-target': target }
+    : { 'Content-Type': 'application/json' }
+}
+
 async function* runConnect(
   model: string,
   messages: Array<UIMessage> | Array<ModelMessage>,
   abortSignal?: AbortSignal,
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
-  systemPrompt = ''
+  systemPrompt = '',
+  target = ''
 ): AsyncGenerator<StreamChunk> {
   const clientId = getClientId()
   const requestId = generateRequestId()
@@ -258,7 +267,7 @@ async function* runConnect(
     for (let attempt = 0; ; attempt += 1) {
       response = await fetch(`${env.managementApiUrl}/api/responses`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: chatRequestHeaders(target),
         body: JSON.stringify(requestBody),
         signal: abortSignal
       })
@@ -387,10 +396,18 @@ async function* runConnect(
 export function createMeshConnectionAdapter(
   model: StringSource,
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
-  systemPrompt?: StringSource
+  systemPrompt?: StringSource,
+  target?: StringSource
 ): ConnectConnectionAdapter {
   return {
     connect: (_messages, _data, abortSignal) =>
-      runConnect(resolveModel(model), _messages, abortSignal, onResponseMetadata, resolveSystemPrompt(systemPrompt))
+      runConnect(
+        resolveModel(model),
+        _messages,
+        abortSignal,
+        onResponseMetadata,
+        resolveOptionalString(systemPrompt),
+        resolveOptionalString(target)
+      )
   }
 }
