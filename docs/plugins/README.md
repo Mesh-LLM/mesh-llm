@@ -232,6 +232,12 @@ either placement. The existing Configuration `Plugins` tab owns config-section
 projection, and only ready config sections in the `integrations` projection
 mount there.
 
+The host draws a page header ("Plugin page", the page label and where it is
+mounted from) above each plugin page. A page with its own title bar can set
+`host_header = false` (`web_ui_page(...).host_header(false)`); the host then
+draws no visible header, keeps the page label as its accessible heading, and
+still names the plugin in the navigation.
+
 Plugin-owned settings declared in `config_schema` continue to render through
 the console's standard schema controls. A custom config-section bundle should
 add plugin-specific actions or context; it should not recreate a schema field

@@ -239,14 +239,18 @@ export function PluginWebUiRoutePage() {
 
   return (
     <section className="panel-shell flex min-h-[24rem] flex-col rounded-[var(--radius-lg)] border border-border bg-panel">
-      <header className="border-b border-border-soft px-5 py-4">
-        <div className="type-label text-fg-faint">Plugin page</div>
-        <h1 className="type-headline mt-1 text-foreground">{eligibility.page.label}</h1>
-        <p className="type-caption mt-1 text-fg-dim">
-          Mounted from <span className="font-mono text-foreground">{pluginName}</span> page{' '}
-          <span className="font-mono text-foreground">{eligibility.page.id}</span>.
-        </p>
-      </header>
+      {eligibility.page.host_header === false ? (
+        <h1 className="sr-only">{eligibility.page.label}</h1>
+      ) : (
+        <header className="border-b border-border-soft px-5 py-4">
+          <div className="type-label text-fg-faint">Plugin page</div>
+          <h1 className="type-headline mt-1 text-foreground">{eligibility.page.label}</h1>
+          <p className="type-caption mt-1 text-fg-dim">
+            Mounted from <span className="font-mono text-foreground">{pluginName}</span> page{' '}
+            <span className="font-mono text-foreground">{eligibility.page.id}</span>.
+          </p>
+        </header>
+      )}
       {mountStatus.kind === 'loading' ? (
         <div className="border-b border-border-soft px-5 py-2 text-[length:var(--density-type-caption)] text-fg-faint">
           Loading plugin bundle...

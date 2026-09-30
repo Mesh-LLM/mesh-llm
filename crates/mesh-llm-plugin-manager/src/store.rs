@@ -55,6 +55,8 @@ pub struct InstalledPluginWebUiPageMetadata {
     pub entry_script: String,
     #[serde(default)]
     pub placement: InstalledPluginWebUiPagePlacement,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub host_header: Option<bool>,
 }
 
 /// A manifest-declared placement request, not a promotion decision: the

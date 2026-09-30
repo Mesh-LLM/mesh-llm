@@ -208,6 +208,9 @@ message PluginWebUiPageManifest {
   // (older plugins compiled against an earlier schema) is treated as
   // AUXILIARY, so this field is additive and backward compatible.
   PluginWebUiPagePlacement placement = 7;
+  // false: the host draws no page header above this page (the page has its
+  // own title bar). Absent or true: the host header is shown.
+  optional bool host_header = 8;
 }
 
 enum PluginWebUiPagePlacement {

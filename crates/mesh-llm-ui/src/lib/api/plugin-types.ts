@@ -10,6 +10,8 @@ export type PluginWebUiPageRaw = {
   readonly bundle_id: string
   readonly entry_script: string
   readonly placement?: PluginWebUiPlacementRaw
+  /** `false`: the page draws its own title bar and the host shows no page header. */
+  readonly host_header?: boolean
 }
 
 export type PluginWebUiConfigSectionRaw = {

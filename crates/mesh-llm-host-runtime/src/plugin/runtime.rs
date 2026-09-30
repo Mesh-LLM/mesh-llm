@@ -1082,6 +1082,7 @@ pub(crate) mod tests {
                         bundle_id: "main".into(),
                         entry_script: "assets/app.js".into(),
                         placement: InstalledPluginWebUiPagePlacement::Auxiliary,
+                        host_header: None,
                     }],
                     config_sections: vec![InstalledPluginWebUiConfigSectionMetadata {
                         id: "settings".into(),

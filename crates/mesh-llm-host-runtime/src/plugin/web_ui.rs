@@ -51,6 +51,9 @@ pub struct PluginWebUiPageOverview {
     pub bundle_id: String,
     pub entry_script: String,
     pub placement: PluginWebUiPagePlacement,
+    /// `Some(false)`: the page asked the host not to draw its page header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_header: Option<bool>,
 }
 
 /// The page's manifest-declared placement request. This is a request, not
@@ -347,6 +350,7 @@ fn plugin_web_ui_page_from_proto(page: &proto::PluginWebUiPageManifest) -> Plugi
             Ok(proto::PluginWebUiPagePlacement::Primary) => PluginWebUiPagePlacement::Primary,
             _ => PluginWebUiPagePlacement::Auxiliary,
         },
+        host_header: page.host_header,
     }
 }
 
@@ -373,6 +377,7 @@ fn plugin_web_ui_page_from_installed(
         bundle_id: page.bundle_id.clone(),
         entry_script: page.entry_script.clone(),
         placement: page.placement.into(),
+        host_header: page.host_header,
     }
 }
 
@@ -418,6 +423,7 @@ pub(super) fn installed_metadata_with_web_ui(
                             bundle_id: "main".into(),
                             entry_script: "assets/app.js".into(),
                             placement: mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement::Auxiliary,
+                            host_header: None,
                         },
                     ],
                     config_sections: vec![

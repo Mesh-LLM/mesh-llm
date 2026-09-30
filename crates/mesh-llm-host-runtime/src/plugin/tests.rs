@@ -17,6 +17,7 @@ fn web_ui_manifest() -> proto::PluginWebUiManifest {
             bundle_id: "main".into(),
             entry_script: "assets/app.js".into(),
             placement: proto::PluginWebUiPagePlacement::Auxiliary as i32,
+            host_header: None,
         }],
         config_sections: vec![proto::PluginWebUiConfigSectionManifest {
             id: "settings".into(),

@@ -7,6 +7,7 @@ export type PluginWebUiPage = {
   readonly bundle_id: string
   readonly entry_script: string
   readonly icon?: string
+  readonly host_header?: boolean
 }
 
 export type PluginWebUiConfigSection = {

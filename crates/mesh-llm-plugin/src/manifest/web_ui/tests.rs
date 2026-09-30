@@ -451,3 +451,26 @@ fn web_ui_page_builder_primary_placement_sets_proto_field() {
         proto::PluginWebUiPagePlacement::Primary as i32
     );
 }
+
+#[test]
+fn web_ui_packaging_carries_the_page_host_header_choice() {
+    let manifest: proto::PluginWebUiManifest = web_ui()
+        .bundle(web_ui_bundle("main", "dist"))
+        .page(
+            web_ui_page("home", "Home", "home", "app.js")
+                .bundle_id("main")
+                .host_header(false),
+        )
+        .page(web_ui_page("other", "Other", "other", "app.js").bundle_id("main"))
+        .into();
+
+    let packaged = PackagedPluginWebUi::try_from(&manifest).expect("valid web UI should pass");
+
+    assert_eq!(packaged.pages[0].host_header, Some(false));
+    assert_eq!(packaged.pages[1].host_header, None);
+    let json = serde_json::to_value(&packaged).unwrap();
+    assert!(
+        json["pages"][1].get("host_header").is_none(),
+        "absent stays absent"
+    );
+}

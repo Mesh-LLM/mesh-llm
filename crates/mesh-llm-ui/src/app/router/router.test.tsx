@@ -400,6 +400,30 @@ describe('app router routes', () => {
   })
 
   it.each([
+    [undefined, true],
+    [true, true],
+    [false, false]
+  ])('shows the host page header when host_header is %s: %s', async (hostHeader, shown) => {
+    installReadyPluginBundle()
+    const webUi = readyPluginWebUi()
+    const page = { ...webUi.pages![0], host_header: hostHeader }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).endsWith('/web-ui/config')
+          ? jsonResponse(visiblePluginConfig())
+          : jsonResponse({ ...webUi, pages: [page] })
+      )
+    )
+
+    renderRouterAt('/plugins/blackboard/dashboard')
+
+    expect(await screen.findByText('Mounted blackboard dashboard')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: 'Blackboard dashboard' })).toBeInTheDocument()
+    expect(screen.queryByText('Plugin page') !== null).toBe(shown)
+  })
+
+  it.each([
     ['disabled', disabledPluginWebUi()],
     ['invalid', invalidPluginWebUi()],
     ['plugin_not_running', pluginNotRunningWebUi()],
