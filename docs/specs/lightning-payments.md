@@ -1,8 +1,8 @@
 # Lightning payments PoC
 
 > [!WARNING]
-> Wallet implementations, including the Lexe wallet, are works in progress
-> still being explored.
+> Wallet implementations, including the Lexe wallet, are currently for example
+> purposes only and are still being explored.
 
 This branch implements two-payment inference over authenticated mesh QUIC
 connections, a provider-neutral wallet API, durable settlement, CLI controls, and

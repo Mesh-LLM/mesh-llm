@@ -1,8 +1,8 @@
 # Wallet engineering notes
 
 > [!WARNING]
-> Wallet implementations, including the Lexe wallet, are works in progress
-> still being explored.
+> Wallet implementations, including the Lexe wallet, are currently for example
+> purposes only and are still being explored.
 
 These maintainer references describe wallet boundaries and evidence expectations,
 not a wallet setup guide or a record of private test systems.
