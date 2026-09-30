@@ -40,10 +40,11 @@ pub mod embedded_runtime {
         EmbeddedMeshHttpConfig, EmbeddedMeshLogFormat, EmbeddedMeshNetworkConfig,
         EmbeddedMeshNodeBuilder, EmbeddedMeshNodeConfig, EmbeddedMeshNodeHandle,
         EmbeddedMeshNodeMode, EmbeddedMeshNodeStatus, EmbeddedMeshRequirementsConfig,
-        EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig, EmbeddedServeConfig,
-        EmbeddedServeHandle, EmbeddedServeMode, EmbeddedServeStatus, EmbeddedServingController,
-        EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, initialize_host_runtime,
-        start_embedded_node, start_embedded_serve,
+        EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig, EmbeddedOpenAiResponse,
+        EmbeddedOpenAiStream, EmbeddedServeConfig, EmbeddedServeHandle, EmbeddedServeMode,
+        EmbeddedServeStatus, EmbeddedServingController, EmbeddedSseEvent, EmbeddedTrustPolicy,
+        SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, initialize_host_runtime, start_embedded_node,
+        start_embedded_serve,
     };
 }
 

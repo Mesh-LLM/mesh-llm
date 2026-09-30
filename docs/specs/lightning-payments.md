@@ -1,5 +1,9 @@
 # Lightning payments PoC
 
+> [!WARNING]
+> Wallet implementations, including the Lexe wallet, are currently for example
+> purposes only and are still being explored.
+
 This branch implements two-payment inference over authenticated mesh QUIC
 connections, a provider-neutral wallet API, durable settlement, CLI controls, and
 an initial Lexe mainnet adapter. Mainnet settlement was exercised on September
@@ -73,28 +77,66 @@ payment hash, and asynchronous `wait_for_payment(payment_hash)` completion.
 `mesh-llm-payments` re-exports it under `mesh_llm_payments::wallet` and drives
 it from the ledger; neither crate links a wallet SDK.
 
-Concrete wallets are plugin processes that advertise the `wallet.v1`
-capability (`mesh-llm-wallet::contract`). The host resolves the provider by
-capability, never by plugin name. `mesh-wallet-lexe` is the shipped
-implementation: Lexe 0.1.23 on mainnet, built into the `mesh-llm` executable
-behind the `wallet-lexe` cargo feature and served blobstore-style as
-`mesh-llm --plugin wallet-lexe`, auto-registered as the optional built-in
-plugin `wallet-lexe`. No second binary ships. The process starts with the host
-but is idle until the first wallet operation; starting it never provisions or
-contacts a wallet. `[[plugin]] name = "wallet-lexe" enabled = false` turns it
-off at runtime (only `enabled` may be set on a built-in); a different
-`wallet.v1` implementation is configured as an ordinary external plugin under
-its own name, with the built-in disabled. A build without the `wallet-lexe`
-feature (SDK consumers) accepts the same stanza and registers nothing.
-NWC, BOLT12 and multi-provider selection are deferred.
+### Build defaults are not spending policy
 
-Feature layering, so embedding applications never link a wallet SDK:
-`payments` (host-runtime, `mesh-llm`, `mesh-llm-embedded-runtime`,
-`mesh-llm-sdk`) is the ledger, gates and the `wallet.v1` adapter; `wallet-lexe`
-(host-runtime, `mesh-llm`) is the built-in Lexe implementation and the only
-feature that links Lexe. The shipped CLI enables both. `mesh-llm-sdk` with
-`serving` compiles neither; with `serving,payments` it compiles the ledger and
-adapter and expects an external `wallet.v1` plugin.
+Default CLI builds, including releases, include **payment infrastructure**
+(`payments`): the ledger, budgets, payment gates, recovery and the generic
+`wallet.v1` adapter. They exclude the **built-in Lexe wallet** (`wallet-lexe`)
+and its SDK. Compiling the infrastructure does not enable spending or supply
+an operational wallet.
+
+Without an available `wallet.v1` provider, wallet-dependent operations cannot
+create invoices or settle payments. Free inference does not require a wallet.
+A fresh profile uses `free_only` spending policy; installing or funding a wallet
+does not enable automatic paid inference. Paying requires a usable wallet and
+explicit spending authorization/budget. Charging for serving is configured
+separately through model pricing. Existing policy, pricing, ledger and wallet
+files are not reset by changing build features; pending settlement still needs
+the original wallet to become available again.
+
+Concrete wallets are plugin processes that advertise `wallet.v1`
+(`mesh-llm-wallet::contract`). The host resolves the provider by capability,
+never by plugin name. An installed external wallet uses the ordinary plugin
+loader; no Lexe-specific client API is required. Enable only one wallet provider.
+Existing wallet pins bind both plugin name and wallet identity: replacing a
+provider with a differently named plugin is not an automatic migration, even
+when it uses the same seed. Do not delete the pin to bypass that check.
+
+The retained `mesh-wallet-lexe` implementation uses Lexe 0.1.24 on mainnet.
+To compile it back into the host:
+
+```sh
+MESH_LLM_WALLET_LEXE=1 just build
+# Or a release build:
+MESH_LLM_WALLET_LEXE=1 just release-build
+```
+
+When compiled in, the host launches it as a separate child using
+`mesh-llm --plugin wallet-lexe`, like blobstore; this mode needs no separate
+wallet executable. It is registered as the optional built-in `wallet-lexe`.
+The process starts with the host but remains idle until the first wallet
+operation; startup alone never provisions or contacts a wallet. To disable
+this compiled-in provider at runtime:
+
+```toml
+[[plugin]]
+name = "wallet-lexe"
+enabled = false
+```
+
+Only `enabled` may be set on a built-in. A default build without `wallet-lexe`
+accepts this stanza but registers no built-in wallet. A runtime setting cannot
+restore code excluded at build time. NWC, BOLT12 and multi-provider selection
+are deferred.
+
+Feature layering: `payments` (host-runtime, `mesh-llm`,
+`mesh-llm-embedded-runtime`, `mesh-llm-sdk`) supplies the ledger, gates and
+`wallet.v1` adapter; `wallet-lexe` (host-runtime, `mesh-llm`) adds the built-in
+Lexe implementation. `mesh-llm-sdk` with `serving` compiles neither; with
+`serving,payments` it compiles payment infrastructure and expects an external
+wallet provider. Embedding apps that explicitly enable `wallet-lexe` still
+compile Lexe regardless of the CLI defaults. Apps can keep using the generic
+wallet operator API while distributing/installing a wallet plugin separately.
 
 Ownership: the host keeps token metering, output gating (host atomics on the
 decode thread) and response bytes, and talks to the payments engine only
@@ -654,21 +696,23 @@ pricing is not inferred from these offers. Invoice terms remain authoritative.
 `RequestTerms.exchange_id` optionally retains the host's existing OpenAI evidence
 exchange ID in the payer's existing JSON terms record. It is not the private
 payment recovery ID. Older records omit it; there is no SQL schema migration.
-The provider protocol and provider evidence emission are unchanged.
+The provider protocol is unchanged.
 
 A trusted local plugin declaring `payment.lifecycle.v1` can observe the active
 payer exchange: `terms_accepted`, `input_invoice_issued`,
 `input_settlement_observed`, `output_invoice_issued`,
 `output_settlement_observed`, and `final_accounted`. Subscribe to
 `openai.exchange.v1` as well to obtain the host exchange and join on `exchange_id`.
-Events contain `exchange_id`, stable `event_ref`, `terms_digest`, `phase`, `source`,
-nullable `segment` (0=input, 1=output), nullable `payment_hash`, nullable
-`settlement` (`terminal` for wallet success), and `amount_msat`.
+Events contain `exchange_id`, stable `event_ref`, `terms_digest`, `role` (`payer`
+or `provider`), `phase`, `source`, nullable `segment` (0=input, 1=output),
+nullable `payment_hash`, nullable `settlement` (`terminal` for wallet success),
+`amount_msat`, and nullable `tokens`.
 Terms acceptance is `payer_asserted` (amount is the approved cap); invoice issuance
 is `provider_asserted` as observed by the payer, not independently verified
 issuance. Settlement is `wallet_reported`, amount excluding fees. Final accounting
-is `payer_asserted`, summing successful debits including fees. No provider-side
-claiming observation is implied by this payer-only stream.
+is `payer_asserted`, summing successful debits including fees. The provider's
+own observations are described below; neither side's stream is evidence of the
+other's.
 
 The terms digest is lowercase SHA-256 over checked JCS JSON using the existing
 host `request_body_digest` helper, applied to the object containing exactly
@@ -686,6 +730,68 @@ leave incomplete evidence; there is no replay or complete audit-log guarantee.
 The persisted correlation remains available to recovery tooling, but recovery
 currently emits no events. No raw invoice, preimage, wallet transaction ID,
 prompt or response text is published. Payment hashes are linkable metadata.
+
+## Provider-side evidence hooks
+
+The serving host emits the same `payment.lifecycle.v1` events, with `role:
+provider`, at the `payments.v1` seller operations it already calls. Emission is
+in the host's serving path, not in the payments engine, so any `payments.v1`
+provider gets it unchanged.
+
+| seller operation | phase | source |
+|---|---|---|
+| `serve_begin` | `terms_accepted` (amount is the terms' cap) | `provider_asserted` |
+| `serve_input_invoice` | `input_invoice_issued` | `provider_asserted` |
+| `settle_received`, input | `input_settlement_observed` | `wallet_reported` |
+| `serve_finish` | `delivered` (`tokens` is the closing watermark, `amount_msat` 0) | `provider_asserted` |
+| `output_receivable` | `output_invoice_issued` | `provider_asserted` |
+| `settle_received`, output | `output_settlement_observed` | `wallet_reported` |
+
+Observation starts when `serve_input_invoice` returns priced terms, and the
+acceptance `serve_begin` made is reported then, just before the input invoice.
+A request that fails before that point — including a backend failure before
+authorization (`Frame::Error`, no invoice, nothing billed) — emits no phases;
+treat that as never priced, not lapsed. `delivered` is emitted once, when the
+serving close succeeds, whatever happened to the transport. Settlement is the
+receiving wallet's report that `settle_received` recorded; the amount is the
+invoice amount. Since the payments engine is a plugin, nothing here claims that
+payment preceded wallet access: `source` says who asserted, which is all it can
+say.
+
+The provider has no host exchange to join, and the request ID is the private
+recovery ID, so it names each observed request with a fresh `exchange_id` of
+its own. `terms_digest` uses the payer's construction over the provider's terms
+with that ID; the other seven fields are the ones the payer approves, but the
+two sides' digests differ because each covers its own `exchange_id`. Join the
+two streams on `payment_hash`, which both sides report for each invoice and
+settlement.
+
+The payer section's bounds apply unchanged: an eight-event queue per request,
+a one-second publication timeout, nothing awaited by serving or settlement, no
+per-token events, and no ID or hashing without a subscriber. Evidence is
+best-effort and can be incomplete. Lapsed input invoices, recorded debt,
+operator unblocking and serving recovery emit no events.
+
+
+### Evidence interpretation and acceptance expectations
+
+Neither payment nor matching payer/provider records prove correct inference,
+honest token counts, or proof of prefill. Wallet settlement is an observation
+reported by the configured wallet, not independent verification of inference.
+
+Use synthetic identities and payment hashes in committed fixtures. These are
+acceptance expectations, not a claim that every fixture is implemented:
+
+| Scenario | What the evidence should distinguish |
+| --- | --- |
+| Paid request | Payer and provider observations correlate by payment hash; invoice claims remain distinct from wallet settlement reports. |
+| Exhausted automatic budget | Paid request is rejected with HTTP 402, not represented as a successful paid exchange. |
+| Free-only policy against a paid-only route | HTTP 402 policy refusal, not a wallet outage or settlement failure. |
+| Restart with a pending payment | Reconcile the existing payment without a second debit; successful terminal reconciliation releases its reservation. |
+| Harness or observation failure | Preserve the failed attempt and its limitation separately from any corrected rerun; do not silently turn it into a pass. |
+
+Uncertain payments must remain distinguishable from terminal outcomes. Do not
+discard unresolved debt merely to report zero outstanding reservations.
 
 
 ### Failure and recovery boundaries

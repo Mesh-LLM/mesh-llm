@@ -1238,6 +1238,25 @@ verify_window_pipeline_depth = 65
     }
 
     #[test]
+    fn zero_pipeline_decode_groups_is_rejected_not_clamped() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.throughput]
+pipeline_decode_groups = 0
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(
+            text.contains("pipeline_decode_groups") && text.contains("at least 1"),
+            "expected a typed rejection for zero groups, got: {text}"
+        );
+        validate_config(&config).expect_err("zero pipeline groups must not be accepted");
+    }
+
+    #[test]
     fn duplicate_model_with_same_profile_is_rejected() {
         let config: MeshConfig = toml::from_str(
             r#"

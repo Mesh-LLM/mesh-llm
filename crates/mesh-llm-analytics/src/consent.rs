@@ -193,7 +193,7 @@ fn is_truthy(value: &str) -> bool {
 }
 
 /// Variables set by the common CI providers.
-const CI_MARKERS: &[&str] = &[
+pub(crate) const CI_MARKERS: &[&str] = &[
     "CI",
     "CONTINUOUS_INTEGRATION",
     "GITHUB_ACTIONS",
@@ -205,7 +205,11 @@ const CI_MARKERS: &[&str] = &[
     "TEAMCITY_VERSION",
 ];
 
-fn detect_ci() -> bool {
+/// Whether this looks like a CI job.
+///
+/// Shared with [`crate::properties::exec_env`] so the environment a run is
+/// *labelled* with cannot drift from the one reporting is *suppressed* for.
+pub(crate) fn detect_ci() -> bool {
     CI_MARKERS.iter().any(|marker| {
         env::var(marker).is_ok_and(|value| {
             let value = value.trim();

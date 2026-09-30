@@ -26,6 +26,7 @@ mod admission;
 mod expiry;
 mod forwarding;
 mod handoff;
+mod lifecycle;
 mod pre_authorization;
 mod review_regressions;
 
@@ -41,6 +42,63 @@ struct Network {
     decoded_before_payment: AtomicBool,
     backend_output_before_payment: AtomicBool,
     invoice_delay_ms: AtomicUsize,
+    /// When set, each node also loads a plugin that records every
+    /// `payment.lifecycle.v1` message it is sent.
+    record_lifecycle: AtomicBool,
+    provider_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
+    payer_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
+}
+
+/// A trusted local plugin that declares `payment.lifecycle.v1` and keeps
+/// every event body it receives.
+fn lifecycle_recorder(
+    name: &'static str,
+    events: Arc<Mutex<Vec<serde_json::Value>>>,
+) -> (String, crate::plugin::InProcessPluginRunner) {
+    let runner: crate::plugin::InProcessPluginRunner = Arc::new(move |stream| {
+        let events = events.clone();
+        let plugin = mesh_llm_plugin::SimplePlugin::new(mesh_llm_plugin::PluginMetadata::new(
+            name,
+            "0.0.0",
+            mesh_llm_plugin::plugin_server_info(
+                name,
+                "0.0.0",
+                "Lifecycle recorder",
+                "Records payment lifecycle events",
+                None::<String>,
+            ),
+        ))
+        .with_manifest(mesh_llm_plugin::plugin_manifest![
+            mesh_llm_plugin::mesh_channel("payment.lifecycle.v1")
+        ])
+        .on_channel_message(move |message, _context| {
+            let events = events.clone();
+            Box::pin(async move {
+                if let Ok(event) = serde_json::from_slice(&message.body) {
+                    events.lock().unwrap().push(event);
+                }
+                Ok(())
+            })
+        });
+        Box::pin(mesh_llm_plugin::PluginRuntime::run_with_stream(
+            plugin, stream,
+        ))
+    });
+    (name.to_owned(), runner)
+}
+
+impl Network {
+    fn recorder(
+        &self,
+        name: &'static str,
+        events: &Arc<Mutex<Vec<serde_json::Value>>>,
+    ) -> Vec<(String, crate::plugin::InProcessPluginRunner)> {
+        if self.record_lifecycle.load(Ordering::SeqCst) {
+            vec![lifecycle_recorder(name, events.clone())]
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 struct TestWallet {
@@ -344,10 +402,18 @@ async fn paid_exchange_on(
         .payments
         .set(provider_service.clone())
         .map_err(|_| anyhow::anyhow!("service already initialized"))?;
-    crate::network::payments::node_ext::attach_payments_plugin(&provider).await?;
+    crate::network::payments::node_ext::attach_payments_plugin_with(
+        &provider,
+        network.recorder("provider-lifecycle-recorder", &network.provider_lifecycle),
+    )
+    .await?;
     let payer = Node::new_for_tests(NodeRole::Client).await?;
-    let payer_payments =
-        super::client::Payments::attach_for_tests(&payer, payer_service.clone()).await?;
+    let payer_payments = super::client::Payments::attach_for_tests_with(
+        &payer,
+        payer_service.clone(),
+        network.recorder("payer-lifecycle-recorder", &network.payer_lifecycle),
+    )
+    .await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
     let backend = tokio::spawn(simulated_backend(

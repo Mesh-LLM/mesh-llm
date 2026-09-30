@@ -30,6 +30,8 @@ pub enum FfiError {
     ConsoleFailed(String),
     #[error("native runtime failed: {0}")]
     NativeRuntimeFailed(String),
+    #[error("OpenAI-compatible request failed: {0}")]
+    OpenAiRequestFailed(String),
 }
 
 pub(super) fn map_mesh_api_error(error: MeshApiError) -> FfiError {
@@ -67,6 +69,10 @@ pub(super) fn map_stream_error(error: MeshApiError) -> FfiError {
         MeshApiError::Client(error) => FfiError::StreamFailed(error.to_string()),
         other => FfiError::StreamFailed(other.to_string()),
     }
+}
+
+pub(super) fn map_openai_error(error: MeshApiError) -> FfiError {
+    FfiError::OpenAiRequestFailed(error.to_string())
 }
 
 pub(super) fn map_native_runtime_error(error: impl ToString) -> FfiError {

@@ -2,6 +2,7 @@
 pub struct ModelNative {
     pub id: String,
     pub name: String,
+    pub context_length: Option<u32>,
 }
 
 #[derive(uniffi::Record)]
@@ -60,4 +61,11 @@ pub struct ChatMessageNative {
 pub struct ResponsesRequestNative {
     pub model: String,
     pub input: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct OpenAiResponseNative {
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
 }

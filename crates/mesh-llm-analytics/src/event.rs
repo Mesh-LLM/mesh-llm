@@ -17,6 +17,12 @@ use std::collections::BTreeMap;
 pub enum Event {
     /// First run of a given install. Emitted once per install identifier.
     InstallFirstRun,
+    /// An existing install started running a different version than last time.
+    ///
+    /// Emitted by whichever process first observes the change, so it covers
+    /// every upgrade route: `--auto-update`, `mesh-llm update`, a re-run of
+    /// `install.sh`, a package manager, or a hand-swapped binary.
+    InstallUpdated,
     /// A one-shot CLI command finished. Carries only family and outcome.
     CliCommand,
     /// `mesh-llm serve` reached a serving state.
@@ -36,6 +42,7 @@ impl Event {
     pub const fn name(self) -> &'static str {
         match self {
             Self::InstallFirstRun => "install_first_run",
+            Self::InstallUpdated => "install_updated",
             Self::CliCommand => "cli_command",
             Self::ServeStarted => "serve_started",
             Self::ServeStopped => "serve_stopped",

@@ -4,7 +4,7 @@ title: SDKs
 
 # Embed Mesh in your app
 
-The Mesh SDKs let an application either connect to an existing mesh or embed a complete mesh node with local model serving. The public APIs are intentionally shaped the same way across Rust, Node.js, JVM/Android, and Swift.
+The Mesh SDKs let an application either connect to an existing mesh or embed a complete mesh node with local model serving. The public APIs are intentionally shaped the same way across Python, Rust, Node.js, JVM/Android, and Swift.
 
 ## Choose a role
 
@@ -47,6 +47,7 @@ Persist the owner keypair in the host application's secure storage. Generate an 
 
 | SDK / target | Mesh inference | Model management | Local serving |
 | --- | ---: | ---: | ---: |
+| Python on macOS/Linux/Windows | yes | native bridge available | build with `embedded-runtime` and package a compatible native runtime |
 | Rust on macOS/Linux | yes | yes | yes with `serving` and a compatible native runtime |
 | Node.js on macOS/Linux/Windows | yes | yes | yes with a compatible native runtime |
 | JVM on macOS/Linux | yes | yes | yes with a matching native runtime library |
@@ -70,6 +71,7 @@ For offline or packaged applications, pass the artifact directory directly to th
 
 ## Pick a language guide
 
+- [Python SDK](/docs/pages/sdk-python/) — PyPI package, async lifecycle, and protocol-preserving requests for agent runtimes.
 - [Rust SDK](/docs/pages/sdk-rust/) — crates.io client facade and embedded `MeshNode`.
 - [Node.js and Electron SDK](/docs/pages/sdk-node/) — npm package, N-API addon, runtime packaging, and console assets.
 - [Java, Kotlin, and Android SDK](/docs/pages/sdk-kotlin/) — GitHub Packages AAR, JVM serving, Android client mode, and coroutines.
@@ -82,4 +84,5 @@ For offline or packaged applications, pass the artifact directory directly to th
 - Treat model downloads as application work: show progress, choose an app-owned cache, and handle cancellation.
 - Stop or reconnect nodes with the host application's lifecycle. On mobile, reconnect when returning to the foreground.
 - Handle typed errors, especially invalid tokens, discovery failures, model-management failures, stream failures, and unsupported serving.
+- Use the protocol-preserving OpenAI request and stream APIs for agents. They carry tools, incremental tool-call arguments, tool results, multimodal content, structured-output settings, reasoning, usage, and future fields without narrowing the protocol to text.
 - Package console assets only when the app needs a local web console; the default native runtime should stay smaller without them.

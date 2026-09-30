@@ -17,6 +17,17 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($repoRoot, $env:MESH_LLM_LLAMA_DIR)) } else { Join-Path $repoRoot ".deps\llama.cpp" }
 $llamaBuildRoot = if ($env:MESH_LLM_LLAMA_BUILD_ROOT) { $env:MESH_LLM_LLAMA_BUILD_ROOT } else { Join-Path $repoRoot ".deps\llama-build" }
 $buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi" }
+# The built-in Lexe wallet is compiled OUT by default, matching scripts/build-host.sh.
+# Set MESH_LLM_WALLET_LEXE=1 to include `wallet-lexe`.
+function Get-HostFeatureList {
+    $features = "web-ui,dynamic-native-runtime,payments"
+    if ($env:MESH_LLM_WALLET_LEXE -eq "1") {
+        $features = "$features,wallet-lexe"
+        Write-Host "Including the built-in Lexe wallet because MESH_LLM_WALLET_LEXE=1."
+    }
+    return $features
+}
+
 # Git never activates a committed hook on clone, so enable the repository hooks
 # on the first local development build. Skipped in CI, and never overrides a
 # hooks path the developer chose themselves.
@@ -1033,7 +1044,7 @@ if ($HostOnly) {
             $hostArgs += "--release"
             $hostOutputProfile = "release"
         }
-        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments,wallet-lexe")
+        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", (Get-HostFeatureList))
         Invoke-NativeCommand "cargo" $hostArgs
         Write-Host "Mesh backend-neutral host: target\\$hostOutputProfile\\mesh-llm.exe"
     }
@@ -1220,7 +1231,7 @@ Invoke-InRepo {
 
     Write-Host "Building mesh-llm..."
     $env:LLAMA_STAGE_BUILD_DIR = $buildDir
-    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments,wallet-lexe")
+    $cargoFeatureArgs = @("--no-default-features", "--features", (Get-HostFeatureList))
     Set-BuildVersionStamp
     switch ($buildProfile) {
         "dev" {

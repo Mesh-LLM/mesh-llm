@@ -15,9 +15,16 @@ enabled = false
 ```
 
 This is the only crate that links the Lexe SDK. It is compiled into `mesh-llm`
-through the host-runtime `wallet-lexe` cargo feature (default on for the shipped
-binary). SDK consumers (`mesh-llm-sdk` with `serving` or `serving,payments`) do
-not enable it and never compile Lexe.
+through the host-runtime `wallet-lexe` Cargo feature, which is **off by default**,
+including release builds. Opt in with `MESH_LLM_WALLET_LEXE=1 just build` or
+`MESH_LLM_WALLET_LEXE=1 just release-build`. The default host retains payment
+infrastructure and can use an installed external `wallet.v1` plugin; that does
+not itself enable spending. SDK consumers (`mesh-llm-sdk` with `serving` or
+`serving,payments`) do not enable it unless they explicitly opt into the
+host-runtime wallet feature.
 
 Wallet state lives under `<config-dir>/payments/lexe/`, the same layout the
-in-process implementation used, so existing wallets keep working.
+in-process implementation used. A build without a wallet provider cannot use
+that wallet until a compatible provider is available. Host pins also bind the
+plugin name: switching to a differently named external plugin requires explicit
+identity-checked adoption, not deletion of the existing pin or wallet state.

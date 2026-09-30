@@ -193,6 +193,17 @@ pub(crate) fn validate_throughput(config: &ThroughputConfig, base_path: &str) ->
             format!("{base_path}.parallel must be at least 1, got {parallel}"),
         ));
     }
+    if let Some(groups) = config.pipeline_decode_groups
+        && groups == 0
+    {
+        // The schema requires at least one group, and the runtime clamps zero to
+        // one -- silently serving a different setting than the one written. Reject
+        // it here where the value still has an author to report to.
+        return Err(validation_diagnostic(
+            &format!("{base_path}.pipeline_decode_groups"),
+            format!("{base_path}.pipeline_decode_groups must be at least 1, got {groups}"),
+        ));
+    }
     validate_bool_or_auto(
         config.continuous_batching.as_ref(),
         &format!("{base_path}.continuous_batching"),

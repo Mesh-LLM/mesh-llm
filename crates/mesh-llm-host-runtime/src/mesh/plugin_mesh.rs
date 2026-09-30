@@ -1,10 +1,121 @@
 use super::*;
-use crate::mesh::node::default_plugin_event_source;
+use crate::mesh::node::stamp_plugin_event_source;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const PLUGIN_FRAME_PREFIX_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const PLUGIN_FRAME_BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const PLUGIN_CHANNEL_FRAME_MAX_BYTES: usize = 10_000_000;
 const PLUGIN_BULK_FRAME_MAX_BYTES: usize = 64_000_000;
+
+/// Shortest interval between plugin-frame warnings for one sending peer.
+///
+/// A remote can open a fresh stream per frame and distinct `message_id` values
+/// bypass the dedup window, so warning once per frame is log I/O that peer
+/// controls. The runtime writes each event to stderr and flushes it, so an
+/// unthrottled warning is both unbounded output and a backpressure stall.
+const PLUGIN_FRAME_WARN_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Upper bound on peers the plugin-frame warning throttle tracks. Reaching it
+/// evicts the least recently warned peer, which costs that peer one extra
+/// warning and never grows the map past this size.
+const PLUGIN_FRAME_WARN_MAX_PEERS: usize = 1024;
+
+/// `frame_kind` value for warnings raised on the channel-frame path.
+const PLUGIN_FRAME_KIND_CHANNEL: &str = "channel";
+
+/// `frame_kind` value for warnings raised on the bulk-transfer path.
+const PLUGIN_FRAME_KIND_BULK: &str = "bulk";
+
+/// Throttle state for plugin-frame warnings from one sending peer.
+///
+/// A remote can open a fresh stream for every frame, so one warning per frame
+/// is log I/O that peer can drive without bound; the cooldown bounds it and
+/// `suppressed` keeps the volume visible in the warning that is eventually
+/// emitted.
+pub(crate) struct PluginFrameWarnState {
+    /// When this peer's last warning was emitted.
+    pub(crate) last_warn_at: std::time::Instant,
+    /// Warnings folded into this peer's next emitted warning.
+    pub(crate) suppressed: u32,
+}
+
+/// Local-only plugin-frame telemetry: the mismatch counter and the per-peer
+/// warning throttle that keeps its output bounded.
+///
+/// The throttle holds its own mutex rather than living in the mesh-wide
+/// `MeshState`, so a plugin-frame decision never contends with — or holds — the
+/// lock every other mesh path serializes behind, and the counter is a lock-free
+/// atomic read for the status path.
+#[derive(Default)]
+pub(crate) struct PluginFrameTelemetry {
+    /// Received plugin-mesh frames whose non-empty `source_peer_id` was not the
+    /// sending peer. Advanced before throttling, so it is the true volume even
+    /// while a peer's warning is folded.
+    source_mismatch_total: AtomicU64,
+    /// Per-peer warning throttle; deliberately its own mutex, not `MeshState`.
+    warn: std::sync::Mutex<HashMap<EndpointId, PluginFrameWarnState>>,
+}
+
+impl PluginFrameTelemetry {
+    /// Record one received frame whose claimed source is not the sending peer.
+    ///
+    /// The counter advances on every call; `now` decides the warning for
+    /// `remote`: `Some` with the number of warnings folded in when the caller
+    /// should emit one, or `None` while the peer is inside its cooldown.
+    pub(crate) fn record_source_mismatch(
+        &self,
+        remote: EndpointId,
+        now: std::time::Instant,
+    ) -> Option<u32> {
+        self.source_mismatch_total.fetch_add(1, Ordering::Relaxed);
+        let mut warn = self
+            .warn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        plugin_frame_warn_slot(&mut warn, remote, now)
+    }
+
+    /// Total plugin-frame source mismatches observed on this node.
+    pub(crate) fn source_mismatch_total(&self) -> u64 {
+        self.source_mismatch_total.load(Ordering::Relaxed)
+    }
+}
+
+/// Throttle decision behind [`PluginFrameTelemetry::record_source_mismatch`],
+/// over `now` so the cooldown is deterministic under test.
+///
+/// Returns the number of warnings folded into the one the caller should emit
+/// now, or `None` while `remote` is still inside its cooldown.
+pub(crate) fn plugin_frame_warn_slot(
+    warn: &mut HashMap<EndpointId, PluginFrameWarnState>,
+    remote: EndpointId,
+    now: std::time::Instant,
+) -> Option<u32> {
+    if let Some(entry) = warn.get_mut(&remote) {
+        if now.duration_since(entry.last_warn_at) < PLUGIN_FRAME_WARN_COOLDOWN {
+            entry.suppressed = entry.suppressed.saturating_add(1);
+            return None;
+        }
+        entry.last_warn_at = now;
+        return Some(std::mem::take(&mut entry.suppressed));
+    }
+
+    // The least recently warned peer is the one to evict. Resolved through a
+    // helper so the scrutinee holds no borrow of `warn`.
+    if warn.len() >= PLUGIN_FRAME_WARN_MAX_PEERS
+        && let Some(oldest) = least_recently_warned(warn)
+    {
+        warn.remove(&oldest);
+    }
+    warn.insert(
+        remote,
+        PluginFrameWarnState {
+            last_warn_at: now,
+            suppressed: 0,
+        },
+    );
+    Some(0)
+}
 
 pub(crate) async fn read_plugin_frame_bytes<R>(reader: &mut R, max_len: usize) -> Result<Vec<u8>>
 where
@@ -55,7 +166,7 @@ impl Node {
                 {
                     return Ok(());
                 }
-                default_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
+                stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
                 let frame = crate::plugin::proto::MeshChannelFrame {
                     plugin_id,
                     message_id: new_plugin_message_id(&message.source_peer_id),
@@ -76,7 +187,7 @@ impl Node {
                 {
                     return Ok(());
                 }
-                default_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
+                stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
                 let frame = crate::plugin::proto::MeshBulkFrame {
                     plugin_id,
                     message_id: new_plugin_message_id(&message.source_peer_id),
@@ -121,6 +232,34 @@ impl Node {
             return false;
         }
         true
+    }
+
+    /// Record a plugin-frame source mismatch from `remote` and decide the warning.
+    ///
+    /// Both plugin-frame receive paths record the same class of event — a frame
+    /// whose claimed `source_peer_id` is not the peer that sent it — and neither
+    /// may warn per frame: a remote can open a stream per frame, and the runtime
+    /// writes every warning to stderr and flushes it synchronously. Every call
+    /// advances the local mismatch counter; the warning itself is throttled to at
+    /// most one per [`PLUGIN_FRAME_WARN_COOLDOWN`] per sending peer, tracking at
+    /// most [`PLUGIN_FRAME_WARN_MAX_PEERS`] peers. Neither the counter nor the
+    /// throttle takes the mesh-wide [`MeshState`] lock.
+    ///
+    /// Returns the number of warnings folded into the one the caller should emit
+    /// now, or `None` while the peer is still inside its cooldown (the caller
+    /// stays silent and the occurrence is counted instead).
+    pub(crate) fn plugin_frame_source_mismatch(&self, remote: EndpointId) -> Option<u32> {
+        self.plugin_frame_telemetry
+            .record_source_mismatch(remote, std::time::Instant::now())
+    }
+
+    /// Total plugin-frame source mismatches this node has observed.
+    ///
+    /// The per-peer warning is throttled, so this counter — not the log line —
+    /// is the record of how often a peer claims a source that is not itself.
+    /// Surfaced on the local status payload.
+    pub(crate) fn plugin_frame_source_mismatch_total(&self) -> u64 {
+        self.plugin_frame_telemetry.source_mismatch_total()
     }
 
     pub(crate) async fn remember_plugin_message(&self, message_id: String) -> bool {
@@ -267,9 +406,16 @@ impl Node {
         });
     }
 
+    /// Handle an inbound plugin-mesh frame carrying channel frames.
+    ///
+    /// `remote` is the peer the frame arrived from, which is not necessarily its
+    /// origin: a relayed frame is re-encoded by each hop. The claimed
+    /// `source_peer_id` is unauthenticated until plugin frame origin signing
+    /// lands, so a mismatch with `remote` is recorded (throttled per peer) and
+    /// the frame keeps its current handling.
     pub(crate) async fn handle_plugin_channel_stream(
         &self,
-        _remote: EndpointId,
+        remote: EndpointId,
         mut send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
     ) -> Result<()> {
@@ -287,6 +433,24 @@ impl Node {
         let Some(message) = frame.message.clone() else {
             return Ok(());
         };
+        // `source_peer_id` arrives from the wire and no frame carries an origin
+        // signature yet, so a value that is not the sending peer is an
+        // unauthenticated claim. Record it; enforcement lands with plugin frame
+        // origin signing. Warning is throttled per peer and reports how many
+        // claims it folded in, so this cannot be turned into unbounded log I/O.
+        if !message.source_peer_id.is_empty()
+            && message.source_peer_id != endpoint_id_hex(remote)
+            && let Some(suppressed) = self.plugin_frame_source_mismatch(remote)
+        {
+            tracing::warn!(
+                claimed_source = %message.source_peer_id,
+                sending_peer = %remote.fmt_short(),
+                channel = %message.channel,
+                frame_kind = %PLUGIN_FRAME_KIND_CHANNEL,
+                suppressed,
+                "Plugin frame claims a source_peer_id that is not the sending peer"
+            );
+        }
         let local_peer_id = endpoint_id_hex(self.endpoint.id());
         let deliver_local =
             message.target_peer_id.is_empty() || message.target_peer_id == local_peer_id;
@@ -320,9 +484,16 @@ impl Node {
         Ok(())
     }
 
+    /// Handle an inbound plugin-mesh frame carrying bulk-transfer frames.
+    ///
+    /// `remote` is the peer the frame arrived from, which is not necessarily its
+    /// origin: a relayed frame is re-encoded by each hop. The claimed
+    /// `source_peer_id` is unauthenticated until plugin frame origin signing
+    /// lands, so a mismatch with `remote` is recorded (throttled per peer) and
+    /// the frame keeps its current handling.
     pub(crate) async fn handle_plugin_bulk_stream(
         &self,
-        _remote: EndpointId,
+        remote: EndpointId,
         mut send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
     ) -> Result<()> {
@@ -340,6 +511,24 @@ impl Node {
         let Some(message) = frame.message.clone() else {
             return Ok(());
         };
+        // `source_peer_id` arrives from the wire and no frame carries an origin
+        // signature yet, so a value that is not the sending peer is an
+        // unauthenticated claim. Record it; enforcement lands with plugin frame
+        // origin signing. Warning is throttled per peer and reports how many
+        // claims it folded in, so this cannot be turned into unbounded log I/O.
+        if !message.source_peer_id.is_empty()
+            && message.source_peer_id != endpoint_id_hex(remote)
+            && let Some(suppressed) = self.plugin_frame_source_mismatch(remote)
+        {
+            tracing::warn!(
+                claimed_source = %message.source_peer_id,
+                sending_peer = %remote.fmt_short(),
+                channel = %message.channel,
+                frame_kind = %PLUGIN_FRAME_KIND_BULK,
+                suppressed,
+                "Plugin frame claims a source_peer_id that is not the sending peer"
+            );
+        }
         let local_peer_id = endpoint_id_hex(self.endpoint.id());
         let deliver_local =
             message.target_peer_id.is_empty() || message.target_peer_id == local_peer_id;
@@ -369,5 +558,85 @@ impl Node {
         }
 
         Ok(())
+    }
+}
+
+/// The peer this throttle would evict first: the one warned longest ago.
+fn least_recently_warned(warn: &HashMap<EndpointId, PluginFrameWarnState>) -> Option<EndpointId> {
+    warn.iter()
+        .min_by_key(|(_, entry)| entry.last_warn_at)
+        .map(|(peer, _)| *peer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peer(seed: u32) -> EndpointId {
+        let mut bytes = [0u8; 32];
+        bytes[..4].copy_from_slice(&seed.to_be_bytes());
+        EndpointId::from(SecretKey::from_bytes(&bytes).public())
+    }
+
+    #[test]
+    fn plugin_frame_warnings_are_throttled_per_peer() {
+        let mut warn = HashMap::new();
+        let remote = peer(1);
+        let now = std::time::Instant::now();
+
+        // The first claim warns; every claim inside the cooldown is folded into
+        // the next warning instead of producing its own.
+        assert_eq!(plugin_frame_warn_slot(&mut warn, remote, now), Some(0));
+        assert_eq!(plugin_frame_warn_slot(&mut warn, remote, now), None);
+        assert_eq!(plugin_frame_warn_slot(&mut warn, remote, now), None);
+        assert_eq!(warn.get(&remote).expect("tracked peer").suppressed, 2);
+
+        // Once the cooldown lapses the folded count is reported, not repeated.
+        let later = now + PLUGIN_FRAME_WARN_COOLDOWN;
+        assert_eq!(plugin_frame_warn_slot(&mut warn, remote, later), Some(2));
+        assert_eq!(warn.get(&remote).expect("tracked peer").suppressed, 0);
+
+        // Each peer has its own budget.
+        assert_eq!(plugin_frame_warn_slot(&mut warn, peer(2), now), Some(0));
+    }
+
+    #[test]
+    fn plugin_frame_warning_state_stays_bounded() {
+        let mut warn = HashMap::new();
+        let start = std::time::Instant::now();
+        for seed in 0..PLUGIN_FRAME_WARN_MAX_PEERS as u32 {
+            // Later peers age, so eviction has an unambiguous oldest entry.
+            let at = start + std::time::Duration::from_millis(u64::from(seed));
+            assert_eq!(plugin_frame_warn_slot(&mut warn, peer(seed), at), Some(0));
+        }
+        assert_eq!(warn.len(), PLUGIN_FRAME_WARN_MAX_PEERS);
+
+        let newest = peer(PLUGIN_FRAME_WARN_MAX_PEERS as u32);
+        let at = start + PLUGIN_FRAME_WARN_COOLDOWN;
+        assert_eq!(plugin_frame_warn_slot(&mut warn, newest, at), Some(0));
+        assert_eq!(warn.len(), PLUGIN_FRAME_WARN_MAX_PEERS);
+        assert!(warn.contains_key(&newest));
+        assert!(!warn.contains_key(&peer(0)));
+    }
+
+    #[test]
+    fn plugin_frame_telemetry_counts_every_mismatch() {
+        let telemetry = PluginFrameTelemetry::default();
+        let remote = peer(7);
+        let now = std::time::Instant::now();
+
+        // The first mismatch warns and is counted.
+        assert_eq!(telemetry.record_source_mismatch(remote, now), Some(0));
+        assert_eq!(telemetry.source_mismatch_total(), 1);
+
+        // Mismatches folded into the cooldown still advance the counter, so the
+        // volume is visible even though the warning is not emitted.
+        assert_eq!(telemetry.record_source_mismatch(remote, now), None);
+        assert_eq!(telemetry.record_source_mismatch(remote, now), None);
+        assert_eq!(telemetry.source_mismatch_total(), 3);
+
+        // The counter is node-wide, not per peer.
+        assert_eq!(telemetry.record_source_mismatch(peer(8), now), Some(0));
+        assert_eq!(telemetry.source_mismatch_total(), 4);
     }
 }

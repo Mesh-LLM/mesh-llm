@@ -38,6 +38,27 @@ console.log(result.content)
 await client.stop()
 ```
 
+## Agent streaming
+
+```js
+await client.start()
+try {
+  const models = await client.inference.listModels()
+  for await (const event of client.inference.streamChatCompletions({
+    model: models[0].id,
+    messages: [{ role: 'user', content: 'What is the weather?' }],
+    tools: [{ type: 'function', function: { name: 'get_weather' } }]
+  })) {
+    if (event.type === 'sse' && !event.done) console.log(event.event, event.json())
+  }
+} finally {
+  await client.stop()
+}
+```
+
+The stream retains named and raw SSE frames, incremental tool-call arguments,
+and future JSON fields. Ending iteration early cancels the native request.
+
 ## Client: Private Mesh
 
 ```js

@@ -112,6 +112,9 @@ pub(crate) struct ResolvedHardwareConfig {
 pub(crate) struct ResolvedThroughputConfig {
     pub(crate) parallel: usize,
     pub(crate) continuous_batching: String,
+    /// Decode-wave groups for the frontend dispatcher. `None` leaves the
+    /// scheduler's ungrouped default.
+    pub(crate) pipeline_decode_groups: Option<u32>,
     pub(crate) threads: Option<usize>,
     pub(crate) threads_batch: Option<usize>,
     pub(crate) tuning_profile: String,
@@ -208,6 +211,7 @@ pub(crate) struct ResolvedEmbeddedOpenAiArgs {
     pub(crate) request_defaults: EmbeddedOpenAiRequestDefaults,
     pub(crate) generation_concurrency: usize,
     pub(crate) continuous_batching: bool,
+    pub(crate) pipeline_decode_groups: Option<u32>,
     pub(crate) prefill_chunk_size: usize,
     pub(crate) prefill_chunk_policy: String,
     pub(crate) prefill_chunk_schedule: Option<String>,

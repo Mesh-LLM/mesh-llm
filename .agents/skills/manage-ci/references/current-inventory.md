@@ -369,8 +369,8 @@ runner-contract update is active.
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against the runtime it just built and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, and Windows log-store privacy ACL checks |
-| `ci-{linux,macos,windows}-product-smoke-slice.yml` | Platform-local core, scripted, model-download, and Laya smokes. The pinned Laya Multilingual F16 GGUF runs startup plus the complete upstream golden `/systemone` battery on Linux CPU/CUDA/Vulkan, conditional `gpu-amd` ROCm, macOS Metal, and Windows CPU; each row selects the exact native device name, so an unavailable backend fails at model load. The Linux Vulkan row additionally needs a live pod that exposes a Vulkan device, which the `gpu-nvidia` scale set has never provided; it stays skipped until a live runner pod passes `verify-vulkan-device` and `MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is `true`. Core CPU/CUDA/Metal restores the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once and runs both through standalone inference, OpenAI client compatibility, and constrained-Tokio restart. The CPU two-node split row uses the same pair for dense KV and strict recurrent `KvRecurrent` validation, persists strict-whitelist seed/worker identity and stage/model snapshots, reconciles two-observer topology and exact two-stage contiguous-cut agreement, and uploads evidence on every outcome. The Linux CPU row additionally preserves node cache roots across restart and requires an observable durable-L3 fill before status and clear verification. Product restore verifies the manifest backend and forces discovery through the bundled runtime. CUDA verifies the packaged dependency closure with `LD_LIBRARY_PATH` unset, runs inherited and strict device probes, installs no cudart or cuBLAS packages, and leaves the NVIDIA driver host-owned. Windows accelerator product targets remain build-only because CI has no Windows accelerator runners. There is no separate product-integration or Qwen migration lane. |
-| `.github/actions/run-laya-product-smoke` | Shared product restore plus Laya startup/read harness. Inputs are bounded to the supported backend/device/cadence combinations, and the fixture is resolved through `product-smoke.json`. |
+| `ci-{linux,macos,windows}-product-smoke-slice.yml` | Platform-local core, scripted, model-download, and Laya smokes. The pinned Laya Multilingual F16 GGUF runs startup plus the complete upstream golden `/systemone` battery on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm, macOS Metal, and Windows CPU; each row selects the exact native device name, so an unavailable backend fails at model load. Core CPU/CUDA/Metal restores the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once and runs both through standalone inference, OpenAI client compatibility, and constrained-Tokio restart. The CPU two-node split row uses the same pair for dense KV and strict recurrent `KvRecurrent` validation, persists strict-whitelist seed/worker identity and stage/model snapshots, reconciles two-observer topology and exact two-stage contiguous-cut agreement, and uploads evidence on every outcome. The Linux CPU row additionally preserves node cache roots across restart and requires an observable durable-L3 fill before status and clear verification. Product restore verifies the manifest backend and forces discovery through the bundled runtime. CUDA verifies the packaged dependency closure with `LD_LIBRARY_PATH` unset, runs inherited and strict device probes, installs no cudart or cuBLAS packages, and leaves the NVIDIA driver host-owned. Windows accelerator product targets remain build-only because CI has no Windows accelerator runners. There is no separate product-integration or Qwen migration lane. |
+| `.github/actions/run-laya-product-smoke` | Shared product restore plus Laya startup/read harness. Inputs are bounded to the supported backend/device/cadence combinations, and the fixture is resolved through `product-smoke.json`. The explicit Vulkan row enables the Vulkan profile for runners without `vulkaninfo`; model startup and reads still verify the device. Windows product restore emits LF-delimited manifest fields for Git Bash. |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |
@@ -816,14 +816,14 @@ may cover eligible build/test rows across Linux, Depot macOS 15 and Windows
 credential-bearing smokes, `gpu-nvidia` hardware and uncertified Intel macOS
 rows remain exceptions. The documented `gpu-nvidia` ephemeral scale set is
 the sole currently verified uncredentialed, hardware-qualified same-repository
-PR exception. The typed ROCm job remains skipped unless
+PR exception. The typed Vulkan job remains skipped until
+`verify-vulkan-device` passes in a live pod and
+`MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly `true`. The typed Vulkan job
+and source-checked Laya action both enforce that gate, including when an older
+protected workflow definition still admits the job. The typed ROCm job remains
+skipped unless
 `MESH_ROCM_INFERENCE_RUNNER_ENABLED` explicitly enables the repository-scoped
-`gpu-amd` role. The typed Linux Vulkan job remains skipped unless
-`MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly `true`: the live
-`gpu-nvidia` pod has never exposed a Vulkan device profile to the product, so
-that row failed on every main and PR run since it landed while the sibling CUDA
-row passed on the same pod. An operator restores it after `verify-vulkan-device`
-passes in a live runner pod.
+`gpu-amd` role.
 
 The permanent Depot PR gate is documented in `ci/DEPOT_MIGRATION.md`; the
 accepted temporary findings and risks are in
@@ -891,7 +891,9 @@ Bracketed IPv6 authorities use the fixed runner's Python 3.8+ stdlib
 Attestation reports only value-free variable/reason classes and fails closed
 on malformed or missing backend data.
 
-Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
+Relevant repository variable names include `MESH_VULKAN_INFERENCE_RUNNER_ENABLED`
+(exact `true` enables the certified Vulkan Laya runner),
+`MESH_ROCM_INFERENCE_RUNNER_ENABLED`, `DEPOT_RUNNERS_ENABLED`,
 `DEPOT_PR_RUNNERS_ENABLED` (global temporary exception gate),
 `DEPOT_PR_CANARY_REF` (absent by default; one exact
 `refs/pull/<number>/merge` ref only), `DEPOT_PR_SENTINEL_REF` (absent by
@@ -911,9 +913,8 @@ prove the absence of ambient Depot/WebDAV authority, so the runtime sentinel
 has recorded unsafe repository-scoped cross-trust authority and must be
 redesigned and repeated successfully; no-secret/no-token, fork and provider-
 parity canaries remain required. Other variables include `CUDA_VERSION`,
-`VULKAN_SDK_VERSION`, `MESH_ROCM_INFERENCE_RUNNER_ENABLED`,
-`MESH_VULKAN_INFERENCE_RUNNER_ENABLED`, smoke configuration variables, and
-release/deployment variables. Secret values never belong in this inventory;
+`VULKAN_SDK_VERSION`, smoke configuration variables, and release/deployment
+variables. Secret values never belong in this inventory;
 known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`
 and deployment tokens.
 

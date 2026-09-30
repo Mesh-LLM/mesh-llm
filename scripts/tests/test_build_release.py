@@ -31,10 +31,20 @@ class BuildReleaseScriptTests(unittest.TestCase):
         features = set(cargo_args[cargo_args.index("--features") + 1].split(","))
         self.assertEqual(
             features,
-            {"web-ui", "dynamic-native-runtime", "payments", "wallet-lexe"},
+            {"web-ui", "dynamic-native-runtime", "payments"},
         )
         self.assertIn("--no-default-features", script)
         self.assertIn("MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 is unsupported", script)
+
+    def test_wallet_lexe_is_opt_in(self) -> None:
+        cargo_args = self.run_build_release_with_backend(
+            "cpu", wallet_lexe=True
+        ).split()
+        features = set(cargo_args[cargo_args.index("--features") + 1].split(","))
+        self.assertEqual(
+            features,
+            {"web-ui", "dynamic-native-runtime", "payments", "wallet-lexe"},
+        )
 
     def test_release_entry_point_delegates_to_canonical_host_builder(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
@@ -169,6 +179,7 @@ class BuildReleaseScriptTests(unittest.TestCase):
                     "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
                 }
             )
+            env.pop("MESH_LLM_WALLET_LEXE", None)
             env.pop("MESH_LLM_BUILD_VERSION", None)
             subprocess.run(
                 [str(copied_host_script), "--profile", profile],
@@ -182,7 +193,11 @@ class BuildReleaseScriptTests(unittest.TestCase):
             return version_log.read_text(encoding="utf-8")
 
     def run_build_release_with_backend(
-        self, backend: str, *, dynamic_native_runtime: bool = True
+        self,
+        backend: str,
+        *,
+        dynamic_native_runtime: bool = True,
+        wallet_lexe: bool = False,
     ) -> str:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -279,6 +294,9 @@ class BuildReleaseScriptTests(unittest.TestCase):
                     "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
                 }
             )
+            env.pop("MESH_LLM_WALLET_LEXE", None)
+            if wallet_lexe:
+                env["MESH_LLM_WALLET_LEXE"] = "1"
             subprocess.run(
                 [str(copied_script)],
                 cwd=tmp,

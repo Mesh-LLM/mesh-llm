@@ -12,6 +12,9 @@ import tarfile
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1973,29 +1976,6 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn('archive_path="$product_dir.tar.gz"', script)
         self.assertIn('tar -C "$product_dir" -czf "$archive_path" .', script)
 
-    def test_restore_smoke_inputs_normalizes_windows_path_fields(self) -> None:
-        """The composed-product line must not carry Windows carriage returns.
-
-        Python's text-mode stdout writes CRLF on Windows, so the last field of
-        the tab-split read keeps the carriage return and every path built from
-        it silently stops matching (`...-cpu\\r` is not a directory). This was
-        the Windows Laya smoke failure mode, and it is the same Windows
-        shell-boundary normalization the product composer applies.
-        """
-        action = self.read_action("restore-smoke-inputs")
-        carriage_return = "%$" + "'" + "\\r" + "'"
-
-        self.assertIn(
-            "IFS=$'\\t' read -r version backend host_path runtime_path",
-            action,
-        )
-        for field in ("version", "backend", "host_path", "runtime_path"):
-            with self.subTest(field=field):
-                self.assertIn(
-                    f'{field}="${{{field}{carriage_return}}}"',
-                    action,
-                )
-
     def test_product_composer_normalizes_windows_shell_boundaries(self) -> None:
         script = COMPOSE_SCRIPT.read_text(encoding="utf-8")
 
@@ -2178,8 +2158,51 @@ class CiArtifactActionTests(unittest.TestCase):
             "product must contain exactly its manifest-selected runtime",
             action,
         )
+        self.assertIn('runtime_path="${runtime_path%$\'\\r\'}"', action)
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
+        self.assertIn("sys.stdout.buffer.write(", action)
+        self.assertIn(
+            '("\\t".join((version, backend, host_path, runtime_path)) + "\\n").encode()',
+            action,
+        )
+
+    @unittest.skipUnless(os.name == "posix", "requires Bash")
+    def test_smoke_restore_extracts_composed_product(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            with mock.patch.dict(os.environ, {"COPYFILE_DISABLE": "1"}):
+                result = self.run_product_composer(workspace)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            artifact = workspace / "artifact"
+            artifact.mkdir()
+            shutil.copy2(workspace / "product-input.tar.gz", artifact)
+            action = yaml.safe_load(self.read_action("restore-smoke-inputs"))
+            extract_step = next(
+                step for step in action["runs"]["steps"]
+                if step["name"] == "Extract and verify composed product"
+            )
+            script = extract_step["run"]
+            for name, value in {
+                "artifact_path": str(artifact),
+                "binary_name": "mesh-llm",
+                "expected_backend": "cpu",
+            }.items():
+                script = script.replace(f"${{{{ inputs.{name} }}}}", value)
+            result = subprocess.run(
+                [
+                    "/bin/bash", "--noprofile", "--norc", "-e",
+                    "-o", "pipefail", "-c", script,
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((artifact / "mesh-llm").is_file())
+            self.assertTrue((artifact / "product-manifest.json").is_file())
 
     def test_test_model_restore_is_optional_and_verified(self) -> None:
         """The shared model action: resolve, cache, download, verify.

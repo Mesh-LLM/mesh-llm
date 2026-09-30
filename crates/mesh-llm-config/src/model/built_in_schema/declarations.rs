@@ -565,6 +565,10 @@ fn throughput_settings(
             &format!("{prefix}.continuous_batching"),
             bool_or_auto_schema(),
         ),
+        basic_setting(
+            &format!("{prefix}.pipeline_decode_groups"),
+            ConfigValueSchema::Integer,
+        ),
         basic_setting(&format!("{prefix}.threads"), ConfigValueSchema::Integer),
         basic_setting(
             &format!("{prefix}.threads_batch"),

@@ -485,11 +485,23 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn(runtime_id, linux)
                 self.assertIn(f"device: {device}", linux)
         self.assertIn("MESH_ROCM_INFERENCE_RUNNER_ENABLED", linux)
-        # The live Vulkan device gate mirrors the ROCm runner gate: the row is
-        # planned on every main run, so an ungated failure there is a red main.
-        self.assertIn("MESH_VULKAN_INFERENCE_RUNNER_ENABLED", linux)
+        self.assertIn("vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true'", linux)
+        self.assertIn("enable_vulkan_inference: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}", linux)
         self.assertIn("gpu-amd", linux)
         self.assertIn("gpu-nvidia", linux)
+        vulkan_job = linux.split("\n  laya_vulkan:", 1)[1].split(
+            "\n  laya_rocm:", 1
+        )[0]
+        self.assertIn("MESH_LLM_VULKAN_AVAILABLE: '1'", vulkan_job)
+
+        laya_action = (ROOT / ".github/actions/run-laya-product-smoke/action.yml").read_text()
+        self.assertEqual(
+            laya_action.count(
+                "inputs.device != 'Vulkan0' || inputs.enable_vulkan_inference == 'true'"
+            ),
+            2,
+        )
+        self.assertIn("Report uncertified Vulkan smoke skip", laya_action)
 
         macos = self.workflow("ci-macos-product-smoke-slice.yml")
         self.assertIn("macos-metal", macos)

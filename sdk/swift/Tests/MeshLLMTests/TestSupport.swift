@@ -15,11 +15,25 @@ final class TestMeshNodeHandle: MeshNodeHandle, @unchecked Sendable {
     private let lock = NSLock()
     private var cancelledRequestIdsStorage: [String] = []
     private var connected = false
+    private var lastOpenAIPathStorage: String?
+    private var lastOpenAIBodyStorage: String?
 
     var cancelledRequestIds: [String] {
         lock.lock()
         defer { lock.unlock() }
         return cancelledRequestIdsStorage
+    }
+
+    var lastOpenAIPath: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastOpenAIPathStorage
+    }
+
+    var lastOpenAIBody: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastOpenAIBodyStorage
     }
 
     init() {
@@ -38,6 +52,49 @@ final class TestMeshNodeHandle: MeshNodeHandle, @unchecked Sendable {
 
     override func responses(request: ResponsesRequestNative, listener: EventListener) throws -> String {
         listener.onEvent(event: .tokenDelta(requestId: requestId, delta: "hello"))
+        listener.onEvent(event: .completed(requestId: requestId))
+        return requestId
+    }
+
+    override func openaiRequest(path: String, bodyJson: String) throws -> OpenAiResponseNative {
+        lock.lock()
+        lastOpenAIPathStorage = path
+        lastOpenAIBodyStorage = bodyJson
+        lock.unlock()
+        return OpenAiResponseNative(
+            statusCode: 200,
+            contentType: "application/json",
+            body: #"{"choices":[{"message":{"tool_calls":[{"id":"call-1"}]}}]}"#
+        )
+    }
+
+    override func openaiStream(
+        path: String,
+        bodyJson: String,
+        listener: OpenAiStreamListener
+    ) throws -> String {
+        lock.lock()
+        lastOpenAIPathStorage = path
+        lastOpenAIBodyStorage = bodyJson
+        lock.unlock()
+        listener.onEvent(event: .started(
+            requestId: requestId,
+            statusCode: 200,
+            contentType: "text/event-stream"
+        ))
+        let data = #"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":\"Syd"}}]}}]}"#
+        listener.onEvent(event: .sse(
+            requestId: requestId,
+            eventType: path == "/v1/responses" ? "response.function_call_arguments.delta" : nil,
+            data: data,
+            raw: "data: \(data)\n\n"
+        ))
+        listener.onEvent(event: .sse(
+            requestId: requestId,
+            eventType: nil,
+            data: "[DONE]",
+            raw: "data: [DONE]\n\n"
+        ))
         listener.onEvent(event: .completed(requestId: requestId))
         return requestId
     }
@@ -107,6 +164,25 @@ final class OpenStreamMeshNodeHandle: MeshNodeHandle, @unchecked Sendable {
         return requestId
     }
 
+    override func openaiStream(
+        path: String,
+        bodyJson: String,
+        listener: OpenAiStreamListener
+    ) throws -> String {
+        listener.onEvent(event: .started(
+            requestId: requestId,
+            statusCode: 200,
+            contentType: "text/event-stream"
+        ))
+        listener.onEvent(event: .sse(
+            requestId: requestId,
+            eventType: nil,
+            data: #"{"choices":[{"delta":{"content":"hello"}}]}"#,
+            raw: #"data: {"choices":[{"delta":{"content":"hello"}}]}"# + "\n\n"
+        ))
+        return requestId
+    }
+
     override func cancel(requestId: String) throws {
         lock.lock()
         cancelledRequestIdsStorage.append(requestId)
@@ -118,6 +194,71 @@ final class OpenStreamMeshNodeHandle: MeshNodeHandle, @unchecked Sendable {
         let listener = chatListener
         lock.unlock()
         listener?.onEvent(event: .completed(requestId: requestId))
+    }
+}
+
+final class FailedOpenAIStreamMeshNodeHandle: MeshNodeHandle, @unchecked Sendable {
+    init() {
+        super.init(noHandle: MeshNodeHandle.NoHandle())
+    }
+
+    required init(unsafeFromHandle handle: UInt64) {
+        super.init(unsafeFromHandle: handle)
+    }
+
+    override func openaiStream(
+        path: String,
+        bodyJson: String,
+        listener: OpenAiStreamListener
+    ) throws -> String {
+        listener.onEvent(event: .failed(
+            requestId: "failed-request",
+            statusCode: 429,
+            error: "rate limited",
+            body: #"{"error":"slow down"}"#
+        ))
+        return "failed-request"
+    }
+}
+
+final class FastOpenAIStreamMeshNodeHandle: MeshNodeHandle, @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelledRequestIdsStorage: [String] = []
+
+    var cancelledRequestIds: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelledRequestIdsStorage
+    }
+
+    init() {
+        super.init(noHandle: MeshNodeHandle.NoHandle())
+    }
+
+    required init(unsafeFromHandle handle: UInt64) {
+        super.init(unsafeFromHandle: handle)
+    }
+
+    override func openaiStream(
+        path: String,
+        bodyJson: String,
+        listener: OpenAiStreamListener
+    ) throws -> String {
+        for _ in 0..<300 {
+            listener.onEvent(event: .sse(
+                requestId: "fast-request",
+                eventType: nil,
+                data: "{}",
+                raw: "data: {}\n\n"
+            ))
+        }
+        return "fast-request"
+    }
+
+    override func cancel(requestId: String) throws {
+        lock.lock()
+        cancelledRequestIdsStorage.append(requestId)
+        lock.unlock()
     }
 }
 

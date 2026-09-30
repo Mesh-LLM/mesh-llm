@@ -39,8 +39,6 @@ pub(crate) use send::{
 
 #[cfg(feature = "payments")]
 pub(crate) mod paid;
-#[cfg(feature = "payments")]
-mod paid_events;
 
 #[cfg(feature = "payments")]
 pub(crate) mod payment_recovery;

@@ -73,10 +73,11 @@ pub(crate) use self::status::classify_runtime_error;
 use self::state::ApiInner;
 use self::status::{
     IntentSummary, LifecycleInstancePayload, LoggingStatusPayload, MeshModelPayload,
-    OpenAiGuardrailsPayload, RUNTIME_EVENTS_CAPABILITY, RuntimeCapabilityFlags,
-    RuntimeEventsStatusSummary, RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload,
-    StatusPayload, build_runtime_processes_payload, build_runtime_stage_payloads,
-    build_runtime_status_payload, derive_daemon_state, runtime_stage_state_label,
+    OpenAiGuardrailsPayload, PluginFrameTelemetryPayload, RUNTIME_EVENTS_CAPABILITY,
+    RuntimeCapabilityFlags, RuntimeEventsStatusSummary, RuntimeLlamaPayload,
+    RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
+    build_runtime_stage_payloads, build_runtime_status_payload, derive_daemon_state,
+    runtime_stage_state_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
@@ -1018,6 +1019,9 @@ impl MeshApi {
         payload.wanted_model_refs = self.wanted_model_refs().await;
         payload.mesh_requirements = node.mesh_requirement_policy_summary().await;
         payload.recent_mesh_rejections = node.recent_mesh_requirement_rejections().await;
+        payload.plugin_frame_telemetry = PluginFrameTelemetryPayload {
+            source_mismatch_total: node.plugin_frame_source_mismatch_total(),
+        };
         payload.logging =
             crate::logging_runtime_state().map(|state| LoggingStatusPayload::from(state.status()));
         payload

@@ -740,6 +740,10 @@ public protocol MeshClientHandleProtocol: AnyObject, Sendable {
 
     func inferenceListModels() throws  -> [ModelNative]
 
+    func openaiRequest(path: String, bodyJson: String) throws  -> OpenAiResponseNative
+
+    func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener) throws  -> String
+
     func reconnect() throws
 
     func responses(request: ResponsesRequestNative, listener: EventListener) throws  -> String
@@ -829,6 +833,29 @@ open func inferenceListModels()throws  -> [ModelNative]  {
         uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshclienthandle_inference_list_models(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func openaiRequest(path: String, bodyJson: String)throws  -> OpenAiResponseNative  {
+    return try  FfiConverterTypeOpenAiResponseNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_request(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),
+        FfiConverterString.lower(bodyJson),uniffiCallStatus
+    )
+})
+}
+
+open func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_stream(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),
+        FfiConverterString.lower(bodyJson),
+        FfiConverterCallbackInterfaceOpenAiStreamListener_lower(listener),uniffiCallStatus
     )
 })
 }
@@ -946,6 +973,10 @@ public protocol MeshNodeHandleProtocol: AnyObject, Sendable {
     func loadServingModel(modelRef: String, options: LoadModelOptions) throws  -> ServedModel
 
     func modelCacheStatus() throws  -> ModelCacheStatus
+
+    func openaiRequest(path: String, bodyJson: String) throws  -> OpenAiResponseNative
+
+    func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener) throws  -> String
 
     func pruneDerivedCache(policy: PrunePolicy) throws  -> PruneResult
 
@@ -1118,6 +1149,29 @@ open func modelCacheStatus()throws  -> ModelCacheStatus  {
         uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_model_cache_status(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func openaiRequest(path: String, bodyJson: String)throws  -> OpenAiResponseNative  {
+    return try  FfiConverterTypeOpenAiResponseNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_request(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),
+        FfiConverterString.lower(bodyJson),uniffiCallStatus
+    )
+})
+}
+
+open func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_openai_stream(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),
+        FfiConverterString.lower(bodyJson),
+        FfiConverterCallbackInterfaceOpenAiStreamListener_lower(listener),uniffiCallStatus
     )
 })
 }
@@ -2217,12 +2271,14 @@ public func FfiConverterTypeModelDetails_lower(_ value: ModelDetails) -> RustBuf
 public struct ModelNative: Equatable, Hashable {
     public var id: String
     public var name: String
+    public var contextLength: UInt32?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String) {
+    public init(id: String, name: String, contextLength: UInt32?) {
         self.id = id
         self.name = name
+        self.contextLength = contextLength
     }
 
 
@@ -2242,13 +2298,15 @@ public struct FfiConverterTypeModelNative: FfiConverterRustBuffer {
         return
             try ModelNative(
                 id: FfiConverterString.read(from: &buf),
-                name: FfiConverterString.read(from: &buf)
+                name: FfiConverterString.read(from: &buf),
+                contextLength: FfiConverterOptionUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: ModelNative, into buf: inout [UInt8]) {
         FfiConverterString.write(value.id, into: &buf)
         FfiConverterString.write(value.name, into: &buf)
+        FfiConverterOptionUInt32.write(value.contextLength, into: &buf)
     }
 }
 
@@ -2645,6 +2703,64 @@ public func FfiConverterTypeNativeRuntimePruneResultNative_lift(_ buf: RustBuffe
 #endif
 public func FfiConverterTypeNativeRuntimePruneResultNative_lower(_ value: NativeRuntimePruneResultNative) -> RustBuffer {
     return FfiConverterTypeNativeRuntimePruneResultNative.lower(value)
+}
+
+
+public struct OpenAiResponseNative: Equatable, Hashable {
+    public var statusCode: UInt16
+    public var contentType: String?
+    public var body: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(statusCode: UInt16, contentType: String?, body: String) {
+        self.statusCode = statusCode
+        self.contentType = contentType
+        self.body = body
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension OpenAiResponseNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOpenAiResponseNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OpenAiResponseNative {
+        return
+            try OpenAiResponseNative(
+                statusCode: FfiConverterUInt16.read(from: &buf),
+                contentType: FfiConverterOptionString.read(from: &buf),
+                body: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OpenAiResponseNative, into buf: inout [UInt8]) {
+        FfiConverterUInt16.write(value.statusCode, into: &buf)
+        FfiConverterOptionString.write(value.contentType, into: &buf)
+        FfiConverterString.write(value.body, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOpenAiResponseNative_lift(_ buf: RustBuffer) throws -> OpenAiResponseNative {
+    return try FfiConverterTypeOpenAiResponseNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOpenAiResponseNative_lower(_ value: OpenAiResponseNative) -> RustBuffer {
+    return FfiConverterTypeOpenAiResponseNative.lower(value)
 }
 
 
@@ -3463,6 +3579,8 @@ enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     case NativeRuntimeFailed(message: String)
 
+    case OpenAiRequestFailed(message: String)
+
 
 
 
@@ -3548,6 +3666,10 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
 
+        case 15: return .OpenAiRequestFailed(
+            message: try FfiConverterString.read(from: &buf)
+        )
+
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -3587,6 +3709,8 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(13))
         case .NativeRuntimeFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(14))
+        case .OpenAiRequestFailed(_ /* message is ignored*/):
+            writeInt(&buf, Int32(15))
 
 
         }
@@ -3890,6 +4014,106 @@ public func FfiConverterTypeNativeRuntimeVerificationPolicyNative_lift(_ buf: Ru
 #endif
 public func FfiConverterTypeNativeRuntimeVerificationPolicyNative_lower(_ value: NativeRuntimeVerificationPolicyNative) -> RustBuffer {
     return FfiConverterTypeNativeRuntimeVerificationPolicyNative.lower(value)
+}
+
+
+
+
+public enum OpenAiStreamEventNative: Equatable, Hashable {
+
+    case started(requestId: String, statusCode: UInt16, contentType: String?
+    )
+    case sse(requestId: String, eventType: String?, data: String, raw: String
+    )
+    case completed(requestId: String
+    )
+    case failed(requestId: String, statusCode: UInt16?, error: String, body: String?
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension OpenAiStreamEventNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOpenAiStreamEventNative: FfiConverterRustBuffer {
+    typealias SwiftType = OpenAiStreamEventNative
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OpenAiStreamEventNative {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .started(requestId: try FfiConverterString.read(from: &buf), statusCode: try FfiConverterUInt16.read(from: &buf), contentType: try FfiConverterOptionString.read(from: &buf)
+        )
+
+        case 2: return .sse(requestId: try FfiConverterString.read(from: &buf), eventType: try FfiConverterOptionString.read(from: &buf), data: try FfiConverterString.read(from: &buf), raw: try FfiConverterString.read(from: &buf)
+        )
+
+        case 3: return .completed(requestId: try FfiConverterString.read(from: &buf)
+        )
+
+        case 4: return .failed(requestId: try FfiConverterString.read(from: &buf), statusCode: try FfiConverterOptionUInt16.read(from: &buf), error: try FfiConverterString.read(from: &buf), body: try FfiConverterOptionString.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: OpenAiStreamEventNative, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case let .started(requestId,statusCode,contentType):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(requestId, into: &buf)
+            FfiConverterUInt16.write(statusCode, into: &buf)
+            FfiConverterOptionString.write(contentType, into: &buf)
+
+
+        case let .sse(requestId,eventType,data,raw):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(requestId, into: &buf)
+            FfiConverterOptionString.write(eventType, into: &buf)
+            FfiConverterString.write(data, into: &buf)
+            FfiConverterString.write(raw, into: &buf)
+
+
+        case let .completed(requestId):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(requestId, into: &buf)
+
+
+        case let .failed(requestId,statusCode,error,body):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(requestId, into: &buf)
+            FfiConverterOptionUInt16.write(statusCode, into: &buf)
+            FfiConverterString.write(error, into: &buf)
+            FfiConverterOptionString.write(body, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOpenAiStreamEventNative_lift(_ buf: RustBuffer) throws -> OpenAiStreamEventNative {
+    return try FfiConverterTypeOpenAiStreamEventNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOpenAiStreamEventNative_lower(_ value: OpenAiStreamEventNative) -> RustBuffer {
+    return FfiConverterTypeOpenAiStreamEventNative.lower(value)
 }
 
 
@@ -4330,6 +4554,141 @@ public func FfiConverterCallbackInterfaceNativeRuntimeProgressListener_lift(_ ha
 #endif
 public func FfiConverterCallbackInterfaceNativeRuntimeProgressListener_lower(_ v: NativeRuntimeProgressListener) -> UInt64 {
     return FfiConverterCallbackInterfaceNativeRuntimeProgressListener.lower(v)
+}
+
+
+
+
+public protocol OpenAiStreamListener: AnyObject, Sendable {
+
+    func onEvent(event: OpenAiStreamEventNative)
+
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceOpenAiStreamListener {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceOpenAiStreamListener = UniffiVTableCallbackInterfaceOpenAiStreamListener(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceOpenAiStreamListener.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface OpenAiStreamListener: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceOpenAiStreamListener.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface OpenAiStreamListener: handle missing in uniffiClone")
+            }
+        },
+        onEvent: { (
+            uniffiHandle: UInt64,
+            event: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceOpenAiStreamListener.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onEvent(
+                     event: try FfiConverterTypeOpenAiStreamEventNative_lift(event)
+                )
+            }
+
+
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceOpenAiStreamListener> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceOpenAiStreamListener>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitOpenAiStreamListener() {
+    uniffi_meshllm_ffi_fn_init_callback_vtable_openaistreamlistener(UniffiCallbackInterfaceOpenAiStreamListener.vtablePtr)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceOpenAiStreamListener {
+    fileprivate static let handleMap = UniffiHandleMap<OpenAiStreamListener>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceOpenAiStreamListener : FfiConverter {
+    typealias SwiftType = OpenAiStreamListener
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceOpenAiStreamListener_lift(_ handle: UInt64) throws -> OpenAiStreamListener {
+    return try FfiConverterCallbackInterfaceOpenAiStreamListener.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceOpenAiStreamListener_lower(_ v: OpenAiStreamListener) -> UInt64 {
+    return FfiConverterCallbackInterfaceOpenAiStreamListener.lower(v)
 }
 
 #if swift(>=5.8)
@@ -4871,6 +5230,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models() != 43178) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request() != 20166) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_stream() != 23571) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 39153) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4911,6 +5276,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 44993) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 65095) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream() != 24624) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 12315) {
@@ -4967,9 +5338,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 47323) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_meshllm_ffi_checksum_method_openaistreamlistener_on_event() != 60558) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
     uniffiCallbackInitEventListener()
     uniffiCallbackInitNativeRuntimeProgressListener()
+    uniffiCallbackInitOpenAiStreamListener()
     return InitializationResult.ok
 }()
 

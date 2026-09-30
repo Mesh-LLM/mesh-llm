@@ -953,6 +953,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "throughput.pipeline_decode_groups",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "throughput.threads",
         status: WiringStatus::Wired,
         owner: "n/a",
