@@ -47,6 +47,12 @@ const ANALYTICS_CATEGORY: CategoryPresentation = CategoryPresentation {
     summary: "Anonymous usage reporting to the mesh-llm maintainers",
     order: 50,
 };
+const PAYMENTS_CATEGORY: CategoryPresentation = CategoryPresentation {
+    id: "payments",
+    label: "Payments",
+    summary: "Wallet backend used for paid inference",
+    order: 60,
+};
 const RUNTIME_POLICY_CATEGORY: CategoryPresentation = CategoryPresentation {
     id: "runtime-policy",
     label: "Runtime Policy",
@@ -121,6 +127,7 @@ fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> 
         .or_else(|| kv_disk_presentation(rendered))
         .or_else(|| gpu_setting_presentation(rendered))
         .or_else(|| process_setting_presentation(rendered))
+        .or_else(|| payments_presentation(rendered))
         .or_else(|| native_runtime_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
         .or_else(|| generation_defaults_presentation(rendered))
@@ -400,6 +407,22 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         )
         .placeholder("ed25519:<64 hex characters>")
         .hint("text")),
+        _ => None,
+    }
+}
+
+fn payments_presentation(rendered: &str) -> Option<SettingPresentation> {
+    match rendered {
+        "payments.wallet" => Some(
+            sp(
+                "Wallet plugin",
+                "Plugin name of the wallet that backs paid inference. When unset, the only running wallet plugin is used, preferring any other over the built-in Lexe wallet.",
+                PAYMENTS_CATEGORY,
+                10,
+            )
+            .placeholder("wallet-lexe")
+            .hint("text"),
+        ),
         _ => None,
     }
 }
@@ -1100,6 +1123,9 @@ fn fallback_category_for_path(rendered: &str) -> Option<CategoryPresentation> {
     }
     if rendered.starts_with("owner_control.") {
         return Some(NETWORK_CATEGORY);
+    }
+    if rendered.starts_with("payments.") {
+        return Some(PAYMENTS_CATEGORY);
     }
     if rendered.starts_with("mesh_requirements.") {
         return Some(ATTESTATION_CATEGORY);

@@ -22,6 +22,10 @@ fn slot(manager: PluginManager) -> PluginManagerSlot {
     Arc::new(tokio::sync::Mutex::new(Some(manager)))
 }
 
+fn factory(manager: PluginManager) -> PluginWalletFactory {
+    PluginWalletFactory::new(slot(manager), None)
+}
+
 const PLUGIN: &str = "wallet-fake";
 
 /// What the fake plugin should do on the next call of a given operation.
@@ -234,7 +238,7 @@ fn sample_invoice() -> mesh_llm_wallet::invoice::Invoice {
 async fn open_writes_pin_and_is_provisioned_afterwards() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let factory = PluginWalletFactory::new(slot(manager));
+    let factory = factory(manager);
     let dir = tempfile::tempdir().unwrap();
 
     assert!(!factory.is_provisioned(dir.path()));
@@ -252,7 +256,7 @@ async fn open_writes_pin_and_is_provisioned_afterwards() {
 async fn open_refuses_a_different_wallet_identity() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let factory = PluginWalletFactory::new(slot(manager));
+    let factory = factory(manager);
     let dir = tempfile::tempdir().unwrap();
     factory.open(dir.path()).await.unwrap();
 
@@ -276,7 +280,7 @@ async fn open_refuses_non_mainnet_wallets() {
     let plugin = FakeWalletPlugin::new("w1");
     plugin.identity.lock().unwrap().network = "signet".into();
     let manager = manager_for(&plugin).await;
-    let factory = PluginWalletFactory::new(slot(manager));
+    let factory = factory(manager);
     let dir = tempfile::tempdir().unwrap();
     let error = factory
         .open(dir.path())
@@ -291,7 +295,7 @@ async fn open_refuses_non_mainnet_wallets() {
 #[tokio::test]
 async fn open_without_a_wallet_plugin_fails_cleanly() {
     let manager = PluginManager::for_test_bridge(&[], Arc::new(FakeWalletPlugin::new("x")));
-    let factory = PluginWalletFactory::new(slot(manager));
+    let factory = factory(manager);
     let dir = tempfile::tempdir().unwrap();
     let error = factory
         .open(dir.path())
@@ -307,7 +311,7 @@ async fn open_without_a_wallet_plugin_fails_cleanly() {
 async fn queries_reopen_once_after_plugin_restart() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let wallet = PluginWalletFactory::new(slot(manager))
+    let wallet = factory(manager)
         .open(tempfile::tempdir().unwrap().path())
         .await
         .unwrap();
@@ -327,7 +331,7 @@ async fn queries_reopen_once_after_plugin_restart() {
 async fn transport_loss_during_pay_is_uncertain_and_not_retried() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let wallet = PluginWalletFactory::new(slot(manager))
+    let wallet = factory(manager)
         .open(tempfile::tempdir().unwrap().path())
         .await
         .unwrap();
@@ -342,7 +346,7 @@ async fn transport_loss_during_pay_is_uncertain_and_not_retried() {
 async fn structured_not_submitted_is_preserved_across_ipc() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let wallet = PluginWalletFactory::new(slot(manager))
+    let wallet = factory(manager)
         .open(tempfile::tempdir().unwrap().path())
         .await
         .unwrap();
@@ -362,7 +366,7 @@ async fn structured_not_submitted_is_preserved_across_ipc() {
 async fn pay_reopens_once_on_not_open_then_gives_up() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let wallet = PluginWalletFactory::new(slot(manager))
+    let wallet = factory(manager)
         .open(tempfile::tempdir().unwrap().path())
         .await
         .unwrap();
@@ -396,7 +400,7 @@ async fn pay_reopens_once_on_not_open_then_gives_up() {
 async fn unstructured_plugin_error_is_uncertain_for_pay() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let wallet = PluginWalletFactory::new(slot(manager))
+    let wallet = factory(manager)
         .open(tempfile::tempdir().unwrap().path())
         .await
         .unwrap();
@@ -415,7 +419,7 @@ async fn unstructured_plugin_error_is_uncertain_for_pay() {
 async fn lookup_decodes_optional_transaction() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let wallet = PluginWalletFactory::new(slot(manager))
+    let wallet = factory(manager)
         .open(tempfile::tempdir().unwrap().path())
         .await
         .unwrap();
@@ -437,7 +441,7 @@ async fn lookup_decodes_optional_transaction() {
 async fn invoice_expiry_is_sent_by_the_host_and_claiming_survives_the_wire() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let wallet = PluginWalletFactory::new(slot(manager))
+    let wallet = factory(manager)
         .open(tempfile::tempdir().unwrap().path())
         .await
         .unwrap();
@@ -493,7 +497,7 @@ fn each_plugin_gets_its_own_directory() {
 async fn corrupt_pin_refuses_open_without_touching_the_plugin() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
-    let factory = PluginWalletFactory::new(slot(manager));
+    let factory = factory(manager);
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(WalletPin::path(dir.path()), b"{garbage").unwrap();
     assert!(factory.is_provisioned(dir.path()));
@@ -512,7 +516,7 @@ async fn corrupt_pin_refuses_open_without_touching_the_plugin() {
 async fn plugin_manager_is_resolved_at_open_time_not_construction() {
     let plugin = FakeWalletPlugin::new("w1");
     let slot: PluginManagerSlot = Arc::new(tokio::sync::Mutex::new(None));
-    let factory = PluginWalletFactory::new(Arc::clone(&slot));
+    let factory = PluginWalletFactory::new(Arc::clone(&slot), None);
     let dir = tempfile::tempdir().unwrap();
 
     // Startup order: the payment service (and its factory) exists before the
@@ -541,10 +545,7 @@ async fn concurrent_queries_recover_after_restart_and_preserve_pin() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
     let dir = tempfile::tempdir().unwrap();
-    let wallet = PluginWalletFactory::new(slot(manager))
-        .open(dir.path())
-        .await
-        .unwrap();
+    let wallet = factory(manager).open(dir.path()).await.unwrap();
     // Every in-flight query sees the restart at once.
     plugin.crash();
     let (a, b, c) = tokio::join!(wallet.balance(), wallet.balance(), wallet.balance());
@@ -564,10 +565,7 @@ async fn amountless_invoice_is_refused_before_reaching_a_wallet_that_cannot_make
     plugin.features.lock().unwrap().amountless_invoices = false;
     let manager = manager_for(&plugin).await;
     let dir = tempfile::tempdir().unwrap();
-    let wallet = PluginWalletFactory::new(slot(manager))
-        .open(dir.path())
-        .await
-        .unwrap();
+    let wallet = factory(manager).open(dir.path()).await.unwrap();
 
     let error = wallet
         .create_invoice(None, 60)
@@ -580,4 +578,20 @@ async fn amountless_invoice_is_refused_before_reaching_a_wallet_that_cannot_make
         "{:?}",
         plugin.calls()
     );
+}
+
+#[tokio::test]
+async fn configured_wallet_that_is_not_running_is_not_replaced_by_another() {
+    let plugin = FakeWalletPlugin::new("w1");
+    let manager = manager_for(&plugin).await;
+    let dir = tempfile::tempdir().unwrap();
+    let factory = PluginWalletFactory::new(slot(manager), Some("wallet-other".into()));
+    let error = factory
+        .open(dir.path())
+        .await
+        .err()
+        .expect("must not fall back to a different running wallet")
+        .to_string();
+    assert!(error.contains("wallet-other"), "{error}");
+    assert_eq!(plugin.opens.load(Ordering::SeqCst), 0);
 }

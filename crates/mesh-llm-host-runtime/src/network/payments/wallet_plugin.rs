@@ -10,7 +10,8 @@
 //! 2. **The wallet identity is pinned.** After the first successful open the
 //!    host writes `payments/wallet-provider.json`. Later opens must return the
 //!    same identity or fail; outstanding ledger state is only meaningful
-//!    against the wallet that created it.
+//!    against the wallet that created it. Which plugin is opened is decided
+//!    in [`selection`].
 //! 3. **Settlement waits carry no IPC deadline.** `wait_for_*` block on the
 //!    plugin for as long as the caller is willing to wait; the caller owns
 //!    cancellation by dropping the future.
@@ -32,6 +33,10 @@ use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
 use crate::plugin::PluginManager;
+
+pub mod selection;
+
+use selection::{possible_wallets_not_running, select_wallet_plugin};
 
 /// Parent of every wallet plugin's data directory.
 const WALLETS_SUBDIR: &str = "wallets";
@@ -63,11 +68,30 @@ pub type PluginManagerSlot = Arc<Mutex<Option<PluginManager>>>;
 /// Resolves the `wallet.v1` provider through the plugin manager.
 pub struct PluginWalletFactory {
     plugin_manager: PluginManagerSlot,
+    /// The wallet plugin chosen in `[payments] wallet`, if any.
+    configured_wallet: Option<String>,
 }
 
 impl PluginWalletFactory {
-    pub fn new(plugin_manager: PluginManagerSlot) -> Self {
-        Self { plugin_manager }
+    pub fn new(plugin_manager: PluginManagerSlot, configured_wallet: Option<String>) -> Self {
+        Self {
+            plugin_manager,
+            configured_wallet,
+        }
+    }
+
+    /// Names of the running plugins that serve `wallet.v1`.
+    async fn running_wallet_plugins(plugin_manager: &PluginManager) -> Result<Vec<String>> {
+        let mut names: Vec<String> = plugin_manager
+            .capability_providers()
+            .await?
+            .into_iter()
+            .filter(|provider| provider.capability == CAPABILITY && provider.available)
+            .map(|provider| provider.plugin_name)
+            .collect();
+        names.sort();
+        names.dedup();
+        Ok(names)
     }
 
     async fn plugin_manager(&self) -> Result<PluginManager> {
@@ -88,16 +112,21 @@ impl WalletFactory for PluginWalletFactory {
 
     async fn open(&self, payment_directory: &Path) -> Result<Arc<dyn WalletProvider>> {
         let plugin_manager = self.plugin_manager().await?;
-        let provider = plugin_manager
-            .available_provider_for_capability(CAPABILITY)
-            .await?
-            .ok_or_else(|| {
-                anyhow!("no wallet plugin is running (capability '{CAPABILITY}' unavailable)")
-            })?;
+        // Read the pin before contacting any plugin so a corrupt pin is
+        // reported without provisioning anything.
+        let pin = WalletPin::load(payment_directory)?;
+        let running = Self::running_wallet_plugins(&plugin_manager).await?;
+        let down = possible_wallets_not_running(&plugin_manager.list().await);
+        let plugin_name = select_wallet_plugin(
+            &running,
+            &down,
+            pin.as_ref(),
+            self.configured_wallet.as_deref(),
+        )?;
         let wallet = PluginWalletProvider {
             plugin_manager,
-            wallet_directory: wallet_directory(payment_directory, &provider.plugin_name)?,
-            plugin_name: provider.plugin_name,
+            wallet_directory: wallet_directory(payment_directory, &plugin_name)?,
+            plugin_name,
             payment_directory: payment_directory.to_path_buf(),
             features: std::sync::Mutex::new(WalletFeatures::default()),
             open_lock: Mutex::new(()),

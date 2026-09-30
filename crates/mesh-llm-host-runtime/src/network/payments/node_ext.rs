@@ -9,6 +9,8 @@ use mesh_llm_payments_types::engine::AdvertisedPrices;
 use mesh_llm_payments_types::pricing::Pricing;
 
 use super::engine::PaymentsEngine;
+use super::wallet_plugin::PluginWalletFactory;
+use super::wallet_plugin::selection::configured_wallet;
 use crate::mesh::Node;
 
 /// Lazily opened payments engine, shared by every clone of a [`Node`].
@@ -83,14 +85,19 @@ impl Node {
             let service = self
                 .payments
                 .get_or_try_init(|| async {
-                    let directory = self.config_state.lock().await.payment_directory();
+                    let (directory, wallet) = {
+                        let config_state = self.config_state.lock().await;
+                        (
+                            config_state.payment_directory(),
+                            configured_wallet(&config_state.config().payments),
+                        )
+                    };
                     // The wallet is a plugin (`wallet.v1`); the ledger stays
                     // in-process. The factory holds the plugin-manager slot,
                     // not a manager: this can run during startup (gossip
                     // advertises prices) before `set_plugin_manager`.
-                    let factory = crate::network::payments::wallet_plugin::PluginWalletFactory::new(
-                        Arc::clone(&self.plugin_manager),
-                    );
+                    let factory =
+                        PluginWalletFactory::new(Arc::clone(&self.plugin_manager), wallet);
                     let provider = super::engine::provider()
                         .ok_or_else(|| anyhow::anyhow!("no payments engine installed"))?;
                     provider.open(&directory, Arc::new(factory))

@@ -1382,6 +1382,7 @@ fn legacy_proto_config_to_mesh(
         models,
         plugins,
         logging: Default::default(),
+        payments: Default::default(),
         extra: Default::default(),
     };
     if let Some(mode) = snapshot

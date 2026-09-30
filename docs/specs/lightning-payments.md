@@ -95,14 +95,13 @@ files are not reset by changing build features; pending settlement still needs
 the original wallet to become available again.
 
 Concrete wallets are plugin processes that advertise `wallet.v1`
-(`mesh-llm-wallet::contract`). The host resolves the provider by capability,
-never by plugin name. An installed external wallet uses the ordinary plugin
-loader; no Lexe-specific client API is required. Enable only one wallet provider.
-Existing wallet pins bind both plugin name and wallet identity: replacing a
-provider with a differently named plugin is not an automatic migration, even
-when it uses the same seed. Switch providers with `mesh-llm wallet unpin`
-(below), which refuses while anything outstanding depends on the pinned wallet;
-do not delete the pin by hand.
+(`mesh-llm-wallet::contract`). The host finds wallet plugins by that capability
+and chooses among them as described below. An installed external wallet uses
+the ordinary plugin loader; no Lexe-specific client API is required. Existing wallet pins bind both
+plugin name and wallet identity: replacing a provider with a differently named
+plugin is not an automatic migration, even when it uses the same seed. Switch
+providers with `mesh-llm wallet unpin` (below), which refuses while anything
+outstanding depends on the pinned wallet; do not delete the pin by hand.
 
 The retained `mesh-wallet-lexe` implementation uses Lexe 0.1.24 on mainnet.
 To compile it back into the host:
@@ -128,8 +127,19 @@ enabled = false
 
 Only `enabled` may be set on a built-in. A default build without `wallet-lexe`
 accepts this stanza but registers no built-in wallet. A runtime setting cannot
-restore code excluded at build time. NWC, BOLT12 and multi-provider selection
-are deferred.
+restore code excluded at build time. NWC and BOLT12 are deferred.
+
+When more than one `wallet.v1` plugin runs, the host picks one in this order:
+
+1. The plugin named in the ledger's pin (below). A pin is never silently
+   replaced; a pinned plugin that is not running is an error.
+2. `[payments] wallet = "<plugin>"` in `config.toml`. It must be running.
+3. The only running wallet plugin other than `wallet-lexe`, then `wallet-lexe`
+   itself. Two or more other wallet plugins need an explicit choice. This
+   automatic choice is refused while any enabled plugin that might be a wallet
+   is not running, because the choice is pinned: a plugin that crashed has lost
+   its capability list, and choosing among the running plugins would hand the
+   ledger to `wallet-lexe` for good. Start the plugin or set `[payments] wallet`.
 
 `wallet_open` also returns the wallet's `features`: whether it can create
 amount-less invoices. The host refuses amount-less `fund-wallet` invoices on a

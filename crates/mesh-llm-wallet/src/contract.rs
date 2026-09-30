@@ -2,8 +2,9 @@
 //!
 //! A wallet plugin advertises [`CAPABILITY`] in its manifest and serves the
 //! operations below over the ordinary plugin operation transport. The host
-//! resolves the provider by capability, never by plugin name, so any plugin
-//! that speaks this contract can back paid inference.
+//! finds wallet plugins by this capability, so any plugin that speaks this
+//! contract can back paid inference; which one does is decided by the wallet
+//! pin and the operator's configuration.
 //!
 //! Every shape here is additive JSON: unknown fields are ignored on both
 //! sides, and new optional fields may be added without a version bump.
