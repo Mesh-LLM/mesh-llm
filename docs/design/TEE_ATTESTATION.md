@@ -148,6 +148,58 @@ confidential GPU proof. It proves only the selected endpoint and approved
 measured workload. The trial was deleted; archived evidence is useful for
 regression checking, not for claiming a live machine is currently attested.
 
+## Platform adapter boundary
+
+The challenge stream and strict single-host route stay shared. The client
+chooses a platform verifier through its own policy, then appraises a bounded
+evidence envelope before prompt dispatch. The existing Intel TDX/dstack
+response retains `format: "mesh-tee-endpoint-v1"` and its original flat fields.
+The new envelope shape is:
+
+```json
+{
+  "format": "mesh-tee-endpoint-v2",
+  "platform": "snp-direct",
+  "endpoint_id": "<32 raw iroh public-key bytes, hex encoded>",
+  "nonce": "<32 client-chosen bytes, hex encoded>",
+  "payload": { "<platform-specific signed evidence and collateral>": "..." }
+}
+```
+
+`platform` names a verifier candidate; the peer cannot choose the client's
+trusted root or policy. The parser accepts the v2 envelope only as input to a
+matching registered verifier. With only the TDX v1 verifier configured, every
+v2 platform is rejected. Unknown formats, unexpected v2 fields, and mismatched
+nonce or authenticated `EndpointId` also fail closed. The outer endpoint and
+nonce fields are untrusted echoes; the selected verifier must find their
+binding in signed hardware/provider evidence.
+
+All new adapters use the same 64-byte endpoint-binding value:
+
+```text
+B_v2 = SHA-512("mesh-tee-endpoint-v2\0" || endpoint_id[32 raw bytes] || client_nonce[32 raw bytes])
+```
+
+The fixed-length byte strings are concatenated in that order, without hex
+text or length prefixes. For a guest-controlled direct SNP or TDX report, the
+entire value goes into its signed 64-byte `REPORT_DATA`/`REPORTDATA`. AWS Nitro
+can carry it in signed `user_data` while also signing the original challenge
+in `nonce`. Managed VM/vTPM deployments require a profile-specific signed
+chain from this binding to the hardware report and measured workload; field
+placement and trust roots must be verified for each provider. The current TDX
+v1 binding uses `SHA-256` over its v1 domain, nonce, and endpoint, followed by
+32 zero bytes. It is valid only for v1 and cannot be used as a v2 fallback.
+Neither binding makes a model-byte claim.
+
+Cross-adapter vector: endpoint bytes `00 01 ... 1f`, nonce bytes
+`20 21 ... 3f`, and expected `B_v2` hex
+`25931c725b7ac216a56a0f2a7b6a2c71706fbb3fb57ddcc90923532158295435a32937fd60e564ef9f94306e9d1ba962dd8fd65adf62a642ffc7ef04074f1b6a`.
+See the [AMD SNP ABI](https://docs.amd.com/v/u/en-US/56860_PUB_SEV_SNP),
+[Intel TDX ABI](https://cdrdv2-public.intel.com/853289/intel-tdx-module-abi-spec-348551006.pdf),
+and [AWS Nitro document specification](https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html)
+for the signed fields. The digest construction and envelope are Mesh protocol
+choices.
+
 ## Platform coverage plan
 
 Keep one Mesh challenge/routing contract but make the evidence producer and

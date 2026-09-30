@@ -1,8 +1,7 @@
 //! Client-owned TEE policy and strict single-host request dispatch.
 
 use super::*;
-use crate::mesh::tee_attestation::TdxPolicy;
-use std::path::Path;
+use crate::mesh::tee_attestation::ClientTeePolicy;
 use std::time::Duration;
 
 pub(super) enum TeeDispatch {
@@ -156,17 +155,17 @@ async fn route_verified_peer(
         Ok(headers) => headers,
         Err(message) => return handled_error(tcp_stream, 400, &message, route_observer).await,
     };
-    let Some(path) = std::env::var_os("MESH_TEE_TDX_POLICY") else {
-        return handled_error(
-            tcp_stream,
-            503,
-            "client TDX policy is not configured",
-            route_observer,
-        )
-        .await;
-    };
-    let policy = match TdxPolicy::load(Path::new(&path)) {
-        Ok(policy) => policy,
+    let policy = match ClientTeePolicy::configured() {
+        Ok(Some(policy)) => policy,
+        Ok(None) => {
+            return handled_error(
+                tcp_stream,
+                503,
+                "client TDX policy is not configured",
+                route_observer,
+            )
+            .await;
+        }
         Err(error) => {
             tracing::warn!(%error, "invalid client TDX policy");
             return handled_error(
@@ -189,8 +188,11 @@ async fn route_verified_peer(
         .collect();
     let selected = tokio::time::timeout(Duration::from_secs(30), async {
         for peer in candidates {
-            match ctx.node.verify_tdx_peer(peer, &policy).await {
-                Ok(()) => return Some(peer),
+            match ctx.node.verify_tee_peer(peer, &policy).await {
+                Ok(verified) => {
+                    tracing::debug!(platform = verified.platform, %peer, "TEE candidate verified");
+                    return Some(verified.endpoint_id);
+                }
                 Err(error) => tracing::debug!(%error, %peer, "TEE candidate rejected"),
             }
         }

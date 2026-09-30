@@ -15,7 +15,8 @@ use sha2::{Digest, Sha256, Sha384};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const FORMAT: &str = "mesh-tee-endpoint-v1";
+const TDX_FORMAT_V1: &str = "mesh-tee-endpoint-v1";
+const PLATFORM_FORMAT_V2: &str = "mesh-tee-endpoint-v2";
 const REPORT_DATA_DOMAIN: &[u8] = b"mesh-tee-endpoint-v1\0";
 const MAX_EVIDENCE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_QUOTE_BYTES: usize = 64 * 1024;
@@ -40,6 +41,29 @@ pub(crate) struct TdxPolicy {
     rt_mr2: [u8; 48],
     rt_mr3: [u8; 48],
     app_compose_sha256: [u8; 32],
+}
+
+/// The client chooses the verifier. A peer cannot select a weaker platform
+/// policy by changing the evidence format it returns.
+pub(crate) enum ClientTeePolicy {
+    IntelTdxDstack(TdxPolicy),
+}
+
+impl ClientTeePolicy {
+    pub(crate) fn configured() -> Result<Option<Self>> {
+        let Some(path) = std::env::var_os("MESH_TEE_TDX_POLICY") else {
+            return Ok(None);
+        };
+        Ok(Some(Self::IntelTdxDstack(TdxPolicy::load(Path::new(
+            &path,
+        ))?)))
+    }
+}
+
+/// Only a successful, platform-specific verifier may construct this result.
+pub(crate) struct VerifiedTeePeer {
+    pub(crate) endpoint_id: EndpointId,
+    pub(crate) platform: &'static str,
 }
 
 impl TdxPolicy {
@@ -81,7 +105,7 @@ struct Challenge {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Evidence {
+struct TdxEvidenceV1 {
     format: String,
     endpoint_id: String,
     nonce: String,
@@ -89,6 +113,65 @@ struct Evidence {
     event_log: Value,
     compose_hash: String,
     app_compose: String,
+}
+
+/// New platform adapters use a typed, bounded outer envelope. The payload is
+/// never trusted until the verifier selected by the client policy appraises it.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlatformEvidenceV2 {
+    format: String,
+    platform: String,
+    endpoint_id: String,
+    nonce: String,
+    payload: Value,
+}
+
+enum PeerEvidence {
+    IntelTdxV1(TdxEvidenceV1),
+    PlatformV2(PlatformEvidenceV2),
+}
+
+fn parse_peer_evidence(body: &[u8]) -> Result<PeerEvidence> {
+    let value: Value = serde_json::from_slice(body).context("parse TEE evidence")?;
+    let format = value
+        .get("format")
+        .and_then(Value::as_str)
+        .context("TEE evidence has no format")?;
+    match format {
+        TDX_FORMAT_V1 => Ok(PeerEvidence::IntelTdxV1(serde_json::from_value(value)?)),
+        PLATFORM_FORMAT_V2 => {
+            let evidence: PlatformEvidenceV2 = serde_json::from_value(value)?;
+            ensure!(
+                !evidence.platform.is_empty()
+                    && evidence.platform.len() <= 64
+                    && evidence.platform.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    }),
+                "invalid TEE platform identifier"
+            );
+            ensure!(evidence.payload.is_object(), "invalid TEE platform payload");
+            Ok(PeerEvidence::PlatformV2(evidence))
+        }
+        _ => bail!("unknown TEE evidence format"),
+    }
+}
+
+fn verify_selected_identity(
+    nonce: &str,
+    endpoint_id: &str,
+    expected_nonce: &[u8; 32],
+    peer: EndpointId,
+) -> Result<()> {
+    ensure!(
+        fixed_hex::<32>(nonce, "nonce")? == *expected_nonce,
+        "wrong TEE nonce"
+    );
+    ensure!(
+        fixed_hex::<32>(endpoint_id, "endpoint_id")? == *peer.as_bytes(),
+        "attested peer differs from selected peer"
+    );
+    Ok(())
 }
 
 async fn read_bounded(recv: &mut iroh::endpoint::RecvStream, max: usize) -> Result<Vec<u8>> {
@@ -150,7 +233,11 @@ impl Node {
 
     /// Verify one peer before sending prompt bytes to it. A fresh challenge is
     /// issued on the same authenticated iroh identity later used for routing.
-    pub(crate) async fn verify_tdx_peer(&self, peer: EndpointId, policy: &TdxPolicy) -> Result<()> {
+    pub(crate) async fn verify_tee_peer(
+        &self,
+        peer: EndpointId,
+        policy: &ClientTeePolicy,
+    ) -> Result<VerifiedTeePeer> {
         tokio::time::timeout(CHALLENGE_TIMEOUT, async {
             let mut nonce = [0u8; 32];
             rand::rng().fill(&mut nonce);
@@ -165,16 +252,40 @@ impl Node {
             write_bounded(&mut send, &challenge).await?;
             send.finish()?;
             let body = read_bounded(&mut recv, MAX_EVIDENCE_BYTES).await?;
-            let evidence: Evidence = serde_json::from_slice(&body)?;
-            verify_tdx_evidence(&evidence, &nonce, peer, policy).await
+            appraise_peer_evidence(parse_peer_evidence(&body)?, &nonce, peer, policy).await
         })
         .await
         .context("TEE challenge or verification timed out")?
     }
 }
 
+async fn appraise_peer_evidence(
+    evidence: PeerEvidence,
+    nonce: &[u8; 32],
+    peer: EndpointId,
+    policy: &ClientTeePolicy,
+) -> Result<VerifiedTeePeer> {
+    match (policy, evidence) {
+        (ClientTeePolicy::IntelTdxDstack(policy), PeerEvidence::IntelTdxV1(evidence)) => {
+            verify_tdx_evidence(&evidence, nonce, peer, policy).await?;
+            Ok(VerifiedTeePeer {
+                endpoint_id: peer,
+                platform: "intel-tdx-dstack",
+            })
+        }
+        (ClientTeePolicy::IntelTdxDstack(_), PeerEvidence::PlatformV2(evidence)) => {
+            ensure!(
+                evidence.format == PLATFORM_FORMAT_V2,
+                "unknown TEE evidence format"
+            );
+            verify_selected_identity(&evidence.nonce, &evidence.endpoint_id, nonce, peer)?;
+            bail!("client TDX policy rejects platform {}", evidence.platform)
+        }
+    }
+}
+
 #[cfg(unix)]
-async fn dstack_evidence(peer: EndpointId, nonce: &[u8; 32]) -> Result<Evidence> {
+async fn dstack_evidence(peer: EndpointId, nonce: &[u8; 32]) -> Result<TdxEvidenceV1> {
     let socket = std::env::var_os("MESH_TEE_DSTACK_SOCKET")
         .context("MESH_TEE_DSTACK_SOCKET is not configured")?;
     let client = reqwest::Client::builder()
@@ -201,8 +312,8 @@ async fn dstack_evidence(peer: EndpointId, nonce: &[u8; 32]) -> Result<Evidence>
             .map(str::to_owned)
             .with_context(|| format!("dstack response omitted {name}"))
     };
-    Ok(Evidence {
-        format: FORMAT.to_owned(),
+    Ok(TdxEvidenceV1 {
+        format: TDX_FORMAT_V1.to_owned(),
         endpoint_id: hex::encode(peer.as_bytes()),
         nonce: hex::encode(nonce),
         quote: field(&quote, "quote")?,
@@ -216,7 +327,7 @@ async fn dstack_evidence(peer: EndpointId, nonce: &[u8; 32]) -> Result<Evidence>
 }
 
 #[cfg(not(unix))]
-async fn dstack_evidence(_peer: EndpointId, _nonce: &[u8; 32]) -> Result<Evidence> {
+async fn dstack_evidence(_peer: EndpointId, _nonce: &[u8; 32]) -> Result<TdxEvidenceV1> {
     bail!("dstack quote generation requires Unix")
 }
 
@@ -244,20 +355,16 @@ async fn dstack_request(
 }
 
 async fn verify_tdx_evidence(
-    evidence: &Evidence,
+    evidence: &TdxEvidenceV1,
     nonce: &[u8; 32],
     peer: EndpointId,
     policy: &TdxPolicy,
 ) -> Result<()> {
-    ensure!(evidence.format == FORMAT, "unknown TEE evidence format");
     ensure!(
-        fixed_hex::<32>(&evidence.nonce, "nonce")? == *nonce,
-        "wrong TEE nonce"
+        evidence.format == TDX_FORMAT_V1,
+        "unknown TEE evidence format"
     );
-    ensure!(
-        fixed_hex::<32>(&evidence.endpoint_id, "endpoint_id")? == *peer.as_bytes(),
-        "attested peer differs from selected peer"
-    );
+    verify_selected_identity(&evidence.nonce, &evidence.endpoint_id, nonce, peer)?;
     ensure!(
         evidence.quote.len() <= MAX_QUOTE_BYTES * 2,
         "quote is too large"
@@ -423,8 +530,8 @@ mod tests {
             rt_mr3: [0; 48],
             app_compose_sha256: [0; 32],
         };
-        let mut evidence = Evidence {
-            format: FORMAT.to_owned(),
+        let mut evidence = TdxEvidenceV1 {
+            format: TDX_FORMAT_V1.to_owned(),
             endpoint_id: hex::encode(peer.as_bytes()),
             nonce: hex::encode([1u8; 32]),
             quote: String::new(),
@@ -451,5 +558,82 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn client_tdx_policy_rejects_other_platform_before_hardware_lookup() {
+        let peer = iroh::SecretKey::generate().public();
+        let nonce = [5u8; 32];
+        let policy = ClientTeePolicy::IntelTdxDstack(TdxPolicy {
+            mr_td: [0; 48],
+            rt_mr0: [0; 48],
+            rt_mr1: [0; 48],
+            rt_mr2: [0; 48],
+            rt_mr3: [0; 48],
+            app_compose_sha256: [0; 32],
+        });
+        let body = serde_json::to_vec(&PlatformEvidenceV2 {
+            format: PLATFORM_FORMAT_V2.to_owned(),
+            platform: "snp-direct".to_owned(),
+            endpoint_id: hex::encode(peer.as_bytes()),
+            nonce: hex::encode(nonce),
+            payload: json!({ "report": "unverified" }),
+        })
+        .unwrap();
+        let evidence = parse_peer_evidence(&body).unwrap();
+        let error = appraise_peer_evidence(evidence, &nonce, peer, &policy)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("rejects platform snp-direct"));
+    }
+
+    #[test]
+    fn evidence_parser_preserves_legacy_tdx_response() {
+        let body = json!({
+            "format": TDX_FORMAT_V1,
+            "endpoint_id": hex::encode([1u8; 32]),
+            "nonce": hex::encode([2u8; 32]),
+            "quote": "",
+            "event_log": [],
+            "compose_hash": hex::encode([3u8; 32]),
+            "app_compose": "",
+        });
+        let evidence = parse_peer_evidence(&serde_json::to_vec(&body).unwrap()).unwrap();
+        assert!(matches!(evidence, PeerEvidence::IntelTdxV1(_)));
+    }
+
+    #[test]
+    fn evidence_parser_rejects_unknown_and_malformed_v2_formats() {
+        let unknown = json!({ "format": "mesh-tee-endpoint-v3" });
+        assert!(parse_peer_evidence(&serde_json::to_vec(&unknown).unwrap()).is_err());
+
+        let malformed = json!({
+            "format": PLATFORM_FORMAT_V2,
+            "platform": "snp-direct",
+            "endpoint_id": hex::encode([0u8; 32]),
+            "nonce": hex::encode([0u8; 32]),
+            "payload": "not an object",
+        });
+        assert!(parse_peer_evidence(&serde_json::to_vec(&malformed).unwrap()).is_err());
+
+        let invalid_platform = json!({
+            "format": PLATFORM_FORMAT_V2,
+            "platform": "snp-direct\nspoofed-log-line",
+            "endpoint_id": hex::encode([0u8; 32]),
+            "nonce": hex::encode([0u8; 32]),
+            "payload": {},
+        });
+        assert!(parse_peer_evidence(&serde_json::to_vec(&invalid_platform).unwrap()).is_err());
+
+        let extra_field = json!({
+            "format": PLATFORM_FORMAT_V2,
+            "platform": "snp-direct",
+            "endpoint_id": hex::encode([0u8; 32]),
+            "nonce": hex::encode([0u8; 32]),
+            "payload": {},
+            "unrecognized": true,
+        });
+        assert!(parse_peer_evidence(&serde_json::to_vec(&extra_field).unwrap()).is_err());
     }
 }
