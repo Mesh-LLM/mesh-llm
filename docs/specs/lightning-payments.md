@@ -731,6 +731,27 @@ currently emits no events. No raw invoice, preimage, wallet transaction ID,
 prompt or response text is published. Payment hashes are linkable metadata.
 
 
+### Evidence interpretation and acceptance expectations
+
+Neither payment nor matching payer/provider records prove correct inference,
+honest token counts, or proof of prefill. Wallet settlement is an observation
+reported by the configured wallet, not independent verification of inference.
+
+Use synthetic identities and payment hashes in committed fixtures. These are
+acceptance expectations, not a claim that every fixture is implemented:
+
+| Scenario | What the evidence should distinguish |
+| --- | --- |
+| Paid request | Payer and provider observations correlate by payment hash; invoice claims remain distinct from wallet settlement reports. |
+| Exhausted automatic budget | Paid request is rejected with HTTP 402, not represented as a successful paid exchange. |
+| Free-only policy against a paid-only route | HTTP 402 policy refusal, not a wallet outage or settlement failure. |
+| Restart with a pending payment | Reconcile the existing payment without a second debit; successful terminal reconciliation releases its reservation. |
+| Harness or observation failure | Preserve the failed attempt and its limitation separately from any corrected rerun; do not silently turn it into a pass. |
+
+Uncertain payments must remain distinguishable from terminal outcomes. Do not
+discard unresolved debt merely to report zero outstanding reservations.
+
+
 ### Failure and recovery boundaries
 
 Connection/write failure or a transport drop while awaiting the initial input
