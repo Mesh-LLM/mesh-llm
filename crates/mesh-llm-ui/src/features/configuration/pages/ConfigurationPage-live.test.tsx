@@ -215,7 +215,7 @@ describe('ConfigurationPage live saving and diagnostics', () => {
       'text-fg-dim'
     )
     expect(screen.getByText('missing owner identity')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /docs/i })).toHaveAttribute('href', 'https://meshllm.cloud/')
+    expect(screen.getByRole('link', { name: /docs/i })).toHaveAttribute('href', 'https://meshllm.cloud/docs/')
     expect(screen.queryByRole('button', { name: /copy both/i })).not.toBeInTheDocument()
     expect(screen.getAllByText('mesh-llm')).toHaveLength(2)
     expect(screen.getByText('auth')).toBeInTheDocument()
