@@ -1,0 +1,155 @@
+{
+  "generated_by": "scripts/plan-family-battery.py",
+  "github_matrix": {
+    "include": [
+      {
+        "estimated_work_bytes": 1433358465,
+        "families": "qwen3-dense,llama",
+        "id": "family-battery-01",
+        "shard_index": 0
+      }
+    ]
+  },
+  "manifest": "ci/llama-canary/family-certified.json",
+  "manifest_sha256": "90834e6f52cf494cff216b3bce40953919109596512eb68efd07b4e33f938cdf",
+  "model_class_lanes": {
+    "causal_generation": [
+      "single-step",
+      "chain",
+      "state-handoff"
+    ],
+    "embedding": [
+      "embedding-smoke",
+      "embedding-oracle"
+    ],
+    "encoder_decoder": [
+      "encoder-decoder-smoke",
+      "encoder-decoder-oracle"
+    ],
+    "ocr": [
+      "ocr-smoke",
+      "ocr-oracle"
+    ],
+    "rerank": [
+      "rerank-smoke",
+      "rerank-oracle"
+    ],
+    "speech_recognition": [
+      "speech-recognition-smoke",
+      "speech-recognition-oracle"
+    ],
+    "speech_synthesis": [
+      "speech-synthesis-smoke",
+      "speech-synthesis-oracle"
+    ]
+  },
+  "requested_families": "llama,qwen3-dense",
+  "required_certification_lanes": [
+    "single-step",
+    "chain",
+    "state-handoff"
+  ],
+  "schema_version": 1,
+  "selected_family_count": 2,
+  "selected_models": [
+    {
+      "architecture": "qwen3",
+      "artifact": {
+        "file_integrity": {
+          "Qwen3-0.6B-Q8_0.gguf": {
+            "blob_id": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+            "size_bytes": 639446688
+          }
+        },
+        "files": [
+          "Qwen3-0.6B-Q8_0.gguf"
+        ],
+        "repo": "Qwen/Qwen3-0.6B-GGUF",
+        "revision": "23749fefcc72300e3a2ad315e1317431b06b590a",
+        "selector": "Q8_0"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 28,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 28
+      },
+      "family": "qwen3-dense",
+      "manifest_index": 0,
+      "mmproj_artifact": null,
+      "notes": "core production dense baseline",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 633495552,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "llama",
+      "artifact": {
+        "file_integrity": {
+          "Llama-3.2-1B-Instruct-Q4_K_M.gguf": {
+            "blob_id": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+            "size_bytes": 807694464
+          }
+        },
+        "files": [
+          "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+        "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 16,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 16
+      },
+      "family": "llama",
+      "manifest_index": 1,
+      "mmproj_artifact": null,
+      "notes": "production dense baseline; covers the trimmed olmo2 architecture path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 799862912,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    }
+  ],
+  "shards": [
+    {
+      "estimated_work_bytes": 1433358464,
+      "families": [
+        "qwen3-dense",
+        "llama"
+      ],
+      "id": "family-battery-01",
+      "shard_index": 0
+    }
+  ]
+}

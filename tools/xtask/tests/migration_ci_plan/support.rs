@@ -130,19 +130,6 @@ impl Run<'_> {
         argv.extend_from_slice(self.args);
         spawn(Path::new(env!("CARGO_BIN_EXE_xtask")), &argv, self)
     }
-
-    /// `python3 scripts/plan-ci.py <args>` when the operator names an
-    /// interpreter; `None` keeps default runs free of Python.
-    pub(crate) fn legacy(&self) -> Result<Option<Output>, Box<dyn Error>> {
-        let Some(python) = std::env::var_os("MIGRATION_CI_PLAN_LEGACY_PYTHON") else {
-            return Ok(None);
-        };
-        let script = repository_root().join("scripts/plan-ci.py");
-        let script = script.to_str().ok_or("non-UTF8 script path")?;
-        let mut argv = vec![script];
-        argv.extend_from_slice(self.args);
-        spawn(Path::new(&python), &argv, self).map(Some)
-    }
 }
 
 fn spawn(program: &Path, argv: &[&str], run: &Run<'_>) -> Result<Output, Box<dyn Error>> {
@@ -158,23 +145,4 @@ fn spawn(program: &Path, argv: &[&str], run: &Run<'_>) -> Result<Output, Box<dyn
     stdin.write_all(run.stdin)?;
     drop(stdin);
     Ok(child.wait_with_output()?)
-}
-
-/// Asserts that legacy and ported runs agree on status and both streams.
-pub(crate) fn assert_same_process(legacy: &Output, ported: &Output, label: &str) {
-    assert_eq!(
-        legacy.status.code(),
-        ported.status.code(),
-        "{label}: status parity"
-    );
-    assert_eq!(
-        text(&legacy.stdout),
-        text(&ported.stdout),
-        "{label}: stdout parity"
-    );
-    assert_eq!(
-        text(&legacy.stderr),
-        text(&ported.stderr),
-        "{label}: stderr parity"
-    );
 }

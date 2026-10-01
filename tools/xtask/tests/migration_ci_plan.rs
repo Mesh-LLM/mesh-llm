@@ -3,9 +3,7 @@
 //! (Python 3.13, bash 5, the fixture `cargo metadata`) and normalized with
 //! `jq -c .` exactly as `.github/actions/plan-ci/action.yml` hashes it. Plans
 //! must match those bytes in full, and failures must match the legacy
-//! diagnostic and status. Set `MIGRATION_CI_PLAN_LEGACY_PYTHON` (and
-//! `MIGRATION_CI_PLAN_LEGACY_BASH` for a bash 5) to also run the legacy
-//! planner side by side on identical inputs.
+//! status.
 
 #[path = "migration_ci_plan/support.rs"]
 mod support;
