@@ -28,6 +28,10 @@ set -euo pipefail
 # Exit: 0 pass | unqualified, 1 fail (including an unusable environment).
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+automation=(cargo run --quiet --manifest-path "$ROOT/tools/xtask/Cargo.toml" --)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 
 resolve_llama_build_dir() {
   if [[ -n "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
@@ -51,7 +55,6 @@ REQUIRE_QUALIFIED="${SYSTEMONE_SMOKE_REQUIRE_QUALIFIED:-0}"
 SKIP_CONTRACT="${SYSTEMONE_SMOKE_SKIP_CONTRACT:-0}"
 ALIAS="${SYSTEMONE_SMOKE_ALIAS:-openjev-latest}"
 CASES_DRIVER="${SYSTEMONE_SMOKE_DRIVER:-$ROOT/scripts/skippy-system-one-cases.py}"
-TEST_MODEL_RESOLVER="$ROOT/scripts/resolve-test-model-manifest.py"
 STAGE_SERVER_BIN="${STAGE_SERVER_BIN:-$ROOT/target/debug/skippy}"
 MODEL_PACKAGE_BIN="${MODEL_PACKAGE_BIN:-$ROOT/target/debug/skippy-package-builder}"
 CTX_SIZE="${SYSTEMONE_SMOKE_CTX_SIZE:-8192}"
@@ -134,7 +137,7 @@ record_reason() {
 # enforces the authorized cadence, single-file membership, and the pinned
 # size + SHA-256. Prints the resolver's JSON summary.
 artifact_summary() {
-  python3 "$TEST_MODEL_RESOLVER" "$SMOKE_MANIFEST" \
+  "${automation[@]}" models resolve "$SMOKE_MANIFEST" \
     --artifact-id "$1" \
     --cadence "$SMOKE_CADENCE" \
     --require-single-file
@@ -159,7 +162,7 @@ cached_artifact_path() {
 # Verifies the pinned size and SHA-256 of the artifact files in `dir`. A
 # mismatch is a hard failure, never a skip.
 verify_artifact_digest() {
-  python3 "$TEST_MODEL_RESOLVER" "$SMOKE_MANIFEST" \
+  "${automation[@]}" models resolve "$SMOKE_MANIFEST" \
     --artifact-id "$1" \
     --cadence "$SMOKE_CADENCE" \
     --require-single-file \
@@ -425,7 +428,7 @@ main() {
   require_cmd curl || exit 2
   if [[ ! -f "$SMOKE_MANIFEST" ]]; then
     echo "System One smoke manifest not found: $SMOKE_MANIFEST" >&2
-    echo "regenerate it with scripts/generate-test-model-manifests.py" >&2
+    echo "regenerate it with cargo xtool models generate" >&2
     exit 2
   fi
   if [[ ! -f "$CASES_DRIVER" ]]; then

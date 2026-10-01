@@ -15,7 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTION_DIR = ROOT / ".github" / "actions" / "capture-sccache-stats"
-CAPTURE = ACTION_DIR / "capture.py"
+CAPTURE = ROOT / "tools/xtask/src/ci_operations/sccache_stats.rs"
 SUMMARY = ROOT / "scripts" / "summarize-sccache-stats.py"
 CONFIGURE_ACTION = (
     ROOT / ".github" / "actions" / "configure-sccache-gha" / "action.yml"
@@ -188,8 +188,7 @@ class SccacheEvidenceTests(unittest.TestCase):
         github_output = root / "github-output"
         result = subprocess.run(
             [
-                sys.executable,
-                str(CAPTURE),
+                os.environ.get("MESH_LLM_AUTOMATION_BIN", str(ROOT / "target/debug/xtask")), "ci-ops", "sccache-stats",
                 "--artifact-name",
                 artifact_name,
                 "--output",
@@ -430,8 +429,6 @@ class SccacheEvidenceTests(unittest.TestCase):
         self.assertIn("retention-days: 14", action)
         self.assertIn("if-no-files-found: error", action)
         self.assertIn('"--show-stats", "--stats-format", "json"', capture)
-        self.assertIn("REQUIRED_COUNTERS", capture)
-        self.assertIn("REQUIRED_COUNT_MAPS", capture)
 
     def test_configure_action_resets_each_successful_server_route(self) -> None:
         configure = CONFIGURE_ACTION.read_text(encoding="utf-8")

@@ -2,13 +2,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+automation=(cargo run --quiet --manifest-path "$ROOT/tools/xtask/Cargo.toml" --)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 LLAMA_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-.deps/llama-build/build-stage-abi-static}"
 MODEL_MANIFEST="${MODEL_MANIFEST:-$ROOT/ci/model-artifacts/manifests/openai-smoke.json}"
 MODEL_IDENTITY_OVERRIDDEN=0
 if [[ -n "${MODEL_REPO:-}" || -n "${MODEL_FILE:-}" || -n "${MODEL_SELECTOR:-}" || -n "${MODEL_REVISION:-}" || -n "${MODEL_PATH:-}" ]]; then
   MODEL_IDENTITY_OVERRIDDEN=1
 fi
-MODEL_FIXTURE="$(python3 "$ROOT/scripts/resolve-test-model-manifest.py" "$MODEL_MANIFEST" --cadence manual)"
+MODEL_FIXTURE="$("${automation[@]}" models resolve "$MODEL_MANIFEST" --cadence manual)"
 MODEL_REPO="${MODEL_REPO:-$(jq -r '.repo' <<<"$MODEL_FIXTURE")}"
 MODEL_FILE="${MODEL_FILE:-$(jq -r '.file' <<<"$MODEL_FIXTURE")}"
 MODEL_SELECTOR="${MODEL_SELECTOR:-$(jq -r '.selector' <<<"$MODEL_FIXTURE")}"
@@ -79,7 +83,7 @@ if [[ ! -f "$MODEL_PATH" ]]; then
   exit 1
 fi
 if [[ "$MODEL_IDENTITY_OVERRIDDEN" == "0" ]]; then
-  python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
+  "${automation[@]}" models resolve \
     "$MODEL_MANIFEST" \
     --cadence manual \
     --verify-root "$(dirname "$MODEL_PATH")"

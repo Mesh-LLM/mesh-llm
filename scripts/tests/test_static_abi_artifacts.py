@@ -15,7 +15,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 RESTORE = ROOT / "scripts" / "restore-static-abi-input.sh"
-STAMP_VERIFIER = ROOT / "scripts" / "verify-static-abi-build-stamp.py"
 TOOLCHAIN_EPOCH = "test-runner-image-sha256-deadbeef"
 
 
@@ -283,44 +282,6 @@ class StaticAbiArtifactTests(unittest.TestCase):
                 result.stdout + result.stderr,
             )
             self.assertTrue((destination / "src/libllama.a").is_file())
-
-    def test_stamp_verifier_allows_repeated_cmake_arguments(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            download = self.write_artifact(root)
-            with tarfile.open(
-                download / "mesh-llm-static-abi.tar.gz",
-                "r:gz",
-            ) as bundle:
-                stamp = bundle.extractfile(
-                    "build-stage-abi-static/.mesh-llm-build-stamp",
-                )
-                self.assertIsNotNone(stamp)
-                stamp_path = root / "build-stamp"
-                stamp_path.write_bytes(stamp.read())
-
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(STAMP_VERIFIER),
-                    str(stamp_path),
-                    "--backend",
-                    "cpu",
-                    "--link-mode",
-                    "static",
-                    "--stamp-version",
-                    "3",
-                    "--toolchain-epoch",
-                    TOOLCHAIN_EPOCH,
-                ],
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("cmake_arguments=2", result.stdout)
 
     def test_restore_rejects_manifest_target_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -20,7 +20,7 @@ check-release:
 
 # Check the Rust process-environment mutation census and contract annotations.
 check-env-mutation-contract:
-    @python3 scripts/check-env-mutation-contract.py
+    @just with-lld cargo xtool repository env-mutation-census
 
 # Run one release-attestation xtask action through the repository toolchain.
 release-attestation *ARGS:

@@ -117,7 +117,7 @@ runs:
           chmod +x "$INPUT_OUTPUT_DIR/release-attestation-verifier"
         fi
 
-        python3 scripts/verify-host-dependencies.py \
+        cargo xtool native verify-host-dependencies \
           "$binary_path" \
           --report "$imports_path" \
           --max-glibc declared

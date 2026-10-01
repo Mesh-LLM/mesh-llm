@@ -262,7 +262,7 @@ class CiWindowsCompositionTests(unittest.TestCase):
         action = self.read_action("prepare-host-input")
 
         self.assertIn('scripts/build-host.sh --profile "$INPUT_PROFILE"', action)
-        self.assertIn("scripts/verify-host-dependencies.py", action)
+        self.assertIn("cargo xtool native verify-host-dependencies", action)
         self.assertNotIn("package-native-runtime.sh", action)
 
     def test_windows_host_action_owns_the_neutral_host_integrity_contract(
@@ -274,7 +274,7 @@ class CiWindowsCompositionTests(unittest.TestCase):
             "& .\\scripts\\build-windows.ps1 -BuildProfile $profile -HostOnly",
             action,
         )
-        self.assertIn("scripts\\verify-host-dependencies.py", action)
+        self.assertIn("cargo xtool native verify-host-dependencies", action)
         self.assertIn("mesh-llm.exe.sha256", action)
         self.assertIn("cargo build -q -p xtask --bin xtask", action)
         self.assertIn("release-attestation stamp", action)

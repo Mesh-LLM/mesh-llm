@@ -12,6 +12,7 @@ ci-sccache-seed-build:
 ci-validate:
     actionlint -config-file .github/actionlint.yaml
     git diff --check
+    cargo test -p xtask --test migration_ci_operations --test migration_prepared_inputs --test migration_models --test lane_l3_l2_dispatch --test lane_l3_display_projection --test lane_l3_abi_restore --test lane_l3_cache_metadata
     python3 -m unittest discover -s scripts/tests -p 'test_*.py'
     just ci-crate-lists
     just check-release
@@ -27,6 +28,16 @@ ci-crate-lists:
 automation-bootstrap:
     just with-lld cargo build --locked -p xtask --bin xtask
     just with-lld cargo run --locked -p xtask --bin xtask -- automation bootstrap
+
+[private]
+[unix]
+automation-run *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bootstrap="$(just automation-bootstrap)"
+    binary="$(printf '%s\n' "$bootstrap" | awk -F= '$1 == "binary_path" { print substr($0, index($0, "=") + 1) }')"
+    test -n "$binary"
+    exec "$binary" {{ ARGS }}
 
 # Run crates.io publish-chain consistency checks.
 publish-crates:

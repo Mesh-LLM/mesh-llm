@@ -16,14 +16,11 @@ cuda_canonical_path() {
   if command -v realpath >/dev/null 2>&1; then
     realpath "$path" 2>/dev/null && return 0
   fi
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$path" && return 0
+  if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+    "$MESH_LLM_AUTOMATION_BIN" artifact file-projection canonical-path "$path"
+  else
+    cargo xtool artifact file-projection canonical-path "$path"
   fi
-  if command -v python >/dev/null 2>&1; then
-    python -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$path" && return 0
-  fi
-
-  printf '%s\n' "$path"
 }
 
 # Git Bash's `command -v nvcc` can report a Windows CUDA executable without

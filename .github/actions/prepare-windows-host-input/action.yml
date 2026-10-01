@@ -154,7 +154,7 @@ runs:
           Copy-Item -LiteralPath $verifier -Destination $attestationVerifierPath -Force
         }
 
-        & python scripts\verify-host-dependencies.py $binaryPath --report $importsPath
+        & cargo xtool native verify-host-dependencies $binaryPath --report $importsPath
         if ($LASTEXITCODE -ne 0) {
           throw "backend-neutral host dependency verification failed"
         }

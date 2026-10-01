@@ -597,7 +597,7 @@ class SystemOneCanaryWiringTests(unittest.TestCase):
 
     def test_the_smoke_resolves_pins_through_the_shared_manifest_contract(self) -> None:
         smoke = SMOKE.read_text(encoding="utf-8")
-        self.assertIn("resolve-test-model-manifest.py", smoke)
+        self.assertIn('"${automation[@]}" models resolve', smoke)
         self.assertIn("--require-single-file", smoke)
         self.assertIn("--verify-root", smoke)
 

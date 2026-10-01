@@ -84,6 +84,10 @@ struct PackageMetrics {
     newest: f64,
 }
 
+#[cfg(test)]
+#[path = "build_cache_prune_tests.rs"]
+mod tests;
+
 fn matches_stem(name: &str, stem: &str) -> bool {
     name == stem
         || name.starts_with(&format!("{stem}-"))

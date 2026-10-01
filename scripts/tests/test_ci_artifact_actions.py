@@ -657,7 +657,7 @@ class CiArtifactActionTests(unittest.TestCase):
         action = self.read_action("prepare-host-input")
 
         self.assertIn('scripts/build-host.sh --profile "$INPUT_PROFILE"', action)
-        self.assertIn("scripts/verify-host-dependencies.py", action)
+        self.assertIn("cargo xtool native verify-host-dependencies", action)
         self.assertNotIn("package-native-runtime.sh", action)
 
     def test_windows_host_action_owns_the_neutral_host_integrity_contract(
@@ -669,7 +669,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "& .\\scripts\\build-windows.ps1 -BuildProfile $profile -HostOnly",
             action,
         )
-        self.assertIn("scripts\\verify-host-dependencies.py", action)
+        self.assertIn("cargo xtool native verify-host-dependencies", action)
         self.assertIn("mesh-llm.exe.sha256", action)
         self.assertIn("cargo build -q -p xtask --bin xtask", action)
         self.assertIn("release-attestation stamp", action)
@@ -1521,9 +1521,8 @@ class CiArtifactActionTests(unittest.TestCase):
         for cache_input in (
             "scripts/prepare-llama.sh",
             "scripts/restore-static-abi-input.sh",
-            "scripts/safe-extract-tar.py",
-            "scripts/verify-checksum-sidecar.py",
-            "scripts/verify-static-abi-build-stamp.py",
+            "tools/xtask/src/artifact/**",
+            "tools/xtask/src/prepared_input/**",
             ".github/actions/prepare-static-abi-input/action.yml",
         ):
             self.assertIn(cache_input, producer)
@@ -1539,10 +1538,10 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn("target/runner architecture mismatch", producer_action)
-        self.assertIn("verify-static-abi-build-stamp.py", producer_action)
+        self.assertIn("prepared-input static-abi-stamp", producer_action)
         self.assertIn("--patched-sha", producer_action)
-        self.assertIn("Portable MeshLLM static ABI link metadata", producer_action)
-        self.assertIn("retained producer-local path", producer_action)
+        self.assertIn("prepared-input static-abi-cache-filter", producer_action)
+        self.assertIn("prepared-input static-abi-path-scan", producer_action)
         self.assertNotIn(
             'tar -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")"',
             producer_action,
@@ -1559,13 +1558,13 @@ class CiArtifactActionTests(unittest.TestCase):
             ".mesh-llm-static-abi-input.json",
             producer_action,
         )
-        self.assertIn("verify-checksum-sidecar.py", producer_action)
+        self.assertIn("artifact verify-checksum", producer_action)
 
-        self.assertIn("scripts/safe-extract-tar.py", restore_script)
-        self.assertIn("mesh-llm-static-abi-v3", restore_script)
+        self.assertIn("artifact extract-tar", restore_script)
+        self.assertIn("prepared-input static-abi-manifest verify", restore_script)
         self.assertIn("toolchain_epoch", restore_script)
-        self.assertIn("verify-checksum-sidecar.py", restore_script)
-        self.assertIn("verify-static-abi-build-stamp.py", restore_script)
+        self.assertIn("artifact verify-checksum", restore_script)
+        self.assertIn("prepared-input static-abi-stamp", restore_script)
         self.assertIn("target/runner architecture mismatch", restore_script)
         self.assertNotIn("tar -x", restore_script)
         self.assertIn("prepare-static-abi-input", routing)
@@ -2405,10 +2404,10 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertEqual(action.count(model_inputs_present), 4)
         self.assertIn("model_manifest:", action)
         self.assertIn("model_cadence:", action)
-        self.assertIn("scripts/resolve-test-model-manifest.py", action)
+        self.assertIn("models restore-inputs", action)
         self.assertIn('--cadence "$MODEL_CADENCE"', action)
         self.assertIn("--require-single-file", action)
-        self.assertIn('^[A-Za-z0-9][A-Za-z0-9._-]*$', action)
+        self.assertIn('--model-file="$INPUT_MODEL_FILE"', action)
         self.assertIn("--verify-root \"$HOME/.models\"", action)
         self.assertIn("MODEL_MANIFEST: ${{ inputs.model_manifest }}", action)
         self.assertIn("MODEL_CADENCE: ${{ inputs.model_cadence }}", action)
@@ -2441,13 +2440,15 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("model_artifact_id:", action)
         self.assertIn("MODEL_ARTIFACT_ID: ${{ inputs.model_artifact_id }}", action)
         self.assertEqual(
-            action.count('artifact_args+=(--artifact-id "$MODEL_ARTIFACT_ID")'), 2
+            action.count('artifact_args+=(--artifact-id "$MODEL_ARTIFACT_ID")'), 1
         )
         # `--cadence` must stay literal on both invocations: a manifest
         # consumer declares the cadence it is authorized for, and
         # `test_model_artifact_registry` verifies that by reading the call
         # site rather than tracing an array.
-        self.assertEqual(action.count('--cadence "$MODEL_CADENCE"'), 2)
+        self.assertEqual(action.count('--cadence "$MODEL_CADENCE"'), 1)
+        self.assertIn('--model-cadence="$MODEL_CADENCE"', action)
+        self.assertIn('--model-artifact-id="$MODEL_ARTIFACT_ID"', action)
 
     def test_smoke_restore_delegates_model_restore_to_the_shared_action(self) -> None:
         """One implementation, not two. A second copy of the

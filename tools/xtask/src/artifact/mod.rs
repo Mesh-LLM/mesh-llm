@@ -6,6 +6,7 @@
 
 mod argv;
 mod checksum;
+mod file_projection;
 pub(crate) mod tar_extract;
 mod tar_header;
 mod tar_read;
@@ -24,6 +25,7 @@ pub(crate) enum ArtifactCommand {
     VerifyChecksum,
     ExtractTar,
     ExtractZip,
+    FileProjection,
 }
 
 impl ArtifactCommand {
@@ -32,6 +34,7 @@ impl ArtifactCommand {
             "verify-checksum" => Some(Self::VerifyChecksum),
             "extract-tar" => Some(Self::ExtractTar),
             "extract-zip" => Some(Self::ExtractZip),
+            "file-projection" => Some(Self::FileProjection),
             _ => None,
         }
     }
@@ -49,5 +52,6 @@ pub(crate) fn check(
         ArtifactCommand::VerifyChecksum => checksum::run(args),
         ArtifactCommand::ExtractTar => tar_extract::run(args),
         ArtifactCommand::ExtractZip => zip_extract::run(args),
+        ArtifactCommand::FileProjection => file_projection::run(args),
     }
 }
