@@ -123,11 +123,53 @@ The host hands it `payments/wallets/lexe-wallet/` as its data directory. The
 process stays idle until the first wallet operation; startup alone never
 provisions or contacts a wallet. NWC and BOLT12 are deferred.
 
-Migrating from the former built-in `wallet-lexe`: it is no longer compiled into
-mesh-llm, and a `[[plugin]] name = "wallet-lexe"` stanza is ignored with a
-warning. With the node stopped, copy `payments/wallets/wallet-lexe/seedphrase.txt`
-to `payments/wallets/lexe-wallet/`, then run `mesh-llm wallet unpin` (the pin
-names the old plugin) before starting with `lexe-wallet`.
+#### Migrating from the former built-in `wallet-lexe`
+
+The built-in wallet is no longer compiled into mesh-llm, and a
+`[[plugin]] name = "wallet-lexe"` stanza is ignored with a warning. The wallet
+identity comes from the seed, so moving the seed keeps the same wallet and
+balance. Run every command below against the same profile: pass the same
+`--config` (its parent directory holds `payments/`) to each one. The examples
+use `$CFG` for that file and `$P` for its `payments/` directory.
+
+1. **Settle outstanding work with the old binary first.** While still on a
+   mesh-llm release that has the built-in wallet, run the node until
+   `mesh-llm wallet pending` and `mesh-llm wallet blocked` show nothing you
+   expect to be paid. Unpin (step 4) refuses while invoices are unpaid or
+   payments are in flight, because only the old wallet can settle them.
+2. **Stop the node**, then install the new mesh-llm and the `lexe-wallet`
+   plugin.
+3. **Copy, do not move, the seed.** Depending on the version that created it,
+   the old seed is in one of two places:
+   - `$P/lexe/seedphrase.txt` (older layout), or
+   - `$P/wallets/wallet-lexe/seedphrase.txt`.
+
+   ```sh
+   mkdir -p "$P/wallets/lexe-wallet"
+   test -e "$P/wallets/lexe-wallet/seedphrase.txt" && echo "STOP: destination already has a seed"
+   cp -n "$P/lexe/seedphrase.txt" "$P/wallets/lexe-wallet/" 2>/dev/null \
+     || cp -n "$P/wallets/wallet-lexe/seedphrase.txt" "$P/wallets/lexe-wallet/"
+   ```
+
+   If the destination already holds a seed (for example, because the new plugin
+   was started first and provisioned a fresh wallet), do not overwrite it. A
+   fresh wallet may already hold funds, so decide which wallet to keep first.
+   Leave the old directory in place; it is your backup.
+4. **Unpin**, because the pin names the old plugin: `mesh-llm --config "$CFG" wallet unpin`.
+5. **Update the config:** replace the `wallet-lexe` stanza with the
+   `lexe-wallet` `[[plugin]]` entry above, and change
+   `[payments] wallet = "wallet-lexe"` to `"lexe-wallet"` (or remove that line).
+   The selector rejects a `[payments] wallet` that names a plugin that is not
+   running, even after unpinning.
+6. **Start the node** and check `mesh-llm wallet get-balance`. The new pin in
+   `$P/wallet-provider.json` should show `"plugin": "lexe-wallet"` with the
+   same `wallet_id` as before.
+
+If unpin still refuses and the old binary is no longer available,
+`mesh-llm wallet unblock <peer>` clears it, but that is a **financial
+write-off**: it forgives every unpaid invoice for that peer and waives any
+delivered output that was never invoiced. Use it only for debt you know is
+disposable, such as test traffic.
 
 When more than one `wallet.v1` plugin runs, the host picks one in this order:
 
