@@ -1,8 +1,6 @@
+use super::observation::observe;
 use super::{Action, Context, Coordinator, Report, member::Member, shutdown};
-use crate::process::probe::ProbeLines;
-use crate::process::{
-    Cancellation, Completion, Failure, Limits, Outcome, ProbeDecision, Readiness, control,
-};
+use crate::process::{Cancellation, Completion, Failure, Limits, Outcome, Readiness, control};
 use std::time::Instant;
 pub fn run<Observer: Coordinator>(
     observer: &mut Observer,
@@ -84,6 +82,21 @@ pub fn run<Observer: Coordinator>(
                     break Outcome::IoFailure;
                 }
             }
+            Action::StartExpected { launch, policy } => {
+                if policy.deadline() > limits.execution {
+                    failure = Some(Failure::InvalidSpec(
+                        "expected exit deadline exceeds session",
+                    ));
+                    break Outcome::IoFailure;
+                }
+                if let Err(error) = start(&mut members, launch, limits) {
+                    failure = Some(error);
+                    break Outcome::IoFailure;
+                }
+                if let Some(member) = members.last_mut() {
+                    member.expected = Some(policy);
+                }
+            }
             Action::Stop(id) => match shutdown::stop(&mut members, id, limits, |survivors| {
                 match expired(started, limits, cancellation) {
                     Some(outcome) => Ok(Some(outcome)),
@@ -103,7 +116,14 @@ pub fn run<Observer: Coordinator>(
                 }
             },
             Action::Complete => {
-                if members.is_empty() || members.iter().any(|member| member.admitted.is_none()) {
+                if members.is_empty()
+                    || members.iter().any(|member| match &member.expected {
+                        Some(_) => member.report.as_ref().is_none_or(|report| {
+                            !matches!(report.disposition, super::Disposition::ExpectedExit)
+                        }),
+                        None => member.admitted.is_none(),
+                    })
+                {
                     failure = Some(Failure::InvalidSpec("completion requires admitted members"));
                     break Outcome::IoFailure;
                 }
@@ -170,6 +190,7 @@ fn admit(members: &mut [Member], id: super::MemberId) -> Result<Option<Outcome>,
         return Ok(Some(Outcome::ReadinessDeadline));
     }
     member.admitted = Some(elapsed);
+    member.expected = None;
     Ok(None)
 }
 pub(super) fn expired(
@@ -184,61 +205,4 @@ pub(super) fn expired(
     } else {
         None
     }
-}
-fn observe<Observer: Coordinator>(
-    members: &mut [Member],
-    observer: &mut Observer,
-    context: (Instant, &Limits, &Cancellation),
-    rejection: &mut Option<Observer::Rejection>,
-) -> Result<Option<Outcome>, Failure> {
-    let (started, limits, cancellation) = context;
-    for member in members {
-        let Some(output) = member.output.as_mut() else {
-            continue;
-        };
-        if let Some(outcome) = expired(started, limits, cancellation) {
-            return Ok(Some(outcome));
-        }
-        if member.admitted.is_none() && member.started.elapsed() >= member.deadline {
-            return Ok(Some(Outcome::ReadinessDeadline));
-        }
-        let mut candidate = false;
-        output.poll_probe(&mut |line| {
-            if rejection.is_none()
-                && (!candidate || member.admitted.is_some())
-                && (member.admitted.is_some() || member.started.elapsed() < member.deadline)
-                && expired(started, limits, cancellation).is_none()
-            {
-                match observer.line(member.id, line) {
-                    ProbeDecision::Pending => (),
-                    ProbeDecision::Candidate => candidate = true,
-                    ProbeDecision::Rejected(reason) => *rejection = Some(reason),
-                }
-            }
-        })?;
-        if let Some(outcome) = expired(started, limits, cancellation) {
-            return Ok(Some(outcome));
-        }
-        if member.admitted.is_none() && member.started.elapsed() >= member.deadline {
-            return Ok(Some(Outcome::ReadinessDeadline));
-        }
-        if rejection.is_some() {
-            return Ok(Some(Outcome::ObservationRejected));
-        }
-        let exited = member.child.exited()?;
-        if let Some(outcome) = expired(started, limits, cancellation) {
-            return Ok(Some(outcome));
-        }
-        let elapsed = member.started.elapsed();
-        if member.admitted.is_none() && elapsed >= member.deadline {
-            return Ok(Some(Outcome::ReadinessDeadline));
-        }
-        if exited {
-            return Ok(Some(Outcome::EarlyExit));
-        }
-        if candidate && member.admitted.is_none() {
-            member.admitted = Some(elapsed);
-        }
-    }
-    Ok(None)
 }
