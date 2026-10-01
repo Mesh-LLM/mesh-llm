@@ -397,7 +397,13 @@ main.
 
 Release packaging and product composition now invoke typed xtask `native`,
 `product`, and `artifact` commands through `MESH_LLM_AUTOMATION_BIN` or
-`cargo xtool`. Windows composition jobs prepare the automation executable;
+`cargo xtool`. Release host producers build and upload one source-bound automation
+artifact per OS/architecture through `upload-automation`. All eight release
+composition jobs restore the immutable executable through `restore-automation`,
+verify its checksum and source identity, and export `MESH_LLM_AUTOMATION_BIN`.
+Their existing host-producer `needs` edges provide the artifact dependency; no
+composer invokes Cargo. These shared actions can support later L2 delivery, but
+the L2 callers remain unchanged. Windows composition jobs restore rather than build;
 release jobs no longer install Python. Runtime-package verification embeds the
 checked-in GLIBC ceiling and retains native dependency probes when copied
 outside the source checkout. `repository publish-order --dependency-pairs`

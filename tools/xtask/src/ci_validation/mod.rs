@@ -5,6 +5,7 @@ mod documentation;
 mod entrypoints;
 pub(crate) mod lane_results;
 mod producers;
+mod release_compilation;
 mod release_containers;
 mod release_dispatch;
 mod windows_runtime;
@@ -140,6 +141,7 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
         &compute_changes,
     )?;
     check_release_dispatch_version_preparation(&release_workflow, &native_sdk, &swift_sdk)?;
+    release_compilation::check(repo_root, &release_workflow)?;
     check_release_container_contracts(&release_workflow, &configure_sccache)?;
     check_windows_dynamic_runtime_contract(
         &host,

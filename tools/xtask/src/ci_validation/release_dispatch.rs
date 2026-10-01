@@ -5,15 +5,7 @@ pub(super) fn check_release_dispatch_version_preparation(
     native_sdk_artifact_workflow: &str,
     swift_sdk_artifact_workflow: &str,
 ) -> DynResult<()> {
-    const DISPATCH_RELEASE_JOBS: &[&str] = &[
-        "build",
-        "build_linux_arm64",
-        "compose_linux_aarch64_cuda",
-        "compose_linux_cuda",
-        "compose_linux_rocm",
-        "compose_linux_vulkan",
-        "windows_host_input",
-    ];
+    const DISPATCH_RELEASE_JOBS: &[&str] = &["build", "build_linux_arm64", "windows_host_input"];
     const REQUIRED_STEP: &str = "Prepare dispatched release version";
     const REQUIRED_COMMAND: &str = "scripts/release-version.sh \"$RELEASE_TAG\"";
 
@@ -36,6 +28,13 @@ pub(super) fn check_release_dispatch_version_preparation(
             REQUIRED_COMMAND,
             &format!("release workflow `{job_name}` dispatch version command"),
         )?;
+    }
+
+    for job_name in super::release_compilation::COMPOSITION_JOBS {
+        let job = workflow_job_section(release_workflow, job_name)
+            .ok_or_else(|| format!("release workflow: missing `{job_name}` composition job"))?;
+        ensure_not_contains(job, REQUIRED_STEP, "composition-only version step")?;
+        ensure_not_contains(job, REQUIRED_COMMAND, "composition-only version command")?;
     }
 
     let native_sdk_caller = workflow_job_section(release_workflow, "build_native_sdk_runtime")
