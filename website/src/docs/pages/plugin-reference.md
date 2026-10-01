@@ -133,6 +133,7 @@ The v1 host API is:
 
 - `GET /api/plugins/:plugin/web-ui`
 - `PATCH /api/plugins/:plugin/web-ui/enabled`
+- `PATCH /api/plugins/:plugin/web-ui/primary-tab`
 - `GET /api/plugins/:plugin/web-ui/config`
 - `PATCH /api/plugins/:plugin/web-ui/config`
 - `GET /api/plugins/:plugin/web-ui/assets/*asset`
@@ -141,7 +142,9 @@ The v1 host API is:
 the `web_ui_enabled` preference. The config endpoint returns the mounted
 plugin's visible settings and schema; its patch accepts only plugin-owned
 `settings` and optional `unset` keys. It rejects host-owned fields such as
-`enabled`, `web_ui_enabled`, `command`, `args`, `url`, and `startup`.
+`enabled`, `web_ui_enabled`, `web_ui_primary_tab`, `command`, `args`, `url`, and
+`startup`. `PATCH .../primary-tab` accepts `{ "enabled": true | false }` and
+persists the operator's `web_ui_primary_tab` preference separately.
 Malformed mutations return HTTP 400; schema-invalid values return HTTP 422.
 
 Only a `ready` projection serves assets or imports bundle code. The host

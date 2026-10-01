@@ -1220,6 +1220,22 @@ mod tests {
             primary_tab_summary_body[0]["web_ui"]["primary_tab_enabled"],
             true
         );
+
+        let deny_primary_tab_response = call_plugins_route(
+            &state,
+            "PATCH",
+            "/api/plugins/demo/web-ui/primary-tab",
+            r#"{"enabled":false}"#,
+        )
+        .await;
+        assert!(deny_primary_tab_response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(
+            json_body(&deny_primary_tab_response)["primary_tab_enabled"],
+            false
+        );
+        let persisted = std::fs::read_to_string(&config_path).unwrap();
+        let persisted_config: crate::plugin::MeshConfig = toml::from_str(&persisted).unwrap();
+        assert_eq!(persisted_config.plugins[0].web_ui_primary_tab, Some(false));
     }
 
     struct WebUiFailureFixture {
@@ -1416,6 +1432,26 @@ mod tests {
             json_body(&nondeclaring_toggle)["error"],
             "Plugin does not declare a web UI"
         );
+        assert!(!fixture.config_path.exists());
+
+        let nondeclaring_primary_tab = call_plugins_route(
+            state,
+            "PATCH",
+            "/api/plugins/plain/web-ui/primary-tab",
+            r#"{"enabled":true}"#,
+        )
+        .await;
+        assert!(nondeclaring_primary_tab.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(!fixture.config_path.exists());
+
+        let invalid_primary_tab = call_plugins_route(
+            state,
+            "PATCH",
+            "/api/plugins/ready/web-ui/primary-tab",
+            r#"{"enabled":"yes"}"#,
+        )
+        .await;
+        assert!(invalid_primary_tab.starts_with("HTTP/1.1 400 Bad Request"));
         assert!(!fixture.config_path.exists());
 
         let stapled_asset_path = call_plugins_route(

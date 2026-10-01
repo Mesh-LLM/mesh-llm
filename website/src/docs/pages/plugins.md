@@ -125,6 +125,7 @@ For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-
 | `name` | Installed plugin identifier. Required. |
 | `enabled` | Start the plugin with mesh-llm. Defaults to `true`. |
 | `web_ui_enabled` | Show a declared plugin web UI in the console. Defaults to `true` when omitted; it does not start or stop the plugin process. |
+| `web_ui_primary_tab` | Place a declared plugin web UI in the primary tab when the operator enables it. Defaults to `false` when omitted. |
 | `command` | Explicit executable path or command. Useful for locally built plugins. |
 | `args` | Arguments passed to the plugin process. |
 | `url` | Optional endpoint passed to the plugin as `MESH_LLM_PLUGIN_URL`. |
