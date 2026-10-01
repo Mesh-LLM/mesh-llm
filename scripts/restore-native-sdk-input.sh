@@ -7,6 +7,7 @@ if [[ "$#" -ne 5 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$REPO_ROOT/scripts/lib/automation.sh"
 download_dir="$1"
 extract_dir="$2"
 expected_target="$3"
@@ -62,7 +63,7 @@ if [[ "${#extract_entries[@]}" -ne 0 ]]; then
 fi
 
 "$REPO_ROOT/scripts/verify-native-sdk-package.sh" "${archives[0]}" >&2
-"$REPO_ROOT/scripts/safe-extract-tar.py" "${archives[0]}" "$extract_dir"
+mesh_automation artifact extract-tar "${archives[0]}" "$extract_dir"
 
 artifact_entries=("$extract_dir"/*)
 if [[ "${#artifact_entries[@]}" -ne 1 ||
@@ -74,28 +75,10 @@ fi
 artifact_dir="${artifact_entries[0]}"
 "$REPO_ROOT/scripts/verify-native-sdk-package.sh" "$artifact_dir" >&2
 
-python3 - \
+mesh_automation prepared-input native-sdk-identity \
     "$artifact_dir/manifest.json" \
     "$expected_target" \
     "$expected_backend" \
-    "$expected_profile" <<'PY'
-import json
-import sys
-
-manifest_path, target, backend, profile = sys.argv[1:]
-with open(manifest_path, encoding="utf-8") as handle:
-    manifest = json.load(handle)
-expected = {
-    "target_triple": target,
-    "backend": backend,
-    "cargo_profile": profile,
-}
-for field, value in expected.items():
-    if manifest.get(field) != value:
-        raise SystemExit(
-            f"native SDK manifest {field} mismatch: "
-            f"expected {value!r}, got {manifest.get(field)!r}"
-        )
-PY
+    "$expected_profile"
 
 printf '%s\n' "$artifact_dir"

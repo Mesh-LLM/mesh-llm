@@ -14,6 +14,7 @@ elif [[ "$#" -ne 7 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$REPO_ROOT/scripts/lib/automation.sh"
 cd "$REPO_ROOT"
 
 scripts/check-sdk-contract.sh
@@ -35,15 +36,7 @@ native_sdk_artifact_dir="$(
         "$7"
 )"
 native_sdk_uniffi_library="$(
-    python3 - "$native_sdk_artifact_dir/manifest.json" <<'PY'
-import json
-import os
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    manifest = json.load(fh)
-print(os.path.dirname(manifest.get("uniffi_library") or manifest["library"]))
-PY
+    mesh_automation prepared-input native-sdk-library-dir "$native_sdk_artifact_dir/manifest.json"
 )"
 export MESHLLM_KOTLIN_JNA_LIBRARY_PATH="$native_sdk_artifact_dir/$native_sdk_uniffi_library"
 native_runtime_dir="$(

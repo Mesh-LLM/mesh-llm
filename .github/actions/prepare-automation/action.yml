@@ -91,6 +91,7 @@ runs:
           echo "binary_path=$binary_path"
           echo "target_directory=$target_directory"
         } >> "$GITHUB_OUTPUT"
+        echo "MESH_LLM_AUTOMATION_BIN=$binary_path" >> "$GITHUB_ENV"
 
     - name: Build automation tool
       id: bootstrap_windows
@@ -108,3 +109,4 @@ runs:
         }
         "binary_path=$binaryPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         "target_directory=$targetDirectory" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        "MESH_LLM_AUTOMATION_BIN=$binaryPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

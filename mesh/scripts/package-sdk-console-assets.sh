@@ -18,6 +18,7 @@ EOF
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$REPO_ROOT/scripts/lib/automation.sh"
 SDK="all"
 DIST_DIR="$REPO_ROOT/mesh/crates/mesh-llm-ui/dist"
 SKIP_BUILD=0
@@ -68,20 +69,7 @@ fi
 
 write_manifest() {
     local dest="$1"
-    python3 - "$dest" <<'PY'
-import pathlib
-import sys
-
-root = pathlib.Path(sys.argv[1])
-entries = []
-for path in root.rglob("*"):
-    if path.is_file():
-        rel = path.relative_to(root).as_posix()
-        if rel == "manifest.txt" or rel.startswith("."):
-            continue
-        entries.append(rel)
-(root / "manifest.txt").write_text("\n".join(sorted(entries)) + "\n", encoding="utf-8")
-PY
+    mesh_automation prepared-input sdk-console-manifest "$dest"
 }
 
 copy_console_assets() {
