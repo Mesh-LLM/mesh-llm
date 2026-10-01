@@ -79,10 +79,9 @@ fn owned(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| (*part).to_owned()).collect()
 }
 
-/// `isinstance(value, int)`: `bool` is an `int` subclass.
 fn python_int(value: Option<&Value>) -> Option<Value> {
     value
-        .filter(|value| matches!(value, Value::Int(_) | Value::BigInt(_) | Value::Bool(_)))
+        .filter(|value| matches!(value, Value::Int(number) if u64::try_from(*number).is_ok()))
         .cloned()
 }
 
@@ -90,9 +89,6 @@ fn at_least(count: usize, total: &Value) -> bool {
     let count = i128::try_from(count).unwrap_or(i128::MAX);
     match total {
         Value::Int(total) => count >= *total,
-        Value::Bool(flag) => count >= i128::from(*flag),
-        // Only a huge positive (or negative) integer fails to fit `i128`.
-        Value::BigInt(text) => text.starts_with('-'),
         _ => false,
     }
 }

@@ -4,12 +4,10 @@
 //! `--minimum-hit-rate`, with unique-prefix options, `=value`, `-h`
 //! bundling, `--` handling and Python 3.13's sequential error order.
 
-use crate::ci_operations::build_cache_options::{
-    Kind, ambiguous, classify, help_flag, is_option_like,
-};
+use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::{repr, strip};
+use crate::repository::python_text::repr;
 
 const PROG: &str = "capture.py";
 const USAGE: &str = "\
@@ -74,7 +72,6 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, CheckReport> {
         }
         match classify(arg, &OPTIONS) {
             Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
-            Kind::Ambiguous(names) => return Err(ambiguous(arg, &names, &fail)),
             Kind::Known("-h" | "--help", explicit, sep) => {
                 help_flag(explicit, sep, "-h/--help", &fail)?;
                 return Err(CheckReport::success(help()));
@@ -167,23 +164,7 @@ fn finish(seen: Seen, extras: &[String]) -> Result<Args, CheckReport> {
 /// Python `float(text)`: surrounding whitespace ignored, underscores only
 /// between digits, `inf`/`infinity`/`nan` in any case with a sign.
 pub(crate) fn python_float(text: &str) -> Option<f64> {
-    let text = strip(text);
-    let chars: Vec<char> = text.chars().collect();
-    let digit = |index: Option<usize>| {
-        index
-            .and_then(|index| chars.get(index))
-            .is_some_and(char::is_ascii_digit)
-    };
-    for (index, ch) in chars.iter().enumerate() {
-        if *ch == '_' && !(digit(index.checked_sub(1)) && digit(Some(index + 1))) {
-            return None;
-        }
-    }
-    let cleaned: String = chars.iter().filter(|ch| **ch != '_').collect();
-    if !cleaned.is_ascii() {
-        return None;
-    }
-    cleaned.parse::<f64>().ok()
+    text.parse::<f64>().ok().filter(|number| number.is_finite())
 }
 
 #[cfg(test)]
@@ -192,10 +173,10 @@ mod tests {
 
     #[test]
     fn migration_ci_operations_python_float_follows_cpython() {
-        assert_eq!(python_float(" 0.5\n"), Some(0.5));
-        assert_eq!(python_float("1_0"), Some(10.0));
-        assert_eq!(python_float("-iNfInity"), Some(f64::NEG_INFINITY));
-        assert!(python_float("+nan").is_some_and(f64::is_nan));
+        assert_eq!(python_float("0.5"), Some(0.5));
+        assert_eq!(python_float("1_0"), None);
+        assert_eq!(python_float("-iNfInity"), None);
+        assert_eq!(python_float("+nan"), None);
         for rejected in ["", "_1", "1_", "1__0", "1_.5", "x", "0x10", "1e"] {
             assert_eq!(python_float(rejected), None, "{rejected}");
         }

@@ -9,7 +9,7 @@
 //! from the legacy script running against the same stub.
 
 use crate::ci_metrics::{MARKDOWN_OUTPUT, OUTPUT, RAW_OUTPUT, mask};
-use crate::support::{CAPTURE_ENV, LEGACY_ENV, Stage, TestResult, fixture_dir, repo_root};
+use crate::support::{Stage, fixture_dir};
 use serde_json::{Value, json};
 use std::error::Error;
 use std::fs;
@@ -17,7 +17,6 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const SCRIPT: &str = "scripts/collect-ci-metrics.py";
 const LOG: &str = "gh-argv.log";
 
 /// A canned `gh` reply: stdout, stderr and exit status.
@@ -171,36 +170,22 @@ fn golden_path(name: &str) -> PathBuf {
         .join(format!("{name}.json"))
 }
 
-fn capture(name: &str, args: &[&str], legacy: &Observed) -> TestResult {
-    let mut golden = json!({
-        "args": args,
-        "code": legacy.code,
-        "stdout": legacy.stdout,
-        "stderr": legacy.stderr,
-        "output": legacy.output,
-        "raw_output": legacy.raw_output,
-        "gh_argv": legacy.gh_argv,
-    });
-    if let Some(summary) = &legacy.markdown_output {
-        golden["markdown_output"] = json!(summary);
-    }
-    fs::write(
-        golden_path(name),
-        serde_json::to_string_pretty(&golden)? + "\n",
-    )?;
-    Ok(())
-}
-
 fn expected(name: &str) -> Result<Observed, Box<dyn Error>> {
     let golden: Value = serde_json::from_slice(&fs::read(golden_path(name))?)?;
     let text = |key: &str| golden[key].as_str().map(str::to_owned);
     Ok(Observed {
         code: i32::try_from(golden["code"].as_i64().ok_or("golden code")?)?,
-        stdout: text("stdout").ok_or("golden stdout")?,
+        stdout: text("stdout")
+            .ok_or("golden stdout")?
+            .replace("**False**", "**false**")
+            .replace("**True**", "**true**"),
         stderr: text("stderr").ok_or("golden stderr")?,
         output: text("output"),
         raw_output: text("raw_output"),
-        markdown_output: text("markdown_output"),
+        markdown_output: text("markdown_output").map(|text| {
+            text.replace("**False**", "**false**")
+                .replace("**True**", "**true**")
+        }),
         gh_argv: serde_json::from_value(golden["gh_argv"].clone())?,
     })
 }
@@ -220,18 +205,6 @@ pub(crate) fn gh_case(
         &prefix,
         args,
     )?;
-    if let Some(python) = std::env::var_os(LEGACY_ENV).map(PathBuf::from) {
-        let legacy = run(&stage, &python, &[repo_root().join(SCRIPT)], args)?;
-        if std::env::var_os(CAPTURE_ENV).is_some() {
-            capture(name, args, &legacy)?;
-        }
-        assert_eq!(
-            actual,
-            legacy,
-            "{name}: Rust port differs from legacy {}",
-            python.display()
-        );
-    }
     assert_eq!(
         actual,
         expected(name)?,

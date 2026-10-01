@@ -4,9 +4,7 @@
 //! Python 3.13's sequential error order, then the script's own
 //! `parser.error` rules in source order.
 
-use crate::ci_operations::build_cache_options::{
-    Kind, ambiguous, classify, help_flag, is_option_like,
-};
+use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::ci_operations::ci_metrics_int::python_int;
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
@@ -125,7 +123,6 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, CheckReport> {
         }
         match classify(arg, &OPTIONS) {
             Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
-            Kind::Ambiguous(names) => return Err(ambiguous(arg, &names, &fail)),
             Kind::Known("-h" | "--help", explicit, sep) => {
                 help_flag(explicit, sep, "-h/--help", &fail)?;
                 return Err(CheckReport::success(format!("{USAGE}{HELP}")));

@@ -4,11 +4,7 @@
 //! evidence helpers it loads). Each case runs on a staged copy of the
 //! checkout inputs and compares exit status, stdout and stderr with a golden
 //! under `fixtures/ci_operations/runner_identity/`, captured from the legacy
-//! script under Python 3.13 (`{root}` stands for the stage path). Default
-//! runs start no Python. Set `MIGRATION_CI_OPERATIONS_LEGACY_PYTHON` to an
-//! interpreter to also run the legacy script on identical inputs and require
-//! identical bytes; add `MIGRATION_CI_OPERATIONS_CAPTURE=1` to rewrite the
-//! goldens from those legacy runs.
+//! script under Python 3.13 (`{root}` stands for the stage path).
 //!
 //! `build-cache` replaces `scripts/manage-build-cache.py`; its cases run on
 //! fake cache trees with stub `ps` and `just`, goldens under

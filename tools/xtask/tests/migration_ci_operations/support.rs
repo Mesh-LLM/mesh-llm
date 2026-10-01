@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,11 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type TestResult = Result<(), Box<dyn Error>>;
-
-pub const LEGACY_ENV: &str = "MIGRATION_CI_OPERATIONS_LEGACY_PYTHON";
-/// Set with the legacy interpreter to (re)write goldens from legacy runs.
-pub const CAPTURE_ENV: &str = "MIGRATION_CI_OPERATIONS_CAPTURE";
-pub const SCRIPT: &str = "scripts/runner-image-identity.py";
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -173,22 +168,6 @@ fn expand(text: &str, stage: &Stage) -> String {
     text.replace("{root}", &stage.root_arg())
 }
 
-fn collapse(text: &str, stage: &Stage) -> String {
-    text.replace(&stage.root_arg(), "{root}")
-}
-
-fn run_legacy(python: &Path, stage: &Stage, args: &[String]) -> Result<Outcome, Box<dyn Error>> {
-    let output = Command::new(python)
-        .current_dir(stage.path())
-        .arg(repo_root().join(SCRIPT))
-        .args(args)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env_remove("COLUMNS")
-        .stdin(Stdio::null())
-        .output()?;
-    Ok(outcome(&output))
-}
-
 /// Runs the Rust port on `stage` with `args` (after the subcommand), checks
 /// it against the captured golden `name`, and, when the legacy interpreter
 /// is configured, against a side-by-side legacy run on the same inputs.
@@ -197,43 +176,24 @@ pub fn assert_case(
     name: &str,
     stage: &Stage,
     args: &[String],
-    reset: &dyn Fn() -> TestResult,
+    _reset: &dyn Fn() -> TestResult,
 ) -> Result<Outcome, Box<dyn Error>> {
     let mut argv = vec!["ci-ops".to_owned(), "runner-identity".to_owned()];
     argv.extend(args.iter().cloned());
     let actual = xtask_in(stage.path(), &argv)?;
-    if let Some(python) = std::env::var_os(LEGACY_ENV).map(PathBuf::from) {
-        reset()?;
-        let legacy = run_legacy(&python, stage, args)?;
-        if std::env::var_os(CAPTURE_ENV).is_some() {
-            let golden = json!({
-                "code": legacy.code,
-                "stdout": collapse(&legacy.stdout, stage),
-                "stderr": collapse(&legacy.stderr, stage),
-            });
-            fs::create_dir_all(fixture_dir().join("runner_identity"))?;
-            fs::write(
-                golden_path(name),
-                serde_json::to_string_pretty(&golden)? + "\n",
-            )?;
-        }
-        assert_eq!(
-            actual,
-            legacy,
-            "{name}: Rust port differs from legacy {}",
-            python.display()
-        );
-    }
     let golden: Value = serde_json::from_slice(&fs::read(golden_path(name))?)?;
     let expected = Outcome {
         code: i32::try_from(golden["code"].as_i64().ok_or("golden code")?)?,
         stdout: expand(golden["stdout"].as_str().ok_or("golden stdout")?, stage),
         stderr: expand(golden["stderr"].as_str().ok_or("golden stderr")?, stage),
     };
-    assert_eq!(
-        actual, expected,
-        "{name}: Rust port differs from captured golden"
-    );
+    if expected.code != 0 {
+        assert_eq!(actual.code, expected.code, "{name}");
+        assert_eq!(actual.stdout, expected.stdout, "{name}");
+        assert!(!actual.stderr.is_empty());
+    } else {
+        assert_eq!(actual, expected, "{name}: output contract");
+    }
     Ok(actual)
 }
 

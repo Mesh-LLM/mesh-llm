@@ -16,7 +16,10 @@ pub(crate) fn inputs_repr(list: &Json) -> String {
     list.as_array()
         .unwrap_or_default()
         .iter()
-        .map(|entry| crate::prepared_input::python_value::repr(Some(entry)))
+        .map(|entry| match entry.as_str() {
+            Some(text) => format!("'{}'", text.replace('\'', "''")),
+            None => entry.to_value().to_string(),
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }

@@ -3,9 +3,6 @@
 //! floats including `NaN`/`Infinity`, and their `str`, `==` and
 //! `json.dumps(..., indent=2[, sort_keys=True])` behavior.
 
-use crate::ci_operations::python_json_decode::{
-    DecodeError, EXACT_NUMBER, Hooks, loads, loads_exact,
-};
 use crate::ci_plan::document::Json;
 use crate::ci_plan::plan_bytes::write_string;
 use crate::prepared_input::python_value::float_repr;
@@ -24,53 +21,8 @@ pub(crate) enum Value {
     Object(Vec<(String, Value)>),
 }
 
-/// Marks objects built by the pairs hook, so the non-finite constants the
-/// decoder cannot represent as numbers stay distinguishable from real data.
-const OBJECT_MARK: &str = "\u{0}ci-metrics-object";
-const CONSTANT_MARK: &str = "\u{0}ci-metrics-constant";
-
-fn pairs(items: Vec<(String, Json)>) -> Result<Json, String> {
-    let mut entries: Vec<(String, Json)> = vec![(OBJECT_MARK.to_owned(), Json::Null)];
-    for (key, value) in items {
-        match entries.iter_mut().skip(1).find(|(seen, _)| *seen == key) {
-            Some(entry) => entry.1 = value,
-            None => entries.push((key, value)),
-        }
-    }
-    Ok(Json::Object(entries))
-}
-
-fn constant(name: &str) -> Result<Json, String> {
-    Ok(Json::Object(vec![(
-        CONSTANT_MARK.to_owned(),
-        Json::String(name.to_owned()),
-    )]))
-}
-
-/// `json.load(handle)` of a UTF-8 text-mode handle: strict decoding,
-/// universal newlines, and the BOM rejection of `json.loads(str)`.
 pub(crate) fn parse(raw: &[u8]) -> Result<Value, String> {
-    let hooks = Hooks { pairs, constant };
-    let decode_error = |error| match error {
-        DecodeError::Value(message) => message,
-        DecodeError::Recursion => "maximum recursion depth exceeded".to_owned(),
-    };
-    let Ok(text) = std::str::from_utf8(raw) else {
-        // The shared decoder reports the codec error in CPython's words.
-        return Err(loads(raw, &hooks)
-            .err()
-            .map_or_else(String::new, decode_error));
-    };
-    if text.starts_with('\u{feff}') {
-        return Err(
-            "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)".to_owned(),
-        );
-    }
-    let text = text.replace("\r\n", "\n").replace('\r', "\n");
-    let json = loads_exact(text.as_bytes(), &hooks).map_err(|error| match error {
-        DecodeError::Value(message) => message,
-        DecodeError::Recursion => "maximum recursion depth exceeded".to_owned(),
-    })?;
+    let json = Json::parse(raw).map_err(|error| error.to_string())?;
     Ok(convert(json))
 }
 
@@ -85,24 +37,12 @@ fn convert(json: Json) -> Value {
             .unwrap_or_else(|| Value::Float(number.as_f64().unwrap_or(f64::NAN))),
         Json::String(text) => Value::Str(text),
         Json::Array(items) => Value::Array(items.into_iter().map(convert).collect()),
-        Json::Object(mut entries) => {
-            if let [(key, Json::String(text))] = entries.as_slice()
-                && key == EXACT_NUMBER
-            {
-                return exact_number(text);
-            }
-            if entries.first().is_some_and(|(key, _)| key == CONSTANT_MARK) {
-                return match entries.pop() {
-                    Some((_, Json::String(name))) if name == "NaN" => Value::Float(f64::NAN),
-                    Some((_, Json::String(name))) if name == "-Infinity" => {
-                        Value::Float(f64::NEG_INFINITY)
-                    }
-                    _ => Value::Float(f64::INFINITY),
-                };
-            }
-            let entries = entries.into_iter().skip(1);
-            Value::Object(entries.map(|(key, item)| (key, convert(item))).collect())
-        }
+        Json::Object(entries) => Value::Object(
+            entries
+                .into_iter()
+                .map(|(key, item)| (key, convert(item)))
+                .collect(),
+        ),
     }
 }
 
@@ -155,9 +95,9 @@ pub(crate) fn display(value: &Value) -> String {
 /// Python `repr(value)`.
 pub(crate) fn repr(value: &Value) -> String {
     match value {
-        Value::Null => "None".to_owned(),
-        Value::Bool(true) => "True".to_owned(),
-        Value::Bool(false) => "False".to_owned(),
+        Value::Null => "null".to_owned(),
+        Value::Bool(true) => "true".to_owned(),
+        Value::Bool(false) => "false".to_owned(),
         Value::Int(int) => int.to_string(),
         Value::BigInt(text) => text.clone(),
         Value::Float(float) => float_repr(*float),
@@ -192,20 +132,10 @@ pub(crate) fn equal(left: &Value, right: &Value) -> bool {
         }
         (Value::BigInt(a), Value::BigInt(b)) => a == b,
         (Value::BigInt(_), _) | (_, Value::BigInt(_)) => false,
-        _ => match (numeric(left), numeric(right)) {
-            (Some(a), Some(b)) => a == b || (a.is_nan() && b.is_nan()),
-            _ => false,
-        },
-    }
-}
-
-fn numeric(value: &Value) -> Option<f64> {
-    match value {
-        Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
-        Value::Int(int) => int.to_string().parse().ok(),
-        Value::BigInt(text) => text.parse().ok(),
-        Value::Float(float) => Some(*float),
-        _ => None,
+        (Value::Bool(left), Value::Bool(right)) => left == right,
+        (Value::Int(left), Value::Int(right)) => left == right,
+        (Value::Float(left), Value::Float(right)) => left == right,
+        _ => false,
     }
 }
 
@@ -271,15 +201,4 @@ fn close(out: &mut String, depth: usize, bracket: char) {
     out.push('\n');
     out.push_str(&"  ".repeat(depth));
     out.push(bracket);
-}
-
-/// A JSON number `serde_json` cannot hold: an overflowing float becomes
-/// `±inf` like `float()`, an integer keeps its digits.
-fn exact_number(text: &str) -> Value {
-    let integral = !text.contains(['.', 'e', 'E']);
-    if !integral {
-        return Value::Float(text.parse().unwrap_or(f64::INFINITY));
-    }
-    text.parse::<i128>()
-        .map_or_else(|_| Value::BigInt(text.to_owned()), Value::Int)
 }
