@@ -699,6 +699,7 @@ fn event_context(event: &OpenAiLifecycleEvent) -> &openai_frontend::OpenAiLifecy
         | OpenAiLifecycleEvent::BackendDispatched { context, .. }
         | OpenAiLifecycleEvent::BackendTerminal { context, .. }
         | OpenAiLifecycleEvent::StreamFirstItem { context, .. }
+        | OpenAiLifecycleEvent::ExchangeIdentified { context, .. }
         | OpenAiLifecycleEvent::ResponseCompleted { context, .. }
         | OpenAiLifecycleEvent::NonStreamTerminal { context, .. }
         | OpenAiLifecycleEvent::StreamTerminal { context, .. } => context,

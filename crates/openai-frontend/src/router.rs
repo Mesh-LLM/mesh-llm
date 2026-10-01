@@ -564,6 +564,10 @@ async fn chat_completions(
         .await?;
         let lifecycle =
             state.stream_lifecycle(context, OpenAiBackendOperation::ChatCompletionStream);
+        let exchange_id = backend_context.exchange_id();
+        if let Some(exchange_id) = exchange_id.clone() {
+            lifecycle.record_exchange_id(exchange_id);
+        }
         let stream = observe_backend_stream(stream, lifecycle.clone());
         let prelude = stream::once(async move { json_event(&ChatCompletionChunk::role(model)) });
         let usage_lifecycle = lifecycle.clone();
@@ -591,7 +595,13 @@ async fn chat_completions(
                 completion_lifecycle.mark_protocol_complete();
                 done_event()
             }));
-        Ok(sse_response(events, cancellation, lifecycle))
+        let mut response = sse_response(events, cancellation, lifecycle);
+        if let Some(exchange_id) = exchange_id {
+            response
+                .extensions_mut()
+                .insert(ExchangeIdExtension(exchange_id));
+        }
+        Ok(response)
     } else {
         let backend_context = request_context(context.request_id, trusted_agent_session, false);
         let response = call_backend_with_context(
@@ -680,6 +690,10 @@ async fn stream_responses(
     .await?;
     let lifecycle =
         state.stream_lifecycle(context.clone(), OpenAiBackendOperation::ResponsesStream);
+    let exchange_id = backend_context.exchange_id();
+    if let Some(exchange_id) = exchange_id.clone() {
+        lifecycle.record_exchange_id(exchange_id);
+    }
     let stream = observe_backend_stream(stream, lifecycle.clone());
     let body_state = state_machine.clone();
     let usage_lifecycle = lifecycle.clone();
@@ -697,7 +711,13 @@ async fn stream_responses(
             completion_lifecycle.mark_protocol_complete();
             done_event()
         }));
-    Ok(sse_response(events, cancellation, lifecycle))
+    let mut response = sse_response(events, cancellation, lifecycle);
+    if let Some(exchange_id) = exchange_id {
+        response
+            .extensions_mut()
+            .insert(ExchangeIdExtension(exchange_id));
+    }
+    Ok(response)
 }
 
 async fn non_streaming_responses(

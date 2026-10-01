@@ -203,6 +203,10 @@ pub enum OpenAiLifecycleEvent {
         context: OpenAiLifecycleContext,
         operation: OpenAiBackendOperation,
     },
+    ExchangeIdentified {
+        context: OpenAiLifecycleContext,
+        exchange_id: String,
+    },
     ResponseCompleted {
         context: OpenAiLifecycleContext,
         operation: OpenAiBackendOperation,

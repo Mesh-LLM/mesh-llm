@@ -1601,9 +1601,10 @@ async fn stage_backend_stream_that_ends_normally_fires_stream_completed_terminal
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
+    let context = OpenAiRequestContext::new();
 
     let mut stream = backend
-        .chat_completion_stream_with_hooks(request, |request| async move {
+        .chat_completion_stream_with_hooks(request, &context, |request| async move {
             Ok(Box::pin(futures_util::stream::iter(vec![
                 Ok(ChatCompletionChunk::delta(request.model.clone(), "hi")),
                 Ok(ChatCompletionChunk::done(request.model)),
@@ -1622,6 +1623,11 @@ async fn stage_backend_stream_that_ends_normally_fires_stream_completed_terminal
 
     let terminals = policy.terminals.lock().unwrap();
     assert_eq!(terminals.as_slice(), [HookTerminalRecord::StreamCompleted]);
+    let exchange_ids = policy.terminal_exchange_ids.lock().unwrap();
+    assert_eq!(
+        context.exchange_id().as_deref(),
+        exchange_ids.first().map(String::as_str)
+    );
 }
 
 /// The explicit case this wiring exists for: a client disconnects (or an
@@ -1633,9 +1639,10 @@ async fn stage_backend_stream_dropped_mid_stream_fires_exactly_one_cancelled_ter
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
+    let context = OpenAiRequestContext::new();
 
     let mut stream = backend
-        .chat_completion_stream_with_hooks(request, |request| async move {
+        .chat_completion_stream_with_hooks(request, &context, |request| async move {
             let first = ChatCompletionChunk::delta(request.model, "partial");
             Ok(Box::pin(
                 futures_util::stream::once(async move { Ok(first) })
@@ -1658,9 +1665,10 @@ async fn stage_backend_stream_error_chunk_fires_error_terminal_exactly_once() {
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
+    let context = OpenAiRequestContext::new();
 
     let mut stream = backend
-        .chat_completion_stream_with_hooks(request, |request| async move {
+        .chat_completion_stream_with_hooks(request, &context, |request| async move {
             Ok(Box::pin(futures_util::stream::iter(vec![
                 Ok(ChatCompletionChunk::delta(request.model, "hi")),
                 Err(OpenAiError::backend("upstream exploded")),
@@ -1690,9 +1698,10 @@ async fn stage_backend_stream_denied_never_dispatches_and_fires_terminal_exactly
     });
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
+    let context = OpenAiRequestContext::new();
 
     let error = match backend
-        .chat_completion_stream_with_hooks(request, |_request| async move {
+        .chat_completion_stream_with_hooks(request, &context, |_request| async move {
             panic!("a denied request must never reach dispatch")
         })
         .await

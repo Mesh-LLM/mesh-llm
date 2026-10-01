@@ -1337,6 +1337,40 @@ async fn backend_exchange_id_is_exposed_as_x_exchange_id_response_header() {
     assert_eq!(header, "exch-fixture-01");
 }
 
+#[tokio::test]
+async fn hooked_stream_exposes_exchange_id_response_header() {
+    let backend =
+        crate::hooks::HookedOpenAiBackend::new(Arc::new(FakeBackend), Arc::new(CapsuleMintingHook));
+    let app = router_for(Arc::new(backend));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-mesh",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let exchange_id = response
+        .headers()
+        .get("x-exchange-id")
+        .expect("stream exchange id header")
+        .to_str()
+        .unwrap();
+    assert_eq!(Uuid::parse_str(exchange_id).unwrap().get_version_num(), 4);
+}
+
 /// A response with no `exchange_id` must never produce the header — proves
 /// the wiring is conditional on the backend actually attaching one, not
 /// unconditional (mirroring `no_capsule_marker_means_no_x_capsule_id_header`).

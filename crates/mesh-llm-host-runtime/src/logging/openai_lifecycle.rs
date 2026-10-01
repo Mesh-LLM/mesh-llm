@@ -736,6 +736,10 @@ impl OpenAiLifecycleObserver for OpenAiLifecycleLoggingAdapter {
             OpenAiLifecycleEvent::StreamFirstItem { context, .. } => {
                 self.backend_stream_first_item(context.request_id)
             }
+            OpenAiLifecycleEvent::ExchangeIdentified {
+                context,
+                exchange_id,
+            } => self.merge_exchange_id(context.request_id, Some(exchange_id)),
             OpenAiLifecycleEvent::ResponseCompleted { context, usage, .. } => {
                 self.response_completed(context.request_id, *usage)
             }
@@ -1045,6 +1049,31 @@ mod tests {
             .get_recent(&request_id.as_uuid().to_string())
             .expect("terminal request summary");
         assert_eq!(summary.metadata.exchange_id(), None);
+    }
+
+    #[test]
+    fn stream_exchange_id_survives_terminalization() {
+        let (service, adapter) = adapter();
+        let request_id = RequestId::new();
+        let context = context(request_id);
+
+        adapter.observe(&OpenAiLifecycleEvent::Admitted {
+            context: context.clone(),
+        });
+        adapter.observe(&OpenAiLifecycleEvent::ExchangeIdentified {
+            context: context.clone(),
+            exchange_id: "exch-stream-1".to_string(),
+        });
+        adapter.observe(&OpenAiLifecycleEvent::StreamTerminal {
+            context,
+            result: OpenAiTerminalResult::Completed { status_code: 200 },
+        });
+
+        let summary = service
+            .registry_ref()
+            .get_recent(&request_id.as_uuid().to_string())
+            .expect("terminal request summary");
+        assert_eq!(summary.metadata.exchange_id(), Some("exch-stream-1"));
     }
 
     #[test]

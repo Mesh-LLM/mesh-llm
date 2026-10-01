@@ -62,6 +62,13 @@ impl StreamLifecycle {
         *self.usage.lock().expect("stream usage lock poisoned") = Some(usage.into());
     }
 
+    pub(crate) fn record_exchange_id(&self, exchange_id: String) {
+        self.observe(&OpenAiLifecycleEvent::ExchangeIdentified {
+            context: self.context.clone(),
+            exchange_id,
+        });
+    }
+
     /// Mark the client-visible protocol terminal before yielding `[DONE]`.
     ///
     /// Some clients close immediately after that frame and never poll the body

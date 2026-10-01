@@ -1,7 +1,7 @@
 use std::{
     pin::Pin,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -72,6 +72,7 @@ impl CancellationToken {
 pub struct OpenAiRequestContext {
     cancellation: CancellationToken,
     request_id: Option<RequestId>,
+    exchange_id: Arc<OnceLock<String>>,
     stream_usage_observation: bool,
     trusted_agent_session: bool,
 }
@@ -120,6 +121,16 @@ impl OpenAiRequestContext {
         self.request_id
     }
 
+    /// Publish the join key minted by the backend for a hook-tracked exchange.
+    pub fn publish_exchange_id(&self, exchange_id: String) {
+        let _ = self.exchange_id.set(exchange_id);
+    }
+
+    /// Return the join key published by a hook-tracked backend exchange.
+    pub fn exchange_id(&self) -> Option<String> {
+        self.exchange_id.get().cloned()
+    }
+
     pub fn cancellation_token(&self) -> CancellationToken {
         self.cancellation.clone()
     }
@@ -138,6 +149,7 @@ impl Default for OpenAiRequestContext {
         Self {
             cancellation: CancellationToken::new(),
             request_id: None,
+            exchange_id: Arc::new(OnceLock::new()),
             stream_usage_observation: false,
             trusted_agent_session: false,
         }

@@ -383,12 +383,13 @@ impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
                     },
                 ),
             ),
-            // `StreamFirstItem`/`ResponseCompleted` have no corresponding
+            // `ExchangeIdentified`/`StreamFirstItem`/`ResponseCompleted` have no corresponding
             // `RequestEventKind` row in this task's scope -- request-scope
             // progress and prompt/completion usage are out of §8's Request
             // family, and adapting them would require inventing a kind that
             // does not exist in the inventory. Intentionally unmapped.
-            OpenAiLifecycleEvent::StreamFirstItem { .. }
+            OpenAiLifecycleEvent::ExchangeIdentified { .. }
+            | OpenAiLifecycleEvent::StreamFirstItem { .. }
             | OpenAiLifecycleEvent::ResponseCompleted { .. } => {}
         }
     }
