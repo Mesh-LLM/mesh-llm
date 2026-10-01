@@ -33,6 +33,11 @@ forbidden path if it appears in old notes or logs.
   the window only after a smaller fixture proves the memory and I/O budget.
 - Publish only complete windows, write per-window records, and resume from the
   first missing target shard after cancellation.
+- Provision a trusted xtask executable and set `MESH_LLM_AUTOMATION_BIN` in
+  jobs using `scripts/hf-skippy-convert-job.py`, including upload-only jobs.
+  Its converted-artifact admission is `hf-converted-artifact preflight
+  --artifact-dir <directory>`. The remote job adapter no longer owns a duplicate
+  Python shard validator; a missing automation executable fails before upload.
 
 ## Local Workflow
 

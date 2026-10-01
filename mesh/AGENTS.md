@@ -43,7 +43,7 @@ The build runs Tailwind, Eleventy and Pagefind. It copies website source assets 
 
 A release binary left in `target/release/mesh-llm` may predate the latest debug build. Its presence does not prove it contains current code; rerun `just release-build` when in doubt. For serious testing and deployment, use a composed release product.
 
-The host dependency policy is enforced by `scripts/verify-host-dependencies.py`. Release, installer, SDK, native-package, and image lanes must not bypass it or copy backend libraries beside the host. For isolated runtime discovery, set `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"` and a fresh `MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`. Discovery never searches the working directory. Do not reintroduce an external `llama-server` or `rpc-server` lane.
+The host dependency policy is enforced by `cargo xtool native verify-host-dependencies`. Release, installer, SDK, native-package, and image lanes must not bypass it or copy backend libraries beside the host. For isolated runtime discovery, set `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"` and a fresh `MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`. Discovery never searches the working directory. Do not reintroduce an external `llama-server` or `rpc-server` lane.
 
 ### npm "Exit handler never called" error
 

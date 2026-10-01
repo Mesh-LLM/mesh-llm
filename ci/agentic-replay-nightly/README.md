@@ -96,8 +96,9 @@ artifacts survive failure/cancellation. Warmup is never included in history.
 Example, after resolving the pinned dataset:
 
 ```sh
-python3 scripts/agentic-replay-params.py \
+cargo xtool automation replay-matrix run-family \
   --matrix ci/agentic-replay-nightly/matrix.json \
+  --python "$PWD/ci/agentic-replay-nightly/.venv/bin/python3" --timeout 21600 \
   --run-family granite-3.1-2b --ref main=HEAD \
   --dataset-file /path/to/sessions.parquet --output /path/to/evidence/dense
 ```
@@ -106,3 +107,8 @@ No live duration or successful long-context qualification is claimed by this
 configuration. Session count may be revised after calibration; selected traces
 remain complete and long. Runtime/canary work on micstudio must be coordinated
 before starting a validation run.
+
+Matrix validation, export, immutable pin projection and downloaded-byte checks
+belong to `cargo xtool automation replay-matrix`. The measured workload remains
+`evals/agentic-replay.py` in the existing locked DuckDB environment. Generic
+history/card tooling remains transitional, not an approved Python exception.

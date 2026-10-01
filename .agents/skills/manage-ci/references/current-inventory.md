@@ -734,6 +734,22 @@ fail-open policy.
 
 ## Artifact and cache owners
 
+Release/package L5 adapters use xtask native selection/import/closure checks,
+product composition and release manifests, artifact extraction/checksums,
+typed attestation verdict projection, and the exact RC `rc-ok` predicate.
+Windows release composers use `prepare-automation`; the release workflow has
+no setup-python steps. Runtime-package verification embeds the GLIBC policy
+ceiling and runs native probes without a checkout dependency. Publication's
+dependency projection uses `repository publish-order --dependency-pairs`;
+the checked fixed publication roster is unchanged. The L8 restore-smoke action
+still calls `compose-product-bundle.py`, which is not yet deleted.
+
+`ci-ops authority-audit` exposes endpoint and Docker-auth inspection through
+the existing L2 typed owners. `ci-ops registry-pulls` exposes recursive sample
+loading, reports and threshold enforcement. These commands are registered;
+their L2 workflow/action callers have not switched, and protected delivery
+remains unresolved. Registration does not change provider or cache authority.
+
 Repository Cargo defaults require `sccache` and select a target-specific
 linker driver. Full Linux runner images provide mold as the primary linker and
 lld as the compatibility control. macOS jobs install lld through the shared
@@ -798,7 +814,7 @@ boundary.
   required on driverless composition workers.
 - `ci/model-artifacts/registry.json`: canonical immutable model identities,
   integrity, family capability tags, and allowed general suite/cadence membership.
-  `scripts/generate-test-model-manifests.py` owns the family battery and
+  `cargo xtool models generate` owns the family battery and
   suite-specific projections; CI contract tests reject stale projections.
 - The Linux CPU runtime-event gate consumes `family-qwen3-dense` from
   `skippy-ci-smoke.json` at pull-request, main, or manual cadence. The family
@@ -1066,6 +1082,13 @@ verified warm samples. Full-cohort timing remains inconclusive because pairs 1/2
 had different CPUs. See [retained evidence](../../../../ci/runtime-seed-evidence/34272984200-1/README.md).
 
 ## Console-print product scope
+
+L11 replay callers now use `automation replay-matrix` export/run-family plus
+offline pin, digest and hosted repair-admission commands. The locked DuckDB
+replay workload remains. Workload oracle evidence callers use Rust write/verify;
+HF conversion adapters require `MESH_LLM_AUTOMATION_BIN` for existing converted
+artifact preflight. History/card and remote HF orchestration remain transitional.
+No live optional qualification or publication was performed for this cutover.
 
 `just no-console-print` forbids the print macros and direct `io::stdout()` /
 `io::stderr()` handles in product sources. There is no allowlist: every

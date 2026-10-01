@@ -1329,7 +1329,7 @@ just release-bundle "v$(./target/release/mesh-llm --version | awk '{print $NF}')
 
 Required evidence:
 
-- `scripts/verify-host-dependencies.py target/release/mesh-llm` reports no
+- `cargo xtool native verify-host-dependencies target/release/mesh-llm` reports no
   rejected backend imports.
 - Extracting the product archive yields one host, one runtime tree,
   `product-manifest.json`, and `host-imports.json`; all recorded digests match.

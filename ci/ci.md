@@ -380,6 +380,17 @@ main.
 
 ### Release source and version ownership
 
+Release packaging and product composition now invoke typed xtask `native`,
+`product`, and `artifact` commands through `MESH_LLM_AUTOMATION_BIN` or
+`cargo xtool`. Windows composition jobs prepare the automation executable;
+release jobs no longer install Python. Runtime-package verification embeds the
+checked-in GLIBC ceiling and retains native dependency probes when copied
+outside the source checkout. `repository publish-order --dependency-pairs`
+projects publishable workspace edges, including optional dependencies, for the
+publisher's dry-run checks. The fixed publication roster remains checked by
+`repo-consistency publish-crates`. The L8 smoke restore action still calls the
+transitional Python product composer, so that implementation remains present.
+
 If crates.io accepts only a prefix of the stable package chain,
 `resume-crates-release.yml` resumes publication from the existing immutable
 release tag. The operator supplies both the stable tag and its exact peeled
@@ -580,8 +591,10 @@ Their Linux jobs run on bare hosted runners, whereas `prepare-automation`
 currently requires `verify-runner-image public cpu` on Linux. Protected
 automation delivery must be resolved before those callers switch. The
 pre-checkout audit and no-checkout sentinel must not build candidate code.
-L2 authority and registry-pull intent owners are prepared but not registered
-in production dispatch. No provider, cache authority or required result changed.
+L2 authority and registry-pull intent owners are registered as `ci-ops
+authority-audit` and `ci-ops registry-pulls`. Existing workflow callers remain
+unchanged; protected delivery is still unresolved. No provider, cache authority
+or required result changed.
 
 `scripts/plan-ci.py` is the only source of slice eligibility. It reads the
 JSON-compatible YAML manifests `ci/ownership.yml` and `ci/slices.yml`, validates
@@ -845,6 +858,15 @@ can report the precise terminal failure; cancelled siblings are expected
 terminal results that release their runner capacity.
 
 ## Artifact contract
+
+L3 build/cache and prepared-input callers use xtask. Just bootstraps the tool
+before entering cache locks, so Cargo is not left running as the pruning
+command's parent. Static ABI producer/test jobs prepare the automation binary;
+model restore uses typed resolution and preserves its exact cache identities.
+The five cache/stamp/model/sccache Python implementations are deleted. Generic
+Python contract discovery remains assigned to L12. Windows host/runtime and
+cache-warmer interpreter setup is removed after the concurrent L5 runtime
+package verifier cutover closed those transitive callers.
 
 Every product has three immutable layers:
 
@@ -1293,6 +1315,14 @@ tool dependencies. Global workload coverage stays unknown for other consumers.
 preserve the basis beyond remote artifact expiry.
 
 ## Console-print product scope
+
+The L11 optional-tooling cutover uses typed xtask replay matrix export and
+bounded family execution, canonical model/dataset pin projection, downloaded
+SHA-256 checks and hosted repair publication admission. The measured replay
+still uses its locked DuckDB environment. Workload oracle evidence write/verify
+and HF converted-artifact preflight now use their existing Rust owners.
+Replay history/card and other optional generic tooling remain transitional;
+no live replay, HF job or publication qualification is implied.
 
 `just no-console-print` forbids the print macros and direct `io::stdout()` /
 `io::stderr()` handles in product sources. There is no allowlist: every

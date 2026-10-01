@@ -219,18 +219,6 @@
       "reason": "Plan action pipes typed JSON into the Python planner at this physical line."
     },
     {
-      "id": ".github/actions/prepare-host-input/action.yml#candidate:3e34dde789fab5d1:1",
-      "source_block": "python3 scripts/verify-host-dependencies.py \\",
-      "owner": "neutral host import policy",
-      "disposition": "execution",
-      "argv": "python3 scripts/verify-host-dependencies.py $binary_path --report $imports_path --max-glibc declared",
-      "status_output_effects": "Inherited stdout/stderr; nonzero aborts strict action before checksum/output export; writes host-imports.json at imports_path on successful validation.",
-      "transitive_boundary": "scripts/verify-host-dependencies.py",
-      "replacement": "tools/xtask host import policy, task 16",
-      "deletion_condition": "Remove after report bytes and rejected host dependencies match across platforms.",
-      "reason": "Host preparation executes this verifier before checksum export."
-    },
-    {
       "id": ".github/actions/prepare-static-abi-input/action.yml#candidate:ce10af9abe469a77:1",
       "source_block": "python3 scripts/verify-static-abi-build-stamp.py \\",
       "owner": "portable static ABI stamp verification",
@@ -485,66 +473,6 @@
   ],
   "inline_source_records": [
     {
-      "id": "scripts/ci-smoke-test.sh#candidate:ed14dc5c15b455f4:1",
-      "source_block": "inspect_status=\"$(printf '%s' \"$inspect_json\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"status\"])')\"",
-      "owner": "release attestation smoke inspection",
-      "disposition": "execution",
-      "argv": "printf '%s' $inspect_json | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"status\"])'; stdin is release-attestation inspect --json output",
-      "status_output_effects": "Captures the status string on stdout; stderr inherited, parse error or nonzero fails the optional inspection branch under set -e and pipefail. Reads stdin only; no intended persistent writes.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child",
-      "replacement": "task 21 required smoke attestation parsing",
-      "deletion_condition": "Remove after the smoke inspector preserves status extraction and malformed JSON rejection.",
-      "reason": "scripts/ci-smoke-test.sh:37 runs Python after the optional attestation key guard at :28-31."
-    },
-    {
-      "id": "scripts/ci-smoke-test.sh#candidate:6d666741099c13b1:1",
-      "source_block": "python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"release_attestation\", {}).get(\"status\", \"\"))' 2>/dev/null ||",
-      "owner": "served release attestation status",
-      "disposition": "execution",
-      "argv": "curl -sf http://127.0.0.1:${CONSOLE_PORT}/api/status | python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"release_attestation\", {}).get(\"status\", \"\"))'",
-      "status_output_effects": "Prints status or empty string captured by runtime_release_attestation_status; stderr discarded, failed curl/Python becomes empty via echo fallback. Reads stdin only; no intended persistent writes.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child",
-      "replacement": "task 21 required smoke status parsing",
-      "deletion_condition": "Remove when the smoke preserves missing/invalid status fallback and attestation comparison.",
-      "reason": "scripts/ci-smoke-test.sh:44-48 pipes live API status through Python; this is the first occurrence."
-    },
-    {
-      "id": "scripts/ci-smoke-test.sh#candidate:6e191bf72d2186bb:1",
-      "source_block": "python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"llama_ready\", False))' 2>/dev/null ||",
-      "owner": "model runtime readiness polling",
-      "disposition": "execution",
-      "argv": "curl -sf http://127.0.0.1:${CONSOLE_PORT}/api/status | python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"llama_ready\", False))'",
-      "status_output_effects": "Prints True or False into READY; stderr discarded and failure falls back to False, retrying until MAX_WAIT then failing smoke. Reads stdin only; no intended persistent writes.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child",
-      "replacement": "task 21 required smoke readiness parsing",
-      "deletion_condition": "Remove after readiness retry, malformed status and timeout parity.",
-      "reason": "scripts/ci-smoke-test.sh:121-125 executes Python inside bounded readiness loop."
-    },
-    {
-      "id": "scripts/ci-smoke-test.sh#candidate:11301e711a20d947:1",
-      "source_block": "python3 -c 'import json,sys; data=json.load(sys.stdin).get(\"data\", []); print(data[0].get(\"id\", \"\") if data else \"\")' 2>/dev/null ||",
-      "owner": "first published OpenAI model",
-      "disposition": "execution",
-      "argv": "printf '%s' $MODELS_JSON | python3 -c 'import json,sys; data=json.load(sys.stdin).get(\"data\", []); print(data[0].get(\"id\", \"\") if data else \"\")'",
-      "status_output_effects": "Prints first model ID or empty into SMOKE_MODEL_ID; stderr discarded and failure falls back to empty, retrying up to 60 times then failing smoke. Reads stdin only; no intended persistent writes.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child",
-      "replacement": "task 21 required smoke model-list parsing",
-      "deletion_condition": "Remove after first-model selection and empty/malformed response retry parity.",
-      "reason": "scripts/ci-smoke-test.sh:147-152 pipes fetched model list through Python."
-    },
-    {
-      "id": "scripts/ci-smoke-test.sh#candidate:6d666741099c13b1:2",
-      "source_block": "python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"release_attestation\", {}).get(\"status\", \"\"))' 2>/dev/null ||",
-      "owner": "headless release attestation status",
-      "disposition": "execution",
-      "argv": "curl -sf http://127.0.0.1:${HEADLESS_CONSOLE_PORT}/api/status | python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"release_attestation\", {}).get(\"status\", \"\"))'",
-      "status_output_effects": "Prints status or empty into HEADLESS_ATTESTATION_STATUS; stderr discarded, failed curl/Python becomes empty via echo fallback; mismatch fails smoke only when attestation key is set. Reads stdin only; no intended persistent writes.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child",
-      "replacement": "task 21 required smoke headless status parsing",
-      "deletion_condition": "Remove after headless status fallback and attestation comparison parity.",
-      "reason": "scripts/ci-smoke-test.sh:278-282 repeats the status extractor for headless API; distinct second occurrence."
-    },
-    {
       "id": ".github/actions/install-actionlint/action.yml#candidate:36cd00e4a0f2919a:1",
       "source_block": "python3 - \"$archive\" \"$checksum\" <<'PY'",
       "owner": "required Quality actionlint download integrity",
@@ -555,18 +483,6 @@
       "replacement": "tools/xtask artifact checksum, task 13",
       "deletion_condition": "Remove when actionlint installation verifies the pinned SHA-256 in Rust with the same mismatch failure before extraction.",
       "reason": ".github/actions/install-actionlint/action.yml:41 runs unconditionally after the curl download at :32-40 and before safe-extract-tar.py at :55."
-    },
-    {
-      "id": ".github/actions/prepare-host-input/action.yml#candidate:c30ab741d28dc07d:1",
-      "source_block": "python3 -c 'import json,sys; print(json.load(sys.stdin)[\"target_directory\"])'",
-      "owner": "host input attestation verifier location",
-      "disposition": "execution",
-      "argv": "cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"target_directory\"])'",
-      "status_output_effects": "Only when both attestation key files are set (:90-98). Prints the Cargo target directory captured into cargo_target_dir; a JSON/key error or nonzero status fails the step under set -euo pipefail. Reads stdin only; no writes.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child or subprocess",
-      "replacement": "tools/xtask verifier build/copy target resolution, task 7",
-      "deletion_condition": "Remove when the attestation verifier path is resolved without Python and the stamped/inspected verifier copy is unchanged.",
-      "reason": ".github/actions/prepare-host-input/action.yml:99-104 builds xtask and pipes cargo metadata through Python inside the attestation-enabled branch."
     },
     {
       "id": ".github/actions/prepare-native-sdk-input/action.yml#candidate:1e4a572831da36f2:1",
@@ -651,30 +567,6 @@
       "replacement": "tools/xtask runner trust audit, task 12",
       "deletion_condition": "Remove when the no-checkout attestation classifies bracketed loopback authorities without Python.",
       "reason": ".github/workflows/ci-quality-slice.yml:353-360 gates the job; :410-416 guards the bracketed branch."
-    },
-    {
-      "id": "scripts/ci-client-readiness-smoke.sh#candidate:ad6f284f29a18598:1",
-      "source_block": "port=\"$(python3 - <<'PY'",
-      "owner": "client readiness loopback port selection",
-      "disposition": "execution",
-      "argv": "python3 - with quoted heredoc 26-31 inside port=$(...)",
-      "status_output_effects": "Binds 127.0.0.1:0, prints the chosen port into port, closes the socket; stderr inherited; nonzero aborts under set -euo pipefail. No writes.",
-      "transitive_boundary": "inline stdlib socket; no repository child or subprocess",
-      "replacement": "tools/xtask readiness/lifecycle, task 20",
-      "deletion_condition": "Remove when the Rust readiness owner allocates the port with the same loopback behavior.",
-      "reason": "scripts/ci-client-readiness-smoke.sh:25 runs unconditionally before the client launch."
-    },
-    {
-      "id": "scripts/ci-client-readiness-smoke.sh#candidate:af17aa90455a51a0:1",
-      "source_block": "if python3 - \"$LOG\" <<'PY'",
-      "owner": "client readiness log predicate",
-      "disposition": "execution",
-      "argv": "python3 - $LOG with quoted heredoc 191-207 as an if condition inside the MAX_WAIT loop",
-      "status_output_effects": "Scans the JSON log; exit 0 on a passive_mode ready client event or 'client ready' message, else 1. Status selects success exit versus sleep/retry; stderr inherited. No writes.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child or subprocess",
-      "replacement": "tools/xtask readiness/lifecycle, task 20",
-      "deletion_condition": "Remove when Rust readiness detects the same structured and legacy ready events within the bound.",
-      "reason": "scripts/ci-client-readiness-smoke.sh:184-213 polls once per second after the client starts."
     },
     {
       "id": "scripts/ci-compat-smoke.sh#candidate:ed14dc5c15b455f4:1",
@@ -1368,7 +1260,6 @@
       ],
       "commands": [
         "inline python3 -c and heredocs",
-        "scripts/ci-client-readiness-process.py",
         "scripts/reconcile-two-node-split-evidence.py",
         "scripts/ci-openai-workload-smoke.py",
         "scripts/ci-openai-python-smoke.py",
@@ -1692,8 +1583,8 @@
       "deletion_criteria": "old/new artifact parity for identity, manifests, bytes, checksums, modes, links and errors, then all callers migrate"
     },
     {
-      "caller": "scripts/ci-client-readiness-smoke.sh:25,95-107,167,190",
-      "interpreter_edge": "inline Python port/log probes and ci-client-readiness-process.py process lifecycle commands",
+      "caller": "scripts/ci-client-readiness-smoke.sh",
+      "interpreter_edge": "removed; automation client-readiness owns port selection, event observation and process cleanup",
       "reaches": "stdlib inline snippets and process helper; process helper starts the composed mesh-llm binary",
       "arguments": "binary, native runtime root, readiness/shutdown configuration and helper subcommands",
       "success_output": "selected port and readiness result",
@@ -3031,238 +2922,6 @@
       ]
     },
     {
-      "id": "boundary:ci-client-readiness-smoke:95",
-      "disposition": "platform_conditional",
-      "caller": "scripts/ci-client-readiness-smoke.sh",
-      "line": 95,
-      "source_block": "python3 \"$WINDOWS_PROCESS_HELPER\" ctrl-break --pid \"$native_pid\" 2>/dev/null || true",
-      "occurrence": 1,
-      "candidate_id": "scripts/ci-client-readiness-smoke.sh#candidate:b7902f0c44cd1578:1",
-      "child": "scripts/ci-client-readiness-process.py",
-      "bound_child": null,
-      "selector": "is_windows=1 only when uname -s matches MINGW*|MSYS*|CYGWIN* (scripts/ci-client-readiness-smoke.sh:36-38); line 95 is inside shutdown_client_windows, called only under [[ $is_windows == 1 ]] at :130-131; WINDOWS_PROCESS_HELPER is bound once at :12",
-      "reachable_bytes": "scripts/ci-client-readiness-process.py (walked); fixed subcommand ctrl-break --pid native_pid",
-      "replacement_owner": "task 19 bounded cross-platform process supervision",
-      "deletion_condition": "Remove when the Rust process owner provides ctrl-break/is-running/force-stop and this smoke stops calling the helper.",
-      "rationale": "The helper path is proven from SCRIPT_DIR (BASH_SOURCE idiom); the call is Windows-gated and failure-tolerant, so it is conditional, not unconditional reach.",
-      "evidence": [
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 11,
-          "text": "SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\""
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 12,
-          "text": "WINDOWS_PROCESS_HELPER=\"$SCRIPT_DIR/ci-client-readiness-process.py\""
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 36,
-          "text": "is_windows=0"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 37,
-          "text": "case \"$(uname -s)\" in"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 38,
-          "text": "MINGW*|MSYS*|CYGWIN*) is_windows=1 ;;"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 130,
-          "text": "if [[ \"$is_windows\" == \"1\" ]]; then"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 131,
-          "text": "shutdown_client_windows"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 95,
-          "text": "python3 \"$WINDOWS_PROCESS_HELPER\" ctrl-break --pid \"$native_pid\" 2>/dev/null || true"
-        }
-      ]
-    },
-    {
-      "id": "boundary:ci-client-readiness-smoke:99",
-      "disposition": "platform_conditional",
-      "caller": "scripts/ci-client-readiness-smoke.sh",
-      "line": 99,
-      "source_block": "if [[ -n \"$native_pid\" ]] && ! python3 \"$WINDOWS_PROCESS_HELPER\" is-running --pid \"$native_pid\"; then",
-      "occurrence": 1,
-      "candidate_id": "scripts/ci-client-readiness-smoke.sh#candidate:521647777e2e1488:1",
-      "child": "scripts/ci-client-readiness-process.py",
-      "bound_child": null,
-      "selector": "is_windows=1 only when uname -s matches MINGW*|MSYS*|CYGWIN* (scripts/ci-client-readiness-smoke.sh:36-38); line 99 is inside shutdown_client_windows, called only under [[ $is_windows == 1 ]] at :130-131; WINDOWS_PROCESS_HELPER is bound once at :12",
-      "reachable_bytes": "scripts/ci-client-readiness-process.py (walked); fixed subcommand is-running --pid native_pid",
-      "replacement_owner": "task 19 bounded cross-platform process supervision",
-      "deletion_condition": "Remove when the Rust process owner provides ctrl-break/is-running/force-stop and this smoke stops calling the helper.",
-      "rationale": "The helper path is proven from SCRIPT_DIR (BASH_SOURCE idiom); the call is Windows-gated and failure-tolerant, so it is conditional, not unconditional reach.",
-      "evidence": [
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 11,
-          "text": "SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\""
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 12,
-          "text": "WINDOWS_PROCESS_HELPER=\"$SCRIPT_DIR/ci-client-readiness-process.py\""
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 36,
-          "text": "is_windows=0"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 37,
-          "text": "case \"$(uname -s)\" in"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 38,
-          "text": "MINGW*|MSYS*|CYGWIN*) is_windows=1 ;;"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 130,
-          "text": "if [[ \"$is_windows\" == \"1\" ]]; then"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 131,
-          "text": "shutdown_client_windows"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 99,
-          "text": "if [[ -n \"$native_pid\" ]] && ! python3 \"$WINDOWS_PROCESS_HELPER\" is-running --pid \"$native_pid\"; then"
-        }
-      ]
-    },
-    {
-      "id": "boundary:ci-client-readiness-smoke:105",
-      "disposition": "platform_conditional",
-      "caller": "scripts/ci-client-readiness-smoke.sh",
-      "line": 105,
-      "source_block": "if [[ -n \"$native_pid\" ]] && python3 \"$WINDOWS_PROCESS_HELPER\" is-running --pid \"$native_pid\"; then",
-      "occurrence": 1,
-      "candidate_id": "scripts/ci-client-readiness-smoke.sh#candidate:14dc4ffe371af236:1",
-      "child": "scripts/ci-client-readiness-process.py",
-      "bound_child": null,
-      "selector": "is_windows=1 only when uname -s matches MINGW*|MSYS*|CYGWIN* (scripts/ci-client-readiness-smoke.sh:36-38); line 105 is inside shutdown_client_windows, called only under [[ $is_windows == 1 ]] at :130-131; WINDOWS_PROCESS_HELPER is bound once at :12",
-      "reachable_bytes": "scripts/ci-client-readiness-process.py (walked); fixed subcommand is-running --pid native_pid",
-      "replacement_owner": "task 19 bounded cross-platform process supervision",
-      "deletion_condition": "Remove when the Rust process owner provides ctrl-break/is-running/force-stop and this smoke stops calling the helper.",
-      "rationale": "The helper path is proven from SCRIPT_DIR (BASH_SOURCE idiom); the call is Windows-gated and failure-tolerant, so it is conditional, not unconditional reach.",
-      "evidence": [
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 11,
-          "text": "SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\""
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 12,
-          "text": "WINDOWS_PROCESS_HELPER=\"$SCRIPT_DIR/ci-client-readiness-process.py\""
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 36,
-          "text": "is_windows=0"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 37,
-          "text": "case \"$(uname -s)\" in"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 38,
-          "text": "MINGW*|MSYS*|CYGWIN*) is_windows=1 ;;"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 130,
-          "text": "if [[ \"$is_windows\" == \"1\" ]]; then"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 131,
-          "text": "shutdown_client_windows"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 105,
-          "text": "if [[ -n \"$native_pid\" ]] && python3 \"$WINDOWS_PROCESS_HELPER\" is-running --pid \"$native_pid\"; then"
-        }
-      ]
-    },
-    {
-      "id": "boundary:ci-client-readiness-smoke:107",
-      "disposition": "platform_conditional",
-      "caller": "scripts/ci-client-readiness-smoke.sh",
-      "line": 107,
-      "source_block": "python3 \"$WINDOWS_PROCESS_HELPER\" force-stop --pid \"$native_pid\" || true",
-      "occurrence": 1,
-      "candidate_id": "scripts/ci-client-readiness-smoke.sh#candidate:7a948c8497210557:1",
-      "child": "scripts/ci-client-readiness-process.py",
-      "bound_child": null,
-      "selector": "is_windows=1 only when uname -s matches MINGW*|MSYS*|CYGWIN* (scripts/ci-client-readiness-smoke.sh:36-38); line 107 is inside shutdown_client_windows, called only under [[ $is_windows == 1 ]] at :130-131; WINDOWS_PROCESS_HELPER is bound once at :12",
-      "reachable_bytes": "scripts/ci-client-readiness-process.py (walked); fixed subcommand force-stop --pid native_pid",
-      "replacement_owner": "task 19 bounded cross-platform process supervision",
-      "deletion_condition": "Remove when the Rust process owner provides ctrl-break/is-running/force-stop and this smoke stops calling the helper.",
-      "rationale": "The helper path is proven from SCRIPT_DIR (BASH_SOURCE idiom); the call is Windows-gated and failure-tolerant, so it is conditional, not unconditional reach.",
-      "evidence": [
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 11,
-          "text": "SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\""
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 12,
-          "text": "WINDOWS_PROCESS_HELPER=\"$SCRIPT_DIR/ci-client-readiness-process.py\""
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 36,
-          "text": "is_windows=0"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 37,
-          "text": "case \"$(uname -s)\" in"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 38,
-          "text": "MINGW*|MSYS*|CYGWIN*) is_windows=1 ;;"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 130,
-          "text": "if [[ \"$is_windows\" == \"1\" ]]; then"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 131,
-          "text": "shutdown_client_windows"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 107,
-          "text": "python3 \"$WINDOWS_PROCESS_HELPER\" force-stop --pid \"$native_pid\" || true"
-        }
-      ]
-    },
-    {
       "id": "boundary:package-native-runtime:218",
       "disposition": "bounded_selector",
       "caller": "scripts/package-native-runtime.sh",
@@ -4260,34 +3919,6 @@
       ]
     },
     {
-      "id": "boundary:ci-client-readiness-process:72",
-      "disposition": "finite_target",
-      "caller": "scripts/ci-client-readiness-process.py",
-      "line": 72,
-      "source_block": "subprocess.run(",
-      "occurrence": 1,
-      "candidate_id": "scripts/ci-client-readiness-process.py#subprocess-or-interpreter:227b092c1f2b3e39:1",
-      "child": null,
-      "bound_child": null,
-      "selector": "argv[0] is the string literal 'taskkill.exe' in the list at scripts/ci-client-readiness-process.py:72; no variable, argv or environment value selects the executable",
-      "reachable_bytes": "external host tool 'taskkill.exe' resolved on PATH; no repository Python or script bytes",
-      "replacement_owner": "task 19 bounded cross-platform process supervision",
-      "deletion_condition": "Remove when the Rust process owner force-stops Windows trees.",
-      "rationale": "Finite target: literal taskkill.exe /PID pid /T /F.",
-      "evidence": [
-        {
-          "path": "scripts/ci-client-readiness-process.py",
-          "line": 72,
-          "text": "subprocess.run("
-        },
-        {
-          "path": "scripts/ci-client-readiness-process.py",
-          "line": 73,
-          "text": "[\"taskkill.exe\", \"/PID\", str(pid), \"/T\", \"/F\"],"
-        }
-      ]
-    },
-    {
       "id": "boundary:plan-ci:375",
       "disposition": "runtime_selected_boundary",
       "caller": "scripts/plan-ci.py",
@@ -4327,49 +3958,6 @@
           "path": "scripts/plan-ci.py",
           "line": 914,
           "text": "plan = build_plan(payload, manifest_root=arguments.manifest_root)"
-        }
-      ]
-    },
-    {
-      "id": "boundary:ci-client-readiness-process:38",
-      "disposition": "runtime_selected_boundary",
-      "caller": "scripts/ci-client-readiness-process.py",
-      "line": 38,
-      "source_block": "process = subprocess.Popen(",
-      "occurrence": 1,
-      "candidate_id": "scripts/ci-client-readiness-process.py#subprocess-or-interpreter:091b630b3a4be637:1",
-      "child": null,
-      "bound_child": null,
-      "selector": "argv after 'run --pid-file F --log L --' (argparse REMAINDER at :87); the only repository caller passes $MESH_LLM --log-format json --port P --no-console client --mesh-discovery-mode mdns (scripts/ci-client-readiness-smoke.sh:167-169)",
-      "reachable_bytes": "the mesh-llm executable chosen by the smoke's MESH_LLM variable; no repository Python",
-      "replacement_owner": "task 19 bounded cross-platform process supervision",
-      "deletion_condition": "Remove when the Rust supervisor launches the native client on Windows.",
-      "rationale": "The program is argv-selected by design; the boundary names the caller that chooses it and records that it is not a Python child.",
-      "evidence": [
-        {
-          "path": "scripts/ci-client-readiness-process.py",
-          "line": 87,
-          "text": "run.add_argument(\"program\", nargs=argparse.REMAINDER)"
-        },
-        {
-          "path": "scripts/ci-client-readiness-process.py",
-          "line": 101,
-          "text": "return launch(args.program, args.pid_file, args.log, is_windows=os.name == \"nt\")"
-        },
-        {
-          "path": "scripts/ci-client-readiness-process.py",
-          "line": 38,
-          "text": "process = subprocess.Popen("
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 167,
-          "text": "python3 \"$WINDOWS_PROCESS_HELPER\" run --pid-file \"$native_pid_file\" --log \"$LOG\" -- \\"
-        },
-        {
-          "path": "scripts/ci-client-readiness-smoke.sh",
-          "line": 168,
-          "text": "\"$MESH_LLM\" --log-format json --port \"$port\" --no-console \\"
         }
       ]
     },
