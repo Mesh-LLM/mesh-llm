@@ -1,0 +1,31 @@
+{
+  "origin": "source-derived, not executable oracle capture",
+  "oracle_capture": "pending",
+  "cases": [
+    {"name":"runtime-ready","check":"runtime","body":"{\"llama_ready\":true}","expected":"advance"},
+    {"name":"runtime-string-true","check":"runtime","body":"{\"llama_ready\":\"True\"}","expected":"advance"},
+    {"name":"runtime-false","check":"runtime","body":"{\"llama_ready\":false}","expected":"pending"},
+    {"name":"runtime-number","check":"runtime","body":"{\"llama_ready\":1}","expected":"pending"},
+    {"name":"runtime-invalid","check":"runtime","body":"{","expected":"pending"},
+    {"name":"runtime-missing","check":"runtime","body":"{}","expected":"pending"},
+    {"name":"runtime-array","check":"runtime","body":"[true]","expected":"pending"},
+    {"name":"models-first","check":"models","body":"{\"data\":[{\"id\":\"dense\"},{\"id\":\"second\"}]}","expected":"advance","model":"dense"},
+    {"name":"models-first-empty","check":"models","body":"{\"data\":[{\"id\":\"\"},{\"id\":\"second\"}]}","expected":"pending"},
+    {"name":"models-empty","check":"models","body":"{\"data\":[]}","expected":"pending"},
+    {"name":"models-malformed","check":"models","body":"{\"data\":42}","expected":"pending"},
+    {"name":"chat-content","check":"chat","body":"{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":\"hello\"}}]}","expected":"advance"},
+    {"name":"chat-whitespace","check":"chat","body":"{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":\" \"}}]}","expected":"advance"},
+    {"name":"chat-array-content","check":"chat","body":"{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":[1]}}]}","expected":"advance"},
+    {"name":"chat-empty-content","check":"chat","body":"{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":\"\"}}]}","expected":"reject"},
+    {"name":"chat-wrong-object","check":"chat","body":"{\"object\":\"wrong\",\"choices\":[{\"message\":{\"content\":\"hello\"}}]}","expected":"reject"},
+    {"name":"chat-null","check":"chat","body":"null","expected":"reject"},
+    {"name":"chat-malformed","check":"chat","body":"{","expected":"reject"},
+    {"name":"auto-no-object","check":"auto","body":"{\"choices\":[{\"message\":{\"content\":\"hi\"}}]}","expected":"advance"},
+    {"name":"auto-no-content","check":"auto","body":"{\"choices\":[{\"message\":{}}]}","expected":"reject"},
+    {"name":"stream-markers","check":"stream","body":"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: [DONE]\n","expected":"advance"},
+    {"name":"stream-no-done","check":"stream","body":"data: {\"role\":\"assistant\"}\n","expected":"reject"},
+    {"name":"stream-no-role","check":"stream","body":"data: [DONE]\n","expected":"reject"},
+    {"name":"stream-spaced-role","check":"stream","body":"data: {\"role\": \"assistant\"}\n\ndata: [DONE]\n","expected":"reject"},
+    {"name":"stream-legacy-substrings","check":"stream","body":"not SSE \"role\":\"assistant\" then data: [DONE] trailing","expected":"advance"}
+  ]
+}
