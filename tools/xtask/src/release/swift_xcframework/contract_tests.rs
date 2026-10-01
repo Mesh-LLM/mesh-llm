@@ -24,9 +24,9 @@ fn host_only_when_exact_arm64_declaration() {
 }
 
 #[test]
-fn architecture_contract_when_simulator_lacks_x86_64() {
+fn architecture_contract_when_simulator_includes_unsupported_x86_64() {
     let mut fixture = Fixture::full();
-    fixture.entries[1] = entry("ios", "simulator", &["arm64"]);
+    fixture.entries[1] = entry("ios", "simulator", &["arm64", "x86_64"]);
     fixture.write(false);
     let result = fixture.declarations(Some(Mode::Full));
     assert!(

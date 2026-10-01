@@ -18,11 +18,11 @@ fn accepts_complete_versioned_framework_when_full_and_host_only() {
 }
 
 #[test]
-fn lipo_mismatch_when_catalyst_binary_lacks_x86_64() {
+fn lipo_mismatch_when_catalyst_binary_includes_unsupported_x86_64() {
     let fixture = Fixture::full();
     fixture.materialize();
     fixture.write(true);
-    fs::write(fixture.framework(2).join("MeshLLMFFI"), "arm64").unwrap();
+    fs::write(fixture.framework(2).join("MeshLLMFFI"), "arm64 x86_64").unwrap();
     let result = fixture.verify(Some(Mode::Full));
     assert!(
         result

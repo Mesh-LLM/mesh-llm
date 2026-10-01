@@ -33,13 +33,9 @@ impl Mode {
             .collect()
     }
 
-    pub(super) fn architectures(self, key: &Key) -> BTreeSet<String> {
+    pub(super) fn architectures(self, _key: &Key) -> BTreeSet<String> {
         let names: &[&str] = match self {
-            Self::HostOnly => &["arm64"],
-            Self::Full => match (key.platform.as_str(), key.variant.as_str()) {
-                ("ios", "") => &["arm64"],
-                _ => &["arm64", "x86_64"],
-            },
+            Self::HostOnly | Self::Full => &["arm64"],
         };
         names.iter().map(|name| (*name).to_owned()).collect()
     }
