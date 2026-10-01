@@ -1,5 +1,24 @@
 # MeshLLM CI topology
 
+The L2 planner action and all five lane summaries now invoke Rust `ci plan`
+and `ci validate-lane` using `prepare-automation`'s explicit `hosted-bare`
+profile. That profile is restricted to GitHub-hosted Linux, uses the existing
+stable Rust selection and locked release Cargo without compiler wrappers or
+Just, and preserves the default image profile's verification and cache setup.
+Metadata-only Cargo discovery remains permitted. Composition-only release
+jobs still consume immutable automation and never compile.
+
+Quality commit convention and environment-mutation checks use Rust repository
+owners. Runner-contract cleanup uses `ci-ops runner-cleanup`. Registry-pull
+summaries use `ci-ops registry-pulls`, with jq producing the observation JSON.
+Runtime-seed preflight, restore verification, measurement and summary use
+`ci-ops runtime-seed`. Its automation build precedes measurement and uses
+step-local Cargo home and target directories under runner temp, with compiler
+wrappers disabled; measured native/Cargo/package outputs and cache stay fresh.
+Protected pinned resolver and no-checkout authority callers remain transitional
+pending protected-main delivery. These source changes do not qualify live
+Linux measurements, provider isolation or protected rollout.
+
 L12 local reconciliation preserves the five PR/main entrypoints and protected
 executor boundaries. Quality runs Rust workflow permission, container-shell and
 expression guards plus the real build-script adapter tests. Surviving transitional
@@ -402,8 +421,8 @@ artifact per OS/architecture through `upload-automation`. All eight release
 composition jobs restore the immutable executable through `restore-automation`,
 verify its checksum and source identity, and export `MESH_LLM_AUTOMATION_BIN`.
 Their existing host-producer `needs` edges provide the artifact dependency; no
-composer invokes Cargo. These shared actions can support later L2 delivery, but
-the L2 callers remain unchanged. Windows composition jobs restore rather than build;
+composer invokes Cargo. L2 bare-hosted callers use explicit automation preparation.
+Windows composition jobs restore rather than build;
 release jobs no longer install Python. Runtime-package verification embeds the
 checked-in GLIBC ceiling and retains native dependency probes when copied
 outside the source checkout. `repository publish-order --dependency-pairs`
@@ -607,17 +626,15 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 
 The local `scripts/hooks/commit-msg` hook now invokes the Rust
 `repository conventional-commits` command through the repository Cargo alias.
-The workflow commit check and planner/summary callers remain transitional.
-Their Linux jobs run on bare hosted runners, whereas `prepare-automation`
-currently requires `verify-runner-image public cpu` on Linux. Protected
-automation delivery must be resolved before those callers switch. The
-pre-checkout audit and no-checkout sentinel must not build candidate code.
-L2 authority and registry-pull intent owners are registered as `ci-ops
-authority-audit` and `ci-ops registry-pulls`. Existing workflow callers remain
-unchanged; protected delivery is still unresolved. No provider, cache authority
-or required result changed.
+The workflow commit check, planner and five lane summaries use Rust owners
+through hosted-bare automation preparation. The local package resolver requires
+prepared or restored automation and invokes metadata-only discovery. Protected
+callers still pin the old resolver and retain its Python implementation until
+rollout. Pre-checkout audit and no-checkout sentinel jobs must not build
+candidate code and remain blocked on protected delivery. Registry-pull summaries
+use the Rust owner. No provider, cache authority or required result changed.
 
-`scripts/plan-ci.py` is the only source of slice eligibility. It reads the
+`tools/xtask/src/ci_plan` is the production source of slice eligibility. It reads the
 JSON-compatible YAML manifests `ci/ownership.yml` and `ci/slices.yml`, validates
 their schema and dependency graph, and emits `ci/ci-plan.schema.json` output.
 Its optional manifest root changes only those two reads. All workspace and
@@ -629,7 +646,7 @@ semantic domains, signals, selected slices, reasons, typed matrices, runner
 roles, cache modes and fan-out budgets. Unknown paths and malformed inputs fail
 closed.
 
-`scripts/plan-ci.py` is the sole Clippy and Rust-test batch allocator;
+The Rust CI planner is the sole production Clippy and Rust-test batch allocator;
 `ci-crate-lists` validates that the main `matrices.rust_tests` covers every
 workspace crate exactly once.
 
@@ -1143,7 +1160,7 @@ The warmer's `just ci-sccache-seed-build` recipe covers the dominant
 `mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
 graph, and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix;
 its `Justfile` and `just/**` inputs are part of the exact seed key.
-`ci/runner-images.json` and `scripts/runner-image-identity.py check` make the
+`ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
 without changing execution. The existing Python test discovery verifies the
 catalog against workflow bindings and real planner rows. Historical tool
@@ -1236,17 +1253,17 @@ Runner-images PR #23 merged as `f73c2a9`. Trusted producer admission must run
 maintainer adopts its exact-byte cohort hash, origin and admission-validator
 revision. Offline structural validation alone cannot perform that admission.
 
-The consumer's `runner-image-identity.py bind` accepts a separate reviewed anchor
+The consumer's `ci-ops runner-identity bind` accepts a separate reviewed anchor
 and emits a fresh proposal directory containing `ci/runner-images.json` plus
 content-addressed `ci/runner-image-evidence/<sha256>.json` files. It does not
 modify the input catalog, workflows, image pins, compiler seed or cache policy.
 Qualified public UI and browser entries retain reviewed admission evidence; historical full-web and native entries remain null.
 
 ```sh
-python3 scripts/runner-image-identity.py --root /trusted/mesh-llm bind \
+cargo xtool ci-ops runner-identity --root /trusted/mesh-llm bind \
   --image-id public-cpu --cohort /admitted/staged-cohort.json \
   --anchor /reviewed/anchor.json --output /new/proposal
-python3 scripts/runner-image-identity.py --root /new/proposal validate
+cargo xtool ci-ops runner-identity --root /new/proposal validate
 ```
 
 The anchor has exactly `receipt` and `provenance` objects. Receipt fields are

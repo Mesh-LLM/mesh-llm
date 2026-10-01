@@ -221,19 +221,6 @@
       ]
     ],
     [
-      "scripts/tests/test_ci_sdk_json_consumer.py",
-      [
-        [
-          "fixture",
-          "copied scripts/ci-compose-product-input.sh",
-          "helper runs composer in temporary workspace with stub host SDK reader and fake product; malformed CLI reports block publication",
-          [
-            121
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_ci_sdk_producers.py",
       [
         [
@@ -470,27 +457,6 @@
       ]
     ],
     [
-      "scripts/tests/test_llama_upstream_pin_guard.py",
-      [
-        [
-          "fixture",
-          "git -C temporary upstream/mesh repositories",
-          "run_git helper takes caller-selected commands to create or inspect local revision fixture",
-          [
-            25
-          ]
-        ],
-        [
-          "launch",
-          "scripts/check-llama-upstream-pin.py",
-          "run_guard executes fixed guard with fixture base/head/upstream and asserts status/diagnostics",
-          [
-            131
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_model_artifact_registry.py",
       [
         [
@@ -527,85 +493,6 @@
           [
             99,
             153
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_release_notes.py",
-      [
-        [
-          "launch",
-          "scripts/hooks/commit-msg",
-          "two fixed hook executions on fixture commit message file; assert conventional trailer policy",
-          [
-            112,
-            441
-          ]
-        ],
-        [
-          "launch",
-          "scripts/release-notes-regroup.py",
-          "render helper supplies body/plan/output fixture and captures status; sys.executable continuation belongs to the same call",
-          [
-            216,
-            658,
-            670,
-            681,
-            724,
-            1159
-          ]
-        ],
-        [
-          "assembly",
-          "scripts/release-notes-regroup.py argv",
-          "sys.executable vector continues line 216",
-          [
-            218
-          ]
-        ],
-        [
-          "launch",
-          "scripts/release-notes-regroup.py",
-          "helper plus direct variants execute fixed regroup script on fixture release body/plan and check output/rejections",
-          [
-            538,
-            752
-          ]
-        ],
-        [
-          "assembly",
-          "scripts/release-notes-regroup.py argv",
-          "three argument continuations belong to corresponding preceding regroup calls",
-          [
-            539,
-            725,
-            753
-          ]
-        ],
-        [
-          "assembly",
-          "scripts/check-conventional-commit.py argv",
-          "three fixed checker vectors continue preceding run calls",
-          [
-            659,
-            671,
-            682
-          ]
-        ],
-        [
-          "fixture",
-          "git in temporary release-notes repository",
-          "local init/config/add/commit/tag sequence creates v1/v2 history; repeated expressions do not start GitHub actions",
-          [
-            1085,
-            1086,
-            1089,
-            1096,
-            1097,
-            1100,
-            1102,
-            1103
           ]
         ]
       ]
@@ -772,8 +659,8 @@
           "scripts/cargo-linker-linux-x86_64",
           "linker test with fixture compiler and invocation log; checks forwarded flags",
           [
-            104,
-            146
+            111,
+            153
           ]
         ]
       ]
@@ -912,27 +799,6 @@
           "runs priority p0 with fixture environment; result checks candidate downloader behavior",
           [
             79
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_env_mutation_contract.py",
-      [
-        [
-          "launch",
-          "scripts/check-env-mutation-contract.py",
-          "run_checker passes test args and captures diagnostics/status; argv continuation does not launch separately",
-          [
-            18
-          ]
-        ],
-        [
-          "assembly",
-          "scripts/check-env-mutation-contract.py argv",
-          "sys.executable and SCRIPT belong to run_checker at line 18",
-          [
-            19
           ]
         ]
       ]
@@ -1129,19 +995,6 @@
       ]
     ],
     [
-      "scripts/tests/test_plan_ci.py",
-      [
-        [
-          "launch",
-          "git ls-files",
-          "read-only tracked-path inventory with ROOT cwd for planner catalog assertion",
-          [
-            175
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_plan_family_battery.py",
       [
         [
@@ -1199,53 +1052,6 @@
           "interpreter/script argv continuation of the preceding run, not a second process",
           [
             1202
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_runner_image_evidence.py",
-      [
-        [
-          "launch",
-          "scripts/runner-image-identity.py",
-          "fixed identity CLI: validate, bind, lookup, seed-key, diagnose and check on fixture roots; malformed catalogs fail and bind output stays isolated",
-          [
-            181,
-            203,
-            207,
-            209,
-            219,
-            244
-          ]
-        ],
-        [
-          "assembly",
-          "scripts/runner-image-identity.py argv",
-          "interpreter/identity script continuation of the preceding validate subprocess",
-          [
-            220
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_runner_image_identity.py",
-      [
-        [
-          "launch",
-          "scripts/runner-image-identity.py --root <temporary root>",
-          "cli helper passes test-selected subcommands and suppresses bytecode; same process owns following argv continuation",
-          [
-            53
-          ]
-        ],
-        [
-          "assembly",
-          "scripts/runner-image-identity.py argv",
-          "sys.executable and fixed SCRIPT continuation of cli helper",
-          [
-            54
           ]
         ]
       ]
@@ -1804,20 +1610,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_llama_upstream_pin_guard.py",
-      "members": [
-        [
-          17,
-          "0e291d4ecec4bee1",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/check-llama-upstream-pin.py",
-          "fixed GUARD module"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_performance_history.py",
       "members": [
         [
@@ -1828,56 +1620,6 @@
           "import",
           "scripts/performance-history.py",
           "fixed history module"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_plan_ci.py",
-      "members": [
-        [
-          20,
-          "28684c090228440e",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/plan-ci.py",
-          "fixed planner loaded for unit tests"
-        ],
-        [
-          707,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          709,
-          "b055144f6196d6bd",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          725,
-          "fcde2ef6bba29634",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: invalid = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          726,
-          "87838c12f96e2ea3",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: [sys.executable, str(PLANNER_PATH)],; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2007,48 +1749,6 @@
           "import",
           "scripts/compare-event-benchmark-matrix.py",
           "load_comparator_module uses fixed COMPARATOR_SCRIPT"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_runner_image_evidence.py",
-      "members": [
-        [
-          13,
-          "e5cf1f1b727f1c10",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/runner-image-evidence.py",
-          "fixed evidence module"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_runner_image_identity.py",
-      "members": [
-        [
-          20,
-          "5183ec348de51a39",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/runner-image-identity.py",
-          "fixed identity module"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_runtime_seed_canary.py",
-      "members": [
-        [
-          13,
-          "71284ca065d27ef5",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/runtime-seed-canary.py",
-          "fixed canary module"
         ]
       ]
     },
@@ -2207,34 +1907,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_summarize_depot_registry_pulls.py",
-      "members": [
-        [
-          8,
-          "564c02ccf5097dc2",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/summarize-depot-registry-pulls.py",
-          "fixed SCRIPT in registry tests"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_validate_ci_lane_results.py",
-      "members": [
-        [
-          13,
-          "161eedf470a7be36",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/validate-ci-lane-results.py",
-          "multiline spec uses fixed SCRIPT constant"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_workload_monolithic_oracle.py",
       "members": [
         [
@@ -2291,20 +1963,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_ci_product_layout_catalog.py",
-      "members": [
-        [
-          12,
-          "76a6b771c3bd2539",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/ci-cargo-packages.py",
-          "Fixed compatibility module is loaded with exec_module before planner ownership comparisons; not an independent Python launch"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_kv_restart_replay.py",
       "members": [
         [
@@ -2343,20 +2001,6 @@
           "launch",
           "bash -c selected run block of .github/actions/select-ci-runners/action.yml",
           "RunnerSelectorMixin.run_runner_selector extracts the action run block, executes it with fixture environment and checks GITHUB_OUTPUT; its callers in test_ci_runner_selection_and_cache_policy.py vary inputs, not the target"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_release_notes.py",
-      "members": [
-        [
-          25,
-          "af10afe85077572f",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/check-conventional-commit.py | scripts/release-notes-classify.py | scripts/release-notes-regroup.py | scripts/release-notes-link.py",
-          "load(name,filename) joins SCRIPTS and four exact module-level filename arguments"
         ]
       ]
     },
@@ -2752,47 +2396,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_ci_lane_workflows.py",
-      "members": [
-        [
-          258,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "scripts/validate-ci-lane-results.py with Windows lane projection fixture",
-          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          268,
-          "0bb8fafe2022eacf",
-          2,
-          "subprocess-or-interpreter",
-          "fixture",
-          "scripts/validate-ci-lane-results.py with Windows lane projection fixture",
-          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          270,
-          "b055144f6196d6bd",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "scripts/validate-ci-lane-results.py with Windows lane projection fixture",
-          "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          421,
-          "0bb8fafe2022eacf",
-          3,
-          "subprocess-or-interpreter",
-          "fixture",
-          "scripts/validate-ci-lane-results.py with Windows lane projection fixture",
-          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_ci_laya_smoke.py",
       "members": [
         [
@@ -2986,6 +2589,89 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
+    },
+    {
+      "file": "scripts/tests/test_ci_lane_workflows.py",
+      "members": [
+        [
+          258,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "launch",
+          "fixture jq, Rust lane validator, or local report script selected by this test",
+          "Existing lane projection/report behavior; Rust validator replaces the retired interpreter; inherited status and captured diagnostics remain asserted"
+        ],
+        [
+          268,
+          "0bb8fafe2022eacf",
+          2,
+          "subprocess-or-interpreter",
+          "launch",
+          "fixture jq, Rust lane validator, or local report script selected by this test",
+          "Existing lane projection/report behavior; Rust validator replaces the retired interpreter; inherited status and captured diagnostics remain asserted"
+        ],
+        [
+          420,
+          "0bb8fafe2022eacf",
+          3,
+          "subprocess-or-interpreter",
+          "launch",
+          "fixture jq, Rust lane validator, or local report script selected by this test",
+          "Existing lane projection/report behavior; Rust validator replaces the retired interpreter; inherited status and captured diagnostics remain asserted"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/tests/test_pr_builds_summary.py",
+      "members": [
+        [
+          100,
+          "141093bdfb32f5c8",
+          1,
+          "subprocess-or-interpreter",
+          "launch",
+          "fixture jq, Rust lane validator, or local report script selected by this test",
+          "Existing lane projection/report behavior; Rust validator replaces the retired interpreter; inherited status and captured diagnostics remain asserted"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/tests/test_ci_windows_composition.py",
+      "members": [
+        [
+          578,
+          "66ed60a896c4a06c",
+          1,
+          "subprocess-or-interpreter",
+          "launch",
+          "Rust planner or fixture-backed product composer",
+          "Retained source-owned routing and product consumer validation; planner process now uses the Rust executable"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/tests/test_ci_sdk_json_consumer.py",
+      "members": [
+        [
+          29,
+          "a9db626c7e1b3dd8",
+          1,
+          "subprocess-or-interpreter",
+          "launch",
+          "Rust planner or fixture-backed product composer",
+          "Retained source-owned routing and product consumer validation; planner process now uses the Rust executable"
+        ],
+        [
+          119,
+          "13ca18bc3a83fc8c",
+          1,
+          "subprocess-or-interpreter",
+          "launch",
+          "Rust planner or fixture-backed product composer",
+          "Retained source-owned routing and product consumer validation; planner process now uses the Rust executable"
+        ]
+      ]
     }
   ],
   "member_format": [
@@ -2997,7 +2683,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "74347b10aee1d6254c8bd214bf2c00bc2fc27cc11a3ddf061c3c7c8fb6bd1767",
+  "observed_source_sha256": "c72c89700bbfdf493d843bacb52608bc57acb67fb893dda6db998d9f4c5216a3",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency."

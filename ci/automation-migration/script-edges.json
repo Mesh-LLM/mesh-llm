@@ -62,7 +62,7 @@
           "availability guard before family battery commands; no launch"
         ],
         [
-          501,
+          903,
           "d6de059f3a65588d",
           1,
           "indirect",
@@ -70,7 +70,7 @@
           "argument in command-array construction; Python interpreter/array consumer requires continuation review"
         ],
         [
-          810,
+          903,
           "d6de059f3a65588d",
           2,
           "indirect",
@@ -412,7 +412,7 @@
       "file": "scripts/skippy-workload-certify.sh",
       "members": [
         [
-          101,
+          116,
           "cb27cc1a59fd7c9a",
           1,
           "script",
@@ -428,7 +428,7 @@
           "require_pinned_cpu_candidate: no args; captures patch SHA stdout, inherited stderr; nonzero returns 1"
         ],
         [
-          181,
+          195,
           "90fc69b829bfcaf2",
           1,
           "script",
@@ -468,7 +468,7 @@
           "OCR/ASR --candidate-url http://127.0.0.1:PORT/v1 --oracle-url http://127.0.0.1:ORACLE_PORT/v1 --model MODEL_ID --class MODEL_CLASS --media-path ORACLE_MEDIA_PATH; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
         ],
         [
-          429,
+          438,
           "8bb1eaaf0c78dccc",
           1,
           "script",
@@ -605,7 +605,7 @@
           "Selects default fixed cases driver with optional operator override; executed at line 319"
         ],
         [
-          100,
+          506,
           "f8fb9fe483d3ac0c",
           1,
           "inline",
@@ -629,7 +629,7 @@
           "run_part invokes selected CASES_DRIVER with local URL, model, alias, mode, timeout and JSON report; nonzero prints server log and rejects the part"
         ],
         [
-          417,
+          427,
           "9eb9d13a25607acc",
           1,
           "selection",
@@ -949,7 +949,7 @@
       "file": "scripts/agentic-replay-repair.sh",
       "members": [
         [
-          38,
+          59,
           "344399374f69781e",
           1,
           "script",
@@ -1026,7 +1026,7 @@
           "--llama-src .deps/llama.cpp validate with continued options; stdout/stderr inherited; nonzero fails canary gate"
         ],
         [
-          164,
+          509,
           "8faf38bee64ae451",
           1,
           "script",
@@ -1204,7 +1204,7 @@
       "members": [
         [
           24,
-          "746966710376ed12",
+          "ef4b30c570b5f088",
           1,
           "environment",
           "explicit surviving scripts.tests modules",
@@ -1315,26 +1315,6 @@
   ],
   "python_implementation_edges": [
     {
-      "boundary": "adjacent tracked module only; no claim of downstream subprocess closure",
-      "caller_contract": "module initialization loads sibling evidence via exec_module; import failure propagates, no subprocess",
-      "disposition": "execution",
-      "id": "scripts/runner-image-identity.py#dynamic-import:ac189ab0aa506b04:1",
-      "root": "optional runner-image identity evidence; source file sibling loader",
-      "source": "scripts/runner-image-identity.py:41",
-      "source_block": "_evidence_spec = importlib.util.spec_from_file_location(\"runner_image_evidence\", Path(__file__).with_name(\"runner-image-evidence.py\"))",
-      "target": "scripts/runner-image-evidence.py"
-    },
-    {
-      "boundary": "root / scripts/plan-ci.py; planner child/affected-crate closure separately owned",
-      "caller_contract": "selected-root plan validation imports planner via exec_module; errors propagate; no subprocess on spec assignment",
-      "disposition": "execution",
-      "id": "scripts/runner-image-identity.py#dynamic-import:40fc0127cbc4dd32:1",
-      "root": "optional evidence caller loads independently required CI planner",
-      "source": "scripts/runner-image-identity.py:262",
-      "source_block": "spec = importlib.util.spec_from_file_location(\"runner_identity_planner\", root / \"scripts/plan-ci.py\")",
-      "target": "scripts/plan-ci.py"
-    },
-    {
       "boundary": "sibling lib/ module; native child commands separately owned",
       "caller_contract": "module initialization loads sibling memory admission via exec_module; import errors propagate",
       "disposition": "execution",
@@ -1425,16 +1405,6 @@
       "target": "scripts/check-skippy-workload-candidate.py"
     },
     {
-      "boundary": "_CHECKER_PATH is sibling script; separately owned checker behavior",
-      "caller_contract": "module initialization loads conventional checker via exec_module; import failure propagates, no process",
-      "disposition": "execution",
-      "id": "scripts/release-notes-classify.py#dynamic-import:1688e80c8e83fd68:1",
-      "root": "optional release notes classifier loads independently required conventional checker",
-      "source": "scripts/release-notes-classify.py:29",
-      "source_block": "_SPEC = importlib.util.spec_from_file_location(\"conventional_commit\", _CHECKER_PATH)",
-      "target": "scripts/check-conventional-commit.py"
-    },
-    {
       "boundary": "path computed from supplied root/arguments; resolution contingent on callsite inputs",
       "caller_contract": "selected-root policy loader uses exec_module; import error propagates; no subprocess on spec assignment",
       "disposition": "execution",
@@ -1486,38 +1456,6 @@
         ]
       ],
       "root": "optional operator-run mixed-version payment compatibility"
-    },
-    {
-      "boundary": "Git range supplied by Just/hook caller; message/file modes have no child",
-      "file": "scripts/check-conventional-commit.py",
-      "members": [
-        [
-          194,
-          "38256a6f6b02ff49",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "git log --format=%B%x1e --no-merges <range>",
-          "--range only: capture text stdout/stderr check=True; failure raises, parse commit messages and report violations stderr/status 1, no repository write"
-        ]
-      ],
-      "root": "required commit convention checker, optional --range mode"
-    },
-    {
-      "boundary": "repo, base/head and upstream URL are CLI-provided; equal pins skip fetch",
-      "file": "scripts/check-llama-upstream-pin.py",
-      "members": [
-        [
-          38,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "conditional: git -C <repo> <args>",
-          "git helper captures text stdout/stderr, check=False and timeout; callers ls-tree/show pins, init/fetch temporary bare upstream, rev-parse/cat-file/merge-base/rev-list; status distinguishes ancestry and errors fail guard; temp fetch removed"
-        ]
-      ],
-      "root": "optional llama upstream pin ancestry guard"
     },
     {
       "boundary": "source root from CLI; --write-source-snapshot is an explicit file output, not child launch",
@@ -1946,31 +1884,6 @@
       "root": "optional canary prepared llama source verification"
     },
     {
-      "boundary": "workspace packages and affected crates may be supplied in input; subprocesses only on discovery fallback",
-      "file": "scripts/plan-ci.py",
-      "members": [
-        [
-          320,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "cargo metadata --format-version=1 --no-deps",
-          "_workspace_packages when no input workspace_packages: cwd=root capture text stdout/stderr check=False; nonzero/malformed JSON PlanError; discovers package roster"
-        ],
-        [
-          375,
-          "0bb8fafe2022eacf",
-          2,
-          "subprocess-or-interpreter",
-          "execution",
-          "bash <root>/scripts/affected-crates.sh --stdin",
-          "_affected_crates when affected list not supplied for non-all profile: newline changed files on stdin, cwd=root capture text stdout/stderr check=False; nonzero/bad JSON PlanError; reads affected crate closure"
-        ]
-      ],
-      "root": "required canonical CI planner"
-    },
-    {
       "boundary": "base URL/models/attempts, optional agent smoke selection and binary/public key are CLI inputs; --print-plan avoids launch",
       "file": "scripts/qa-nightly-stability.py",
       "members": [
@@ -2003,47 +1916,6 @@
         ]
       ],
       "root": "optional nightly live endpoint and agent smoke evidence"
-    },
-    {
-      "boundary": "git range and optional repository root supplied by release caller",
-      "file": "scripts/release-notes-classify.py",
-      "members": [
-        [
-          114,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "git log --format=%s%x1f%b%x1e <git_range>",
-          "read_commits cwd repo_root captures text stdout/stderr check=True; failure raises; parses PR suffixes and trailers, read-only"
-        ]
-      ],
-      "root": "optional stable release notes classifier"
-    },
-    {
-      "boundary": "repo and git range selected by release caller; gh API failures are best effort with bounded timeout/budget",
-      "file": "scripts/release-notes-link.py",
-      "members": [
-        [
-          71,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "conditional: gh api repos/<repo>/commits/<sha>/pulls --jq [.[].number] or gh pr view <pr> --repo <repo> --json title,author",
-          "Gh.json captures text stdout/stderr check=True timeout=30; errors logged and return None; PR metadata read, failure does not abort linking"
-        ],
-        [
-          103,
-          "0bb8fafe2022eacf",
-          2,
-          "subprocess-or-interpreter",
-          "execution",
-          "git log --reverse --format=%H%x1f%s%x1f%b%x1e <git_range>",
-          "read_commits cwd repo_root capture text stdout/stderr check=True; nonzero raises, parses SHAs/subjects/trailers; no write by child"
-        ]
-      ],
-      "root": "optional release notes PR linking"
     },
     {
       "boundary": "binary/model/port/mode selected per trial; HTTP readiness and request calls are not subprocess candidates",
@@ -2198,58 +2070,6 @@
       "root": "optional trusted canary agent manifest policy"
     },
     {
-      "boundary": "source revision and host CPU/kernel reflect current checkout and selected runner; no Python subprocess target",
-      "file": "scripts/runtime-seed-canary.py",
-      "members": [
-        [
-          84,
-          "69d9049f761b8527",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "git rev-parse HEAD",
-          "evidence source identity captures stdout, nonzero raises; read-only"
-        ],
-        [
-          89,
-          "9267833dc492102a",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "uname -srm",
-          "evidence host kernel captures stdout, nonzero raises; read-only"
-        ],
-        [
-          94,
-          "447189b338fd7cc2",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "lscpu --json",
-          "evidence host CPU captures JSON stdout, nonzero raises; read-only"
-        ],
-        [
-          124,
-          "423ac832dedbaf71",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "sccache --zero-stats",
-          "zeroes cache counters before trial, check=True inherited streams; nonzero raises"
-        ],
-        [
-          136,
-          "daa4eb4d49fa8644",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "sccache --show-stats --stats-format=json",
-          "captures/validates JSON stdout, nonzero raises; reads cache counters"
-        ]
-      ],
-      "root": "optional CPU runtime compiler-cache seed qualification"
-    },
-    {
       "boundary": "product mesh binary, taskkill on Windows, and scripts/skippy-laya-parity.py via selected interpreter",
       "file": "scripts/ci-laya-smoke.py",
       "members": [
@@ -2329,16 +2149,6 @@
   ],
   "python_implementation_sources": [
     [
-      "scripts/check-conventional-commit.py",
-      "76b122f9766bd69a774e00142401cf96eb46911dd51608bc73495135a82d00b6",
-      235
-    ],
-    [
-      "scripts/check-llama-upstream-pin.py",
-      "f3221c17cec35d7024de500fc00fcd55f446093d16ee473769a897059d431fcd",
-      267
-    ],
-    [
       "scripts/check-skippy-workload-candidate.py",
       "b1e11aaf123a19feeacea8cdbd3b51c0edd7cf33e829f877020bb30e49127539",
       138
@@ -2409,11 +2219,6 @@
       89
     ],
     [
-      "scripts/plan-ci.py",
-      "adfbfe1cd72fefe4e689e8eb5882120b7091e5e2c3b524320a6925baaba6fb1c",
-      924
-    ],
-    [
       "scripts/qa-lightning-compatibility.py",
       "729066935dc2a4d345e68b5554be825c3b3617d855e571e35e70d610213dd9aa",
       184
@@ -2424,16 +2229,6 @@
       1058
     ],
     [
-      "scripts/release-notes-classify.py",
-      "9eb1f34625dafc920230e2afc0c0935ca2f4b339dc22a3a1d960959bd930c75b",
-      321
-    ],
-    [
-      "scripts/release-notes-link.py",
-      "6a9518d1e8189b2cd3673a13a2431197ad173c84378cca71d21a07bd547b3056",
-      280
-    ],
-    [
       "scripts/run-command-with-timeout.py",
       "074c035e889df8037af0274fc1d4acc8a45f90580f89acfd225b83ae56b6c7da",
       181
@@ -2442,16 +2237,6 @@
       "scripts/run-event-benchmark-matrix.py",
       "9762da302f5be3dfaa5aa0f7db8a0dac37dbea66ae083a49be2ed72d6ad2628f",
       1311
-    ],
-    [
-      "scripts/runner-image-identity.py",
-      "f4628c1eb93e3c5ba64d2d8ad45f4a43e537ed63cc4eaeb1113b41eb2d19b4cd",
-      458
-    ],
-    [
-      "scripts/runtime-seed-canary.py",
-      "8ec063467059e2b6f06652d61be2ec940ad7813a46096f6aa28563e7e4925018",
-      292
     ],
     [
       "scripts/skippy-laya-parity.py",

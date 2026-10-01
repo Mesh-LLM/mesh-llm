@@ -85,14 +85,14 @@
           "Exports the absolute locked DuckDB workload interpreter to later run-family calls; echo only"
         ],
         [
-          159,
+          181,
           "8a33412c6ceab882",
           1,
           "script",
           "Rust replay-matrix run-family supervises the retained complete-session DuckDB workload through the explicit locked interpreter, deadline 21600 seconds"
         ],
         [
-          170,
+          181,
           "8a33412c6ceab882",
           2,
           "script",
@@ -158,63 +158,6 @@
           1,
           "inline",
           "selected python3/python heredoc 192-256 parses AUDIT_DOCKER_AUTH_CONFIG and Docker config JSON, rejects credentials; stderr/nonzero on invalid; no write"
-        ]
-      ]
-    },
-    {
-      "file": ".github/actions/install-actionlint/action.yml",
-      "members": [
-        [
-          45,
-          "10208af4a88fcf7c",
-          1,
-          "script",
-          "scripts/safe-extract-tar.py $archive $install_dir; verifies paths/links and extracts pinned actionlint archive"
-        ]
-      ]
-    },
-    {
-      "file": ".github/actions/plan-ci/action.yml",
-      "members": [
-        [
-          219,
-          "c1e54e8ad3923cca",
-          1,
-          "script",
-          "scripts/plan-ci.py --manifest-root $manifest_root; jq JSON on stdin -> ci-plan.json; planner reads catalogs, invokes affected-crates/Cargo; output projected to GITHUB_OUTPUT and summary"
-        ]
-      ]
-    },
-    {
-      "file": ".github/actions/resolve-cargo-packages/action.yml",
-      "members": [
-        [
-          29,
-          "4ad802f11733db1b",
-          1,
-          "probe",
-          "command -v python3 selects available interpreter for protected package batch"
-        ],
-        [
-          30,
-          "fd81b2d1c48eeb5e",
-          1,
-          "selector",
-          "python_bin=python3 when available"
-        ],
-        [
-          32,
-          "c01e2e1dff5a6aaf",
-          1,
-          "selector",
-          "python_bin=python fallback"
-        ],
-        [
-          38,
-          "a05294d19c603934",
-          1,
-          "script",
-          "selected interpreter executes scripts/ci-cargo-packages.py with --generation and --crates, optional --batches; stdout captured then exported as crates to GITHUB_OUTPUT; nonzero fails action"
         ]
       ]
     },
@@ -325,95 +268,38 @@
       ]
     },
     {
-      "file": ".github/workflows/ci-linux-lane.yml",
-      "members": [
-        [
-          216,
-          "1051b414e5b81e6f",
-          1,
-          "script",
-          "scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS; Linux lane summary gates planned jobs"
-        ]
-      ]
-    },
-    {
-      "file": ".github/workflows/ci-macos-lane.yml",
-      "members": [
-        [
-          207,
-          "1051b414e5b81e6f",
-          1,
-          "script",
-          "scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS; macOS lane summary gates planned jobs"
-        ]
-      ]
-    },
-    {
-      "file": ".github/workflows/ci-quality-lane.yml",
-      "members": [
-        [
-          110,
-          "24f05cdabc5413d8",
-          1,
-          "script",
-          "scripts/check-llama-upstream-pin.py $BASE_SHA $HEAD_SHA; selected pin-change gate"
-        ],
-        [
-          117,
-          "1051b414e5b81e6f",
-          1,
-          "script",
-          "scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS; Quality summary"
-        ]
-      ]
-    },
-    {
       "file": ".github/workflows/ci-quality-slice.yml",
       "members": [
         [
-          91,
-          "2196115cff2c8fa3",
-          1,
-          "script",
-          "scripts/check-conventional-commit.py --message $PR_TITLE from environment; required PR title gate"
-        ],
-        [
-          97,
-          "58d56290992d0de9",
-          1,
-          "script",
-          "scripts/check-conventional-commit.py --trailers-only $RUNNER_TEMP/pr-commit-messages.txt; PR body/API commits file prepared immediately before call"
-        ],
-        [
-          176,
+          179,
           "d7149b0913e92921",
           1,
           "provision",
           "quality_contracts Python 3.12 for required contracts and unittest"
         ],
         [
-          178,
+          181,
           "8c1dfd95e0d605d6",
           1,
           "metadata",
           "quality_contracts setup-python version 3.12"
         ],
         [
-          180,
+          183,
           "78b39ffedbd6d228",
           1,
           "installer",
           "python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt; installs required test deps"
         ],
         [
-          460,
+          465,
           "5280fbba5ae3cdc6",
           1,
           "probe",
           "command -v python3 for optional no-checkout authority sentinel"
         ],
         [
-          466,
+          471,
           "ed80ea8633907110",
           1,
           "inline",
@@ -423,52 +309,20 @@
     },
     {
       "file": ".github/workflows/ci-runner-contract-slice.yml",
-      "members": [
-        [
-          125,
-          "b83eff512a36e4eb",
-          1,
-          "script",
-          "scripts/cleanup-self-hosted.py --job runner-contract --evidence-uploaded false; final cleanup target directory"
-        ]
-      ]
-    },
-    {
-      "file": ".github/workflows/ci-website-lane.yml",
-      "members": [
-        [
-          80,
-          "1051b414e5b81e6f",
-          1,
-          "script",
-          "scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS; Website summary"
-        ]
-      ]
-    },
-    {
-      "file": ".github/workflows/ci-windows-lane.yml",
-      "members": [
-        [
-          146,
-          "1051b414e5b81e6f",
-          1,
-          "script",
-          "scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS; Windows summary"
-        ]
-      ]
+      "members": []
     },
     {
       "file": ".github/workflows/depot-canary.yml",
       "members": [
         [
-          349,
+          549,
           "5280fbba5ae3cdc6",
           1,
           "probe",
           "command -v python3 in first cache authority phase"
         ],
         [
-          355,
+          555,
           "ed80ea8633907110",
           1,
           "inline",
@@ -487,69 +341,12 @@
           2,
           "inline",
           "second authority phase printf host | python3 -c ipaddress classifier, exit 0/3/2; output discarded"
-        ],
-        [
-          726,
-          "78a185c96b0f3e5b",
-          1,
-          "script",
-          "scripts/runtime-seed-canary.py preflight runtime-seed-evidence; validates exact seed via GitHub API and writes context.json/GITHUB_OUTPUT"
-        ],
-        [
-          728,
-          "3acd8921875ade39",
-          1,
-          "script",
-          "scripts/runtime-seed-canary.py restore_start runtime-seed-evidence; writes restore-start timer JSON"
-        ],
-        [
-          738,
-          "65dfd4d684711391",
-          1,
-          "script",
-          "scripts/runtime-seed-canary.py restored runtime-seed-evidence; checks cache identity/hit, updates context.json"
-        ],
-        [
-          744,
-          "98d3dd64bc486ef1",
-          1,
-          "script",
-          "scripts/runtime-seed-canary.py start runtime-seed-evidence; subprocess sccache zero-stats, writes initial stats/start JSON"
-        ],
-        [
-          757,
-          "00b8b3cc34ac39dc",
-          1,
-          "script",
-          "scripts/runtime-seed-canary.py finish runtime-seed-evidence; samples sccache, writes measured result even on negative qualification"
-        ],
-        [
-          791,
-          "77bf1dedf6a37df9",
-          1,
-          "script",
-          "scripts/runtime-seed-canary.py summarize runtime-seed-results; requires three cold/warm pair evidence and writes summary.json"
         ]
       ]
     },
     {
       "file": ".github/workflows/depot-registry-canary.yml",
-      "members": [
-        [
-          116,
-          "ba8b083bf352aebd",
-          1,
-          "inline",
-          "python3 - $SOURCE $SAMPLE $elapsed_ms $resolved_digest heredoc 117-132; writes observation.json per fresh runner"
-        ],
-        [
-          168,
-          "a88703e8430c0d99",
-          1,
-          "script",
-          "scripts/summarize-depot-registry-pulls.py --json-out $RUNNER_TEMP/depot-registry-pulls.json --markdown-out $GITHUB_STEP_SUMMARY [--enforce] registry-pull-observations; threshold optional"
-        ]
-      ]
+      "members": []
     },
     {
       "file": ".github/workflows/llama-canary-family-pass.yml",
@@ -710,7 +507,7 @@
           "PIP_CACHE_DIR YAML env /tmp/pip-cache; no process"
         ],
         [
-          104,
+          322,
           "d7149b0913e92921",
           1,
           "provision",
@@ -731,28 +528,28 @@
           "pip cache comment"
         ],
         [
-          112,
+          328,
           "8c1dfd95e0d605d6",
           1,
           "metadata",
           "Linux/CUDA python-version 3.12"
         ],
         [
-          113,
+          329,
           "c2a86f3632e47d36",
           1,
           "metadata",
           "setup-python cache pip"
         ],
         [
-          116,
+          332,
           "e88a4d094ac6519b",
           1,
           "metadata",
           "setup-python cache-dependency-path ci/requirements-ci-python.txt"
         ],
         [
-          138,
+          341,
           "0c31fa04ed6b31fc",
           1,
           "installer",
@@ -898,56 +695,56 @@
       "file": ".github/workflows/ci-linux-product-smoke-slice.yml",
       "members": [
         [
-          127,
+          218,
           "d7149b0913e92921",
           1,
           "provision",
           "Main bd5514dd8 retained source: - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          129,
+          220,
           "b8b50a30eae1ce0d",
           1,
           "metadata",
           "Main bd5514dd8 retained source: python-version: '3.12'; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          152,
+          218,
           "d7149b0913e92921",
           2,
           "provision",
           "Main bd5514dd8 retained source: - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          154,
+          220,
           "b8b50a30eae1ce0d",
           2,
           "metadata",
           "Main bd5514dd8 retained source: python-version: '3.12'; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          170,
+          236,
           "fa5a491897aa0054",
           1,
           "script",
           "Main bd5514dd8 retained source: run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          185,
+          218,
           "d7149b0913e92921",
           3,
           "provision",
           "Main bd5514dd8 retained source: - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          187,
+          220,
           "b8b50a30eae1ce0d",
           3,
           "metadata",
           "Main bd5514dd8 retained source: python-version: '3.12'; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          204,
+          236,
           "fa5a491897aa0054",
           2,
           "script",
