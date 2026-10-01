@@ -122,4 +122,4 @@ jobs:
       - name: Clean self-hosted contract outputs
         if: ${{ (success() || failure() || cancelled()) }}
         timeout-minutes: 5
-        run: python3 scripts/cleanup-self-hosted.py --job runner-contract --evidence-uploaded false
+        run: cargo xtool ci-ops runner-cleanup --job runner-contract --evidence-uploaded false

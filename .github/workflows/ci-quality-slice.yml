@@ -76,6 +76,9 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+      - uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
       - name: Check commit convention
         env:
           # Pull-request-authored text reaches the script through the
@@ -88,13 +91,13 @@ jobs:
           set -euo pipefail
           # The repository squash-merges, so the pull request title becomes the
           # commit subject on main and has to satisfy Conventional Commits.
-          python3 scripts/check-conventional-commit.py --message "$PR_TITLE"
+          "$MESH_LLM_AUTOMATION_BIN" repository conventional-commits --message "$PR_TITLE"
           # The squash body aggregates the branch commit messages, so their
           # attribution trailers land on main even when their subjects do not.
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" --paginate \
             --jq '.[].commit.message' > "$RUNNER_TEMP/pr-commit-messages.txt"
           printf '%s\n' "$PR_BODY" >> "$RUNNER_TEMP/pr-commit-messages.txt"
-          python3 scripts/check-conventional-commit.py \
+          "$MESH_LLM_AUTOMATION_BIN" repository conventional-commits \
             --trailers-only "$RUNNER_TEMP/pr-commit-messages.txt"
 
   runner_policy:
@@ -204,6 +207,8 @@ jobs:
 
       - name: Check console print drift
         run: just no-console-print
+      - name: Check process environment mutation ownership
+        run: cargo xtool repository env-mutation-census
 
   rust_fmt:
     name: Rust format

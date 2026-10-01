@@ -315,7 +315,7 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
         self.assertIn('cargo xtool artifact verify-checksum "$archive"', action)
-        self.assertIn("scripts/safe-extract-tar.py", action)
+        self.assertIn('cargo xtool artifact extract-tar "$archive" "$install_dir"', action)
         self.assertNotIn("tar -x", action)
 
     def write_fake_product_inputs(

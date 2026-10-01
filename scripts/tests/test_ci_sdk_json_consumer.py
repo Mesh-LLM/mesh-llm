@@ -11,7 +11,6 @@ import unittest
 
 from scripts.tests import test_ci_artifact_actions as artifacts
 from scripts.tests import test_ci_prepare_native_runtime as runtime_tests
-from scripts.tests import test_plan_ci as planner_tests
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,15 +20,14 @@ class SdkJsonConsumerTests(unittest.TestCase):
     def test_original_cli_change_selects_the_consumer_and_producers(self) -> None:
         # Exact changed paths at #1675 head 14ec8d0, not this CI repair's
         # control-plane paths (which would mask the miss by selecting everything).
-        payload = planner_tests.fixture("runtime-catalog-pr-1675.json")
+        payload = json.loads((ROOT / "scripts/tests/fixtures/ci-plan/runtime-catalog-pr-1675.json").read_text())
         for paths in (
             payload["changed_files"],
             ["crates/mesh-llm-commands/src/runtime_native/formatters.rs"],
         ):
             with self.subTest(paths=paths):
-                plan = planner_tests.PLANNER.build_plan(
-                    {**payload, "changed_files": paths}, root=ROOT
-                )
+                result = subprocess.run([str(ROOT / "target/debug/xtask"), "ci", "plan"], input=json.dumps({**payload, "changed_files": paths}), capture_output=True, text=True, check=True, cwd=ROOT)
+                plan = json.loads(result.stdout)
                 self.assertNotIn("ci-control", plan["domains"])
                 self.assertEqual(plan["matrices"]["sdk"], [])
                 self.assertIn("ui-artifact", plan["required_slices"])

@@ -267,8 +267,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
         def validate(lane_plan: dict, needs: dict) -> str:
             result = subprocess.run(
                 [
-                    sys.executable,
-                    str(ROOT / "scripts" / "validate-ci-lane-results.py"),
+                    str(ROOT / "target" / "debug" / "xtask"), "ci", "validate-lane",
                     "--lane-plan",
                     json.dumps(lane_plan),
                     "--needs",
@@ -378,7 +377,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             action,
         )
         self.assertIn(
-            'python3 scripts/plan-ci.py --manifest-root "$manifest_root"',
+            '"$MESH_LLM_AUTOMATION_BIN" ci plan --manifest-root "$manifest_root"',
             action,
         )
         self.assertNotIn("git checkout", action)

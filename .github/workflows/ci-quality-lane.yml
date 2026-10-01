@@ -95,6 +95,9 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
       - name: Guard PR llama.cpp upstream pin monotonicity
         if: ${{ github.event_name == 'pull_request' }}
         env:
@@ -107,14 +110,14 @@ jobs:
             exit 1
           fi
           git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
-          python3 scripts/check-llama-upstream-pin.py "$BASE_SHA" "$HEAD_SHA"
+          "$MESH_LLM_AUTOMATION_BIN" repository llama-upstream-pin "$BASE_SHA" "$HEAD_SHA"
       - name: Validate planned quality jobs
         id: validate
         continue-on-error: true
         env:
           LANE_PLAN: ${{ inputs.lane_plan_json }}
           NEEDS_RESULTS: ${{ toJson(needs) }}
-        run: python3 scripts/validate-ci-lane-results.py --lane-plan "$LANE_PLAN" --needs "$NEEDS_RESULTS"
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci validate-lane --lane-plan "$LANE_PLAN" --needs "$NEEDS_RESULTS"'
       - uses: ./.github/actions/report-ci-lane
         with:
           lane_name: CI / Quality

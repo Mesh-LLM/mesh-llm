@@ -9,7 +9,7 @@ import unittest
 
 import yaml
 
-from scripts.tests.test_plan_ci import PLANNER, fixture
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -570,12 +570,13 @@ class CiWindowsCompositionTests(unittest.TestCase):
         for crate in crates:
             with self.subTest(crate=crate):
                 crate_path = packages[crate].relative_to(ROOT).as_posix()
-                payload = fixture("runtime.json")
+                payload = json.loads((ROOT / "scripts/tests/fixtures/ci-plan/runtime.json").read_text())
                 payload["changed_files"] = [f"{crate_path}/src/lib.rs"]
                 payload["workspace_packages"] = workspace_packages
                 payload["affected_crates"] = [crate]
 
-                plan = PLANNER.build_plan(payload, root=ROOT)
+                result = subprocess.run([str(ROOT / "target/debug/xtask"), "ci", "plan"], input=json.dumps(payload), capture_output=True, text=True, check=True, cwd=ROOT)
+                plan = json.loads(result.stdout)
 
                 self.assertIn("platform-checks", plan["required_slices"])
                 rows = [row["id"] for row in plan["matrices"]["platform_checks"]]

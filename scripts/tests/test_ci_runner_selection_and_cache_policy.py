@@ -36,7 +36,7 @@ class CiRunnerSelectionAndCachePolicyTests(RunnerSelectorMixin, unittest.TestCas
             action,
         )
         self.assertIn('cargo xtool artifact verify-checksum "$archive"', action)
-        self.assertIn("scripts/safe-extract-tar.py", action)
+        self.assertIn('cargo xtool artifact extract-tar "$archive" "$install_dir"', action)
         self.assertNotIn("tar -x", action)
 
     def test_sccache_prefers_depot_webdav_with_disk_fallback(self) -> None:
