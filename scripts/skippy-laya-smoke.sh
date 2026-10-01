@@ -6,6 +6,7 @@ set -euo pipefail
 # artifact but never downloads it.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib/automation.sh"
 MANIFEST="${LAYA_SMOKE_MANIFEST:-$ROOT/ci/model-artifacts/manifests/skippy-system-one-smoke.json}"
 ARTIFACT_ID="${LAYA_SMOKE_ARTIFACT_ID:-family-laya-multilingual}"
 CADENCE="${LAYA_SMOKE_CADENCE:-manual}"
@@ -15,11 +16,10 @@ MODEL_PATH="${LAYA_SMOKE_MODEL_PATH:-}"
 DEVICE="${LAYA_SMOKE_DEVICE:-auto}"
 WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/skippy-system-one-smoke}"
 REPORT="${LAYA_SMOKE_REPORT:-$WORK_DIR/reports/laya.json}"
-RESOLVER="$ROOT/scripts/resolve-test-model-manifest.py"
 DRIVER="$ROOT/scripts/skippy-laya-parity.py"
 
 artifact_summary() {
-  python3 "$RESOLVER" "$MANIFEST" \
+  mesh_automation models resolve "$MANIFEST" \
     --artifact-id "$ARTIFACT_ID" \
     --cadence "$CADENCE" \
     --require-single-file
@@ -77,7 +77,7 @@ EOF
     echo "pre-warm it with: scripts/skippy-laya-smoke.sh --prewarm" >&2
     return 1
   fi
-  python3 "$RESOLVER" "$MANIFEST" \
+  mesh_automation models resolve "$MANIFEST" \
     --artifact-id "$ARTIFACT_ID" \
     --cadence "$CADENCE" \
     --require-single-file \
