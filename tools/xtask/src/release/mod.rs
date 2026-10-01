@@ -26,6 +26,10 @@ mod regroup_body;
 mod regroup_date;
 mod regroup_plan;
 mod regroup_py;
+mod swift_checksum;
+mod swift_manifest;
+mod swift_privacy;
+mod swift_xcframework;
 
 use crate::command::DynResult;
 use std::io::Read as _;
@@ -38,6 +42,10 @@ pub(crate) enum ReleaseCommand {
     Classify,
     Regroup,
     VersionAtLeast,
+    SwiftManifestText,
+    SwiftManifest,
+    SwiftPrivacy,
+    SwiftXcframework,
 }
 
 impl ReleaseCommand {
@@ -48,6 +56,10 @@ impl ReleaseCommand {
             "notes-classify" => Some(Self::Classify),
             "notes-regroup" => Some(Self::Regroup),
             "version-at-least" => Some(Self::VersionAtLeast),
+            "swift-manifest-text" => Some(Self::SwiftManifestText),
+            "swift-manifest" => Some(Self::SwiftManifest),
+            "swift-privacy" => Some(Self::SwiftPrivacy),
+            "swift-xcframework" => Some(Self::SwiftXcframework),
             _ => None,
         }
     }
@@ -63,6 +75,12 @@ pub(crate) fn run(command: ReleaseCommand, args: &[String]) -> DynResult<()> {
         ReleaseCommand::Classify => classify::run(args, &mut link_host::SystemHost),
         ReleaseCommand::Regroup => regroup::run(args),
         ReleaseCommand::VersionAtLeast => preflight::run(args),
+        ReleaseCommand::SwiftManifestText => swift_manifest::run(args),
+        ReleaseCommand::SwiftManifest => swift_checksum::run(args),
+        ReleaseCommand::SwiftPrivacy => return swift_privacy::adapter::run(args),
+        ReleaseCommand::SwiftXcframework => {
+            return swift_xcframework::emit(swift_xcframework::run(args));
+        }
     };
     report.emit()
 }
