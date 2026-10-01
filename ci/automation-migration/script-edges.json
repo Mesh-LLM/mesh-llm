@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "lane_L8_cutover": {"receipt":".omo/evidence/lane-L8-multinode-smoke.md","superseded_edges":["scripts/skippy-workload-certify.sh:348 ci-openai-workload-smoke.py","scripts/ci-two-node-split-smoke.sh all baseline Python edges","scripts/ci-hf-xet-portability-smoke.sh:89 inline containment","scripts/ci-client-auto-test.sh inline status/join","scripts/ci-two-node-client-serving-smoke.sh inline readiness/chat/stream","scripts/ci-compat-smoke.sh inline model/attestation"],"note":"Existing groups retain historical baseline source identities; lane-L8-cutover.json records current Rust replacements. Required real Python SDK clients are retained by parent decision."},
   "scope": "Justfile, just/**, scripts/** command-like sources and tools/skippy-stage-rewriter/CMakeLists.txt; scanner-observed rows are reconciled by Rust, NOT full interpreter reachability",
   "identity": "<path>#candidate:<sha256(normalized source line)[0:16]>:<within-file occurrence>",
   "member_format": ["source_line", "hash", "occurrence", "disposition", "immediate_target_or_boundary", "caller_contract"],

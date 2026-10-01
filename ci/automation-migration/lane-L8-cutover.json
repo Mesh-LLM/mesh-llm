@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "lane": "L8",
+  "status": "caller_cutover_local_gates_passed_global_integration_pending",
+  "receipt": ".omo/evidence/lane-L8-multinode-smoke.md",
+  "deleted_implementations": ["scripts/compose-product-bundle.py", "scripts/reconcile-two-node-split-evidence.py", "scripts/ci-openai-workload-smoke.py"],
+  "deleted_test_modules": ["scripts/tests/test_compose_product_bundle.py", "scripts/tests/test_reconcile_two_node_split_evidence.py"],
+  "partial_test_port": "scripts/tests/test_ci_openai_embeddings_smoke.py: HTTP class moved to Rust; real SDK class retained",
+  "commands": ["automation smoke-inputs", "automation smoke-observation", "automation workload-smoke", "automation hf-xet-smoke", "automation split-probe", "automation split-evidence", "product compose", "artifact extract-tar", "product attestation-status", "ci-ops runner-cleanup"],
+  "callers": [
+    {"path":".github/actions/restore-smoke-inputs/action.yml","owner":"artifact extract-tar; automation smoke-inputs; product compose"},
+    {"path":"scripts/skippy-workload-certify.sh","owner":"automation workload-smoke"},
+    {"path":"scripts/ci-two-node-split-smoke.sh","owner":"automation split-evidence; automation split-probe; automation smoke-observation"},
+    {"path":"scripts/ci-hf-xet-portability-smoke.sh","owner":"automation hf-xet-smoke"},
+    {"path":"scripts/ci-client-auto-test.sh","owner":"automation smoke-observation"},
+    {"path":"scripts/ci-two-node-client-serving-smoke.sh","owner":"automation smoke-observation"},
+    {"path":"scripts/ci-compat-smoke.sh","owner":"automation smoke-observation; product attestation-status"}
+  ],
+  "test_owners": {
+    "product_tree_digest":"product::digest::tests::migration_product_tree_digest_uses_ordinal_path_order",
+    "split_evidence":"automation::split_evidence::tests",
+    "http_embeddings":"automation::workload_smoke::embedding::tests",
+    "cli_fixtures":"tools/xtask/tests/lane_l8_smoke.rs"
+  },
+  "sdk_decision":"Parent explicitly retained required real Python SDK callers; no advisory workflow created and no Python setup removed from core SDK compatibility jobs.",
+  "remaining": ["normal CPU/CUDA/Metal CI and live SDK qualification", "historical Python caller-assertion tests outside lane-owned cases", "historical baseline ledger source hashes require integration refresh", "just ci-validate timed out after 120 seconds in broad legacy unittest discovery"]
+}
