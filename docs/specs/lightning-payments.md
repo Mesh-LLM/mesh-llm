@@ -134,7 +134,7 @@ use `$CFG` for that file and `$P` for its `payments/` directory.
 
 1. **Settle outstanding work with the old binary first.** While still on a
    mesh-llm release that has the built-in wallet, run the node until
-   `mesh-llm wallet pending` and `mesh-llm wallet blocked` show nothing you
+   `mesh-llm --config "$CFG" wallet pending` and `mesh-llm --config "$CFG" wallet blocked` show nothing you
    expect to be paid. Unpin (step 4) refuses while invoices are unpaid or
    payments are in flight, because only the old wallet can settle them.
 2. **Stop the node**, then install the new mesh-llm and the `lexe-wallet`
@@ -145,28 +145,34 @@ use `$CFG` for that file and `$P` for its `payments/` directory.
    - `$P/wallets/wallet-lexe/seedphrase.txt`.
 
    ```sh
-   mkdir -p "$P/wallets/lexe-wallet"
-   test -e "$P/wallets/lexe-wallet/seedphrase.txt" && echo "STOP: destination already has a seed"
-   cp -n "$P/lexe/seedphrase.txt" "$P/wallets/lexe-wallet/" 2>/dev/null \
-     || cp -n "$P/wallets/wallet-lexe/seedphrase.txt" "$P/wallets/lexe-wallet/"
+   if [ -e "$P/lexe/seedphrase.txt" ]; then SRC="$P/lexe/seedphrase.txt"
+   elif [ -e "$P/wallets/wallet-lexe/seedphrase.txt" ]; then SRC="$P/wallets/wallet-lexe/seedphrase.txt"
+   else echo "no old seed found" >&2; exit 1; fi
+   DST="$P/wallets/lexe-wallet/seedphrase.txt"
+   if [ -e "$DST" ]; then
+     echo "STOP: $DST already exists; decide which wallet to keep first" >&2; exit 1
+   fi
+   (umask 077 && mkdir -p "$P/wallets/lexe-wallet" && cp "$SRC" "$DST") || exit 1
    ```
 
    If the destination already holds a seed (for example, because the new plugin
    was started first and provisioned a fresh wallet), do not overwrite it. A
    fresh wallet may already hold funds, so decide which wallet to keep first.
    Leave the old directory in place; it is your backup.
-4. **Unpin**, because the pin names the old plugin: `mesh-llm --config "$CFG" wallet unpin`.
+4. **Unpin** (only after step 3 succeeded), because the pin names the old plugin: `mesh-llm --config "$CFG" wallet unpin`.
 5. **Update the config:** replace the `wallet-lexe` stanza with the
    `lexe-wallet` `[[plugin]]` entry above, and change
    `[payments] wallet = "wallet-lexe"` to `"lexe-wallet"` (or remove that line).
    The selector rejects a `[payments] wallet` that names a plugin that is not
    running, even after unpinning.
-6. **Start the node** and check `mesh-llm wallet get-balance`. The new pin in
+6. **Start the node** and check `mesh-llm --config "$CFG" wallet get-balance`. The new pin in
    `$P/wallet-provider.json` should show `"plugin": "lexe-wallet"` with the
    same `wallet_id` as before.
 
 If unpin still refuses and the old binary is no longer available,
-`mesh-llm wallet unblock <peer>` clears it, but that is a **financial
+`mesh-llm --config "$CFG" wallet unblock <peer>` may clear unpaid receivables
+(it does not resolve other refusals, such as in-flight outgoing payments), but
+that is a **financial
 write-off**: it forgives every unpaid invoice for that peer and waives any
 delivered output that was never invoiced. Use it only for debt you know is
 disposable, such as test traffic.
