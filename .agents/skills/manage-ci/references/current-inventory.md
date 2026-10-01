@@ -737,7 +737,12 @@ fail-open policy.
 Release/package L5 adapters use xtask native selection/import/closure checks,
 product composition and release manifests, artifact extraction/checksums,
 typed attestation verdict projection, and the exact RC `rc-ok` predicate.
-Windows release composers use `prepare-automation`; the release workflow has
+Release host producers use `upload-automation` to publish one immutable xtask
+per OS/architecture and source SHA. Every release composer has its host producer
+in `needs` and uses `restore-automation` to verify checksums/source identity and
+export `MESH_LLM_AUTOMATION_BIN`, without Cargo or compiler bootstrap. The shared
+artifact actions are reusable for later L2 delivery; L2 callers have not switched.
+Windows release composers no longer use `prepare-automation`; the release workflow has
 no setup-python steps. Runtime-package verification embeds the GLIBC policy
 ceiling and runs native probes without a checkout dependency. Publication's
 dependency projection uses `repository publish-order --dependency-pairs`;

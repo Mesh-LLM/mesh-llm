@@ -1,0 +1,48 @@
+name: Upload immutable repository automation
+description: Build automation once in a compiler-capable producer and publish source-bound checksummed bytes.
+inputs:
+  source_sha:
+    description: Immutable checked-out automation source commit.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Prepare producer automation
+      id: prepare
+      if: runner.os == 'Windows'
+      uses: ./.github/actions/prepare-automation
+    - name: Build and stage automation
+      shell: bash
+      env:
+        AUTOMATION_SOURCE_SHA: ${{ inputs.source_sha }}
+        AUTOMATION_BINARY_PATH: ${{ steps.prepare.outputs.binary_path }}
+      run: |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = "$AUTOMATION_SOURCE_SHA"
+        binary_path="${AUTOMATION_BINARY_PATH%$'\r'}"
+        if [[ "$RUNNER_OS" != Windows ]]; then
+          report="$(just automation-bootstrap)"
+          binary_path="$(printf '%s\n' "$report" | sed -n 's/^binary_path=//p')"
+        fi
+        if command -v cygpath >/dev/null 2>&1; then
+          binary_path="$(cygpath -u "$binary_path")"
+        fi
+        stage="$RUNNER_TEMP/immutable-automation"
+        mkdir -p "$stage"
+        binary=xtask
+        if [[ "$RUNNER_OS" == Windows ]]; then binary=xtask.exe; fi
+        cp "$binary_path" "$stage/$binary"
+        printf '%s\n' "$AUTOMATION_SOURCE_SHA" > "$stage/source.txt"
+        cd "$stage"
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum "$binary" source.txt > SHA256SUMS
+        else
+          shasum -a 256 "$binary" source.txt > SHA256SUMS
+        fi
+    - name: Upload automation bytes
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      with:
+        name: automation-${{ runner.os }}-${{ runner.arch }}-${{ inputs.source_sha }}
+        path: ${{ runner.temp }}/immutable-automation/*
+        if-no-files-found: error
+        retention-days: 90
