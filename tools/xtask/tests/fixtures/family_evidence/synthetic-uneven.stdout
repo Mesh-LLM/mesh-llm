@@ -1,0 +1,316 @@
+{
+  "generated_by": "scripts/plan-family-battery.py",
+  "github_matrix": {
+    "include": [
+      {
+        "estimated_work_bytes": 9,
+        "families": "alpha,delta",
+        "id": "family-battery-03",
+        "shard_index": 2
+      },
+      {
+        "estimated_work_bytes": 9,
+        "families": "zeta",
+        "id": "family-battery-02",
+        "shard_index": 1
+      },
+      {
+        "estimated_work_bytes": 13,
+        "families": "beta,gamma",
+        "id": "family-battery-01",
+        "shard_index": 0
+      }
+    ]
+  },
+  "manifest": "tools/xtask/tests/fixtures/family_evidence/synthetic-manifest.json",
+  "manifest_sha256": "3643e767cfe6d547c009cb1b6954a66fc83e66b07ee2f2a2cb7a57ecf6530916",
+  "model_class_lanes": {
+    "causal_generation": [
+      "single-step",
+      "chain",
+      "state-handoff"
+    ],
+    "embedding": [
+      "embedding-smoke",
+      "embedding-oracle"
+    ],
+    "encoder_decoder": [
+      "encoder-decoder-smoke",
+      "encoder-decoder-oracle"
+    ],
+    "ocr": [
+      "ocr-smoke",
+      "ocr-oracle"
+    ],
+    "rerank": [
+      "rerank-smoke",
+      "rerank-oracle"
+    ],
+    "speech_recognition": [
+      "speech-recognition-smoke",
+      "speech-recognition-oracle"
+    ],
+    "speech_synthesis": [
+      "speech-synthesis-smoke",
+      "speech-synthesis-oracle"
+    ]
+  },
+  "requested_families": null,
+  "required_certification_lanes": [
+    "single-step",
+    "chain",
+    "state-handoff"
+  ],
+  "schema_version": 1,
+  "selected_family_count": 5,
+  "selected_models": [
+    {
+      "architecture": "qwen3",
+      "artifact": {
+        "file_integrity": {
+          "zeta.gguf": {
+            "blob_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size_bytes": 1
+          }
+        },
+        "files": [
+          "zeta.gguf"
+        ],
+        "repo": "fixture/zeta",
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "selector": "fixture"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1,
+        "layer_end": 1,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 1
+      },
+      "family": "zeta",
+      "manifest_index": 0,
+      "mmproj_artifact": null,
+      "notes": "synthetic parity only",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 9,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen3",
+      "artifact": {
+        "file_integrity": {
+          "beta.gguf": {
+            "blob_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size_bytes": 1
+          }
+        },
+        "files": [
+          "beta.gguf"
+        ],
+        "repo": "fixture/beta",
+        "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "selector": "fixture"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1,
+        "layer_end": 1,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 1
+      },
+      "family": "beta",
+      "manifest_index": 1,
+      "mmproj_artifact": null,
+      "notes": "synthetic parity only",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 9,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen3",
+      "artifact": {
+        "file_integrity": {
+          "alpha.gguf": {
+            "blob_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size_bytes": 1
+          }
+        },
+        "files": [
+          "alpha.gguf"
+        ],
+        "repo": "fixture/alpha",
+        "revision": "cccccccccccccccccccccccccccccccccccccccc",
+        "selector": "fixture"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1,
+        "layer_end": 1,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 1
+      },
+      "family": "alpha",
+      "manifest_index": 2,
+      "mmproj_artifact": null,
+      "notes": "synthetic parity only",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 5,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen3",
+      "artifact": {
+        "file_integrity": {
+          "gamma.gguf": {
+            "blob_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "size_bytes": 1
+          }
+        },
+        "files": [
+          "gamma.gguf"
+        ],
+        "repo": "fixture/gamma",
+        "revision": "dddddddddddddddddddddddddddddddddddddddd",
+        "selector": "fixture"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1,
+        "layer_end": 1,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 1
+      },
+      "family": "gamma",
+      "manifest_index": 3,
+      "mmproj_artifact": null,
+      "notes": "synthetic parity only",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 4,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen3",
+      "artifact": {
+        "file_integrity": {
+          "delta.gguf": {
+            "blob_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "size_bytes": 1
+          }
+        },
+        "files": [
+          "delta.gguf"
+        ],
+        "repo": "fixture/delta",
+        "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "selector": "fixture"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1,
+        "layer_end": 1,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 1
+      },
+      "family": "delta",
+      "manifest_index": 4,
+      "mmproj_artifact": null,
+      "notes": "synthetic parity only",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 4,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    }
+  ],
+  "shards": [
+    {
+      "estimated_work_bytes": 13,
+      "families": [
+        "beta",
+        "gamma"
+      ],
+      "id": "family-battery-01",
+      "shard_index": 0
+    },
+    {
+      "estimated_work_bytes": 9,
+      "families": [
+        "zeta"
+      ],
+      "id": "family-battery-02",
+      "shard_index": 1
+    },
+    {
+      "estimated_work_bytes": 9,
+      "families": [
+        "alpha",
+        "delta"
+      ],
+      "id": "family-battery-03",
+      "shard_index": 2
+    }
+  ]
+}

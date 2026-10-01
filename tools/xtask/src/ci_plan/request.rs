@@ -197,11 +197,11 @@ mod tests {
         );
         assert_eq!(
             files(r#"["./"]"#),
-            fail("changed file is not a normal repository path: './'")
+            fail("changed file is not a normal repository path: \"./\"")
         );
         assert_eq!(
             files(r#"["a/../b"]"#),
-            fail("changed file is not a normal repository path: 'a/../b'")
+            fail("changed file is not a normal repository path: \"a/../b\"")
         );
     }
 

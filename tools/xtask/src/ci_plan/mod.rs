@@ -11,6 +11,7 @@
 pub(crate) mod catalog;
 mod diagnostics;
 pub(crate) mod document;
+pub(crate) mod family;
 mod glob_pattern;
 mod matrices;
 mod plan;

@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn migration_ci_plan_repr_list_matches_python() {
-        assert_eq!(repr_list(&["a", "it's"]), "['a', \"it's\"]");
+        assert_eq!(repr_list(&["a", "it's"]), "[\"a\", \"it's\"]");
         assert_eq!(repr_list::<&str>(&[]), "[]");
     }
 

@@ -70,13 +70,8 @@ impl Json {
         }
     }
 
-    /// Python `value == 1`, which `1.0` and `True` also satisfy.
     pub(crate) fn equals_one(&self) -> bool {
-        match self {
-            Json::Bool(flag) => *flag,
-            Json::Number(number) => number.as_f64() == Some(1.0),
-            _ => false,
-        }
+        self.as_int() == Some(1)
     }
 
     pub(crate) fn to_value(&self) -> Value {
@@ -179,9 +174,10 @@ mod tests {
     }
 
     #[test]
-    fn migration_ci_plan_document_follows_python_numeric_identity() {
+    fn schema_version_requires_integer_identity() {
         let one = |text: &str| Json::parse(text.as_bytes()).expect("valid JSON");
-        assert!(one("1").equals_one() && one("1.0").equals_one() && one("true").equals_one());
+        assert!(one("1").equals_one());
+        assert!(!one("1.0").equals_one() && !one("true").equals_one());
         assert!(!one("2").equals_one() && !one("\"1\"").equals_one());
         assert_eq!(one("1.0").as_int(), None);
         assert_eq!(one("true").as_int(), None);
