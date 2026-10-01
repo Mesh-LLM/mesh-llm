@@ -220,9 +220,11 @@ impl BufferedHttpRequest {
         Ok((target, exclude))
     }
 
-    /// Raw `x-mesh-twin-bracket` header values, in order.
+    /// Raw `x-mesh-twin-bracket` header values, in order and untrimmed, so
+    /// the parser can trim HTTP whitespace (SP/HTAB) only and reject any other
+    /// whitespace as malformed.
     pub fn twin_bracket_header_values(&self) -> Result<Vec<String>, String> {
-        header_values_from_raw(&self.raw, MESH_TWIN_BRACKET_HEADER)
+        untrimmed_header_values_from_raw(&self.raw, MESH_TWIN_BRACKET_HEADER)
             .map_err(|()| format!("{MESH_TWIN_BRACKET_HEADER} header contains invalid UTF-8"))
     }
 
@@ -964,6 +966,16 @@ fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>
 /// at least one occurrence of `name` had non-UTF-8 bytes -- the caller must
 /// reject the request rather than silently drop that occurrence.
 fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+    untrimmed_header_values_from_raw(raw, name).map(|values| {
+        values
+            .iter()
+            .map(|value| value.trim().to_string())
+            .collect()
+    })
+}
+
+/// Every value of header `name`, as UTF-8, exactly as httparse returned it.
+fn untrimmed_header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
     let header_end = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -981,7 +993,7 @@ fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
         .filter(|header| header.name.eq_ignore_ascii_case(name))
         .map(|header| {
             std::str::from_utf8(header.value)
-                .map(|value| value.trim().to_string())
+                .map(str::to_string)
                 .map_err(|_| ())
         })
         .collect()

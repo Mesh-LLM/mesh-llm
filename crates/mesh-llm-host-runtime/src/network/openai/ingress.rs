@@ -1418,13 +1418,15 @@ const MAX_TWIN_BRACKET_LEN: usize = 128;
 
 /// Parse the (possibly repeated) `x-mesh-twin-bracket` header values. Zero
 /// values is a no-op; exactly one must be 1..=128 characters of
-/// `[A-Za-z0-9._:-]`; more than one is ambiguous and rejected. The value is
-/// otherwise opaque: the host copies it and never reads it.
+/// `[A-Za-z0-9._:-]` once HTTP whitespace (SP/HTAB) is trimmed from its ends;
+/// any other whitespace, at the ends or inside, makes it malformed. More than
+/// one value is ambiguous and rejected. The value is otherwise opaque: the
+/// host copies it and never reads it.
 fn parse_twin_bracket_header(values: &[String]) -> Result<Option<String>, String> {
     match values {
         [] => Ok(None),
         [only] => {
-            let value = only.trim();
+            let value = only.trim_matches([' ', '\t']);
             let valid = !value.is_empty()
                 && value.len() <= MAX_TWIN_BRACKET_LEN
                 && value

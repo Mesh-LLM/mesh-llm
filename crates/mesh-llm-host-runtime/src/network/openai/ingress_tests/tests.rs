@@ -1733,6 +1733,59 @@ fn parse_twin_bracket_header_rejects_malformed_or_repeated_values() {
 }
 
 #[test]
+fn parse_twin_bracket_header_trims_only_http_whitespace() {
+    for padded in [" pair-7", "pair-7 ", "\tpair-7\t", " \t pair-7 \t "] {
+        assert_eq!(
+            parse_twin_bracket_header(&[padded.to_string()]),
+            Ok(Some("pair-7".to_string())),
+            "{padded:?} is SP/HTAB-padded and must be trimmed"
+        );
+    }
+    for ws in ['\u{00A0}', '\u{2003}', '\u{3000}'] {
+        for bad in [
+            format!("{ws}pair-7"),
+            format!("pair-7{ws}"),
+            format!("pa{ws}ir-7"),
+            format!(" {ws}pair-7 "),
+        ] {
+            assert!(
+                parse_twin_bracket_header(std::slice::from_ref(&bad)).is_err(),
+                "{bad:?} carries non-HTTP whitespace and must be rejected"
+            );
+        }
+    }
+}
+
+#[test]
+fn twin_bracket_header_values_keep_non_http_whitespace_for_the_parser() {
+    let raw = "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nx-mesh-twin-bracket: \u{00A0}pair-7\u{3000}\r\nContent-Length: 2\r\n\r\n{}";
+    let request = proxy::BufferedHttpRequest {
+        raw: raw.as_bytes().to_vec(),
+        method: "POST".to_owned(),
+        path: "/v1/chat/completions".to_owned(),
+        client_path: "/v1/chat/completions".to_owned(),
+        request_id: RequestId::default(),
+        body_json: None,
+        body_json_attempted: false,
+        body_bytes: None,
+        body_len_bytes: 2,
+        completion_tokens: None,
+        stream: None,
+        model_name: None,
+        request_object_request_ids: Vec::new(),
+        response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
+        correlation_id: None,
+    };
+
+    let values = request.twin_bracket_header_values().unwrap();
+    assert_eq!(values, vec!["\u{00A0}pair-7\u{3000}".to_string()]);
+    assert!(
+        twin_bracket_id(&request).is_err(),
+        "must be a 400, not accepted"
+    );
+}
+
+#[test]
 fn parse_mesh_exclude_header_absent_is_empty() {
     assert_eq!(parse_mesh_exclude_header(&[]), Ok(vec![]));
 }
