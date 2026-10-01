@@ -1395,18 +1395,18 @@
       "disposition": "finite_target",
       "evidence": [
         {
-          "line": 102,
+          "line": 105,
           "path": "scripts/cleanup-self-hosted.py",
           "text": "result = subprocess.run("
         },
         {
-          "line": 103,
+          "line": 106,
           "path": "scripts/cleanup-self-hosted.py",
           "text": "['git', '-C', str(workspace), 'worktree', 'list', '--porcelain', '-z'],"
         }
       ],
       "id": "boundary:cleanup-self-hosted:102",
-      "line": 102,
+      "line": 105,
       "occurrence": 1,
       "rationale": "Finite target: literal git worktree list against workspace = GITHUB_WORKSPACE (runtime data, not an executable selector).",
       "reachable_bytes": "external host tool 'git' resolved on PATH; no repository Python or script bytes",
@@ -1423,18 +1423,18 @@
       "disposition": "finite_target",
       "evidence": [
         {
-          "line": 116,
+          "line": 119,
           "path": "scripts/cleanup-self-hosted.py",
           "text": "subprocess.run("
         },
         {
-          "line": 117,
+          "line": 120,
           "path": "scripts/cleanup-self-hosted.py",
           "text": "['git', '-C', str(workspace), 'worktree', 'remove', '--force', str(path)],"
         }
       ],
       "id": "boundary:cleanup-self-hosted:116",
-      "line": 116,
+      "line": 119,
       "occurrence": 1,
       "rationale": "Finite target: literal git worktree remove --force for paths already validated under the replay root.",
       "reachable_bytes": "external host tool 'git' resolved on PATH; no repository Python or script bytes",
@@ -1517,6 +1517,144 @@
       "replacement_owner": "task 9 schema-compatible CI planning",
       "selector": "build_plan(root=ROOT) (:809-813) passes root to _affected_crates; ROOT is Path(__file__).parents[1] (:40); a library caller may pass another root, and the subprocess runs only for PR profiles without a supplied affected_crates list (:371-373)",
       "source_block": "result = subprocess.run("
+    },
+    {
+      "bound_child": null,
+      "caller": "scripts/check-sdk-contract.sh",
+      "candidate_id": "scripts/check-sdk-contract.sh#candidate:86fafd3f4d7afbd4:1",
+      "child": null,
+      "deletion_condition": "Retire only after source-owned contract migration",
+      "disposition": "bounded_selector",
+      "evidence": [
+        {
+          "line": 210,
+          "path": "scripts/check-sdk-contract.sh",
+          "text": "require \"$PYTHON_SDK\" \"$pattern\" \"python: $pattern\""
+        }
+      ],
+      "id": "boundary:rebase:scripts/check-sdk-contract.sh#candidate:86fafd3f4d7afbd4:1",
+      "line": 210,
+      "occurrence": 1,
+      "rationale": "Python token names a data path, not an executable invocation",
+      "reachable_bytes": "SDK client.py/types.py grep inputs or sdk/python/pyproject.toml version text; no interpreter",
+      "replacement_owner": "tools/xtask QA or SDK component owner",
+      "selector": "literal Python SDK source/manifest filename used as data by shell validation/version propagation",
+      "source_block": "require \"$PYTHON_SDK\" \"$pattern\" \"python: $pattern\""
+    },
+    {
+      "bound_child": null,
+      "caller": "scripts/check-sdk-contract.sh",
+      "candidate_id": "scripts/check-sdk-contract.sh#candidate:3bdf1013e0717170:1",
+      "child": null,
+      "deletion_condition": "Retire only after source-owned contract migration",
+      "disposition": "bounded_selector",
+      "evidence": [
+        {
+          "line": 222,
+          "path": "scripts/check-sdk-contract.sh",
+          "text": "require \"$PYTHON_TYPES\" \"$pattern\" \"python types: $pattern\""
+        }
+      ],
+      "id": "boundary:rebase:scripts/check-sdk-contract.sh#candidate:3bdf1013e0717170:1",
+      "line": 222,
+      "occurrence": 1,
+      "rationale": "Python token names a data path, not an executable invocation",
+      "reachable_bytes": "SDK client.py/types.py grep inputs or sdk/python/pyproject.toml version text; no interpreter",
+      "replacement_owner": "tools/xtask QA or SDK component owner",
+      "selector": "literal Python SDK source/manifest filename used as data by shell validation/version propagation",
+      "source_block": "require \"$PYTHON_TYPES\" \"$pattern\" \"python types: $pattern\""
+    },
+    {
+      "bound_child": null,
+      "caller": "scripts/ci-laya-smoke.py",
+      "candidate_id": "scripts/ci-laya-smoke.py#subprocess-or-interpreter:227b092c1f2b3e39:1",
+      "child": null,
+      "deletion_condition": "Retire only after source-owned contract migration",
+      "disposition": "runtime_selected_boundary",
+      "evidence": [
+        {
+          "line": 62,
+          "path": "scripts/ci-laya-smoke.py",
+          "text": "subprocess.run("
+        }
+      ],
+      "id": "boundary:rebase:scripts/ci-laya-smoke.py#subprocess-or-interpreter:227b092c1f2b3e39:1",
+      "line": 62,
+      "occurrence": 1,
+      "rationale": "Main Laya smoke remains Python migration debt; operator artifact selects executable bytes; child lifecycle and parity reports remain source-owned",
+      "reachable_bytes": "composed immutable mesh binary; sys.executable scripts/skippy-laya-parity.py; taskkill /PID on Windows",
+      "replacement_owner": "tools/xtask QA or SDK component owner",
+      "selector": "CLI --mesh-binary, fixed sibling parity driver, Windows taskkill platform branch",
+      "source_block": "subprocess.run("
+    },
+    {
+      "bound_child": null,
+      "caller": "scripts/ci-laya-smoke.py",
+      "candidate_id": "scripts/ci-laya-smoke.py#subprocess-or-interpreter:091b630b3a4be637:1",
+      "child": null,
+      "deletion_condition": "Retire only after source-owned contract migration",
+      "disposition": "runtime_selected_boundary",
+      "evidence": [
+        {
+          "line": 147,
+          "path": "scripts/ci-laya-smoke.py",
+          "text": "process = subprocess.Popen("
+        }
+      ],
+      "id": "boundary:rebase:scripts/ci-laya-smoke.py#subprocess-or-interpreter:091b630b3a4be637:1",
+      "line": 147,
+      "occurrence": 1,
+      "rationale": "Main Laya smoke remains Python migration debt; operator artifact selects executable bytes; child lifecycle and parity reports remain source-owned",
+      "reachable_bytes": "composed immutable mesh binary; sys.executable scripts/skippy-laya-parity.py; taskkill /PID on Windows",
+      "replacement_owner": "tools/xtask QA or SDK component owner",
+      "selector": "CLI --mesh-binary, fixed sibling parity driver, Windows taskkill platform branch",
+      "source_block": "process = subprocess.Popen("
+    },
+    {
+      "bound_child": null,
+      "caller": "scripts/ci-laya-smoke.py",
+      "candidate_id": "scripts/ci-laya-smoke.py#subprocess-or-interpreter:38c8fc6f8135112d:1",
+      "child": null,
+      "deletion_condition": "Retire only after source-owned contract migration",
+      "disposition": "runtime_selected_boundary",
+      "evidence": [
+        {
+          "line": 157,
+          "path": "scripts/ci-laya-smoke.py",
+          "text": "parity = subprocess.run("
+        }
+      ],
+      "id": "boundary:rebase:scripts/ci-laya-smoke.py#subprocess-or-interpreter:38c8fc6f8135112d:1",
+      "line": 157,
+      "occurrence": 1,
+      "rationale": "Main Laya smoke remains Python migration debt; operator artifact selects executable bytes; child lifecycle and parity reports remain source-owned",
+      "reachable_bytes": "composed immutable mesh binary; sys.executable scripts/skippy-laya-parity.py; taskkill /PID on Windows",
+      "replacement_owner": "tools/xtask QA or SDK component owner",
+      "selector": "CLI --mesh-binary, fixed sibling parity driver, Windows taskkill platform branch",
+      "source_block": "parity = subprocess.run("
+    },
+    {
+      "bound_child": null,
+      "caller": "scripts/release-version.sh",
+      "candidate_id": "scripts/release-version.sh#candidate:ef0612530a155d80:1",
+      "child": null,
+      "deletion_condition": "Retire only after source-owned contract migration",
+      "disposition": "bounded_selector",
+      "evidence": [
+        {
+          "line": 300,
+          "path": "scripts/release-version.sh",
+          "text": "\"sdk/python/pyproject.toml\""
+        }
+      ],
+      "id": "boundary:rebase:scripts/release-version.sh#candidate:ef0612530a155d80:1",
+      "line": 300,
+      "occurrence": 1,
+      "rationale": "Python token names a data path, not an executable invocation",
+      "reachable_bytes": "SDK client.py/types.py grep inputs or sdk/python/pyproject.toml version text; no interpreter",
+      "replacement_owner": "tools/xtask QA or SDK component owner",
+      "selector": "literal Python SDK source/manifest filename used as data by shell validation/version propagation",
+      "source_block": "\"sdk/python/pyproject.toml\""
     }
   ],
   "census": {
@@ -1940,18 +2078,6 @@
       "transitive_boundary": "selected interpreter consumed by version check at line 182 and JSON audit at line 191"
     },
     {
-      "argv": "for cmd in ... python3 uv ...; command -v $cmd inside loop",
-      "deletion_condition": "Remove python3/uv prerequisites only after every canary consumer migrates.",
-      "disposition": "nonexecution",
-      "id": ".github/actions/setup-canary-runner/action.yml#candidate:026f8684c5beba8f:1",
-      "owner": "canary runner prerequisites",
-      "reason": "Loop words name tools rather than executing them.",
-      "replacement": "canary runner preflight owner",
-      "source_block": "for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun goose; do",
-      "status_output_effects": "Probes availability; missing tools are reported and ultimately fail preflight; no Python or uv process launched by this line.",
-      "transitive_boundary": "availability prerequisite for later canary action/script commands"
-    },
-    {
       "argv": "actions/setup-python v6.3.0 with python-version 3.12 when job.container.id == ''",
       "deletion_condition": "Remove provisioning after all selected bare-metal smoke interpreter consumers have replacements.",
       "disposition": "nonexecution",
@@ -2142,6 +2268,54 @@
       "source_block": "run: python3 scripts/validate-ci-lane-results.py --lane-plan \"$LANE_PLAN\" --needs \"$NEEDS_RESULTS\"",
       "status_output_effects": "Inherited streams; continue-on-error records outcome for report-ci-lane; final enforce step fails on non-success. No intended writes in validator.",
       "transitive_boundary": "scripts/validate-ci-lane-results.py"
+    },
+    {
+      "argv": "python scripts/ci-laya-smoke.py \\",
+      "deletion_condition": "Retain main feature until corresponding Rust owner and platform gates pass",
+      "disposition": "execution",
+      "id": ".github/actions/run-laya-product-smoke/action.yml#candidate:7a60522efff12ef5:1",
+      "owner": "main Laya product smoke or self-hosted cleanup",
+      "reason": "New main-side feature retained during rebase",
+      "replacement": "tools/xtask QA Laya and runner cleanup after intent-level qualification",
+      "source_block": "python scripts/ci-laya-smoke.py \\",
+      "status_output_effects": "Starts the composed mesh binary, waits for Laya readiness, runs every golden parity read, writes runner-temp JSON and terminates its child; failure fails the smoke step",
+      "transitive_boundary": "scripts/ci-laya-smoke.py"
+    },
+    {
+      "argv": "run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false",
+      "deletion_condition": "Retain main feature until corresponding Rust owner and platform gates pass",
+      "disposition": "execution",
+      "id": ".github/workflows/ci-linux-product-smoke-slice.yml#candidate:fa5a491897aa0054:1",
+      "owner": "main Laya product smoke or self-hosted cleanup",
+      "reason": "New main-side feature retained during rebase",
+      "replacement": "tools/xtask QA Laya and runner cleanup after intent-level qualification",
+      "source_block": "run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false",
+      "status_output_effects": "Bounded smoke cleanup after upload; evidence-uploaded false preserves diagnostic logs; nonzero fails cleanup step",
+      "transitive_boundary": "scripts/cleanup-self-hosted.py"
+    },
+    {
+      "argv": "run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false",
+      "deletion_condition": "Retain main feature until corresponding Rust owner and platform gates pass",
+      "disposition": "execution",
+      "id": ".github/workflows/ci-linux-product-smoke-slice.yml#candidate:fa5a491897aa0054:2",
+      "owner": "main Laya product smoke or self-hosted cleanup",
+      "reason": "New main-side feature retained during rebase",
+      "replacement": "tools/xtask QA Laya and runner cleanup after intent-level qualification",
+      "source_block": "run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false",
+      "status_output_effects": "Bounded smoke cleanup after upload; evidence-uploaded false preserves diagnostic logs; nonzero fails cleanup step",
+      "transitive_boundary": "scripts/cleanup-self-hosted.py"
+    },
+    {
+      "argv": "run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false",
+      "deletion_condition": "Retain main feature until corresponding Rust owner and platform gates pass",
+      "disposition": "execution",
+      "id": ".github/workflows/ci-linux-product-smoke-slice.yml#candidate:fa5a491897aa0054:3",
+      "owner": "main Laya product smoke or self-hosted cleanup",
+      "reason": "New main-side feature retained during rebase",
+      "replacement": "tools/xtask QA Laya and runner cleanup after intent-level qualification",
+      "source_block": "run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false",
+      "status_output_effects": "Bounded smoke cleanup after upload; evidence-uploaded false preserves diagnostic logs; nonzero fails cleanup step",
+      "transitive_boundary": "scripts/cleanup-self-hosted.py"
     }
   ],
   "inline_source_records": [

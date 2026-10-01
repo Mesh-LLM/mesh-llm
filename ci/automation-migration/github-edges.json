@@ -252,18 +252,6 @@
       ]
     },
     {
-      "file": ".github/actions/setup-canary-runner/action.yml",
-      "members": [
-        [
-          21,
-          "026f8684c5beba8f",
-          1,
-          "probe",
-          "command -v python3 and uv among canary prerequisites; no execution on loop line"
-        ]
-      ]
-    },
-    {
       "file": ".github/actions/use-canary-cache/action.yml",
       "members": [
         [
@@ -340,7 +328,7 @@
       "file": ".github/workflows/ci-linux-lane.yml",
       "members": [
         [
-          214,
+          216,
           "1051b414e5b81e6f",
           1,
           "script",
@@ -352,7 +340,7 @@
       "file": ".github/workflows/ci-macos-lane.yml",
       "members": [
         [
-          203,
+          207,
           "1051b414e5b81e6f",
           1,
           "script",
@@ -461,7 +449,7 @@
       "file": ".github/workflows/ci-windows-lane.yml",
       "members": [
         [
-          133,
+          146,
           "1051b414e5b81e6f",
           1,
           "script",
@@ -567,63 +555,63 @@
       "file": ".github/workflows/llama-canary-family-pass.yml",
       "members": [
         [
-          123,
+          112,
           "081a7835e45475b2",
           1,
           "script",
           "scripts/llama-canary-family-evidence.py build; selected source root/mode/pass/env; dynamic import canary_family_memory.py and source-selected plan-family-battery.py; spawns native battery/build"
         ],
         [
-          188,
+          196,
           "252094aceed96a6d",
           1,
           "script",
           "scripts/cleanup-self-hosted.py --job build --evidence-uploaded $EVIDENCE_UPLOADED --package-uploaded $PACKAGE_UPLOADED; bounded persistent runner cleanup"
         ],
         [
-          206,
+          214,
           "aa8a6ec02469eee3",
           1,
           "comment",
           "restored workload oracle note only"
         ],
         [
-          231,
+          239,
           "aecf7d458f8b1108",
           1,
           "metadata",
           "uses local setup-canary-python action (separately inventoried), not a shell invocation on this line"
         ],
         [
-          239,
+          247,
           "a1177e911b159301",
           1,
           "script",
           "scripts/llama-canary-family-evidence.py restore --root $CANARY_SOURCE_ROOT --package $PACKAGE --identity $IDENTITY; verifies immutable handoff/restores executables"
         ],
         [
-          249,
+          257,
           "d3273d6ae7c14701",
           1,
           "script",
           "scripts/llama-canary-family-evidence.py certify --root $CANARY_SOURCE_ROOT --package $PACKAGE --identity $IDENTITY --shard-index $SHARD_INDEX --memory-tier $MEMORY_TIER --evidence $FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID; selected source battery and bounded memory guard; continue-on-error, later receipt gates result"
         ],
         [
-          259,
+          267,
           "2560ef5bd2b23849",
           1,
           "script",
           "scripts/llama-canary-family-evidence.py receipt --package $PACKAGE --identity $IDENTITY --family $FAMILY --outcome $OUTCOME --evidence $FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID; writes identity-bound worker receipt"
         ],
         [
-          284,
+          292,
           "5355127d6b97ca21",
           1,
           "script",
           "scripts/cleanup-self-hosted.py --job family --evidence-uploaded $EVIDENCE_UPLOADED; final worker cleanup"
         ],
         [
-          313,
+          321,
           "0f728166a1a64d3f",
           1,
           "script",
@@ -642,18 +630,32 @@
           "scripts/llama-canary-resolve-mesh-ref.py; only when MESH_REF nonempty; freezes trusted same-repo revision and writes GITHUB_OUTPUT"
         ],
         [
-          185,
+          173,
           "472a55ce62b4f573",
           1,
           "inline",
           "python3 - heredoc 186-216 parses NEEDS_JSON, gates three repair+independent verify passes, writes publish/package/identity/head/branch GITHUB_OUTPUT on success; selected source case has no publication"
         ],
         [
-          239,
+          229,
           "63c1ed62823cf8ad",
           1,
           "script",
           "scripts/llama-canary-family-evidence.py publication --package $RUNNER_TEMP/certified-canary --identity $IDENTITY; validates final handoff and summary before PR publication"
+        ],
+        [
+          111,
+          "e827e3feecc79f74",
+          1,
+          "script",
+          "Main bd5514dd8 retained source: python3 scripts/llama-canary-family-evidence.py preflight \\; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          129,
+          "be17be8c300fa81d",
+          1,
+          "script",
+          "Main bd5514dd8 retained source: python3 scripts/cleanup-self-hosted.py --job canary-preflight \\; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -865,6 +867,150 @@
           1,
           "metadata",
           "future skippy layout push paths filter windows-native-runtime-deps.py"
+        ]
+      ]
+    },
+    {
+      "file": ".github/actions/run-laya-product-smoke/action.yml",
+      "members": [
+        [
+          97,
+          "7a60522efff12ef5",
+          1,
+          "script",
+          "Main bd5514dd8 retained source: python scripts/ci-laya-smoke.py \\; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": ".github/actions/setup-canary-runner/action.yml",
+      "members": [
+        [
+          23,
+          "f9c3fc4cfa0aa776",
+          1,
+          "probe",
+          "Main bd5514dd8 retained source: for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": ".github/workflows/ci-linux-product-smoke-slice.yml",
+      "members": [
+        [
+          127,
+          "d7149b0913e92921",
+          1,
+          "provision",
+          "Main bd5514dd8 retained source: - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          129,
+          "b8b50a30eae1ce0d",
+          1,
+          "metadata",
+          "Main bd5514dd8 retained source: python-version: '3.12'; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          152,
+          "d7149b0913e92921",
+          2,
+          "provision",
+          "Main bd5514dd8 retained source: - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          154,
+          "b8b50a30eae1ce0d",
+          2,
+          "metadata",
+          "Main bd5514dd8 retained source: python-version: '3.12'; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          170,
+          "fa5a491897aa0054",
+          1,
+          "script",
+          "Main bd5514dd8 retained source: run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          185,
+          "d7149b0913e92921",
+          3,
+          "provision",
+          "Main bd5514dd8 retained source: - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          187,
+          "b8b50a30eae1ce0d",
+          3,
+          "metadata",
+          "Main bd5514dd8 retained source: python-version: '3.12'; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          204,
+          "fa5a491897aa0054",
+          2,
+          "script",
+          "Main bd5514dd8 retained source: run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          218,
+          "d7149b0913e92921",
+          4,
+          "provision",
+          "Main bd5514dd8 retained source: - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          220,
+          "b8b50a30eae1ce0d",
+          4,
+          "metadata",
+          "Main bd5514dd8 retained source: python-version: '3.12'; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          236,
+          "fa5a491897aa0054",
+          3,
+          "script",
+          "Main bd5514dd8 retained source: run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": ".github/workflows/ci-macos-product-smoke-slice.yml",
+      "members": [
+        [
+          72,
+          "d7149b0913e92921",
+          1,
+          "provision",
+          "Main bd5514dd8 retained source: - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          74,
+          "b8b50a30eae1ce0d",
+          1,
+          "metadata",
+          "Main bd5514dd8 retained source: python-version: '3.12'; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": ".github/workflows/ci-windows-product-smoke-slice.yml",
+      "members": [
+        [
+          47,
+          "d7149b0913e92921",
+          1,
+          "provision",
+          "Main bd5514dd8 retained source: - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          49,
+          "b8b50a30eae1ce0d",
+          1,
+          "metadata",
+          "Main bd5514dd8 retained source: python-version: '3.12'; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     }

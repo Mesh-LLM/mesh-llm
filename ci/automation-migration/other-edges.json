@@ -589,7 +589,7 @@
           "Policy says SDK candidates remain conditional; path mention is not Python execution"
         ],
         [
-          463,
+          473,
           "8c58a6a69751aa88",
           1,
           "prose",
@@ -750,7 +750,7 @@
           "Planner rule"
         ],
         [
-          234,
+          233,
           "d85a2a51bf30b0a6",
           1,
           "data",
@@ -758,7 +758,7 @@
           "Planner rule"
         ],
         [
-          323,
+          322,
           "a7f4b190250fb094",
           1,
           "data",
@@ -766,7 +766,7 @@
           "Future layout path rule, not existing executable"
         ],
         [
-          324,
+          323,
           "83f9b77a8c65be10",
           1,
           "data",
@@ -774,7 +774,7 @@
           "Future layout path rule"
         ],
         [
-          331,
+          330,
           "e12c6dc214d17902",
           1,
           "data",
@@ -782,7 +782,7 @@
           "Future layout path rule"
         ],
         [
-          332,
+          331,
           "555eafb3d24ac43c",
           1,
           "data",
@@ -790,7 +790,7 @@
           "Future layout path rule"
         ],
         [
-          431,
+          430,
           "9813dc3a9fbcce2e",
           1,
           "data",
@@ -798,7 +798,7 @@
           "Future layout path rule"
         ],
         [
-          432,
+          431,
           "485a939f1620237a",
           1,
           "data",
@@ -856,7 +856,7 @@
       "file": ".agents/skills/manage-ci/references/current-inventory.md",
       "members": [
         [
-          159,
+          168,
           "dfb3282ee54d32f3",
           1,
           "prose",
@@ -864,7 +864,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          384,
+          394,
           "99c02a235da33b1d",
           1,
           "prose",
@@ -872,7 +872,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          402,
+          412,
           "b4b4c134cd581a78",
           1,
           "prose",
@@ -880,7 +880,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          444,
+          454,
           "3858c48032d98379",
           1,
           "prose",
@@ -888,7 +888,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          624,
+          634,
           "228436f634d0d4f3",
           1,
           "prose",
@@ -896,7 +896,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          676,
+          691,
           "eeb405e9c110db5a",
           1,
           "prose",
@@ -904,7 +904,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          780,
+          795,
           "374b927a548a1046",
           1,
           "prose",
@@ -912,7 +912,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          949,
+          971,
           "b1fec73cf1f5bd28",
           1,
           "prose",
@@ -920,7 +920,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1082,
+          1104,
           "b7a562e2b1d3673f",
           1,
           "prose",
@@ -928,7 +928,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1123,
+          1145,
           "0934d1ce8f661df3",
           1,
           "prose",
@@ -936,7 +936,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1149,
+          1171,
           "3894bbba68037f7b",
           1,
           "prose",
@@ -944,7 +944,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1177,
+          1199,
           "d1e95ba515d2e6ee",
           1,
           "prose",
@@ -952,7 +952,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1181,
+          1203,
           "d6b4ea35c364a6aa",
           1,
           "prose",
@@ -960,7 +960,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1185,
+          1207,
           "fd29fdc80ac15e00",
           1,
           "prose",
@@ -968,12 +968,20 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1210,
+          1232,
           "fdc0a30f00b17d4e",
           1,
           "prose",
           "CI ownership or retained HF conversion environment description",
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
+        ],
+        [
+          19,
+          "9de9f9314729099c",
+          1,
+          "prose",
+          "selected existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: itself. `scripts/tests/test_ci_windows_composition.py` keeps the list, the; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     }
@@ -1648,23 +1656,10 @@
       ]
     },
     {
-      "file": "evals/test_agentic_replay_l3.py",
-      "members": [
-        [
-          10,
-          "d7ea42dfe5c27a57",
-          1,
-          "execution",
-          "evals/agentic-replay.py",
-          "Test constructs a file-location loader for the fixed sibling replay module and executes it with exec_module; no child process"
-        ]
-      ]
-    },
-    {
       "file": "evals/agentic-replay.py",
       "members": [
         [
-          169,
+          237,
           "0bb8fafe2022eacf",
           1,
           "execution",
@@ -1672,7 +1667,7 @@
           "check=True stdout/stderr captured, returns stdout.strip; optional manual replay"
         ],
         [
-          290,
+          358,
           "0bb8fafe2022eacf",
           2,
           "conditional",
@@ -1680,7 +1675,7 @@
           "cwd/env explicit, stdout+stderr logged, exit code logged; nonzero RuntimeError; commands include just release-host-build and just release-runtime-build backend, other runtime-selected commands need per-caller closure"
         ],
         [
-          323,
+          391,
           "227b092c1f2b3e39",
           1,
           "execution",
@@ -1688,7 +1683,7 @@
           "check=True; creates detached worktree for optional replay"
         ],
         [
-          444,
+          512,
           "b055144f6196d6bd",
           1,
           "selection",
@@ -1696,7 +1691,7 @@
           "Builds argv with --dataset-file/--dataset-revision/--output/--sessions-per-cohort or --trajectories-per-framework/--min-isl/--max-isl/--min-turns and repeated cohorts/frameworks; launched by 477"
         ],
         [
-          477,
+          545,
           "867afda6aa32c098",
           1,
           "execution",
@@ -1704,7 +1699,7 @@
           "check=True; raises explicit DuckDB/selection RuntimeError on child failure; writes thoughtworks-trajectories.json in output/inputs"
         ],
         [
-          699,
+          767,
           "61820625c5ebb4da",
           1,
           "prose",
@@ -1712,7 +1707,7 @@
           "Optional process field, not a launch"
         ],
         [
-          1320,
+          1459,
           "e231e3a2b65c72af",
           1,
           "prose",
@@ -1720,7 +1715,7 @@
           "Not a launch"
         ],
         [
-          1335,
+          1474,
           "091b630b3a4be637",
           1,
           "conditional",
@@ -1728,7 +1723,7 @@
           "start_new_session=True, cwd worktree, stdout+stderr combined to log; server lifecycle stop_server sends process-group SIGINT/TERM/KILL"
         ],
         [
-          1354,
+          1493,
           "66e1db0b76c00cfe",
           1,
           "prose",
@@ -1736,7 +1731,7 @@
           "Stop method signature, no launch"
         ],
         [
-          1418,
+          1557,
           "e231e3a2b65c72af",
           2,
           "prose",
@@ -1744,7 +1739,7 @@
           "start_l3_server type annotation; no process on this line"
         ],
         [
-          1429,
+          1568,
           "091b630b3a4be637",
           2,
           "execution",
@@ -1752,7 +1747,7 @@
           "start_l3_server launches the selected Mesh binary from build worktree with isolated runtime and cache-root flags; stdout/stderr to log, new process session, stop_server owns cleanup"
         ],
         [
-          1471,
+          1610,
           "f2bb6e29f68bd69a",
           1,
           "prose",
@@ -1760,7 +1755,7 @@
           "wait_for_l3_fill parameter only, not a launch"
         ],
         [
-          1492,
+          1631,
           "401466093f080ab6",
           1,
           "prose",
@@ -1768,15 +1763,7 @@
           "wait_for_l3_record parameter only, not a launch"
         ],
         [
-          1644,
-          "63f5489d83a96146",
-          1,
-          "execution",
-          "scripts/skippy-llama-parity.py",
-          "Dynamic import REPO/scripts/skippy-llama-parity.py; exec_module loads GGUF metadata validation in long-context preflight; shared optional/required module ownership remains separate"
-        ],
-        [
-          1728,
+          1885,
           "cbbf1358918b38fe",
           1,
           "prose",
@@ -1784,12 +1771,28 @@
           "Process holder, not launch"
         ],
         [
-          3187,
+          3363,
           "cbbf1358918b38fe",
           2,
           "prose",
           "subprocess.Popen type annotation",
           "Process holder, not launch"
+        ],
+        [
+          802,
+          "61820625c5ebb4da",
+          2,
+          "conditional",
+          "selected evals/agentic_replay_evidence.py context projection and selected replay subprocess",
+          "Main bd5514dd8 retained source: process: Optional[subprocess.Popen[bytes]] = None,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          1777,
+          "63f5489d83a96146",
+          1,
+          "conditional",
+          "selected evals/agentic_replay_evidence.py context projection and selected replay subprocess",
+          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -1848,19 +1851,6 @@
           "conditional",
           "stage0 command assembled from selected benchmark server/model arguments",
           "Popen launches optional upstream stage, executable runtime-selected"
-        ]
-      ]
-    },
-    {
-      "file": "evals/skippy-cache-correctness-gate.py",
-      "members": [
-        [
-          21,
-          "ee9ea5137a7a51d9",
-          1,
-          "execution",
-          "evals/skippy-cache-production-bench.py",
-          "Dynamic file-location spec from PRODUCTION_BENCH = REPO/evals/skippy-cache-production-bench.py; exec_module loads optional benchmark helpers"
         ]
       ]
     },
@@ -2051,20 +2041,20 @@
       "file": "evals/skippy-moe-expert-smoke.py",
       "members": [
         [
-          43,
-          "ee9ea5137a7a51d9",
-          1,
-          "execution",
-          "evals/skippy-cache-production-bench.py",
-          "Dynamic import from PRODUCTION_BENCH path, optional smoke"
-        ],
-        [
           69,
           "dbef69df4b6c3a92",
           1,
           "conditional",
           "smoke-selected command vector",
           "subprocess.run command assembled from smoke config; not necessarily Python"
+        ],
+        [
+          43,
+          "ee9ea5137a7a51d9",
+          1,
+          "conditional",
+          "selected existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_cache_production_bench\", PRODUCTION_BENCH); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2101,14 +2091,6 @@
       "file": "evals/skippy-radix-cache-ab.py",
       "members": [
         [
-          65,
-          "3c18db1c9af79f96",
-          1,
-          "execution",
-          "evals/skippy-cache-production-bench.py",
-          "Dynamic import of local production benchmark via path parameter bound in calling source"
-        ],
-        [
           353,
           "cbe66c21195598a1",
           1,
@@ -2123,6 +2105,14 @@
           "conditional",
           "configured cache benchmark server command",
           "Popen selected server; no fixed Python child"
+        ],
+        [
+          65,
+          "3c18db1c9af79f96",
+          1,
+          "conditional",
+          "selected existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_cache_production_bench\", path); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2149,9 +2139,9 @@
           250,
           "892caa4372698f91",
           1,
-          "execution",
-          "evals/skippy-agentic-prompt-manifest.py",
-          "GENERATOR = REPO/evals/skippy-agentic-prompt-manifest.py; dynamic exec_module loads generator"
+          "conditional",
+          "selected existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_agentic_prompt_manifest\", GENERATOR); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2159,20 +2149,20 @@
       "file": "evals/skippy-waiting-prefix-ab.py",
       "members": [
         [
-          37,
-          "af10afe85077572f",
-          1,
-          "execution",
-          "evals/skippy-scheduler-fixtures.py OR evals/skippy-radix-cache-ab.py",
-          "load_module(name,path) receives literal repo-relative path at callers 108-110 and 862; exec_module executes selected module; no arbitrary import from source-observed callsites"
-        ],
-        [
           426,
           "091b630b3a4be637",
           1,
           "conditional",
           "configured waiting-prefix server command",
           "Popen optional server from selected executable; not statically a Python target"
+        ],
+        [
+          37,
+          "af10afe85077572f",
+          1,
+          "conditional",
+          "selected existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(name, path); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2265,6 +2255,45 @@
           "execution",
           "git merge-base --is-ancestor <base_sha> <pr mergeCommit oid>",
           "check=False; returncode contributes to per-PR in-range boolean; no intended write"
+        ]
+      ]
+    },
+    {
+      "file": "evals/skippy-cache-correctness-gate.py",
+      "members": [
+        [
+          21,
+          "ee9ea5137a7a51d9",
+          1,
+          "conditional",
+          "selected existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: spec = importlib.util.spec_from_file_location(\"skippy_cache_production_bench\", PRODUCTION_BENCH); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": "evals/test_agentic_replay_l3.py",
+      "members": [
+        [
+          10,
+          "d7ea42dfe5c27a57",
+          1,
+          "conditional",
+          "selected existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: SPEC = importlib.util.spec_from_file_location(\"agentic_replay\", SCRIPT); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": "sdk/python/src/meshllm/_binding.py",
+      "members": [
+        [
+          13,
+          "514278cdb5ecf0f3",
+          1,
+          "conditional",
+          "selected meshllm._generated.mesh_ffi SDK binding import",
+          "Main bd5514dd8 retained source: _native_module = import_module(\"meshllm._generated.mesh_ffi\"); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     }

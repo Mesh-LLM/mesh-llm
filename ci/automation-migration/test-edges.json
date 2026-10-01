@@ -21,22 +21,8 @@
           "PowerShell Resolve-StageBuildDir extracted from scripts/build-windows.ps1",
           "Windows-only pwsh command evaluates selected function against temporary prepared SHA and build directory; no native build",
           [
-            96
-          ]
-        ],
-        [
-          "fixture",
-          "PowerShell ConvertTo-BashRepoPath extracted from scripts/build-windows.ps1",
-          "Windows-only pwsh checks repository-relative and WSL/drive path conversion; no build",
-          [
-            150
-          ]
-        ],
-        [
-          "fixture",
-          "PowerShell llama workdir selection extracted from scripts/build-windows.ps1",
-          "Windows-only pwsh resolves MESH_LLM_LLAMA_DIR relative to the repository from a fixture working directory",
-          [
+            96,
+            150,
             195
           ]
         ]
@@ -171,7 +157,9 @@
           "scripts/skippy-system-one-cases.py",
           "run_driver invokes selected interpreter and fixed cases driver against local fixture endpoint, captures JSON report and status",
           [
-            300
+            300,
+            426,
+            495
           ]
         ],
         [
@@ -180,35 +168,6 @@
           "Interpreter argv continuation for the run_driver subprocess, not a second process",
           [
             302
-          ]
-        ],
-        [
-          "fixture",
-          "scripts/skippy-system-one-smoke.sh",
-          "Runs the checked-in smoke against isolated temp work and unqualified or missing-native fixtures; no downloaded model",
-          [
-            426
-          ]
-        ],
-        [
-          "fixture",
-          "scripts/skippy-system-one-smoke.sh --prewarm",
-          "Reads pinned artifact identity through the plan-only prewarm path, no model downloaded",
-          [
-            495
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_ci_lane_workflows.py",
-      [
-        [
-          "fixture",
-          "jq -ce lane projection from plan-ci action",
-          "expression extracted from action, plan JSON on stdin; tests quality/website required and optional projections",
-          [
-            282
           ]
         ]
       ]
@@ -297,17 +256,17 @@
           [
             25,
             26,
+            130,
             34,
             60,
             90,
             106,
             118,
-            126,
-            130,
             161,
             180,
             228,
-            251
+            251,
+            126
           ]
         ],
         [
@@ -328,14 +287,7 @@
           ".github/actions/select-ci-runners/action.yml run block",
           "_run_selector runs extracted Bash with fake event/ref and temporary GITHUB_OUTPUT; checks sentinel authorization",
           [
-            98
-          ]
-        ],
-        [
-          "fixture",
-          "depot sentinel Validate protected sentinel identity step",
-          "_run_validation executes selected workflow Bash with synthetic sentinel ID, PR and output, rejects malformed inputs",
-          [
+            98,
             152
           ]
         ],
@@ -357,7 +309,8 @@
           "depot-canary attestation step Bash block",
           "_run_attestation executes selected step with synthetic endpoint/token and temporary output; no remote canary",
           [
-            67
+            67,
+            541
           ]
         ],
         [
@@ -366,14 +319,6 @@
           "nested run_validation tests selected seed/verify key block with synthetic ref/PR/ID",
           [
             206
-          ]
-        ],
-        [
-          "fixture",
-          "depot-canary cache or Docker audit probe Bash block",
-          "run_probe executes selected action/canary block with fake home, Docker config and endpoints",
-          [
-            541
           ]
         ]
       ]
@@ -395,7 +340,10 @@
           "scripts/run-command-with-timeout.py --seconds 1 --label agent developer task",
           "wrapper runs Python -c sleep(30) under timeout; asserts exit 124 and timeout diagnostic, no Goose",
           [
-            107
+            107,
+            292,
+            403,
+            420
           ]
         ],
         [
@@ -404,32 +352,6 @@
           "sys.executable continuation of timeout-wrapper subprocess at line 107; not another Python launch at this line",
           [
             115
-          ]
-        ],
-        [
-          "fixture",
-          "extracted repair-clock Bash fixture",
-          "helper runs selected Bash function with first/second pass outcomes and simulated clock, no Goose run",
-          [
-            177
-          ]
-        ],
-        [
-          "fixture",
-          "git in temporary canary repair repository",
-          "git init and status inspect only synthetic checkout",
-          [
-            273,
-            276
-          ]
-        ],
-        [
-          "fixture",
-          "repair shell excerpt and bash syntax probe",
-          "test launches assembled Bash repair excerpt and bash -n on script; does not dispatch canary workflow",
-          [
-            387,
-            404
           ]
         ]
       ]
@@ -443,10 +365,10 @@
           "two distinct init/add/commit sequences and helper git subcommands bind local source identities",
           [
             343,
-            347,
-            348,
             400,
+            347,
             404,
+            348,
             405,
             420
           ]
@@ -457,14 +379,6 @@
           "bash -c steps[gate].run with OUTCOME fixture; target depends on selected named step",
           [
             559
-          ]
-        ],
-        [
-          "fixture",
-          "Python -c heredoc extracted from canary workflow step",
-          "executes selected step body as inline Python with fixture environment, not a separate script file",
-          [
-            584
           ]
         ]
       ]
@@ -541,7 +455,8 @@
           "scripts/skippy-llama-parity.py",
           "_run helper passes test args and captures parity verdict; next interpreter vector is same process",
           [
-            68
+            68,
+            609
           ]
         ],
         [
@@ -550,63 +465,6 @@
           "sys.executable/PARITY vector continuation of _run",
           [
             69
-          ]
-        ],
-        [
-          "launch",
-          "scripts/update-llama-pin.sh",
-          "fixed updater writes or rejects temporary upstream.txt; prepared-source case reads test-created .mesh-llm-upstream-sha without fetching upstream",
-          [
-            232,
-            243,
-            262
-          ]
-        ],
-        [
-          "fixture",
-          "scripts/llama-canary-family-outcome.sh sourced via bash -c",
-          "classifier receives fixture log and returns status class, no family worker launched",
-          [
-            396
-          ]
-        ],
-        [
-          "launch",
-          "scripts/run-command-with-timeout.py",
-          "two subprocess.run calls and one Popen wrap test Python -c sleep/stdin children; assert timeout, process-group signal cleanup and stdin EOF",
-          [
-            413,
-            437,
-            478
-          ]
-        ],
-        [
-          "assembly",
-          "Python -c child argv to timeout wrapper",
-          "three sys.executable continuations supply wrapper command vectors, not three independent subprocesses on these lines",
-          [
-            421,
-            445,
-            486
-          ]
-        ],
-        [
-          "launch",
-          "scripts/skippy-family-battery.sh",
-          "dry-run helper and tampered-plan/preflight-only cases with fixture manifests and stubbed model inspect; no full family certification",
-          [
-            608,
-            741,
-            951,
-            995
-          ]
-        ],
-        [
-          "launch",
-          "scripts/plan-family-battery.py",
-          "generates canonical fixture plan subsequently modified to test battery rejection",
-          [
-            730
           ]
         ]
       ]
@@ -655,6 +513,9 @@
           [
             21,
             69,
+            243,
+            305,
+            379,
             105,
             113
           ]
@@ -665,10 +526,7 @@
           "repeated calls with local upstream and fixture workdir/patch queue; assert rejection of duplicate/CRLF series, deterministic author identity and repaired partial clone; no remote upstream",
           [
             99,
-            153,
-            243,
-            305,
-            379
+            153
           ]
         ]
       ]
@@ -690,7 +548,12 @@
           "scripts/release-notes-regroup.py",
           "render helper supplies body/plan/output fixture and captures status; sys.executable continuation belongs to the same call",
           [
-            216
+            216,
+            658,
+            670,
+            681,
+            724,
+            1159
           ]
         ],
         [
@@ -707,7 +570,6 @@
           "helper plus direct variants execute fixed regroup script on fixture release body/plan and check output/rejections",
           [
             538,
-            724,
             752
           ]
         ],
@@ -719,16 +581,6 @@
             539,
             725,
             753
-          ]
-        ],
-        [
-          "launch",
-          "scripts/check-conventional-commit.py",
-          "three separate messages via fixed CLI, positive and negative title/body cases",
-          [
-            658,
-            670,
-            681
           ]
         ],
         [
@@ -754,14 +606,6 @@
             1100,
             1102,
             1103
-          ]
-        ],
-        [
-          "fixture",
-          "scripts/release-notes-generate.sh with fake gh",
-          "invokes checked-in shell generator on v1/v2 fixture history; fake gh records publication output, no real GitHub release",
-          [
-            1159
           ]
         ]
       ]
@@ -807,7 +651,8 @@
           "Bash evaluates selected function against temporary known-version files; valid version rewrites fixture and malformed source rejects",
           [
             87,
-            107
+            107,
+            225
           ]
         ],
         [
@@ -816,14 +661,6 @@
           "Bash resolves fixture layout paths without publishing a release",
           [
             132
-          ]
-        ],
-        [
-          "fixture",
-          "scripts/release-version.sh against temporary layout",
-          "Runs selected version script with temporary source, checking fixture output and no release publication",
-          [
-            225
           ]
         ]
       ]
@@ -844,14 +681,7 @@
           "release.yml Prepare release UI version run block",
           "bash -c named workflow step with temp checkout and release-version stub; source mismatch rejects, matching SHA writes fixture outputs",
           [
-            90
-          ]
-        ],
-        [
-          "fixture",
-          "release.yml metadata release-notes base selector run block",
-          "Runs selected Bash metadata step with fixture Git tags and source SHA; checks previous stable tag without release publication",
-          [
+            90,
             277
           ]
         ]
@@ -873,14 +703,7 @@
           "restore-test-model action resolve-model Bash block",
           "runs extracted step with synthetic manifest and GITHUB_OUTPUT for PR/main/manual cadence",
           [
-            335
-          ]
-        ],
-        [
-          "launch",
-          "scripts/resolve-test-model-manifest.py",
-          "fixed Python resolver on fixture manifest with removed cadence; rejects with nonzero, no model download",
-          [
+            335,
             371
           ]
         ]
@@ -921,14 +744,7 @@
           "Runs extracted Bash predicate with address-in-use and model-initialization fixture logs; rejects unrelated failures",
           [
             143,
-            150
-          ]
-        ],
-        [
-          "fixture",
-          "skippy-workload-certify.sh start_candidate_server function",
-          "Runs extracted Bash start function with fake server, stub Python port selector and fixture logs; verifies bounded address retry and no retry on other errors",
-          [
+            150,
             194,
             241
           ]
@@ -956,14 +772,7 @@
           "scripts/cargo-linker-linux-x86_64",
           "linker test with fixture compiler and invocation log; checks forwarded flags",
           [
-            104
-          ]
-        ],
-        [
-          "launch",
-          "scripts/cargo-linker --mesh-probe",
-          "Bash linker probe with temporary cache and stub tools; checks selection outcome",
-          [
+            104,
             146
           ]
         ]
@@ -978,27 +787,6 @@
           "invalid --cuda-archh option is rejected before a build starts",
           [
             17
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_build_release.py",
-      [
-        [
-          "fixture",
-          "copied scripts/build-host.sh",
-          "runs copied host builder with stub tools and selected debug/release profile in temporary tree",
-          [
-            173
-          ]
-        ],
-        [
-          "fixture",
-          "copied release build script",
-          "runs copied script with test-controlled environment in temporary tree; checks release build contract",
-          [
-            282
           ]
         ]
       ]
@@ -1081,14 +869,7 @@
           "Python -c benchmark comparator import",
           "executes inline Python with hash seed and SCRIPT path to compare deterministic outputs; existing argv row is same process",
           [
-            491
-          ]
-        ],
-        [
-          "launch",
-          "scripts/compare-event-benchmark-matrix.py --help",
-          "executes fixed comparator help CLI; existing argv continuation is same process",
-          [
+            491,
             1029
           ]
         ]
@@ -1116,14 +897,7 @@
           "/bin/bash -c test-selected CUDA toolkit snippet",
           "run_bash executes caller-supplied shell snippets with temporary fake toolkit and selected PATH, not an implicit CUDA install",
           [
-            32
-          ]
-        ],
-        [
-          "launch",
-          "scripts/detect-cuda-toolkit-version.sh",
-          "Bash helper runs fixed detection script with caller-controlled toolkit paths and asserts version/rejection",
-          [
+            32,
             99
           ]
         ]
@@ -1298,14 +1072,7 @@
           "scripts/lib/macos-deployment-target.sh sourced in Bash",
           "child Bash prints target after source; tests default and override",
           [
-            30
-          ]
-        ],
-        [
-          "fixture",
-          "just --command bash -c deployment-target probe",
-          "runs Just environment export and Bash echo; checks target propagation",
-          [
+            30,
             43
           ]
         ]
@@ -1319,22 +1086,8 @@
           "scripts/verify-native-runtime-package.sh | scripts/verify-native-sdk-package.sh",
           "run_verifier caller selects only RUNTIME_VERIFIER or SDK_VERIFIER, including both in archive loops; Bash checks fixture artifact, digest and rejection",
           [
-            57
-          ]
-        ],
-        [
-          "launch",
-          "scripts/restore-native-sdk-input.sh",
-          "run_sdk_restore helper uses fixed SDK_RESTORE with fixture artifact and profile; callers check restoration",
-          [
-            79
-          ]
-        ],
-        [
-          "launch",
-          "scripts/verify-native-runtime-package.sh",
-          "helper uses fixed RUNTIME_VERIFIER with controlled runtime bundle and stub tools",
-          [
+            57,
+            79,
             760
           ]
         ]
@@ -1352,26 +1105,12 @@
             125,
             173,
             221,
-            253
-          ]
-        ],
-        [
-          "launch",
-          "scripts/package-native-runtime.sh",
-          "Bash package script with fixture runtime/backend and tool inputs; caller cases verify staging and invalid dependency/architecture outcomes",
-          [
+            253,
             279,
             357,
             531,
+            613,
             673
-          ]
-        ],
-        [
-          "fixture",
-          "/bin/bash -c native package probe",
-          "test builds inline shell harness with failing nvcc stub; asserts nonzero diagnostic, not a separate Python execution",
-          [
-            613
           ]
         ]
       ]
@@ -1398,24 +1137,6 @@
           "read-only tracked-path inventory with ROOT cwd for planner catalog assertion",
           [
             175
-          ]
-        ],
-        [
-          "launch",
-          "scripts/plan-ci.py",
-          "fixed PLANNER_PATH CLI with fixture JSON stdin; valid plan and invalid input cases assert output and failure",
-          [
-            690,
-            708
-          ]
-        ],
-        [
-          "assembly",
-          "scripts/plan-ci.py argv",
-          "sys.executable/PLANNER_PATH continuations of corresponding subprocess calls, not extra launches",
-          [
-            692,
-            709
           ]
         ]
       ]
@@ -1457,19 +1178,6 @@
           "Bash publisher with fake registry/commands and temporary workspace; callers vary args and assert no real publication",
           [
             353
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_run_command_with_timeout.py",
-      [
-        [
-          "launch",
-          "scripts/run-command-with-timeout.py --seconds 10 --label agent --cleanup-on-exit",
-          "wrapper runs test-created inline parent Python that can spawn nested child; result checks timeout and process-group cleanup",
-          [
-            149
           ]
         ]
       ]
@@ -1550,14 +1258,7 @@
           "scripts/safe-extract-tar.py",
           "run_extract helper executes python3 extractor on caller-provided archive/destination fixtures",
           [
-            23
-          ]
-        ],
-        [
-          "launch",
-          "scripts/verify-checksum-sidecar.py",
-          "run_verify helper checks test artifact and malformed/missing digest outcomes",
-          [
+            23,
             154
           ]
         ]
@@ -1572,19 +1273,6 @@
           "extractor helper runs script on fixture archive and destination; existing argv assembly row is same subprocess",
           [
             30
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_sccache_evidence.py",
-      [
-        [
-          "launch",
-          ".github/actions/capture-sccache-stats/capture.py",
-          "Python capture CLI against fixture stats and GITHUB_OUTPUT; continuation is same process",
-          [
-            178
           ]
         ]
       ]
@@ -1620,14 +1308,7 @@
           "rustc crates/skippy-ffi/build.rs",
           "compiles temporary build-script executable; not a Cargo/native runtime production build",
           [
-            25
-          ]
-        ],
-        [
-          "fixture",
-          "compiled skippy-ffi build-script fixture",
-          "runs compiled build script against temporary stub library and dynamic-runtime feature flags",
-          [
+            25,
             62
           ]
         ],
@@ -1684,7 +1365,9 @@
           "Python stdin stage-config generator extracted from scripts/skippy-workload-certify.sh",
           "one sys.executable - invocation with fixture model/projector values; line 27 is argv continuation",
           [
-            26
+            26,
+            83,
+            134
           ]
         ],
         [
@@ -1696,20 +1379,11 @@
           ]
         ],
         [
-          "fixture",
-          "Bash inline stamp/build harness",
-          "stub candidate build and manifest variables exercise stamp logic without starting certification",
-          [
-            83
-          ]
-        ],
-        [
           "launch",
           "scripts/skippy-workload-certify.sh",
           "_run and direct embedding-smoke calls use temporary model/build paths and skip-build; validate rejection and diagnostics",
           [
-            99,
-            134
+            99
           ]
         ]
       ]
@@ -1723,15 +1397,8 @@
           "Bash producer prints deterministic paths or rejects unsafe input; no oracle is built",
           [
             14,
+            58,
             28
-          ]
-        ],
-        [
-          "launch",
-          "scripts/plan-family-battery.py",
-          "fixed planner run asserts roster classes in emitted plan; no certification model is launched",
-          [
-            58
           ]
         ]
       ]
@@ -1753,7 +1420,7 @@
       "file": "scripts/tests/test_agentic_replay.py",
       "members": [
         [
-          20,
+          21,
           "ce33fd937305ee0d",
           1,
           "dynamic-import",
@@ -1909,7 +1576,7 @@
           "fixed ROOT-relative cleanup module"
         ],
         [
-          114,
+          115,
           "81b14dd334dac984",
           1,
           "subprocess-or-interpreter",
@@ -1918,7 +1585,7 @@
           "helper edits a test-only Git repository, not the checked-out source"
         ],
         [
-          137,
+          138,
           "d2cfb24f43d5e3b9",
           1,
           "subprocess-or-interpreter",
@@ -2043,13 +1710,31 @@
       "file": "scripts/tests/test_llama_canary_agent_repair_contract.py",
       "members": [
         [
-          419,
+          435,
           "51209f5cb2aad7e3",
           1,
           "dynamic-import",
           "import",
           "scripts/skippy-llama-parity.py",
           "test-local parity path is bound to the repository script before exec_module"
+        ],
+        [
+          178,
+          "13ca18bc3a83fc8c",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: return subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          289,
+          "a64ba1ba06692892",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: subprocess.run([\"git\", \"init\", \"-q\"], cwd=repo, check=True); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2064,6 +1749,15 @@
           "import",
           "scripts/llama-canary-family-evidence.py",
           "fixed canary evidence module; its own imports and children need separate closure"
+        ],
+        [
+          586,
+          "b9c6e0dd0ebffa7c",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(['python3', '-c', body], env={**os.environ,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2148,6 +1842,42 @@
           "import",
           "scripts/plan-ci.py",
           "fixed planner loaded for unit tests"
+        ],
+        [
+          707,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          709,
+          "b055144f6196d6bd",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          725,
+          "fcde2ef6bba29634",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: invalid = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          726,
+          "87838c12f96e2ea3",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: [sys.executable, str(PLANNER_PATH)],; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2220,7 +1950,7 @@
           "fixed SOURCE wrapper; separate child tree tested later"
         ],
         [
-          144,
+          196,
           "20bc6e185d9750bd",
           1,
           "subprocess-or-interpreter",
@@ -2229,7 +1959,7 @@
           "source-string construction; actual nested child starts only if parent runs"
         ],
         [
-          150,
+          202,
           "a9a7d1aadd149c53",
           1,
           "subprocess-or-interpreter",
@@ -2238,13 +1968,22 @@
           "argv continuation of run at line 149, not independent launch"
         ],
         [
-          151,
+          203,
           "89b0ca533b2b157a",
           1,
           "subprocess-or-interpreter",
           "assembly",
           "--cleanup-on-exit -- sys.executable -c parent",
           "nested parent command passed to timeout wrapper; continuation only"
+        ],
+        [
+          201,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2670,7 +2409,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          2266,
+          2265,
           "0bb8fafe2022eacf",
           5,
           "subprocess-or-interpreter",
@@ -2679,7 +2418,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          2819,
+          2818,
           "0bb8fafe2022eacf",
           6,
           "subprocess-or-interpreter",
@@ -2870,7 +2609,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          296,
+          304,
           "0bb8fafe2022eacf",
           3,
           "subprocess-or-interpreter",
@@ -2879,7 +2618,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          314,
+          322,
           "0bb8fafe2022eacf",
           4,
           "subprocess-or-interpreter",
@@ -2888,7 +2627,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          340,
+          348,
           "0bb8fafe2022eacf",
           5,
           "subprocess-or-interpreter",
@@ -2897,7 +2636,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          436,
+          444,
           "227b092c1f2b3e39",
           2,
           "subprocess-or-interpreter",
@@ -2906,7 +2645,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          448,
+          456,
           "0bb8fafe2022eacf",
           6,
           "subprocess-or-interpreter",
@@ -2915,7 +2654,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          466,
+          474,
           "0bb8fafe2022eacf",
           7,
           "subprocess-or-interpreter",
@@ -2924,7 +2663,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          484,
+          492,
           "0bb8fafe2022eacf",
           8,
           "subprocess-or-interpreter",
@@ -2938,7 +2677,7 @@
       "file": "scripts/tests/test_sccache_evidence.py",
       "members": [
         [
-          699,
+          706,
           "b055144f6196d6bd",
           1,
           "subprocess-or-interpreter",
@@ -2947,13 +2686,22 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          707,
+          714,
           "13ca18bc3a83fc8c",
           1,
           "subprocess-or-interpreter",
           "conditional",
           "fixture-selected Rust automation or shell adapter argv",
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          185,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2979,6 +2727,265 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ]
       ]
+    },
+    {
+      "file": "scripts/tests/test_build_release.py",
+      "members": [
+        [
+          184,
+          "227b092c1f2b3e39",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          300,
+          "227b092c1f2b3e39",
+          2,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/tests/test_ci_lane_workflows.py",
+      "members": [
+        [
+          258,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "scripts/validate-ci-lane-results.py with Windows lane projection fixture",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          268,
+          "0bb8fafe2022eacf",
+          2,
+          "subprocess-or-interpreter",
+          "fixture",
+          "scripts/validate-ci-lane-results.py with Windows lane projection fixture",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          270,
+          "b055144f6196d6bd",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "scripts/validate-ci-lane-results.py with Windows lane projection fixture",
+          "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          421,
+          "0bb8fafe2022eacf",
+          3,
+          "subprocess-or-interpreter",
+          "fixture",
+          "scripts/validate-ci-lane-results.py with Windows lane projection fixture",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/tests/test_ci_laya_smoke.py",
+      "members": [
+        [
+          11,
+          "161eedf470a7be36",
+          1,
+          "dynamic-import",
+          "fixture",
+          "scripts/ci-laya-smoke.py import",
+          "Main bd5514dd8 retained source: SPEC = importlib.util.spec_from_file_location(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/tests/test_llama_upstream_canary_contract.py",
+      "members": [
+        [
+          231,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          242,
+          "fcde2ef6bba29634",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: invalid = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          261,
+          "ada8261f4230c053",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: prepared = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          397,
+          "0bb8fafe2022eacf",
+          2,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          414,
+          "0bb8fafe2022eacf",
+          3,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          422,
+          "b055144f6196d6bd",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          438,
+          "199ce1cfcc1f5f1c",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: wrapper = subprocess.Popen(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          446,
+          "b055144f6196d6bd",
+          2,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          479,
+          "0bb8fafe2022eacf",
+          4,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          487,
+          "b055144f6196d6bd",
+          3,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          731,
+          "53c026884edc220c",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: generated = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          742,
+          "0bb8fafe2022eacf",
+          5,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          952,
+          "0bb8fafe2022eacf",
+          6,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          996,
+          "b0c6e8c6c4abee0f",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: incomplete = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/tests/test_skippy_laya_parity.py",
+      "members": [
+        [
+          11,
+          "dc454cc3781ea700",
+          1,
+          "dynamic-import",
+          "fixture",
+          "scripts/skippy-laya-parity.py import and CLI fixture",
+          "Main bd5514dd8 retained source: SPEC = importlib.util.spec_from_file_location(\"laya_parity\", ROOT / \"scripts\" / \"skippy-laya-parity.py\"); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          81,
+          "dffbaca47b54b6d0",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "scripts/skippy-laya-parity.py import and CLI fixture",
+          "Main bd5514dd8 retained source: original = parity.subprocess.run; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          82,
+          "af63d8a80465e955",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "scripts/skippy-laya-parity.py import and CLI fixture",
+          "Main bd5514dd8 retained source: parity.subprocess.run = fake_run; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          86,
+          "73c287b5d7a5296a",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "scripts/skippy-laya-parity.py import and CLI fixture",
+          "Main bd5514dd8 retained source: parity.subprocess.run = original; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          93,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "fixture",
+          "scripts/skippy-laya-parity.py import and CLI fixture",
+          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
     }
   ],
   "member_format": [
@@ -2990,7 +2997,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "13a3dbf819241560451b23d9dfe8c8954c96ce6e700e8ff65b6efc94f5d89477",
+  "observed_source_sha256": "74347b10aee1d6254c8bd214bf2c00bc2fc27cc11a3ddf061c3c7c8fb6bd1767",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency."
