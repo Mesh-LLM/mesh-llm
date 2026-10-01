@@ -1,0 +1,14 @@
+{
+  "candidate_executable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "class": "embedding",
+  "comparison": "embedding local-monolithic oracle passed: fixture",
+  "model_id": "fixture",
+  "model_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  "oracle_executable": "llama-server",
+  "oracle_executable_sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+  "oracle_lane": "embedding-oracle",
+  "pinned_patch_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "projector_sha256": null,
+  "smoke_lane": "embedding-smoke",
+  "status": "pass"
+}
