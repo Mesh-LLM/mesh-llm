@@ -129,9 +129,9 @@ fn migration_prepared_inputs_abi_manifest_verify_accepts_matching_input_unchange
     rewrite(&input, |value| value["schema_version"] = json!(3.0))?;
     assert_output(
         &verify(&input, TARGET, "e1").run(input.scratch.path())?,
-        0,
+        1,
         "",
-        "",
+        "static ABI manifest schema_version mismatch: expected 3, got 3.0\n",
     );
     Ok(())
 }

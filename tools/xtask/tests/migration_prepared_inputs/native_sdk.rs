@@ -74,9 +74,9 @@ fn migration_prepared_inputs_sdk_manifest_accepts_matching_artifact() -> TestRes
     assert_output(&verify_edit(|_| {})?, 0, "", "");
     assert_output(
         &verify_edit(|value| value["schema_version"] = json!(1.0))?,
-        0,
+        1,
         "",
-        "",
+        "unsupported schema_version: 1.0\n",
     );
     Ok(())
 }

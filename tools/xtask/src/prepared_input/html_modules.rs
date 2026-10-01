@@ -13,23 +13,55 @@ type Attributes = Vec<(String, Option<String>)>;
 
 pub(crate) fn module_sources(html: &str) -> Vec<ModuleSource> {
     let mut sources = Vec::new();
-    let mut rest = html;
-    while let Some(start) = rest.find('<') {
-        rest = &rest[start..];
-        let Some(tag) = start_tag(rest) else {
-            rest = skip_markup(rest);
-            continue;
-        };
-        rest = tag.after;
+    visit_start_tags(html, unescape, |tag| {
         if tag.name == "script" && attribute(&tag.attrs, "type") == Some(Some("module")) {
             let src = attribute(&tag.attrs, "src").unwrap_or(Some(""));
             sources.push(src.map(str::to_owned));
         }
+    });
+    sources
+}
+
+pub(crate) fn asset_references(html: &str) -> Result<Vec<String>, String> {
+    let mut references = Vec::new();
+    visit_start_tags(html, unescape, |tag| {
+        for name in ["src", "href"] {
+            if let Some(Some(value)) = attribute(&tag.attrs, name)
+                && !value.is_empty()
+            {
+                references.push(value.to_owned());
+            }
+        }
+    });
+    for value in &references {
+        if value.split('&').skip(1).any(|tail| {
+            tail.split_once(';').is_some_and(|(name, _)| {
+                !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric())
+            })
+        }) {
+            return Err("unsupported named entity in console asset reference".into());
+        }
+    }
+    Ok(references)
+}
+
+fn visit_start_tags(html: &str, decode: fn(&str) -> String, mut visit: impl FnMut(&StartTag<'_>)) {
+    let mut rest = html;
+    while let Some(start) = rest.find('<') {
+        rest = &rest[start..];
+        let Some(tag) = start_tag(rest, decode) else {
+            rest = skip_markup(rest);
+            continue;
+        };
+        rest = tag.after;
+        visit(&tag);
         if !tag.self_closing && matches!(tag.name.as_str(), "script" | "style") {
             rest = skip_raw_text(rest, &tag.name);
         }
     }
-    sources
 }
 
 struct StartTag<'a> {
@@ -81,7 +113,7 @@ fn skip_raw_text<'a>(text: &'a str, name: &str) -> &'a str {
     ""
 }
 
-fn start_tag(text: &str) -> Option<StartTag<'_>> {
+fn start_tag(text: &str, decode: fn(&str) -> String) -> Option<StartTag<'_>> {
     let body = text.strip_prefix('<')?;
     if !body.starts_with(|ch: char| ch.is_ascii_alphabetic()) {
         return None;
@@ -113,14 +145,14 @@ fn start_tag(text: &str) -> Option<StartTag<'_>> {
         if rest.is_empty() {
             return None;
         }
-        let (key, value, after) = attribute_at(rest);
+        let (key, value, after) = attribute_at(rest, decode);
         attrs.push((key, value));
         rest = after;
     }
 }
 
 /// One `name[=value]` pair starting at a non-space, non-`/` character.
-fn attribute_at(text: &str) -> (String, Option<String>, &str) {
+fn attribute_at(text: &str, decode: fn(&str) -> String) -> (String, Option<String>, &str) {
     let first = text.chars().next().map_or(0, char::len_utf8);
     let name_end = text[first..]
         .find(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '/' | '=' | '>'))
@@ -136,13 +168,13 @@ fn attribute_at(text: &str) -> (String, Option<String>, &str) {
         if let Some(quoted) = value_text.strip_prefix(quote)
             && let Some(end) = quoted.find(quote)
         {
-            return (key, Some(unescape(&quoted[..end])), &quoted[end + 1..]);
+            return (key, Some(decode(&quoted[..end])), &quoted[end + 1..]);
         }
     }
     let end = value_text
         .find(|ch: char| ch.is_ascii_whitespace() || ch == '>')
         .unwrap_or(value_text.len());
-    (key, Some(unescape(&value_text[..end])), &value_text[end..])
+    (key, Some(decode(&value_text[..end])), &value_text[end..])
 }
 
 /// `html.unescape` for the references that appear in attribute values:
