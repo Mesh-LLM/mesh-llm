@@ -30,6 +30,8 @@ pub(crate) enum VersionError {
     },
     #[error("invalid UTF-8 source: {0}")]
     Utf8(#[from] std::str::Utf8Error),
+    #[error("invalid Skippy runtime release version")]
+    RuntimeInvalid,
     #[error("workspace package version not found")]
     WorkspaceMissing,
     #[error("missing ABI component '{0}'")]
@@ -133,3 +135,44 @@ pub(crate) fn read_source(path: &Path) -> Result<Vec<u8>, VersionError> {
 #[cfg(test)]
 #[path = "package_version_tests.rs"]
 mod tests;
+
+/// Read the independent runtime release identity, preserving its text-file contract.
+pub(crate) fn runtime_version(bytes: &[u8]) -> Result<String, VersionError> {
+    let text = std::str::from_utf8(bytes)?.trim();
+    let (base, suffix) = text
+        .split_once('-')
+        .map_or((text, None), |(base, suffix)| (base, Some(suffix)));
+    let components: Vec<_> = base.split('.').collect();
+    let base_valid = components.len() == 3
+        && components
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    let suffix_valid = suffix.is_none_or(|suffix| {
+        !suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    });
+    if !base_valid || !suffix_valid {
+        return Err(VersionError::RuntimeInvalid);
+    }
+    Ok(text.to_owned())
+}
+
+#[cfg(test)]
+mod runtime_release_tests {
+    use super::runtime_version;
+    #[test]
+    fn runtime_identity_accepts_independent_release_and_rejects_invalid_source() {
+        assert_eq!(runtime_version(b"  0.75.1-rc.2\n").unwrap(), "0.75.1-rc.2");
+        for source in [
+            b"1.2".as_slice(),
+            b"1.2.3-",
+            b"1.2.3+build",
+            b"1.2.3\nextra",
+            b"1.2.3\xff",
+        ] {
+            assert!(runtime_version(source).is_err());
+        }
+    }
+}
