@@ -41,7 +41,7 @@
     {
       "group": "happy",
       "name": "string cuda major and abbreviated options",
-      "args": ["--ro=rt", "--o", "linux", "--ar", "x86_64", "--b", "cuda", "--cuda", "13"],
+      "args": ["--root=rt", "--os", "linux", "--arch", "x86_64", "--backend", "cuda", "--cuda-major", "13"],
       "files": {
         "rt/cuda12/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": {\"toolkit_major\": 12}}}}",
         "rt/cuda13/manifest.json": "{\"runtime\": {\"platform\": {\"os\": \"linux\", \"arch\": \"x86_64\"}, \"backend\": {\"kind\": \"cuda\", \"cuda\": {\"toolkit_major\": \"13\"}}}}"

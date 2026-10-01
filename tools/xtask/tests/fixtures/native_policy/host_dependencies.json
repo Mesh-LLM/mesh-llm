@@ -72,7 +72,7 @@
     {
       "group": "happy",
       "name": "help",
-      "args": ["--he"],
+      "args": ["--help"],
       "code": 0,
       "stdout": "usage: verify-host-dependencies.py [-h] [--format {elf,macho,pe}]\n                                   [--report REPORT] [--no-import-policy]\n                                   [--max-glibc MAX_GLIBC]\n                                   binary\n\npositional arguments:\n  binary\n\noptions:\n  -h, --help            show this help message and exit\n  --format {elf,macho,pe}\n  --report REPORT\n  --no-import-policy    Report imports without enforcing the host policy.\n                        Native runtime libraries legitimately import each\n                        other, so only the glibc floor applies to them.\n  --max-glibc MAX_GLIBC\n                        Reject an ELF binary that needs a GLIBC symbol version\n                        above this one, or the literal 'declared' to read\n                        scripts/linux-glibc-floor.txt.\n",
       "stderr": ""

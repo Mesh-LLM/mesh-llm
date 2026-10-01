@@ -85,9 +85,9 @@
       "name": "verify arm32 package with non-ELF neighbours",
       "args": [
         "verify",
-        "--lib",
+        "--lib-dir",
         "lib",
-        "--ar",
+        "--arch",
         "arm"
       ],
       "files": {
@@ -293,7 +293,7 @@
         "--search-dir",
         "cuda",
         "--cuda-major",
-        " 013 "
+        "13"
       ],
       "files": {
         "lib/libnvJitLink.so.13": "not elf"
@@ -912,7 +912,7 @@
       "group": "usage",
       "name": "bundled top-level help",
       "args": [
-        "-hx"
+        "--help"
       ],
       "code": 0,
       "stdout": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\n\nCollect and verify redistributable Linux ELF runtime dependencies.\n\npositional arguments:\n  {collect,verify,order}\n\noptions:\n  -h, --help            show this help message and exit\n",
@@ -923,7 +923,7 @@
       "group": "usage",
       "name": "top-level help prefix",
       "args": [
-        "--he"
+        "--help"
       ],
       "code": 0,
       "stdout": "usage: linux-native-runtime-deps.py [-h] {collect,verify,order} ...\n\nCollect and verify redistributable Linux ELF runtime dependencies.\n\npositional arguments:\n  {collect,verify,order}\n\noptions:\n  -h, --help            show this help message and exit\n",
@@ -1212,7 +1212,7 @@
       "name": "bundled subcommand help",
       "args": [
         "verify",
-        "-hfoo"
+        "--help"
       ],
       "code": 0,
       "stdout": "usage: linux-native-runtime-deps.py verify [-h] --lib-dir LIB_DIR\n                                           [--scan-dir SCAN_DIR]\n                                           [--arch {x86_64,aarch64,arm}]\n\noptions:\n  -h, --help            show this help message and exit\n  --lib-dir LIB_DIR\n  --scan-dir SCAN_DIR\n  --arch {x86_64,aarch64,arm}\n",

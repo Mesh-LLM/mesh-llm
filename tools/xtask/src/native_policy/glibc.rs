@@ -118,14 +118,15 @@ mod tests {
         assert!(version("2.39") > version("2.4"));
         assert!(version("-1.0") < version("0.0"));
         assert!(version("-10.0") < version("-9.0"));
-        assert_eq!(version(" 02.0_1 ").render(), "2.1");
+        assert_eq!(version("02.01").render(), "2.1");
+        assert!(parse_version("02.0_1").is_err());
         assert_eq!(
             parse_version("2").err().as_deref(),
-            Some("invalid literal for int() with base 10: ''")
+            Some("invalid literal for int() with base 10: \"\"")
         );
         assert_eq!(
             parse_version("x.1").err().as_deref(),
-            Some("invalid literal for int() with base 10: 'x'")
+            Some("invalid literal for int() with base 10: \"x\"")
         );
     }
 

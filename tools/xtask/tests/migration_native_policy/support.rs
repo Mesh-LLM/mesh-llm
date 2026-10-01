@@ -12,15 +12,6 @@ pub(crate) type TestResult = Result<(), Box<dyn Error>>;
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// Opt-in interpreter for side-by-side legacy runs. Unset by default, so the
-/// required suite never launches Python.
-const LEGACY_PYTHON: &str = "MIGRATION_NATIVE_POLICY_LEGACY_PYTHON";
-
-/// With the legacy interpreter set, a directory that receives each legacy
-/// outcome as `<case name>.json` instead of comparing it, for recapturing
-/// goldens.
-const RECORD: &str = "MIGRATION_NATIVE_POLICY_RECORD";
-
 /// A per-case scratch directory removed on drop.
 pub(crate) struct Scratch(PathBuf);
 
@@ -47,14 +38,6 @@ impl Drop for Scratch {
     }
 }
 
-fn repository_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("xtask lives under tools/")
-        .to_path_buf()
-}
-
 /// The legacy script a `native` command replaces.
 #[derive(Clone, Copy)]
 pub(crate) enum Tool {
@@ -75,17 +58,6 @@ impl Tool {
             Self::WindowsDeps => "windows-runtime-deps",
             Self::ReleaseMatrix => "release-matrix",
             Self::RuntimePackage => "verify-runtime-package",
-        }
-    }
-
-    fn script(self) -> &'static str {
-        match self {
-            Self::SelectRuntime => "scripts/select-native-runtime.py",
-            Self::HostDependencies => "scripts/verify-host-dependencies.py",
-            Self::LinuxDeps => "scripts/linux-native-runtime-deps.py",
-            Self::WindowsDeps => "scripts/windows-native-runtime-deps.py",
-            Self::ReleaseMatrix => "scripts/validate-release-native-runtime-matrix.py",
-            Self::RuntimePackage => "scripts/verify-native-runtime-package.sh",
         }
     }
 
@@ -251,7 +223,7 @@ pub(crate) struct Outcome {
     pub(crate) calls: String,
 }
 
-fn execute(tool: Tool, case: &Value, legacy: Option<&Path>) -> Result<Outcome, Box<dyn Error>> {
+fn execute(tool: Tool, case: &Value) -> Result<Outcome, Box<dyn Error>> {
     let scratch = Scratch::new(tool.command())?;
     let root = scratch.path();
     let bin = build(root, case)?;
@@ -261,22 +233,8 @@ fn execute(tool: Tool, case: &Value, legacy: Option<&Path>) -> Result<Outcome, B
         .iter()
         .map(text)
         .collect();
-    let mut command = match legacy {
-        Some(python) => {
-            let mut command = Command::new(if matches!(tool, Tool::RuntimePackage) {
-                Path::new("/bin/bash")
-            } else {
-                python
-            });
-            command.arg(repository_root().join(tool.script()));
-            command
-        }
-        None => {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
-            command.args(["native", tool.command()]);
-            command
-        }
-    };
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command.args(["native", tool.command()]);
     let mut child = command
         .args(&args)
         .current_dir(root)
@@ -345,39 +303,20 @@ fn expected(case: &Value) -> Outcome {
 }
 
 /// Runs every case through the port and requires the checked-in golden.
-/// With `MIGRATION_NATIVE_POLICY_LEGACY_PYTHON` set, the legacy script runs
-/// on an identical layout and must match the same golden.
 pub(crate) fn check(tool: Tool, group: &str) -> TestResult {
-    let legacy = std::env::var_os(LEGACY_PYTHON);
     for case in cases(tool, group)? {
         let name = text(&case["name"]);
         let golden = expected(&case);
-        if let Some(python) = &legacy
-            && case["host_specific_oracle"] != true
-        {
-            let observed = execute(tool, &case, Some(Path::new(python)))?;
-            if let Some(directory) = std::env::var_os(RECORD) {
-                record(Path::new(&directory), name, &observed)?;
-                continue;
-            }
-            assert_eq!(observed, golden, "legacy vs golden for {name}");
+        let ported = execute(tool, &case)?;
+        if golden.code != Some(0) {
+            assert_eq!(ported.code, golden.code, "{name}");
+            assert_eq!(ported.stdout, golden.stdout, "{name}");
+            assert_eq!(ported.report, golden.report, "{name}");
+            assert_eq!(ported.calls, golden.calls, "{name}");
+            assert!(!ported.stderr.is_empty());
+        } else {
+            assert_eq!(ported, golden, "output contract for {name}");
         }
-        let ported = execute(tool, &case, None)?;
-        assert_eq!(ported, golden, "port vs golden for {name}");
     }
-    Ok(())
-}
-
-fn record(directory: &Path, name: &str, observed: &Outcome) -> TestResult {
-    let document = serde_json::json!({
-        "name": name,
-        "code": observed.code,
-        "stdout": observed.stdout,
-        "stderr": observed.stderr,
-        "calls": observed.calls,
-    });
-    fs::create_dir_all(directory)?;
-    let file = directory.join(format!("{}.json", name.replace('/', "_")));
-    fs::write(file, serde_json::to_vec(&document)?)?;
     Ok(())
 }

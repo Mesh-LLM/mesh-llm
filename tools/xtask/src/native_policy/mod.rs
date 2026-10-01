@@ -17,8 +17,12 @@ mod linux_deps_collect;
 mod linux_deps_elf;
 mod linux_deps_order;
 mod linux_deps_policy;
+pub(crate) mod manifest_identity;
 mod manifest_json;
+mod package_version;
+mod package_version_command;
 mod release_matrix;
+mod runtime_manifest_writer;
 mod runtime_package;
 mod runtime_package_linux;
 mod runtime_package_macos;
@@ -41,6 +45,8 @@ pub(crate) enum NativeCommand {
     WindowsRuntimeDeps,
     ReleaseMatrix,
     VerifyRuntimePackage,
+    PackageSourceVersion,
+    RuntimeManifestWrite,
 }
 
 impl NativeCommand {
@@ -52,6 +58,8 @@ impl NativeCommand {
             "windows-runtime-deps" => Some(Self::WindowsRuntimeDeps),
             "release-matrix" => Some(Self::ReleaseMatrix),
             "verify-runtime-package" => Some(Self::VerifyRuntimePackage),
+            "package-source-version" => Some(Self::PackageSourceVersion),
+            "runtime-manifest-write" => Some(Self::RuntimeManifestWrite),
             _ => None,
         }
     }
@@ -65,6 +73,8 @@ pub(crate) fn run(
     root: impl FnOnce() -> DynResult<PathBuf>,
 ) -> DynResult<()> {
     let report = match command {
+        NativeCommand::RuntimeManifestWrite => return runtime_manifest_writer::run(args),
+        NativeCommand::PackageSourceVersion => package_version_command::run(args),
         NativeCommand::SelectRuntime => select_runtime::run(args),
         NativeCommand::LinuxRuntimeDeps => linux_deps::run(args, &toolchain::HostToolchain),
         NativeCommand::WindowsRuntimeDeps => windows_deps::run(args, &toolchain::HostToolchain),
