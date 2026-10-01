@@ -76,7 +76,7 @@ fn package_tool(root: &Path) -> DynResult<String> {
             return Err("unsafe declared runtime tool".into());
         }
     }
-    let relative = "tools/skippy-model-package";
+    let relative = "tools/skippy-package-builder";
     let expected = manifest
         .runtime
         .tools
@@ -329,14 +329,14 @@ mod tests {
         let root = tempfile::tempdir()?;
         let runtime = root.path().join("fixture");
         fs::create_dir_all(runtime.join("tools"))?;
-        let tool = runtime.join("tools/skippy-model-package");
+        let tool = runtime.join("tools/skippy-package-builder");
         fs::write(&tool, b"fixture")?;
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o755))?;
         let digest = crate::product::digest::file_sha256(&tool).map_err(|failure| failure.error)?;
         fs::write(
             runtime.join("manifest.json"),
             serde_json::to_vec(
-                &serde_json::json!({"runtime":{"tools":{"tools/skippy-model-package":digest}}}),
+                &serde_json::json!({"runtime":{"tools":{"tools/skippy-package-builder":digest}}}),
             )?,
         )?;
         assert!(package_tool(root.path()).is_ok());

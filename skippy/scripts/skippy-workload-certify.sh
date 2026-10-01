@@ -345,7 +345,11 @@ start_candidate_server() {
 }
 
 start_candidate_server
-python3 "$ROOT/scripts/ci-openai-workload-smoke.py" \
+workload_automation=(cargo xtool)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+  workload_automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+"${workload_automation[@]}" automation workload-smoke \
   --base-url "http://127.0.0.1:$PORT/v1" \
   --model "$MODEL_ID" \
   --class "$MODEL_CLASS" \

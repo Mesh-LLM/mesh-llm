@@ -13,9 +13,6 @@ import tarfile
 import tempfile
 import tomllib
 import unittest
-from unittest import mock
-
-import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1996,8 +1993,11 @@ class CiArtifactActionTests(unittest.TestCase):
         targets = (
             "aarch64-apple-ios",
             "aarch64-apple-ios-sim",
+            "x86_64-apple-ios",
             "aarch64-apple-ios-macabi",
+            "x86_64-apple-ios-macabi",
             "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
         )
         assembly_only_retry = [
             f"swift-sdk-target-{target}-1" for target in targets
@@ -2107,15 +2107,14 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn(
-            "shared-key: swift-sdk-aarch64-apple-darwin",
+            "shared-key: ${{ format('swift-sdk-{0}', runner.arch == 'ARM64' "
+            "&& 'aarch64-apple-darwin' || 'x86_64-apple-darwin') }}",
             producer,
         )
         self.assertIn(
-            "path: .deps/llama-build/build-stage-abi-aarch64-apple-darwin-metal",
+            "path: ${{ format('.deps/llama-build/build-stage-abi-{0}-metal'",
             producer,
         )
-        self.assertNotIn("x86_64-apple-darwin", producer)
-        self.assertNotIn("x86_64-apple-darwin", host_builder)
         self.assertNotIn("runner.arch, inputs.mode, hashFiles(", producer)
         self.assertIn(
             "uses: ./.github/actions/resolve-native-toolchain-epoch",
@@ -2329,63 +2328,12 @@ class CiArtifactActionTests(unittest.TestCase):
         action = self.read_action("restore-smoke-inputs")
 
         self.assertIn("expected exactly one composed product archive", action)
-        self.assertIn("scripts/safe-extract-tar.py", action)
+        self.assertIn('"${automation[@]}" artifact extract-tar', action)
         self.assertNotIn("tar -xzf", action)
-        self.assertIn("product host path must be", action)
-        self.assertIn(
-            "product runtime must be one direct child of native-runtimes",
-            action,
-        )
-        self.assertIn("product top-level contents are not canonical", action)
-        self.assertIn(
-            "product must contain exactly its manifest-selected runtime",
-            action,
-        )
-        self.assertIn('runtime_path="${runtime_path%$\'\\r\'}"', action)
+        self.assertIn('"${automation[@]}" automation smoke-inputs', action)
+        self.assertIn('"${automation[@]}" product compose', action)
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
-        self.assertIn("sys.stdout.buffer.write(", action)
-        self.assertIn(
-            '("\\t".join((version, backend, host_path, runtime_path)) + "\\n").encode()',
-            action,
-        )
-
-    @unittest.skipUnless(os.name == "posix", "requires Bash")
-    def test_smoke_restore_extracts_composed_product(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workspace = Path(temp_dir)
-            with mock.patch.dict(os.environ, {"COPYFILE_DISABLE": "1"}):
-                result = self.run_product_composer(workspace)
-            self.assertEqual(result.returncode, 0, result.stderr)
-
-            artifact = workspace / "artifact"
-            artifact.mkdir()
-            shutil.copy2(workspace / "product-input.tar.gz", artifact)
-            action = yaml.safe_load(self.read_action("restore-smoke-inputs"))
-            extract_step = next(
-                step for step in action["runs"]["steps"]
-                if step["name"] == "Extract and verify composed product"
-            )
-            script = extract_step["run"]
-            for name, value in {
-                "artifact_path": str(artifact),
-                "binary_name": "mesh-llm",
-                "expected_backend": "cpu",
-            }.items():
-                script = script.replace(f"${{{{ inputs.{name} }}}}", value)
-            result = subprocess.run(
-                [
-                    "/bin/bash", "--noprofile", "--norc", "-e",
-                    "-o", "pipefail", "-c", script,
-                ],
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue((artifact / "mesh-llm").is_file())
-            self.assertTrue((artifact / "product-manifest.json").is_file())
 
     def test_test_model_restore_is_optional_and_verified(self) -> None:
         """The shared model action: resolve, cache, download, verify.

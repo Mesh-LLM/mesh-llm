@@ -290,7 +290,12 @@ jobs:
         env:
           CLEANUP_ARTIFACT_PATH: ${{ inputs.artifact_path }}
           CLEANUP_BINARY_PATH: ${{ inputs.mesh_binary_target }}
-        run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
+        run: |
+          if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+            "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
+          else
+            cargo xtool ci-ops runner-cleanup --job smoke --evidence-uploaded false
+          fi
 
   smoke_tests_macos:
     name: Skippy Inference Smoke Tests (macOS Metal)

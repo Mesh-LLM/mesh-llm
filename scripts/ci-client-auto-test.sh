@@ -16,6 +16,10 @@
 # Exits 0 only if both invariants hold; 1 otherwise.
 
 set -euo pipefail
+automation=(cargo xtool)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+    automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 
 MESH_LLM="${1:?Usage: $0 <mesh-llm-binary>}"
 CONSOLE_PORT=3132        # avoid clashing with other CI steps
@@ -113,7 +117,7 @@ if [ "$API_UP" = true ]; then
     STATUS=$(curl -sf --max-time 5 "http://localhost:${CONSOLE_PORT}/api/status" 2>&1 || echo "")
     if [ -n "$STATUS" ]; then
         # Check it's valid JSON with expected fields
-        if echo "$STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'version' in d or 'peers' in d or 'models' in d" 2>/dev/null; then
+        if echo "$STATUS" | "${automation[@]}" automation smoke-observation status 2>/dev/null; then
             echo "✅ /api/status returns valid JSON"
         else
             echo "⚠️  /api/status returned something but couldn't validate: $STATUS"
@@ -149,17 +153,8 @@ if [ "$API_UP" = true ]; then
     JOINED=false
     for j in $(seq 1 "$JOIN_WAIT"); do
         STATUS=$(curl -sf --max-time 5 "http://localhost:${CONSOLE_PORT}/api/status" 2>/dev/null || echo "")
-        if [ -n "$STATUS" ] && echo "$STATUS" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-mesh_id = d.get("mesh_id")
-peers = d.get("peers") or []
-if mesh_id and peers:
-    sys.exit(0)
-sys.exit(1)
-' 2>/dev/null; then
-            MESH_ID=$(echo "$STATUS" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("mesh_id",""))')
-            PEER_COUNT=$(echo "$STATUS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("peers") or []))')
+        if [ -n "$STATUS" ] && JOIN_STATUS=$(echo "$STATUS" | "${automation[@]}" automation smoke-observation joined 2>/dev/null); then
+            IFS=$'\t' read -r MESH_ID PEER_COUNT <<<"$JOIN_STATUS"
             echo "✅ Joined mesh after ${j}s — mesh_id=${MESH_ID} peers=${PEER_COUNT}"
             JOINED=true
             break
