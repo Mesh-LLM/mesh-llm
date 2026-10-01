@@ -485,8 +485,33 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn(runtime_id, linux)
                 self.assertIn(f"device: {device}", linux)
         self.assertIn("MESH_ROCM_INFERENCE_RUNNER_ENABLED", linux)
-        self.assertIn("vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true'", linux)
-        self.assertIn("enable_vulkan_inference: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}", linux)
+        # The hardware-runner gates must be case-sensitive. A plain
+        # `vars.X == 'true'` expression ignores case, so `TRUE`/`True` would
+        # schedule a GPU row on a runner that is not certified for that
+        # backend. The raw values are validated in the shell and both rows
+        # depend on the normalized result instead.
+        self.assertNotIn("vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true'", linux)
+        self.assertNotIn("vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED == 'true'", linux)
+        self.assertIn("  gpu_runner_gate:", linux)
+        self.assertIn('if [[ "$value" == "true" ]]; then', linux)
+        self.assertIn("needs: [gpu_runner_gate]", linux)
+        self.assertIn("needs.gpu_runner_gate.outputs.vulkan_enabled == 'true'", linux)
+        self.assertIn("needs.gpu_runner_gate.outputs.rocm_enabled == 'true'", linux)
+        self.assertIn(
+            "enable_vulkan_inference: ${{ needs.gpu_runner_gate.outputs.vulkan_enabled }}",
+            linux,
+        )
+        gate_job = linux.split("\n  gpu_runner_gate:", 1)[1].split(
+            "\n  laya_vulkan:", 1
+        )[0]
+        self.assertIn(
+            "MESH_VULKAN_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED }}",
+            gate_job,
+        )
+        self.assertIn(
+            "MESH_ROCM_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED }}",
+            gate_job,
+        )
         self.assertIn("gpu-amd", linux)
         self.assertIn("gpu-nvidia", linux)
         vulkan_job = linux.split("\n  laya_vulkan:", 1)[1].split(

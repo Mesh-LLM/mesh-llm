@@ -169,19 +169,52 @@ jobs:
           CLEANUP_BINARY_PATH: target/release/mesh-llm
         run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
 
-  # The composed Vulkan product itself is built, verified, and readiness-smoked
-  # by the runtime and product slices. The Laya row needs something they do not:
-  # a live pod that exposes a Vulkan device to the product. The `gpu-nvidia`
-  # scale set has never provided one - this row failed on every main and PR run
-  # since it landed, the resolver rejecting the only candidate, on the same pod
-  # where the sibling Laya CUDA row passed. Keep it planned, but skipped until a
-  # live runner pod passes `verify-vulkan-device` (the check
-  # mesh-llm-runner-images documents for a Vulkan-capable NVIDIA pod) and an
-  # operator sets the variable, in the same shape as
-  # MESH_ROCM_INFERENCE_RUNNER_ENABLED.
+  # Case-sensitive exact-`true` gate for the two hardware-backed Laya rows.
+  #
+  # A GitHub Actions expression cannot compare strings case-sensitively: `==`
+  # ignores case, so `vars.X == 'true'` also matches `TRUE` and `True`. A
+  # mis-cased variable therefore schedules a GPU row against a runner that is
+  # not certified for that backend - the `gpu-nvidia` scale set has never
+  # exposed a Vulkan device, and the `gpu-amd` ROCm role is repository-scoped -
+  # which restores the red main these gates exist to prevent. Validate the raw
+  # value in the shell, where `[[ .. == .. ]]` is exact, and let both rows
+  # depend on the normalized result. `run-laya-product-smoke` still repeats the
+  # gate from that normalized input, so an older protected workflow cannot run
+  # the Vulkan smoke on an uncertified PR runner before this workflow change
+  # reaches main.
+  gpu_runner_gate:
+    name: GPU runner gate
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core') && (contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') || contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm')) }}
+    runs-on: ubuntu-24.04
+    outputs:
+      vulkan_enabled: ${{ steps.check.outputs.vulkan_enabled }}
+      rocm_enabled: ${{ steps.check.outputs.rocm_enabled }}
+    steps:
+      - name: Require exactly the lowercase true
+        id: check
+        env:
+          MESH_VULKAN_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED }}
+          MESH_ROCM_INFERENCE_RUNNER_ENABLED: ${{ vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED }}
+        run: |
+          set -euo pipefail
+          for pair in \
+            "vulkan_enabled:MESH_VULKAN_INFERENCE_RUNNER_ENABLED" \
+            "rocm_enabled:MESH_ROCM_INFERENCE_RUNNER_ENABLED"
+          do
+            output="${pair%%:*}"
+            name="${pair#*:}"
+            value="${!name:-}"
+            enabled=false
+            if [[ "$value" == "true" ]]; then
+              enabled=true
+            fi
+            echo "$output=$enabled" >> "$GITHUB_OUTPUT"
+          done
+
   laya_vulkan:
     name: Laya smoke (Linux Vulkan)
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}
+    needs: [gpu_runner_gate]
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.vulkan_enabled == 'true' }}
     runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia, mesh-llm-amd64]
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
@@ -202,7 +235,7 @@ jobs:
           staged_binary_path: target/release/mesh-llm
           expected_backend: vulkan
           device: Vulkan0
-          enable_vulkan_inference: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}
+          enable_vulkan_inference: ${{ needs.gpu_runner_gate.outputs.vulkan_enabled }}
           model_cadence: ${{ inputs.original_event_name == 'push' && 'main' || inputs.original_event_name == 'pull_request' && 'pull-request' || 'manual' }}
           save_model_cache: 'false'
       - name: Clean self-hosted Laya smoke outputs
@@ -215,7 +248,8 @@ jobs:
 
   laya_rocm:
     name: Laya smoke (Linux ROCm)
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && vars.MESH_ROCM_INFERENCE_RUNNER_ENABLED == 'true' }}
+    needs: [gpu_runner_gate]
+    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.rocm_enabled == 'true' }}
     runs-on: [self-hosted, Linux, X64, amd64, gpu-amd, mesh-llm-amd64]
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
