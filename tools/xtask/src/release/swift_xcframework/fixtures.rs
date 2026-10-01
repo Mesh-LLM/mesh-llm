@@ -62,9 +62,9 @@ impl Fixture {
     pub(super) fn full() -> Self {
         Self::new(vec![
             entry("ios", "", &["arm64"]),
-            entry("ios", "simulator", &["arm64", "x86_64"]),
-            entry("ios", "maccatalyst", &["arm64", "x86_64"]),
-            entry("macos", "", &["arm64", "x86_64"]),
+            entry("ios", "simulator", &["arm64"]),
+            entry("ios", "maccatalyst", &["arm64"]),
+            entry("macos", "", &["arm64"]),
         ])
     }
 

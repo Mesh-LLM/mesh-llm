@@ -2104,12 +2104,11 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn(
-            "shared-key: ${{ format('swift-sdk-{0}', runner.arch == 'ARM64' "
-            "&& 'aarch64-apple-darwin' || 'x86_64-apple-darwin') }}",
+            "shared-key: swift-sdk-aarch64-apple-darwin",
             producer,
         )
         self.assertIn(
-            "path: ${{ format('.deps/llama-build/build-stage-abi-{0}-metal'",
+            "path: .deps/llama-build/build-stage-abi-aarch64-apple-darwin-metal",
             producer,
         )
         self.assertNotIn("runner.arch, inputs.mode, hashFiles(", producer)
