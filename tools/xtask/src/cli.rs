@@ -1,9 +1,41 @@
 use crate::command::DynResult;
 use std::path::{Path, PathBuf};
 
-const NATIVE_USAGE: &str = "usage:\n  cargo xtool native select-runtime --root <dir> --os <os> --arch <arch> --backend <backend> [--cuda-major <major>]\n  cargo xtool native verify-host-dependencies <binary> [--format {elf|macho|pe}] [--report <path>] [--no-import-policy] [--max-glibc <version|declared>]\n  cargo xtool native linux-runtime-deps {collect|verify|order} --lib-dir <dir> [--scan-dir <dir>]... [--arch {x86_64|aarch64|arm}] [--search-dir <dir>]... [--cuda-major {12|13}] [--primary <name>]\n  cargo xtool native windows-runtime-deps {collect|verify} --lib-dir <dir> [--scan-dir <dir>]... [--search-dir <dir>]...\n  cargo xtool native release-matrix --manifest <json> [--required-target <os>/<arch>/<backend>]... [<artifact>...]\n  cargo xtool native verify-runtime-package [--portable] <artifact>...";
+const HF_CONVERTED_ARTIFACT_USAGE: &str =
+    "usage: cargo xtool hf-converted-artifact preflight --artifact-dir <directory>";
 
-const USAGE: &str = "usage:\n  cargo xtool artifact verify-checksum <artifact>\n  cargo xtool artifact extract-tar <archive> <destination>\n  cargo xtool artifact extract-zip <archive> <destination>\n  cargo xtool automation {inventory|policy} --check\n  cargo xtool automation bootstrap\n  cargo xtool automation parity --suite ci [--evidence <dir>] [--interpreter <path> | --rust-only]\n  cargo xtool ci plan [--manifest-root <path>] < plan-input.json\n  cargo xtool ci validate-lane --lane-plan <json> --needs <json> [--workflow <lane.yml>] [--plan-digest <sha256> --canonical-plan <json>]\n  cargo xtool ci validate-graph --workflows <dir>\n  cargo xtool ci-ops runner-identity [--root <path>] [--catalog <path>] {validate|check|diagnose|lookup|seed-key|bind} ...\n  cargo xtool ci-ops build-cache {status|prune|build} [--workspace <path>] [--target-dir <path>] [--max-size <size>] [--max-age <days>] [--json] [--execute] [-- <build command>...]\n  cargo xtool ci-ops sccache-stats --artifact-name <name> --output <path> [--github-output <path>] [--cache-expectation {cold|warm|opportunistic}] [--minimum-hit-rate <float>]\n  cargo xtool ci-ops collect-metrics --input <path|-> [--json-out <path|->] [--status <status>] [--top <n>] [--label KEY=VALUE]...\n  cargo xtool models generate [--registry <path>] [--check]\n  cargo xtool models resolve <manifest> --cadence <cadence> [--artifact-id <id>] [--require-single-file] [--github-output <path> [--github-output-prefix <name_>]] [--verify-root <dir>]\n  cargo xtool models restore-inputs --github-output <path> [--model-url <url> --model-file <name> | --model-manifest <path> --model-cadence <cadence> [--model-artifact-id <id>]]\n  cargo xtool prepared-input <consumer> ... (UI, static ABI, native SDK inputs)\n  cargo xtool release notes-base <target-tag> < tags.txt\n  cargo xtool release notes-link --body <md> --range <a..b> --repo <owner/name> --out-body <md> --out-links <json> [--repo-root <dir>] [--api-budget <n>]\n  cargo xtool release notes-classify --body <md> (--has-entries | --range <a..b> --version <v> --date <d> --out <json>) [--repo-root <dir>] [--links <json>]\n  cargo xtool repo-consistency release-targets\n  cargo xtool repo-consistency ci-crate-lists\n  cargo xtool repo-consistency publish-crates\n  cargo xtool repo-consistency test-all-rust-crate-coverage\n  cargo xtool repo-consistency no-console-print\n  cargo xtool repository affected-crates [--stdin | <path>...]\n  cargo xtool repository conventional-commits (--message <subject> | --range <range> | <file>) [--trailers-only]\n  cargo xtool repository env-mutation-census [--root <path>] [--file <path>]...\n  cargo xtool repository llama-upstream-pin [--repository <path>] [--upstream-url <url>] <base-sha> <head-sha>\n  cargo xtool release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo xtool release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo xtool release-attestation inspect --binary <path> [--public-key-file <path>] [--json]\n  (cargo run -p xtask -- <domain> <command> ... remains supported)";
+pub(crate) fn print_usage() {
+    println!(
+        "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
+        crate::automation::client_readiness::USAGE,
+        crate::automation::daemon_readiness::USAGE,
+        crate::automation::REPLAY_EXPORT_USAGE,
+        crate::automation::REPLAY_RUN_FAMILY_USAGE,
+        crate::automation::sdk_advisory::USAGE,
+        crate::automation::rollout::USAGE,
+        crate::automation::WORKLOAD_ORACLE_EVIDENCE_USAGE,
+        crate::automation::canary_aggregate_command::USAGE,
+        crate::automation::qualification::USAGE,
+        crate::automation::required_smoke::USAGE,
+        crate::automation::native_generator::USAGE
+    );
+    println!(
+        "  cargo xtool repository cargo-packages --generation {{legacy|current}} --crates <JSON> [--batches <JSON>] {{--cargo <absolute-executable> [--timeout <seconds>] | --metadata <fixture-path>}}"
+    );
+    println!("  {}", crate::automation::split_evidence::USAGE);
+    println!("  cargo xtool native package-source-version {{workspace|abi}} SOURCE (experimental)");
+    println!("  cargo xtool repository cargo-target-directory < cargo-metadata.json");
+    println!(
+        "  cargo xtool native runtime-manifest-write MANIFEST ID VERSION ABI OS ARCH TARGET PLATFORM BACKEND CUDA_MAJOR PRIMARY UPSTREAM PATCHED PATCH_DIGEST LIBRARY... -- TOOL... -- LICENSE... -- RELOCATABLE..."
+    );
+    println!(
+        "  cargo xtool prepared-input native-sdk-manifest-write MANIFEST ID VERSION TARGET PLATFORM OS ARCH BACKEND FLAVOR PROFILE LIBRARY UNIFFI UPSTREAM PATCHED PATCH_DIGEST"
+    );
+}
+
+const NATIVE_USAGE: &str = "usage:\n  cargo xtool native select-runtime --root <dir> --os <os> --arch <arch> --backend <backend> [--cuda-major <major>]\n  cargo xtool native verify-host-dependencies <binary> [--format {elf|macho|pe}] [--report <path>] [--no-import-policy] [--max-glibc <version|declared>]\n  cargo xtool native linux-runtime-deps {collect|verify|order} --lib-dir <dir> [--scan-dir <dir>]... [--arch {x86_64|aarch64|arm}] [--search-dir <dir>]... [--cuda-major {12|13}] [--primary <name>]\n  cargo xtool native windows-runtime-deps {collect|verify} --lib-dir <dir> [--scan-dir <dir>]... [--search-dir <dir>]...\n  cargo xtool native release-matrix --manifest <json> [--required-target <os>/<arch>/<backend>]... [<artifact>...]\n  cargo xtool native verify-runtime-package [--portable] <artifact>...\n  cargo xtool native package-source-version {workspace|abi} SOURCE (experimental)";
+
+const USAGE: &str = "usage:\n  cargo xtool artifact verify-checksum <artifact>\n  cargo xtool artifact extract-tar <archive> <destination>\n  cargo xtool artifact extract-zip <archive> <destination>\n  cargo xtool automation {inventory|policy} --check\n  cargo xtool automation bootstrap\n  cargo xtool automation parity --suite ci [--evidence <dir>] [--interpreter <path> | --rust-only]\n  cargo xtool automation replay-matrix validate --matrix <path>\n  cargo xtool ci plan [--manifest-root <path>] < plan-input.json\n  cargo xtool ci validate-lane --lane-plan <json> --needs <json> [--workflow <lane.yml>] [--plan-digest <sha256> --canonical-plan <json>]\n  cargo xtool ci validate-graph --workflows <dir>\n  cargo xtool ci-ops runner-identity [--root <path>] [--catalog <path>] {validate|check|diagnose|lookup|seed-key|bind} ...\n  cargo xtool ci-ops build-cache {status|prune|build} [--workspace <path>] [--target-dir <path>] [--max-size <size>] [--max-age <days>] [--json] [--execute] [-- <build command>...]\n  cargo xtool ci-ops sccache-stats --artifact-name <name> --output <path> [--github-output <path>] [--cache-expectation {cold|warm|opportunistic}] [--minimum-hit-rate <float>]\n  cargo xtool ci-ops collect-metrics --input <path|-> [--json-out <path|->] [--status <status>] [--top <n>] [--label KEY=VALUE]...\n  cargo xtool models generate [--registry <path>] [--check]\n  cargo xtool models resolve <manifest> --cadence <cadence> [--artifact-id <id>] [--require-single-file] [--github-output <path> [--github-output-prefix <name_>]] [--verify-root <dir>]\n  cargo xtool models restore-inputs --github-output <path> [--model-url <url> --model-file <name> | --model-manifest <path> --model-cadence <cadence> [--model-artifact-id <id>]]\n  cargo xtool prepared-input <consumer> ... (UI, static ABI, native SDK inputs)\n  cargo xtool release notes-base <target-tag> < tags.txt\n  cargo xtool release notes-link --body <md> --range <a..b> --repo <owner/name> --out-body <md> --out-links <json> [--repo-root <dir>] [--api-budget <n>]\n  cargo xtool release notes-classify --body <md> (--has-entries | --range <a..b> --version <v> --date <d> --out <json>) [--repo-root <dir>] [--links <json>]\n  cargo xtool repo-consistency release-targets\n  cargo xtool repo-consistency ci-crate-lists\n  cargo xtool repo-consistency publish-crates\n  cargo xtool repo-consistency test-all-rust-crate-coverage\n  cargo xtool repo-consistency no-console-print\n  cargo xtool repository affected-crates [--stdin | <path>...]\n  cargo xtool repository conventional-commits (--message <subject> | --range <range> | <file>) [--trailers-only]\n  cargo xtool repository env-mutation-census [--root <path>] [--file <path>]...\n  cargo xtool repository llama-upstream-pin [--repository <path>] [--upstream-url <url>] <base-sha> <head-sha>\n  cargo xtool release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo xtool release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo xtool release-attestation inspect --binary <path> [--public-key-file <path>] [--json]\n  (cargo run -p xtask -- <domain> <command> ... remains supported)";
 
 pub(crate) struct Cli<'a> {
     pub(crate) root: Option<PathBuf>,
@@ -11,14 +43,23 @@ pub(crate) struct Cli<'a> {
 }
 
 pub(crate) enum CliCommand<'a> {
+    HfConvertedArtifact(&'a [String]),
+    Rollout(&'a [String]),
     Repository(RepositoryCommand<'a>),
     GenerateKeypair(&'a [String]),
     Stamp(&'a [String]),
     Inspect(&'a [String]),
     Check(RepositoryCheck, &'a [String]),
     CiPlan(&'a [String]),
+    CiFamilyPlan(&'a [String]),
+    NativeGenerator(&'a [String]),
+    SplitEvidence(&'a [String]),
     CiValidate(&'a str, &'a [String]),
-    AutomationParity(&'a [String]),
+    Qualification(&'a str, &'a [String]),
+    ReplayMatrix(&'a [String]),
+    WorkloadOracleEvidence(&'a [String]),
+    CanaryReceipts(&'a [String]),
+    RewriterReport(&'a [String]),
     Models(crate::model_registry::ModelsCommand, &'a [String]),
     Artifact(crate::artifact::ArtifactCommand, &'a [String]),
     CiOperations(crate::ci_operations::CiOperationsCommand, &'a [String]),
@@ -34,12 +75,18 @@ pub(crate) enum CliCommand<'a> {
 #[derive(Clone, Copy)]
 pub(crate) enum RepositoryCheck {
     AffectedCrates,
+    CargoPackages,
+    CargoTargetDirectory,
     ConventionalCommits,
     EnvMutationCensus,
     LlamaUpstreamPin,
 }
 
 pub(crate) enum RepositoryCommand<'a> {
+    SdkAdvisory(&'a [String]),
+    ClientReadiness(&'a [String]),
+    DaemonReadiness(&'a [String]),
+    RequiredSmoke(&'a [String]),
     Automation(&'a [String]),
     AutomationBootstrap(&'a [String]),
     ReleaseTargets,
@@ -64,11 +111,62 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
-            [domain, scope, rest @ ..] if domain == "automation" && scope == "parity" => {
-                CliCommand::AutomationParity(rest)
+            [domain, scope, verb, rest @ ..]
+                if domain == "automation" && scope == "required-smoke" && verb == "run" =>
+            {
+                CliCommand::Repository(RepositoryCommand::RequiredSmoke(rest))
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "native-generator" => {
+                CliCommand::NativeGenerator(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "ci" && scope == "family-plan" => {
+                CliCommand::CiFamilyPlan(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "hf-converted-artifact" && scope == "preflight" =>
+            {
+                CliCommand::HfConvertedArtifact(rest)
+            }
+            [domain, ..] if domain == "hf-converted-artifact" => {
+                return Err(HF_CONVERTED_ARTIFACT_USAGE.into());
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "client-readiness" => {
+                CliCommand::Repository(RepositoryCommand::ClientReadiness(rest))
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "daemon-readiness" => {
+                CliCommand::Repository(RepositoryCommand::DaemonReadiness(rest))
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "rewriter-report" => {
+                CliCommand::RewriterReport(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "replay-matrix" => {
+                CliCommand::ReplayMatrix(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "workload-oracle-evidence" =>
+            {
+                CliCommand::WorkloadOracleEvidence(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "canary-receipts" => {
+                CliCommand::CanaryReceipts(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "bootstrap" => {
                 CliCommand::Repository(RepositoryCommand::AutomationBootstrap(rest))
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "sdk-advisory" => {
+                CliCommand::Repository(RepositoryCommand::SdkAdvisory(rest))
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "rollout" => {
+                CliCommand::Rollout(rest)
+            }
+            [domain, verb, rest @ ..]
+                if domain == "automation"
+                    && matches!(verb.as_str(), "qualify" | "qualify-replay") =>
+            {
+                CliCommand::Qualification(verb, rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "split-evidence" => {
+                CliCommand::SplitEvidence(rest)
             }
             [domain, rest @ ..] if domain == "automation" => {
                 CliCommand::Repository(RepositoryCommand::Automation(rest))
@@ -140,6 +238,8 @@ impl<'a> Cli<'a> {
             [domain, scope, rest @ ..] if domain == "repository" => {
                 let check = match scope.as_str() {
                     "affected-crates" => RepositoryCheck::AffectedCrates,
+                    "cargo-packages" => RepositoryCheck::CargoPackages,
+                    "cargo-target-directory" => RepositoryCheck::CargoTargetDirectory,
                     "conventional-commits" => RepositoryCheck::ConventionalCommits,
                     "env-mutation-census" => RepositoryCheck::EnvMutationCensus,
                     "llama-upstream-pin" => RepositoryCheck::LlamaUpstreamPin,
@@ -158,7 +258,16 @@ impl<'a> Cli<'a> {
             [domain, scope, rest @ ..] if domain == "release-attestation" && scope == "inspect" => {
                 CliCommand::Inspect(rest)
             }
-            _ => return Err(USAGE.into()),
+            _ => {
+                return Err(format!(
+                    "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}",
+                    crate::automation::REPLAY_EXPORT_USAGE,
+                    crate::automation::sdk_advisory::USAGE,
+                    crate::automation::rollout::USAGE,
+                    crate::automation::WORKLOAD_ORACLE_EVIDENCE_USAGE
+                )
+                .into());
+            }
         };
         Ok(Self { root, command })
     }
