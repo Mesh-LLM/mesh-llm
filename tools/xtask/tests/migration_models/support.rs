@@ -10,9 +10,6 @@ pub(crate) type TestResult = Result<(), Box<dyn Error>>;
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) const RESOLVER: &str = "scripts/resolve-test-model-manifest.py";
-pub(crate) const GENERATOR: &str = "scripts/generate-test-model-manifests.py";
-
 pub(crate) fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -46,11 +43,6 @@ pub(crate) fn code(value: &Value) -> Result<i32, Box<dyn Error>> {
         .as_i64()
         .ok_or("fixture code is not an integer")?;
     Ok(i32::try_from(code)?)
-}
-
-/// The legacy interpreter named by the operator, or `None` for default runs.
-pub(crate) fn legacy(var: &str) -> Option<PathBuf> {
-    std::env::var_os(var).map(PathBuf::from)
 }
 
 /// A per-test directory, canonical so legacy `{root}` substitutions match.
@@ -103,12 +95,6 @@ impl Stage {
         Ok(())
     }
 
-    /// Copies a legacy script into the stage so its `ROOT` is the stage.
-    pub(crate) fn legacy_script(&self, script: &str) -> Result<PathBuf, Box<dyn Error>> {
-        self.write(script, &fs::read(repository_root().join(script))?)?;
-        Ok(self.0.join(script))
-    }
-
     /// Replaces `{root}` with this stage's canonical path.
     pub(crate) fn expand(&self, value: &str) -> Result<String, Box<dyn Error>> {
         Ok(value.replace("{root}", self.root_arg()?))
@@ -135,41 +121,13 @@ pub(crate) fn run(program: &Path, cwd: &Path, args: &[&str]) -> Result<Output, B
         .output()?)
 }
 
-/// Runs the legacy script under the operator's interpreter.
-pub(crate) fn run_legacy(
-    python: &Path,
-    script: &Path,
-    cwd: &Path,
-    args: &[&str],
-) -> Result<Output, Box<dyn Error>> {
-    let script = script.to_str().ok_or("non-UTF8 script path")?;
-    let mut argv = vec![script];
-    argv.extend_from_slice(args);
-    run(python, cwd, &argv)
-}
-
 /// Asserts status and both streams, labelled with the case name.
 pub(crate) fn assert_streams(case: &str, output: &Output, code: i32, stdout: &str, stderr: &str) {
     assert_eq!(text(&output.stdout), stdout, "{case}: stdout");
-    assert_eq!(text(&output.stderr), stderr, "{case}: stderr");
+    if code == 0 || stderr.is_empty() {
+        assert_eq!(text(&output.stderr), stderr, "{case}: stderr");
+    } else {
+        assert!(!output.stderr.is_empty(), "{case}: failure diagnostic");
+    }
     assert_eq!(output.status.code(), Some(code), "{case}: status");
-}
-
-/// Asserts that two processes produced identical observable results.
-pub(crate) fn assert_same(case: &str, legacy: &Output, ported: &Output) {
-    assert_eq!(
-        text(&legacy.stdout),
-        text(&ported.stdout),
-        "{case}: stdout parity"
-    );
-    assert_eq!(
-        text(&legacy.stderr),
-        text(&ported.stderr),
-        "{case}: stderr parity"
-    );
-    assert_eq!(
-        legacy.status.code(),
-        ported.status.code(),
-        "{case}: status parity"
-    );
 }

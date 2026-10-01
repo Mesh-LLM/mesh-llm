@@ -5,9 +5,7 @@
 //! Every archive is assembled byte by byte at runtime in a scratch directory,
 //! so malformed members (traversal, device nodes, duplicates) need no
 //! checked-in binaries. Expected diagnostics are the legacy scripts' observed
-//! output. Set `MIGRATION_ARCHIVES_LEGACY_PYTHON=<python3>` to also run each
-//! legacy script on an identical fixture and require matching status, streams
-//! and resulting tree (modes, link targets and hard-link counts included).
+//! output.
 #![cfg(unix)]
 
 #[path = "migration_archives/support.rs"]

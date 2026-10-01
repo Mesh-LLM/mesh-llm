@@ -7,10 +7,6 @@
 //! and compares exit status, stdout, stderr, written files and the recorded
 //! `git`/`gh` argv with a golden under `fixtures/release/`, captured from the
 //! legacy script under Python 3.13 (`{root}` stands for the scratch path).
-//! Python tracebacks keep only their header and final exception line.
-//! Default runs start no Python. Set `MIGRATION_RELEASE_LEGACY_PYTHON` to an
-//! interpreter to also run the legacy script on identical inputs and require
-//! identical results; add `MIGRATION_RELEASE_CAPTURE=1` to rewrite goldens.
 
 #[path = "migration_release/failure_diagnostics.rs"]
 mod failure_diagnostics;

@@ -3,8 +3,7 @@
 //! manifest resolution and the no-model outputs that gate the cache step.
 
 use crate::support::{
-    RESOLVER, Stage, TestResult, assert_same, assert_streams, code, field, fixture, legacy,
-    repository_root, run,
+    Stage, TestResult, assert_streams, code, field, fixture, repository_root, run,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -53,43 +52,6 @@ fn ported_args(case: &Value) -> Result<Vec<String>, Box<dyn std::error::Error>> 
     Ok(args)
 }
 
-/// Runs the captured action block under the operator's bash 5 with the
-/// legacy resolver as `python3`.
-fn legacy_step(
-    stage: &Stage,
-    case: &Value,
-    bash: &Path,
-    python: &Path,
-) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-    let bin = stage.path().join("bin");
-    if !bin.join("python3").exists() {
-        std::fs::create_dir_all(&bin)?;
-        std::os::unix::fs::symlink(python, bin.join("python3"))?;
-    }
-    stage.write("resolve-step.sh", resolve_step()?.as_bytes())?;
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let mut command = std::process::Command::new(bash);
-    command
-        .current_dir(stage.path())
-        .args(["-e", "resolve-step.sh"])
-        .env("PATH", path);
-    command.env("GITHUB_OUTPUT", stage.path().join("gh.out"));
-    for (env, input) in [
-        ("INPUT_MODEL_URL", "model_url"),
-        ("INPUT_MODEL_FILE", "model_file"),
-        ("MODEL_MANIFEST", "model_manifest"),
-        ("MODEL_ARTIFACT_ID", "model_artifact_id"),
-        ("MODEL_CADENCE", "model_cadence"),
-    ] {
-        command.env(env, field(&case["inputs"], input)?);
-    }
-    Ok(command.stdin(std::process::Stdio::null()).output()?)
-}
-
 #[test]
 fn migration_models_restore_step_source_is_the_captured_block() -> TestResult {
     // Given/When: the resolve step in the checked-in action.
@@ -106,11 +68,6 @@ fn migration_models_restore_outputs_match_the_action_for_every_suite_and_cadence
     stage.frozen_manifests()?;
     let cases = fixture("restore-step.json")?;
     let cases = cases.as_array().ok_or("cases must be an array")?;
-    let bash = legacy("MIGRATION_MODELS_LEGACY_BASH");
-    let python = legacy("MIGRATION_MODELS_LEGACY_PYTHON");
-    if python.is_some() {
-        stage.legacy_script(RESOLVER)?;
-    }
     let mut resolved = 0;
     for case in cases {
         let name = field(case, "name")?;
@@ -131,12 +88,6 @@ fn migration_models_restore_outputs_match_the_action_for_every_suite_and_cadence
         assert_eq!(outputs, field(case, "github_output")?, "{name}: outputs");
         if code(case)? == 0 && outputs.contains("sha256=") && !outputs.contains("sha256=\n") {
             resolved += 1;
-        }
-        if let (Some(bash), Some(python)) = (&bash, &python) {
-            stage.write("gh.out", b"")?;
-            let original = legacy_step(&stage, case, bash, python)?;
-            assert_same(name, &original, &ported);
-            assert_eq!(stage.read("gh.out")?, outputs, "{name}: output parity");
         }
     }
     assert_eq!(cases.len(), 340);

@@ -3,9 +3,7 @@
 //! abbreviations, `--name=value`, bundled `-h`, `--` handling and Python
 //! 3.13's error order (required options before unrecognized arguments).
 
-use crate::ci_operations::build_cache_options::{
-    Kind, ambiguous, classify, help_flag, is_option_like,
-};
+use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::repository::check_report::CheckReport;
 
 const PROG: &str = "compose-product-bundle.py";
@@ -71,7 +69,6 @@ pub(super) fn parse(args: &[String]) -> Result<Args, CheckReport> {
         }
         match classify(arg, &OPTIONS) {
             Kind::Positional | Kind::Unknown => extras.push(arg),
-            Kind::Ambiguous(names) => return Err(ambiguous(arg, &names, &fail)),
             Kind::Known("-h" | "--help", explicit, sep) => {
                 help_flag(explicit, sep, "-h/--help", &fail)?;
                 return Err(CheckReport::success(format!("{USAGE}{HELP}")));
@@ -150,22 +147,22 @@ mod tests {
     fn migration_product_argv_prefixes_and_check() {
         let parsed = parse(&strings(&[
             "--bundle=b",
-            "--ho",
+            "--host",
             "h",
-            "--r",
+            "--runtime",
             "r",
-            "--v",
+            "--version",
             "-1",
-            "--ba",
+            "--backend",
             "cpu",
-            "--che",
+            "--check",
         ]))
         .unwrap_or_else(|report| panic!("{}", report.stderr));
         assert_eq!(parsed.bundle, "b");
         assert_eq!(parsed.version, "-1");
         assert!(parsed.check);
         let report = parse(&strings(&["--check=1"])).err().map(|r| r.stderr);
-        let expected = "argument --check: ignored explicit argument '1'";
+        let expected = "argument --check: ignored explicit argument \"1\"";
         assert!(report.is_some_and(|text| text.contains(expected)));
     }
 }

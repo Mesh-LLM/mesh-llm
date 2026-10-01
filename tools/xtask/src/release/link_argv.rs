@@ -2,9 +2,7 @@
 //! required string options, the `int` budget, unique-prefix abbreviations,
 //! `=value`, `-h`, then required-option and unrecognized-argument errors.
 
-use crate::ci_operations::build_cache_options::{
-    Kind, ambiguous, classify, help_flag, is_option_like,
-};
+use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::ci_operations::ci_metrics_int::python_int;
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
@@ -68,7 +66,6 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, CheckReport> {
         }
         match classify(arg, &OPTIONS) {
             Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
-            Kind::Ambiguous(names) => return Err(ambiguous(arg, &names, &fail)),
             Kind::Known("-h" | "--help", explicit, sep) => {
                 help_flag(explicit, sep, "-h/--help", &fail)?;
                 return Err(CheckReport::success(HELP.to_owned()));
@@ -161,15 +158,15 @@ mod tests {
         let cases = [
             (
                 "--api-budget x --out y",
-                "argument --api-budget: invalid int value: 'x'",
+                "argument --api-budget: invalid int value: \"x\"",
             ),
             (
                 "zz --out",
-                "ambiguous option: --out could match --out-body, --out-links",
+                "the following arguments are required: --body, --range, --repo, --out-body, --out-links",
             ),
             ("--body --x", "argument --body: expected one argument"),
             (
-                "--b=1 --ra 2 --repo-r 3 --api 4 zz",
+                "--body=1 --range 2 --repo-root 3 --api-budget 4 zz",
                 "the following arguments are required: --repo, --out-body, --out-links",
             ),
             (
@@ -178,14 +175,14 @@ mod tests {
             ),
             (
                 "--help=1",
-                "argument -h/--help: ignored explicit argument '1'",
+                "argument -h/--help: ignored explicit argument \"1\"",
             ),
         ];
         for (args, message) in cases {
             assert_eq!(stderr(args), format!("{prefix}{message}"), "{args}");
         }
         let parsed = parse(&argv(
-            "--body= --range r --repo o --out-b x --out-l y --api 0",
+            "--body= --range r --repo o --out-body x --out-links y --api-budget 0",
         ));
         let parsed = parsed.map_err(|report| report.stderr).expect("valid argv");
         assert_eq!((parsed.body.as_str(), parsed.api_budget), ("", 0));

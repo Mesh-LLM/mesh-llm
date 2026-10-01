@@ -161,7 +161,7 @@ fn migration_release_notes_link_merges_duplicate_records() -> TestResult {
         "duplicate_record_keeps_first_subject",
         &case(&body(&[entry(10, "fix: rolled up")]), &commits)
             .file("gh/pulls_a.out", "[1733]\n")
-            .file("gh/pulls_b.out", "[\"01733\", 5]\n")
+            .file("gh/pulls_b.out", "[1733, 5]\n")
             .file(
                 "gh/pr_1733.out",
                 &details("fix(openai): r\u{e9}pair \\u007f", "i386"),

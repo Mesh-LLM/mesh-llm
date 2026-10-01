@@ -2,7 +2,6 @@
 //! `os.walk` search for `manifest.json` files and
 //! `artifacts.sort(key=lambda item: item["id"])`.
 
-use super::python_object::type_name;
 use crate::ci_plan::document::Json;
 use std::fs;
 use std::path::Path;
@@ -38,17 +37,10 @@ pub(super) fn manifest_paths(root: &str) -> Vec<String> {
 /// type passes; otherwise a non-string id fails with the `TypeError` of
 /// Python's first comparison, `ids[1] < ids[0]`.
 pub(super) fn sort_by_id(artifacts: &mut [Json]) -> Result<(), String> {
-    if artifacts.len() < 2 {
-        return Ok(());
-    }
     let id = |item: &Json| item.get("id").cloned().unwrap_or(Json::Null);
     let ids: Vec<Json> = artifacts.iter().map(id).collect();
     if ids.iter().any(|value| !matches!(value, Json::String(_))) {
-        return Err(format!(
-            "TypeError: '<' not supported between instances of '{}' and '{}'",
-            type_name(&ids[1]),
-            type_name(&ids[0])
-        ));
+        return Err("runtime artifact id must be a string".into());
     }
     let text = |value: &Json| value.as_str().unwrap_or("").to_owned();
     artifacts.sort_by_key(|item| text(&id(item)));

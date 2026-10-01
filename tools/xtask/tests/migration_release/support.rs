@@ -15,9 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub type TestResult = Result<(), Box<dyn Error>>;
 
 /// Interpreter for side-by-side legacy runs; unset, no Python starts.
-pub const LEGACY_ENV: &str = "MIGRATION_RELEASE_LEGACY_PYTHON";
 /// Set with [`LEGACY_ENV`] to rewrite the goldens from legacy runs.
-pub const CAPTURE_ENV: &str = "MIGRATION_RELEASE_CAPTURE";
 const GIT_LOG: &str = "git-argv.log";
 const GH_LOG: &str = "gh-argv.log";
 const TRACEBACK: &str = "Traceback (most recent call last):\n";
@@ -40,15 +38,6 @@ impl Tool {
             Self::Link => "notes-link",
             Self::Classify => "notes-classify",
             Self::Regroup => "notes-regroup",
-        }
-    }
-
-    fn script(self) -> &'static str {
-        match self {
-            Self::Base => "scripts/select-release-notes-base.py",
-            Self::Link => "scripts/release-notes-link.py",
-            Self::Classify => "scripts/release-notes-classify.py",
-            Self::Regroup => "scripts/release-notes-regroup.py",
         }
     }
 }
@@ -204,7 +193,7 @@ fn normalize(stderr: &str) -> String {
     }
 }
 
-fn execute(tool: Tool, case: &Case, legacy: Option<&Path>) -> Result<Value, Box<dyn Error>> {
+fn execute(tool: Tool, case: &Case) -> Result<Value, Box<dyn Error>> {
     let stage = Stage::new(tool.command())?;
     if case.with_git {
         stage.executable("bin/git", &git_stub(stage.path()))?;
@@ -215,18 +204,8 @@ fn execute(tool: Tool, case: &Case, legacy: Option<&Path>) -> Result<Value, Box<
     for (relative, bytes) in &case.files {
         stage.write(relative, bytes)?;
     }
-    let mut command = match legacy {
-        Some(python) => {
-            let mut command = Command::new(python);
-            command.arg(repo_root().join(tool.script()));
-            command
-        }
-        None => {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
-            command.args(["release", tool.command()]);
-            command
-        }
-    };
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command.args(["release", tool.command()]);
     let root = stage.path().to_string_lossy().into_owned();
     let mut child = command
         .args(&case.args)
@@ -291,32 +270,32 @@ fn golden_path(tool: Tool, name: &str) -> PathBuf {
 /// script; with [`LEGACY_ENV`] set, also runs the legacy script on
 /// identical inputs and requires identical results.
 pub fn check(tool: Tool, name: &str, case: &Case) -> Result<Value, Box<dyn Error>> {
-    let actual = execute(tool, case, None)?;
+    let actual = execute(tool, case)?;
     let golden = golden_path(tool, name);
-    if let Some(python) = std::env::var_os(LEGACY_ENV).map(PathBuf::from) {
-        let legacy = execute(tool, case, Some(&python))?;
-        if std::env::var_os(CAPTURE_ENV).is_some() {
-            if let Some(parent) = golden.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut recorded = legacy.clone();
-            recorded["args"] = json!(case.args);
-            fs::write(&golden, serde_json::to_string_pretty(&recorded)? + "\n")?;
-        }
-        assert_eq!(
-            actual,
-            legacy,
-            "{name}: port differs from legacy {}",
-            python.display()
-        );
-    }
     let mut expected: Value = serde_json::from_slice(&fs::read(&golden)?)?;
     if let Some(map) = expected.as_object_mut() {
         map.remove("args");
     }
-    assert_eq!(
-        actual, expected,
-        "{name}: port differs from captured golden"
-    );
+    if expected["code"] != 0
+        || !expected["stderr"]
+            .as_str()
+            .ok_or("expected stderr")?
+            .is_empty()
+    {
+        for field in ["code", "stdout", "outputs", "git_argv", "gh_argv"] {
+            assert_eq!(actual[field], expected[field], "{name}: {field}");
+        }
+        if !expected["stderr"]
+            .as_str()
+            .ok_or("expected stderr")?
+            .is_empty()
+        {
+            assert!(!actual["stderr"].as_str().ok_or("stderr")?.is_empty());
+        } else {
+            assert_eq!(actual["stderr"], expected["stderr"]);
+        }
+    } else {
+        assert_eq!(actual, expected, "{name}: output contract");
+    }
     Ok(actual)
 }

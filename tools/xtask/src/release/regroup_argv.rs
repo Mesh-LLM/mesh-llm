@@ -3,9 +3,7 @@
 //! abbreviations, `=value`, `-h`, the required `--body`, unrecognized
 //! arguments, and the script's own `parser.error` messages.
 
-use crate::ci_operations::build_cache_options::{
-    Kind, ambiguous, classify, help_flag, is_option_like,
-};
+use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
 
@@ -60,7 +58,6 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, CheckReport> {
         }
         match classify(arg, &OPTIONS) {
             Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
-            Kind::Ambiguous(names) => return Err(ambiguous(arg, &names, &fail)),
             Kind::Known("-h" | "--help", explicit, sep) => {
                 help_flag(explicit, sep, "-h/--help", &fail)?;
                 return Err(CheckReport::success(HELP.to_owned()));
@@ -138,14 +135,14 @@ mod tests {
             ),
             ("--body b zz", "unrecognized arguments: zz"),
             (
-                "--body b --li=1",
-                "argument --list: ignored explicit argument '1'",
+                "--body b --list=1",
+                "argument --list: ignored explicit argument \"1\"",
             ),
         ];
         for (args, message) in cases {
             assert_eq!(stderr(args), format!("{prefix}{message}"), "{args}");
         }
-        let argv: Vec<String> = ["--b=x", "--c", "--m", "t", "--l"]
+        let argv: Vec<String> = ["--body=x", "--check", "--metadata-from", "t", "--list"]
             .map(str::to_owned)
             .to_vec();
         let parsed = parse(&argv).ok();

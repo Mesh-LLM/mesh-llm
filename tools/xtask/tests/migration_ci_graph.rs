@@ -6,9 +6,7 @@
 //! the expected planned jobs per case and lane come from
 //! `fixtures/ci_graph/lane_jobs.json`, which jq derived from the legacy
 //! script's rules. Workflow mutations run on temporary copies of the checked-in
-//! workflows. Default runs start no Python; set
-//! `MIGRATION_CI_GRAPH_LEGACY_PYTHON` to also run the legacy script side by
-//! side on the legacy argv.
+//! workflows.
 
 #[path = "migration_ci_graph/support.rs"]
 mod support;
