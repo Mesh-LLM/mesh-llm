@@ -1,0 +1,19 @@
+[
+  {"name":"incomplete pagination","pointer":"/total_count","value":4,"reason":"incomplete_artifacts"},
+  {"name":"duplicate immutable ID","pointer":"/artifacts/0/id","value":701,"reason":"duplicate_artifact_id"},
+  {"name":"wrong platform name","pointer":"/artifacts/1/name","value":"ci-product-macos-amd64-cpu","reason":"missing_artifact"},
+  {"name":"wrong architecture name","pointer":"/artifacts/1/name","value":"ci-product-linux-arm64-cpu","reason":"missing_artifact"},
+  {"name":"wrong backend name","pointer":"/artifacts/1/name","value":"ci-product-linux-amd64-rocm","reason":"missing_artifact"},
+  {"name":"ambiguous exact name","pointer":"/artifacts/0/name","value":"ci-product-linux-amd64-cpu","reason":"ambiguous_artifact"},
+  {"name":"expired exact match","pointer":"/artifacts/1/expired","value":true,"reason":"expired_artifact"},
+  {"name":"foreign producer run","pointer":"/artifacts/1/workflow_run/id","value":303,"reason":"artifact_identity"},
+  {"name":"foreign artifact repository","pointer":"/artifacts/1/workflow_run/repository_id","value":999,"reason":"artifact_identity"},
+  {"name":"foreign artifact head repository","pointer":"/artifacts/1/workflow_run/head_repository_id","value":999,"reason":"artifact_identity"},
+  {"name":"artifact feature branch","pointer":"/artifacts/1/workflow_run/head_branch","value":"feature","reason":"artifact_identity"},
+  {"name":"stale artifact source","pointer":"/artifacts/1/workflow_run/head_sha","value":"3333333333333333333333333333333333333333","reason":"artifact_identity"},
+  {"name":"missing origin","pointer":"/artifacts/1/workflow_run","value":null,"reason":"artifact_identity"},
+  {"name":"missing digest","pointer":"/artifacts/1/digest","value":null,"reason":"artifact_digest"},
+  {"name":"wrong digest algorithm","pointer":"/artifacts/1/digest","value":"sha1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","reason":"artifact_digest"},
+  {"name":"uppercase digest","pointer":"/artifacts/1/digest","value":"sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","reason":"artifact_digest"},
+  {"name":"empty inventory","pointer":"/artifacts","value":[],"reason":"incomplete_artifacts"}
+]

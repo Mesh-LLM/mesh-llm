@@ -1,0 +1,82 @@
+{
+  "errors": [],
+  "kind": "mesh-llm-two-node-split-readiness",
+  "model_id": "model-a",
+  "model_label": "dense",
+  "observers": {
+    "mesh_id": "mesh-a",
+    "seed": {
+      "node_id": "seed-node",
+      "peer_node_ids": [
+        "worker-node"
+      ]
+    },
+    "worker": {
+      "node_id": "worker-node",
+      "peer_node_ids": [
+        "seed-node"
+      ]
+    }
+  },
+  "schema_version": 1,
+  "snapshots": {
+    "seed_models": {
+      "path": "seed-models.json",
+      "sha256": "6d56dc8395e8c032a254d0a8f8497452f09549e5c283785cc675deaaed295680"
+    },
+    "seed_stages": {
+      "path": "seed-stages.json",
+      "sha256": "8567796a132fca80095536729ffcc52adb31d3b723d11e4a268992faff0a409c"
+    },
+    "seed_status": {
+      "path": "seed-status.json",
+      "sha256": "e79dd392b0c69792be584700ad31a29cb80a9f76062b4358a16fe94ca0492c28"
+    },
+    "worker_models": {
+      "path": "worker-models.json",
+      "sha256": "6d56dc8395e8c032a254d0a8f8497452f09549e5c283785cc675deaaed295680"
+    },
+    "worker_stages": {
+      "path": "worker-stages.json",
+      "sha256": "b227e98558d03098a4559a30d152953a07e11212443a24ec7c613f5f5e9b91dd"
+    },
+    "worker_status": {
+      "path": "worker-status.json",
+      "sha256": "e5dda58662e9b2677449cbe1737fb2a9a644a178490d96ae71a294e18ee46344"
+    }
+  },
+  "status": "ready",
+  "topology": {
+    "layer_end": 24,
+    "layer_start": 0,
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "model_id": "model-a",
+    "package_ref": "hf:test/model@revision",
+    "run_id": "run-a",
+    "stages": [
+      {
+        "endpoint": {
+          "bind_addr": "127.0.0.1:5501"
+        },
+        "layer_end": 12,
+        "layer_start": 0,
+        "node_id": "seed-node-0001",
+        "stage_id": "stage-0",
+        "stage_index": 0,
+        "state": "ready"
+      },
+      {
+        "endpoint": {
+          "bind_addr": "127.0.0.1:5502"
+        },
+        "layer_end": 24,
+        "layer_start": 12,
+        "node_id": "worker-node-0002",
+        "stage_id": "stage-1",
+        "stage_index": 1,
+        "state": "ready"
+      }
+    ],
+    "topology_id": "topology-a"
+  }
+}
