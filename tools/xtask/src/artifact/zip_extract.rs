@@ -10,6 +10,7 @@ use crate::repository::python_text::repr;
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,16 @@ const S_IFMT: u32 = 0o170_000;
 const S_IFDIR: u32 = 0o040_000;
 const S_IFREG: u32 = 0o100_000;
 const S_IFLNK: u32 = 0o120_000;
+
+#[cfg(windows)]
+fn symlink(target: &str, output: &Path) -> std::io::Result<()> {
+    let resolved = output.parent().unwrap_or(output).join(target);
+    if resolved.is_dir() {
+        std::os::windows::fs::symlink_dir(target, output)
+    } else {
+        std::os::windows::fs::symlink_file(target, output)
+    }
+}
 
 pub(super) fn run(args: &[String]) -> CheckReport {
     let [archive, destination] = args else {
@@ -63,6 +74,7 @@ struct Entry<'a> {
     info: &'a Info,
     parts: Vec<String>,
     kind: Kind,
+    #[cfg(unix)]
     mode: u32,
 }
 
@@ -154,6 +166,7 @@ fn classify<'a>(archive: &Archive, info: &'a Info) -> Result<Entry<'a>, Failure>
         info,
         parts,
         kind,
+        #[cfg(unix)]
         mode,
     })
 }
@@ -262,7 +275,9 @@ fn write_file(archive: &Archive, entry: &Entry<'_>, output: &Path) -> Result<(),
     handle
         .write_all(&bytes)
         .map_err(|error| os_failure(&error, output))?;
+    #[cfg(unix)]
     let permissions = entry.mode & 0o777;
+    #[cfg(unix)]
     if permissions != 0 {
         fs::set_permissions(output, fs::Permissions::from_mode(permissions))
             .map_err(|error| os_failure(&error, output))?;
