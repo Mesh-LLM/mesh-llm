@@ -4,7 +4,9 @@ use serde_json::Value;
 
 // Both sides of one paid exchange observe it: the payer through its ingress
 // task, the provider at the seller-op call sites in the serving path. They
-// share no exchange ID, so they join on the invoices' payment hashes.
+// share no exchange ID, so they join on the invoices' payment hashes. On each
+// side, the lifecycle events carry the same exchange ID as that side's
+// `openai.exchange.v1` events.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn payer_and_provider_each_observe_one_paid_exchange() -> Result<()> {
     let network = Arc::new(Network::default());
@@ -64,6 +66,15 @@ async fn payer_and_provider_each_observe_one_paid_exchange() -> Result<()> {
             .all(|e| e["exchange_id"] == provider_exchange)
     );
     assert_ne!(provider_exchange, "host-evidence-id");
+    // The provider's two channels join exactly: its effective and terminal
+    // exchange events carry the lifecycle events' exchange ID.
+    let exchange_ids = network.provider_exchange_ids.lock().unwrap().clone();
+    assert_eq!(
+        exchange_ids.len(),
+        2,
+        "effective + terminal: {exchange_ids:?}"
+    );
+    assert!(exchange_ids.iter().all(|id| id == provider_exchange));
 
     // The join: each invoice's payment hash, and the amount on it, is the
     // same as each side saw it, and each side's settlement names that hash.

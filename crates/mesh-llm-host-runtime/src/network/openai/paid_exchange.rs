@@ -24,14 +24,27 @@ pub(crate) struct PaidServedExchange {
 }
 
 impl PaidServedExchange {
-    /// Publish the effective event; `None` (nothing published) when no
-    /// plugin subscribes to exchange events, as on the free path.
-    pub(crate) async fn begin(node: &mesh::Node, model_name: &str) -> Option<Self> {
+    /// Whether a plugin subscribes to this node's exchange events.
+    pub(crate) async fn is_subscribed(node: &mesh::Node) -> bool {
+        match paid_exchange_channel(node).await {
+            Some(channel) => channel.has_subscriber().await,
+            None => false,
+        }
+    }
+
+    /// Publish the effective event under `exchange_id`, the id the serving
+    /// path minted for this request; `None` (nothing published) without an
+    /// id or when no plugin subscribes to exchange events, as on the free path.
+    pub(crate) async fn begin(
+        node: &mesh::Node,
+        model_name: &str,
+        exchange_id: Option<&str>,
+    ) -> Option<Self> {
+        let exchange_id = exchange_id?.to_owned();
         let channel = paid_exchange_channel(node).await?;
         if !channel.has_subscriber().await {
             return None;
         }
-        let exchange_id = uuid::Uuid::new_v4().to_string();
         channel
             .publish(&OpenAiExchangeEnvelope::effective(
                 exchange_id.clone(),

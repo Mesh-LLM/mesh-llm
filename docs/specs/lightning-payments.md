@@ -804,13 +804,16 @@ invoice amount. Since the payments engine is a plugin, nothing here claims that
 payment preceded wallet access: `source` says who asserted, which is all it can
 say.
 
-The provider has no host exchange to join, and the request ID is the private
-recovery ID, so it names each observed request with a fresh `exchange_id` of
-its own. `terms_digest` uses the payer's construction over the provider's terms
-with that ID; the other seven fields are the ones the payer approves, but the
-two sides' digests differ because each covers its own `exchange_id`. Join the
-two streams on `payment_hash`, which both sides report for each invoice and
-settlement.
+The request ID is the private recovery ID, so the serving host names each paid
+serving request with a fresh `exchange_id` of its own, minted once when a plugin
+subscribes to either channel. Its `payment.lifecycle.v1` events and the paid
+serving path's `openai.exchange.v1` events both carry it, so a plugin subscribed
+to both joins the provider's two channels on `exchange_id`, as on the payer side.
+`terms_digest` uses the payer's construction over the provider's terms with that
+ID; the other seven fields are the ones the payer approves, but the two sides'
+digests differ because each covers its own `exchange_id`. Join the payer's and
+the provider's streams on `payment_hash`, which both sides report for each
+invoice and settlement.
 
 The payer section's bounds apply unchanged: an eight-event queue per request,
 a one-second publication timeout, nothing awaited by serving or settlement, no
