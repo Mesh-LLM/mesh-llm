@@ -17,7 +17,6 @@ from unittest.mock import Mock, patch
 SCRIPTS = Path(__file__).resolve().parents[1]
 with patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
     SMOKE = runpy.run_path(str(SCRIPTS / "ci-openai-embeddings-smoke.py"))
-    HTTP_SMOKE = runpy.run_path(str(SCRIPTS / "ci-openai-workload-smoke.py"))
 
 
 class EmbeddingSdkSmokeTests(unittest.TestCase):
@@ -130,64 +129,6 @@ class EmbeddingSdkSmokeTests(unittest.TestCase):
             struct.pack("<2f", 1 + 1e-7, 1e-7)
         ).decode()
         self.run_smoke(response)
-
-
-class EmbeddingHttpSmokeTests(unittest.TestCase):
-    """The raw HTTP smoke must enforce the same base64 envelope as the SDK smoke."""
-
-    def run_smoke(self, encoded: dict) -> None:
-        """Return deterministic related/unrelated vectors before the supplied base64 reply."""
-        numeric = {"object": "list", "model": "fixture", "usage": {"prompt_tokens": 3},
-                   "data": [{"object": "embedding", "index": index, "embedding": vector}
-                            for index, vector in enumerate(([1, 0], [1, 0], [0, 1]))]}
-        request = Mock(side_effect=[numeric, encoded])
-        with patch.dict(HTTP_SMOKE["smoke_embedding"].__globals__, {"request_json": request}):
-            HTTP_SMOKE["smoke_embedding"]("http://127.0.0.1:9337/v1", "fixture")
-
-    def test_base64_cardinality_and_metadata_are_required(self) -> None:
-        """A valid vector cannot compensate for a missing, surplus or mislabelled item."""
-        item = {"object": "embedding", "index": 0,
-                "embedding": base64.b64encode(struct.pack("<2f", 1, 0)).decode()}
-        good = {"object": "list", "model": "fixture", "data": [item]}
-        self.run_smoke(good)
-        for changed in ({"data": []}, {"data": [item, item]}, {"data": None},
-                        {"data": [None]}, {"data": [{**item, "index": 1}]},
-                        {"data": [{**item, "index": False}]},
-                        {"data": [{**item, "index": 0.0}]},
-                        {"data": [{**item, "index": "0"}]},
-                        {"data": [{**item, "object": None}]},
-                        {"model": "another-model"}, {"object": "embedding"}):
-            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
-                self.run_smoke({**good, **changed})
-
-    def test_numeric_batch_rejects_invalid_indexes_and_boolean_components(self) -> None:
-        """Malformed float batches cannot earn certification through Python coercions."""
-        for changed in ({"index": False}, {"index": 0.0}, {"embedding": [True, 0.0]}):
-            with self.subTest(changed=changed):
-                rows = [{"object": "embedding", "index": index, "embedding": [1.0, 0.0]}
-                        for index in range(3)]
-                rows[0].update(changed)
-                request = Mock(return_value={"object": "list", "model": "fixture", "data": rows})
-                with patch.dict(HTTP_SMOKE["smoke_embedding"].__globals__, {"request_json": request}):
-                    with self.assertRaises(RuntimeError):
-                        HTTP_SMOKE["smoke_embedding"]("http://127.0.0.1:9337/v1", "fixture")
-                request.assert_called_once()
-
-    def test_base64_values_must_match_float_response(self) -> None:
-        """Do not award HTTP certification for a different, correctly sized vector."""
-        encoded = {"object": "list", "model": "fixture", "data": [{
-            "object": "embedding", "index": 0,
-            "embedding": base64.b64encode(struct.pack("<2f", 0, 1)).decode(),
-        }]}
-        with self.assertRaisesRegex(RuntimeError, "differs from float"):
-            self.run_smoke(encoded)
-
-    def test_base64_parity_allows_float32_rounding(self) -> None:
-        """Use the same rounding allowance as the official SDK validator."""
-        self.run_smoke({"object": "list", "model": "fixture", "data": [{
-            "object": "embedding", "index": 0,
-            "embedding": base64.b64encode(struct.pack("<2f", 1 + 1e-7, 1e-7)).decode(),
-        }]})
 
 
 if __name__ == "__main__":

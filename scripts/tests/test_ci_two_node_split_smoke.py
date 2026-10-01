@@ -55,18 +55,10 @@ class WorkDirCreationTests(unittest.TestCase):
             )
 
 
-def prefix_validator_source() -> str:
-    script = SMOKE_SCRIPT.read_text()
-    function = script[script.index("validate_prefix_responses() {") :]
-    match = re.search(r"<<'PY'\n(?P<source>.*?)\nPY\n}", function, re.DOTALL)
-    if match is None:
-        raise AssertionError("could not extract split-prefix response validator")
-    return match.group("source")
-
-
 def shell_function_block(first: str, following: str) -> str:
     script = SMOKE_SCRIPT.read_text(encoding="utf-8")
-    return script[
+    automation = ROOT / "target/debug/xtask"
+    return f'automation=("{automation}")\n' + script[
         script.index(f"{first}() {{") : script.index(f"{following}() {{")
     ]
 
@@ -143,8 +135,7 @@ class TwoNodeSplitSmokeTests(unittest.TestCase):
                 )
 
             return subprocess.run(
-                [sys.executable, "-", directory, "6", "kv-recurrent"],
-                input=prefix_validator_source(),
+                [str(ROOT / "target/debug/xtask"), "automation", "split-probe", "prefix-verify", directory, "6", "kv-recurrent"],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -178,9 +169,9 @@ class TwoNodeSplitSmokeTests(unittest.TestCase):
         for observer in ("seed", "worker"):
             for snapshot in ("status", "stages", "models"):
                 self.assertIn(f"{observer}-{snapshot}.json", script)
-        self.assertIn('"mesh_id": payload.get("mesh_id")', script)
+        self.assertIn('automation split-probe snapshot "$kind" "$raw" "$output"', script)
         self.assertNotIn('payload["token"] = "[redacted]"', script)
-        self.assertIn("scripts/reconcile-two-node-split-evidence.py", script)
+        self.assertIn('"${automation[@]}" automation split-evidence', script)
         self.assertIn(
             'SPLIT_EVIDENCE_PATH="${WORK_DIR}/${prefix}split-evidence.json"', script
         )
@@ -388,7 +379,7 @@ fi
                 check=False,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("does not declare tools/skippy-package-builder", result.stderr)
+            self.assertIn("missing package tool checksum", result.stderr)
 
     def test_package_tool_checksum_is_verified_before_use(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -433,7 +424,7 @@ fi
                 check=False,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("expected exactly one native runtime manifest", result.stderr)
+            self.assertIn("expected exactly one runtime manifest", result.stderr)
 
     def test_package_tool_has_no_consumer_build_fallback(self) -> None:
         script = SMOKE_SCRIPT.read_text(encoding="utf-8")

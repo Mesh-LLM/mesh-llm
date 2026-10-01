@@ -4,6 +4,10 @@
 # Usage: scripts/ci-compat-smoke.sh <mesh-llm-binary> <bin-dir> <model-path>
 
 set -euo pipefail
+automation=(cargo xtool)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+    automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 
 MESH_LLM="${1:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
 BIN_DIR="${2:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
@@ -29,9 +33,9 @@ inspect_release_attestation() {
 
     local inspect_json
     local inspect_status
-    inspect_json="$(cargo run -q -p xtask -- release-attestation inspect --binary "$MESH_LLM" --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" --json)"
+    inspect_json="$("${automation[@]}" release-attestation inspect --binary "$MESH_LLM" --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" --json)"
     echo "Release attestation inspect: $inspect_json"
-    inspect_status="$(printf '%s' "$inspect_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+    inspect_status="$(printf '%s' "$inspect_json" | "${automation[@]}" product attestation-status)"
     if [[ "$inspect_status" != "$ATTESTATION_EXPECTED_STATUS" ]]; then
         echo "Unexpected embedded release-attestation status: expected $ATTESTATION_EXPECTED_STATUS, got $inspect_status" >&2
         exit 1
@@ -118,7 +122,7 @@ for i in $(seq 1 "$MAX_WAIT"); do
     MODELS_JSON="$(curl -sf "${BASE_URL}/models" 2>/dev/null || true)"
     MODEL_ID="$(
         printf '%s' "$MODELS_JSON" |
-            python3 -c 'import json,sys; data=json.load(sys.stdin).get("data", []); print(data[0].get("id", "") if data else "")' 2>/dev/null ||
+            "${automation[@]}" automation smoke-observation first-model 2>/dev/null ||
             echo ""
     )"
     if [[ -n "$MODEL_ID" ]]; then
@@ -136,7 +140,7 @@ done
 
 RUNTIME_ATTESTATION_STATUS="$({
     curl -sf "http://127.0.0.1:${CONSOLE_PORT}/api/status" 2>/dev/null |
-        python3 -c 'import json,sys; print(json.load(sys.stdin).get("release_attestation", {}).get("status", ""))' 2>/dev/null ||
+        "${automation[@]}" automation smoke-observation attestation 2>/dev/null ||
         echo ""
 })"
 echo "Runtime release attestation status: ${RUNTIME_ATTESTATION_STATUS:-unknown}"
