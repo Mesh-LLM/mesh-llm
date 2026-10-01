@@ -6,6 +6,15 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
 
 pub(crate) fn print_usage() {
     println!(
+        "  cargo xtool automation smoke-inputs <product-root> <binary-name> <expected-backend>"
+    );
+    println!("  cargo xtool automation smoke-observation <verb> [model] < observation.json");
+    println!(
+        "  cargo xtool automation workload-smoke --base-url <url> --model <id> --class <class> [--media-path <path>]"
+    );
+    println!("  cargo xtool automation hf-xet-smoke <download-output> <isolated-cache-root>");
+    println!("  cargo xtool automation split-probe <verb> ...");
+    println!(
         "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
         crate::automation::client_readiness::USAGE,
         crate::automation::daemon_readiness::USAGE,
@@ -46,6 +55,11 @@ pub(crate) struct Cli<'a> {
 }
 
 pub(crate) enum CliCommand<'a> {
+    SmokeInputs(&'a [String]),
+    WorkloadSmoke(&'a [String]),
+    HfXetSmoke(&'a [String]),
+    SmokeObservation(&'a [String]),
+    SplitProbe(&'a [String]),
     RuntimeCacheInstall(&'a [String]),
     SdkFixture(&'a [String]),
     LoggingConsole(&'a [String]),
@@ -123,6 +137,23 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "split-probe" => {
+                CliCommand::SplitProbe(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "smoke-observation" =>
+            {
+                CliCommand::SmokeObservation(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "hf-xet-smoke" => {
+                CliCommand::HfXetSmoke(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "workload-smoke" => {
+                CliCommand::WorkloadSmoke(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "smoke-inputs" => {
+                CliCommand::SmokeInputs(rest)
+            }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "control-plane-qa" => {
                 CliCommand::ControlPlaneQa(rest)
             }
