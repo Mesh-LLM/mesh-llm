@@ -1,18 +1,22 @@
 mod artifact;
 mod attestation;
+mod automation;
 mod automation_bootstrap;
-mod automation_parity;
 mod ci_operations;
 mod ci_plan;
 mod ci_validation;
 mod cli;
+mod cli_output;
 mod command;
+#[path = "automation/command_interrupt/mod.rs"]
+pub(crate) mod command_interrupt;
 mod installer_fixtures;
 mod migration_inventory;
 mod model_registry;
 mod native_policy;
 mod no_console_print;
 mod prepared_input;
+pub mod process;
 mod product;
 mod publish_consistency;
 mod release;
@@ -34,6 +38,10 @@ fn main() {
 
 fn run() -> DynResult<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args == ["--help"] {
+        cli::print_usage();
+        return Ok(());
+    }
     let parsed = cli::Cli::parse(&args)?;
     let explicit_root = parsed
         .root
@@ -41,6 +49,8 @@ fn run() -> DynResult<()> {
         .map(|path| repository::RepositoryRoot::resolve(Some(path)))
         .transpose()?;
     match parsed.command {
+        cli::CliCommand::HfConvertedArtifact(rest) => automation::hf_converted_artifact::run(rest),
+        cli::CliCommand::Rollout(rest) => automation::rollout::run(rest),
         cli::CliCommand::GenerateKeypair(rest) => {
             attestation::generate_release_attestation_keypair(rest)
         }
@@ -54,13 +64,33 @@ fn run() -> DynResult<()> {
             ci_plan::run(root.as_path(), rest)
         }
         cli::CliCommand::CiValidate(verb, rest) => ci_validation::lane_results::run(verb, rest),
-        cli::CliCommand::AutomationParity(rest) => {
+        cli::CliCommand::CiFamilyPlan(rest) => {
             let root = match explicit_root {
                 Some(root) => root,
                 None => repository::RepositoryRoot::resolve(None)?,
             };
-            automation_parity::run(root.as_path(), rest)
+            ci_plan::family::run(root.as_path(), rest)
         }
+        cli::CliCommand::NativeGenerator(rest) => automation::native_generator::run(rest),
+        cli::CliCommand::SplitEvidence(rest) => automation::split_evidence::run(rest),
+        cli::CliCommand::Qualification(verb, rest) => automation::qualification::run(
+            verb,
+            rest,
+            explicit_root
+                .as_ref()
+                .map(repository::RepositoryRoot::as_path),
+        ),
+        cli::CliCommand::ReplayMatrix(rest) => automation::run_replay_matrix(
+            rest,
+            explicit_root
+                .as_ref()
+                .map(repository::RepositoryRoot::as_path),
+        ),
+        cli::CliCommand::CanaryReceipts(rest) => automation::canary_aggregate_command::run(rest),
+        cli::CliCommand::WorkloadOracleEvidence(rest) => {
+            automation::run_workload_oracle_evidence(rest)
+        }
+        cli::CliCommand::RewriterReport(rest) => automation::rewriter_report::run(rest),
         cli::CliCommand::PreparedInput(rest) => prepared_input::run(rest),
         cli::CliCommand::Product(command, rest) => product::run(command, rest),
         cli::CliCommand::Release(command, rest) => release::run(command, rest),
@@ -99,6 +129,18 @@ fn run() -> DynResult<()> {
             };
             let root = root.as_path();
             match command {
+                cli::RepositoryCommand::RequiredSmoke(rest) => {
+                    automation::required_smoke::run(root, rest)
+                }
+                cli::RepositoryCommand::SdkAdvisory(rest) => {
+                    automation::sdk_advisory::run(root, rest)
+                }
+                cli::RepositoryCommand::ClientReadiness(rest) => {
+                    Ok(automation::client_readiness::run(root, rest)?)
+                }
+                cli::RepositoryCommand::DaemonReadiness(rest) => {
+                    Ok(automation::daemon_readiness::run(root, rest)?)
+                }
                 cli::RepositoryCommand::Automation(rest) => {
                     std::env::set_current_dir(root)?;
                     migration_inventory::run(rest)
