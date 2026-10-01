@@ -100,6 +100,7 @@ jobs:
           set -euo pipefail
           uv sync --locked --project ci/agentic-replay-nightly
           REPLAY_PYTHON_BIN="$GITHUB_WORKSPACE/ci/agentic-replay-nightly/.venv/bin"
+          echo "REPLAY_PYTHON=$REPLAY_PYTHON_BIN/python3" >> "$GITHUB_ENV"
           "$REPLAY_PYTHON_BIN/python3" -c 'import duckdb; print("DuckDB", duckdb.__version__)'
           echo "$REPLAY_PYTHON_BIN" >> "$GITHUB_PATH"
 
@@ -127,89 +128,25 @@ jobs:
           # Validate pins before any download: format errors and drift from
           # the canonical harness pin must fail in seconds, not after hours
           # of downloads.
-          python3 - "$MATRIX_FILE" skippy/evals/skippy-competitive-benchmark.json > "$RUNNER_TEMP/agentic-replay-models.tsv" <<'PY'
-          import json, pathlib, re, sys
-          matrix = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          canonical = json.loads(pathlib.Path(sys.argv[2]).read_text())["thoughtworks"]["dataset"]
-          for model in matrix["models"]:
-              family = model.get("family", "unknown")
-              for key in ("family", "repo", "file"):
-                  if not model.get(key):
-                      raise SystemExit(f"{family}: matrix model entry missing {key}")
-              for key, pattern in (("revision", r"[0-9a-f]{40}"), ("sha256", r"[0-9a-f]{64}")):
-                  value = model.get(key)
-                  if not isinstance(value, str) or not re.fullmatch(pattern, value):
-                      raise SystemExit(f"{family}: {key} must match {pattern} (got {value!r})")
-              print("\t".join((model["family"], model["repo"], model["revision"], model["file"], model["sha256"])))
-          replay = matrix.get("replay")
-          if not isinstance(replay, dict):
-              raise SystemExit("matrix replay block is missing")
-          dataset = {
-              "repo": replay.get("dataset"),
-              "revision": replay.get("dataset_revision"),
-              "filename": replay.get("dataset_file"),
-              "sha256": replay.get("dataset_sha256"),
-          }
-          if dataset != canonical:
-              raise SystemExit(
-                  "nightly dataset pin must match the agentic-replay harness pin:\n"
-                  f"  matrix:   {dataset}\n  canonical: {canonical}"
-              )
-          PY
-          python3 scripts/agentic-replay-params.py \
+          cargo xtool automation replay-matrix pins --matrix "$MATRIX_FILE" \
+            --canonical skippy/evals/skippy-competitive-benchmark.json \
+            --models-output "$RUNNER_TEMP/agentic-replay-models.tsv" \
+            --dataset-output "$RUNNER_TEMP/agentic-replay-dataset.tsv"
+          cargo xtool automation replay-matrix export \
             --matrix "$MATRIX_FILE" \
             --json-output "$RUNNER_TEMP/agentic-replay-params.json" \
             --github-env "$GITHUB_ENV"
           while IFS=$'\t' read -r family repo revision file expected_sha; do
             # Request path-only stdout from the installed CLI, not system Python.
             model_path=$(hf download "$repo" "$file" --revision "$revision" --format quiet)
-            python3 - "$model_path" "$expected_sha" "$family" <<'PY'
-          import hashlib, pathlib, sys
-          path, expected, family = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-          digest = hashlib.sha256()
-          with path.open("rb") as model_file:
-              for chunk in iter(lambda: model_file.read(8 * 1024 * 1024), b""):
-                  digest.update(chunk)
-          actual = digest.hexdigest()
-          if actual != expected:
-              raise SystemExit(f"{family}: model SHA-256 mismatch: expected={expected} actual={actual}")
-          print(f"verified {family}: {actual}")
-          PY
+            cargo xtool automation replay-matrix verify-digest --file "$model_path" --sha256 "$expected_sha"
+            echo "verified $family"
           done < "$RUNNER_TEMP/agentic-replay-models.tsv"
 
-          python3 - "$MATRIX_FILE" skippy/evals/skippy-competitive-benchmark.json <<'PY' > "$RUNNER_TEMP/agentic-replay-dataset.tsv"
-          import json, pathlib, re, sys
-          matrix = json.loads(pathlib.Path(sys.argv[1]).read_text())["replay"]
-          canonical = json.loads(pathlib.Path(sys.argv[2]).read_text())["thoughtworks"]["dataset"]
-          dataset = {
-              "repo": matrix.get("dataset"),
-              "revision": matrix.get("dataset_revision"),
-              "filename": matrix.get("dataset_file"),
-              "sha256": matrix.get("dataset_sha256"),
-          }
-          if dataset != canonical:
-              raise SystemExit("nightly dataset pin must match the agentic-replay harness pin")
-          if not re.fullmatch(r"[0-9a-f]{40}", dataset["revision"] or ""):
-              raise SystemExit("dataset revision must be an immutable 40-hex commit")
-          if not re.fullmatch(r"[0-9a-f]{64}", dataset["sha256"] or ""):
-              raise SystemExit("dataset sha256 must be a 64-hex digest")
-          print("\t".join((dataset["repo"], dataset["revision"], dataset["filename"], dataset["sha256"])))
-          PY
           IFS=$'\t' read -r dataset_repo dataset_revision dataset_file dataset_sha < "$RUNNER_TEMP/agentic-replay-dataset.tsv"
           dataset_path=$(HF_HUB_OFFLINE=0 hf download "$dataset_repo" "$dataset_file" \
             --repo-type dataset --revision "$dataset_revision" --format quiet)
-          python3 - "$dataset_path" "$dataset_sha" <<'PY'
-          import hashlib, pathlib, sys
-          path, expected = pathlib.Path(sys.argv[1]), sys.argv[2]
-          digest = hashlib.sha256()
-          with path.open("rb") as dataset_file:
-              for chunk in iter(lambda: dataset_file.read(8 * 1024 * 1024), b""):
-                  digest.update(chunk)
-          actual = digest.hexdigest()
-          if actual != expected:
-              raise SystemExit(f"dataset SHA-256 mismatch: expected={expected} actual={actual}")
-          print(f"verified trajectory dataset: {actual}")
-          PY
+          cargo xtool automation replay-matrix verify-digest --file "$dataset_path" --sha256 "$dataset_sha"
           echo "DATASET_FILE=$dataset_path" >> "$GITHUB_ENV"
 
       - name: Replay granite-3.1-2b complete sessions
@@ -219,7 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           ulimit -n 65536
-          python3 scripts/agentic-replay-params.py --matrix "$MATRIX_FILE" \
+          cargo xtool automation replay-matrix run-family --matrix "$MATRIX_FILE" --python "$REPLAY_PYTHON" --timeout 21600 \
             --run-family granite-3.1-2b --ref main=HEAD \
             --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/granite-3.1-2b"
 
@@ -230,7 +167,7 @@ jobs:
         run: |
           set -euo pipefail
           ulimit -n 65536
-          python3 scripts/agentic-replay-params.py --matrix "$MATRIX_FILE" \
+          cargo xtool automation replay-matrix run-family --matrix "$MATRIX_FILE" --python "$REPLAY_PYTHON" --timeout 21600 \
             --run-family granite-3.1-3b-a800m --ref main=HEAD \
             --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/granite-3.1-3b-a800m"
 
@@ -241,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           ulimit -n 65536
-          python3 scripts/agentic-replay-params.py --matrix "$MATRIX_FILE" \
+          cargo xtool automation replay-matrix run-family --matrix "$MATRIX_FILE" --python "$REPLAY_PYTHON" --timeout 21600 \
             --run-family qwen3.5-4b --ref main=HEAD \
             --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/qwen3.5-4b"
 
@@ -400,7 +337,7 @@ jobs:
         timeout-minutes: 5
         env:
           EVIDENCE_UPLOADED: ${{ steps.upload_evidence.outcome == 'success' }}
-        run: python3 scripts/cleanup-self-hosted.py --job replay --evidence-uploaded "$EVIDENCE_UPLOADED"
+        run: cargo xtool ci-ops runner-cleanup --job replay --evidence-uploaded "$EVIDENCE_UPLOADED"
 
   publish-repair:
     needs: replay
@@ -434,100 +371,10 @@ jobs:
         run: |
           set -euo pipefail
           PUBLICATION_DIR="$RUNNER_TEMP/replay-artifacts/repair-publication"
-          STATUS_FILE="$PUBLICATION_DIR/status.json"
-          PATCH_FILE="$PUBLICATION_DIR/repair.patch"
-          BODY_FILE="$PUBLICATION_DIR/pr-body.md"
-          VALIDATED=$(python3 - "$PUBLICATION_DIR" "$STATUS_FILE" "$PATCH_FILE" "$BODY_FILE" "${{ github.sha }}" "${{ github.run_id }}" "${{ github.run_attempt }}" <<'PY'
-          import hashlib
-          import json
-          import pathlib
-          import re
-          import subprocess
-          import sys
-
-          publication_dir = pathlib.Path(sys.argv[1])
-          status_path = pathlib.Path(sys.argv[2])
-          patch_path = pathlib.Path(sys.argv[3])
-          body_path = pathlib.Path(sys.argv[4])
-          expected_base = sys.argv[5]
-          expected_run_id = sys.argv[6]
-          expected_attempt = sys.argv[7]
-          expected_files = {"pr-body.md", "repair.patch", "status.json"}
-          if publication_dir.is_symlink() or not publication_dir.is_dir() or {
-              path.name for path in publication_dir.iterdir()
-          } != expected_files:
-              raise SystemExit("repair publication must contain exactly its three data files")
-          for path in (status_path, patch_path, body_path):
-              if path.is_symlink() or not path.is_file():
-                  raise SystemExit(f"repair publication file is not regular: {path}")
-
-          status = json.loads(status_path.read_text(encoding="utf-8"))
-          required = {
-              "base_sha",
-              "body_bytes",
-              "body_sha256",
-              "patch_bytes",
-              "patch_sha256",
-              "resolution",
-              "run_id",
-              "run_attempt",
-              "schema_version",
-          }
-          if (
-              set(status) != required
-              or type(status["schema_version"]) is not int
-              or status["schema_version"] != 1
-          ):
-              raise SystemExit("repair publication status schema is invalid")
-          if status["resolution"] not in {"fix-verified", "needs-attention"}:
-              raise SystemExit("repair publication resolution is invalid")
-          if (
-              not isinstance(status["run_id"], str)
-              or not re.fullmatch(r"[0-9]+", status["run_id"])
-              or status["run_id"] != expected_run_id
-          ):
-              raise SystemExit("repair publication run_id is invalid")
-          if (
-              isinstance(status["run_attempt"], bool)
-              or not isinstance(status["run_attempt"], int)
-              or status["run_attempt"] <= 0
-              or not re.fullmatch(r"[1-9][0-9]*", expected_attempt)
-              or status["run_attempt"] != int(expected_attempt)
-          ):
-              raise SystemExit("repair publication run_attempt is invalid")
-          for key in ("base_sha",):
-              if not isinstance(status[key], str) or not re.fullmatch(r"[0-9a-f]{40}", status[key]):
-                  raise SystemExit(f"repair publication {key} is invalid")
-          if status["base_sha"] != expected_base:
-              raise SystemExit("repair publication is for a different workflow source SHA")
-          current_base = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          if current_base != expected_base:
-              raise SystemExit("trusted checkout is not the workflow source SHA")
-
-          def sha256(path: pathlib.Path) -> str:
-              digest = hashlib.sha256()
-              with path.open("rb") as handle:
-                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                      digest.update(chunk)
-              return digest.hexdigest()
-
-          patch_bytes = patch_path.stat().st_size
-          body_bytes = body_path.stat().st_size
-          if not 0 < patch_bytes <= 64 * 1024 * 1024 or not 0 < body_bytes <= 1024 * 1024:
-              raise SystemExit("repair publication size is outside the allowed bounds")
-          if status["patch_bytes"] != patch_bytes or status["patch_sha256"] != sha256(patch_path):
-              raise SystemExit("repair patch digest does not match status metadata")
-          if status["body_bytes"] != body_bytes or status["body_sha256"] != sha256(body_path):
-              raise SystemExit("repair PR body digest does not match status metadata")
-          body_path.read_text(encoding="utf-8")
-          if b"\x00" in body_path.read_bytes():
-              raise SystemExit("repair PR body contains a NUL byte")
-          patch = patch_path.read_bytes()
-          if not patch.startswith(b"From ") or b"\nSubject: " not in patch:
-              raise SystemExit("repair patch is not a format-patch artifact")
-          print(f'{status["run_id"]}\t{status["run_attempt"]}\t{status["resolution"]}')
-          PY
-          )
+          VALIDATED=$(cargo xtool automation replay-matrix publication-verify \
+            --publication-dir "$PUBLICATION_DIR" --base-sha "${{ github.sha }}" \
+            --checkout-sha "$(git rev-parse HEAD)" \
+            --run-id "${{ github.run_id }}" --run-attempt "${{ github.run_attempt }}")
           IFS=$'\t' read -r RUN_ID RUN_ATTEMPT RESOLUTION <<< "$VALIDATED"
           {
             echo "run_id=$RUN_ID"

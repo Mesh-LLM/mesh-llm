@@ -1,8 +1,11 @@
+pub(super) mod digest;
 pub(super) mod export;
 mod input;
 mod integer;
 pub(super) mod invocation;
 mod parameters;
+pub(super) mod pins;
+pub(super) mod publication;
 pub(super) mod run_family;
 mod serialization;
 mod value;

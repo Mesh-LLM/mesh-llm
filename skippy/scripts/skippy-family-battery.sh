@@ -906,7 +906,7 @@ run_workload_certify() {
       -- "${command[@]}" >"$log_path" 2>&1 || exit_code=$?
   fi
   if (( certified == 1 && exit_code == 0 )); then
-    local verify_command=(python3 "$ROOT/scripts/verify-workload-oracle-evidence.py" \
+    local verify_command=(cargo xtool automation workload-oracle-evidence verify \
       --evidence "$cert_run_dir/workload-oracle-evidence.json" \
       --class "$model_class" --smoke-lane "$smoke_lane" --oracle-lane "$oracle_lane" \
       --model-id "$model_id" --model-path "$target" \
