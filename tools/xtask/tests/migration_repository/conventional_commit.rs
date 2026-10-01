@@ -1,13 +1,10 @@
 //! `repository conventional-commits` parity with
 //! `scripts/check-conventional-commit.py`.
 
-use crate::support::{
-    Invocation, Legacy, LegacyKind, Scratch, TestResult, assert_output, commit_all, git_init, text,
-};
+use crate::support::{Invocation, Scratch, TestResult, assert_output, commit_all, git_init, text};
 use std::path::Path;
 use std::process::Output;
 
-const SCRIPT: &str = "scripts/check-conventional-commit.py";
 const TYPES: &str =
     "build, chore, ci, deps, docs, feat, fix, perf, refactor, revert, security, style, test";
 const GUIDANCE: &str = "\nConventional Commits: https://www.conventionalcommits.org/en/v1.0.0/\n\
@@ -37,11 +34,7 @@ fn check(cwd: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>
         stdin: None,
         env: &[],
     }
-    .run_with_legacy(Legacy {
-        kind: LegacyKind::Python,
-        script: SCRIPT,
-        args,
-    })
+    .run()
 }
 
 #[test]

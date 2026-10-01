@@ -1,13 +1,10 @@
 //! `repository env-mutation-census` parity with
 //! `scripts/check-env-mutation-contract.py`.
 
-use crate::support::{
-    Invocation, Legacy, LegacyKind, Scratch, TestResult, assert_output, repository_root,
-};
+use crate::support::{Invocation, Scratch, TestResult, assert_output, repository_root};
 use std::path::Path;
 use std::process::Output;
 
-const SCRIPT: &str = "scripts/check-env-mutation-contract.py";
 const AUDITED_FILE: &str = "crates/model-hf/src/store/local.rs";
 const TODO: &str =
     "// TODO: Audit that the environment access only happens in single-threaded code.";
@@ -42,11 +39,7 @@ fn census(root: &Path, files: &[&str]) -> Result<Output, Box<dyn std::error::Err
         stdin: None,
         env: &[],
     }
-    .run_with_legacy(Legacy {
-        kind: LegacyKind::Python,
-        script: SCRIPT,
-        args: &args,
-    })
+    .run()
 }
 
 fn violations(lines: &[&str]) -> String {

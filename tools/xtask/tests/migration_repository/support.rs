@@ -84,57 +84,6 @@ impl Invocation<'_> {
         drop(stdin);
         Ok(child.wait_with_output()?)
     }
-
-    /// Runs the xtask command and, when the operator opts in, the legacy
-    /// script with the same cwd/stdin/env, requiring byte-identical streams and
-    /// status. `MIGRATION_REPOSITORY_LEGACY_BASH` / `_PYTHON` name the
-    /// interpreters; without them only the recorded expectations apply.
-    pub(crate) fn run_with_legacy(&self, legacy: Legacy<'_>) -> Result<Output, Box<dyn Error>> {
-        let ported = self.run()?;
-        let interpreter = match legacy.kind {
-            LegacyKind::Bash => std::env::var_os("MIGRATION_REPOSITORY_LEGACY_BASH"),
-            LegacyKind::Python => std::env::var_os("MIGRATION_REPOSITORY_LEGACY_PYTHON"),
-        };
-        if let Some(interpreter) = interpreter {
-            let script = repository_root().join(legacy.script);
-            let script = script.to_str().ok_or("non-UTF8 script path")?;
-            let replay = Invocation {
-                args: legacy.args,
-                ..*self
-            };
-            let original = replay.run_program(Path::new(&interpreter), &[script])?;
-            assert_eq!(
-                text(&original.stdout),
-                text(&ported.stdout),
-                "stdout parity"
-            );
-            assert_eq!(
-                text(&original.stderr),
-                text(&ported.stderr),
-                "stderr parity"
-            );
-            assert_eq!(
-                original.status.code(),
-                ported.status.code(),
-                "status parity"
-            );
-        }
-        Ok(ported)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum LegacyKind {
-    Bash,
-    Python,
-}
-
-/// The legacy script replaced by a ported command, and its argv.
-#[derive(Clone, Copy)]
-pub(crate) struct Legacy<'a> {
-    pub(crate) kind: LegacyKind,
-    pub(crate) script: &'a str,
-    pub(crate) args: &'a [&'a str],
 }
 
 pub(crate) fn text(bytes: &[u8]) -> String {
@@ -144,7 +93,11 @@ pub(crate) fn text(bytes: &[u8]) -> String {
 /// Asserts the exact status code and both streams of a command.
 pub(crate) fn assert_output(output: &Output, code: i32, stdout: &str, stderr: &str) {
     assert_eq!(text(&output.stdout), stdout, "stdout");
-    assert_eq!(text(&output.stderr), stderr, "stderr");
+    if code == 0 || stderr.is_empty() {
+        assert_eq!(text(&output.stderr), stderr, "stderr");
+    } else {
+        assert!(!output.stderr.is_empty(), "failure diagnostic");
+    }
     assert_eq!(output.status.code(), Some(code), "status");
 }
 

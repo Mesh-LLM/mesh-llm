@@ -2,13 +2,11 @@
 //! `scripts/check-llama-upstream-pin.py`.
 
 use crate::support::{
-    Invocation, Legacy, LegacyKind, Scratch, TestResult, assert_output, commit_all, git, git_init,
-    text,
+    Invocation, Scratch, TestResult, assert_output, commit_all, git, git_init, text,
 };
 use std::path::Path;
 use std::process::Output;
 
-const SCRIPT: &str = "scripts/check-llama-upstream-pin.py";
 const PIN_PATH: &str = "third_party/llama.cpp/upstream.txt";
 
 struct Upstream {
@@ -68,11 +66,7 @@ fn guard(scratch: &Scratch, base: &str, head: &str) -> Result<Output, Box<dyn st
         stdin: None,
         env: &[],
     }
-    .run_with_legacy(Legacy {
-        kind: LegacyKind::Python,
-        script: SCRIPT,
-        args: &args,
-    })
+    .run()
 }
 
 fn header(merge_base: &str, base_pin: &str, proposed: &str) -> String {

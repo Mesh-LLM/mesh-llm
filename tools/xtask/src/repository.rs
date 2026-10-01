@@ -1,4 +1,6 @@
 mod affected_crates;
+mod cargo_packages;
+mod cargo_projection;
 pub(crate) mod check_args;
 pub(crate) mod check_report;
 mod conventional_commit;
@@ -31,7 +33,9 @@ pub(crate) fn run_check(
         Ok(root.0)
     };
     match check {
+        RepositoryCheck::CargoTargetDirectory => cargo_projection::run(args),
         RepositoryCheck::AffectedCrates => affected_crates::run(&cwd, args),
+        RepositoryCheck::CargoPackages => cargo_packages::run(&cwd, args),
         RepositoryCheck::ConventionalCommits => conventional_commit::run(&cwd, args),
         RepositoryCheck::EnvMutationCensus => env_census::run(args, default_root),
         RepositoryCheck::LlamaUpstreamPin => upstream_pin::run(args, default_root),

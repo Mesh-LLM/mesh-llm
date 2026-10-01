@@ -1,0 +1,35 @@
+pub(super) const SUCCESSORS: &[(&str, &[&str])] = &[
+    ("mesh-llm-gpu-bench", &["skippy-gpu-bench"]),
+    ("mesh-llm-guardrails", &["skippy-guardrails"]),
+    ("mesh-llm-hardware-profile", &["skippy-hardware-profile"]),
+    ("mesh-llm-native-runtime", &["skippy-native-runtime"]),
+    ("mesh-llm-runtime-install", &["skippy-runtime-install"]),
+    ("model-artifact", &["skippy-model-artifact"]),
+    ("model-hf", &["skippy-model-hf", "skippy-hf-hub"]),
+    ("model-package", &["skippy-model-package"]),
+    ("model-ref", &["skippy-model-ref"]),
+    ("model-resolver", &["skippy-model-resolver"]),
+    ("openai-frontend", &["skippy-openai-frontend"]),
+    ("skippy-model-package", &["skippy-package-builder"]),
+    (
+        "skippy-server",
+        &[
+            "skippy-serving",
+            "skippy-api",
+            "skippy-cli",
+            "skippy-commands",
+            "skippy-config",
+            "skippy-events",
+        ],
+    ),
+    (
+        "mesh-llm-host-runtime",
+        &[
+            "mesh-llm-host-runtime",
+            "mesh-llm-skippy-adapter",
+            "mesh-llm-control-api",
+            "mesh-llm-membership",
+            "mesh-llm-transport",
+        ],
+    ),
+];
