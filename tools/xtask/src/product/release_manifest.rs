@@ -1,10 +1,10 @@
-//! `product runtime-release-manifest <out> <repo> <tag> <tmp-root>
+//! `product runtime-release-manifest <out> <repo> <tag> <runtime-version> <tmp-root>
 //! <archive>...`: the port of the inline Python in
 //! `scripts/generate-native-runtime-release-manifest.sh`. Each archive is
 //! hashed, safely extracted below `<tmp-root>/archive-<index>`, and must
 //! hold exactly one `manifest.json` whose runtime carries every required
-//! field, targets the tag's version, and agrees with the other archives on
-//! MeshLLM version and Skippy ABI. The sorted artifact list is written as
+//! field, matches the requested independent runtime release, and agrees with
+//! the other archives on runtime release and Skippy ABI. The sorted artifact list is written as
 //! `json.dump(..., indent=2, sort_keys=True)` plus a newline.
 //!
 //! A `SystemExit` message prints as-is and an uncaught exception prints its
@@ -28,7 +28,7 @@ const REQUIRED: [&str; 7] = [
     "files",
     "id",
     "libraries",
-    "mesh_version",
+    "release_version",
     "platform",
     "skippy_abi",
 ];
@@ -54,21 +54,25 @@ pub(super) fn run(args: &[String]) -> CheckReport {
 /// The versions every archive must share, fixed by the first archive.
 #[derive(Default)]
 struct Shared {
-    mesh_version: Option<String>,
+    release_version: Option<String>,
     skippy_abi: Option<Json>,
 }
 
 fn generate(args: &[String]) -> Result<(), Failure> {
-    let [out, repo, tag, tmp_root, archives @ ..] = args else {
+    let [out, repo, tag, requested_version, tmp_root, archives @ ..] = args else {
         return Err(format!(
-            "ValueError: not enough values to unpack (expected at least 5, got {})",
+            "ValueError: not enough values to unpack (expected at least 6, got {})",
             args.len() + 1
         )
         .into());
     };
-    let release_version = tag.strip_prefix('v').unwrap_or(tag);
+    let release_version = requested_version
+        .strip_prefix('v')
+        .unwrap_or(requested_version);
     if release_version.is_empty() {
-        return Err("release tag must contain a version".to_owned().into());
+        return Err("requested runtime release must contain a version"
+            .to_owned()
+            .into());
     }
     let mut shared = Shared::default();
     let mut artifacts = Vec::with_capacity(archives.len());
@@ -87,12 +91,13 @@ fn generate(args: &[String]) -> Result<(), Failure> {
         set(&mut artifact, "sha256", sha256);
         artifacts.push(artifact);
     }
-    let Some(mesh_version) = shared.mesh_version else {
+    let Some(release_version) = shared.release_version else {
         return Err("no native runtime artifacts supplied".to_owned().into());
     };
     sort_by_id(&mut artifacts)?;
     let manifest = Json::Object(vec![
-        ("mesh_version".to_owned(), Json::String(mesh_version)),
+        ("schema_version".to_owned(), Json::Number(2.into())),
+        ("release_version".to_owned(), Json::String(release_version)),
         (
             "skippy_abi".to_owned(),
             shared.skippy_abi.unwrap_or(Json::Null),
@@ -140,6 +145,12 @@ fn inspect(
         .into());
     };
     let manifest = load(Path::new(manifest_path), manifest_path)?;
+    if manifest.get("schema_version").and_then(Json::as_int) != Some(2) {
+        return Err(format!(
+            "{archive} requires native runtime schema_version 2; import legacy caches explicitly"
+        )
+        .into());
+    }
     let runtime = runtime_object(&manifest, archive)?;
     let version = runtime_version(&runtime, archive, tag, release_version)?;
     agree(shared, &runtime, version)?;
@@ -174,10 +185,10 @@ fn runtime_object(manifest: &Json, archive: &str) -> Result<Json, String> {
 fn runtime_version(
     runtime: &Json,
     archive: &str,
-    tag: &str,
+    _tag: &str,
     release_version: &str,
 ) -> Result<String, String> {
-    let value = runtime.get("mesh_version").unwrap_or(&Json::Null);
+    let value = runtime.get("release_version").unwrap_or(&Json::Null);
     let Json::String(version) = value else {
         return Err(format!(
             "AttributeError: '{}' object has no attribute 'startswith'",
@@ -186,18 +197,18 @@ fn runtime_version(
     };
     if version.strip_prefix('v').unwrap_or(version) != release_version {
         return Err(format!(
-            "{archive} mesh_version {version} does not match release tag {tag}"
+            "{archive} release_version {version} does not match requested runtime release {release_version}"
         ));
     }
     Ok(version.clone())
 }
 
 fn agree(shared: &mut Shared, runtime: &Json, version: String) -> Result<(), String> {
-    match &shared.mesh_version {
-        None => shared.mesh_version = Some(version),
+    match &shared.release_version {
+        None => shared.release_version = Some(version),
         Some(first) if *first != version => {
             return Err(format!(
-                "mixed mesh versions in native runtime artifacts: {version} != {first}"
+                "mixed runtime releases in native runtime artifacts: {version} != {first}"
             ));
         }
         Some(_) => {}
@@ -230,4 +241,24 @@ fn write(out: &str, text: &str) -> Result<(), String> {
         return Err(os_error_line(&error, &parent));
     }
     std::fs::write(out, text).map_err(|error| os_error_line(&error, out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn runtime_release_is_independent_of_product_publication_tag() {
+        let runtime = Json::parse(br#"{"release_version":"9.0.0"}"#).unwrap();
+        assert_eq!(
+            runtime_version(&runtime, "producer.tar.gz", "v2.0.0", "9.0.0").unwrap(),
+            "9.0.0"
+        );
+        assert!(
+            runtime_version(&runtime, "producer.tar.gz", "v2.0.0", "2.0.0")
+                .unwrap_err()
+                .contains("requested runtime release")
+        );
+        let legacy = Json::parse(br#"{"mesh_version":"9.0.0"}"#).unwrap();
+        assert!(runtime_version(&legacy, "producer.tar.gz", "v2.0.0", "9.0.0").is_err());
+    }
 }

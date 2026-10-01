@@ -5,6 +5,7 @@ pub(crate) mod check_args;
 pub(crate) mod check_report;
 mod conventional_commit;
 mod env_census;
+mod publish_order;
 pub(crate) mod python_text;
 mod upstream_pin;
 
@@ -34,6 +35,7 @@ pub(crate) fn run_check(
     };
     match check {
         RepositoryCheck::CargoTargetDirectory => cargo_projection::run(args),
+        RepositoryCheck::PublishOrder => publish_order::run(args),
         RepositoryCheck::AffectedCrates => affected_crates::run(&cwd, args),
         RepositoryCheck::CargoPackages => cargo_packages::run(&cwd, args),
         RepositoryCheck::ConventionalCommits => conventional_commit::run(&cwd, args),

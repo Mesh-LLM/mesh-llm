@@ -96,7 +96,7 @@ jobs:
 
       - name: Check crates.io publish-chain consistency
         working-directory: release-source
-        run: cargo run -p xtask -- repo-consistency publish-crates
+        run: cargo xtool repo-consistency publish-crates
 
       - name: Restore verified release runtime libraries
         id: runtime

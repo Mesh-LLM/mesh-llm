@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/lib/automation.sh"
+
 usage() {
     cat >&2 <<'USAGE'
 usage: scripts/publish-crates.sh [--dry-run] [--allow-dirty] [--resume] [--sleep-seconds N]
@@ -334,28 +338,7 @@ load_registry_dep_pairs() {
         exit 1
     fi
     registry_dep_pairs="$(
-        printf '%s' "$metadata" | python3 -c '
-import json
-import sys
-
-metadata = json.load(sys.stdin)
-
-publishable = [p for p in metadata["packages"] if p.get("publish") != []]
-by_manifest_dir = {
-    p["manifest_path"].rsplit("/", 1)[0]: p["name"] for p in publishable
-}
-
-for package in publishable:
-    for dependency in package["dependencies"]:
-        if dependency.get("kind") == "dev":
-            continue
-        path = dependency.get("path")
-        if not path:
-            continue
-        name = by_manifest_dir.get(path.rstrip("/"))
-        if name and name != package["name"]:
-            print(package["name"], name)
-'
+        printf '%s' "$metadata" | mesh_automation repository publish-order --dependency-pairs
     )"
 }
 

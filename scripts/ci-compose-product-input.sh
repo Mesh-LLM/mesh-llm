@@ -12,14 +12,9 @@ set -euo pipefail
 INPUT_ATTESTATION_PUBLIC_KEY_FILE="${INPUT_ATTESTATION_PUBLIC_KEY_FILE:-}"
 INPUT_ATTESTATION_VERIFIER="${INPUT_ATTESTATION_VERIFIER:-}"
 
-if command -v python3 >/dev/null 2>&1; then
-    python_bin="python3"
-elif command -v python >/dev/null 2>&1; then
-    python_bin="python"
-else
-    echo "python3 or python is required to compose a product input" >&2
-    exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/lib/automation.sh"
 
 to_shell_path() {
     local path="${1%$'\r'}"
@@ -61,60 +56,11 @@ canonical_paths=()
 while IFS= read -r path; do
     canonical_paths+=("$(to_shell_path "$path")")
 done < <(
-    "$python_bin" - \
+    mesh_automation product canonical-inputs \
         "$GITHUB_WORKSPACE" \
         "$INPUT_HOST_INPUT_DIR" \
         "$INPUT_RUNTIME_INPUT_DIR" \
-        "$INPUT_OUTPUT_DIR" <<'PY'
-import sys
-from pathlib import Path
-
-
-def resolve_in_workspace(workspace: Path, raw: str, *, require_dir: bool) -> Path:
-    candidate = Path(raw)
-    if not candidate.is_absolute():
-        candidate = workspace / candidate
-    candidate = candidate.resolve(strict=False)
-    try:
-        candidate.relative_to(workspace)
-    except ValueError as error:
-        raise SystemExit(
-            f"CI artifact path escapes GITHUB_WORKSPACE: {raw} -> {candidate}"
-        ) from error
-    if require_dir and not candidate.is_dir():
-        raise SystemExit(f"CI producer input is not a directory: {candidate}")
-    return candidate
-
-
-def overlaps(left: Path, right: Path) -> bool:
-    return (
-        left == right
-        or left in right.parents
-        or right in left.parents
-    )
-
-
-workspace = Path(sys.argv[1]).resolve(strict=True)
-host_input = resolve_in_workspace(workspace, sys.argv[2], require_dir=True)
-runtime_input = resolve_in_workspace(workspace, sys.argv[3], require_dir=True)
-output = resolve_in_workspace(workspace, sys.argv[4], require_dir=False)
-
-if output == workspace:
-    raise SystemExit(f"product output cannot be GITHUB_WORKSPACE: {output}")
-for label, producer_input in (
-    ("host", host_input),
-    ("runtime", runtime_input),
-):
-    if overlaps(output, producer_input):
-        raise SystemExit(
-            f"product output overlaps {label} producer input: "
-            f"{output} and {producer_input}"
-        )
-
-print(host_input)
-print(runtime_input)
-print(output)
-PY
+        "$INPUT_OUTPUT_DIR"
 )
 
 if [[ "${#canonical_paths[@]}" -ne 3 ]]; then
@@ -143,7 +89,7 @@ require_file "immutable host" "$host"
 chmod +x "$host"
 require_nonempty_file "host import report" "$host_imports"
 require_nonempty_file "host checksum" "$host_checksum"
-"$python_bin" scripts/verify-checksum-sidecar.py "$host"
+mesh_automation artifact verify-checksum "$host"
 
 if [[ -n "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
     attestation_verifier="${INPUT_ATTESTATION_VERIFIER:-$host_input_dir/release-attestation-verifier}"
@@ -153,7 +99,7 @@ if [[ -n "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" ]]; then
         "$INPUT_ATTESTATION_PUBLIC_KEY_FILE"
     require_file "release attestation verifier" "$attestation_verifier"
     require_nonempty_file "release attestation verifier checksum" "$verifier_checksum"
-    "$python_bin" scripts/verify-checksum-sidecar.py \
+    mesh_automation artifact verify-checksum \
         "$attestation_verifier"
     chmod +x "$attestation_verifier"
     "$attestation_verifier" release-attestation inspect \
@@ -188,8 +134,8 @@ elif [[ "${#runtime_archives[@]}" -eq 1 ]]; then
         echo "expected exactly one checksum sidecar for ${runtime_archives[0]}; found ${#runtime_sidecars[@]}" >&2
         exit 1
     fi
-    scripts/verify-native-runtime-package.sh "${runtime_archives[0]}"
-    "$python_bin" scripts/safe-extract-tar.py \
+    mesh_automation native verify-runtime-package "${runtime_archives[0]}"
+    mesh_automation artifact extract-tar \
         "${runtime_archives[0]}" \
         "$output_dir/native-runtimes"
 else
@@ -231,7 +177,7 @@ if [[ "${#composed_runtime_dirs[@]}" -ne 1 ]]; then
     exit 1
 fi
 runtime_dir="${composed_runtime_dirs[0]}"
-scripts/verify-native-runtime-package.sh "$runtime_dir"
+mesh_automation native verify-runtime-package "$runtime_dir"
 
 host_version_output="$("$output_dir/$INPUT_BINARY_NAME" --version)"
 host_version="$(awk '{print $NF}' <<<"$host_version_output")"
@@ -244,7 +190,7 @@ if [[ "$host_release_version" != "$version" ]]; then
     echo "Output: $host_version_output" >&2
     exit 1
 fi
-"$python_bin" scripts/compose-product-bundle.py \
+mesh_automation product compose \
     --bundle "$output_dir" \
     --host "$output_dir/$INPUT_BINARY_NAME" \
     --runtime "$runtime_dir" \
