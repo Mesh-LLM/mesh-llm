@@ -10,6 +10,8 @@ mod files;
 
 #[derive(Serialize)]
 struct Manifest<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema_version: Option<u32>,
     runtime: Runtime<'a>,
     build: Build<'a>,
 }
@@ -17,7 +19,10 @@ struct Manifest<'a> {
 #[derive(Serialize)]
 struct Runtime<'a> {
     id: &'a str,
-    mesh_version: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mesh_version: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_version: Option<&'a str>,
     skippy_abi: &'a str,
     platform: Platform<'a>,
     backend: backend::Backend,
@@ -51,6 +56,10 @@ struct Build<'a> {
 }
 
 pub(super) fn run(args: &[String]) -> DynResult<()> {
+    let schema_v2 = args
+        .first()
+        .is_some_and(|argument| argument == "--schema-v2");
+    let args = if schema_v2 { &args[1..] } else { args };
     let [
         output,
         id,
@@ -69,7 +78,7 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         rest @ ..,
     ] = args
     else {
-        return Err("runtime-manifest-write MANIFEST ID VERSION ABI OS ARCH TARGET PLATFORM BACKEND CUDA_MAJOR PRIMARY UPSTREAM PATCHED PATCH_DIGEST LIBRARY... -- TOOL... -- LICENSE... -- RELOCATABLE...".into());
+        return Err("runtime-manifest-write [--schema-v2] MANIFEST ID VERSION ABI OS ARCH TARGET PLATFORM BACKEND CUDA_MAJOR PRIMARY UPSTREAM PATCHED PATCH_DIGEST LIBRARY... -- TOOL... -- LICENSE... -- RELOCATABLE...".into());
     };
     let groups: Vec<_> = rest.split(|value| value == "--").collect();
     super::manifest_identity::verify(target, os, arch)?;
@@ -97,9 +106,11 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     let tool_hashes = files::hashes(root, tools.iter())?;
     let primary_sha = hashes.get(primary).ok_or("missing primary checksum")?;
     let manifest = Manifest {
+        schema_version: schema_v2.then_some(2),
         runtime: Runtime {
             id,
-            mesh_version: version,
+            mesh_version: (!schema_v2).then_some(version),
+            release_version: schema_v2.then_some(version),
             skippy_abi: abi,
             platform: Platform {
                 os,
@@ -136,4 +147,58 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
 
 fn optional(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
+}
+
+#[cfg(test)]
+mod schema_tests {
+    #[test]
+    fn writer_preserves_legacy_mesh_and_independent_schema_two_runtime_identity() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("runtime-schema-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::write(root.join("lib/llama.dll"), b"fixture").unwrap();
+        for schema_v2 in [false, true] {
+            let output = root.join(if schema_v2 { "v2.json" } else { "legacy.json" });
+            let mut args: Vec<String> = vec![
+                output.to_string_lossy().into_owned(),
+                "runtime-id".into(),
+                "0.75.1".into(),
+                "1.2.3".into(),
+                "windows".into(),
+                "x86_64".into(),
+                "x86_64-pc-windows-msvc".into(),
+                "windows".into(),
+                "cpu".into(),
+                "".into(),
+                "lib/llama.dll".into(),
+                "".into(),
+                "".into(),
+                "".into(),
+                "lib/llama.dll".into(),
+                "--".into(),
+                "--".into(),
+                "--".into(),
+            ];
+            if schema_v2 {
+                args.insert(0, "--schema-v2".into());
+            }
+            super::run(&args).unwrap();
+            let actual: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            if schema_v2 {
+                assert_eq!(actual["schema_version"], 2);
+                assert_eq!(actual["runtime"]["release_version"], "0.75.1");
+                assert!(actual["runtime"].get("mesh_version").is_none());
+            } else {
+                assert!(actual.get("schema_version").is_none());
+                assert_eq!(actual["runtime"]["mesh_version"], "0.75.1");
+                assert!(actual["runtime"].get("release_version").is_none());
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

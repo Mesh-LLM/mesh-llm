@@ -92,23 +92,7 @@ select_compatible_runtime() {
     TEMP_ROOT="$(mktemp -d "${RUNNER_TEMP:-/tmp}/mesh-sdk-runtime-compat.XXXXXX")"
     compatibility_json="$TEMP_ROOT/available.json"
     expected_skippy_abi="$(
-        python3 - "$REPO_ROOT/skippy/crates/skippy-ffi/src/lib.rs" <<'PY'
-import re
-import sys
-
-values = {}
-for line in open(sys.argv[1], encoding="utf-8"):
-    match = re.match(
-        r"pub const ABI_VERSION_(MAJOR|MINOR|PATCH): u32 = ([0-9]+);",
-        line.strip(),
-    )
-    if match:
-        values[match.group(1)] = match.group(2)
-try:
-    print("{}.{}.{}".format(values["MAJOR"], values["MINOR"], values["PATCH"]))
-except KeyError as error:
-    raise SystemExit(f"missing Skippy ABI constant in {sys.argv[1]}: {error}") from error
-PY
+        cargo xtool native package-source-version abi "$REPO_ROOT/skippy/crates/skippy-ffi/src/lib.rs"
     )"
     env \
         -u MESH_LLM_CONFIG \
@@ -126,84 +110,11 @@ PY
         --json >"$compatibility_json"
 
     runtime_dir="$(
-        python3 - \
+        cargo xtool prepared-input sdk-runtime-select \
             "$runtime_root" \
             "$BACKEND" \
             "$compatibility_json" \
-            "$expected_skippy_abi" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-runtime_root = Path(sys.argv[1]).resolve()
-requested_backend = {"cuda-blackwell": "cuda", "hip": "rocm"}.get(
-    sys.argv[2], sys.argv[2]
-)
-expected_skippy_abi = sys.argv[4]
-with open(sys.argv[3], encoding="utf-8") as fh:
-    payload = json.load(fh)
-
-rows = payload.get("runtimes") if isinstance(payload, dict) else payload
-if not isinstance(rows, list):
-    raise SystemExit(
-        "native runtime compatibility output must be a JSON list or an object "
-        "with a runtimes list"
-    )
-if not all(isinstance(row, dict) for row in rows):
-    raise SystemExit("native runtime compatibility rows must be JSON objects")
-
-supported = [row for row in rows if row.get("supported") is True]
-preferred = [row for row in supported if row.get("backend") == requested_backend]
-if len(preferred) == 1:
-    selected = preferred[0]
-elif len(supported) == 1:
-    selected = supported[0]
-else:
-    rendered = ", ".join(
-        f"{row.get('id', '<missing-id>')}:{row.get('backend', '<missing-backend>')}"
-        for row in supported
-    ) or "none"
-    raise SystemExit(
-        "expected exactly one compatible adjacent native runtime "
-        f"(preferred backend {requested_backend}); found {rendered}"
-    )
-
-runtime_id = selected.get("id")
-if not isinstance(runtime_id, str) or not runtime_id.strip():
-    raise SystemExit("compatible native runtime is missing its id")
-
-matches = []
-manifest_paths = []
-if (runtime_root / "manifest.json").is_file():
-    manifest_paths.append(runtime_root / "manifest.json")
-manifest_paths.extend(sorted(runtime_root.glob("*/manifest.json")))
-for manifest_path in manifest_paths:
-    with manifest_path.open(encoding="utf-8") as fh:
-        manifest = json.load(fh)
-    runtime = manifest.get("runtime") or {}
-    if runtime.get("id") != runtime_id:
-        continue
-    if runtime.get("skippy_abi") != expected_skippy_abi:
-        raise SystemExit(
-            f"adjacent native runtime {runtime_id} has Skippy ABI "
-            f"{runtime.get('skippy_abi')}, expected {expected_skippy_abi}"
-        )
-    matches.append(manifest_path.parent.resolve())
-
-if len(matches) != 1:
-    rendered = ", ".join(str(path) for path in matches) or "none"
-    raise SystemExit(
-        f"expected one adjacent artifact directory for runtime {runtime_id}; "
-        f"found {rendered}"
-    )
-try:
-    matches[0].relative_to(runtime_root)
-except ValueError as error:
-    raise SystemExit(
-        f"selected native runtime escapes adjacent bundle root: {matches[0]}"
-    ) from error
-print(matches[0])
-PY
+            "$expected_skippy_abi"
     )"
 
     scripts/verify-native-runtime-package.sh "$runtime_dir" >&2

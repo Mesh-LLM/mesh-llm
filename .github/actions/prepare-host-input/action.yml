@@ -97,10 +97,8 @@ runs:
             exit 1
           fi
           cargo build -q -p xtask --bin xtask
-          cargo_target_dir="$(
-            cargo metadata --no-deps --format-version 1 |
-              python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'
-          )"
+          cargo_metadata="$(cargo metadata --no-deps --format-version 1)"
+          cargo_target_dir="$(cargo xtool repository cargo-target-directory <<< "$cargo_metadata")"
           attestation_verifier="$cargo_target_dir/debug/xtask"
           stamp_args=(
             --binary "$binary_path"
