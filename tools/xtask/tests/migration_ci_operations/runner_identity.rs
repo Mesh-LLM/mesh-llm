@@ -290,17 +290,238 @@ fn workflow_and_planner_drift_fail_check() -> TestResult {
 
 #[test]
 fn diagnose_refuses_reenabled_runtime_seed_restore() -> TestResult {
-    let cases: [(&str, Mutation); 2] = [
-        ("diagnose_seed_reenabled", |s| {
+    let cases: [(&str, Mutation); 1] = [("diagnose_seed_reenabled", |s| {
+        s.replace(
+            ".github/workflows/ci-linux-runtime-slice.yml",
+            "allow_trusted_seed: \"false\"",
+            "allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}",
+        )
+    })];
+    run_drift(&cases, "diagnose")
+}
+
+#[test]
+fn runner_check_and_diagnose_use_rust_planner_without_python_input() -> TestResult {
+    let stage = Stage::checkout("rust-planner-only")?;
+    for command in ["check", "diagnose"] {
+        let outcome = super::support::xtask_in(
+            stage.path(),
+            &[
+                "ci-ops".into(),
+                "runner-identity".into(),
+                "--root".into(),
+                stage.root_arg(),
+                command.into(),
+            ],
+        )?;
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    }
+    Ok(())
+}
+
+#[test]
+fn additional_platform_seed_and_conditional_drift_is_rejected() -> TestResult {
+    let cases: &[(&str, Mutation)] = &[
+        ("rocm-release", |s| {
             s.replace(
-                ".github/workflows/ci-linux-runtime-slice.yml",
-                "allow_trusted_seed: \"false\"",
-                "allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}",
+                ".github/workflows/release.yml",
+                &s.image("public-rocm-release")?,
+                &s.image("public-rocm-ci")?,
             )
         }),
-        ("diagnose_missing_planner", |s| {
-            Ok(std::fs::remove_file(s.path().join("scripts/plan-ci.py"))?)
+        ("runtime-image", |s| {
+            s.replace(
+                ".github/workflows/ci-linux-runtime-slice.yml",
+                "image: ${{ matrix.runtime.container_image }}",
+                "image: ignored",
+            )
+        }),
+        ("runtime-epoch", |s| {
+            s.replace(
+                "ci/slices.yml",
+                s.catalog()?["images"]["public-cpu"]["native_toolchain_epoch"]
+                    .as_str()
+                    .ok_or("epoch")?,
+                "changed-native-epoch",
+            )
+        }),
+        ("sdk-optout", |s| {
+            s.replace(
+                ".github/workflows/sdk-smoke.yml",
+                "inputs.sdk_kind != 'swift' &&",
+                "inputs.sdk_kind == 'swift' &&",
+            )
+        }),
+        ("sdk-cache", |s| {
+            s.replace(
+                ".github/workflows/sdk-smoke.yml",
+                "env.SDK_RUST_TOOLCHAIN_EPOCH,",
+                "'ignored-epoch',",
+            )
+        }),
+        ("publisher-recipe", |s| {
+            s.replace(
+                ".github/workflows/cache-warm-sccache.yml",
+                "'Justfile', 'just/**'",
+                "'Justfile', 'just/ci.just'",
+            )
+        }),
+        ("missing-runtime-guard", |s| {
+            s.replace(
+                ".github/workflows/ci-linux-runtime-slice.yml",
+                "          allow_trusted_seed: \"false\"\n",
+                "",
+            )
+        }),
+        ("release-selector", |s| {
+            s.replace(
+                ".github/workflows/ci-ui-artifact-slice.yml",
+                "inputs.release_tag != '' &&",
+                "inputs.source_sha != '' &&",
+            )
+        }),
+        ("short-container", |s| {
+            s.append(
+                ".github/workflows/ci-web-slice.yml",
+                &format!("\n  extra:\n    container: {}\n", s.image("public-web")?),
+            )
+        }),
+        ("unregistered-mutable", |s| {
+            s.write(".github/workflows/unregistered.yml", b"jobs:\n  extra:\n    container:\n      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner:latest\n")
+        }),
+        ("canary-override", |s| {
+            s.replace(
+                ".github/workflows/depot-canary.yml",
+                "ci-ops runtime-seed preflight runtime-seed-evidence",
+                "ci-ops runtime-seed preflight runtime-seed-evidence; echo key=other",
+            )
+        }),
+        ("canary-missing", |s| {
+            s.replace(
+                ".github/workflows/depot-canary.yml",
+                "id: seed_key",
+                "id: other_key",
+            )
+        }),
+        ("canary-unused", |s| {
+            s.replace(
+                ".github/workflows/depot-canary.yml",
+                "CANARY_KEY:",
+                "UNUSED_KEY:",
+            )
+        }),
+        ("canary-duplicate", |s| {
+            s.replace(".github/workflows/depot-canary.yml", "  runtime_seed_summary:", "      - name: duplicate key\n        id: seed_key\n        run: true\n\n  runtime_seed_summary:")
         }),
     ];
-    run_drift(&cases, "diagnose")
+    for (name, mutate) in cases {
+        let stage = Stage::checkout(name)?;
+        mutate(&stage)?;
+        let outcome = super::support::xtask_in(
+            stage.path(),
+            &[
+                "ci-ops".into(),
+                "runner-identity".into(),
+                "--root".into(),
+                stage.root_arg(),
+                "check".into(),
+            ],
+        )?;
+        assert_ne!(outcome.code, 0, "{name}");
+        assert!(outcome.stdout.is_empty(), "{name}");
+    }
+    Ok(())
+}
+
+#[test]
+fn receipt_role_binding_and_registered_yaml_contracts_are_checked() -> TestResult {
+    for mutation in [
+        "provenance",
+        "receipt",
+        "image",
+        "publisher",
+        "sdk",
+        "artifact",
+    ] {
+        let stage = Stage::checkout(mutation)?;
+        stage.edit_catalog(|catalog| match mutation {
+            "provenance" => catalog["images"]["public-cpu"]["provenance"] = serde_json::Value::Null,
+            "receipt" => {
+                catalog["images"]["public-cpu"]["receipt"]["index_candidate_key"] =
+                    "invented".into()
+            }
+            "image" => {
+                catalog["images"]["public-ui"]["receipt"]["index_candidate_key"] =
+                    "candidate-index-public-browser".into()
+            }
+            "publisher" | "sdk" => {
+                let role = catalog[if mutation == "publisher" {
+                    "compiler_seed"
+                } else {
+                    "sdk_rust"
+                }][if mutation == "publisher" {
+                    "publisher_role"
+                } else {
+                    "role"
+                }]
+                .as_str()
+                .expect("role")
+                .to_owned();
+                let mut extra = catalog["consumer_roles"][&role]["bindings"][0].clone();
+                extra["job"] = "additional".into();
+                catalog["consumer_roles"][&role]["bindings"]
+                    .as_array_mut()
+                    .expect("bindings")
+                    .push(extra);
+            }
+            "artifact" => {
+                catalog["consumer_roles"]["ui-artifact"]["bindings"][0]["job"] = "ui_quality".into()
+            }
+            _ => unreachable!(),
+        })?;
+        let outcome = super::support::xtask_in(
+            stage.path(),
+            &[
+                "ci-ops".into(),
+                "runner-identity".into(),
+                "--root".into(),
+                stage.root_arg(),
+                "validate".into(),
+            ],
+        )?;
+        assert_ne!(outcome.code, 0, "{mutation}");
+    }
+    let stage = Stage::checkout("registered-yaml")?;
+    std::fs::rename(
+        stage.path().join(".github/workflows/ci-web-slice.yml"),
+        stage.path().join(".github/workflows/ci-web-slice.yaml"),
+    )?;
+    stage.edit_catalog(|catalog| {
+        for role in catalog["consumer_roles"]
+            .as_object_mut()
+            .expect("roles")
+            .values_mut()
+        {
+            for binding in role["bindings"].as_array_mut().expect("bindings") {
+                if binding["workflow"] == "ci-web-slice.yml" {
+                    binding["workflow"] = "ci-web-slice.yaml".into();
+                }
+            }
+        }
+    })?;
+    let args = [
+        "ci-ops".into(),
+        "runner-identity".into(),
+        "--root".into(),
+        stage.root_arg(),
+        "check".into(),
+    ];
+    assert_eq!(super::support::xtask_in(stage.path(), &args)?.code, 0);
+    stage.replace(
+        ".github/workflows/ci-web-slice.yaml",
+        &stage.image("public-web")?,
+        &stage.image("public-cpu")?,
+    )?;
+    assert_ne!(super::support::xtask_in(stage.path(), &args)?.code, 0);
+    Ok(())
 }

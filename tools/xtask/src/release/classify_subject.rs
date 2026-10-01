@@ -91,6 +91,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_supported_commit_type_classifies_with_its_consumed_section() {
+        for (kind, section) in [
+            ("feat", "Added"),
+            ("fix", "Fixed"),
+            ("perf", "Changed"),
+            ("revert", "Changed"),
+            ("security", "Security"),
+            ("build", "Internal"),
+            ("chore", "Internal"),
+            ("ci", "Internal"),
+            ("deps", "Internal"),
+            ("docs", "Internal"),
+            ("refactor", "Internal"),
+            ("style", "Internal"),
+            ("test", "Internal"),
+        ] {
+            let subject = format!("{kind}(a.b/c_d-e)!: change (#123)");
+            let parsed = parse_subject(&subject).expect("supported grammar");
+            assert_eq!(type_section(parsed.kind), Some(section));
+            assert_eq!(parsed.scope, Some("a.b/c_d-e"));
+            assert!(parsed.breaking);
+        }
+    }
+
+    #[test]
     fn migration_release_classify_subject_grammar() {
         let found = parse_subject("feat(a.b/c-d)!: x").map(|s| (s.kind, s.scope, s.breaking));
         assert_eq!(found, Some(("feat", Some("a.b/c-d"), true)));

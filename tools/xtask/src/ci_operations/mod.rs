@@ -50,6 +50,14 @@ pub(crate) mod runner_identity_argv;
 mod runner_identity_check;
 mod runner_identity_help;
 mod runner_identity_subargs;
+mod runtime_seed;
+mod runtime_seed_io;
+mod runtime_seed_preflight;
+mod runtime_seed_stats;
+mod runtime_seed_summary;
+#[cfg(test)]
+mod runtime_seed_tests;
+mod runtime_seed_types;
 mod sccache_argv;
 mod sccache_evidence;
 mod sccache_render;
@@ -74,6 +82,7 @@ pub(crate) enum CiOperationsCommand {
     AuthorityAudit,
     RegistryPulls,
     ChatDisplay,
+    RuntimeSeed,
 }
 
 impl CiOperationsCommand {
@@ -87,6 +96,7 @@ impl CiOperationsCommand {
             "authority-audit" => Some(Self::AuthorityAudit),
             "registry-pulls" => Some(Self::RegistryPulls),
             "chat-display" => Some(Self::ChatDisplay),
+            "runtime-seed" => Some(Self::RuntimeSeed),
             _ => None,
         }
     }
@@ -109,6 +119,7 @@ pub(crate) fn run(
         CiOperationsCommand::RunnerCleanup => unreachable!(),
         CiOperationsCommand::ChatDisplay => unreachable!(),
         CiOperationsCommand::AuthorityAudit => authority_command::run(args),
+        CiOperationsCommand::RuntimeSeed => runtime_seed::run(args),
         CiOperationsCommand::RegistryPulls => {
             let output = registry_pulls::run(args)?;
             crate::repository::check_report::CheckReport {

@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::fs;
 
 #[test]
-fn actionlint_extractor_joins_checked_in_invocation_contract() -> DynResult<()> {
+fn actionlint_extractor_has_no_python_child_after_cutover() -> DynResult<()> {
     let root = crate::repository::RepositoryRoot::resolve(None)?;
     let paths = [
         ".github/actions/install-actionlint/action.yml".to_owned(),
@@ -14,22 +14,14 @@ fn actionlint_extractor_joins_checked_in_invocation_contract() -> DynResult<()> 
     let observed = scan::scan_paths(root.as_path(), &paths)?;
     let validated = observed.iter().map(|row| row.id.clone()).collect();
     let graph = report(root.as_path(), &paths, &observed, &validated, &[&paths[0]])?;
-    let edge = graph
-        .edges
-        .iter()
-        .find(|edge| edge.child.as_deref() == Some("scripts/safe-extract-tar.py"))
-        .ok_or("missing extractor call")?;
-    assert_eq!(edge.unresolved_reason, None);
     assert!(
-        edge.argv
-            .as_deref()
-            .is_some_and(|argv| argv.contains("$archive $install_dir"))
+        !graph
+            .edges
+            .iter()
+            .any(|edge| edge.child.as_deref() == Some("scripts/safe-extract-tar.py"))
     );
-    assert!(
-        edge.status_streams_effects
-            .as_deref()
-            .is_some_and(|effects| effects.contains("nonzero fails"))
-    );
+    let action = fs::read_to_string(root.as_path().join(&paths[0]))?;
+    assert!(action.contains("cargo xtool artifact extract-tar \"$archive\" \"$install_dir\""));
     Ok(())
 }
 

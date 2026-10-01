@@ -67,3 +67,66 @@ fn migration_ci_plan_rejects_unknown_arguments_with_usage_status() -> TestResult
     assert!(text(&output.stderr).contains("unrecognized arguments: --bogus"));
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn source_catalog_root_does_not_move_workspace_metadata_or_affected_discovery() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    use std::{
+        fs,
+        io::Write,
+        process::{Command, Stdio},
+    };
+    let stage = Stage::new("distinct-roots")?;
+    let manifests = stage.manifest_root("default")?;
+    let workspace = stage.path().join("protected");
+    fs::create_dir_all(workspace.join("scripts"))?;
+    fs::write(workspace.join("Cargo.toml"), "[workspace]\nmembers=[]\n")?;
+    fs::create_dir_all(workspace.join("tools/xtask"))?;
+    fs::write(
+        workspace.join("tools/xtask/Cargo.toml"),
+        "[package]\nname='xtask'\n",
+    )?;
+    fs::write(
+        workspace.join("scripts/affected-crates.sh"),
+        "#!/bin/sh\ntest \"$PWD\" = \"$EXPECTED_WORKSPACE\" || exit 99\nprintf '{\"affected\":[\"mesh-llm\"]}'\n",
+    )?;
+    let cargo = stage.path().join("bin/cargo");
+    let metadata = crate::support::fixture_root().join("cargo-metadata.json");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\ntest \"$PWD\" = \"$EXPECTED_WORKSPACE\" || exit 99\ncat '{}'\n",
+            metadata.display()
+        ),
+    )?;
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
+    let input = r#"{"profile":"pr-ready","event_name":"pull_request","source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_sha":"","changed_files":["CONTRIBUTING.md"]}"#;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(&workspace)
+        .args([
+            "--repo-root",
+            workspace.to_str().ok_or("workspace")?,
+            "ci",
+            "plan",
+            "--manifest-root",
+            manifests.to_str().ok_or("manifests")?,
+        ])
+        .env("PATH", stage.search_path()?)
+        .env("EXPECTED_WORKSPACE", &workspace)
+        .env("RUSTC_WRAPPER", "missing-wrapper")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or("stdin")?
+        .write_all(input.as_bytes())?;
+    let output = child.wait_with_output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(plan["domains"], serde_json::json!(["docs"]));
+    Ok(())
+}

@@ -1,7 +1,7 @@
 mod cli;
 mod metadata;
 mod names;
-mod successors;
+pub(crate) mod successors;
 
 #[cfg(test)]
 mod tests;

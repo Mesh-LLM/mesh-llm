@@ -247,5 +247,168 @@ fn qualified_images_without_retained_evidence_fail_every_command() -> TestResult
         let outcome = check_case(name, &evidence.stage, &args)?;
         assert_eq!((outcome.code, outcome.stdout.as_str()), (1, ""), "{name}");
     }
+    let outcome = super::support::xtask_in(
+        evidence.stage.path(),
+        &[
+            "ci-ops".into(),
+            "runner-identity".into(),
+            "--root".into(),
+            evidence.stage.root_arg(),
+            "diagnose".into(),
+        ],
+    )?;
+    assert_ne!(outcome.code, 0);
+    assert!(outcome.stdout.is_empty());
+    Ok(())
+}
+
+#[test]
+fn reanchored_cohort_still_rejects_structural_and_platform_corruption() -> TestResult {
+    for pointer in [
+        "/schema",
+        "/extra",
+        "/candidates/candidate-index-public-cpu/digest",
+        "/candidates/candidate-index-public-cpu/backend/id",
+        "/candidates/candidate-index-public-cpu/backend/name",
+        "/platforms/public-cpu-amd64/receipt/platform/architecture",
+        "/platforms/public-cpu-amd64/receipt/runtime/source/mesh_revision",
+        "/platforms/public-cpu-amd64/receipt/oci/manifest/digest",
+        "/platforms/public-cpu-amd64/receipt/runtime/cache",
+        "/platforms/public-cpu-amd64/candidate/schema",
+        "/platforms/public-cpu-amd64/candidate/extra",
+        "/candidates/candidate-index-public-cpu/children",
+    ] {
+        let evidence = EvidenceStage::new("reanchored")?;
+        let mut cohort = evidence.cohort()?;
+        match pointer {
+            "/extra" => cohort["extra"] = "unknown".into(),
+            "/platforms/public-cpu-amd64/candidate/extra" => {
+                cohort["platforms"]["public-cpu-amd64"]["candidate"]["extra"] = "unknown".into()
+            }
+            "/candidates/candidate-index-public-cpu/children" => {
+                *cohort.pointer_mut(pointer).ok_or("pointer")? = json!([])
+            }
+            _ => *cohort.pointer_mut(pointer).ok_or("pointer")? = Value::Null,
+        }
+        let raw = serde_json::to_vec(&cohort)?;
+        evidence.stage.write("input.json", &raw)?;
+        let mut anchor = evidence.anchor(&cohort["origin"]);
+        anchor["receipt"]["cohort_sha256"] = hash_bytes(&raw).into();
+        anchor["provenance"]["cohort_sha256"] = hash_bytes(&raw).into();
+        evidence.write_anchor(&anchor)?;
+        let outcome = super::support::xtask_in(
+            evidence.stage.path(),
+            &[
+                "ci-ops".into(),
+                "runner-identity".into(),
+                "--root".into(),
+                evidence.stage.root_arg(),
+                "bind".into(),
+                "--image-id".into(),
+                "public-cpu".into(),
+                "--cohort".into(),
+                "input.json".into(),
+                "--anchor".into(),
+                "anchor.json".into(),
+                "--output".into(),
+                "proposal".into(),
+            ],
+        )?;
+        assert_ne!(outcome.code, 0, "{pointer}");
+        assert!(!evidence.stage.path().join("proposal").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn sequential_proposals_retain_shared_and_distinct_evidence() -> TestResult {
+    for shared in [true, false] {
+        let evidence = EvidenceStage::new("sequential")?;
+        let invoke =
+            |root: &std::path::Path, image: &str, cohort: &str, anchor: &str, output: &str| {
+                super::support::xtask_in(
+                    evidence.stage.path(),
+                    &[
+                        "ci-ops".into(),
+                        "runner-identity".into(),
+                        "--root".into(),
+                        root.display().to_string(),
+                        "bind".into(),
+                        "--image-id".into(),
+                        image.into(),
+                        "--cohort".into(),
+                        cohort.into(),
+                        "--anchor".into(),
+                        anchor.into(),
+                        "--output".into(),
+                        output.into(),
+                    ],
+                )
+            };
+        assert_eq!(
+            invoke(
+                evidence.stage.path(),
+                "public-cpu",
+                "input.json",
+                "anchor.json",
+                "first"
+            )?
+            .code,
+            0
+        );
+        let first = evidence.stage.path().join("first");
+        let mut catalog: Value =
+            serde_json::from_slice(&fs::read(first.join("ci/runner-images.json"))?)?;
+        catalog["images"]["public-vulkan"]["reference"] = format!(
+            "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:{}",
+            "7".repeat(64)
+        )
+        .into();
+        catalog["images"]["public-vulkan"]["native_toolchain_epoch"] =
+            format!("mesh-llm-cuda-runner-sha256-{}", "7".repeat(64)).into();
+        fs::write(
+            first.join("ci/runner-images.json"),
+            serde_json::to_vec(&catalog)?,
+        )?;
+        let mut raw = evidence.raw.clone();
+        if !shared {
+            raw.push(b' ');
+        }
+        let mut anchor = evidence.anchor(&evidence.cohort()?["origin"]);
+        anchor["receipt"]["index_candidate_key"] = "candidate-index-public-vulkan".into();
+        anchor["receipt"]["cohort_sha256"] = hash_bytes(&raw).into();
+        anchor["provenance"]["cohort_sha256"] = hash_bytes(&raw).into();
+        evidence.stage.write("second-input.json", &raw)?;
+        evidence
+            .stage
+            .write("second-anchor.json", &serde_json::to_vec(&anchor)?)?;
+        assert_eq!(
+            invoke(
+                &first,
+                "public-vulkan",
+                "second-input.json",
+                "second-anchor.json",
+                "second"
+            )?
+            .code,
+            0
+        );
+        let second = evidence.stage.path().join("second");
+        assert_eq!(
+            fs::read_dir(second.join("ci/runner-image-evidence"))?.count(),
+            if shared { 1 } else { 2 }
+        );
+        let result = super::support::xtask_in(
+            evidence.stage.path(),
+            &[
+                "ci-ops".into(),
+                "runner-identity".into(),
+                "--root".into(),
+                second.display().to_string(),
+                "validate".into(),
+            ],
+        )?;
+        assert_eq!(result.code, 0, "{}", result.stderr);
+    }
     Ok(())
 }
