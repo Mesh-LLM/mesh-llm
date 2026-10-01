@@ -40,7 +40,7 @@ mod evidence_timestamp;
 mod identity_text;
 pub(crate) mod python_access;
 pub(crate) mod python_json_decode;
-mod python_json_strings;
+mod runner_cleanup;
 mod runner_identity;
 pub(crate) mod runner_identity_argv;
 mod runner_identity_check;
@@ -63,6 +63,7 @@ use std::path::PathBuf;
 #[derive(Clone, Copy)]
 pub(crate) enum CiOperationsCommand {
     RunnerIdentity,
+    RunnerCleanup,
     BuildCache,
     SccacheStats,
     CollectMetrics,
@@ -72,6 +73,7 @@ impl CiOperationsCommand {
     pub(crate) fn parse(name: &str) -> Option<Self> {
         match name {
             "runner-identity" => Some(Self::RunnerIdentity),
+            "runner-cleanup" => Some(Self::RunnerCleanup),
             "build-cache" => Some(Self::BuildCache),
             "sccache-stats" => Some(Self::SccacheStats),
             "collect-metrics" => Some(Self::CollectMetrics),
@@ -87,7 +89,11 @@ pub(crate) fn run(
     args: &[String],
     root: impl FnOnce() -> DynResult<PathBuf>,
 ) -> DynResult<()> {
+    if matches!(command, CiOperationsCommand::RunnerCleanup) {
+        return runner_cleanup::command::run(args);
+    }
     let report = match command {
+        CiOperationsCommand::RunnerCleanup => unreachable!(),
         CiOperationsCommand::BuildCache => build_cache::run(args),
         CiOperationsCommand::SccacheStats => sccache_stats::run(args),
         CiOperationsCommand::CollectMetrics => ci_metrics::run(args),

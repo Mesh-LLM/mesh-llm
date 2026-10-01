@@ -146,7 +146,6 @@ pub(crate) fn remove_tree(path: &Path, target: &Path) -> Result<(), String> {
     std::fs::remove_dir_all(path).map_err(|error| io_text(&error, path))
 }
 
-/// Python's `OSError.__str__` for a failed operation on `path`.
 pub(crate) fn io_text(error: &std::io::Error, path: &Path) -> String {
-    crate::ci_plan::catalog::os_error_text(error, &path.to_string_lossy())
+    format!("{}: {error}", path.display())
 }

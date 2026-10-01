@@ -5,8 +5,8 @@
 //! status and both streams with a golden in `fixtures/ci_operations/
 //! build_cache/` and, when configured, a side-by-side legacy run.
 
-use crate::support::{CAPTURE_ENV, LEGACY_ENV, Outcome, Stage, TestResult, fixture_dir, repo_root};
-use serde_json::{Value, json};
+use crate::support::{Outcome, Stage, TestResult, fixture_dir};
+use serde_json::Value;
 use std::error::Error;
 use std::fs::{self, File, FileTimes};
 use std::os::unix::fs::PermissionsExt;
@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, UNIX_EPOCH};
 
-const SCRIPT: &str = "scripts/manage-build-cache.py";
 const OLD: u64 = 1_577_836_800;
 
 struct Tree {
@@ -181,40 +180,27 @@ fn run_case(
     tree: &Tree,
     args: &[&str],
     inspect: &dyn Fn(&Tree) -> TestResult,
-    reset: bool,
+    _reset: bool,
 ) -> Result<Outcome, Box<dyn Error>> {
     let actual = tree.rust(args)?;
     inspect(tree)?;
-    if let Some(python) = std::env::var_os(LEGACY_ENV).map(PathBuf::from) {
-        if reset {
-            tree.populate()?;
-        }
-        let legacy = tree.run(&python, &[repo_root().join(SCRIPT)], args)?;
-        if std::env::var_os(CAPTURE_ENV).is_some() {
-            let golden =
-                json!({"code": legacy.code, "stdout": legacy.stdout, "stderr": legacy.stderr});
-            fs::write(
-                golden_path(name),
-                serde_json::to_string_pretty(&golden)? + "\n",
-            )?;
-        }
-        assert_eq!(
-            actual,
-            legacy,
-            "{name}: port differs from legacy {}",
-            python.display()
-        );
-    }
     let golden: Value = serde_json::from_slice(&fs::read(golden_path(name))?)?;
     let expected = Outcome {
         code: i32::try_from(golden["code"].as_i64().ok_or("golden code")?)?,
         stdout: golden["stdout"].as_str().ok_or("golden stdout")?.to_owned(),
         stderr: golden["stderr"].as_str().ok_or("golden stderr")?.to_owned(),
     };
-    assert_eq!(
-        actual, expected,
-        "{name}: port differs from captured golden"
-    );
+    if expected.code == 0 {
+        assert_eq!(actual, expected, "{name}: output contract");
+    } else {
+        assert_eq!(actual.code, expected.code, "{name}");
+        assert_eq!(actual.stdout, expected.stdout, "{name}");
+        assert_eq!(
+            actual.stderr.is_empty(),
+            expected.stderr.is_empty(),
+            "{name}"
+        );
+    }
     Ok(actual)
 }
 

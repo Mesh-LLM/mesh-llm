@@ -6,9 +6,7 @@
 use crate::ci_operations::build_cache_help::{
     BUILD_USAGE, PROG, PRUNE_USAGE, STATUS_USAGE, TOP_USAGE, build_help, status_help, top_help,
 };
-use crate::ci_operations::build_cache_options::{
-    Kind, ambiguous, classify, help_flag, is_option_like,
-};
+use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::ci_operations::build_cache_values::{Age, parse_age, parse_size};
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
@@ -102,7 +100,6 @@ fn parse_top(args: &[String]) -> Result<Args, CheckReport> {
                 )));
             }
             Kind::Unknown => extras.push(arg.clone()),
-            Kind::Ambiguous(names) => return Err(ambiguous(arg, &names, &top_error)),
             Kind::Known(_, explicit, sep) => {
                 help_flag(explicit, sep, "-h/--help", &top_error)?;
                 return Err(CheckReport::success(top_help()));
@@ -162,7 +159,6 @@ fn parse_sub(mode: Mode, args: &[String], extras: &mut Vec<String>) -> Result<Ar
                 return Ok(parsed);
             }
             Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
-            Kind::Ambiguous(names) => return Err(ambiguous(arg, &names, &|m| sub.fail(m))),
             Kind::Known(option, explicit, sep) => {
                 let value = match option {
                     "-h" | "--help" | "--json" | "--execute" => {
