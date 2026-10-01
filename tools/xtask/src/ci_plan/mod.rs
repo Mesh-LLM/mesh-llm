@@ -13,6 +13,8 @@ mod diagnostics;
 pub(crate) mod document;
 pub(crate) mod family;
 mod glob_pattern;
+#[cfg(test)]
+mod layout_contract_tests;
 mod matrices;
 mod plan;
 pub(crate) mod plan_bytes;

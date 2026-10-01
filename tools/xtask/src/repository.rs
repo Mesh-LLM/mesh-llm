@@ -1,5 +1,5 @@
 mod affected_crates;
-mod cargo_packages;
+pub(crate) mod cargo_packages;
 mod cargo_projection;
 pub(crate) mod check_args;
 pub(crate) mod check_report;

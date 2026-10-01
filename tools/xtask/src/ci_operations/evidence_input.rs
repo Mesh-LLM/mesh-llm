@@ -179,6 +179,29 @@ pub(crate) fn evidence_path(root: &Path, sha: &Json) -> Outcome<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn evidence_input_rejects_symlinks_and_oversized_files() {
+        let root = tempfile::tempdir().expect("root");
+        let input = root.path().join("input.json");
+        std::fs::write(&input, b"{}").expect("input");
+        let link = root.path().join("link.json");
+        std::os::unix::fs::symlink(&input, &link).expect("link");
+        assert!(read_bytes(&link).is_err());
+        std::os::unix::fs::symlink(root.path(), root.path().join("ci")).expect("directory link");
+        assert!(
+            evidence_path(
+                root.path(),
+                &Json::String(format!("sha256:{}", "a".repeat(64)))
+            )
+            .is_err()
+        );
+        let file = std::fs::File::create(&input).expect("file");
+        file.set_len(MAX_BYTES + 1).expect("length");
+        assert!(read_bytes(&input).is_err());
+        assert!(decode(&vec![b' '; usize::try_from(MAX_BYTES + 1).expect("bound")]).is_err());
+    }
+
     #[test]
     fn migration_ci_operations_decode_rejects_duplicates_depth_and_floats() {
         let error = |raw: &[u8]| decode(raw).expect_err("invalid");

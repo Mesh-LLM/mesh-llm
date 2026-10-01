@@ -29,11 +29,6 @@ pub(crate) fn runtime_consumer(catalog: &Json) -> Outcome<(String, String, Strin
 /// `planner_rows(root)`: the exhaustive main-profile runtime rows from the
 /// checked-in planner catalogs, through the Rust planner.
 pub(crate) fn planner_rows(root: &Path) -> Outcome<Vec<Value>> {
-    let planner = root.join("scripts/plan-ci.py");
-    if !planner.is_file() {
-        let error = std::io::Error::from_raw_os_error(2);
-        return Err(os_error_text(&error, &python_path_display(&planner)));
-    }
     let slices = read_json(&root.join("ci/slices.yml"))?;
     let ownership = read_json(&root.join("ci/ownership.yml"))?;
     crate::ci_plan::exhaustive_runtime_rows(&ownership, &slices)

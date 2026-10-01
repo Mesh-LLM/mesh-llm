@@ -181,7 +181,7 @@ fn check_canary(
     let ok = steps.len() == 1
         && one_field(steps[0], "CANARY_KEY", "runtime seed canary", None)? == expression
         && one_field(steps[0], "run", "runtime seed canary", None)?
-            == "python3 scripts/runtime-seed-canary.py preflight runtime-seed-evidence";
+            == "\"$MESH_LLM_AUTOMATION_BIN\" ci-ops runtime-seed preflight runtime-seed-evidence";
     require(ok, || "runtime seed canary key resolver drift".to_owned())
 }
 

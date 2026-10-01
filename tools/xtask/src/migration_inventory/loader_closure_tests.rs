@@ -24,11 +24,33 @@ fn runner_image_planner_loader_rejects_target_drift_and_unknown_import() -> DynR
     let repo = crate::repo_consistency::repo_root()?;
     let root = crate::command::unique_temp_dir("runner-planner-loader");
     fs::create_dir_all(root.join("scripts"))?;
-    let loader = fs::read_to_string(repo.join("scripts/runner-image-identity.py"))?;
-    let planner = fs::read(repo.join("scripts/plan-ci.py"))?;
+    let loader = "spec = importlib.util.spec_from_file_location(\"runner_identity_planner\", root / \"scripts/plan-ci.py\")\nspec.loader.exec_module(planner)\n_evidence_spec = importlib.util.spec_from_file_location(\"runner_image_evidence\", Path(__file__).with_name(\"runner-image-evidence.py\"))\n_evidence_spec.loader.exec_module(evidence)\n".to_owned();
+    let planner = b"historical fixture planner bytes";
     fs::write(root.join("scripts/runner-image-identity.py"), &loader)?;
-    fs::write(root.join("scripts/plan-ci.py"), &planner)?;
-    let ledger = MigrationLedgers::load(&repo)?.invocations;
+    fs::write(root.join("scripts/plan-ci.py"), planner)?;
+    let mut ledger = MigrationLedgers::load(&repo)?.invocations;
+    ledger.runner_image_planner_loader = Some(super::ledger::PlannerLoader {
+        caller: "scripts/runner-image-identity.py".into(),
+        source_block: "spec = importlib.util.spec_from_file_location(\"runner_identity_planner\", root / \"scripts/plan-ci.py\")".into(),
+        target: "scripts/plan-ci.py".into(), target_sha256: "0".repeat(64),
+        invocation: "historical fixture invocation".into(), status_streams_effects: "fixture output".into(),
+        replacement_owner: "Rust planner".into(), deletion_phase: 2, deletion_condition: "fixture only".into(),
+    });
+    ledger
+        .source_verified_edges
+        .push(super::ledger::VerifiedEdge {
+            id: "scripts/runner-image-identity.py#dynamic-import:40fc0127cbc4dd32:1".into(),
+            owner: "historical loader fixture".into(),
+            reason: "fixture boundary".into(),
+            target: "scripts/plan-ci.py".into(),
+            replacement_task: 9,
+        });
+    use sha2::{Digest, Sha256};
+    ledger
+        .runner_image_planner_loader
+        .as_mut()
+        .ok_or("historical record")?
+        .target_sha256 = hex::encode(Sha256::digest(planner));
     check_runner_image_planner_loader(&root, &ledger)?;
 
     // When target bytes or the selected import path change, then ownership is stale.
@@ -38,7 +60,7 @@ fn runner_image_planner_loader_rejects_target_drift_and_unknown_import() -> DynR
         error.to_string().contains("changed planner target bytes"),
         "{error}"
     );
-    fs::write(root.join("scripts/plan-ci.py"), &planner)?;
+    fs::write(root.join("scripts/plan-ci.py"), planner)?;
     fs::write(
         root.join("scripts/runner-image-identity.py"),
         loader.replace(
@@ -68,7 +90,6 @@ fn runner_image_planner_loader_rejects_target_drift_and_unknown_import() -> DynR
             .contains("changed or unowned dynamic import"),
         "{error}"
     );
-    let mut ledger = ledger;
     ledger
         .runner_image_planner_loader
         .as_mut()

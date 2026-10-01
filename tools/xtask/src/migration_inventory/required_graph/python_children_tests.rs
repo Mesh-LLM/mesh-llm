@@ -89,7 +89,7 @@ fn reached_python_calls_keep_finite_descendants_and_runtime_boundaries() -> DynR
 }
 
 #[test]
-fn checked_in_planner_exposes_selected_shell_child_without_certifying_root() -> DynResult<()> {
+fn checked_in_planner_action_no_longer_reaches_python_planner() -> DynResult<()> {
     // Given the real planner reached through its own source path.
     let root = crate::repository::RepositoryRoot::resolve(None)?;
     let paths = ledger::tracked_paths(root.as_path())?;
@@ -104,18 +104,14 @@ fn checked_in_planner_exposes_selected_shell_child_without_certifying_root() -> 
         &paths,
         &observed,
         &validated,
-        &["scripts/plan-ci.py"],
+        &[".github/actions/plan-ci/action.yml"],
     )?;
     // Then source proves the relative script, but caller-selected root bytes stay conditional.
     assert!(
-        graph
+        !graph
             .edges
             .iter()
-            .any(|edge| edge.parent == "scripts/plan-ci.py"
-                && edge.line == 375
-                && edge.child.as_deref() == Some("scripts/affected-crates.sh")
-                && edge.status == "unknown_selection"
-                && edge.argv.is_none())
+            .any(|edge| edge.child.as_deref() == Some("scripts/plan-ci.py"))
     );
     Ok(())
 }

@@ -1,4 +1,4 @@
-pub(super) const SUCCESSORS: &[(&str, &[&str])] = &[
+pub(crate) const SUCCESSORS: &[(&str, &[&str])] = &[
     ("mesh-llm-gpu-bench", &["skippy-gpu-bench"]),
     ("mesh-llm-guardrails", &["skippy-guardrails"]),
     ("mesh-llm-hardware-profile", &["skippy-hardware-profile"]),
