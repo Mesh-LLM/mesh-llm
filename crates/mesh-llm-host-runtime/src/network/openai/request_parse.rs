@@ -32,6 +32,10 @@ pub(crate) const MESH_TARGET_HEADER: &str = "x-mesh-target";
 /// Remove one or more peers from the remote-mesh candidate set before
 /// selection. Comma-separated within one header value.
 pub(crate) const MESH_EXCLUDE_HEADER: &str = "x-mesh-exclude";
+/// A client-chosen id marking requests it sent to different nodes as one
+/// pair; copied unread onto the routing node's exchange events, never
+/// forwarded to a peer.
+pub(crate) const MESH_TWIN_BRACKET_HEADER: &str = "x-mesh-twin-bracket";
 pub(super) const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_AUDIO_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
@@ -214,6 +218,12 @@ impl BufferedHttpRequest {
         let exclude = header_values_from_raw(&self.raw, MESH_EXCLUDE_HEADER)
             .map_err(|()| format!("{MESH_EXCLUDE_HEADER} header contains invalid UTF-8"))?;
         Ok((target, exclude))
+    }
+
+    /// Raw `x-mesh-twin-bracket` header values, in order.
+    pub fn twin_bracket_header_values(&self) -> Result<Vec<String>, String> {
+        header_values_from_raw(&self.raw, MESH_TWIN_BRACKET_HEADER)
+            .map_err(|()| format!("{MESH_TWIN_BRACKET_HEADER} header contains invalid UTF-8"))
     }
 
     /// The only semantic request media kind trusted by artifact capture.

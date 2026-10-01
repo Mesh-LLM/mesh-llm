@@ -429,6 +429,13 @@ pub struct OpenAiExchangeEnvelope {
     /// model — never fabricated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_digest: Option<String>,
+    /// A client-chosen id marking this exchange as one of a pair (or set) the
+    /// client sent to different nodes on purpose, copied unread from the
+    /// request's `x-mesh-twin-bracket` header. The host never sends a second
+    /// request, picks a second node or compares answers: pairing is the
+    /// client's choice. `None` when the header is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub twin_bracket_id: Option<String>,
 }
 
 impl OpenAiExchangeEnvelope {
@@ -453,6 +460,7 @@ impl OpenAiExchangeEnvelope {
             response_digest: None,
             tool_calls_digest: None,
             reasoning_digest: None,
+            twin_bracket_id: None,
         }
     }
 
@@ -480,6 +488,7 @@ impl OpenAiExchangeEnvelope {
             response_digest: None,
             tool_calls_digest: None,
             reasoning_digest: None,
+            twin_bracket_id: None,
         }
     }
 
@@ -515,6 +524,14 @@ impl OpenAiExchangeEnvelope {
     #[must_use]
     pub fn with_request_digest(mut self, digest: String) -> Self {
         self.request_digest = Some(digest);
+        self
+    }
+
+    /// Attach the client's twin bracket id (see
+    /// [`twin_bracket_id`](Self::twin_bracket_id)); `None` leaves it absent.
+    #[must_use]
+    pub fn with_twin_bracket_id(mut self, twin_bracket_id: Option<String>) -> Self {
+        self.twin_bracket_id = twin_bracket_id;
         self
     }
 
@@ -575,6 +592,7 @@ impl OpenAiExchangeEnvelope {
             response_digest: None,
             tool_calls_digest: None,
             reasoning_digest: None,
+            twin_bracket_id: None,
         }
     }
 
@@ -636,6 +654,7 @@ impl OpenAiExchangeEnvelope {
             response_digest: None,
             tool_calls_digest: None,
             reasoning_digest: None,
+            twin_bracket_id: None,
         }
     }
 }

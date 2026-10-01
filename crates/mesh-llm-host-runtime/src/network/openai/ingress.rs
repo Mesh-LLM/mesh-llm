@@ -1072,6 +1072,8 @@ async fn route_missing_local_model(
             // both sides."
             let (forwarded_nonce, nonce_origin) = request.capsule_nonce_headers();
             let nonce_source = remote_mesh_nonce_source(&forwarded_nonce, &nonce_origin);
+            // Validated in `route_request`; copied onto both events unread.
+            let twin_bracket = twin_bracket_id(request).ok().flatten();
             // In tests, `exchange_channel` may be injected directly so the
             // publish pair is observable even when `plugin_manager` is
             // `None`. In production (and in non-test builds)
@@ -1086,12 +1088,15 @@ async fn route_missing_local_model(
                 .plugin_manager
                 .map(|pm| pm as &dyn OpenAiExchangeChannel);
             if let Some(ch) = channel {
-                ch.publish(&OpenAiExchangeEnvelope::effective_remote_mesh(
-                    exchange_id.clone(),
-                    model_name,
-                    forwarded_nonce.clone(),
-                    nonce_source,
-                ))
+                ch.publish(
+                    &OpenAiExchangeEnvelope::effective_remote_mesh(
+                        exchange_id.clone(),
+                        model_name,
+                        forwarded_nonce.clone(),
+                        nonce_source,
+                    )
+                    .with_twin_bracket_id(twin_bracket.clone()),
+                )
                 .await;
             }
             // Only echoed when the client asked for a specific peer via
@@ -1148,7 +1153,8 @@ async fn route_missing_local_model(
                         request_digest,
                     },
                     &outcome,
-                );
+                )
+                .with_twin_bracket_id(twin_bracket);
                 ch.publish(&terminal).await;
             }
             return outcome;
@@ -1407,6 +1413,36 @@ fn parse_mesh_exclude_header(values: &[String]) -> Result<Vec<iroh::EndpointId>,
     Ok(excluded)
 }
 
+/// The longest `x-mesh-twin-bracket` value the host copies.
+const MAX_TWIN_BRACKET_LEN: usize = 128;
+
+/// Parse the (possibly repeated) `x-mesh-twin-bracket` header values. Zero
+/// values is a no-op; exactly one must be 1..=128 characters of
+/// `[A-Za-z0-9._:-]`; more than one is ambiguous and rejected. The value is
+/// otherwise opaque: the host copies it and never reads it.
+fn parse_twin_bracket_header(values: &[String]) -> Result<Option<String>, String> {
+    match values {
+        [] => Ok(None),
+        [only] => {
+            let value = only.trim();
+            let valid = !value.is_empty()
+                && value.len() <= MAX_TWIN_BRACKET_LEN
+                && value
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | ':' | '-'));
+            valid
+                .then(|| value.to_string())
+                .map(Some)
+                .ok_or_else(|| format!("invalid x-mesh-twin-bracket value '{value}'"))
+        }
+        _ => Err("multiple x-mesh-twin-bracket headers are ambiguous".to_string()),
+    }
+}
+
+fn twin_bracket_id(request: &proxy::BufferedHttpRequest) -> Result<Option<String>, String> {
+    parse_twin_bracket_header(&request.twin_bracket_header_values()?)
+}
+
 /// Parse and validate the raw `x-mesh-target` / `x-mesh-exclude` header
 /// values off `request` in one place, so every caller enforces them the same
 /// way before making a routing decision.
@@ -1606,7 +1642,9 @@ async fn route_request(
         // `x-mesh-exclude` BEFORE the local-candidate check below -- a
         // targeted or excluded request must never be silently served from
         // local candidates without ever consulting these headers.
-        let (target, excluded) = match parse_mesh_routing_headers(request) {
+        let parsed = parse_mesh_routing_headers(request)
+            .and_then(|routing| twin_bracket_id(request).map(|_| routing));
+        let (target, excluded) = match parsed {
             Ok(parsed) => parsed,
             Err(message) => {
                 return response_outcome(
@@ -2017,7 +2055,9 @@ async fn enforce_mesh_routing_headers_before_dispatch(
     routing_model: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<ClientStream, proxy::RouteDispatchOutcome> {
-    let (target, excluded) = match parse_mesh_routing_headers(request) {
+    let parsed = parse_mesh_routing_headers(request)
+        .and_then(|routing| twin_bracket_id(request).map(|_| routing));
+    let (target, excluded) = match parsed {
         Ok(parsed) => parsed,
         Err(message) => {
             return Err(response_outcome(

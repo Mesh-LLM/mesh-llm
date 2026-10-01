@@ -1393,7 +1393,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         br#"{"model":"acme/remote-model:Q4_K_M","messages":[{"role":"user","content":"hi"}]}"#;
     let nonce = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
     let raw = format!(
-        "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nx-capsule-client-nonce: {nonce}\r\n\r\n",
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nx-capsule-client-nonce: {nonce}\r\nx-mesh-twin-bracket: pair-7\r\n\r\n",
         len = body.len(),
         nonce = nonce,
     )
@@ -1509,6 +1509,11 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         events[0].nonce, events[1].nonce,
         "effective and terminal envelopes must carry the same nonce"
     );
+
+    // (5) The client's twin bracket id, copied unread onto both envelopes.
+    for event in events.iter() {
+        assert_eq!(event.twin_bracket_id.as_deref(), Some("pair-7"));
+    }
 }
 
 /// Verifies that `route_missing_local_model` sets `nonce_source =
@@ -1644,6 +1649,10 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
 
     assert_eq!(events[0].phase, OpenAiExchangePhase::EffectiveRequest);
     assert_eq!(events[1].phase, OpenAiExchangePhase::Terminal);
+    assert!(
+        events.iter().all(|event| event.twin_bracket_id.is_none()),
+        "no x-mesh-twin-bracket header, no twin_bracket_id"
+    );
 
     // Both envelopes must report SidecarGeneratedFallback because
     // x-capsule-nonce-origin was present on the request.
@@ -1700,6 +1709,27 @@ fn parse_mesh_target_header_rejects_malformed_value() {
 fn parse_mesh_target_header_rejects_multiple_values_as_ambiguous() {
     let value = hex::encode(test_endpoint_id(0x11).as_bytes());
     assert!(parse_mesh_target_header(&[value.clone(), value]).is_err());
+}
+
+#[test]
+fn parse_twin_bracket_header_copies_one_valid_value() {
+    assert_eq!(parse_twin_bracket_header(&[]), Ok(None));
+    assert_eq!(
+        parse_twin_bracket_header(&[" run-2026.09:pair_7 ".to_string()]),
+        Ok(Some("run-2026.09:pair_7".to_string()))
+    );
+}
+
+#[test]
+fn parse_twin_bracket_header_rejects_malformed_or_repeated_values() {
+    let too_long = "x".repeat(129);
+    for bad in ["", "has space", "slash/no", too_long.as_str()] {
+        assert!(
+            parse_twin_bracket_header(&[bad.to_string()]).is_err(),
+            "{bad:?} must be rejected"
+        );
+    }
+    assert!(parse_twin_bracket_header(&["a".to_string(), "b".to_string()]).is_err());
 }
 
 #[test]
