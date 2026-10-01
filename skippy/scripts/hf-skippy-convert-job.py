@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
@@ -152,35 +151,13 @@ def upload(args: argparse.Namespace, artifact_dir: Path) -> None:
 
 
 def validate_converted_artifact(artifact_dir: Path) -> None:
-    required_files = ("README.md", "skippy-convert-manifest.json")
-    missing = [name for name in required_files if not (artifact_dir / name).is_file()]
-    if not artifact_dir.is_dir() or missing:
-        details = f"; missing {', '.join(missing)}" if missing else ""
-        raise FileNotFoundError(
-            f"complete converted artifact not found: {artifact_dir}{details}"
-        )
-
-    manifest_path = artifact_dir / "skippy-convert-manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    expected_splits = manifest.get("expected_splits")
-    basename = manifest.get("output_basename")
-    if not isinstance(expected_splits, int) or expected_splits < 1:
-        raise ValueError(f"invalid expected_splits in {manifest_path}")
-    if not isinstance(basename, str) or not basename:
-        raise ValueError(f"invalid output_basename in {manifest_path}")
-
-    if expected_splits == 1:
-        expected_names = [f"{basename}.gguf"]
-    else:
-        expected_names = [
-            f"{basename}-{index:05}-of-{expected_splits:05}.gguf"
-            for index in range(1, expected_splits + 1)
-        ]
-    missing_shards = [name for name in expected_names if not (artifact_dir / name).is_file()]
-    if missing_shards:
-        raise FileNotFoundError(
-            f"converted artifact is incomplete: missing {', '.join(missing_shards)}"
-        )
+    run(
+        os.environ["MESH_LLM_AUTOMATION_BIN"],
+        "hf-converted-artifact",
+        "preflight",
+        "--artifact-dir",
+        str(artifact_dir),
+    )
 
 
 def converted_artifact_dir(args: argparse.Namespace) -> Path:

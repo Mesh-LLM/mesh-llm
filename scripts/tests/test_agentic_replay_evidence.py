@@ -138,22 +138,3 @@ class SessionEvidenceTests(unittest.TestCase):
                 "skippy.exact_cache.restored_tokens": tokens,
             },
         }
-
-    def test_same_matrix_command_is_used_for_original_and_repair(self):
-        path = ROOT / "scripts/agentic-replay-params.py"
-        spec = importlib.util.spec_from_file_location("replay_params_test", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        matrix = ROOT / "ci/agentic-replay-nightly/matrix.json"
-        for model in json.loads(matrix.read_text())["models"]:
-            command = module.replay_command(
-                matrix, model["family"], ["fixed=HEAD", "base=abc"], "data", "out"
-            )
-            self.assertIn("--sessions-per-concurrency", command)
-            self.assertIn("--minimum-context-tokens", command)
-            self.assertEqual(command[command.index("--replay-mode") + 1], "all")
-            self.assertEqual(
-                "--require-recurrent-restores" in command,
-                model["class"] == "hybrid-recurrent",
-            )
-            self.assertIn("base=abc", command)

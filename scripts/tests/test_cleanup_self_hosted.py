@@ -192,16 +192,6 @@ class CleanupTests(unittest.TestCase):
                 self.assertEqual(step['timeout-minutes'], 5)
         self.assertEqual(len(found), 11)
 
-    def test_replay_builds_use_the_job_owned_worktree_root(self):
-        spec = importlib.util.spec_from_file_location('replay_params', ROOT / 'scripts/agentic-replay-params.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        directory = str(self.temp / 'agentic-replay-worktrees')
-        with patch.dict(os.environ, AGENTIC_REPLAY_WORKTREE_ROOT=directory):
-            command = module.replay_command(ROOT / 'ci/agentic-replay-nightly/matrix.json',
-                                            'granite-3.1-2b', ['main=HEAD'], Path('dataset'), Path('output'))
-        self.assertEqual(command[command.index('--worktree-root') + 1], directory)
-        self.assertIn((self.temp, Path(directory)), C.targets(self.env, 'replay', False, False))
 
     def test_release_cache_save_precedes_cleanup(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/release.yml').read_text())

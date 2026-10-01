@@ -457,7 +457,7 @@ fi
 
 if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; then
   ORACLE_EXECUTABLE="${ORACLE_SERVER:-${ORACLE_COMPLETION:-$ORACLE_TTS}}"
-  evidence_command=(python3 "$ROOT/scripts/write-workload-oracle-evidence.py"
+  evidence_command=(cargo xtool automation workload-oracle-evidence write
     --output "$EVIDENCE_PATH"
     --comparison-log "$COMPARISON_LOG"
     --class "$MODEL_CLASS"

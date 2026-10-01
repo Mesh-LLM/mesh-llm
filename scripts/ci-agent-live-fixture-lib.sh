@@ -19,16 +19,7 @@ agent_smoke_pick_model() {
     fi
 
     curl -sf "${base_url%/}/models" |
-        python3 -c 'import json,sys
-data=json.load(sys.stdin).get("data", [])
-preferred=("minimax", "glm", "qwen", "coder", "hermes")
-ids=[item.get("id","") for item in data if item.get("id")]
-for needle in preferred:
-    for model_id in ids:
-        if needle in model_id.lower():
-            print(model_id)
-            raise SystemExit
-print(ids[0] if ids else "")'
+        cargo xtool automation agent-pick-model
 }
 
 agent_smoke_write_fixture() {

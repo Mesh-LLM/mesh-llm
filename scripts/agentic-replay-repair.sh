@@ -15,6 +15,8 @@ RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 RESOLVED=0
 MATRIX_FILE="${MATRIX_FILE:-ci/agentic-replay-nightly/matrix.json}"
 REPLAY_PARAMS_FILE=""
+REPLAY_MODELS_FILE=""
+REPLAY_DATASET_PINS_FILE=""
 PUBLICATION_DIR="$OUTPUT_DIR/repair-publication"
 AGENT_PROVIDER="${REPLAY_AGENT_PROVIDER:-zai_coding_plan}"
 AGENT_MODEL="${REPLAY_AGENT_MODEL:-glm-5.3-flash}"
@@ -23,6 +25,8 @@ AGENT_SESSION_NAME="agentic-replay-repair-${RUN_ID}-${RUN_ATTEMPT}"
 # shellcheck disable=SC2329 # invoked indirectly by the EXIT trap
 cleanup() {
   [[ -z "${REPLAY_PARAMS_FILE:-}" ]] || rm -f -- "$REPLAY_PARAMS_FILE"
+  [[ -z "${REPLAY_MODELS_FILE:-}" ]] || rm -f -- "$REPLAY_MODELS_FILE"
+  [[ -z "${REPLAY_DATASET_PINS_FILE:-}" ]] || rm -f -- "$REPLAY_DATASET_PINS_FILE"
 }
 trap cleanup EXIT
 
@@ -80,7 +84,7 @@ Attempted automated repair by Goose from nightly run evidence."
   # 2. Re-run the benchmark on the repaired tree with the nightly benchmark
   # shape, then re-normalize and gate the repaired summaries.
   REPLAY_PARAMS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-params.XXXXXX")
-  run_untrusted python3 scripts/agentic-replay-params.py \
+  run_untrusted cargo xtool automation replay-matrix export \
     --matrix "$MATRIX_FILE" --json-output "$REPLAY_PARAMS_FILE"
   REPLAY_DATASET_FILE="${DATASET_FILE:-${MESH_AGENTIC_REPLAY_DATASET_FILE:-}}"
   RERUN_FAILED=0
@@ -88,20 +92,20 @@ Attempted automated repair by Goose from nightly run evidence."
     echo "replay dataset file is unavailable — needs-attention" >&2
     RERUN_FAILED=1
   fi
-  for family in $(run_untrusted python3 - "$MATRIX_FILE" <<'PY'
-import json
-import pathlib
-import sys
-print(" ".join(model["family"] for model in json.loads(pathlib.Path(sys.argv[1]).read_text())["models"]))
-PY
-  ); do
+  REPLAY_MODELS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-models.XXXXXX")
+  REPLAY_DATASET_PINS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-dataset.XXXXXX")
+  run_untrusted cargo xtool automation replay-matrix pins --matrix "$MATRIX_FILE" \
+    --canonical evals/skippy-competitive-benchmark.json \
+    --models-output "$REPLAY_MODELS_FILE" --dataset-output "$REPLAY_DATASET_PINS_FILE"
+  while IFS=$'\t' read -r family _; do
     if [[ "$RERUN_FAILED" == "1" && -z "$REPLAY_DATASET_FILE" ]]; then break; fi
-    run_untrusted python3 scripts/agentic-replay-params.py \
+    run_untrusted cargo xtool automation replay-matrix run-family \
       --matrix "$MATRIX_FILE" --run-family "$family" \
+      --python "${REPLAY_PYTHON:?locked replay interpreter required}" --timeout 21600 \
       --ref fixed=HEAD --ref "base=$BASE_SHA" \
       --dataset-file "$REPLAY_DATASET_FILE" \
       --output "$OUTPUT_DIR/repair/$family" || RERUN_FAILED=1
-  done
+  done < "$REPLAY_MODELS_FILE"
   HISTORY_ARGS=(
     --matrix "$MATRIX_FILE"
     --replay-dir "$OUTPUT_DIR/repair"
