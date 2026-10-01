@@ -5,10 +5,10 @@ It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-wallet` and `mesh-wallet-lexe` alongside `mesh-llm-payments`;
+`mesh-llm-wallet` alongside `mesh-llm-payments`;
 `just ci-crate-lists` checks it against workspace membership. The publish
 chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
-`mesh-wallet-lexe` and `mesh-llm-payments`, including optional dependencies.
+`mesh-llm-payments`, including optional dependencies.
 
 The protected catalogs include `platform-windows-cfg`: ownership of any crate
 it lists selects `platform-checks` and its existing `windows-unit` row, and
