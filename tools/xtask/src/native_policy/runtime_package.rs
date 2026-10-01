@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 const USAGE: &str = "Usage: scripts/verify-native-runtime-package.sh [--portable] <artifact-dir-or-tar.gz> [...]\n\nVerifies MeshLLM native runtime artifacts:\n  - manifest schema and resolver fields\n  - artifact directory name matches runtime.id\n  - all runtime.libraries exist\n  - library_sha256 matches the primary library\n  - Linux platform.min_glibc is a valid major.minor floor and matches the\n    packaged ELF requirement exactly when present\n  - Linux ELF libraries and tools stay within the declared glibc floor\n  - Linux shared-library RUNPATH/RPATH is relocatable and resolves packaged deps\n  - Linux CUDA ELF dependencies are closed, same-architecture, and non-stub\n  - Windows non-system DLL imports are present in the artifact\n  - required archive checksum sidecar\n  - archive paths and links cannot escape the extraction directory\n\n--portable validates integrity, archive shape, manifest schema, paths, and\nchecksums without running host-specific binary dependency probes.\n";
 
-pub(super) fn run(args: &[String], tools: &dyn Toolchain, checkout: &Path) -> CheckReport {
+pub(super) fn run(args: &[String], tools: &dyn Toolchain) -> CheckReport {
     let mut portable = false;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
@@ -32,7 +32,7 @@ pub(super) fn run(args: &[String], tools: &dyn Toolchain, checkout: &Path) -> Ch
     }
     let mut stdout = String::new();
     for (position, input) in args[index..].iter().enumerate() {
-        match verify_input(input, position, portable, tools, checkout) {
+        match verify_input(input, position, portable, tools) {
             Ok(message) => stdout.push_str(&message),
             Err(error) => return CheckReport::failure(stdout, format!("{error}\n")),
         }
@@ -45,11 +45,10 @@ fn verify_input(
     position: usize,
     portable: bool,
     tools: &dyn Toolchain,
-    checkout: &Path,
 ) -> Result<String, String> {
     let source = Path::new(input);
     if source.is_dir() {
-        return verify_dir(source, portable, tools, checkout);
+        return verify_dir(source, portable, tools);
     }
     if !input.ends_with(".tar.gz") && !input.ends_with(".tgz") {
         return Err(format!(
@@ -87,19 +86,14 @@ fn verify_input(
             ));
         }
     };
-    verify_dir(directory, portable, tools, checkout)
+    verify_dir(directory, portable, tools)
 }
 
-fn verify_dir(
-    path: &Path,
-    portable: bool,
-    tools: &dyn Toolchain,
-    checkout: &Path,
-) -> Result<String, String> {
+fn verify_dir(path: &Path, portable: bool, tools: &dyn Toolchain) -> Result<String, String> {
     let package = Package::read(path)?;
     if !portable {
         match package.os.as_str() {
-            "linux" => super::runtime_package_linux::verify(&package, tools, checkout)?,
+            "linux" => super::runtime_package_linux::verify(&package, tools)?,
             "macos" => super::runtime_package_macos::verify(&package, tools)?,
             "windows" => {
                 let arguments = vec![

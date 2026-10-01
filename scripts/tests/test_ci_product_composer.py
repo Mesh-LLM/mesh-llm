@@ -425,10 +425,10 @@ class CiProductComposerTests(unittest.TestCase):
         self.assertEqual(action.count(model_inputs_present), 4)
         self.assertIn("model_manifest:", action)
         self.assertIn("model_cadence:", action)
-        self.assertIn("scripts/resolve-test-model-manifest.py", action)
+        self.assertIn("models restore-inputs", action)
         self.assertIn('--cadence "$MODEL_CADENCE"', action)
         self.assertIn("--require-single-file", action)
-        self.assertIn('^[A-Za-z0-9][A-Za-z0-9._-]*$', action)
+        self.assertIn('--model-file="$INPUT_MODEL_FILE"', action)
         self.assertIn("--verify-root \"$HOME/.models\"", action)
         self.assertIn("MODEL_MANIFEST: ${{ inputs.model_manifest }}", action)
         self.assertIn("MODEL_CADENCE: ${{ inputs.model_cadence }}", action)
@@ -461,9 +461,11 @@ class CiProductComposerTests(unittest.TestCase):
         self.assertIn("model_artifact_id:", action)
         self.assertIn("MODEL_ARTIFACT_ID: ${{ inputs.model_artifact_id }}", action)
         self.assertEqual(
-            action.count('artifact_args+=(--artifact-id "$MODEL_ARTIFACT_ID")'), 2
+            action.count('artifact_args+=(--artifact-id "$MODEL_ARTIFACT_ID")'), 1
         )
-        self.assertEqual(action.count('--cadence "$MODEL_CADENCE"'), 2)
+        self.assertEqual(action.count('--cadence "$MODEL_CADENCE"'), 1)
+        self.assertIn('--model-cadence="$MODEL_CADENCE"', action)
+        self.assertIn('--model-artifact-id="$MODEL_ARTIFACT_ID"', action)
 
     def test_smoke_restore_delegates_model_restore_to_the_shared_action(self) -> None:
         """One implementation, not two. A second copy of the

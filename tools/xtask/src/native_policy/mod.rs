@@ -79,11 +79,9 @@ pub(crate) fn run(
         NativeCommand::LinuxRuntimeDeps => linux_deps::run(args, &toolchain::HostToolchain),
         NativeCommand::WindowsRuntimeDeps => windows_deps::run(args, &toolchain::HostToolchain),
         NativeCommand::ReleaseMatrix => release_matrix::run(args),
-        NativeCommand::VerifyRuntimePackage => runtime_package::run(
-            args,
-            &toolchain::HostToolchain,
-            &root().unwrap_or_else(|_| build_checkout()),
-        ),
+        NativeCommand::VerifyRuntimePackage => {
+            runtime_package::run(args, &toolchain::HostToolchain)
+        }
         NativeCommand::VerifyHostDependencies => {
             let mut root = Some(root);
             let mut floor_file = || {

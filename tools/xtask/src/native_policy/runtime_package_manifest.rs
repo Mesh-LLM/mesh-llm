@@ -92,6 +92,9 @@ impl Package {
         }
         let raw = fs::read(&path).map_err(|error| error.to_string())?;
         let document: Value = serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
+        if document.get("schema_version").and_then(Value::as_u64) != Some(2) {
+            return Err("native runtime manifest requires schema_version 2; import legacy caches explicitly".to_owned());
+        }
         let runtime = object(
             document
                 .get("runtime")
@@ -100,7 +103,7 @@ impl Package {
         )?;
         let missing: Vec<&str> = [
             "id",
-            "mesh_version",
+            "release_version",
             "skippy_abi",
             "platform",
             "backend",
@@ -117,7 +120,7 @@ impl Package {
             ));
         }
         let id = string(runtime.get("id"), "runtime id must be a non-empty string")?;
-        for field in ["mesh_version", "skippy_abi"] {
+        for field in ["release_version", "skippy_abi"] {
             string(
                 runtime.get(field),
                 &format!("runtime {field} must be a non-empty string"),
@@ -304,5 +307,21 @@ impl Package {
 
     pub(super) fn entries(&self) -> impl Iterator<Item = &str> {
         self.libraries.iter().chain(&self.tools).map(String::as_str)
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+    #[test]
+    fn legacy_runtime_requires_explicit_import() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("manifest.json"),
+            br#"{"schema_version":1,"runtime":{"mesh_version":"1.0.0"}}"#,
+        )
+        .unwrap();
+        let error = Package::read(root.path()).err().unwrap();
+        assert!(error.contains("schema_version 2"));
     }
 }

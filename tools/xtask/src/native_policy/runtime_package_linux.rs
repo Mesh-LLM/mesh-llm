@@ -4,6 +4,17 @@ use super::toolchain::{Exit, Toolchain, decode};
 use std::io::Read;
 use std::path::Path;
 
+const GLIBC_POLICY: &str = include_str!("../../../../scripts/linux-glibc-floor.txt");
+
+fn embedded_floor() -> Result<Version, String> {
+    GLIBC_POLICY
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .ok_or_else(|| "embedded GLIBC policy has no floor".to_owned())
+        .and_then(parse_version)
+}
+
 fn inspect(tools: &dyn Toolchain, flag: &str, path: &Path) -> Result<String, String> {
     let args = [
         "readelf".to_owned(),
@@ -259,17 +270,13 @@ fn verify_search_paths(package: &Package, tools: &dyn Toolchain) -> Result<(), S
     Ok(())
 }
 
-pub(super) fn verify(
-    package: &Package,
-    tools: &dyn Toolchain,
-    checkout: &Path,
-) -> Result<(), String> {
+pub(super) fn verify(package: &Package, tools: &dyn Toolchain) -> Result<(), String> {
     if !tools.which("readelf") {
         return Err(
             "readelf is required to verify Linux native runtime shared libraries".to_owned(),
         );
     }
-    let floor_file = checkout.join("scripts/linux-glibc-floor.txt");
+    let floor = embedded_floor()?.render();
     let mut elf_entries = Vec::new();
     for relative in package.entries() {
         let path = package.root.join(relative);
@@ -281,9 +288,9 @@ pub(super) fn verify(
                 path.to_string_lossy().into_owned(),
                 "--no-import-policy".to_owned(),
                 "--max-glibc".to_owned(),
-                "declared".to_owned(),
+                floor.clone(),
             ];
-            let mut floor_path = || Ok(floor_file.clone());
+            let mut floor_path = || Err("embedded floor does not require a file".to_owned());
             let report = super::host_dependencies::run(&args, tools, &mut floor_path);
             if report.code != 0 {
                 return Err(report.stderr.trim_end_matches('\n').to_owned());
@@ -294,4 +301,15 @@ pub(super) fn verify(
     version_consistency(package, tools, &elf_entries)?;
     verify_cuda(package, tools)?;
     verify_search_paths(package, tools)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn embedded_policy_matches_checked_in_policy() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/linux-glibc-floor.txt");
+        assert_eq!(super::GLIBC_POLICY, std::fs::read_to_string(path).unwrap());
+        assert!(super::embedded_floor().is_ok());
+    }
 }

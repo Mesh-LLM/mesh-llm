@@ -10,7 +10,7 @@ use super::compose_argv::{Args, parse};
 use super::digest::{IoFailure, file_sha256, tree_sha256};
 use super::manifest_load::load;
 use super::pure_path::PurePath;
-use super::python_object::{display, dumps, equal, get, item, remove_v_prefix, require_hashable};
+use super::python_object::{display, dumps, equal, get, item, require_hashable};
 use crate::artifact::zip_extract::os_error_line;
 use crate::ci_plan::document::Json;
 use crate::repository::check_report::CheckReport;
@@ -79,16 +79,21 @@ fn compose_manifest(args: &Args, bundle: &PurePath) -> Result<Json, String> {
     let runtime = PurePath::new(&args.runtime);
     let runtime_manifest_path = runtime.join("manifest.json").display();
     let runtime_manifest = load(Path::new(&runtime_manifest_path), &runtime_manifest_path)?;
+    if runtime_manifest
+        .get("schema_version")
+        .and_then(Json::as_int)
+        != Some(2)
+    {
+        return Err(value_error(
+            "native runtime manifest requires schema_version 2; import legacy caches explicitly"
+                .to_owned(),
+        ));
+    }
     let runtime_data = item(&runtime_manifest, "runtime")?;
     let runtime_id = item(runtime_data, "id")?;
-    let runtime_mesh_version = remove_v_prefix(item(runtime_data, "mesh_version")?)?;
-    if runtime_mesh_version != version {
-        return Err(value_error(format!(
-            "native runtime {} targets MeshLLM {runtime_mesh_version}, expected {version}",
-            display(runtime_id)
-        )));
-    }
     validate_backend(runtime_id, &runtime_manifest, runtime_data, &args.backend)?;
+    let contract = super::host_contract::read(Path::new(&host.display()))?;
+    super::host_contract::validate(&contract, runtime_data, runtime_id, version)?;
     let host_path = host.relative_to(bundle).map_err(value_error)?;
     let host_sha = file_sha256(Path::new(&host.display())).map_err(io)?;
     let runtime_path = runtime.relative_to(bundle).map_err(value_error)?;
@@ -105,12 +110,24 @@ fn compose_manifest(args: &Args, bundle: &PurePath) -> Result<Json, String> {
             Json::Object(vec![
                 ("path".to_owned(), text(&host_path)),
                 ("sha256".to_owned(), text(&host_sha)),
+                (
+                    "required_skippy_abi".to_owned(),
+                    item(&contract, "skippy_abi")?.clone(),
+                ),
             ]),
         ),
         (
             "runtime".to_owned(),
             Json::Object(vec![
                 ("id".to_owned(), runtime_id.clone()),
+                (
+                    "release_version".to_owned(),
+                    item(runtime_data, "release_version")?.clone(),
+                ),
+                (
+                    "skippy_abi".to_owned(),
+                    item(runtime_data, "skippy_abi")?.clone(),
+                ),
                 ("path".to_owned(), text(&runtime_path)),
                 ("sha256".to_owned(), text(&runtime_sha)),
                 ("manifest_sha256".to_owned(), text(&manifest_sha)),
@@ -156,6 +173,34 @@ fn validate_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_runtime_rejected_before_product_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = temp.path().join("runtime");
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::write(
+            runtime.join("manifest.json"),
+            br#"{"schema_version":1,"runtime":{"mesh_version":"2.0.0"}}"#,
+        )
+        .unwrap();
+        let args = [
+            "--bundle",
+            temp.path().to_str().unwrap(),
+            "--host",
+            "nonexistent-host",
+            "--runtime",
+            runtime.to_str().unwrap(),
+            "--version",
+            "2.0.0",
+            "--backend",
+            "cpu",
+        ]
+        .map(str::to_owned);
+        let args = parse(&args).unwrap_or_else(|_| panic!("valid arguments"));
+        assert!(compose(&args).unwrap_err().contains("schema_version 2"));
+        assert!(!temp.path().join(MANIFEST).exists());
+    }
 
     #[test]
     fn migration_product_backend_aliases() {
