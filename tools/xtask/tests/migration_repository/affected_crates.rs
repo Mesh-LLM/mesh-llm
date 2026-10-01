@@ -1,8 +1,6 @@
 //! `repository affected-crates` parity with `scripts/affected-crates.sh`.
 
-use crate::support::{
-    Invocation, Legacy, LegacyKind, Scratch, TestResult, assert_output, repository_root, text,
-};
+use crate::support::{Invocation, Scratch, TestResult, assert_output, repository_root, text};
 use std::path::Path;
 
 const SCRIPT: &str = "scripts/affected-crates.sh";
@@ -54,11 +52,7 @@ fn affected(
         stdin: Some(stdin),
         env: &[],
     }
-    .run_with_legacy(Legacy {
-        kind: LegacyKind::Bash,
-        script: SCRIPT,
-        args,
-    })
+    .run()
 }
 
 fn pretty(affected: &[&str], test_crates: &[&str], ui: bool, website: bool) -> String {
