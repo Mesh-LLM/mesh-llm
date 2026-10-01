@@ -392,7 +392,7 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
                 path = Path(directory) / "manifest.json"
                 path.write_text(json.dumps(manifest))
                 result = subprocess.run(
-                    ["python3", str(ROOT / "scripts/resolve-test-model-manifest.py"),
+                    ["cargo", "xtool", "models", "resolve",
                      str(path), "--artifact-id", inputs["model_artifact_id"],
                      "--cadence", cadence, "--require-single-file"],
                     cwd=ROOT, text=True, capture_output=True, check=False,

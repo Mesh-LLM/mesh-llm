@@ -2,6 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+automation=(cargo run --quiet --manifest-path "$ROOT/tools/xtask/Cargo.toml" --)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 
 resolve_llama_build_dir() {
   if [[ -n "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
@@ -24,7 +28,7 @@ DENSE_MODEL_OVERRIDDEN=0
 if [[ -n "${DENSE_MODEL_REPO:-}" || -n "${DENSE_MODEL_FILE:-}" || -n "${DENSE_MODEL_SELECTOR:-}" || -n "${DENSE_MODEL_REVISION:-}" || -n "${DENSE_MODEL_PATH:-}" ]]; then
   DENSE_MODEL_OVERRIDDEN=1
 fi
-DENSE_MODEL_FIXTURE="$(python3 "$ROOT/scripts/resolve-test-model-manifest.py" "$DENSE_MODEL_MANIFEST" --artifact-id "$DENSE_MODEL_ARTIFACT_ID" --cadence manual)"
+DENSE_MODEL_FIXTURE="$("${automation[@]}" models resolve "$DENSE_MODEL_MANIFEST" --artifact-id "$DENSE_MODEL_ARTIFACT_ID" --cadence manual)"
 DENSE_MODEL_REPO="${DENSE_MODEL_REPO:-$(jq -r '.repo' <<<"$DENSE_MODEL_FIXTURE")}"
 DENSE_MODEL_FILE="${DENSE_MODEL_FILE:-$(jq -r '.file' <<<"$DENSE_MODEL_FIXTURE")}"
 DENSE_MODEL_SELECTOR="${DENSE_MODEL_SELECTOR:-$(jq -r '.selector' <<<"$DENSE_MODEL_FIXTURE")}"
@@ -38,7 +42,7 @@ RECURRENT_MODEL_OVERRIDDEN=0
 if [[ -n "${RECURRENT_MODEL_REPO:-}" || -n "${RECURRENT_MODEL_FILE:-}" || -n "${RECURRENT_MODEL_SELECTOR:-}" || -n "${RECURRENT_MODEL_REVISION:-}" || -n "${RECURRENT_MODEL_PATH:-}" ]]; then
   RECURRENT_MODEL_OVERRIDDEN=1
 fi
-RECURRENT_MODEL_FIXTURE="$(python3 "$ROOT/scripts/resolve-test-model-manifest.py" "$RECURRENT_MODEL_MANIFEST" --artifact-id "$RECURRENT_MODEL_ARTIFACT_ID" --cadence manual)"
+RECURRENT_MODEL_FIXTURE="$("${automation[@]}" models resolve "$RECURRENT_MODEL_MANIFEST" --artifact-id "$RECURRENT_MODEL_ARTIFACT_ID" --cadence manual)"
 RECURRENT_MODEL_REPO="${RECURRENT_MODEL_REPO:-$(jq -r '.repo' <<<"$RECURRENT_MODEL_FIXTURE")}"
 RECURRENT_MODEL_FILE="${RECURRENT_MODEL_FILE:-$(jq -r '.file' <<<"$RECURRENT_MODEL_FIXTURE")}"
 RECURRENT_MODEL_SELECTOR="${RECURRENT_MODEL_SELECTOR:-$(jq -r '.selector' <<<"$RECURRENT_MODEL_FIXTURE")}"
@@ -360,14 +364,14 @@ if [[ -z "$RECURRENT_MODEL_PATH" ]]; then
   RECURRENT_MODEL_PATH="$(download_model "$RECURRENT_MODEL_REPO" "$RECURRENT_MODEL_FILE" "$RECURRENT_MODEL_REVISION" "${MODEL_DIR}/recurrent")"
 fi
 if [[ "$DENSE_MODEL_OVERRIDDEN" == "0" ]]; then
-  python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
+  "${automation[@]}" models resolve \
     "$DENSE_MODEL_MANIFEST" \
     --artifact-id "$DENSE_MODEL_ARTIFACT_ID" \
     --cadence manual \
     --verify-root "$(dirname "$DENSE_MODEL_PATH")"
 fi
 if [[ "$RECURRENT_MODEL_OVERRIDDEN" == "0" ]]; then
-  python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
+  "${automation[@]}" models resolve \
     "$RECURRENT_MODEL_MANIFEST" \
     --artifact-id "$RECURRENT_MODEL_ARTIFACT_ID" \
     --cadence manual \

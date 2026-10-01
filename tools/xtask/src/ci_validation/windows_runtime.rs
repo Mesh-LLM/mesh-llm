@@ -14,7 +14,7 @@ pub(super) fn check_windows_dynamic_runtime_contract(
     )?;
     ensure_contains(
         prepare_windows_host_action,
-        r"scripts\verify-host-dependencies.py",
+        "native verify-host-dependencies",
         "shared Windows host action import-policy verification",
     )?;
     ensure_not_contains(

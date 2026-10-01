@@ -12,8 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "ci" / "model-artifacts" / "registry.json"
 MANIFESTS = ROOT / "ci" / "model-artifacts" / "manifests"
-GENERATOR = ROOT / "scripts" / "generate-test-model-manifests.py"
-RESOLVER = ROOT / "scripts" / "resolve-test-model-manifest.py"
+GENERATOR = "generate"
+RESOLVER = "resolve"
 
 
 class ModelArtifactRegistryTests(unittest.TestCase):
@@ -28,8 +28,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                     source.write_text(json.dumps(registry), encoding="utf-8")
                     result = subprocess.run(
                         [
-                            "python3",
-                            str(GENERATOR),
+                            "cargo", "xtool", "models", GENERATOR,
                             "--registry",
                             str(source),
                             "--check",
@@ -60,7 +59,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                     source = Path(temp_dir) / "registry.json"
                     source.write_text(json.dumps(registry), encoding="utf-8")
                     result = subprocess.run(
-                        ["python3", str(GENERATOR), "--registry", str(source), "--check"],
+                        ["cargo", "xtool", "models", GENERATOR, "--registry", str(source), "--check"],
                         cwd=ROOT, text=True, capture_output=True, check=False,
                     )
                 self.assertEqual(2, result.returncode)
@@ -85,7 +84,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                          set(model_schema["properties"]["evidence"]["required"]))
 
     def test_generated_manifests_are_current(self) -> None:
-        subprocess.run(["python3", str(GENERATOR), "--check"], cwd=ROOT, check=True)
+        subprocess.run(["cargo", "xtool", "models", GENERATOR, "--check"], cwd=ROOT, check=True)
 
     def test_suite_manifests_match_registry_membership(self) -> None:
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
@@ -147,7 +146,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         for cadence in ("pull-request", "main"):
             with self.subTest(cadence=cadence):
                 subprocess.run(
-                    ["python3", str(RESOLVER), model["model_manifest"],
+                    ["cargo", "xtool", "models", RESOLVER, model["model_manifest"],
                      "--artifact-id", model["model_artifact_id"],
                      "--cadence", cadence, "--require-single-file"],
                     cwd=ROOT, check=True, capture_output=True, text=True,
@@ -284,14 +283,14 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             "skippy/scripts/skippy-ci-smoke.sh",
             "skippy/scripts/skippy-openai-smoke.sh",
         )
-        invocation = re.compile(r"resolve-test-model-manifest\.py")
+        invocation = re.compile(r"models (?:resolve|restore-inputs)")
         for relative in consumers:
             content = (ROOT / relative).read_text(encoding="utf-8")
             matches = list(invocation.finditer(content))
             self.assertTrue(matches, relative)
             for match in matches:
                 with self.subTest(consumer=relative, offset=match.start()):
-                    self.assertIn("--cadence", content[match.start() : match.start() + 500])
+                    self.assertRegex(content[match.start() : match.start() + 500], r"--(?:model-)?cadence")
 
         parity = (ROOT / "skippy" / "scripts" / "download-skippy-parity-candidates.sh").read_text(
             encoding="utf-8"
@@ -304,7 +303,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             output = Path(directory) / "github-output"
             result = subprocess.run(
                 [
-                    "python3", str(RESOLVER), str(manifest),
+                     "cargo", "-q", "xtool", "models", RESOLVER, str(manifest),
                     "--artifact-id", "smollm2-q8-inference",
                     "--cadence", "pull-request",
                     "--require-single-file",
@@ -322,7 +321,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
     def test_resolver_uses_declared_default_for_multi_artifact_manifest(self) -> None:
         result = subprocess.run(
             [
-                "python3", str(RESOLVER), str(MANIFESTS / "product-smoke.json"),
+                "cargo", "xtool", "models", RESOLVER, str(MANIFESTS / "product-smoke.json"),
                 "--cadence", "pull-request",
                 "--require-single-file",
             ],
@@ -348,7 +347,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             )
             result = subprocess.run(
                 [
-                    "python3", str(RESOLVER), str(manifest),
+                    "cargo", "xtool", "models", RESOLVER, str(manifest),
                     "--cadence", "manual",
                 ],
                 cwd=ROOT,
@@ -444,8 +443,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             )
             subprocess.run(
                 [
-                    "python3",
-                    str(RESOLVER),
+                    "cargo", "xtool", "models", RESOLVER,
                     str(manifest),
                     "--cadence",
                     "manual",
@@ -457,8 +455,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             (root / "fixture.bin").write_bytes(b"tampered fixture\n")
             result = subprocess.run(
                 [
-                    "python3",
-                    str(RESOLVER),
+                    "cargo", "xtool", "models", RESOLVER,
                     str(manifest),
                     "--cadence",
                     "manual",
@@ -476,8 +473,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         manifest = MANIFESTS / "product-smoke.json"
         result = subprocess.run(
             [
-                "python3",
-                str(RESOLVER),
+                "cargo", "xtool", "models", RESOLVER,
                 str(manifest),
                 "--artifact-id",
                 "smollm2-q8-inference",
@@ -495,8 +491,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         manifest = MANIFESTS / "hf-download-smoke.json"
         result = subprocess.run(
             [
-                "python3",
-                str(RESOLVER),
+                "cargo", "xtool", "models", RESOLVER,
                 str(manifest),
                 "--artifact-id",
                 "gemma3-bf16-metadata",

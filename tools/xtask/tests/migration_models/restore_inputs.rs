@@ -6,14 +6,9 @@ use crate::support::{
     Stage, TestResult, assert_streams, code, field, fixture, repository_root, run,
 };
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::path::Path;
 
 const ACTION: &str = ".github/actions/restore-test-model/action.yml";
-/// SHA-256 of the dedented resolve-step block the goldens were captured from.
-/// An action edit fails here instead of silently staling the goldens.
-const RESOLVE_STEP_SHA256: &str =
-    "64784a27b10eb7c45f3360881ee841542dc7b14fbfdfc82c89c4359413892981";
 const INPUTS: [(&str, &str); 5] = [
     ("--model-url", "model_url"),
     ("--model-file", "model_file"),
@@ -53,11 +48,14 @@ fn ported_args(case: &Value) -> Result<Vec<String>, Box<dyn std::error::Error>> 
 }
 
 #[test]
-fn migration_models_restore_step_source_is_the_captured_block() -> TestResult {
-    // Given/When: the resolve step in the checked-in action.
-    let digest = hex::encode(Sha256::digest(resolve_step()?.as_bytes()));
-    // Then: it is the exact block every restore golden was captured from.
-    assert_eq!(digest, RESOLVE_STEP_SHA256);
+fn migration_models_restore_action_uses_typed_resolution() -> TestResult {
+    let block = resolve_step()?;
+    assert!(block.contains("models restore-inputs"));
+    for (flag, _) in INPUTS {
+        assert!(block.contains(flag), "missing action input {flag}");
+    }
+    assert!(block.contains("--github-output \"$GITHUB_OUTPUT\""));
+    assert!(!block.contains("python"));
     Ok(())
 }
 

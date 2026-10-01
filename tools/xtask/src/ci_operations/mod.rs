@@ -1,6 +1,8 @@
 //! `ci-ops`: Rust owners of the runner, cache and CI metrics helper scripts.
 //! Each command keeps its legacy script's argv, streams and exit statuses.
 
+mod authority_audit;
+mod authority_command;
 mod build_cache;
 mod build_cache_argv;
 mod build_cache_cargo;
@@ -12,6 +14,7 @@ mod build_cache_values;
 mod catalog_contracts;
 mod catalog_release_pair;
 mod catalog_validation;
+mod chat_display;
 mod ci_metrics;
 mod ci_metrics_aggregate;
 mod ci_metrics_analyze;
@@ -40,6 +43,7 @@ mod evidence_timestamp;
 mod identity_text;
 pub(crate) mod python_access;
 pub(crate) mod python_json_decode;
+mod registry_pulls;
 mod runner_cleanup;
 mod runner_identity;
 pub(crate) mod runner_identity_argv;
@@ -67,6 +71,9 @@ pub(crate) enum CiOperationsCommand {
     BuildCache,
     SccacheStats,
     CollectMetrics,
+    AuthorityAudit,
+    RegistryPulls,
+    ChatDisplay,
 }
 
 impl CiOperationsCommand {
@@ -77,6 +84,9 @@ impl CiOperationsCommand {
             "build-cache" => Some(Self::BuildCache),
             "sccache-stats" => Some(Self::SccacheStats),
             "collect-metrics" => Some(Self::CollectMetrics),
+            "authority-audit" => Some(Self::AuthorityAudit),
+            "registry-pulls" => Some(Self::RegistryPulls),
+            "chat-display" => Some(Self::ChatDisplay),
             _ => None,
         }
     }
@@ -89,11 +99,24 @@ pub(crate) fn run(
     args: &[String],
     root: impl FnOnce() -> DynResult<PathBuf>,
 ) -> DynResult<()> {
+    if matches!(command, CiOperationsCommand::ChatDisplay) {
+        return chat_display::run(args);
+    }
     if matches!(command, CiOperationsCommand::RunnerCleanup) {
         return runner_cleanup::command::run(args);
     }
     let report = match command {
         CiOperationsCommand::RunnerCleanup => unreachable!(),
+        CiOperationsCommand::ChatDisplay => unreachable!(),
+        CiOperationsCommand::AuthorityAudit => authority_command::run(args),
+        CiOperationsCommand::RegistryPulls => {
+            let output = registry_pulls::run(args)?;
+            crate::repository::check_report::CheckReport {
+                stdout: output.stdout,
+                stderr: String::new(),
+                code: output.code,
+            }
+        }
         CiOperationsCommand::BuildCache => build_cache::run(args),
         CiOperationsCommand::SccacheStats => sccache_stats::run(args),
         CiOperationsCommand::CollectMetrics => ci_metrics::run(args),

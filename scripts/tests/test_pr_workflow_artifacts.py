@@ -228,7 +228,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
-            "scripts/resolve-test-model-manifest.py",
+            "cargo xtool models resolve",
             workflow,
         )
         self.assertIn("Restore Skippy correctness model cache", workflow)

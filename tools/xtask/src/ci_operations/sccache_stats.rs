@@ -42,15 +42,26 @@ fn valid_artifact_name(name: &str) -> bool {
 fn sccache_on_path() -> bool {
     let path = std::env::var_os("PATH").unwrap_or_else(|| ":/bin:/usr/bin".into());
     std::env::split_paths(&path).any(|directory| {
-        let candidate = directory.join("sccache");
+        let candidate = directory.join(if cfg!(windows) {
+            "sccache.exe"
+        } else {
+            "sccache"
+        });
         is_executable_file(&candidate)
     })
 }
 
 fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
 }
 
 /// `subprocess.run(..., capture_output=True, text=True)`: stderr is
@@ -63,8 +74,15 @@ fn run_sccache() -> Result<String, Failure> {
         .map_err(|error| io_text(&error, Path::new("sccache")))?;
     if !output.status.success() {
         let code = output.status.code().unwrap_or_else(|| {
-            use std::os::unix::process::ExitStatusExt;
-            -output.status.signal().unwrap_or(0)
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                -output.status.signal().unwrap_or(0)
+            }
+            #[cfg(not(unix))]
+            {
+                1
+            }
         });
         return Err(format!(
             "sccache {} failed with exit code {code}",

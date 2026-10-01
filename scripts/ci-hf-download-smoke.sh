@@ -14,12 +14,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+automation=(cargo run --quiet --manifest-path "$ROOT/tools/xtask/Cargo.toml" --)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 MODEL_MANIFEST="${MESH_HF_DOWNLOAD_TEST_MANIFEST:-$ROOT/ci/model-artifacts/manifests/hf-download-smoke.json}"
 MODEL_CADENCE="${MESH_HF_DOWNLOAD_TEST_CADENCE:-manual}"
 export MESH_HF_DOWNLOAD_TEST_MANIFEST="$MODEL_MANIFEST"
 
 for artifact_id in smollm2-q4-download gemma3-bf16-metadata; do
-  python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
+  "${automation[@]}" models resolve \
     "$MODEL_MANIFEST" \
     --artifact-id "$artifact_id" \
     --cadence "$MODEL_CADENCE" >/dev/null

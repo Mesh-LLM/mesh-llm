@@ -117,10 +117,6 @@ jobs:
       - name: Configure macOS linker
         if: ${{ matrix.check.platform == 'macos' }}
         uses: ./.github/actions/setup-macos-lld
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        if: ${{ matrix.check.platform == 'windows' }}
-        with:
-          python-version: "3.x"
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         if: ${{ matrix.check.platform == 'windows' }}
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0

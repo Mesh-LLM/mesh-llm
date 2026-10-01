@@ -351,9 +351,8 @@ class CiSdkProducersTests(RunnerSelectorMixin, unittest.TestCase):
         for cache_input in (
             "scripts/prepare-llama.sh",
             "scripts/restore-static-abi-input.sh",
-            "scripts/safe-extract-tar.py",
-            "scripts/verify-checksum-sidecar.py",
-            "scripts/verify-static-abi-build-stamp.py",
+            "tools/xtask/src/artifact/**",
+            "tools/xtask/src/prepared_input/**",
             ".github/actions/prepare-static-abi-input/action.yml",
         ):
             self.assertIn(cache_input, producer)
@@ -369,10 +368,10 @@ class CiSdkProducersTests(RunnerSelectorMixin, unittest.TestCase):
             producer,
         )
         self.assertIn("target/runner architecture mismatch", producer_action)
-        self.assertIn("verify-static-abi-build-stamp.py", producer_action)
+        self.assertIn("prepared-input static-abi-stamp", producer_action)
         self.assertIn("--patched-sha", producer_action)
-        self.assertIn("Portable MeshLLM static ABI link metadata", producer_action)
-        self.assertIn("retained producer-local path", producer_action)
+        self.assertIn("prepared-input static-abi-cache-filter", producer_action)
+        self.assertIn("prepared-input static-abi-path-scan", producer_action)
         self.assertNotIn(
             'tar -C "$(dirname "$LLAMA_STAGE_BUILD_DIR")"',
             producer_action,
@@ -389,13 +388,13 @@ class CiSdkProducersTests(RunnerSelectorMixin, unittest.TestCase):
             ".mesh-llm-static-abi-input.json",
             producer_action,
         )
-        self.assertIn("verify-checksum-sidecar.py", producer_action)
+        self.assertIn("artifact verify-checksum", producer_action)
 
-        self.assertIn("scripts/safe-extract-tar.py", restore_script)
-        self.assertIn("mesh-llm-static-abi-v3", restore_script)
+        self.assertIn("artifact extract-tar", restore_script)
+        self.assertIn("prepared-input static-abi-manifest verify", restore_script)
         self.assertIn("toolchain_epoch", restore_script)
-        self.assertIn("verify-checksum-sidecar.py", restore_script)
-        self.assertIn("verify-static-abi-build-stamp.py", restore_script)
+        self.assertIn("artifact verify-checksum", restore_script)
+        self.assertIn("prepared-input static-abi-stamp", restore_script)
         self.assertIn("target/runner architecture mismatch", restore_script)
         self.assertNotIn("tar -x", restore_script)
         self.assertIn("prepare-static-abi-input", routing)

@@ -60,7 +60,7 @@ RECIPES_BY_FILE: Final = {
         "website-clean", "website-dev",
     },
     "just/ci.just": {
-        "automation-bootstrap", "ci-crate-lists", "ci-sccache-seed-build", "ci-shellcheck", "ci-validate",
+        "automation-bootstrap", "automation-run", "ci-crate-lists", "ci-sccache-seed-build", "ci-shellcheck", "ci-validate",
         "no-console-print", "publish-crates", "test-all",
     },
     "just/mesh-client.just": {"auto", "mesh-client"},
@@ -171,7 +171,9 @@ class JustfileLayoutTests(unittest.TestCase):
         )
 
         self.assertEqual(private_sources["just/build.just"], 2)
-        self.assertTrue(all(count == 0 for path, count in private_sources.items() if path != "just/build.just"))
+        self.assertEqual(private_sources["just/ci.just"], 1)
+        self.assertTrue(all(count == 0 for path, count in private_sources.items() if path not in {"just/build.just", "just/ci.just"}))
+        self.assertNotIn("automation-run", subprocess.check_output(["just", "--summary"], cwd=ROOT, text=True).split())
         self.assertNotIn("with-lld", subprocess.check_output(["just", "--summary"], cwd=ROOT, text=True).split())
         self.assertEqual(dump["modules"], {})
         self.assertEqual(dump["first"], "default")

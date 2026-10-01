@@ -45,6 +45,10 @@
 set -euo pipefail
 
 ROOT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)"
+automation=(cargo run --quiet --manifest-path "$ROOT_SCRIPT_DIR/../tools/xtask/Cargo.toml" --)
+if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 CONFIG="${MESH_COMPETITIVE_CONFIG:-$ROOT_SCRIPT_DIR/../skippy/evals/skippy-competitive-benchmark.json}"
 MODEL_MANIFEST="${MESH_COMPETITIVE_MODEL_MANIFEST:-$ROOT_SCRIPT_DIR/../ci/model-artifacts/manifests/competitive-benchmark.json}"
 PROMPT_GENERATOR="$ROOT_SCRIPT_DIR/../skippy/evals/skippy-agentic-prompt-manifest.py"
@@ -118,7 +122,7 @@ for key in "${MODEL_KEYS[@]}"; do
   [[ -n "$key" ]] || continue
   artifact_id="$(model_field "$key" '.artifact_id')"
   [[ "$artifact_id" != "null" ]] || { echo "error: unknown model key or artifact id: $key" >&2; fail_count=$((fail_count+1)); continue; }
-  fixture="$($PYTHON_BIN "$ROOT_SCRIPT_DIR/resolve-test-model-manifest.py" "$MODEL_MANIFEST" --artifact-id "$artifact_id" --cadence manual)"
+  fixture="$("${automation[@]}" models resolve "$MODEL_MANIFEST" --artifact-id "$artifact_id" --cadence manual)"
   repo="$(jq -r '.repo' <<<"$fixture")"
   revision="$(jq -r '.revision' <<<"$fixture")"
   filename="$(jq -r '.file' <<<"$fixture")"
@@ -126,7 +130,7 @@ for key in "${MODEL_KEYS[@]}"; do
   echo "--- model $key: $repo @$revision"
   # No --local-dir: the blob lands in the HF cache; -q prints the path only.
   cached="$(hf download -q "$repo" "$filename" --revision "$revision" | tail -1)"
-  if ! "$PYTHON_BIN" "$ROOT_SCRIPT_DIR/resolve-test-model-manifest.py" \
+  if ! "${automation[@]}" models resolve \
     "$MODEL_MANIFEST" \
     --artifact-id "$artifact_id" \
     --cadence manual \
