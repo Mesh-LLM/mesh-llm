@@ -7,9 +7,7 @@
 //! Cases live in `tests/fixtures/native_policy/*.json`; their expected
 //! streams, statuses and report files are the legacy scripts' observed
 //! output. Inspection tools are shell stubs placed alone on `PATH`, so no
-//! real `readelf`/`otool`/`objdump` runs. Set
-//! `MIGRATION_NATIVE_POLICY_LEGACY_PYTHON=<python3>` to also run each legacy
-//! script on an identical layout and require the same golden.
+//! real `readelf`/`otool`/`objdump` runs.
 #![cfg(unix)]
 
 #[path = "migration_native_policy/support.rs"]

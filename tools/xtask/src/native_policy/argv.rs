@@ -3,9 +3,7 @@
 //! flags, at most one positional, unique-prefix and `=value` options, `-h`
 //! bundling, the first `--` separator, and argparse's sequential error order.
 
-use crate::ci_operations::build_cache_options::{
-    Kind, ambiguous, classify, help_flag, is_option_like,
-};
+use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::ci_operations::ci_metrics_int::python_int_text;
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
@@ -140,9 +138,6 @@ impl Grammar {
             index += 1;
             match kind {
                 Kind::Positional | Kind::Unknown => extras.push(arg),
-                Kind::Ambiguous(found) => {
-                    return Err(ambiguous(arg, &found, &|message| self.fail(message)));
-                }
                 Kind::Known("-h" | "--help", explicit, sep) => {
                     help_flag(explicit, sep, "-h/--help", &|message| self.fail(message))?;
                     return Err(CheckReport::success(self.help.to_owned()));
