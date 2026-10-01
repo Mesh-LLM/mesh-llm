@@ -4,6 +4,7 @@ mod args;
 mod command;
 mod contract;
 mod coordinated;
+mod diagnostics;
 mod evidence;
 mod execution;
 mod failure;

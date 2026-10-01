@@ -29,7 +29,10 @@ pub(super) fn spec(
         "--device".into(),
         options.device.clone(),
         "--ctx-size".into(),
-        options.variant.model.context_size().to_string(),
+        options
+            .context_size
+            .unwrap_or(options.variant.model.context_size())
+            .to_string(),
         "--port".into(),
         ports.api.to_string(),
         "--console".into(),

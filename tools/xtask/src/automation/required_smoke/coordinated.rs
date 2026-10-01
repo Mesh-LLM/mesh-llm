@@ -28,13 +28,19 @@ pub(super) fn execute(
     let mut headless_state = None;
     let result = (|| {
         primary_state.prepare()?;
-        primary_state.model_fit(options.variant.model.batch_sizes())?;
+        primary_state.model_fit(options.batch_sizes.or(options.variant.model.batch_sizes()))?;
         headless_state = Some(PrivateState::create(&options.parent, "required-smoke")?);
         let state = headless_state.as_ref().ok_or(Rejection::Incomplete)?;
         state.prepare()?;
-        state.model_fit(options.variant.model.batch_sizes())?;
-        let primary_ports = Reservation::acquire()?;
-        let headless_ports = Reservation::acquire()?;
+        state.model_fit(options.batch_sizes.or(options.variant.model.batch_sizes()))?;
+        let primary_ports = match options.endpoints {
+            Some(endpoints) => Reservation::acquire_at(endpoints[0])?,
+            None => Reservation::acquire()?,
+        };
+        let headless_ports = match options.endpoints {
+            Some(endpoints) => Reservation::acquire_at(endpoints[1])?,
+            None => Reservation::acquire()?,
+        };
         let deadline = options.readiness + Duration::from_secs(300);
         let primary_launch = Launch {
             member: MemberId::Seed,
@@ -104,6 +110,12 @@ pub(super) fn execute(
         })?;
         finish_report(session, report, cancellation)
     })();
+    if result.is_err() {
+        super::diagnostics::native_logs(&primary_state);
+        if let Some(state) = &headless_state {
+            super::diagnostics::native_logs(state);
+        }
+    }
     let result = match headless_state {
         Some(state) => finish_state(state, result),
         None => result,

@@ -1,3 +1,4 @@
+pub(crate) mod agent_model;
 #[path = "canary_receipts/command.rs"]
 pub(crate) mod canary_aggregate_command;
 #[expect(
@@ -8,6 +9,13 @@ pub(crate) mod canary_aggregate_command;
 pub(crate) mod canary_receipts;
 pub(crate) mod client_readiness;
 mod codepoint_json;
+pub(crate) mod control_plane_qa;
+pub(crate) mod daemon_lifecycle;
+pub(crate) mod logging_console;
+pub(crate) mod logging_recovery;
+pub(crate) mod runtime_install;
+pub(crate) mod sdk_fixture;
+pub(crate) mod startup_recovery;
 pub(crate) use crate::command_interrupt;
 pub(crate) mod daemon_readiness;
 pub(crate) mod hf_converted_artifact;
@@ -48,8 +56,11 @@ pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>)
         [verb, rest @ ..] if verb == "validate" => replay_matrix::run(rest),
         [verb, rest @ ..] if verb == "export" => replay_matrix::export::run(rest),
         [verb, rest @ ..] if verb == "run-family" => replay_matrix::run_family::run(rest, root),
+        [verb, rest @ ..] if verb == "pins" => replay_matrix::pins::run(rest),
+        [verb, rest @ ..] if verb == "verify-digest" => replay_matrix::digest::run(rest),
+        [verb, rest @ ..] if verb == "publication-verify" => replay_matrix::publication::run(rest),
         _ => Err(format!(
-            "usage: cargo xtool automation replay-matrix {{validate|export|run-family}} --matrix <path>\n  {}",
+            "usage: cargo xtool automation replay-matrix {{validate|export|run-family|pins|verify-digest|publication-verify}} ...\n  {}",
             REPLAY_RUN_FAMILY_USAGE
         )
         .into()),

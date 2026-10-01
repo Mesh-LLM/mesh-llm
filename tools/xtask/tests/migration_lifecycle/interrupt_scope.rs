@@ -251,7 +251,9 @@ impl Coordinator for AdmittedInterrupt {
                 raise(libc::SIGINT);
                 Action::Pending
             }
-            MemberState::IntentionalStop => panic!("member must remain live until interruption"),
+            MemberState::IntentionalStop | MemberState::ExpectedExit { .. } => {
+                panic!("member must remain live until interruption")
+            }
         }
     }
 }

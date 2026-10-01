@@ -14,6 +14,7 @@ fn retained_report() -> process::retained::Report<Rejection> {
                 process::Outcome::ObservationRejected,
             ),
             process: report(71),
+            completion: None,
         }],
     }
 }

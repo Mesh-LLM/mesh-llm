@@ -25,6 +25,9 @@ pub(crate) fn print_usage() {
     println!("  {}", crate::automation::split_evidence::USAGE);
     println!("  cargo xtool native package-source-version {{workspace|abi}} SOURCE (experimental)");
     println!("  cargo xtool repository cargo-target-directory < cargo-metadata.json");
+    println!("  cargo xtool repository publish-order [--dependency-pairs] < cargo-metadata.json");
+    println!("  cargo xtool product attestation-status < inspection.json");
+    println!("  cargo xtool product rc-ok {{model|request MODEL|verify}}");
     println!(
         "  cargo xtool native runtime-manifest-write MANIFEST ID VERSION ABI OS ARCH TARGET PLATFORM BACKEND CUDA_MAJOR PRIMARY UPSTREAM PATCHED PATCH_DIGEST LIBRARY... -- TOOL... -- LICENSE... -- RELOCATABLE..."
     );
@@ -43,6 +46,13 @@ pub(crate) struct Cli<'a> {
 }
 
 pub(crate) enum CliCommand<'a> {
+    RuntimeCacheInstall(&'a [String]),
+    SdkFixture(&'a [String]),
+    LoggingConsole(&'a [String]),
+    StartupRecovery(&'a [String]),
+    DaemonLifecycle(&'a [String]),
+    LoggingRecovery(&'a [String]),
+    ControlPlaneQa(&'a [String]),
     HfConvertedArtifact(&'a [String]),
     Rollout(&'a [String]),
     Repository(RepositoryCommand<'a>),
@@ -57,6 +67,7 @@ pub(crate) enum CliCommand<'a> {
     CiValidate(&'a str, &'a [String]),
     Qualification(&'a str, &'a [String]),
     ReplayMatrix(&'a [String]),
+    AgentPickModel(&'a [String]),
     WorkloadOracleEvidence(&'a [String]),
     CanaryReceipts(&'a [String]),
     RewriterReport(&'a [String]),
@@ -77,6 +88,7 @@ pub(crate) enum RepositoryCheck {
     AffectedCrates,
     CargoPackages,
     CargoTargetDirectory,
+    PublishOrder,
     ConventionalCommits,
     EnvMutationCensus,
     LlamaUpstreamPin,
@@ -111,6 +123,32 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "control-plane-qa" => {
+                CliCommand::ControlPlaneQa(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "logging-recovery" => {
+                CliCommand::LoggingRecovery(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "daemon-lifecycle" => {
+                CliCommand::DaemonLifecycle(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "startup-recovery" => {
+                CliCommand::StartupRecovery(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "logging-console" => {
+                CliCommand::LoggingConsole(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "sdk-fixture" => {
+                CliCommand::SdkFixture(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "runtime-cache-install" =>
+            {
+                CliCommand::RuntimeCacheInstall(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "agent-pick-model" => {
+                CliCommand::AgentPickModel(rest)
+            }
             [domain, scope, verb, rest @ ..]
                 if domain == "automation" && scope == "required-smoke" && verb == "run" =>
             {
@@ -240,6 +278,7 @@ impl<'a> Cli<'a> {
                     "affected-crates" => RepositoryCheck::AffectedCrates,
                     "cargo-packages" => RepositoryCheck::CargoPackages,
                     "cargo-target-directory" => RepositoryCheck::CargoTargetDirectory,
+                    "publish-order" => RepositoryCheck::PublishOrder,
                     "conventional-commits" => RepositoryCheck::ConventionalCommits,
                     "env-mutation-census" => RepositoryCheck::EnvMutationCensus,
                     "llama-upstream-pin" => RepositoryCheck::LlamaUpstreamPin,

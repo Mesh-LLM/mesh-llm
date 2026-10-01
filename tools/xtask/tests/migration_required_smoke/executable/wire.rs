@@ -51,7 +51,7 @@ pub fn serve(
     let mut code = 200;
     let body = if header.starts_with("GET /api/status ") {
         serde_json::json!({"api_port":context.api,"local_instances":[{"pid": if context.scenario == "ownership" { 1 } else { std::process::id() },"is_self":true}],
-            "llama_ready": context.scenario != "timeout", "release_attestation":{"status": if context.scenario == "attestation" { "invalid" } else { "missing" }}}).to_string()
+            "token":"sdk-fixture-invite", "llama_ready": context.scenario != "timeout", "release_attestation":{"status": if context.scenario == "attestation" { "invalid" } else { "missing" }}}).to_string()
     } else if header.starts_with("GET /v1/models ") {
         if context.headless && context.scenario == "headless" {
             code = 500;

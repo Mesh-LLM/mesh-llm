@@ -49,6 +49,32 @@ fn run() -> DynResult<()> {
         .map(|path| repository::RepositoryRoot::resolve(Some(path)))
         .transpose()?;
     match parsed.command {
+        cli::CliCommand::ControlPlaneQa(rest) => {
+            let root = repository::RepositoryRoot::resolve(None)?;
+            automation::control_plane_qa::run(root.as_path(), rest)
+        }
+        cli::CliCommand::LoggingRecovery(rest) => {
+            let root = repository::RepositoryRoot::resolve(None)?;
+            automation::logging_recovery::run(root.as_path(), rest)
+        }
+        cli::CliCommand::DaemonLifecycle(rest) => {
+            let root = repository::RepositoryRoot::resolve(None)?;
+            automation::daemon_lifecycle::run(root.as_path(), rest)
+        }
+        cli::CliCommand::StartupRecovery(rest) => {
+            let root = repository::RepositoryRoot::resolve(None)?;
+            automation::startup_recovery::run(root.as_path(), rest)
+        }
+        cli::CliCommand::LoggingConsole(rest) => {
+            let root = repository::RepositoryRoot::resolve(None)?;
+            automation::logging_console::run(root.as_path(), rest)
+        }
+        cli::CliCommand::SdkFixture(rest) => {
+            let root = repository::RepositoryRoot::resolve(None)?;
+            automation::sdk_fixture::run(root.as_path(), rest)
+        }
+        cli::CliCommand::RuntimeCacheInstall(rest) => automation::runtime_install::run(rest),
+        cli::CliCommand::AgentPickModel(rest) => automation::agent_model::run(rest),
         cli::CliCommand::HfConvertedArtifact(rest) => automation::hf_converted_artifact::run(rest),
         cli::CliCommand::Rollout(rest) => automation::rollout::run(rest),
         cli::CliCommand::GenerateKeypair(rest) => {
