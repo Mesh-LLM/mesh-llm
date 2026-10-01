@@ -61,8 +61,7 @@ pub struct MeshConfig {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PaymentsConfig {
     /// Plugin name of the `wallet.v1` provider to use. When unset the host
-    /// uses the only running wallet plugin, preferring any other over the
-    /// built-in Lexe wallet.
+    /// uses the only running wallet plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallet: Option<String>,
 }
