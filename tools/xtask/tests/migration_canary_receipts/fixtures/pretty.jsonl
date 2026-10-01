@@ -1,0 +1,5 @@
+{
+  "family": "dense",
+  "exit_code": 0,
+  "outcomes": [{"name": "model-preflight", "status": "pass", "exit_code": 0}]
+}{"family":"dense","exit_code":0,"split_layer":10,"outcomes":[{"name":"chain","status":"pass","exit_code":0},{"name":"single-step","status":"pass","exit_code":0},{"name":"state-handoff","status":"pass","exit_code":0}]}
