@@ -307,10 +307,20 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         }
         if entry.name == RETIRED_WALLET_LEXE_PLUGIN_ID {
             // The built-in Lexe wallet was removed; keep old configs loading.
-            tracing::warn!(
-                "ignoring [[plugin]] '{RETIRED_WALLET_LEXE_PLUGIN_ID}': the built-in Lexe wallet \
-                 was removed; install the external `lexe-wallet` plugin instead"
-            );
+            // An output event, not `tracing::warn!`: the runtime's default
+            // log filter drops host-runtime warnings, so users never saw it.
+            // Plugins are resolved more than once at startup; warn once.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+                    message: format!(
+                        "Ignoring [[plugin]] '{RETIRED_WALLET_LEXE_PLUGIN_ID}': the built-in \
+                         Lexe wallet was removed; install the external `lexe-wallet` plugin \
+                         instead"
+                    ),
+                    context: None,
+                });
+            });
             continue;
         }
         if entry.name == PAYMENTS_PLUGIN_ID {
