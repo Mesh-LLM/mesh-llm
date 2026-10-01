@@ -33,7 +33,7 @@ pub(super) fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) 
     }
     ensure_contains(
         sources.quality,
-        "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
+        "just ci-legacy-contracts",
         "quality contract suite",
     )?;
     ensure_contains(

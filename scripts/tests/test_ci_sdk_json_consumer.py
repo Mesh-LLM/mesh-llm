@@ -66,7 +66,6 @@ class SdkJsonConsumerTests(unittest.TestCase):
         for name in (
             "ci-compose-product-input.sh",
             "ci-prepare-native-runtime.sh",
-            "compose-product-bundle.py",
             "verify-native-runtime-package.sh",
             "verify-checksum-sidecar.py",
             "safe-extract-tar.py",
@@ -78,6 +77,7 @@ class SdkJsonConsumerTests(unittest.TestCase):
                     destination = workspace / product / "scripts" / name
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(implementation, destination)
+        shutil.copytree(ROOT / "scripts/lib", scripts / "lib")
         abi = workspace / "skippy/crates/skippy-ffi/src/lib.rs"
         abi.parent.mkdir(parents=True)
         shutil.copy2(ROOT / "skippy/crates/skippy-ffi/src/lib.rs", abi)
@@ -133,6 +133,7 @@ class SdkJsonConsumerTests(unittest.TestCase):
                 **os.environ,
                 "PATH": f"{tools}:{os.environ['PATH']}",
                 "GITHUB_WORKSPACE": str(workspace),
+                "MESH_LLM_AUTOMATION_BIN": str(ROOT / "target/debug/xtask"),
                 "GITHUB_OUTPUT": str(workspace / "github-output"),
                 "INPUT_HOST_INPUT_DIR": str(host_input),
                 "INPUT_RUNTIME_INPUT_DIR": str(runtime_input),

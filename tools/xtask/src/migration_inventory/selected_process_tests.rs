@@ -47,10 +47,9 @@ fn selected_process_rejects_omitted_required_probe_and_planner() -> DynResult<()
     let root = crate::repo_consistency::repo_root()?;
     let ledgers = MigrationLedgers::load(&root)?;
     check_selected_processes(&root, &ledgers.invocations.selected_process_calls)?;
-    for (path, line) in [
-        ("scripts/package-native-runtime.sh", 208),
-        ("scripts/skippy-family-battery.sh", 190),
-    ] {
+    for record in &ledgers.invocations.selected_process_calls {
+        let path = record.caller.as_str();
+        let line = record.line;
         let mut records = ledgers.invocations.selected_process_calls.clone();
         records.retain(|record| record.caller != path || record.line != line);
         // When one launch is omitted, then the gate rejects its physical source.

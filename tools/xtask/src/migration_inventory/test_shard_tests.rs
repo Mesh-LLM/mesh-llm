@@ -136,7 +136,11 @@ fn test_shard_checks_all_tracked_test_candidates() -> DynResult<()> {
         .iter()
         .flat_map(|(_, cases)| cases.iter().map(|(_, _, _, lines)| lines.len()))
         .sum::<usize>();
-    assert_eq!(observed.len(), 425);
-    assert_eq!(additional, 326);
+    let grouped = ledger
+        .groups
+        .iter()
+        .map(|group| group.members.len())
+        .sum::<usize>();
+    assert_eq!(observed.len(), grouped + additional);
     check_test_source_shard(&root, &text, &observed)
 }

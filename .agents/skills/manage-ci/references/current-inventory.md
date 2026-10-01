@@ -513,7 +513,7 @@ The ternary that selects `image: ''` must put the **non-empty** value in the
 `&&` branch: `cond && url || ''`, never `cond && '' || url`. GitHub Actions
 expressions are JS-style short-circuit and `''` is falsy, so
 `cond && '' || url` always evaluates to `url` regardless of `cond` -- the
-opt-out branch becomes unreachable. `scripts/tests/test_ci_workflow_ternary_contract.py`
+opt-out branch becomes unreachable. The Rust workflow expression guard
 fails any `${{ }}` ternary whose `&&` branch is a falsy literal (`''`, `""`,
 `0`, `false`) across every workflow; it exists specifically because this bug
 class is invisible to `actionlint`.
@@ -572,7 +572,7 @@ declare `shell: bash`.
 `$(( ))` arithmetic expansion is **not** on that list and must not be added.
 It is POSIX (Shell Command Language 2.6.4) and `dash` evaluates it correctly;
 flagging it would reject valid `sh` steps and force a spurious `shell: bash`.
-`scripts/tests/test_ci_workflow_container_shell_contract.py` carries the
+`tools/xtask/src/ci_validation/workflow_guards/shell.rs` carries the
 pattern list and an inline note saying so.
 
 ### Reusable-workflow permission chain
@@ -585,7 +585,7 @@ does not grant; GitHub rejects at run creation with a **zero-job
 granted at *every* hop, and
 `ci-linux-product-smoke-slice.yml` / `ci-macos-product-smoke-slice.yml` sat at
 `contents: read` between granted parents and requesting children.
-`scripts/tests/test_ci_workflow_permission_contract.py` walks every local
+`tools/xtask/src/ci_validation/workflow_guards/permissions.rs` walks every local
 `uses: ./.github/workflows/X.yml` edge and asserts the caller's effective
 permissions (job-level, else workflow-level) cover what `X.yml` requests.
 
@@ -742,7 +742,7 @@ no setup-python steps. Runtime-package verification embeds the GLIBC policy
 ceiling and runs native probes without a checkout dependency. Publication's
 dependency projection uses `repository publish-order --dependency-pairs`;
 the checked fixed publication roster is unchanged. The L8 restore-smoke action
-still calls `compose-product-bundle.py`, which is not yet deleted.
+uses Rust product composition and the Python composer is deleted.
 
 `ci-ops authority-audit` exposes endpoint and Docker-auth inspection through
 the existing L2 typed owners. `ci-ops registry-pulls` exposes recursive sample
@@ -1426,3 +1426,10 @@ missing fixtures and registry dimension/MTP drift fail CI validation. The matrix
 checks admitted stage chains and explicit unsupported contracts without model
 weights; it does not confer real-model certification. See
 `ci/llama-canary/SYNTHETIC_GRAPH_CONTRACTS.md` for structural coverage and limits.
+
+L12 keeps existing setup steps with live consumers. Quality uses Rust workflow
+guards and build-script fixtures, followed by the explicitly enumerated
+`ci-legacy-contracts` modules. Core SDK compatibility and live canary environments
+remain required. No provider, permission, cache-authority or five-entrypoint
+contract changed. The shared runtime-reuse adapter honors the prepared automation
+executable, so copied SDK consumers do not depend on local Cargo aliases.

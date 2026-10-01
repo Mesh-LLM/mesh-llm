@@ -34,7 +34,7 @@ fn required_closure_allows_source_owned_unittest_but_rejects_new_inline() -> Dyn
             row.path == "just/ci.just" && row.source_block.starts_with("python3 -m unittest")
         })
         .ok_or("missing checked-in unittest candidate")?;
-    assert_eq!(baseline.id, "just/ci.just#candidate:807df0c5a71213d8:1");
+    assert!(owned.contains(&baseline.id));
     // When the required recipe is checked, then its owned Python call is transitional.
     check_required_closure(&repo, &paths, &observed, &owned, &["just/ci.just"])?;
 
@@ -43,7 +43,10 @@ fn required_closure_allows_source_owned_unittest_but_rejects_new_inline() -> Dyn
     source(
         &root,
         "just/ci.just",
-        "ci-validate:\n    python3 -m unittest discover -s scripts/tests -p 'test_*.py'\n    python3 -c 'print(1)'\n",
+        &format!(
+            "ci-validate:\n    {}\n    python3 -c 'print(1)'\n",
+            baseline.source_block
+        ),
     )?;
     let paths = vec!["just/ci.just".to_owned()];
     let observed = scan::scan_paths(&root, &paths)?;

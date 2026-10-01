@@ -23,6 +23,7 @@ if [[ "$#" -lt 1 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$REPO_ROOT/scripts/lib/automation.sh"
 OUT_DIR="$1"
 shift
 
@@ -92,7 +93,7 @@ select_compatible_runtime() {
     TEMP_ROOT="$(mktemp -d "${RUNNER_TEMP:-/tmp}/mesh-sdk-runtime-compat.XXXXXX")"
     compatibility_json="$TEMP_ROOT/available.json"
     expected_skippy_abi="$(
-        cargo xtool native package-source-version abi "$REPO_ROOT/skippy/crates/skippy-ffi/src/lib.rs"
+        mesh_automation native package-source-version abi "$REPO_ROOT/skippy/crates/skippy-ffi/src/lib.rs"
     )"
     env \
         -u MESH_LLM_CONFIG \
@@ -110,7 +111,7 @@ select_compatible_runtime() {
         --json >"$compatibility_json"
 
     runtime_dir="$(
-        cargo xtool prepared-input sdk-runtime-select \
+        mesh_automation prepared-input sdk-runtime-select \
             "$runtime_root" \
             "$BACKEND" \
             "$compatibility_json" \

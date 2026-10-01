@@ -108,7 +108,7 @@ fn checked_in_required_graph_has_no_generic_inline_reason() -> DynResult<()> {
 
     // Then every former generic entry has a joined contract or a named boundary.
     assert_eq!(count(GENERIC), 0);
-    assert_eq!(count(SELECTED), 17);
+    assert_eq!(count(SELECTED), 0);
     // The Windows helper calls now bind through the proven SCRIPT_DIR root instead.
     assert_eq!(count(VARIABLE), 0);
     let joined = graph
@@ -121,6 +121,6 @@ fn checked_in_required_graph_has_no_generic_inline_reason() -> DynResult<()> {
             })
         })
         .count();
-    assert_eq!(joined, 5 + 28);
+    assert_eq!(joined, 2);
     Ok(())
 }

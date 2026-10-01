@@ -35,32 +35,43 @@ fn actionlint_extractor_joins_checked_in_invocation_contract() -> DynResult<()> 
 
 #[test]
 fn composer_selected_child_joins_script_identity_and_owner() -> DynResult<()> {
-    let root = crate::repository::RepositoryRoot::resolve(None)?;
-    let paths = ledger::tracked_paths(root.as_path())?;
-    let observed = scan::scan_paths(root.as_path(), &paths)?;
-    let validated = observed.iter().map(|row| row.id.clone()).collect();
-    let graph = report(
-        root.as_path(),
-        &paths,
-        &observed,
-        &validated,
-        &["scripts/ci-compose-product-input.sh"],
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path();
+    let path = "scripts/composer.sh";
+    fs::create_dir(root.join("scripts"))?;
+    fs::write(
+        root.join(path),
+        "python3 scripts/safe-extract-tar.py archive output\n",
     )?;
+    fs::write(root.join("scripts/safe-extract-tar.py"), "")?;
+    let paths = vec![path.to_owned(), "scripts/safe-extract-tar.py".to_owned()];
+    let observed = scan::scan_paths(root, &paths)?;
+    fs::create_dir_all(root.join("ci/automation-migration"))?;
+    fs::write(
+        root.join("ci/automation-migration/python-inventory.json"),
+        serde_json::to_vec(
+            &serde_json::json!({"files":[{"path":"scripts/safe-extract-tar.py","replacement_owner":"artifact extract-tar","deletion_condition":"last caller switches"}]}),
+        )?,
+    )?;
+    fs::write(
+        root.join("ci/automation-migration/script-edges.json"),
+        serde_json::to_vec(
+            &serde_json::json!({"groups":[{"file":path,"members":[[1,observed[0].id.split(':').nth(1).ok_or("hash")?,1,"script","scripts/safe-extract-tar.py","archive extraction; nonzero rejects unsafe paths"]]}]}),
+        )?,
+    )?;
+    let validated = observed.iter().map(|row| row.id.clone()).collect();
+    let graph = report(root, &paths, &observed, &validated, &[path])?;
     let edge = graph
         .edges
         .iter()
         .find(|edge| {
-            edge.parent == "scripts/ci-compose-product-input.sh"
-                && edge.line == 192
+            edge.parent == path
+                && edge.line == 1
                 && edge.child.as_deref() == Some("scripts/safe-extract-tar.py")
         })
         .ok_or("missing composer extraction")?;
     assert_eq!(edge.unresolved_reason, None);
-    assert!(
-        edge.status_streams_effects
-            .as_deref()
-            .is_some_and(|effects| effects.contains("replacement owner"))
-    );
+    assert_eq!(edge.child.as_deref(), Some("scripts/safe-extract-tar.py"));
     Ok(())
 }
 

@@ -12,7 +12,7 @@ mod digest;
 mod entrypoint_graph;
 mod lane_graph;
 mod results;
-mod workflow_yaml;
+pub(super) mod workflow_yaml;
 
 use crate::command::DynResult;
 use crate::repository::check_args::Grammar;

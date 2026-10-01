@@ -231,7 +231,7 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             self.assertIn(variable, standalone_smoke)
         for variable in ("MESH_COMPAT_BATCH_SIZE", "MESH_COMPAT_UBATCH_SIZE"):
             self.assertIn(variable, compat_smoke)
-        self.assertIn("[defaults.model_fit]", standalone_smoke)
+        self.assertIn("automation required-smoke run", standalone_smoke)
         self.assertIn("[defaults.model_fit]", compat_smoke)
         self.assertIn("MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL", workflow)
         self.assertIn("expected_backend:", workflow)
@@ -266,13 +266,13 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("run_client_routing_probe", smoke_script)
         self.assertIn("Passive client routing and streaming validated", smoke_script)
         self.assertIn(
-            'checkpointed_restore = exact_payload_kind == "kv-recurrent"',
+            'automation split-probe prefix-verify',
             smoke_script,
         )
         self.assertIn("run_durable_restart_probe", smoke_script)
         self.assertIn("kv-cache status", smoke_script)
         self.assertIn(
-            "if not checkpointed_restore and (", smoke_script
+            '"$EXPECTED_EXACT_PAYLOAD_KIND"', smoke_script
         )
 
     def test_split_smoke_uploads_reconciled_evidence_on_every_outcome(self):

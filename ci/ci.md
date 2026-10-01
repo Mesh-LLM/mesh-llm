@@ -1,5 +1,20 @@
 # MeshLLM CI topology
 
+L12 local reconciliation preserves the five PR/main entrypoints and protected
+executor boundaries. Quality runs Rust workflow permission, container-shell and
+expression guards plus the real build-script adapter tests. Surviving transitional
+contract modules are enumerated by `just ci-legacy-contracts`; automatic test
+discovery is removed. SDK compatibility, blocked control-plane callers and live
+canary coverage still require their existing environments. This is not a claim
+that the required graph has no interpreter dependency.
+
+Runtime reuse now honors the prepared automation executable through the shared
+adapter, including when the consumer is copied outside Cargo alias discovery.
+Local SDK fixtures execute that same adapter and reject incompatible runtime
+reports before readiness or artifact publication. Publication fixtures execute
+the real dependency projection against complete workspace metadata; fake Cargo
+is confined to metadata acquisition and publish transport.
+
 This is the checked-in implementation. Normative rules live in
 `.agents/skills/manage-ci/SKILL.md`; the factual inventory is in
 `.agents/skills/manage-ci/references/current-inventory.md`; the design record
@@ -388,8 +403,8 @@ checked-in GLIBC ceiling and retains native dependency probes when copied
 outside the source checkout. `repository publish-order --dependency-pairs`
 projects publishable workspace edges, including optional dependencies, for the
 publisher's dry-run checks. The fixed publication roster remains checked by
-`repo-consistency publish-crates`. The L8 smoke restore action still calls the
-transitional Python product composer, so that implementation remains present.
+`repo-consistency publish-crates`. The L8 smoke restore action uses Rust product
+composition and the transitional Python composer is deleted.
 
 If crates.io accepts only a prefix of the stable package chain,
 `resume-crates-release.yml` resumes publication from the existing immutable

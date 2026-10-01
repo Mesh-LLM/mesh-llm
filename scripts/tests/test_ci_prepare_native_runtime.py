@@ -375,6 +375,7 @@ cat "$(dirname "$0")/runtime-rows.json"
             scripts.mkdir(parents=True)
             helper = scripts / SCRIPT.name
             shutil.copy2(SCRIPT, helper)
+            shutil.copytree(ROOT / "scripts/lib", scripts / "lib")
             make_executable(helper)
 
             package_script = scripts / "package-native-runtime.sh"

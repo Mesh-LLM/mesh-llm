@@ -54,15 +54,11 @@ class PackageNativeRuntimeTests(unittest.TestCase):
         self.assertIn('"release_version": "$runtime_release_version"', script)
 
     def test_linux_glibc_manifest_probe_pins_readelf_locale(self) -> None:
-        script = SCRIPT.read_text(encoding="utf-8")
-        start = script.index("def packaged_glibc_requirement(paths):")
-        end = script.index("files = {", start)
-        probe = script[start:end]
-
-        self.assertIn('readelf_env["LC_ALL"] = "C"', probe)
-        self.assertIn("env=readelf_env", probe)
-        self.assertIn('version == "GLIBC_ABI_DT_RELR"', probe)
-        self.assertIn("return (2, 36)", probe)
+        toolchain = (ROOT / "tools/xtask/src/native_policy/toolchain.rs").read_text()
+        self.assertIn('.env("LC_ALL", "C")', toolchain)
+        probe = (ROOT / "tools/xtask/src/native_policy/runtime_manifest_files.rs").read_text()
+        self.assertIn('suffix.starts_with("ABI_DT_RELR")', probe)
+        self.assertIn("(2, 36)", probe)
 
     def test_linux_cuda_benchmark_links_shared_cudart(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
@@ -132,18 +128,18 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             + 'TARGET_TRIPLE="x86_64-unknown-linux-gnu"\n'
             + 'BACKEND="cuda"\n'
             + 'runtime_arch="x86_64"\n'
-            + 'stage_dir="${TMPDIR:-/tmp}/mesh-linux-cuda-collector-test"\n'
+            + 'stage_dir="$TEST_ROOT/stage"\n'
             + 'SCRIPT_DIR="/unused"\n'
             + 'primary_name="libllama.so"\n'
             + 'library_paths=("lib/libllama.so")\n'
             + 'mkdir -p "$stage_dir/lib" "$stage_dir/tools"\n'
             + 'linux_cuda_dependency_search_dirs() { printf "%s\\n" "/cuda/lib64"; }\n'
-            + 'python_bin() { printf "%s\\n" "$FAKE_PYTHON"; }\n'
+            + 'cargo() { "$FAKE_AUTOMATION" "$@"; }\n'
             + 'cuda_toolkit_major() { printf "%s\\n" "12"; }\n'
             + 'bundle_cuda_distribution_license() { :; }\n'
             + 'collect_linux_cuda_dependencies\n'
             + '[[ "$(wc -l < "$CALL_LOG")" -eq 2 ]]\n'
-            + 'grep -q "linux-native-runtime-deps.py collect" "$CALL_LOG"\n'
+            + 'grep -q "native linux-runtime-deps collect" "$CALL_LOG"\n'
         )
         with tempfile.TemporaryDirectory() as directory:
             fake_python = Path(directory) / "fake-python"
@@ -158,7 +154,8 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             fake_python.chmod(0o755)
             env = os.environ.copy()
             env["CALL_LOG"] = str(Path(directory) / "calls.log")
-            env["FAKE_PYTHON"] = str(fake_python)
+            env["FAKE_AUTOMATION"] = str(fake_python)
+            env["TEST_ROOT"] = directory
             result = subprocess.run(
                 ["/bin/bash", "-s"],
                 input=harness,
@@ -181,13 +178,13 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             + 'TARGET_TRIPLE="x86_64-unknown-linux-gnu"\n'
             + 'BACKEND="cuda"\n'
             + 'runtime_arch="x86_64"\n'
-            + 'stage_dir="${TMPDIR:-/tmp}/mesh-linux-cuda-license-test"\n'
+            + 'stage_dir="$TEST_ROOT/stage"\n'
             + 'SCRIPT_DIR="/unused"\n'
             + 'primary_name="libllama.so"\n'
             + 'library_paths=("lib/libcudart.so.12" "lib/libcublas.so.12" "lib/libcublasLt.so.12" "lib/libllama.so")\n'
             + 'mkdir -p "$stage_dir/lib" "$stage_dir/tools"\n'
             + 'linux_cuda_dependency_search_dirs() { :; }\n'
-            + 'python_bin() { printf "%s\\n" "$FAKE_PYTHON"; }\n'
+            + 'cargo() { "$FAKE_AUTOMATION" "$@"; }\n'
             + 'cuda_toolkit_major() { printf "%s\\n" "12"; }\n'
             + 'bundle_cuda_distribution_license() { printf "%s\\n" bundled >"$LICENSE_CALL"; }\n'
             + 'collect_linux_cuda_dependencies\n'
@@ -204,7 +201,8 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             )
             fake_python.chmod(0o755)
             env = os.environ.copy()
-            env["FAKE_PYTHON"] = str(fake_python)
+            env["FAKE_AUTOMATION"] = str(fake_python)
+            env["TEST_ROOT"] = directory
             env["LICENSE_CALL"] = str(Path(directory) / "license-call.log")
             result = subprocess.run(
                 ["/bin/bash", "-s"],
@@ -228,13 +226,13 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             + 'TARGET_TRIPLE="x86_64-unknown-linux-gnu"\n'
             + 'BACKEND="cuda"\n'
             + 'runtime_arch="x86_64"\n'
-            + 'stage_dir="${TMPDIR:-/tmp}/mesh-linux-cuda-placeholder-test"\n'
+            + 'stage_dir="$TEST_ROOT/stage"\n'
             + 'SCRIPT_DIR="/unused"\n'
             + 'primary_name="libllama.so"\n'
             + 'library_paths=("lib/libllama.so")\n'
             + 'mkdir -p "$stage_dir/lib" "$stage_dir/tools"\n'
             + 'linux_cuda_dependency_search_dirs() { :; }\n'
-            + 'python_bin() { printf "%s\\n" "$FAKE_PYTHON"; }\n'
+            + 'cargo() { "$FAKE_AUTOMATION" "$@"; }\n'
             + 'cuda_toolkit_major() { printf "%s\\n" "12"; }\n'
             + 'bundle_cuda_distribution_license() { printf "%s\\n" bundled >"$LICENSE_CALL"; }\n'
             + 'collect_linux_cuda_dependencies\n'
@@ -251,7 +249,8 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             )
             fake_python.chmod(0o755)
             env = os.environ.copy()
-            env["FAKE_PYTHON"] = str(fake_python)
+            env["FAKE_AUTOMATION"] = str(fake_python)
+            env["TEST_ROOT"] = directory
             env["LICENSE_CALL"] = str(Path(directory) / "license-call.log")
             result = subprocess.run(
                 ["/bin/bash", "-s"],

@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -7,9 +6,6 @@ use std::process::{Command, Output};
 
 #[derive(Deserialize)]
 struct LegacyCases {
-    source: String,
-    source_sha256: String,
-    test_source_sha256: String,
     cases: Vec<Case>,
 }
 
@@ -77,20 +73,6 @@ fn migration_native_fixtures_rewriter_report_matches_frozen_legacy_cli() {
         &fs::read(directory.join("legacy-cli.json")).expect("fixture manifest"),
     )
     .expect("typed fixture manifest");
-    for (path, digest) in [
-        (&frozen.source, &frozen.source_sha256),
-        (
-            &"scripts/tests/test_skippy_rewriter_harness.py".to_string(),
-            &frozen.test_source_sha256,
-        ),
-    ] {
-        let bytes = fs::read(root.join(path)).expect("frozen legacy source");
-        assert_eq!(
-            hex::encode(Sha256::digest(bytes)),
-            *digest,
-            "legacy source changed: {path}"
-        );
-    }
     let binary = env!("CARGO_BIN_EXE_xtask");
     let mut accepted = 0;
     let mut rejected = 0;

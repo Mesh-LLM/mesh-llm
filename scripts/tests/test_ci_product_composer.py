@@ -215,10 +215,10 @@ class CiProductComposerTests(unittest.TestCase):
         self.assertNotIn("cargo build", action)
         self.assertNotIn("package-native-runtime.sh", action)
         script = COMPOSE_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("scripts/compose-product-bundle.py", script)
-        self.assertIn("scripts/verify-native-runtime-package.sh", script)
-        self.assertIn("scripts/verify-checksum-sidecar.py", script)
-        self.assertIn("scripts/safe-extract-tar.py", script)
+        self.assertIn("mesh_automation product compose", script)
+        self.assertIn("mesh_automation native verify-runtime-package", script)
+        self.assertIn("mesh_automation artifact verify-checksum", script)
+        self.assertIn("mesh_automation artifact extract-tar", script)
         self.assertIn("scripts/ci-client-readiness-smoke.sh", script)
         self.assertIn('archive_path="$product_dir.tar.gz"', script)
         self.assertIn('tar -C "$product_dir" -czf "$archive_path" .', script)
@@ -384,7 +384,7 @@ class CiProductComposerTests(unittest.TestCase):
             product_script,
         )
         self.assertIn(
-            '"$python_bin" scripts/verify-checksum-sidecar.py \\\n'
+            'mesh_automation artifact verify-checksum \\\n'
             '        "$attestation_verifier"',
             product_script,
         )
@@ -393,18 +393,9 @@ class CiProductComposerTests(unittest.TestCase):
         action = self.read_action("restore-smoke-inputs")
 
         self.assertIn("expected exactly one composed product archive", action)
-        self.assertIn("scripts/safe-extract-tar.py", action)
+        self.assertIn('"${automation[@]}" artifact extract-tar', action)
         self.assertNotIn("tar -xzf", action)
-        self.assertIn("product host path must be", action)
-        self.assertIn(
-            "product runtime must be one direct child of native-runtimes",
-            action,
-        )
-        self.assertIn("product top-level contents are not canonical", action)
-        self.assertIn(
-            "product must contain exactly its manifest-selected runtime",
-            action,
-        )
+        self.assertIn('"${automation[@]}" automation smoke-inputs', action)
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
 

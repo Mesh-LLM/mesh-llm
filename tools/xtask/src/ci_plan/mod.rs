@@ -57,6 +57,18 @@ pub(crate) fn run(root: &Path, args: &[String]) -> DynResult<()> {
     report(&stdin, &roots).emit()
 }
 
+pub(crate) fn build_for_validation(root: &Path, input: &[u8]) -> DynResult<serde_json::Value> {
+    let payload = document::Json::parse(input)?;
+    plan::build(
+        &payload,
+        &plan::Roots {
+            workspace: root,
+            manifests: root,
+        },
+    )
+    .map_err(|error| error.0.into())
+}
+
 fn report(stdin: &[u8], roots: &plan::Roots<'_>) -> CheckReport {
     // Invalid JSON keeps the legacy prefix and status; the parser detail is
     // serde_json's wording rather than Python's `JSONDecodeError` text.

@@ -186,7 +186,7 @@ class CleanupTests(unittest.TestCase):
                     continue
                 found.add((file.name, name))
                 step = job['steps'][-1]
-                self.assertIn('cleanup-self-hosted.py', step.get('run', ''))
+                self.assertTrue(any(command in step.get('run', '') for command in ('cleanup-self-hosted.py', 'ci-ops runner-cleanup')))
                 for status in ('success()', 'failure()', 'cancelled()'):
                     self.assertIn(status, step.get('if', ''))
                 self.assertEqual(step['timeout-minutes'], 5)
