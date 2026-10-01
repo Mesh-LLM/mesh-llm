@@ -19,6 +19,7 @@ pub(crate) mod startup_recovery;
 pub(crate) use crate::command_interrupt;
 pub(crate) mod daemon_readiness;
 pub(crate) mod hf_converted_artifact;
+pub(crate) mod hf_xet_smoke;
 pub(crate) mod native_contracts;
 pub(crate) mod native_generator;
 mod private_state;
@@ -37,8 +38,12 @@ pub(crate) mod sdk_advisory;
 #[cfg(test)]
 #[path = "../../tests/migration_lifecycle/shared_owners.rs"]
 pub(crate) mod shared_owner_tests;
+pub(crate) mod smoke_inputs;
+pub(crate) mod smoke_observation;
 pub(crate) mod split_evidence;
+pub(crate) mod split_probe;
 pub(crate) mod workload_oracle_evidence;
+pub(crate) mod workload_smoke;
 
 use crate::command::DynResult;
 

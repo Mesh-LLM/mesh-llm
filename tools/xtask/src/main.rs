@@ -49,6 +49,11 @@ fn run() -> DynResult<()> {
         .map(|path| repository::RepositoryRoot::resolve(Some(path)))
         .transpose()?;
     match parsed.command {
+        cli::CliCommand::SplitProbe(rest) => automation::split_probe::run(rest),
+        cli::CliCommand::SmokeObservation(rest) => automation::smoke_observation::run(rest),
+        cli::CliCommand::HfXetSmoke(rest) => automation::hf_xet_smoke::run(rest),
+        cli::CliCommand::WorkloadSmoke(rest) => automation::workload_smoke::run(rest),
+        cli::CliCommand::SmokeInputs(rest) => automation::smoke_inputs::run(rest),
         cli::CliCommand::ControlPlaneQa(rest) => {
             let root = repository::RepositoryRoot::resolve(None)?;
             automation::control_plane_qa::run(root.as_path(), rest)
