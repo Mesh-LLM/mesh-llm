@@ -313,7 +313,7 @@ function HeaderLinks({ links }: { links: { href: string; label: string }[] }) {
 }
 
 const DEFAULT_API_ACCESS_LINKS: LinkItem[] = [
-  { href: 'https://meshllm.cloud/', label: 'Docs' },
+  { href: 'https://meshllm.cloud/docs/', label: 'Docs' },
   { href: 'https://meshllm.cloud/#install', label: 'Install' }
 ]
 
