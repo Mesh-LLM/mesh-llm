@@ -1,5 +1,17 @@
 # MeshLLM CI inventory
 
+L2 post-checkout planning and the five lane summaries use Rust through the
+closed `prepare-automation` hosted-bare profile. Only GitHub-hosted Linux may
+select it; locked release Cargo bypasses compiler wrappers and Just, while
+image callers retain verification and sccache unchanged. Quality convention
+and environment ownership checks, runner-contract cleanup, registry summary,
+and runtime-seed lifecycle have Rust callers. Runtime-seed preparation uses
+step-local runner-temp Cargo home/target paths before the measured section.
+The protected `ed07043b` audit, `38d63b2f` resolver and no-checkout sentinel
+remain untouched pending protected-main delivery. Metadata-only Cargo is
+permitted; release composition remains compilation-free. Live execution and
+runtime-seed timing qualification are not claimed by this source cutover.
+
 This file records checked-in CI facts and selected controlled probe evidence.
 It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
@@ -446,7 +458,7 @@ repository secrets. The trusted main entrypoint may pass the optional
 
 `ci/runner-images.json` records the checked-in image references, semantic job
 bindings, native epochs, compiler-seed identity and the separate SDK Rust
-toolchain identity. `scripts/runner-image-identity.py check` compares those
+toolchain identity. `cargo xtool ci-ops runner-identity check` compares those
 values with every literal workflow image binding and the actual planner rows.
 Its focused tests run through the existing `just ci-validate` discovery. This
 catalog adds no planner authority and changes no cache keys.
@@ -686,7 +698,8 @@ source commit.
 
 ## Planner contract
 
-- `scripts/plan-ci.py` is the only routing implementation.
+- `tools/xtask/src/ci_plan` owns routing; the legacy Python planner and its
+  identity/test import closure are deleted.
 - `ci/ownership.yml` maps paths and direct crates to semantic domains; unknown
   paths fail closed.
 - `ci/slices.yml` defines profiles, slice dependencies, rows, runner roles,
@@ -741,7 +754,7 @@ Release host producers use `upload-automation` to publish one immutable xtask
 per OS/architecture and source SHA. Every release composer has its host producer
 in `needs` and uses `restore-automation` to verify checksums/source identity and
 export `MESH_LLM_AUTOMATION_BIN`, without Cargo or compiler bootstrap. The shared
-artifact actions are reusable for later L2 delivery; L2 callers have not switched.
+artifact actions remain reusable; L2 bare-hosted callers use hosted-bare preparation.
 Windows release composers no longer use `prepare-automation`; the release workflow has
 no setup-python steps. Runtime-package verification embeds the GLIBC policy
 ceiling and runs native probes without a checkout dependency. Publication's
@@ -751,9 +764,11 @@ uses Rust product composition and the Python composer is deleted.
 
 `ci-ops authority-audit` exposes endpoint and Docker-auth inspection through
 the existing L2 typed owners. `ci-ops registry-pulls` exposes recursive sample
-loading, reports and threshold enforcement. These commands are registered;
-their L2 workflow/action callers have not switched, and protected delivery
-remains unresolved. Registration does not change provider or cache authority.
+loading, reports and threshold enforcement, and the registry summary caller
+uses that owner. Pre-checkout authority callers remain blocked on protected
+delivery. The local Cargo package resolver requires prepared automation; its
+protected pinned callers and Python remain unchanged. No provider or cache
+authority changed.
 
 Repository Cargo defaults require `sccache` and select a target-specific
 linker driver. Full Linux runner images provide mold as the primary linker and
@@ -1050,7 +1065,7 @@ state, not proof that a restriction is absent.
 
 Runner-images PR #23 is pending; its retained exact-attempt admission flow is
 not yet the producer's merged-main behavior. After that producer flow lands,
-`scripts/runner-image-identity.py bind` can prepare offline catalog proposals
+`cargo xtool ci-ops runner-identity bind` can prepare offline catalog proposals
 from maintainer-reviewed admission anchors. The exact cohort bytes are retained
 under `ci/runner-image-evidence/<sha256>.json`; ordinary commands validate hashes
 and consumer relationships without executing producer code or authenticating

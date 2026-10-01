@@ -35,6 +35,14 @@ command with Rust or component-owned tests: documented behavior, real output
 formats consumed by callers, valid-input files and exit semantics, and failure
 modes. Preserve exact bytes where a caller consumes or hashes them.
 
+The explicit `prepare-automation` `hosted-bare` profile is an automation-only
+exception for GitHub-hosted Linux. It uses the existing stable Rust selection
+and locked Cargo without Just or compiler wrappers; default image preparation
+still verifies the runner image and configures sccache. Runtime-seed automation
+preparation may use step-local Cargo home and target directories outside the
+measured paths before preflight, without populating the measured compiler cache.
+Neither exception permits product compilation in composition-only consumers.
+
 Do not implement Python emulation in xtask: repr/str formatting, argparse or
 JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
 parity. Do not commit differential oracle tests that invoke Python. Legacy

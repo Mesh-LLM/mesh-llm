@@ -450,6 +450,14 @@
       "migration_hf_artifact_controls"
     ]
   },
+  "lane_L12_current_coverage": {
+    "baseline_counts": "historical census below is not current execution; final measured counts belong to receipt",
+    "build_driver": "tools/xtask/tests/lane_l12_build_llama.rs; eleven real shell cases replace four retired test modules with workflow guards",
+    "legacy_fixture_repairs": "SDK composition uses real prepared automation and shared adapter; publish metadata includes workspace IDs/members and runs Rust dependency projection; archive and smoke assertions name owning commands; native CUDA fixture intercepts only Cargo transport; resolver rejects actual errors rather than linker-warning prose",
+    "native_report": "migration_native_fixtures preserves all report cases without deleted-source hash binding",
+    "receipt": ".omo/evidence/lane-L12-reconciliation.md",
+    "workflow_guards": "tools/xtask/src/ci_validation/workflow_guards; permission downgrade/strictest requests/all-scope grants; container-shell precedence; falsy branch rejection"
+  },
   "lane_L12_reconciliation": {
     "policy": "Retired source bindings removed; surviving identities rebound to exact lines. Missing new identities still fail inventory; this command grants no ownership.",
     "receipt": ".omo/evidence/lane-L12-reconciliation.md",
@@ -1090,11 +1098,12 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "cutover_status": "deleted with final caller; historical intent roster retained",
       "deletion_condition": "Delete only after exact archive, manifest, checksum, mode, symlink, and OS parity.",
       "gate": "Legacy just ci-validate plus artifact/platform qualification",
       "module": "scripts/tests/test_ci_product_layout_catalog.py",
       "owner": "tools/xtask/src/artifact or owning platform/native component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "cargo test -p xtask: migration_ci_plan, migration_ci_operations, migration_release, migration_repository, layout_contract_tests, lane_l2_quality_contracts",
       "sha256": "c7d44d751d051a01836dc9e47df0634dbb4ea26e75bbdea09e5ed1e65f8adf87",
       "test_method_count": 6,
       "test_methods": [
@@ -1570,11 +1579,12 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "cutover_status": "deleted with last caller; historical case roster retained",
       "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
       "gate": "Legacy just ci-validate plus owning build/install/platform gate",
       "module": "scripts/tests/test_env_mutation_contract.py",
       "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "cargo test -p xtask --test migration_repository; environment census and upstream pin behavior",
       "sha256": "2d3e563e5d5808334dbbdea010563933487d3cdf49faacb36b0c96afc82324d8",
       "test_method_count": 8,
       "test_methods": [
@@ -2142,11 +2152,12 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "cutover_status": "deleted with last caller; historical case roster retained",
       "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_llama_upstream_pin_guard.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "cargo test -p xtask --test migration_repository; environment census and upstream pin behavior",
       "sha256": "ae0a87dc9effa1a0c1be8adc2a3317df9c61c733d86e269e696e7b922b9e46cd",
       "test_method_count": 11,
       "test_methods": [
@@ -2441,11 +2452,12 @@
         "planner-negative-unknown-field.json: Bash 5.3 CLI rejects unknown field with exit 2 and no JSON; Bash 3.2 still fails before validation"
       ],
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "cutover_status": "deleted with final caller; historical intent roster retained",
       "deletion_condition": "Delete only after case-level fixture parity and shadow validation of all profiles.",
       "gate": "Rust planner unit/integration tests; legacy just ci-validate until cutover",
       "module": "scripts/tests/test_plan_ci.py",
       "owner": "tools/xtask/src/ci_plan",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "cargo test -p xtask: migration_ci_plan, migration_ci_operations, migration_release, migration_repository, layout_contract_tests, lane_l2_quality_contracts",
       "sha256": "8c0e19c80cf26db2d6895e463b4052e06b86a12b51c46ac14f0b0ba7c8b0cacf",
       "test_method_count": 33,
       "test_methods": [
@@ -2779,11 +2791,12 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "cutover_status": "deleted with final caller; historical intent roster retained",
       "deletion_condition": "Delete only after exact deterministic notes/version/preflight parity; fixtures cannot publish.",
       "gate": "Legacy just ci-validate plus just check-release/just publish-crates",
       "module": "scripts/tests/test_release_notes.py",
       "owner": "tools/xtask/src/release or release workflow owner",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "cargo test -p xtask: migration_ci_plan, migration_ci_operations, migration_release, migration_repository, layout_contract_tests, lane_l2_quality_contracts",
       "sha256": "898b3520d70468a095e93daf9d81ff593e4af34754422675e38df1491d3b8c07",
       "test_method_count": 97,
       "test_methods": [
@@ -3116,11 +3129,12 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "cutover_status": "deleted with final caller; historical intent roster retained",
       "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
       "gate": "Legacy just ci-validate plus owning build/install/platform gate",
       "module": "scripts/tests/test_runner_image_evidence.py",
       "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "cargo test -p xtask: migration_ci_plan, migration_ci_operations, migration_release, migration_repository, layout_contract_tests, lane_l2_quality_contracts",
       "sha256": "45470471322f6392c3dc01b1a5f6cfc27247898135af75a1573a479f1e647153",
       "test_method_count": 15,
       "test_methods": [
@@ -3143,11 +3157,12 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "cutover_status": "deleted with final caller; historical intent roster retained",
       "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
       "gate": "Legacy just ci-validate plus owning build/install/platform gate",
       "module": "scripts/tests/test_runner_image_identity.py",
       "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "cargo test -p xtask: migration_ci_plan, migration_ci_operations, migration_release, migration_repository, layout_contract_tests, lane_l2_quality_contracts",
       "sha256": "420c2d1595ec50409d12c0dcbeb98503e33021241ec2544669849e11517f3080",
       "test_method_count": 49,
       "test_methods": [
@@ -3241,11 +3256,12 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "cutover_status": "deleted with last production caller; historical case roster retained",
       "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
       "gate": "Legacy just ci-validate and relevant workflow/platform lane",
       "module": "scripts/tests/test_runtime_seed_canary.py",
       "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "cargo test -p xtask --test lane_l2_runtime_seed --test lane_l2_runtime_lifecycle --test lane_l2_registry_pulls; runtime_seed unit tests",
       "sha256": "c489f93701bbd3a0f68ce86d01d926057586ce834d471c6f1c5081746653a225",
       "test_method_count": 14,
       "test_methods": [
@@ -3782,11 +3798,12 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "cutover_status": "deleted with last production caller; historical case roster retained",
       "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
       "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
       "module": "scripts/tests/test_summarize_depot_registry_pulls.py",
       "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "cargo test -p xtask --test lane_l2_runtime_seed --test lane_l2_runtime_lifecycle --test lane_l2_registry_pulls; runtime_seed unit tests",
       "sha256": "ba874f72c1069dfc05b8d225454cc9fbf3c2fb971db7a574dee7a16bf21793c9",
       "test_method_count": 4,
       "test_methods": [
@@ -3989,14 +4006,6 @@
   ],
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
-  "lane_L12_current_coverage": {
-    "receipt": ".omo/evidence/lane-L12-reconciliation.md",
-    "workflow_guards": "tools/xtask/src/ci_validation/workflow_guards; permission downgrade/strictest requests/all-scope grants; container-shell precedence; falsy branch rejection",
-    "build_driver": "tools/xtask/tests/lane_l12_build_llama.rs; eleven real shell cases replace four retired test modules with workflow guards",
-    "native_report": "migration_native_fixtures preserves all report cases without deleted-source hash binding",
-    "legacy_fixture_repairs": "SDK composition uses real prepared automation and shared adapter; publish metadata includes workspace IDs/members and runs Rust dependency projection; archive and smoke assertions name owning commands; native CUDA fixture intercepts only Cargo transport; resolver rejects actual errors rather than linker-warning prose",
-    "baseline_counts": "historical census below is not current execution; final measured counts belong to receipt"
-  },
   "scope": {
     "ast_discovered_test_method_definitions": 1764,
     "native_test_modules": [

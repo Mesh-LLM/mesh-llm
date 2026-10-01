@@ -581,7 +581,7 @@
       "file": ".agents/skills/manage-ci/SKILL.md",
       "members": [
         [
-          56,
+          64,
           "f3eb280cf5f18fa9",
           1,
           "prose",
@@ -589,7 +589,7 @@
           "Policy says SDK candidates remain conditional; path mention is not Python execution"
         ],
         [
-          473,
+          481,
           "8c58a6a69751aa88",
           1,
           "prose",
@@ -856,7 +856,7 @@
       "file": ".agents/skills/manage-ci/references/current-inventory.md",
       "members": [
         [
-          168,
+          180,
           "dfb3282ee54d32f3",
           1,
           "prose",
@@ -864,15 +864,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          394,
-          "99c02a235da33b1d",
-          1,
-          "prose",
-          "CI ownership or retained HF conversion environment description",
-          "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
-        ],
-        [
-          412,
+          424,
           "b4b4c134cd581a78",
           1,
           "prose",
@@ -880,7 +872,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          454,
+          466,
           "3858c48032d98379",
           1,
           "prose",
@@ -888,15 +880,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          634,
-          "228436f634d0d4f3",
-          1,
-          "prose",
-          "CI ownership or retained HF conversion environment description",
-          "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
-        ],
-        [
-          691,
+          704,
           "eeb405e9c110db5a",
           1,
           "prose",
@@ -904,7 +888,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          795,
+          810,
           "374b927a548a1046",
           1,
           "prose",
@@ -912,15 +896,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          971,
-          "b1fec73cf1f5bd28",
-          1,
-          "prose",
-          "CI ownership or retained HF conversion environment description",
-          "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
-        ],
-        [
-          1104,
+          1119,
           "b7a562e2b1d3673f",
           1,
           "prose",
@@ -928,7 +904,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1145,
+          1160,
           "0934d1ce8f661df3",
           1,
           "prose",
@@ -936,7 +912,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1171,
+          1186,
           "3894bbba68037f7b",
           1,
           "prose",
@@ -944,7 +920,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1199,
+          1214,
           "d1e95ba515d2e6ee",
           1,
           "prose",
@@ -952,7 +928,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1203,
+          1218,
           "d6b4ea35c364a6aa",
           1,
           "prose",
@@ -960,7 +936,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1207,
+          1222,
           "fd29fdc80ac15e00",
           1,
           "prose",
@@ -968,7 +944,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1232,
+          1247,
           "fdc0a30f00b17d4e",
           1,
           "prose",
@@ -976,7 +952,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          19,
+          31,
           "9de9f9314729099c",
           1,
           "prose",

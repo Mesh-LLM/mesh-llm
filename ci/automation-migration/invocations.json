@@ -1322,72 +1322,6 @@
     },
     {
       "bound_child": null,
-      "caller": "scripts/check-conventional-commit.py",
-      "candidate_id": "scripts/check-conventional-commit.py#subprocess-or-interpreter:38256a6f6b02ff49:1",
-      "child": null,
-      "deletion_condition": "Remove when the Rust conventional-commit owner runs git log for --range.",
-      "disposition": "finite_target",
-      "evidence": [
-        {
-          "line": 194,
-          "path": "scripts/check-conventional-commit.py",
-          "text": "out = subprocess.run("
-        },
-        {
-          "line": 195,
-          "path": "scripts/check-conventional-commit.py",
-          "text": "[\"git\", \"log\", \"--format=%B%x1e\", \"--no-merges\", args.range],"
-        }
-      ],
-      "id": "boundary:check-conventional-commit:194",
-      "line": 194,
-      "occurrence": 1,
-      "rationale": "Finite target: the literal git executable with fixed log flags plus the caller's --range string (argv data, not a program).",
-      "reachable_bytes": "external host tool 'git' resolved on PATH; no repository Python or script bytes",
-      "replacement_owner": "task 8 repository checks",
-      "selector": "argv[0] is the string literal 'git' in the list at scripts/check-conventional-commit.py:194; no variable, argv or environment value selects the executable",
-      "source_block": "out = subprocess.run("
-    },
-    {
-      "bound_child": null,
-      "caller": "scripts/check-llama-upstream-pin.py",
-      "candidate_id": "scripts/check-llama-upstream-pin.py#subprocess-or-interpreter:0bb8fafe2022eacf:1",
-      "child": null,
-      "deletion_condition": "Remove when the Rust pin checker performs the same git queries.",
-      "disposition": "finite_target",
-      "evidence": [
-        {
-          "line": 38,
-          "path": "scripts/check-llama-upstream-pin.py",
-          "text": "result = subprocess.run("
-        },
-        {
-          "line": 39,
-          "path": "scripts/check-llama-upstream-pin.py",
-          "text": "[\"git\", \"-C\", str(repo), *args],"
-        },
-        {
-          "line": 247,
-          "path": "scripts/check-llama-upstream-pin.py",
-          "text": "\"--repository\","
-        },
-        {
-          "line": 249,
-          "path": "scripts/check-llama-upstream-pin.py",
-          "text": "default=Path(__file__).resolve().parents[1],"
-        }
-      ],
-      "id": "boundary:check-llama-upstream-pin:38",
-      "line": 38,
-      "occurrence": 1,
-      "rationale": "Finite target: every call site passes git subcommands through git(); argv[0] is literal git with -C repo, where repo is --repository (default Path(__file__).parents[1]) or a temporary bare clone.",
-      "reachable_bytes": "external host tool 'git' resolved on PATH; no repository Python or script bytes",
-      "replacement_owner": "task 8 repository checks",
-      "selector": "argv[0] is the string literal 'git' in the list at scripts/check-llama-upstream-pin.py:38; no variable, argv or environment value selects the executable",
-      "source_block": "result = subprocess.run("
-    },
-    {
-      "bound_child": null,
       "caller": "scripts/cleanup-self-hosted.py",
       "candidate_id": "scripts/cleanup-self-hosted.py#subprocess-or-interpreter:0bb8fafe2022eacf:1",
       "child": null,
@@ -1441,82 +1375,6 @@
       "replacement_owner": "task 19 bounded cross-platform process supervision (self-hosted cleanup)",
       "selector": "argv[0] is the string literal 'git' in the list at scripts/cleanup-self-hosted.py:116; no variable, argv or environment value selects the executable",
       "source_block": "subprocess.run("
-    },
-    {
-      "bound_child": null,
-      "caller": "scripts/plan-ci.py",
-      "candidate_id": "scripts/plan-ci.py#subprocess-or-interpreter:0bb8fafe2022eacf:1",
-      "child": null,
-      "deletion_condition": "Remove when the Rust planner reads cargo metadata itself.",
-      "disposition": "finite_target",
-      "evidence": [
-        {
-          "line": 320,
-          "path": "scripts/plan-ci.py",
-          "text": "result = subprocess.run("
-        },
-        {
-          "line": 321,
-          "path": "scripts/plan-ci.py",
-          "text": "[\"cargo\", \"metadata\", \"--format-version=1\", \"--no-deps\"],"
-        },
-        {
-          "line": 322,
-          "path": "scripts/plan-ci.py",
-          "text": "cwd=root,"
-        }
-      ],
-      "id": "boundary:plan-ci:320",
-      "line": 320,
-      "occurrence": 1,
-      "rationale": "Finite target: literal cargo metadata --format-version=1 --no-deps with cwd=root.",
-      "reachable_bytes": "external host tool 'cargo' resolved on PATH; no repository Python or script bytes",
-      "replacement_owner": "task 9 schema-compatible CI planning",
-      "selector": "argv[0] is the string literal 'cargo' in the list at scripts/plan-ci.py:320; no variable, argv or environment value selects the executable",
-      "source_block": "result = subprocess.run("
-    },
-    {
-      "bound_child": "scripts/affected-crates.sh",
-      "caller": "scripts/plan-ci.py",
-      "candidate_id": "scripts/plan-ci.py#subprocess-or-interpreter:0bb8fafe2022eacf:2",
-      "child": "scripts/affected-crates.sh",
-      "deletion_condition": "Remove when the Rust planner computes affected crates directly.",
-      "disposition": "runtime_selected_boundary",
-      "evidence": [
-        {
-          "line": 40,
-          "path": "scripts/plan-ci.py",
-          "text": "ROOT = Path(__file__).resolve().parents[1]"
-        },
-        {
-          "line": 374,
-          "path": "scripts/plan-ci.py",
-          "text": "script = root / \"scripts\" / \"affected-crates.sh\""
-        },
-        {
-          "line": 320,
-          "path": "scripts/plan-ci.py",
-          "text": "result = subprocess.run("
-        },
-        {
-          "line": 813,
-          "path": "scripts/plan-ci.py",
-          "text": "manifest_root: Path | None = None,"
-        },
-        {
-          "line": 914,
-          "path": "scripts/plan-ci.py",
-          "text": "plan = build_plan(payload, manifest_root=arguments.manifest_root)"
-        }
-      ],
-      "id": "boundary:plan-ci:375",
-      "line": 375,
-      "occurrence": 2,
-      "rationale": "Root override is the boundary: only the default ROOT binding is walked; a caller-supplied root is not claimed.",
-      "reachable_bytes": "bash <root>/scripts/affected-crates.sh --stdin; for the CLI (main -> build_plan without root) this checkout's scripts/affected-crates.sh, which is walked as bound_child; other roots are external bytes",
-      "replacement_owner": "task 9 schema-compatible CI planning",
-      "selector": "build_plan(root=ROOT) (:809-813) passes root to _affected_crates; ROOT is Path(__file__).parents[1] (:40); a library caller may pass another root, and the subprocess runs only for PR profiles without a supplied affected_crates list (:371-373)",
-      "source_block": "result = subprocess.run("
     },
     {
       "bound_child": null,
@@ -1982,18 +1840,6 @@
   },
   "github_source_records": [
     {
-      "argv": "python3 scripts/safe-extract-tar.py $archive $install_dir; archive is the downloaded, SHA-256-checked actionlint tar.gz; install_dir is runner temp/actionlint",
-      "deletion_condition": "Keep until actionlint installation uses a Rust extractor with matching traversal rejection, extracted files and failure status.",
-      "disposition": "execution",
-      "id": ".github/actions/install-actionlint/action.yml#candidate:10208af4a88fcf7c:1",
-      "owner": "required Quality actionlint installation",
-      "reason": "The run block executes this extractor after checking the downloaded archive SHA-256, not as a metadata path or a selected runtime target.",
-      "replacement": "tools/xtask artifact extraction, task 13",
-      "source_block": "python3 scripts/safe-extract-tar.py \"$archive\" \"$install_dir\"",
-      "status_output_effects": "Inherits stdout and stderr; nonzero fails the bash action before test -x and PATH export. Validates archive member paths and links, then extracts the pinned actionlint executable into install_dir; no output is parsed.",
-      "transitive_boundary": "scripts/safe-extract-tar.py; no child process in this extractor"
-    },
-    {
       "argv": "uv sync --locked --project ci/canary-python (UV_PYTHON_DOWNLOADS=never)",
       "deletion_condition": "Retain until the selected canary SDK checks use an approved isolated environment with equivalent lock and import behavior.",
       "disposition": "execution",
@@ -2148,126 +1994,6 @@
       "source_block": "run: python -m pip install --upgrade pip -r ci/requirements-ci-python.txt",
       "status_output_effects": "pip output inherited; nonzero fails the step; upgrades pip and installs requirements in macOS runner Python environment.",
       "transitive_boundary": "ci/requirements-ci-python.txt and package dependencies; ci-compat-smoke.sh downstream Python SDK invocations are separate transitive edges"
-    },
-    {
-      "argv": "jq -cn profile/event/source/base/changed_files/optional affected_crates | python3 scripts/plan-ci.py --manifest-root $manifest_root > ci-plan.json; PR uses validated source manifest data under runner temp, protected planner code",
-      "deletion_condition": "Remove after protected planner source and JSON/status/projection parity is proven across profiles.",
-      "disposition": "execution",
-      "id": ".github/actions/plan-ci/action.yml#candidate:c1e54e8ad3923cca:1",
-      "owner": "canonical CI plan action",
-      "reason": "Plan action pipes typed JSON into the Python planner at this physical line.",
-      "replacement": "tools/xtask ci plan, tasks 9-10",
-      "source_block": "| python3 scripts/plan-ci.py --manifest-root \"$manifest_root\" > ci-plan.json",
-      "status_output_effects": "Planner JSON stdout redirected to ci-plan.json; stderr inherited; pipefail aborts on nonzero. Later jq validates schema and projects plan into GITHUB_OUTPUT; planner can call Cargo metadata/affected-crates for closure.",
-      "transitive_boundary": "scripts/plan-ci.py; PR manifest bytes checked against protected catalogs, main/manual use workspace manifests"
-    },
-    {
-      "argv": "python3 scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS (inputs.lane_plan_json and toJson(needs))",
-      "deletion_condition": "Remove after selected/skipped/failed needs and summary outcome parity.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-linux-lane.yml#candidate:1051b414e5b81e6f:1",
-      "owner": "Linux lane summary validation",
-      "reason": "Linux summary executes the checked-out validator before reporting its outcome.",
-      "replacement": "tools/xtask ci validate-lane, task 11",
-      "source_block": "run: python3 scripts/validate-ci-lane-results.py --lane-plan \"$LANE_PLAN\" --needs \"$NEEDS_RESULTS\"",
-      "status_output_effects": "Inherited streams; continue-on-error records step outcome, report-ci-lane reports success/failure, final enforce step fails on non-success. No intended writes in validator.",
-      "transitive_boundary": "scripts/validate-ci-lane-results.py"
-    },
-    {
-      "argv": "python3 scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS (inputs.lane_plan_json and toJson(needs))",
-      "deletion_condition": "Remove after selected/skipped/failed needs and summary outcome parity.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-macos-lane.yml#candidate:1051b414e5b81e6f:1",
-      "owner": "macOS lane summary validation",
-      "reason": "macOS summary executes the checked-out validator before reporting its outcome.",
-      "replacement": "tools/xtask ci validate-lane, task 11",
-      "source_block": "run: python3 scripts/validate-ci-lane-results.py --lane-plan \"$LANE_PLAN\" --needs \"$NEEDS_RESULTS\"",
-      "status_output_effects": "Inherited streams; continue-on-error records step outcome, report-ci-lane reports success/failure, final enforce step fails on non-success. No intended writes in validator.",
-      "transitive_boundary": "scripts/validate-ci-lane-results.py"
-    },
-    {
-      "argv": "python3 scripts/check-llama-upstream-pin.py $BASE_SHA $HEAD_SHA after SHA shape check and git fetch",
-      "deletion_condition": "Remove after pin-change acceptance/rejection parity for PR base/head.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-quality-lane.yml#candidate:24f05cdabc5413d8:1",
-      "owner": "PR upstream pin monotonicity",
-      "reason": "Quality summary executes upstream pin guard only for PR events.",
-      "replacement": "tools/xtask upstream pin check, task 8",
-      "source_block": "python3 scripts/check-llama-upstream-pin.py \"$BASE_SHA\" \"$HEAD_SHA\"",
-      "status_output_effects": "PR-only summary step; inherited streams; nonzero fails the guard step even though the later lane validator has continue-on-error. Reads Git revisions, no intended write.",
-      "transitive_boundary": "scripts/check-llama-upstream-pin.py"
-    },
-    {
-      "argv": "python3 scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS (inputs.lane_plan_json and toJson(needs))",
-      "deletion_condition": "Remove after selected/skipped/failed needs and summary outcome parity.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-quality-lane.yml#candidate:1051b414e5b81e6f:1",
-      "owner": "Quality lane summary validation",
-      "reason": "Quality summary executes validator then reports step outcome.",
-      "replacement": "tools/xtask ci validate-lane, task 11",
-      "source_block": "run: python3 scripts/validate-ci-lane-results.py --lane-plan \"$LANE_PLAN\" --needs \"$NEEDS_RESULTS\"",
-      "status_output_effects": "Inherited streams; continue-on-error records outcome for report-ci-lane; final enforce step fails when outcome is not success. No intended writes in validator.",
-      "transitive_boundary": "scripts/validate-ci-lane-results.py"
-    },
-    {
-      "argv": "python3 scripts/check-conventional-commit.py --message $PR_TITLE (PR_TITLE delivered through env, not shell interpolation of untrusted text)",
-      "deletion_condition": "Remove after title validation and diagnostics parity.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-quality-slice.yml#candidate:2196115cff2c8fa3:1",
-      "owner": "PR title convention gate",
-      "reason": "PR commit_convention job validates the title from environment.",
-      "replacement": "tools/xtask commit convention, task 8",
-      "source_block": "python3 scripts/check-conventional-commit.py --message \"$PR_TITLE\"",
-      "status_output_effects": "PR-only commit_convention job; inherited streams; nonzero fails strict step. Validates title subject, no intended write.",
-      "transitive_boundary": "scripts/check-conventional-commit.py"
-    },
-    {
-      "argv": "python3 scripts/check-conventional-commit.py --trailers-only $RUNNER_TEMP/pr-commit-messages.txt; file assembled from gh API commit messages and PR_BODY",
-      "deletion_condition": "Remove after trailer-only validation and diagnostics parity.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-quality-slice.yml#candidate:58d56290992d0de9:1",
-      "owner": "PR attribution-trailer gate",
-      "reason": "PR commit_convention job invokes trailer-only validation on collected messages.",
-      "replacement": "tools/xtask commit convention, task 8",
-      "source_block": "python3 scripts/check-conventional-commit.py \\",
-      "status_output_effects": "PR-only job; inherited streams; nonzero fails strict step. Reads temporary message file; does not write it (caller does).",
-      "transitive_boundary": "scripts/check-conventional-commit.py"
-    },
-    {
-      "argv": "python3 scripts/cleanup-self-hosted.py --job runner-contract --evidence-uploaded false",
-      "deletion_condition": "Remove after bounded cleanup parity on all terminal outcomes.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-runner-contract-slice.yml#candidate:b83eff512a36e4eb:1",
-      "owner": "trusted runner contract cleanup",
-      "reason": "Final self-hosted runner step conditionally executes the bounded cleanup script.",
-      "replacement": "tools/xtask scoped self-hosted cleanup, task 12",
-      "source_block": "run: python3 scripts/cleanup-self-hosted.py --job runner-contract --evidence-uploaded false",
-      "status_output_effects": "Final step gated on success/failure/cancellation; inherited streams; nonzero fails cleanup step. Removes only validated runner-contract generated paths, preserving shared caches and failed uploads.",
-      "transitive_boundary": "scripts/cleanup-self-hosted.py; runner-contract job branch only"
-    },
-    {
-      "argv": "python3 scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS (inputs.lane_plan_json and toJson(needs))",
-      "deletion_condition": "Remove after selected/skipped/failed needs and summary outcome parity.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-website-lane.yml#candidate:1051b414e5b81e6f:1",
-      "owner": "Website lane summary validation",
-      "reason": "Website summary executes the checked-out validator before reporting its outcome.",
-      "replacement": "tools/xtask ci validate-lane, task 11",
-      "source_block": "run: python3 scripts/validate-ci-lane-results.py --lane-plan \"$LANE_PLAN\" --needs \"$NEEDS_RESULTS\"",
-      "status_output_effects": "Inherited streams; continue-on-error records outcome for report-ci-lane; final enforce step fails on non-success. No intended writes in validator.",
-      "transitive_boundary": "scripts/validate-ci-lane-results.py"
-    },
-    {
-      "argv": "python3 scripts/validate-ci-lane-results.py --lane-plan $LANE_PLAN --needs $NEEDS_RESULTS (inputs.lane_plan_json and toJson(needs))",
-      "deletion_condition": "Remove after selected/skipped/failed needs and summary outcome parity.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-windows-lane.yml#candidate:1051b414e5b81e6f:1",
-      "owner": "Windows lane summary validation",
-      "reason": "The Windows summary invokes the checked-out validator and reports its step outcome.",
-      "replacement": "tools/xtask ci validate-lane, task 11",
-      "source_block": "run: python3 scripts/validate-ci-lane-results.py --lane-plan \"$LANE_PLAN\" --needs \"$NEEDS_RESULTS\"",
-      "status_output_effects": "Inherited streams; continue-on-error records outcome for report-ci-lane; final enforce step fails on non-success. No intended writes in validator.",
-      "transitive_boundary": "scripts/validate-ci-lane-results.py"
     },
     {
       "argv": "python scripts/ci-laya-smoke.py \\",
@@ -3113,20 +2839,6 @@
       "reason": "Second inline ipaddress check gates later provider probe",
       "replacement_task": 12,
       "target": "inline ipaddress code"
-    },
-    {
-      "id": "scripts/runner-image-identity.py#dynamic-import:ac189ab0aa506b04:1",
-      "owner": "runner image identity loader",
-      "reason": "Imports adjacent evidence module through file-location spec",
-      "replacement_task": 12,
-      "target": "scripts/runner-image-evidence.py"
-    },
-    {
-      "id": "scripts/runner-image-identity.py#dynamic-import:40fc0127cbc4dd32:1",
-      "owner": "runner image identity planner selection",
-      "reason": "Imports planner by repository-root-relative path",
-      "replacement_task": 10,
-      "target": "scripts/plan-ci.py"
     },
     {
       "id": "scripts/llama-canary-family-evidence.py#dynamic-import:3c2c97de0b0aba79:1",

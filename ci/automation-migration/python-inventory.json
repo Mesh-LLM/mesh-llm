@@ -385,33 +385,6 @@
       "required": false
     },
     {
-      "classification": "required repository check",
-      "deletion_condition": "Just/workflow callers use Rust owner with identical validation and exit behavior.",
-      "exception": null,
-      "path": "scripts/check-conventional-commit.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask repository",
-      "required": true
-    },
-    {
-      "classification": "required repository check",
-      "deletion_condition": "Just/release callers use Rust owner and explicit census parity passes.",
-      "exception": null,
-      "path": "scripts/check-env-mutation-contract.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask repository",
-      "required": true
-    },
-    {
-      "classification": "required CI repository check",
-      "deletion_condition": "Quality workflow caller uses Rust owner with same pin/patch checks.",
-      "exception": null,
-      "path": "scripts/check-llama-upstream-pin.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask repository/release",
-      "required": true
-    },
-    {
       "classification": "workload/canary identity validation",
       "deletion_condition": "Map all canary/workload callers and port generic identity checks before deleting.",
       "exception": null,
@@ -628,15 +601,6 @@
       "required": false
     },
     {
-      "classification": "required CI planner",
-      "deletion_condition": "Shadow parity across all representative inputs, protected caller cutover and no Python planner imports.",
-      "exception": null,
-      "path": "scripts/plan-ci.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_plan",
-      "required": true
-    },
-    {
       "classification": "family certification planner",
       "deletion_condition": "Port generic planning or place complete certification path behind explicit optional workflow without hiding required contracts.",
       "exception": null,
@@ -691,33 +655,6 @@
       "required": false
     },
     {
-      "classification": "release notes generation",
-      "deletion_condition": "Deterministic classification and optional-agent fallback parity; release caller migrated.",
-      "exception": null,
-      "path": "scripts/release-notes-classify.py",
-      "phase": 3,
-      "replacement_owner": "tools/xtask release",
-      "required": false
-    },
-    {
-      "classification": "release notes generation",
-      "deletion_condition": "Linking/output parity and release caller migrated.",
-      "exception": null,
-      "path": "scripts/release-notes-link.py",
-      "phase": 3,
-      "replacement_owner": "tools/xtask release",
-      "required": false
-    },
-    {
-      "classification": "release notes generation",
-      "deletion_condition": "Regrouping and failure fallback parity and release caller migrated.",
-      "exception": null,
-      "path": "scripts/release-notes-regroup.py",
-      "phase": 3,
-      "replacement_owner": "tools/xtask release",
-      "required": false
-    },
-    {
       "classification": "bounded process helper",
       "deletion_condition": "Callers use Rust supervisor and preserve process group cleanup/timeout behavior.",
       "exception": null,
@@ -742,33 +679,6 @@
       "path": "scripts/run-openai-guardrail-corpus.py",
       "phase": 5,
       "replacement_owner": "tools/xtask qa or Rust protocol tests",
-      "required": false
-    },
-    {
-      "classification": "CI runner identity evidence library",
-      "deletion_condition": "Port together with runner-image-identity dynamic import closure.",
-      "exception": null,
-      "path": "scripts/runner-image-evidence.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence",
-      "required": false
-    },
-    {
-      "classification": "CI runner identity and planner consumer",
-      "deletion_condition": "Port both explicit dynamic imports (evidence and plan-ci) and keep identity tests green.",
-      "exception": null,
-      "path": "scripts/runner-image-identity.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation",
-      "required": false
-    },
-    {
-      "classification": "manual CI cache qualification",
-      "deletion_condition": "Port read-only evidence/measurement contract; no cache mutation in migration QA.",
-      "exception": null,
-      "path": "scripts/runtime-seed-canary.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence",
       "required": false
     },
     {
@@ -841,15 +751,6 @@
       "path": "scripts/skippy-tts-oracle.py",
       "phase": 5,
       "replacement_owner": "Native/domain oracle owner plus tools/xtask evidence",
-      "required": false
-    },
-    {
-      "classification": "manual CI evidence summarizer",
-      "deletion_condition": "Port generic report aggregation or document optional read-only caller.",
-      "exception": null,
-      "path": "scripts/summarize-depot-registry-pulls.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask automation evidence",
       "required": false
     },
     {
@@ -1123,15 +1024,6 @@
       "required": true
     },
     {
-      "classification": "generic CI catalog test",
-      "deletion_condition": "Path/domain ownership parity tests remain required.",
-      "exception": null,
-      "path": "scripts/tests/test_ci_product_layout_catalog.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
       "classification": "generic runner/cache policy test",
       "deletion_condition": "Provider/cache policy cases move to Rust and remain required.",
       "exception": null,
@@ -1300,15 +1192,6 @@
       "path": "scripts/tests/test_download_skippy_parity_candidates.py",
       "phase": 2,
       "replacement_owner": "tools/xtask native patch/build tests",
-      "required": true
-    },
-    {
-      "classification": "generic repository policy test",
-      "deletion_condition": "Census and mutation policy checks pass in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_env_mutation_contract.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask repository tests",
       "required": true
     },
     {
@@ -1510,15 +1393,6 @@
       "required": true
     },
     {
-      "classification": "generic pin check test",
-      "deletion_condition": "Pin and patch queue failure cases pass in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_llama_upstream_pin_guard.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask repository/release tests",
-      "required": true
-    },
-    {
       "classification": "generic native toolchain test",
       "deletion_condition": "Linker toolchain contract tested in Rust/native tests.",
       "exception": null,
@@ -1597,15 +1471,6 @@
       "path": "scripts/tests/test_performance_history.py",
       "phase": 2,
       "replacement_owner": "tools/xtask automation evidence tests",
-      "required": true
-    },
-    {
-      "classification": "generic required planner test",
-      "deletion_condition": "All plan cases pass in Rust shadow parity.",
-      "exception": null,
-      "path": "scripts/tests/test_plan_ci.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_plan tests",
       "required": true
     },
     {
@@ -1699,15 +1564,6 @@
       "required": true
     },
     {
-      "classification": "generic release notes test",
-      "deletion_condition": "Notes outputs and failures match in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_release_notes.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask release tests",
-      "required": true
-    },
-    {
       "classification": "generic release adapter test",
       "deletion_condition": "Preflight and no-mutation contracts migrated.",
       "exception": null,
@@ -1771,39 +1627,12 @@
       "required": true
     },
     {
-      "classification": "generic CI evidence test",
-      "deletion_condition": "Evidence schema and identity checks migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_runner_image_evidence.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence tests",
-      "required": true
-    },
-    {
-      "classification": "generic CI policy test",
-      "deletion_condition": "Image identity and dynamic planner edge parity covered in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_runner_image_identity.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation tests",
-      "required": true
-    },
-    {
       "classification": "generic runtime test gate",
       "deletion_condition": "Native runtime event gate and evidence behavior tested by replacement.",
       "exception": null,
       "path": "scripts/tests/test_runtime_events_native_gate.py",
       "phase": 2,
       "replacement_owner": "tools/xtask ci_validation/native test owner",
-      "required": true
-    },
-    {
-      "classification": "generic measurement test",
-      "deletion_condition": "Warm/cold evidence and failure statuses migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_runtime_seed_canary.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence tests",
       "required": true
     },
     {
@@ -2005,15 +1834,6 @@
       "required": true
     },
     {
-      "classification": "generic evidence test",
-      "deletion_condition": "Aggregation/schema tests migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_summarize_depot_registry_pulls.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence tests",
-      "required": true
-    },
-    {
       "classification": "generic macOS SDK test",
       "deletion_condition": "Swift/XCFramework environment contract tested on macOS.",
       "exception": null,
@@ -2029,15 +1849,6 @@
       "path": "scripts/tests/test_synthetic_graph_registry.py",
       "phase": 2,
       "replacement_owner": "tools/xtask model registry tests",
-      "required": true
-    },
-    {
-      "classification": "generic required CI validator test",
-      "deletion_condition": "All selected/skip/failure/digest outcomes tested in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_validate_ci_lane_results.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation tests",
       "required": true
     },
     {
@@ -2066,15 +1877,6 @@
       "phase": 5,
       "replacement_owner": "Domain TTS oracle owner",
       "required": false
-    },
-    {
-      "classification": "required CI lane result validator",
-      "deletion_condition": "All lane callers use Rust and result semantics parity passes.",
-      "exception": null,
-      "path": "scripts/validate-ci-lane-results.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
-      "required": true
     },
     {
       "classification": "trusted canary agent policy",
