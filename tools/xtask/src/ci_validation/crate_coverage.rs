@@ -1,9 +1,7 @@
 use crate::command::{DynResult, ensure_contains, ensure_set_eq};
 use crate::repo_consistency::{script_workspace_members, workspace_package_names};
 use std::fs;
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 fn check_ci_crate_test_coverage(
     linux_lane_workflow: &str,
@@ -21,7 +19,7 @@ fn check_ci_crate_test_coverage(
     )?;
     ensure_contains(
         quality_workflow,
-        "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
+        "just ci-legacy-contracts",
         "quality CI contract test suite",
     )?;
 
@@ -39,28 +37,7 @@ pub(crate) fn check_ci_crate_test_coverage_files(repo_root: &Path) -> DynResult<
 
 fn check_main_plan_test_coverage(repo_root: &Path) -> DynResult<()> {
     let input = r#"{"profile":"main","event_name":"push","source_sha":"0000000000000000000000000000000000000000","base_sha":"","changed_files":[]}"#;
-    let mut child = Command::new("python3")
-        .current_dir(repo_root)
-        .args(["scripts/plan-ci.py"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .ok_or("failed to open planner stdin")?
-        .write_all(input.as_bytes())?;
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "main CI planner failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
-    }
-
-    let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let plan = crate::ci_plan::build_for_validation(repo_root, input.as_bytes())?;
     let batches = plan
         .get("matrices")
         .and_then(|matrices| matrices.get("rust_tests"))

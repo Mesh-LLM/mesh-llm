@@ -140,12 +140,16 @@ fn graph_expands_checked_in_just_bindings_without_claiming_census() -> DynResult
     assert!(graph.edges.iter().any(|edge| edge.parent == "just:with-lld"
         && edge.source_block == "exec cargo run -p xtask -- repo-consistency ci-crate-lists"
         && edge.status == "optional_branch"));
-    assert!(graph.edges.iter().any(|edge| edge.parent == "just:build"
-        && edge.child.as_deref() == Some("scripts/manage-build-cache.py")
-        && edge.status == "optional_branch"));
+    assert!(graph.edges.iter().any(|edge| {
+        edge.parent == "just:build"
+            && edge
+                .source_block
+                .contains("automation-run ci-ops build-cache build")
+            && edge.status == "unknown_selection"
+    }));
     // Then each gated edge carries a platform_conditional record, so no class-c edge remains.
     assert!(graph.edges.iter().any(|edge| edge.parent == "just:build"
-        && edge.disposition == super::boundaries::EdgeDisposition::PlatformConditional));
+        && edge.disposition == super::boundaries::EdgeDisposition::BoundedSelector));
     assert_eq!(graph.unresolved, 0);
     Ok(())
 }

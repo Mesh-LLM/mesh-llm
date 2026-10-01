@@ -41,6 +41,7 @@ class HfXetPortabilitySmokeTests(unittest.TestCase):
     def run_smoke(self, binary: Path) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["PATH"] = str(self.bin_dir)
+        environment["MESH_LLM_AUTOMATION_BIN"] = str(ROOT / "target/debug/xtask")
         return subprocess.run(
             ["/bin/bash", str(SCRIPT), str(binary)],
             check=False,

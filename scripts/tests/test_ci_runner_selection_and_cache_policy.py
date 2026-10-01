@@ -35,7 +35,7 @@ class CiRunnerSelectionAndCachePolicyTests(RunnerSelectorMixin, unittest.TestCas
             "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6",
             action,
         )
-        self.assertIn("actionlint archive checksum mismatch", action)
+        self.assertIn('cargo xtool artifact verify-checksum "$archive"', action)
         self.assertIn("scripts/safe-extract-tar.py", action)
         self.assertNotIn("tar -x", action)
 

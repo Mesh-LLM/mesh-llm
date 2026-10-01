@@ -286,7 +286,7 @@ class CiArtifactActionTests(unittest.TestCase):
             contract,
         )
         self.assertIn(
-            "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
+            "just ci-legacy-contracts",
             contract,
         )
         requirements = (
@@ -314,7 +314,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6",
             action,
         )
-        self.assertIn("actionlint archive checksum mismatch", action)
+        self.assertIn('cargo xtool artifact verify-checksum "$archive"', action)
         self.assertIn("scripts/safe-extract-tar.py", action)
         self.assertNotIn("tar -x", action)
 
@@ -1440,7 +1440,7 @@ class CiArtifactActionTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, consumer_script)
-        self.assertIn("scripts/safe-extract-tar.py", restore_script)
+        self.assertIn("mesh_automation artifact extract-tar", restore_script)
         self.assertIn("prepare-native-sdk-input", routing)
         self.assertIn("native-sdk-artifact", routing)
         self.assertIn("restore-native-sdk-input", routing)
@@ -1932,7 +1932,7 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn(
-            "scripts/verify-swift-xcframework.py",
+            "mesh_automation release swift-xcframework",
             (
                 ROOT / "mesh" / "scripts" / "verify-swift-release-artifact.sh"
             ).read_text(encoding="utf-8"),
@@ -2053,10 +2053,7 @@ class CiArtifactActionTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, consumer_script)
-        self.assertIn(
-            'scripts/safe-extract-zip.py "$SWIFT_INPUT_ARCHIVE"',
-            consumer_script,
-        )
+        self.assertIn("mesh_automation artifact extract-zip", consumer_script)
         self.assertIn(
             'install -m 0644 "$SWIFT_INPUT_BINDING" '
             '"$SWIFT_TRACKED_BINDING"',
@@ -2150,10 +2147,10 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertNotIn("cargo build", action)
         self.assertNotIn("package-native-runtime.sh", action)
         script = COMPOSE_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("scripts/compose-product-bundle.py", script)
-        self.assertIn("scripts/verify-native-runtime-package.sh", script)
-        self.assertIn("scripts/verify-checksum-sidecar.py", script)
-        self.assertIn("scripts/safe-extract-tar.py", script)
+        self.assertIn("mesh_automation product compose", script)
+        self.assertIn("mesh_automation native verify-runtime-package", script)
+        self.assertIn("mesh_automation artifact verify-checksum", script)
+        self.assertIn("mesh_automation artifact extract-tar", script)
         self.assertIn("scripts/ci-client-readiness-smoke.sh", script)
         self.assertIn('archive_path="$product_dir.tar.gz"', script)
         self.assertIn('tar -C "$product_dir" -czf "$archive_path" .', script)
@@ -2319,7 +2316,7 @@ class CiArtifactActionTests(unittest.TestCase):
             product_script,
         )
         self.assertIn(
-            '"$python_bin" scripts/verify-checksum-sidecar.py \\\n'
+            'mesh_automation artifact verify-checksum \\\n'
             '        "$attestation_verifier"',
             product_script,
         )

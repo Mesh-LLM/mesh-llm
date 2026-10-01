@@ -349,6 +349,7 @@ class PublishCratesFixture:
         merged_env = os.environ.copy()
         merged_env.update(env or {})
         merged_env["PATH"] = f"{self.bin_dir}{os.pathsep}{merged_env['PATH']}"
+        merged_env["MESH_LLM_AUTOMATION_BIN"] = str(ROOT / "target/debug/xtask")
         return subprocess.run(
             ["bash", str(SCRIPT), *(args or [])],
             cwd=self.tmp_path,
@@ -496,6 +497,7 @@ fi
             packages.append(
                 {
                     "name": crate,
+                    "id": crate,
                     "version": "0.68.0",
                     "manifest_path": f"{self.tmp_path}/crates/{crate}/Cargo.toml",
                     "dependencies": [
@@ -509,7 +511,7 @@ fi
                     ],
                 }
             )
-        return json.dumps({"packages": packages})
+        return json.dumps({"packages": packages, "workspace_members": sorted(crate_names)})
 
     def _write_executable(self, name: str, content: str) -> None:
         path = self.bin_dir / name

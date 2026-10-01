@@ -60,7 +60,7 @@ RECIPES_BY_FILE: Final = {
         "website-clean", "website-dev",
     },
     "just/ci.just": {
-        "automation-bootstrap", "automation-run", "ci-crate-lists", "ci-sccache-seed-build", "ci-shellcheck", "ci-validate",
+        "automation-bootstrap", "automation-run", "ci-crate-lists", "ci-sccache-seed-build", "ci-shellcheck", "ci-validate", "ci-legacy-contracts",
         "no-console-print", "publish-crates", "test-all",
     },
     "just/mesh-client.just": {"auto", "mesh-client"},

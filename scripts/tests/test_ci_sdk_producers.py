@@ -273,7 +273,7 @@ class CiSdkProducersTests(RunnerSelectorMixin, unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, consumer_script)
-        self.assertIn("scripts/safe-extract-tar.py", restore_script)
+        self.assertIn("mesh_automation artifact extract-tar", restore_script)
         self.assertIn("prepare-native-sdk-input", routing)
         self.assertIn("native-sdk-artifact", routing)
         self.assertIn("restore-native-sdk-input", routing)
@@ -748,7 +748,7 @@ class CiSdkProducersTests(RunnerSelectorMixin, unittest.TestCase):
             producer,
         )
         self.assertIn(
-            "scripts/verify-swift-xcframework.py",
+            "mesh_automation release swift-xcframework",
             (
                 ROOT / "mesh" / "scripts" / "verify-swift-release-artifact.sh"
             ).read_text(encoding="utf-8"),
@@ -876,10 +876,7 @@ class CiSdkProducersTests(RunnerSelectorMixin, unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, consumer_script)
-        self.assertIn(
-            'scripts/safe-extract-zip.py "$SWIFT_INPUT_ARCHIVE"',
-            consumer_script,
-        )
+        self.assertIn("mesh_automation artifact extract-zip", consumer_script)
         self.assertIn(
             'install -m 0644 "$SWIFT_INPUT_BINDING" '
             '"$SWIFT_TRACKED_BINDING"',

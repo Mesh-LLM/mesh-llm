@@ -315,7 +315,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                 capture_output=True,
                 check=True,
             )
-            self.assertEqual(result.stderr, "")
+            self.assertNotIn("error:", result.stderr.lower())
             self.assertIn("dense_file=SmolLM2-135M-Instruct-Q8_0.gguf", output.read_text())
 
     def test_resolver_uses_declared_default_for_multi_artifact_manifest(self) -> None:

@@ -152,14 +152,26 @@ fn verified_inline_occurrence_does_not_approve_heredoc_data_or_dynamic_target() 
 
 #[test]
 fn smoke_inline_contracts_bind_each_physical_occurrence() -> DynResult<()> {
-    let root = crate::repository::RepositoryRoot::resolve(None)?;
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path();
     let path = "scripts/ci-smoke-test.sh";
+    fs::create_dir(root.join("scripts"))?;
+    fs::create_dir_all(root.join("ci/automation-migration"))?;
+    let call = "python3 -c 'import json'";
+    fs::write(root.join(path), format!("{call}\n{call}\n"))?;
     let files = [path.to_owned()];
-    let observed = scan::scan_paths(root.as_path(), &files)?;
+    let observed = scan::scan_paths(root, &files)?;
+    let records = observed.iter().map(|row| serde_json::json!({"id":row.id,"source_block":call,"disposition":"execution","argv":call,"status_output_effects":"stdout inherited; nonzero fails","transitive_boundary":"inline JSON input","replacement":"Rust smoke owner","deletion_condition":"replace with intent owner","reason":"synthetic physical invocation"})).collect::<Vec<_>>();
+    fs::write(
+        root.join("ci/automation-migration/invocations.json"),
+        serde_json::to_vec(
+            &serde_json::json!({"github_source_records":[],"inline_source_records":records}),
+        )?,
+    )?;
     let validated = observed.iter().map(|row| row.id.clone()).collect();
 
-    let graph = report(root.as_path(), &files, &observed, &validated, &[path])?;
-    for line in [39, 48, 139, 166, 296] {
+    let graph = report(root, &files, &observed, &validated, &[path])?;
+    for line in [1, 2] {
         let edge = graph
             .edges
             .iter()
@@ -175,12 +187,12 @@ fn smoke_inline_contracts_bind_each_physical_occurrence() -> DynResult<()> {
         graph
             .edges
             .iter()
-            .find(|edge| edge.line == 48)
+            .find(|edge| edge.line == 1)
             .and_then(|edge| edge.contract_source.as_ref()),
         graph
             .edges
             .iter()
-            .find(|edge| edge.line == 296)
+            .find(|edge| edge.line == 2)
             .and_then(|edge| edge.contract_source.as_ref())
     );
     Ok(())

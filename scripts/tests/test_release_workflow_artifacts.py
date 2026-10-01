@@ -786,8 +786,8 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             "compose_linux_aarch64_cuda",
         )
 
-        self.assertIn("scripts/verify-checksum-sidecar.py", smoke)
-        self.assertIn("scripts/safe-extract-tar.py", smoke)
+        self.assertIn("cargo xtool artifact verify-checksum", smoke)
+        self.assertIn("cargo xtool artifact extract-tar", smoke)
         self.assertIn(
             'scripts/ci-hf-xet-portability-smoke.sh "$binary"',
             smoke,
