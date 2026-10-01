@@ -552,6 +552,22 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn strict_package_v2_source_gets_a_content_address() {
+        let root = tempfile::tempdir().unwrap();
+        crate::inference::skippy::write_test_package_v2_fixture(
+            root.path(),
+            "fixture/model",
+            &[("payload", "shared/payload.gguf", "blk.0.weight")],
+        )
+        .unwrap();
+        let identity = crate::inference::skippy::identity_from_package_v2(root.path()).unwrap();
+
+        let strict = into_content_addressed_identity(identity)
+            .expect("local-required must accept a package-v2 source made of regular files");
+        assert!(is_content_addressed_gguf_ref(&strict.package_ref));
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_fingerprint_is_reusable_and_catches_a_same_size_rewrite() {
