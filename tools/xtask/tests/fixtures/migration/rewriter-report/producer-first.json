@@ -1,0 +1,234 @@
+{
+  "builders": [
+    {
+      "constructor": "model_auxiliary::graph_mtp::graph_mtp",
+      "edits": [],
+      "file": "src/models/auxiliary.cpp",
+      "line": 12,
+      "proof": {
+        "activation_in": "",
+        "activation_out": "",
+        "embedding_owner": false,
+        "execution_scope": "final_stage_sidecar",
+        "loop": {
+          "end": "",
+          "start": "",
+          "var": ""
+        },
+        "nonlocal_exits": [],
+        "output_owner": false,
+        "scope_evidence": [
+          "typed_mtp_builder"
+        ],
+        "terminal_predicates": []
+      },
+      "unsupported_reason": null,
+      "verdict": "supported_auxiliary"
+    },
+    {
+      "constructor": "model_continue_path::graph::graph",
+      "edits": [
+        {
+          "file": "src/models/continue-path.cpp",
+          "kind": "insert_begin_block",
+          "range": [
+            901,
+            901
+          ],
+          "text": "\n    begin_block(inpL, il);\n"
+        },
+        {
+          "file": "src/models/continue-path.cpp",
+          "kind": "insert_end_block",
+          "range": [
+            973,
+            973
+          ],
+          "text": "  end_block(inpL, il);\n  "
+        },
+        {
+          "file": "src/models/continue-path.cpp",
+          "kind": "insert_end_block_before_continue",
+          "range": [
+            927,
+            927
+          ],
+          "text": "end_block(inpL, il);\n      "
+        }
+      ],
+      "file": "src/models/continue-path.cpp",
+      "line": 28,
+      "proof": {
+        "activation_in": "inpL",
+        "activation_out": "inpL",
+        "embedding_owner": true,
+        "execution_scope": "partitioned_decoder",
+        "loop": {
+          "end": "n_layer",
+          "start": "0",
+          "var": "il"
+        },
+        "nonlocal_exits": [],
+        "output_owner": false,
+        "scope_evidence": [],
+        "terminal_predicates": []
+      },
+      "unsupported_reason": null,
+      "verdict": "transformable"
+    },
+    {
+      "constructor": "model_continue_unbraced::graph::graph",
+      "edits": [
+        {
+          "file": "src/models/continue-unbraced.cpp",
+          "kind": "insert_begin_block",
+          "range": [
+            909,
+            909
+          ],
+          "text": "\n    begin_block(inpL, il);\n"
+        },
+        {
+          "file": "src/models/continue-unbraced.cpp",
+          "kind": "insert_end_block",
+          "range": [
+            967,
+            967
+          ],
+          "text": "  end_block(inpL, il);\n  "
+        },
+        {
+          "file": "src/models/continue-unbraced.cpp",
+          "kind": "wrap_end_block_before_continue",
+          "range": [
+            927,
+            936
+          ],
+          "text": "{\n        end_block(inpL, il);\n        continue;\n    }"
+        }
+      ],
+      "file": "src/models/continue-unbraced.cpp",
+      "line": 28,
+      "proof": {
+        "activation_in": "inpL",
+        "activation_out": "inpL",
+        "embedding_owner": true,
+        "execution_scope": "partitioned_decoder",
+        "loop": {
+          "end": "n_layer",
+          "start": "0",
+          "var": "il"
+        },
+        "nonlocal_exits": [],
+        "output_owner": false,
+        "scope_evidence": [],
+        "terminal_predicates": []
+      },
+      "unsupported_reason": null,
+      "verdict": "transformable"
+    },
+    {
+      "constructor": "model_fixture::graph::graph",
+      "edits": [
+        {
+          "file": "src/models/conventional.cpp",
+          "kind": "insert_begin_block",
+          "range": [
+            1015,
+            1015
+          ],
+          "text": "\n    begin_block(inpL, il);\n"
+        },
+        {
+          "file": "src/models/conventional.cpp",
+          "kind": "insert_end_block",
+          "range": [
+            1140,
+            1140
+          ],
+          "text": "  end_block(inpL, il);\n  "
+        }
+      ],
+      "file": "src/models/conventional.cpp",
+      "line": 37,
+      "proof": {
+        "activation_in": "inpL",
+        "activation_out": "inpL",
+        "embedding_owner": true,
+        "execution_scope": "partitioned_decoder",
+        "loop": {
+          "end": "n_layer",
+          "start": "0",
+          "var": "il"
+        },
+        "nonlocal_exits": [],
+        "output_owner": true,
+        "scope_evidence": [],
+        "terminal_predicates": []
+      },
+      "unsupported_reason": null,
+      "verdict": "transformable"
+    },
+    {
+      "constructor": "model_delegated_stacks::graph::graph",
+      "edits": [],
+      "file": "src/models/delegated-opaque.cpp",
+      "line": 19,
+      "proof": {
+        "activation_in": "",
+        "activation_out": "",
+        "embedding_owner": true,
+        "execution_scope": "partitioned_decoder",
+        "loop": {
+          "end": "",
+          "start": "",
+          "var": ""
+        },
+        "nonlocal_exits": [],
+        "output_owner": false,
+        "scope_evidence": [],
+        "terminal_predicates": []
+      },
+      "unsupported_reason": "no layer block loop",
+      "verdict": "unsupported_shape"
+    },
+    {
+      "constructor": "model_multiple_domains::graph::graph",
+      "edits": [],
+      "file": "src/models/multiple-domains.cpp",
+      "line": 19,
+      "proof": {
+        "activation_in": "",
+        "activation_out": "",
+        "embedding_owner": true,
+        "execution_scope": "multiple_sequential_layer_domains",
+        "loop": {
+          "end": "",
+          "start": "",
+          "var": ""
+        },
+        "nonlocal_exits": [],
+        "output_owner": false,
+        "scope_evidence": [
+          "first.n_layer",
+          "second.n_layer"
+        ],
+        "terminal_predicates": []
+      },
+      "unsupported_reason": null,
+      "verdict": "supported_whole_model"
+    }
+  ],
+  "generator_version": "0.5.0",
+  "llama_cpp_commit": "fixture",
+  "schema_version": 1,
+  "source_root": "/private/var/folders/5q/y9dmlwq11tqd74j_17t5p5ym0000gn/T/opencode/task23-approved-report-20260927-eTWePA/campaign/producer-pair/source",
+  "summary": {
+    "already_transformed": 0,
+    "error": 0,
+    "supported_auxiliary": 1,
+    "supported_whole_model": 1,
+    "transformable": 3,
+    "unsupported_shape": 1
+  }
+}
