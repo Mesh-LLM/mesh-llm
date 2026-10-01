@@ -16,6 +16,13 @@ class BuildAcceleratorDefaultsTests(unittest.TestCase):
         findings: list[str] = []
         for path in sorted((ROOT / ".github").rglob("*.yml")):
             text = path.read_text(encoding="utf-8")
+            if path.name == "depot-canary.yml":
+                isolated = text.split("      - name: Prepare isolated automation before measurement\n", 1)[1].split("      - name: Admit exact seed", 1)[0]
+                self.assertIn("CARGO_TARGET_DIR: ${{ runner.temp }}/runtime-seed-automation-target", isolated)
+                self.assertIn("CARGO_HOME: ${{ runner.temp }}/runtime-seed-automation-cargo", isolated)
+                self.assertIn("cargo build --locked --release -p xtask --bin xtask", isolated)
+                self.assertNotIn("mesh-llm --", isolated)
+                text = text.replace(isolated, "", 1)
             for forbidden in (
                 'RUSTC_WRAPPER: ""',
                 "RUSTC_WRAPPER: ''",

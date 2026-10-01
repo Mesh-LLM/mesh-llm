@@ -1,6 +1,8 @@
 from pathlib import Path
 import re
 import unittest
+import json
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -93,10 +95,10 @@ class RequiredSummaryTests(unittest.TestCase):
                     )
 
     def test_lane_validator_rejects_required_skips_and_extra_work(self):
-        validator = (ROOT / "scripts/validate-ci-lane-results.py").read_text()
-        self.assertIn('if result != "success"', validator)
-        self.assertIn('if result != "skipped"', validator)
-        self.assertIn("required lane has no planned jobs", validator)
+        plan = {"lane": "quality", "required": True, "required_slices": ["quality"], "matrices": {}}
+        for needs in ({"quality": {"result": "skipped"}}, {"quality": {"result": "success"}, "runner_contract": {"result": "success"}}):
+            result = subprocess.run([str(ROOT / "target/debug/xtask"), "ci", "validate-lane", "--lane-plan", json.dumps(plan), "--needs", json.dumps(needs)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

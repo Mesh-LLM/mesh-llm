@@ -42,7 +42,7 @@ runs:
         cargo xtool artifact verify-checksum "$archive"
 
         mkdir -p "$install_dir"
-        python3 scripts/safe-extract-tar.py "$archive" "$install_dir"
+        cargo xtool artifact extract-tar "$archive" "$install_dir"
         test -x "$install_dir/actionlint"
         "$install_dir/actionlint" -version
         printf '%s\n' "$install_dir" >> "$GITHUB_PATH"

@@ -718,14 +718,25 @@ jobs:
       - uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
           pinned_epoch: mesh-llm-cuda-runner-sha256-f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      - name: Prepare isolated automation before measurement
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/runtime-seed-automation-target
+          CARGO_HOME: ${{ runner.temp }}/runtime-seed-automation-cargo
+          RUSTC_WRAPPER: ""
+          CARGO_BUILD_RUSTC_WRAPPER: ""
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p xtask --bin xtask
+          echo "MESH_LLM_AUTOMATION_BIN=$CARGO_TARGET_DIR/release/xtask" >> "$GITHUB_ENV"
       - name: Admit exact seed and observe fresh filesystem
         id: seed_key
         env:
           GH_TOKEN: ${{ github.token }}
           CANARY_KEY: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
-        run: python3 scripts/runtime-seed-canary.py preflight runtime-seed-evidence
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed preflight runtime-seed-evidence'
       - name: Start restore timer
-        run: python3 scripts/runtime-seed-canary.py restore_start runtime-seed-evidence
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed restore_start runtime-seed-evidence'
       - id: seed
         uses: ./.github/actions/restore-sccache-seed
         with:
@@ -735,13 +746,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CANARY_CACHE_HIT: ${{ steps.seed.outputs.cache_hit }}
-        run: python3 scripts/runtime-seed-canary.py restored runtime-seed-evidence
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed restored runtime-seed-evidence'
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: "false"
           allow_native_github_cache: "false"
       - name: Reset counters and start build measurement
-        run: python3 scripts/runtime-seed-canary.py start runtime-seed-evidence
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed start runtime-seed-evidence'
       - name: Build and verify real CPU runtime
         id: runtime
         uses: ./.github/actions/prepare-native-runtime-input
@@ -754,7 +765,7 @@ jobs:
         if: ${{ !cancelled() && steps.runtime.outcome != 'skipped' }}
         env:
           CANARY_BUILD_OUTCOME: ${{ steps.runtime.outcome }}
-        run: python3 scripts/runtime-seed-canary.py finish runtime-seed-evidence
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed finish runtime-seed-evidence'
       - name: Capture existing cache assessment
         if: ${{ !cancelled() && steps.runtime.outcome != 'skipped' }}
         uses: ./.github/actions/capture-sccache-stats
@@ -787,8 +798,11 @@ jobs:
         with:
           pattern: runtime-seed-evidence-*
           path: runtime-seed-results
+      - uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
       - name: Compare all three complete pairs
-        run: python3 scripts/runtime-seed-canary.py summarize runtime-seed-results
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed summarize runtime-seed-results'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ !cancelled() }}
         with:
