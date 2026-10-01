@@ -42,7 +42,6 @@
   ],
   "explicit_non_exceptions": [
     {"path":"scripts/ci-openai-workload-smoke.py","reason":"Generic stdlib HTTP/protocol smoke; replacement is Rust QA/protocol tests or tools/xtask, not an external ecosystem implementation."},
-    {"path":"scripts/ci-client-readiness-process.py","reason":"Generic process/readiness supervision; must move to tools/xtask process owner."},
     {"path":"scripts/reconcile-two-node-split-evidence.py","reason":"Generic evidence validation in required smoke closure; move to tools/xtask QA/evidence."},
     {"path":"scripts/run-command-with-timeout.py","reason":"Generic process orchestration; no ecosystem behavior."},
     {"path":"scripts/plan-ci.py","reason":"Required repository CI planner; migrate to tools/xtask, not retained as Python."},

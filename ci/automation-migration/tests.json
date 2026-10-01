@@ -1,5 +1,16 @@
 {
   "schema_version": 1,
+  "lane_L11_cutover": {
+    "receipt": ".omo/evidence/lane-L11-optional-tooling.md",
+    "deleted_modules": ["scripts/tests/test_agentic_replay_params.py", "scripts/tests/test_agentic_replay_repair_contract.py", "scripts/tests/test_hf_skippy_convert_job.py", "scripts/tests/test_verify_workload_oracle_evidence.py"],
+    "rust_gates": ["lane_l11_optional_tooling", "migration_optional_isolation", "migration_run_family", "migration_workload_oracle_cli", "migration_hf_artifact_cli", "migration_hf_converted_artifact", "migration_hf_artifact_controls"],
+    "moved_cases": {
+      "scripts/tests/test_agentic_replay_evidence.py::test_same_matrix_command_is_used_for_original_and_repair": "migration_run_family and replay_matrix::invocation intent tests",
+      "scripts/tests/test_cleanup_self_hosted.py::test_replay_builds_use_the_job_owned_worktree_root": "replay_matrix::invocation worktree projection and runner_cleanup::replay tests",
+      "scripts/tests/test_agentic_replay_nightly_workflow.py::test_input_verification_uses_cli_paths_without_python_package": "lane_l11_optional_tooling pin projection and corrupt-byte rejection; live HF acquisition remains unexecuted"
+    },
+    "policy": "Shape and intent only; no Python invocation or interpreter emulation in replacement tests. Historical module rosters below are baseline records, not current executable coverage."
+  },
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "behavioral_baseline": {
     "method_name_inventory_is_not_behavioral_coverage": true,
@@ -641,6 +652,8 @@
     },
     {
       "module": "scripts/tests/test_ci_client_readiness_process.py",
+      "cutover_status": "deleted; Rust process owner replaces helper",
+      "replacement_evidence": "tools/xtask/tests/migration_process/windows.rs and migration_lifecycle/signals.rs; native Windows execution remains unverified",
       "sha256": "46dfc0ef2d76a94ac90cc6abe5fd696c0d3ee1d14640f28a189ac468f2714072",
       "test_method_count": 6,
       "test_methods": [
@@ -659,6 +672,8 @@
     },
     {
       "module": "scripts/tests/test_ci_client_readiness_smoke.py",
+      "cutover_status": "deleted; Rust client readiness owner and shell adapter replace tests",
+      "replacement_evidence": "cargo test -p xtask --test migration_lifecycle: 374 passed; cli/shell_adapter.rs exercises actual shell entrypoint",
       "sha256": "de1e3ebc06bca23f3af5432f310d93ea8a4a94f95753b86e4242b19fcd44096f",
       "test_method_count": 3,
       "test_methods": [
@@ -2431,6 +2446,8 @@
     },
     {
       "module": "scripts/tests/test_qa_logging_recovery.py",
+      "cutover_status": "deleted; Rust logging recovery narrative and side-effect-free plan tests replace duplicate shell tests",
+      "replacement_evidence": "tools/xtask/tests/lane_l7_logging_recovery.rs and lane_l7_plans.rs; shellcheck covers shell syntax; no source-text parity assertions retained",
       "sha256": "c7e0d745d9b3ede1900320ddaf1efcaa3c359b207cd3a32dd24a9af70d5fa81c",
       "test_method_count": 5,
       "test_methods": [

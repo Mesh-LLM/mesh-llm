@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "lane": "L7",
+  "status": "caller_cutover_platform_evidence_pending",
+  "receipt": ".omo/evidence/lane-L7-lifecycle-qa.md",
+  "callers": [
+    {"path": "scripts/ci-client-readiness-smoke.sh", "owner": "automation client-readiness"},
+    {"path": "scripts/ci-smoke-test.sh", "owner": "automation required-smoke run"},
+    {"path": "scripts/ci-sdk-fixture.sh", "owner": "automation sdk-fixture"},
+    {"path": "scripts/ci-install-native-runtime.sh", "owner": "automation runtime-cache-install"},
+    {"path": "scripts/qa-runtime-daemon-lifecycle.sh", "owner": "automation daemon-lifecycle"},
+    {"path": "scripts/certify-split-startup-recovery.sh", "owner": "automation startup-recovery"},
+    {"path": "scripts/qa-control-plane-mixed-version.sh", "owner": "automation control-plane-qa"},
+    {"path": "scripts/qa-logging-recovery.sh", "owner": "automation logging-recovery"},
+    {"path": "scripts/qa-logging-console-e2e.sh", "owner": "automation logging-console"}
+  ],
+  "deleted_implementations": ["scripts/ci-client-readiness-process.py"],
+  "deleted_test_modules": [
+    "scripts/tests/test_ci_client_readiness_process.py",
+    "scripts/tests/test_ci_client_readiness_smoke.py",
+    "scripts/tests/test_qa_logging_recovery.py"
+  ],
+  "intent_owners": [
+    "tools/xtask/tests/migration_lifecycle/cli.rs",
+    "tools/xtask/tests/migration_lifecycle/signals.rs",
+    "tools/xtask/tests/migration_process/windows.rs",
+    "tools/xtask/tests/migration_process/retained_completion.rs",
+    "tools/xtask/tests/lane_l7_control_plane.rs",
+    "tools/xtask/tests/lane_l7_daemon_lifecycle.rs",
+    "tools/xtask/tests/lane_l7_logging_console.rs",
+    "tools/xtask/tests/lane_l7_logging_recovery.rs",
+    "tools/xtask/tests/lane_l7_sdk_fixture.rs",
+    "tools/xtask/tests/lane_l7_split_recovery.rs",
+    "tools/xtask/tests/lane_l7_standalone.rs",
+    "tools/xtask/tests/lane_l7_plans.rs"
+  ],
+  "remaining_callers": [],
+  "unverified": ["native Windows process evidence", "native Linux process evidence", "full narrative execution", "global invocation and edge census reconciliation"]
+}
