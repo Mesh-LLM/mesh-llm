@@ -70,7 +70,13 @@ fn migration_models_frozen_manifests_match_the_checkout() -> TestResult {
         }
         let mut frozen: Value =
             serde_json::from_slice(&fs::read(fixture_dir().join("manifests").join(name))?)?;
-        let current: Value = serde_json::from_slice(&fs::read(root.join(path))?)?;
+        let mut current: Value = serde_json::from_slice(&fs::read(root.join(path))?)?;
+        if name == "product-smoke.json" {
+            current["artifacts"]
+                .as_array_mut()
+                .ok_or("product artifacts")?
+                .retain(|row| row["id"] != "family-laya-multilingual");
+        }
         if let Some(rows) = frozen["artifacts"].as_array_mut() {
             for row in rows {
                 if row["id"] == "family-qwen3-dense" {
@@ -106,6 +112,12 @@ fn migration_models_required_smoke_identities_are_unchanged() -> TestResult {
             "ibm-granite/granite-4.0-h-350m-GGUF",
             "a864f823cce6e6048b5752e2816fe7a23987d790",
             "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb",
+        ),
+        (
+            "family-laya-multilingual",
+            "meshllm/laya-multilingual-F16-GGUF",
+            "bcc99560232b5a5c91cb14d46b9496acbeae2c43",
+            "03881e45cdc5d0cf5e3a841cafe2ebdb8280e53e113c489e6847f7f45ca9c139",
         ),
     ];
     // When/Then: dense and recurrent identities are the pinned pair.
