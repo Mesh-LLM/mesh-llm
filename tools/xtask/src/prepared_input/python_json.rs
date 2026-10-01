@@ -1,6 +1,4 @@
-//! The `json` module behavior prepared-input manifests depend on: reading a
-//! UTF-8 JSON file, Python `==` between loaded values, and
-//! `json.dumps(value, indent=2, sort_keys=True)` bytes.
+//! Prepared-input JSON loading, structural comparison, and stable output bytes.
 
 use crate::ci_plan::document::Json;
 use crate::ci_plan::plan_bytes::write_string;
@@ -14,34 +12,8 @@ pub(crate) fn load(path: &Path) -> Result<Json, String> {
     Json::parse(text.as_bytes()).map_err(|error| error.to_string())
 }
 
-/// Python `==` between two `json.loads` results: numbers compare by value
-/// (`1 == 1.0`, `True == 1`), objects ignore key order.
 pub(crate) fn equal(left: &Json, right: &Json) -> bool {
-    match (left, right) {
-        (Json::Null, Json::Null) => true,
-        (Json::String(a), Json::String(b)) => a == b,
-        (Json::Array(a), Json::Array(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| equal(x, y))
-        }
-        (Json::Object(a), Json::Object(b)) => {
-            a.len() == b.len()
-                && a.iter()
-                    .all(|(key, value)| right.get(key).is_some_and(|other| equal(value, other)))
-        }
-        _ => match (numeric(left), numeric(right)) {
-            (Some(a), Some(b)) => a == b,
-            _ => false,
-        },
-    }
-}
-
-/// Numeric value of a JSON number or bool, as Python compares them.
-fn numeric(value: &Json) -> Option<f64> {
-    match value {
-        Json::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
-        Json::Number(number) => number.as_f64(),
-        _ => None,
-    }
+    left.to_value() == right.to_value()
 }
 
 /// `json.dumps(value, indent=2, sort_keys=True)`; the caller appends the
@@ -115,15 +87,29 @@ mod tests {
     }
 
     #[test]
-    fn migration_prepared_inputs_equality_follows_python() {
+    fn structural_comparison_ignores_object_key_order() {
         assert!(equal(
             &parsed(r#"{"a": 1, "b": true}"#),
-            &parsed(r#"{"b": 1.0, "a": 1.0}"#)
+            &parsed(r#"{"b": true, "a": 1}"#)
         ));
+    }
+
+    #[test]
+    fn structural_comparison_rejects_different_json_types() {
+        assert!(!equal(&parsed("true"), &parsed("1")));
+        assert!(!equal(&parsed("1"), &parsed("1.0")));
         assert!(!equal(&parsed(r#"{"a": 1}"#), &parsed(r#"{"a": "1"}"#)));
         assert!(!equal(
             &parsed(r#"{"a": 1}"#),
             &parsed(r#"{"a": 1, "b": 2}"#)
+        ));
+    }
+
+    #[test]
+    fn structural_comparison_preserves_integer_precision() {
+        assert!(!equal(
+            &parsed("9007199254740992"),
+            &parsed("9007199254740993")
         ));
     }
 }
