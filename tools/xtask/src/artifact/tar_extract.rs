@@ -11,6 +11,7 @@ use crate::repository::check_report::CheckReport;
 use crate::repository::python_text::repr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,16 @@ const PROGRAM: Program = Program {
     name: "safe-extract-tar.py",
     positionals: &["archive", "destination"],
 };
+
+#[cfg(windows)]
+fn symlink(target: &str, output: &Path) -> std::io::Result<()> {
+    let resolved = output.parent().unwrap_or(output).join(target);
+    if resolved.is_dir() {
+        std::os::windows::fs::symlink_dir(target, output)
+    } else {
+        std::os::windows::fs::symlink_file(target, output)
+    }
+}
 
 pub(super) fn run(args: &[String]) -> CheckReport {
     match PROGRAM.parse(args) {
@@ -111,9 +122,17 @@ fn mkdir_parents(path: &Path, shown: &str) -> Result<(), String> {
 }
 
 fn apply_mode(path: &Path, mode: i64) -> Result<(), String> {
-    let bits = u32::try_from(mode & 0o777).unwrap_or_default();
-    fs::set_permissions(path, fs::Permissions::from_mode(bits))
-        .map_err(|error| os_error_text(&error, &path.to_string_lossy()))
+    #[cfg(unix)]
+    {
+        let bits = u32::try_from(mode & 0o777).unwrap_or_default();
+        fs::set_permissions(path, fs::Permissions::from_mode(bits))
+            .map_err(|error| os_error_text(&error, &path.to_string_lossy()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+        Ok(())
+    }
 }
 
 fn occupied(path: &Path) -> bool {

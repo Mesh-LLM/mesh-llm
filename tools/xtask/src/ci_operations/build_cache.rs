@@ -96,8 +96,15 @@ fn build(args: &Args, workspace: &Path, target: &Path) -> Result<CheckReport, Fa
         .status()
         .map_err(|error| io_text(&error, Path::new(program)))?;
     let code = status.code().unwrap_or_else(|| {
-        use std::os::unix::process::ExitStatusExt;
-        -status.signal().unwrap_or(0)
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            -status.signal().unwrap_or(0)
+        }
+        #[cfg(not(unix))]
+        {
+            1
+        }
     });
     Ok(CheckReport {
         stdout: String::new(),

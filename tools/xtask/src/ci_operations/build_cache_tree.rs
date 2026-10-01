@@ -5,16 +5,28 @@
 
 use crate::ci_operations::build_cache_values::resolve;
 use std::fs::Metadata;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Python's `st_mtime`: `sec + nsec * 1e-9` in binary64.
 pub(crate) fn mtime(metadata: &Metadata) -> f64 {
-    metadata.mtime() as f64 + metadata.mtime_nsec() as f64 * 1e-9
+    #[cfg(unix)]
+    {
+        metadata.mtime() as f64 + metadata.mtime_nsec() as f64 * 1e-9
+    }
+    #[cfg(not(unix))]
+    {
+        metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0.0, |elapsed| elapsed.as_secs_f64())
+    }
 }
 
 fn size(metadata: &Metadata) -> i128 {
-    i128::from(metadata.size())
+    i128::from(metadata.len())
 }
 
 /// `(total lstat bytes, newest mtime)` for `path`; `(0, 0.0)` when missing.
