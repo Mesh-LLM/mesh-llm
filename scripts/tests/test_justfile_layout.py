@@ -42,6 +42,7 @@ RECIPES_BY_FILE: Final = {
         "bench-corpus", "competitive-benchmark-build", "family-certify",
         "metrics-server", "metrics-server-build",
         "skippy-native-full-replay", "skippy-native-tests", "skippy-openai-smoke",
+        "skippy-rewriter-build",
         "skippy-workload-oracles-build",
         "skippy-quantize-build",
         "skippy-quantize-release-build", "skippy-quantize-standalone-build",

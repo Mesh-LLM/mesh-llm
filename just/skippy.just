@@ -35,6 +35,33 @@ skippy-release backend="" target="":
 skippy-release backend="":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend "{{ backend }}" -BuildProfile release -SkippyOnly
 
+# Build the native rewriter fixture with an explicitly selected pinned LLVM.
+[unix]
+skippy-rewriter-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix="${SKIPPY_REWRITER_LLVM_PREFIX:-}"
+    if [[ -z "$prefix" || ! -x "$prefix/bin/clang" || ! -f "$prefix/lib/cmake/llvm/LLVMConfig.cmake" || ! -f "$prefix/lib/cmake/clang/ClangConfig.cmake" ]]; then
+      printf '%s\n' 'SKIPPY_REWRITER_LLVM_PREFIX must name an existing pinned LLVM with clang and LLVM/Clang CMake packages' >&2
+      exit 1
+    fi
+    if ! command -v ninja >/dev/null 2>&1; then
+      printf '%s\n' 'Ninja is required for skippy-rewriter-build' >&2
+      exit 1
+    fi
+    arch_args=()
+    if [[ "$(uname -s)" == Darwin ]]; then
+      native_arch="$(uname -m)"
+      if [[ "$native_arch" == x86_64 && "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == 1 ]]; then
+        exec arch -arm64 just skippy-rewriter-build
+      fi
+      arch_args=(-DCMAKE_OSX_ARCHITECTURES="$native_arch")
+    fi
+    cmake -S skippy/scripts/tools/skippy-stage-rewriter -B .scratch/skippy-stage-rewriter-build -G Ninja \
+      -DBUILD_TESTING=ON "${arch_args[@]}" \
+      -DLLVM_DIR="$prefix/lib/cmake/llvm" -DClang_DIR="$prefix/lib/cmake/clang"
+    cmake --build .scratch/skippy-stage-rewriter-build
+
 # Build the skippy benchmark/debug telemetry collector.
 [unix]
 metrics-server-build:

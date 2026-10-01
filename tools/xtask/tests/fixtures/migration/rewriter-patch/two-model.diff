@@ -1,0 +1,14 @@
+diff --git a/src/models/a.cpp b/src/models/a.cpp
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/src/models/a.cpp
++++ b/src/models/a.cpp
+@@ -1 +1 @@
+-alpha
++ALPHA
+diff --git a/src/models/b.cpp b/src/models/b.cpp
+index 3333333333333333333333333333333333333333..4444444444444444444444444444444444444444 100644
+--- a/src/models/b.cpp
++++ b/src/models/b.cpp
+@@ -1 +1 @@
+-beta
++BETA

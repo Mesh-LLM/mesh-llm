@@ -1,0 +1,1 @@
+{"schema_version":1,"llama_cpp_commit":"abc","generator_version":"0.2.0","builders":[{"file":"src/models/mimo.cpp","constructor":"model::graph_mtp::graph_mtp","verdict":"supported_auxiliary","proof":{"execution_scope":"final_stage_sidecar","scope_evidence":["typed_mtp_builder"]},"edits":[]}],"summary":{"supported_auxiliary":1}}

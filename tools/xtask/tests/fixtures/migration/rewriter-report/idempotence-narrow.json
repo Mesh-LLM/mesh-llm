@@ -1,0 +1,1 @@
+{"schema_version":0,"builders":[{"file":"src/models/mimo.cpp","verdict":"supported_auxiliary","proof":null,"edits":[1]},{"verdict":"unknown"}],"summary":null}
