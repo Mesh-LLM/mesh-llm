@@ -5,6 +5,8 @@ use crate::{
 use std::collections::VecDeque;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::time::Duration;
+#[path = "retained_completion.rs"]
+mod completion_tests;
 #[path = "retained_generations.rs"]
 mod generation_tests;
 #[path = "retained_shutdown.rs"]

@@ -14,6 +14,7 @@ pub(super) struct Member {
     pub deadline: Duration,
     pub admitted: Option<Duration>,
     pub report: Option<MemberReport>,
+    pub expected: Option<super::ExpectedExit>,
 }
 impl Member {
     pub fn spawn(launch: Launch, limits: &Limits) -> Result<Self, Failure> {
@@ -57,10 +58,21 @@ impl Member {
             deadline: launch.readiness_deadline,
             admitted: None,
             report: None,
+            expected: None,
         })
     }
     pub fn snapshot(&self) -> Snapshot {
         let state = match (&self.report, self.admitted) {
+            (Some(report), _) if matches!(report.disposition, Disposition::ExpectedExit) => {
+                match report
+                    .completion
+                    .as_ref()
+                    .and_then(|receipt| receipt.status.map(|status| (status, receipt.elapsed)))
+                {
+                    Some((status, elapsed)) => MemberState::ExpectedExit { status, elapsed },
+                    None => MemberState::IntentionalStop,
+                }
+            }
             (Some(_), _) => MemberState::IntentionalStop,
             (None, Some(elapsed)) => MemberState::Ready { elapsed },
             (None, None) => MemberState::Starting,
@@ -131,7 +143,9 @@ impl Member {
             Some(_) | None => ReadinessStop::NotAdmitted,
         };
         let outcome = match disposition {
-            Disposition::IntentionalStop | Disposition::SessionCleanup => Outcome::Ready,
+            Disposition::IntentionalStop
+            | Disposition::SessionCleanup
+            | Disposition::ExpectedExit => Outcome::Ready,
             Disposition::Failure(outcome) => outcome,
         };
         let (stdout, stdout_failure) = output.stdout.finish();
@@ -140,6 +154,7 @@ impl Member {
             member: self.id,
             admitted: self.admitted,
             disposition,
+            completion: None,
             process: ProcessReport {
                 pid: self.child.id(),
                 outcome,
@@ -153,5 +168,8 @@ impl Member {
                 failure: output.failure.or(stdout_failure).or(stderr_failure),
             },
         });
+        if let (Some(policy), Some(report)) = (&self.expected, &mut self.report) {
+            report.completion = Some(policy.receipt(self.started.elapsed(), &report.process));
+        }
     }
 }

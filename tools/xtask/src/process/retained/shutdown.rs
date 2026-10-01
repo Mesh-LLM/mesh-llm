@@ -103,7 +103,7 @@ pub(super) fn finish(
     }
 }
 
-fn observe_cleanup(
+pub(super) fn observe_cleanup(
     survivors: &mut [Member],
     context: (Instant, &Limits, &Cancellation),
 ) -> Result<Option<Outcome>, Failure> {
