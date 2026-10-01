@@ -994,7 +994,7 @@
           "run_for: --seconds timeout --label label optional --cleanup-on-exit -- remaining command array; combined output tee log, nonzero/124 budget failure propagated"
         ],
         [
-          283,
+          305,
           "1d0915cce3e94cb3",
           1,
           "script",
@@ -1002,7 +1002,7 @@
           "--base-ref BASE_HEAD --llama-src selected prepared tree; output tee policy log, failure rejects agent candidate"
         ],
         [
-          300,
+          322,
           "90fc69b829bfcaf2",
           1,
           "script",
@@ -1010,7 +1010,7 @@
           "--candidate-binary selected skippy-server --native-build-dir selected build --producer-manifest selected manifest; source and executable gate, failure rejects candidate"
         ],
         [
-          423,
+          445,
           "5af7e4058f86f917",
           1,
           "environment",
@@ -1018,7 +1018,7 @@
           "LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- arch -arm64 bash scripts/build-llama.sh with CMake flags; environment installs dependency and runs native build, failures abort"
         ],
         [
-          474,
+          506,
           "61060159e19b736b",
           1,
           "script",
@@ -1026,7 +1026,7 @@
           "--llama-src .deps/llama.cpp validate with continued options; stdout/stderr inherited; nonzero fails canary gate"
         ],
         [
-          477,
+          164,
           "8faf38bee64ae451",
           1,
           "script",
@@ -1034,7 +1034,7 @@
           "--manifest ci/llama-canary/family-certified.json --shard-count 1 --check-cache --cache-root selected cache --output selected plan; writes plan JSON; failure rejects canary"
         ],
         [
-          510,
+          542,
           "f251a821729aba82",
           1,
           "script",
@@ -1042,7 +1042,7 @@
           "--shard-count 256 and continued manifest/cache/output; emits shard plan, nonzero rejects build"
         ],
         [
-          516,
+          548,
           "c1c61cc7de080110",
           1,
           "script",
@@ -1050,7 +1050,7 @@
           "--llama-src .deps/llama.cpp validate; inherited output/status, nonzero fails certification"
         ],
         [
-          523,
+          555,
           "2cb072e565e9e041",
           1,
           "script",
@@ -1058,7 +1058,7 @@
           "no args; writes split certification roster; output/status inherited, failure rejects canary"
         ],
         [
-          527,
+          559,
           "180a08a4e49894c0",
           1,
           "script",
@@ -1066,12 +1066,28 @@
           "--check validates generated roster without writing; inherited diagnostics, nonzero rejects canary"
         ],
         [
-          620,
+          657,
           "c0f5c0782f3719b3",
           1,
           "script",
           "scripts/llama-canary-family-evidence.py",
           "pack with continued source/plan/executable evidence arguments; writes digest-bound handoff bundle, failure rejects canary"
+        ],
+        [
+          170,
+          "b4ca5a08609ed376",
+          1,
+          "script",
+          "scripts/plan-family-battery.py cache and immutable plan preflight before repair",
+          "Main bd5514dd8 retained source: python3 scripts/plan-family-battery.py --verify-plan \"$PLAN_PATH\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          509,
+          "8faf38bee64ae451",
+          2,
+          "script",
+          "scripts/plan-family-battery.py cache and immutable plan preflight before repair",
+          "Main bd5514dd8 retained source: python3 scripts/plan-family-battery.py \\; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -1195,6 +1211,85 @@
           "Transitional legacy coverage retained individually; modules remain pending their intent ports, not approved exceptions"
         ]
       ]
+    },
+    {
+      "file": "scripts/check-sdk-contract.sh",
+      "members": [
+        [
+          14,
+          "930d555ba4cc726d",
+          1,
+          "data",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: PYTHON_SDK=\"$ROOT/sdk/python/src/meshllm/client.py\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          15,
+          "ea55ee9ce21d9377",
+          1,
+          "data",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: PYTHON_TYPES=\"$ROOT/sdk/python/src/meshllm/types.py\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          210,
+          "86fafd3f4d7afbd4",
+          1,
+          "script",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: require \"$PYTHON_SDK\" \"$pattern\" \"python: $pattern\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          222,
+          "3bdf1013e0717170",
+          1,
+          "script",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: require \"$PYTHON_TYPES\" \"$pattern\" \"python types: $pattern\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/release-version.sh",
+      "members": [
+        [
+          300,
+          "ef0612530a155d80",
+          1,
+          "script",
+          "existing source-owned command or inert source reference retained from main",
+          "Main bd5514dd8 retained source: \"sdk/python/pyproject.toml\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/skippy-laya-smoke.sh",
+      "members": [
+        [
+          19,
+          "4a456e11a292a0dc",
+          1,
+          "data",
+          "scripts/skippy-laya-parity.py real-model golden driver",
+          "Main bd5514dd8 retained source: DRIVER=\"$ROOT/scripts/skippy-laya-parity.py\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          61,
+          "0560eb6eb0c2e243",
+          1,
+          "data",
+          "scripts/skippy-laya-parity.py real-model golden driver",
+          "Main bd5514dd8 retained source: for command in jq python3; do; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          87,
+          "45771e06b96aa14d",
+          1,
+          "script",
+          "scripts/skippy-laya-parity.py real-model golden driver",
+          "Main bd5514dd8 retained source: python3 \"$DRIVER\" \\; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ]
     }
   ],
   "identity": "<path>#candidate:<sha256(normalized source line)[0:16]>:<within-file occurrence>",
@@ -1305,7 +1400,7 @@
       "disposition": "execution",
       "id": "scripts/llama-canary-family-evidence.py#subprocess-or-interpreter:a8a1161c9d06eb91:1",
       "root": "optional canary workload handoff",
-      "source": "scripts/llama-canary-family-evidence.py:244",
+      "source": "scripts/llama-canary-family-evidence.py:258",
       "source_block": "head = subprocess.check_output([sys.executable, str(root / \"scripts/llama-oracle-source.py\")],",
       "target": "scripts/llama-oracle-source.py"
     },
@@ -1315,7 +1410,7 @@
       "disposition": "execution",
       "id": "scripts/llama-canary-family-evidence.py#subprocess-or-interpreter:525299a40cfeab48:1",
       "root": "optional canary source verification",
-      "source": "scripts/llama-canary-family-evidence.py:279",
+      "source": "scripts/llama-canary-family-evidence.py:293",
       "source_block": "actual = subprocess.check_output([sys.executable, str(root / \"scripts/llama-oracle-source.py\")],",
       "target": "scripts/llama-oracle-source.py"
     },
@@ -1325,7 +1420,7 @@
       "disposition": "execution",
       "id": "scripts/llama-canary-family-evidence.py#subprocess-or-interpreter:fa00def0fe879e31:1",
       "root": "optional canary source verification",
-      "source": "scripts/llama-canary-family-evidence.py:300",
+      "source": "scripts/llama-canary-family-evidence.py:314",
       "source_block": "subprocess.run([sys.executable, str(root / \"scripts/check-skippy-workload-candidate.py\"),",
       "target": "scripts/check-skippy-workload-candidate.py"
     },
@@ -1461,7 +1556,7 @@
       "file": "scripts/cleanup-self-hosted.py",
       "members": [
         [
-          102,
+          105,
           "0bb8fafe2022eacf",
           1,
           "subprocess-or-interpreter",
@@ -1470,7 +1565,7 @@
           "replay cleanup captures stdout/check=True; identifies only worktrees under replay root, failure aborts"
         ],
         [
-          116,
+          119,
           "227b092c1f2b3e39",
           1,
           "subprocess-or-interpreter",
@@ -1762,7 +1857,7 @@
           "git helper serves rev-parse, bundle, diff, ls-files and checkout callers; captured stripped stdout, nonzero raises; checkout/bundle callers mutate selected source/export"
         ],
         [
-          156,
+          170,
           "178e05462d2a41a9",
           1,
           "subprocess-or-interpreter",
@@ -1771,7 +1866,7 @@
           "check_binary captures stdout; rejects non-arm64, nonzero raises; binary inspection only"
         ],
         [
-          161,
+          175,
           "8b5b969ae095143c",
           1,
           "subprocess-or-interpreter",
@@ -1780,7 +1875,7 @@
           "check_binary captures dependency listing, rejects non-system dylibs; nonzero raises; read-only"
         ],
         [
-          192,
+          206,
           "a05d2a1fc56be774",
           1,
           "subprocess-or-interpreter",
@@ -1789,7 +1884,7 @@
           "build invokes sibling repair shell with assembled env, check=True inherited streams; repair/build outputs in selected source"
         ],
         [
-          250,
+          264,
           "099fac3324d1c992",
           1,
           "subprocess-or-interpreter",
@@ -1798,7 +1893,7 @@
           "pack_llama_source creates temporary clone, check=True timeout=120 inherited streams; exports validated bundle afterward"
         ],
         [
-          270,
+          284,
           "5ca7ed3fb135b2be",
           1,
           "subprocess-or-interpreter",
@@ -1989,7 +2084,7 @@
       "file": "scripts/run-command-with-timeout.py",
       "members": [
         [
-          31,
+          35,
           "8ceb06ada28c579b",
           1,
           "subprocess-or-interpreter",
@@ -1998,7 +2093,7 @@
           "terminate_group signature describes process parameter; not a launch"
         ],
         [
-          45,
+          63,
           "3cf8ceb2f324c898",
           1,
           "subprocess-or-interpreter",
@@ -2007,7 +2102,7 @@
           "cleanup_completed_group signature describes process parameter; not a launch"
         ],
         [
-          61,
+          52,
           "a4d15b5a4b17c79e",
           1,
           "subprocess-or-interpreter",
@@ -2016,7 +2111,7 @@
           "group_running captures process status stdout, failure raises, read-only; used for bounded cleanup"
         ],
         [
-          90,
+          136,
           "091b630b3a4be637",
           1,
           "subprocess-or-interpreter",
@@ -2153,6 +2248,83 @@
         ]
       ],
       "root": "optional CPU runtime compiler-cache seed qualification"
+    },
+    {
+      "boundary": "product mesh binary, taskkill on Windows, and scripts/skippy-laya-parity.py via selected interpreter",
+      "file": "scripts/ci-laya-smoke.py",
+      "members": [
+        [
+          38,
+          "01feea34027d49f0",
+          1,
+          "subprocess-or-interpreter",
+          "data",
+          "product mesh binary, taskkill on Windows, and scripts/skippy-laya-parity.py via selected interpreter",
+          "Main bd5514dd8 retained source: def wait_for_model(process: subprocess.Popen[str], api_port: int, timeout: float) -> str:; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          58,
+          "13a75e58942c5b84",
+          1,
+          "subprocess-or-interpreter",
+          "data",
+          "product mesh binary, taskkill on Windows, and scripts/skippy-laya-parity.py via selected interpreter",
+          "Main bd5514dd8 retained source: def stop(process: subprocess.Popen[str]) -> None:; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          62,
+          "227b092c1f2b3e39",
+          1,
+          "subprocess-or-interpreter",
+          "execution",
+          "product mesh binary, taskkill on Windows, and scripts/skippy-laya-parity.py via selected interpreter",
+          "Main bd5514dd8 retained source: subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          147,
+          "091b630b3a4be637",
+          1,
+          "subprocess-or-interpreter",
+          "execution",
+          "product mesh binary, taskkill on Windows, and scripts/skippy-laya-parity.py via selected interpreter",
+          "Main bd5514dd8 retained source: process = subprocess.Popen(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          157,
+          "38c8fc6f8135112d",
+          1,
+          "subprocess-or-interpreter",
+          "execution",
+          "product mesh binary, taskkill on Windows, and scripts/skippy-laya-parity.py via selected interpreter",
+          "Main bd5514dd8 retained source: parity = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ],
+        [
+          159,
+          "b055144f6196d6bd",
+          1,
+          "subprocess-or-interpreter",
+          "execution",
+          "product mesh binary, taskkill on Windows, and scripts/skippy-laya-parity.py via selected interpreter",
+          "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ],
+      "root": "main retained optional or platform smoke owner"
+    },
+    {
+      "boundary": "operator-supplied llama-laya-cli executable",
+      "file": "scripts/skippy-laya-parity.py",
+      "members": [
+        [
+          107,
+          "dbef69df4b6c3a92",
+          1,
+          "subprocess-or-interpreter",
+          "execution",
+          "operator-supplied llama-laya-cli executable",
+          "Main bd5514dd8 retained source: completed = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
+        ]
+      ],
+      "root": "main retained optional or platform smoke owner"
     }
   ],
   "python_implementation_sources": [
@@ -2177,14 +2349,19 @@
       111
     ],
     [
+      "scripts/ci-laya-smoke.py",
+      "32819b268aa3e222dc8469e8b6f69bfe6d8d0f083e08375cf9066487efc295e1",
+      193
+    ],
+    [
       "scripts/ci-workload-monolithic-oracle.py",
       "e4f4707d5ddb36c27aabcae77b0403db8ddc16aa535dbe9c88986f38d7ec9f51",
       259
     ],
     [
       "scripts/cleanup-self-hosted.py",
-      "91724b2c864d537f4b57d3165d6e3806b854bb402939c68932ab2dae12d5ef63",
-      152
+      "af4816aa74a8c769b5f17f6cb8e7bad0952fedb2864d2fc363a387d98eb35450",
+      156
     ],
     [
       "scripts/collect-ci-metrics.py",
@@ -2218,8 +2395,8 @@
     ],
     [
       "scripts/llama-canary-family-evidence.py",
-      "89dc3f313c95482e7022b58d7a274eb724e18eb4aca20ae9a8907ae45245e5c2",
-      648
+      "1a459c1e3887c9e4a1de61e9d80b8d177ac1452df828e519d3b99f15abd4ad5c",
+      665
     ],
     [
       "scripts/llama-canary-resolve-mesh-ref.py",
@@ -2258,8 +2435,8 @@
     ],
     [
       "scripts/run-command-with-timeout.py",
-      "e7c46a677e93f82562534426a0c78cb0c03fef9601f4eab0013163adf9a63266",
-      132
+      "074c035e889df8037af0274fc1d4acc8a45f90580f89acfd225b83ae56b6c7da",
+      181
     ],
     [
       "scripts/run-event-benchmark-matrix.py",
@@ -2275,6 +2452,11 @@
       "scripts/runtime-seed-canary.py",
       "8ec063467059e2b6f06652d61be2ec940ad7813a46096f6aa28563e7e4925018",
       292
+    ],
+    [
+      "scripts/skippy-laya-parity.py",
+      "21f82728ed9ebc6738bb841d9c17fde264832477ebb8f5d0db025de3be9033f2",
+      166
     ],
     [
       "scripts/skippy-llama-parity.py",

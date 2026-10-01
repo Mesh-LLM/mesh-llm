@@ -439,6 +439,15 @@
       "required": false
     },
     {
+      "classification": "main Laya smoke migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "scripts/ci-laya-smoke.py",
+      "phase": 5,
+      "replacement_owner": "tools/xtask qa Laya owner after behavioral qualification",
+      "required": true
+    },
+    {
       "classification": "external SDK compatibility",
       "deletion_condition": "Retain only behind approved compatibility workflow and pinned local dependency.",
       "exception": "Actual LiteLLM SDK compatibility only; must be separately declared, advisory and isolated.",
@@ -790,6 +799,15 @@
       "required": false
     },
     {
+      "classification": "main Laya smoke migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "scripts/skippy-laya-parity.py",
+      "phase": 5,
+      "replacement_owner": "tools/xtask qa Laya owner after behavioral qualification",
+      "required": true
+    },
+    {
       "classification": "upstream/native parity validation",
       "deletion_condition": "Port generic inventory/report logic; preserve only proven upstream-specific operations if isolated.",
       "exception": null,
@@ -1048,6 +1066,15 @@
       "path": "scripts/tests/test_ci_lane_workflows.py",
       "phase": 2,
       "replacement_owner": "tools/xtask ci_validation",
+      "required": true
+    },
+    {
+      "classification": "main Laya smoke migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "scripts/tests/test_ci_laya_smoke.py",
+      "phase": 5,
+      "replacement_owner": "tools/xtask qa Laya owner after behavioral qualification",
       "required": true
     },
     {
@@ -1852,6 +1879,15 @@
       "required": true
     },
     {
+      "classification": "main Laya smoke migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "scripts/tests/test_skippy_laya_parity.py",
+      "phase": 5,
+      "replacement_owner": "tools/xtask qa Laya owner after behavioral qualification",
+      "required": true
+    },
+    {
       "classification": "generic native parity test",
       "deletion_condition": "Parity inventory and source checks migrated.",
       "exception": null,
@@ -2066,6 +2102,78 @@
       "phase": 4,
       "replacement_owner": "Rust OpenAI protocol fixtures or compatibility owner",
       "required": true
+    },
+    {
+      "classification": "main Python SDK ecosystem migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "sdk/python/hatch_build.py",
+      "phase": 5,
+      "replacement_owner": "Python SDK component; isolation decision remains pending",
+      "required": false
+    },
+    {
+      "classification": "main Python SDK ecosystem migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "sdk/python/src/meshllm/__init__.py",
+      "phase": 5,
+      "replacement_owner": "Python SDK component; isolation decision remains pending",
+      "required": false
+    },
+    {
+      "classification": "main Python SDK ecosystem migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "sdk/python/src/meshllm/_binding.py",
+      "phase": 5,
+      "replacement_owner": "Python SDK component; isolation decision remains pending",
+      "required": false
+    },
+    {
+      "classification": "main Python SDK ecosystem migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "sdk/python/src/meshllm/_generated/__init__.py",
+      "phase": 5,
+      "replacement_owner": "Python SDK component; isolation decision remains pending",
+      "required": false
+    },
+    {
+      "classification": "main Python SDK ecosystem migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "sdk/python/src/meshllm/_generated/mesh_ffi.py",
+      "phase": 5,
+      "replacement_owner": "Python SDK component; isolation decision remains pending",
+      "required": false
+    },
+    {
+      "classification": "main Python SDK ecosystem migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "sdk/python/src/meshllm/client.py",
+      "phase": 5,
+      "replacement_owner": "Python SDK component; isolation decision remains pending",
+      "required": false
+    },
+    {
+      "classification": "main Python SDK ecosystem migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "sdk/python/src/meshllm/types.py",
+      "phase": 5,
+      "replacement_owner": "Python SDK component; isolation decision remains pending",
+      "required": false
+    },
+    {
+      "classification": "main Python SDK ecosystem migration debt",
+      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
+      "exception": null,
+      "path": "sdk/python/tests/test_client.py",
+      "phase": 5,
+      "replacement_owner": "Python SDK component; isolation decision remains pending",
+      "required": false
     }
   ],
   "interpreter_edges": {
