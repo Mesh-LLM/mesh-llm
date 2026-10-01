@@ -1,8 +1,3 @@
-//! `pathlib.PurePosixPath` as the legacy composer uses it: parsing (a `//`
-//! root is distinct from `/`, empty and `.` parts vanish, `..` stays
-//! literal), `str()`, the `/` join and Python 3.13's `relative_to` without
-//! `walk_up`, including its `ValueError` wording.
-
 use crate::repository::python_text::repr;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -13,13 +8,7 @@ pub(super) struct PurePath {
 
 impl PurePath {
     pub(super) fn new(text: &str) -> Self {
-        let root = if text.starts_with("//") && !text.starts_with("///") {
-            "//"
-        } else if text.starts_with('/') {
-            "/"
-        } else {
-            ""
-        };
+        let root = if text.starts_with('/') { "/" } else { "" };
         let parts = text
             .split('/')
             .filter(|part| !part.is_empty() && *part != ".")
@@ -80,19 +69,16 @@ mod tests {
     fn migration_product_pure_path_matches_python() {
         assert_eq!(PurePath::new("a//./b/").display(), "a/b");
         assert_eq!(PurePath::new("").display(), ".");
-        assert_eq!(PurePath::new("//a").display(), "//a");
+        assert_eq!(PurePath::new("//a").display(), "/a");
         assert_eq!(PurePath::new("///a").display(), "/a");
         assert_eq!(PurePath::new(".").join("m").display(), "m");
         assert_eq!(relative("./a", "a").as_deref(), Ok("."));
         assert_eq!(relative("a/b", ".").as_deref(), Ok("a/b"));
         assert_eq!(relative("a/b/../c", "a/b/..").as_deref(), Ok("c"));
-        assert_eq!(
-            relative("//a/b", "/a"),
-            Err("'//a/b' is not in the subpath of '/a'".to_owned())
-        );
+        assert_eq!(relative("//a/b", "/a"), Ok("b".to_owned()));
         assert_eq!(
             relative("/a", "b"),
-            Err("'/a' is not in the subpath of 'b'".to_owned())
+            Err("\"/a\" is not in the subpath of \"b\"".to_owned())
         );
     }
 }

@@ -1,10 +1,7 @@
 //! Resolver edge cases: output modes, integrity verification, path and
 //! newline injection, SHA/size shape, cadence, selection and argv handling.
 
-use crate::support::{
-    RESOLVER, Stage, TestResult, assert_same, assert_streams, code, field, fixture, legacy,
-    run_legacy, xtask,
-};
+use crate::support::{Stage, TestResult, assert_streams, code, field, fixture, xtask};
 use serde_json::Value;
 
 /// serde_json's parser wording replaces Python's `JSONDecodeError` text;
@@ -38,11 +35,6 @@ fn migration_models_resolver_edge_cases_match_legacy() -> TestResult {
     stage.write("fixture.bin", PAYLOAD)?;
     let cases = fixture("resolver-cases.json")?;
     let cases = cases.as_array().ok_or("cases must be an array")?;
-    let python = legacy("MIGRATION_MODELS_LEGACY_PYTHON");
-    let script = python
-        .as_ref()
-        .map(|_| stage.legacy_script(RESOLVER))
-        .transpose()?;
     for case in cases {
         let name = field(case, "name")?;
         let args = stage_case(&stage, case)?;
@@ -69,21 +61,6 @@ fn migration_models_resolver_edge_cases_match_legacy() -> TestResult {
             field(case, "github_output")?,
             "{name}: github output"
         );
-        if let (Some(python), Some(script)) = (&python, &script) {
-            stage_case(&stage, case)?;
-            let original = run_legacy(python, script, stage.path(), &args)?;
-            let legacy_output = stage.read("gh.out")?;
-            stage_case(&stage, case)?;
-            let ported = xtask(stage.path(), &ported_args)?;
-            if !EXPLAINED.contains(&name) {
-                assert_same(name, &original, &ported);
-            }
-            assert_eq!(
-                legacy_output,
-                stage.read("gh.out")?,
-                "{name}: github output parity"
-            );
-        }
     }
     assert_eq!(cases.len(), 77);
     Ok(())

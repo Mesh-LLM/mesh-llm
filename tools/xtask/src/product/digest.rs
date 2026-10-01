@@ -11,9 +11,9 @@ use std::io::Read;
 use std::path::Path;
 
 /// An I/O failure and the path Python would have reported it for.
-pub(super) struct IoFailure {
-    pub(super) error: std::io::Error,
-    pub(super) path: std::path::PathBuf,
+pub(crate) struct IoFailure {
+    pub(crate) error: std::io::Error,
+    pub(crate) path: std::path::PathBuf,
 }
 
 fn failure(error: std::io::Error, path: &Path) -> IoFailure {
@@ -39,7 +39,7 @@ fn file_digest(path: &Path) -> Result<[u8; 32], IoFailure> {
     Ok(digest.finalize().into())
 }
 
-pub(super) fn file_sha256(path: &Path) -> Result<String, IoFailure> {
+pub(crate) fn file_sha256(path: &Path) -> Result<String, IoFailure> {
     file_digest(path).map(hex::encode)
 }
 

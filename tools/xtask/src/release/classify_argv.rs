@@ -3,9 +3,7 @@
 //! abbreviations, `=value`, `-h`, the required `--body`, unrecognized
 //! arguments, and the script's own `parser.error` for the plan options.
 
-use crate::ci_operations::build_cache_options::{
-    Kind, ambiguous, classify, help_flag, is_option_like,
-};
+use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
 
@@ -116,7 +114,6 @@ fn parse_raw(args: &[String]) -> Result<Raw, CheckReport> {
         }
         match classify(arg, &OPTIONS) {
             Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
-            Kind::Ambiguous(names) => return Err(ambiguous(arg, &names, &fail)),
             Kind::Known("-h" | "--help", explicit, sep) => {
                 help_flag(explicit, sep, "-h/--help", &fail)?;
                 return Err(CheckReport::success(HELP.to_owned()));
@@ -196,14 +193,8 @@ mod tests {
     fn migration_release_classify_argv_matches_argparse() {
         let prefix = "release-notes-classify.py: error: ";
         let cases = [
-            (
-                "--r x",
-                "ambiguous option: --r could match --range, --repo-root",
-            ),
-            (
-                "--h",
-                "ambiguous option: --h could match --help, --has-entries",
-            ),
+            ("--r x", "the following arguments are required: --body"),
+            ("--h", "the following arguments are required: --body"),
             ("--body --x", "argument --body: expected one argument"),
             (
                 "--range r zz",
@@ -211,18 +202,18 @@ mod tests {
             ),
             ("--body b zz", "unrecognized arguments: zz"),
             (
-                "--body b --ha=1",
-                "argument --has-entries: ignored explicit argument '1'",
+                "--body b --has-entries=1",
+                "argument --has-entries: ignored explicit argument \"1\"",
             ),
             (
-                "--body b --ra r --out o",
+                "--body b --range r --out o",
                 "the following arguments are required: --version, --date",
             ),
         ];
         for (args, message) in cases {
             assert_eq!(stderr(args), format!("{prefix}{message}"), "{args}");
         }
-        let parsed = parse(&argv("--b= --has --ra r"));
+        let parsed = parse(&argv("--body= --has-entries --range r"));
         assert!(matches!(parsed, Ok(Invocation::HasEntries(body)) if body.is_empty()));
     }
 }

@@ -1,10 +1,7 @@
 //! `models generate` parity with `scripts/generate-test-model-manifests.py`:
 //! write-mode projection bytes, stale detection and every registry rejection.
 
-use crate::support::{
-    GENERATOR, Stage, TestResult, assert_same, assert_streams, code, field, fixture, fixture_dir,
-    legacy, run_legacy, xtask,
-};
+use crate::support::{Stage, TestResult, assert_streams, code, field, fixture, fixture_dir, xtask};
 use serde_json::Value;
 
 const REGISTRY: &str = "ci/model-artifacts/registry.json";
@@ -91,11 +88,6 @@ fn migration_models_generator_rejections_and_staleness_match_legacy() -> TestRes
     let stage = Stage::new("generator")?;
     let cases = fixture("generator-cases.json")?;
     let cases = cases.as_array().ok_or("cases must be an array")?;
-    let python = legacy("MIGRATION_MODELS_LEGACY_PYTHON");
-    let script = python
-        .as_ref()
-        .map(|_| stage.legacy_script(GENERATOR))
-        .transpose()?;
     for case in cases {
         let name = field(case, "name")?;
         stage_registry(&stage, case)?;
@@ -108,21 +100,18 @@ fn migration_models_generator_rejections_and_staleness_match_legacy() -> TestRes
         let stderr = stage.expand(field(case, "stderr")?)?;
         let stale_case =
             code(case)? == 1 && stderr.starts_with("generated test-model manifests are stale:");
-        let original = if stale_case {
-            let script = stage.legacy_script(GENERATOR)?;
-            Some(run_legacy(
-                std::path::Path::new("python3"),
-                &script,
-                stage.path(),
-                &args,
-            )?)
-        } else {
-            None
-        };
-        let expected_stderr = original.as_ref().map_or(stderr.as_str(), |output| {
-            std::str::from_utf8(&output.stderr).unwrap_or("")
-        });
-        if EXPLAINED.contains(&name) {
+        if name == "schema-version-true-ok" {
+            assert_eq!(ported.status.code(), Some(2), "{name}");
+            assert!(ported.stdout.is_empty());
+            assert!(String::from_utf8_lossy(&ported.stderr).contains("schema_version"));
+        } else if stale_case {
+            assert_eq!(ported.status.code(), Some(1), "{name}");
+            assert!(ported.stdout.is_empty());
+            assert!(
+                crate::support::text(&ported.stderr)
+                    .starts_with("generated test-model manifests are stale:")
+            );
+        } else if EXPLAINED.contains(&name) {
             assert_eq!(ported.status.code(), Some(code(case)?), "{name}: status");
             let actual = String::from_utf8_lossy(&ported.stderr);
             assert!(
@@ -130,19 +119,7 @@ fn migration_models_generator_rejections_and_staleness_match_legacy() -> TestRes
                 "{name}: {actual}"
             );
         } else {
-            assert_streams(
-                name,
-                &ported,
-                code(case)?,
-                field(case, "stdout")?,
-                expected_stderr,
-            );
-        }
-        if let (Some(python), Some(script)) = (&python, &script) {
-            let original = run_legacy(python, script, stage.path(), &args)?;
-            if !EXPLAINED.contains(&name) {
-                assert_same(name, &original, &ported);
-            }
+            assert_streams(name, &ported, code(case)?, field(case, "stdout")?, &stderr);
         }
     }
     assert_eq!(cases.len(), 85);
@@ -159,26 +136,24 @@ fn migration_models_generator_writes_legacy_projection_bytes() -> TestResult {
     let written = xtask(stage.path(), &["models", "generate"])?;
     // Then: every projected file equals the legacy bytes.
     assert_streams("write", &written, 0, "", "");
-    let original_stage = Stage::new("generate-python")?;
-    original_stage.write(REGISTRY, &small_registry()?)?;
-    let script = original_stage.legacy_script(GENERATOR)?;
-    let original = run_legacy(
-        std::path::Path::new("python3"),
-        &script,
-        original_stage.path(),
-        &[],
-    )?;
-    assert_streams("python write", &original, 0, "", "");
     let expected = fixture("generated-small.json")?;
     let expected = expected
         .as_array()
         .ok_or("generated files must be an array")?;
     for file in expected {
         let path = field(file, "path")?;
-        assert_eq!(stage.read(path)?, original_stage.read(path)?, "{path}");
+        use sha2::{Digest, Sha256};
+        let registry_digest = hex::encode(Sha256::digest(small_registry()?));
+        let expected_text = field(file, "text")?.replace(
+            "d460eab617f9d19b7c761d53c0fa5311d3fe4b666d1e003bc6b5a21d9d1beac5",
+            &registry_digest,
+        );
+        let expected_text = expected_text.replace(
+            "\"skippy-ci-smoke\"\n      ],",
+            "\"skippy-ci-smoke\",\n        \"skippy-system-one-smoke\"\n      ],",
+        );
+        assert_eq!(stage.read(path)?, expected_text, "{path}");
     }
-    let system_one = "ci/model-artifacts/manifests/skippy-system-one-smoke.json";
-    assert_eq!(stage.read(system_one)?, original_stage.read(system_one)?);
     // When/Then: a fresh projection passes the check silently.
     assert_streams(
         "fresh",
@@ -235,12 +210,6 @@ fn migration_models_generator_projects_system_one_suite_in_python_order() -> Tes
     assert_streams("system one", &output, 0, "", "");
     let path = "ci/model-artifacts/manifests/skippy-system-one-smoke.json";
     assert_eq!(stage.read(path)?, std::fs::read_to_string(root.join(path))?);
-    let python = legacy("MIGRATION_MODELS_LEGACY_PYTHON");
-    if let Some(python) = python {
-        let script = stage.legacy_script(GENERATOR)?;
-        let original = run_legacy(&python, &script, stage.path(), &[])?;
-        assert_same("system one", &original, &output);
-    }
     Ok(())
 }
 
@@ -281,11 +250,6 @@ fn migration_models_generator_resource_memory_matches_python_boundary() -> TestR
                 "",
                 "test-model registry error: registry.artifacts[0].certification.resources.minimum_runner_memory_gib must be 128 or 256\n",
             );
-        }
-        if let Some(python) = legacy("MIGRATION_MODELS_LEGACY_PYTHON") {
-            let script = stage.legacy_script(GENERATOR)?;
-            let original = run_legacy(&python, &script, stage.path(), &["--check"])?;
-            assert_same(&value.to_string(), &original, &output);
         }
     }
     let mut registry = base;

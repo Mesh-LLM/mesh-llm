@@ -2,7 +2,6 @@
 //! of a range with its pull request, credits pull requests GitHub's body
 //! left out, and writes the augmented body plus the API-linked records.
 
-use crate::ci_operations::ci_metrics_int::python_int_text;
 use crate::ci_operations::ci_metrics_value::{Value, display};
 use crate::prepared_input::python_io::decode_utf8;
 use crate::release::link_argv::{Args, parse};
@@ -148,37 +147,12 @@ fn first_item(numbers: &Value) -> Result<Value, Uncaught> {
     }
 }
 
-/// `int(value)` as canonical decimal text.
 fn python_int(value: &Value) -> Result<String, Uncaught> {
     match value {
-        Value::Bool(flag) => Ok(u8::from(*flag).to_string()),
-        Value::Int(int) => Ok(int.to_string()),
-        Value::BigInt(text) => Ok(text.clone()),
-        Value::Float(float) if float.is_nan() => Err(Uncaught::new(
-            "ValueError",
-            "cannot convert float NaN to integer".to_owned(),
-        )),
-        Value::Float(float) if float.is_infinite() => Err(Uncaught::new(
-            "OverflowError",
-            "cannot convert float infinity to integer".to_owned(),
-        )),
-        // `int(float)` truncates toward zero; `{:.0}` prints it exactly.
-        Value::Float(float) => Ok(format!("{:.0}", float.trunc() + 0.0)),
-        Value::Str(text) => python_int_text(text).ok_or_else(|| {
-            Uncaught::new(
-                "ValueError",
-                format!(
-                    "invalid literal for int() with base 10: {}",
-                    crate::repository::python_text::repr(text)
-                ),
-            )
-        }),
-        other => Err(Uncaught::new(
-            "TypeError",
-            format!(
-                "int() argument must be a string, a bytes-like object or a real number, not '{}'",
-                type_name(other)
-            ),
+        Value::Int(number) if u64::try_from(*number).is_ok() => Ok(number.to_string()),
+        _ => Err(Uncaught::new(
+            "pull_request",
+            "pull-request number must be a u64 integer".into(),
         )),
     }
 }

@@ -17,7 +17,7 @@ mod archive_zip;
 mod canonical_inputs;
 mod compose;
 mod compose_argv;
-mod digest;
+pub(crate) mod digest;
 mod manifest_load;
 mod posix_path;
 mod pure_path;

@@ -3,10 +3,7 @@
 //! `scripts/resolve-test-model-manifest.py` and the resolve step of
 //! `.github/actions/restore-test-model/action.yml`. Every expectation under
 //! `fixtures/models` is legacy output captured with Python 3.13 and bash 5
-//! (capture scripts: `.omo/evidence/task-14-capture/`). Default runs start no
-//! Python. Set `MIGRATION_MODELS_LEGACY_PYTHON` (and
-//! `MIGRATION_MODELS_LEGACY_BASH` for the action step) to also run the legacy
-//! code side by side on identical inputs.
+//! (capture scripts: `.omo/evidence/task-14-capture/`).
 
 #[path = "migration_models/support.rs"]
 mod support;

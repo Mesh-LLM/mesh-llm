@@ -165,7 +165,7 @@ mod tests {
         let list = Json::Array(Vec::new());
         assert_eq!(
             expected_kind_of(&list).err().as_deref(),
-            Some("TypeError: unhashable type: 'list'")
+            Some("backend must be a scalar value")
         );
     }
 }

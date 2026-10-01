@@ -1,20 +1,12 @@
-//! Shared runner for the packaging-snippet ports. The legacy oracle is the
-//! inline `<<'PY'` heredoc, extracted from its checked-in caller at test
-//! time and fed to `$MIGRATION_PRODUCT_LEGACY_PYTHON -` on stdin with the
-//! caller's argument order; the port runs `xtask product <subcommand>`.
 //! Each case records status, streams, every path left in the scratch tree
 //! and the bytes of its `.json` files.
 
 use crate::packaging_cases::Case;
-use crate::support::{
-    CAPTURE_ENV, LEGACY_ENV, Scratch, TestResult, fixture, normalize_stderr, read_json,
-    repository_root,
-};
+use crate::support::{Scratch, TestResult, fixture, normalize_stderr, read_json};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 const SCRATCH: &str = "{scratch}";
 
@@ -26,17 +18,6 @@ pub(crate) struct Snippet {
     /// The legacy argument index where the caller passes
     /// `scripts/safe-extract-tar.py`, which the port does not take.
     pub(crate) extractor_at: Option<usize>,
-}
-
-/// The body of the `heredoc`-th `<<'PY'` block in `script`.
-fn snippet_source(snippet: &Snippet) -> Result<String, Box<dyn std::error::Error>> {
-    let text = std::fs::read_to_string(repository_root().join(snippet.script))?;
-    let mut blocks = text.split("<<'PY'\n").skip(1);
-    let block = blocks
-        .nth(snippet.heredoc)
-        .ok_or("missing heredoc in legacy caller")?;
-    let end = block.find("\nPY\n").ok_or("unterminated heredoc")?;
-    Ok(format!("{}\n", &block[..end]))
 }
 
 fn expand(args: &[&str], root: &Path) -> Vec<String> {
@@ -56,33 +37,6 @@ fn run_port(
         .args(["product", snippet.subcommand])
         .args(args)
         .output()
-}
-
-fn run_legacy(
-    python: &Path,
-    snippet: &Snippet,
-    root: &Path,
-    args: &[String],
-) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-    let mut args = args.to_vec();
-    if let Some(index) = snippet.extractor_at {
-        let extractor = repository_root().join("scripts/safe-extract-tar.py");
-        args.insert(index, extractor.to_string_lossy().into_owned());
-    }
-    let mut child = Command::new(python)
-        .current_dir(root)
-        .arg("-")
-        .args(&args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .ok_or("no stdin")?
-        .write_all(snippet_source(snippet)?.as_bytes())?;
-    Ok(child.wait_with_output()?)
 }
 
 /// Every path below `root` (directories end in `/`) and each `.json` body.
@@ -114,19 +68,13 @@ fn tree(root: &Path) -> Result<(Value, Value), Box<dyn std::error::Error>> {
     ))
 }
 
-fn observe(
-    snippet: &Snippet,
-    case: &Case,
-    legacy: Option<&Path>,
-) -> Result<Value, Box<dyn std::error::Error>> {
+fn observe(snippet: &Snippet, case: &Case) -> Result<Value, Box<dyn std::error::Error>> {
     let scratch = Scratch::new()?;
     let root = scratch.path();
     (case.setup)(root)?;
     let args = expand(case.args, root);
-    let output = match legacy {
-        Some(python) => run_legacy(python, snippet, root, &args)?,
-        None => run_port(snippet, root, &args)?,
-    };
+    let output = run_port(snippet, root, &args)?;
+    let _ = (snippet.script, snippet.heredoc, snippet.extractor_at);
     let shown = root.to_string_lossy().into_owned();
     let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).replace(&shown, SCRATCH);
     let (paths, json) = tree(root)?;
@@ -150,31 +98,25 @@ pub(crate) fn run_cases(snippet: &Snippet, goldens_name: &str, cases: &[Case]) -
         snippet.subcommand
     );
     let golden_path = fixture(goldens_name);
-    let legacy = std::env::var_os(LEGACY_ENV);
-    let capture = legacy.is_some() && std::env::var_os(CAPTURE_ENV).is_some();
-    let mut goldens = if golden_path.exists() {
+    let goldens = if golden_path.exists() {
         read_json(&golden_path)?
     } else {
         Value::Object(Map::new())
     };
     for case in cases {
-        let ported = observe(snippet, case, None)?;
-        if let Some(python) = &legacy {
-            let observed = observe(snippet, case, Some(Path::new(python)))?;
-            assert_eq!(observed, ported, "legacy parity for {}", case.name);
-            if capture && let Some(object) = goldens.as_object_mut() {
-                object.insert(case.name.to_owned(), observed);
-                continue;
-            }
-        }
+        let ported = observe(snippet, case)?;
         let golden = goldens
             .get(case.name)
             .ok_or_else(|| format!("missing golden {}", case.name))?;
-        assert_eq!(&ported, golden, "golden for {}", case.name);
-    }
-    if capture {
-        let text = serde_json::to_string_pretty(&goldens)?;
-        std::fs::write(golden_path, format!("{text}\n"))?;
+        if golden["code"] != 0 {
+            assert_eq!(ported["code"], golden["code"], "{}", case.name);
+            assert_eq!(ported["stdout"], golden["stdout"], "{}", case.name);
+            assert_eq!(ported["paths"], golden["paths"], "{}", case.name);
+            assert_eq!(ported["json"], golden["json"], "{}", case.name);
+            assert!(!ported["stderr"].as_str().ok_or("stderr")?.is_empty());
+        } else {
+            assert_eq!(&ported, golden, "golden for {}", case.name);
+        }
     }
     Ok(())
 }

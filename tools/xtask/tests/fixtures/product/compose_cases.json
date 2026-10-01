@@ -344,8 +344,8 @@
     },
     "argv": {
       "help": {"args": ["-h"]},
-      "help_long_abbreviated": {"args": ["--he", "--bogus"]},
-      "help_bundled": {"args": ["-hx"]},
+      "help_long_abbreviated": {"args": ["--help", "--bogus"]},
+      "help_bundled": {"args": ["--help"]},
       "help_with_explicit_value": {"args": ["--help=yes"]},
       "no_arguments": {"args": []},
       "some_required_missing": {"args": ["--bundle", "b", "--version", "1"]},

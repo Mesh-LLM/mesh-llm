@@ -11,10 +11,7 @@ pub(crate) type TestResult = Result<(), Box<dyn Error>>;
 
 /// Opt-in interpreter for side-by-side legacy runs; unset by default so the
 /// required suite never launches Python.
-pub(crate) const LEGACY_ENV: &str = "MIGRATION_PRODUCT_LEGACY_PYTHON";
 /// With the interpreter set, rewrite the goldens from the legacy run.
-pub(crate) const CAPTURE_ENV: &str = "MIGRATION_PRODUCT_CAPTURE";
-const SCRIPT: &str = "scripts/compose-product-bundle.py";
 const SCRATCH: &str = "{scratch}";
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -126,29 +123,12 @@ fn arguments(case: &Value, key: &str, root: &Path) -> Vec<String> {
 }
 
 /// Which implementation runs a case.
-#[derive(Clone, Copy)]
-pub(crate) enum Runner<'a> {
-    Port,
-    Legacy(&'a Path),
-}
-
-fn invoke(
-    runner: Runner<'_>,
-    root: &Path,
-    args: &[String],
-) -> std::io::Result<std::process::Output> {
-    match runner {
-        Runner::Port => Command::new(env!("CARGO_BIN_EXE_xtask"))
-            .current_dir(root)
-            .args(["product", "compose"])
-            .args(args)
-            .output(),
-        Runner::Legacy(python) => Command::new(python)
-            .current_dir(root)
-            .arg(repository_root().join(SCRIPT))
-            .args(args)
-            .output(),
-    }
+fn invoke(root: &Path, args: &[String]) -> std::io::Result<std::process::Output> {
+    Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(root)
+        .args(["product", "compose"])
+        .args(args)
+        .output()
 }
 
 /// An uncaught Python exception is reduced to its traceback's last line,
@@ -166,19 +146,19 @@ pub(crate) fn normalize_stderr(stderr: &str) -> String {
 }
 
 /// Status, streams and every regular file left below the scratch directory.
-pub(crate) fn execute(runner: Runner<'_>, case: &Value) -> Result<Value, Box<dyn Error>> {
+pub(crate) fn execute(case: &Value) -> Result<Value, Box<dyn Error>> {
     let scratch = Scratch::new()?;
     let root = scratch.0.as_path();
     write_files(root, case.get("files"))?;
     write_links(root, case.get("links"))?;
     let setup = arguments(case, "setup", root);
     if !setup.is_empty() {
-        let output = invoke(runner, root, &setup)?;
+        let output = invoke(root, &setup)?;
         assert!(output.status.success(), "setup failed: {output:?}");
     }
     remove(root, case.get("remove"))?;
     write_files(root, case.get("mutate"))?;
-    let output = invoke(runner, root, &arguments(case, "args", root))?;
+    let output = invoke(root, &arguments(case, "args", root))?;
     let shown = root.to_string_lossy().into_owned();
     let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).replace(&shown, SCRATCH);
     let mut result = Map::new();

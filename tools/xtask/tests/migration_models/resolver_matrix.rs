@@ -2,10 +2,7 @@
 //! every registry cadence plus an unauthorized one x single-file mode, in
 //! both stdout-JSON and GitHub-output modes.
 
-use crate::support::{
-    RESOLVER, Stage, TestResult, assert_same, assert_streams, code, field, fixture, legacy,
-    run_legacy, xtask,
-};
+use crate::support::{Stage, TestResult, assert_streams, code, field, fixture, xtask};
 use serde_json::Value;
 
 /// The legacy argv order: manifest, cadence, optional id, optional flag.
@@ -38,11 +35,6 @@ fn migration_models_resolver_matrix_matches_legacy_for_every_suite_and_cadence()
     stage.frozen_manifests()?;
     let cases = fixture("resolver-matrix.json")?;
     let cases = cases.as_array().ok_or("matrix must be an array")?;
-    let python = legacy("MIGRATION_MODELS_LEGACY_PYTHON");
-    let script = python
-        .as_ref()
-        .map(|_| stage.legacy_script(RESOLVER))
-        .transpose()?;
     let (mut accepted, mut rejected) = (0, 0);
     for case in cases {
         let name = label(case);
@@ -85,11 +77,6 @@ fn migration_models_resolver_matrix_matches_legacy_for_every_suite_and_cadence()
             field(gh, "file")?,
             "{name}: github output"
         );
-        if let (Some(python), Some(script)) = (&python, &script) {
-            let original = run_legacy(python, script, stage.path(), &args)?;
-            let ported = xtask(stage.path(), &ported_args)?;
-            assert_same(&name, &original, &ported);
-        }
     }
     // Then: the matrix exercised both authorized and rejected resolutions.
     assert_eq!(cases.len(), 648);

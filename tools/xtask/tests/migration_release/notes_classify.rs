@@ -195,7 +195,7 @@ fn migration_release_notes_classify_has_entries() -> TestResult {
     )?;
     classify(
         "has_entries_missing_body",
-        &Case::new(&["--body", "nope.md", "--has"]),
+        &Case::new(&["--body", "nope.md", "--has-entries"]),
     )
 }
 

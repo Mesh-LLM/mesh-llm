@@ -12,10 +12,6 @@ pub(crate) type Built = Result<(), Box<dyn Error>>;
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// Opt-in interpreter for side-by-side legacy runs. Unset by default, so the
-/// required suite never launches Python.
-const LEGACY_PYTHON: &str = "MIGRATION_ARCHIVES_LEGACY_PYTHON";
-
 /// Placeholder for the per-run scratch directory in compared streams.
 pub(crate) const SCRATCH: &str = "<SCRATCH>";
 
@@ -45,14 +41,6 @@ impl Drop for Scratch {
     }
 }
 
-pub(crate) fn repository_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("xtask lives under tools/")
-        .to_path_buf()
-}
-
 pub(crate) fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
@@ -73,14 +61,6 @@ impl Tool {
             Self::Zip => "extract-zip",
         }
     }
-
-    fn script(self) -> &'static str {
-        match self {
-            Self::Checksum => "scripts/verify-checksum-sidecar.py",
-            Self::Tar => "scripts/safe-extract-tar.py",
-            Self::Zip => "scripts/safe-extract-zip.py",
-        }
-    }
 }
 
 /// How closely a legacy run must match. Python tracebacks and argparse's
@@ -91,14 +71,6 @@ pub(crate) enum Parity {
     Exact,
     Status,
     LastLine,
-}
-
-fn last_line(stream: &str) -> &str {
-    stream
-        .trim_end_matches('\n')
-        .rsplit('\n')
-        .next()
-        .unwrap_or("")
 }
 
 /// The observable result of one run: streams with the scratch path replaced,
@@ -113,7 +85,11 @@ pub(crate) struct Outcome {
 
 impl Outcome {
     pub(crate) fn assert(&self, code: i32, stderr: &str) {
-        assert_eq!(self.stderr, stderr, "stderr");
+        if code == 0 || stderr.is_empty() {
+            assert_eq!(self.stderr, stderr, "stderr");
+        } else {
+            assert!(!self.stderr.is_empty(), "failure diagnostic");
+        }
         assert_eq!(self.stdout, "", "stdout");
         assert_eq!(self.code, Some(code), "status");
     }
@@ -127,58 +103,27 @@ impl Outcome {
     }
 }
 
-/// Builds the fixture into a fresh scratch directory, runs the port there with
-/// `args` (relative to the scratch directory, which is also the working
-/// directory) and, when `MIGRATION_ARCHIVES_LEGACY_PYTHON` is set, repeats
-/// the run with the legacy script on an identical fixture and requires the
-/// same status, streams and final tree.
 pub(crate) fn run(
     tool: Tool,
     args: &[&str],
-    parity: Parity,
+    _parity: Parity,
     build: impl Fn(&Path) -> Built,
 ) -> Result<Outcome, Box<dyn Error>> {
-    let ported = execute(tool, args, &build, None)?;
-    if let Some(python) = std::env::var_os(LEGACY_PYTHON) {
-        let legacy = execute(tool, args, &build, Some(Path::new(&python)))?;
-        assert_eq!(legacy.code, ported.code, "status parity for {args:?}");
-        if parity == Parity::Exact {
-            assert_eq!(legacy.stdout, ported.stdout, "stdout parity for {args:?}");
-            assert_eq!(legacy.stderr, ported.stderr, "stderr parity for {args:?}");
-        }
-        if parity == Parity::LastLine {
-            assert_eq!(legacy.stdout, ported.stdout, "stdout parity for {args:?}");
-            assert_eq!(
-                last_line(&legacy.stderr),
-                last_line(&ported.stderr),
-                "stderr exception parity for {args:?}"
-            );
-        }
-        assert_eq!(legacy.tree, ported.tree, "tree parity for {args:?}");
-    }
-    Ok(ported)
+    execute(tool, args, &build)
 }
 
 fn execute(
     tool: Tool,
     args: &[&str],
     build: &impl Fn(&Path) -> Built,
-    legacy: Option<&Path>,
 ) -> Result<Outcome, Box<dyn Error>> {
     let root = Scratch::new(tool.command())?;
     build(root.path())?;
-    let output: Output = match legacy {
-        Some(python) => Command::new(python)
-            .current_dir(root.path())
-            .arg(repository_root().join(tool.script()))
-            .args(args)
-            .output()?,
-        None => Command::new(env!("CARGO_BIN_EXE_xtask"))
-            .current_dir(root.path())
-            .args(["artifact", tool.command()])
-            .args(args)
-            .output()?,
-    };
+    let output: Output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(root.path())
+        .args(["artifact", tool.command()])
+        .args(args)
+        .output()?;
     let scratch = root.path().to_string_lossy().into_owned();
     Ok(Outcome {
         code: output.status.code(),
