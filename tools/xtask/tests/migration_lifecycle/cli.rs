@@ -4,6 +4,9 @@ use crate::support::{Case, Sentinel, assert_absent, ready, record, repository};
 #[path = "cli_readiness.rs"]
 mod readiness;
 
+#[path = "shell_adapter.rs"]
+mod shell_adapter;
+
 #[test]
 fn migration_lifecycle_cli_private_ready_and_graceful_shutdown() {
     let case = Case::new(Behavior::Clean, vec![ready()]);

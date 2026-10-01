@@ -14,6 +14,9 @@ pub(super) struct Options {
     pub variant: Variant,
     pub readiness: Duration,
     pub shutdown: Duration,
+    pub context_size: Option<u32>,
+    pub batch_sizes: Option<(u32, u32)>,
+    pub endpoints: Option<[(u16, u16); 2]>,
 }
 
 impl Options {
@@ -36,6 +39,13 @@ impl Options {
                     | "--stack"
                     | "--ready-max-wait"
                     | "--shutdown-max-wait"
+                    | "--ctx-size"
+                    | "--batch-size"
+                    | "--ubatch-size"
+                    | "--api-port"
+                    | "--console-port"
+                    | "--headless-api-port"
+                    | "--headless-console-port"
             ) {
                 return Err("unknown smoke option".into());
             }
@@ -91,6 +101,52 @@ impl Options {
             }
             Ok(Duration::from_secs(seconds))
         };
+        let positive = |flag| -> DynResult<Option<u32>> {
+            values
+                .get(flag)
+                .map(|value| {
+                    let number = value.parse::<u32>()?;
+                    if number == 0 {
+                        return Err("size must be positive".into());
+                    }
+                    Ok(number)
+                })
+                .transpose()
+        };
+        let batch_sizes = match (positive("--batch-size")?, positive("--ubatch-size")?) {
+            (Some(batch), Some(ubatch)) => Some((batch, ubatch)),
+            (None, None) => None,
+            _ => return Err("batch and ubatch must be set together".into()),
+        };
+        let port_keys = [
+            "--api-port",
+            "--console-port",
+            "--headless-api-port",
+            "--headless-console-port",
+        ];
+        let endpoints = if port_keys.iter().any(|key| values.contains_key(key)) {
+            let port = |key| -> DynResult<u16> {
+                let value = required(key)?.parse::<u16>()?;
+                if value == 0 {
+                    return Err("explicit port must be nonzero".into());
+                }
+                Ok(value)
+            };
+            let ports = [
+                port(port_keys[0])?,
+                port(port_keys[1])?,
+                port(port_keys[2])?,
+                port(port_keys[3])?,
+            ];
+            for (index, value) in ports.iter().enumerate() {
+                if ports[..index].contains(value) {
+                    return Err("smoke ports must be distinct".into());
+                }
+            }
+            Some([(ports[0], ports[1]), (ports[2], ports[3])])
+        } else {
+            None
+        };
         Ok(Self {
             binary,
             model,
@@ -116,6 +172,9 @@ impl Options {
                 .ok_or("unknown smoke variant")?,
             readiness: seconds("--ready-max-wait", 180)?,
             shutdown: seconds("--shutdown-max-wait", 15)?,
+            context_size: positive("--ctx-size")?,
+            batch_sizes,
+            endpoints,
         })
     }
 }

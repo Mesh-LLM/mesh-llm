@@ -17,9 +17,13 @@ pub(crate) struct Reservation {
 
 impl Reservation {
     pub(crate) fn acquire() -> Result<Self, Error> {
-        let bind = || TcpListener::bind((Ipv4Addr::LOCALHOST, 0));
-        let api = bind().map_err(|error| Error::io("reserve API port", error))?;
-        let console = bind().map_err(|error| Error::io("reserve console port", error))?;
+        Self::acquire_at((0, 0))
+    }
+    pub(crate) fn acquire_at(endpoints: (u16, u16)) -> Result<Self, Error> {
+        let api = TcpListener::bind((Ipv4Addr::LOCALHOST, endpoints.0))
+            .map_err(|error| Error::io("reserve API port", error))?;
+        let console = TcpListener::bind((Ipv4Addr::LOCALHOST, endpoints.1))
+            .map_err(|error| Error::io("reserve console port", error))?;
         let quic = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|error| Error::io("reserve QUIC port", error))?;
         let ports = Ports {

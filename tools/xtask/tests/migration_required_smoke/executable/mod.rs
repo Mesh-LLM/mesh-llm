@@ -31,6 +31,9 @@ pub(super) fn options(directory: &std::path::Path, scenario: &str) -> args::Opti
         },
         readiness: std::time::Duration::from_secs(2),
         shutdown: std::time::Duration::from_secs(1),
+        context_size: None,
+        batch_sizes: None,
+        endpoints: None,
     }
 }
 

@@ -39,7 +39,9 @@ impl Overlap<'_> {
                 );
             }
             MemberState::Ready { .. } => (),
-            MemberState::IntentionalStop => return Err(Rejection::EarlyExit),
+            MemberState::IntentionalStop | MemberState::ExpectedExit { .. } => {
+                return Err(Rejection::EarlyExit);
+            }
         }
         if let Some(launch) = self.headless_launch.take() {
             return Ok(Action::Start(launch));
@@ -66,7 +68,9 @@ impl Overlap<'_> {
                 },
             ),
             MemberState::Ready { .. } => Ok(Action::Complete),
-            MemberState::IntentionalStop => Err(Rejection::EarlyExit),
+            MemberState::IntentionalStop | MemberState::ExpectedExit { .. } => {
+                Err(Rejection::EarlyExit)
+            }
         }
     }
 }

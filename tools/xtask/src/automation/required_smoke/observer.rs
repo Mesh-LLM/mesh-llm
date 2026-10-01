@@ -39,7 +39,12 @@ impl Observer {
                 Ok(result) => {
                     self.in_flight = false;
                     let check = session.expected()?.ok_or(Rejection::OutOfOrder)?;
-                    match session.observe((check, result.transfer()), self.started.elapsed())? {
+                    let observed =
+                        session.observe((check, result.transfer()), self.started.elapsed());
+                    if observed.is_err() {
+                        super::diagnostics::response(check, &result);
+                    }
+                    match observed? {
                         Progress::Pending => self.next = context.elapsed + Duration::from_secs(1),
                         Progress::Advanced(_) | Progress::Complete => (),
                     }
