@@ -169,7 +169,7 @@ fn other_shard_checks_live_source_without_claiming_completion() -> DynResult<()>
                 && row.path != "tools/skippy-stage-rewriter/CMakeLists.txt"
         })
         .count();
-    assert_eq!(other, 171);
+    assert_eq!(other, 167);
     let ledger: serde_json::Value = serde_json::from_str(&text)?;
     assert_eq!(
         ledger["outside_scanner_source_calls"]

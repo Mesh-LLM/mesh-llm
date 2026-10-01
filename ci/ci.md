@@ -443,6 +443,14 @@ and host. Swift resource assembly and the release-tag SDK resources consume the
 same bytes with `--skip-build`. Missing manifests, mismatched source/version,
 changed files and placeholder HTML fail before host compilation. UI artifacts
 use `prepared-release-ui-*`, outside the published `release-*` asset namespace.
+The build job first uploads `<artifact_name>-raw`. Release-only `ui_stamp`
+checks out the protected automation source, bootstraps xtask in the existing
+CPU image, downloads the raw distribution and adds only the release manifest
+through `prepared-input ui-distribution stamp`. Its final artifact retains the
+original name and dist layout; no Node install or UI rebuild occurs there.
+Ordinary PR/main callers keep their direct unstamped artifact and skip this job.
+`restore-release-ui` verifies with the prepared automation binary when present
+or the existing Cargo xtool alias in a Rust-capable consumer checkout.
 
 Linux CUDA, ROCm and Vulkan release composition jobs use the pinned `public
 cpu` image, retaining producer checksum/import checks, attestation verification,
@@ -564,6 +572,16 @@ for a closed list of five checked-in workflow files and passes data through
 native inputs. No workflow YAML is generated and no lane allocates a planner.
 
 ## Planner and profiles
+
+The local `scripts/hooks/commit-msg` hook now invokes the Rust
+`repository conventional-commits` command through the repository Cargo alias.
+The workflow commit check and planner/summary callers remain transitional.
+Their Linux jobs run on bare hosted runners, whereas `prepare-automation`
+currently requires `verify-runner-image public cpu` on Linux. Protected
+automation delivery must be resolved before those callers switch. The
+pre-checkout audit and no-checkout sentinel must not build candidate code.
+L2 authority and registry-pull intent owners are prepared but not registered
+in production dispatch. No provider, cache authority or required result changed.
 
 `scripts/plan-ci.py` is the only source of slice eligibility. It reads the
 JSON-compatible YAML manifests `ci/ownership.yml` and `ci/slices.yml`, validates
@@ -750,6 +768,15 @@ production remains a single Apple Silicon job.
 The Swift SDK smoke consumes the lane's immutable UI distribution with
 `--skip-build`; it does not install Node or pnpm and owns no package-manager
 cache.
+
+SDK packaging and Swift metadata adapters invoke xtask through the prepared
+`MESH_LLM_AUTOMATION_BIN` or `cargo xtool`. Native SDK manifest/identity/library
+checks and console resource manifests belong to `prepared-input`; SwiftPM
+checksum/update/verification, privacy plist and XCFramework checks belong to
+`release`. Archive extraction and sidecar verification belong to `artifact`.
+The Python XCFramework verifier and its duplicate Python tests are deleted.
+This caller cutover does not qualify native SDK, Xcode, Gradle or SDK-fixture
+lifecycle execution, and does not remove another lane's interpreter setup.
 
 ## Fan-out and timing controls
 

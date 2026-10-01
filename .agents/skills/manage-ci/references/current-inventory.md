@@ -366,7 +366,8 @@ commit-metadata rule here expecting it to enforce anything.
 What enforces the convention instead:
 
 - `scripts/hooks/commit-msg` locally, installed by `just hooks-install` and by
-  the first local development build on every platform.
+  the first local development build on every platform. It invokes the Rust
+  `repository conventional-commits` command through `cargo xtool`.
 - The `commit_convention` job in `ci-quality-slice.yml`, which validates the
   pull request title against Conventional Commits and scans every branch
   commit message plus the pull request body for denied attribution trailers.
@@ -418,7 +419,7 @@ runner-contract update is active.
 | `ci-pr-canary-lane.yml` | Optional protected merge-source diagnostic lane for one Linux amd64 CPU UI/host/runtime/product chain; runner policy stays on the default branch, and the summary is step-summary-only and non-required |
 | `ci-quality-slice.yml` | Contracts (including product-crate README, description, and local-link checks), format, unused-dependency check, Clippy and generated CLI inventory freshness; additive protected authority sentinel |
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
-| `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release callers prepare one source/version-bound UI with complete file checksums, shared by all hosts and SDK resources |
+| `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release UI builds upload a raw artifact, then a separate Rust-capable `ui_stamp` job binds source/version and complete file checksums without rebuilding the console |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch, plus a pinned, digest-verified Skippy correctness fixture; related PR changes (including `mesh-llm-skippy-adapter`) additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
@@ -481,6 +482,7 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `smoke.yml` | `smoke_tests` | `public cpu` when `inputs.runner != 'gpu-nvidia'`, else uncontainerized (see opt-out below) |
 | `sdk-smoke.yml` | its job | `public cpu` when `inputs.sdk_kind != 'swift'`, else uncontainerized |
 | `ci-ui-artifact-slice.yml` | `ui_artifact` | `public ui` ordinarily; existing `public web` for nonempty release tags |
+| `ci-ui-artifact-slice.yml` | `ui_stamp` | `public cpu`, release-tag callers only; protected automation checkout consumes the immutable raw distribution |
 | `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `mesh/website` | `public ui`, `public browser`, existing `public web`, respectively |
 | `website-pages.yml` | `build` | `public web` |
 | `nightly-stability-run.yml` | `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
@@ -749,7 +751,7 @@ sccache with short `C:\\s` and `C:\\t` roots, and every Windows native backend
 asks CMake to hash object paths at 180 characters before the legacy MAX_PATH
 boundary.
 
-- `restore-release-ui` / `scripts/ui-distribution.py`: verify the shared release
+- `restore-release-ui` / `prepared-input ui-distribution`: verify the shared release
   console's source SHA, version, complete file hashes and built JavaScript entry
   before platform-specific Rust compilation or SDK resource packaging. The
   UI producer's version step trusts only `GITHUB_WORKSPACE` in the container's
@@ -757,7 +759,9 @@ boundary.
   The `prepared-release-ui-*` artifact retains for 90 days and is excluded from the
   GitHub release asset glob. Swift release resource assembly skips pnpm and the
   console build when this artifact is supplied; ordinary PR/main behavior is
-  unchanged.
+  unchanged. Verification uses `MESH_LLM_AUTOMATION_BIN` exported by
+  `prepare-automation` when available, otherwise the existing Cargo xtool alias
+  in the consumer's Rust-capable checkout. No Python interpreter is selected.
 
 - `prepare-host-input` / `prepare-windows-host-input`: neutral host bytes,
   import report and checksum.
@@ -781,6 +785,11 @@ boundary.
   contract before the runtime-event gate and run-scoped upload. Only trusted
   main pushes publish; PRs restore only and Depot rows bypass this cache.
 - `prepare-static-abi-input`: portable static ABI archive.
+- `prepare-native-sdk-input`: SDK identity verification uses xtask prepared-input
+  commands. SDK package/restore, console resources, SwiftPM manifest, privacy
+  plist and XCFramework adapters use `MESH_LLM_AUTOMATION_BIN` when prepared,
+  otherwise `cargo xtool`. The generic Python XCFramework verifier is removed.
+  Native SDK, Xcode and Gradle execution remain platform qualification gates.
 - `compose-product-input`: exact host/runtime verification and composition.
   Linux CPU readiness also feeds the composed host's real `runtime list
   --available --json` output through `ci-prepare-native-runtime.sh`, the shared
@@ -1028,8 +1037,8 @@ GitHub provenance again. See `ci/ci.md` for the explicit trust boundary and CLI.
 Current image references and historical null evidence remain unchanged.
 
 The `product-smoke` catalog role covers `smoke.yml`; accelerator and macOS paths
-retain their existing container opt-outs. The inventory has 9 images, 35 roles
-and 35 literal workflow image bindings.
+retain their existing container opt-outs. The inventory has 9 images, 36 roles
+and 36 literal workflow image bindings.
 
 ### Qualified lean UI consumers
 

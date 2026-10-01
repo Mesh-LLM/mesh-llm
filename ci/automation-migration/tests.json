@@ -3633,23 +3633,6 @@
       "deletion_condition": "Delete only after exact archive, manifest, checksum, mode, symlink, and OS parity."
     },
     {
-      "module": "scripts/tests/test_verify_swift_xcframework.py",
-      "sha256": "28b032ecd05b4b01568808eb11091a8bbdcd39023b172b6fb2a354d9b0d45667",
-      "test_method_count": 5,
-      "test_methods": [
-        "test_accepts_exact_full_architecture_matrix",
-        "test_accepts_exact_host_only_arm64_slice",
-        "test_mode_independent_verification_still_requires_macos",
-        "test_rejects_full_slice_missing_declared_x86_64",
-        "test_rejects_lipo_slices_that_disagree_with_plist"
-      ],
-      "owner": "tools/xtask/src/artifact or owning platform/native component",
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "gate": "Legacy just ci-validate plus artifact/platform qualification",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "deletion_condition": "Delete only after exact archive, manifest, checksum, mode, symlink, and OS parity."
-    },
-    {
       "module": "scripts/tests/test_verify_workload_oracle_evidence.py",
       "sha256": "1f6b883c0ee959d3d08cef385f058bc3915765cffebe1787d1a0bf71b3040229",
       "test_method_count": 12,

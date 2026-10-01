@@ -19,6 +19,8 @@ Root `Cargo.toml`, `Cargo.lock`, `.cargo/`, `just/`, CI, and cross-workspace too
 
 The canonical repo-local skills live under `.agents/skills/`; the selectable release-validation specialist is defined in `.agents/agents/release-validation.md`.
 
+Generate and check the public Skippy native API documentation through `cargo xtool automation native-generator contracts api-doc` and `cargo xtool automation native-generator contracts api-doc --check`; follow `skippy/AGENTS.md` for the owning native preparation and documentation paths.
+
 ## Building
 
 Always use `just`. Never build manually. Bare `just` (or `just build`) builds Skippy first, then MeshLLM. Use `just skippy` or `just mesh` for one product; `just release-build` builds both release products in the same order. The products share a workspace version and release tag but have distinct deliverables.
@@ -110,7 +112,10 @@ extend typed `tools/xtask` commands and call them from thin Just recipes;
 `cargo xtool repo-consistency ci-crate-lists` is an existing command from the
 repository root. Do not move generic policy into shell, PowerShell, or
 JavaScript. Existing Python validation and workflow entrypoints below remain
-transitional until their replacements have behavioral parity. The SDK Python
+transitional until Rust or component-owned tests cover their shape and intent.
+Do not commit Python emulation or differential tests that invoke Python; delete
+each legacy implementation with its last caller switch and validate in normal
+CI. Preserve real consumed outputs and failure semantics. The SDK Python
 ecosystem candidates in `ci/automation-migration/python-exceptions.json` are
 conditional, not approved, until task 22 proves their isolation.
 
