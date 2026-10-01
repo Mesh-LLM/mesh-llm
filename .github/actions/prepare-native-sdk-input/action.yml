@@ -155,29 +155,13 @@ runs:
 
         scripts/verify-native-sdk-package.sh "$archive_path"
         scripts/verify-native-sdk-package.sh "$artifact_dir"
-        python3 - \
+        REPO_ROOT="$GITHUB_WORKSPACE"
+        source scripts/lib/automation.sh
+        mesh_automation prepared-input native-sdk-identity \
           "$artifact_dir/manifest.json" \
           "$INPUT_TARGET" \
           "$INPUT_BACKEND" \
-          "$INPUT_PROFILE" <<'PY'
-        import json
-        import sys
-
-        manifest_path, target, backend, profile = sys.argv[1:]
-        with open(manifest_path, encoding="utf-8") as handle:
-            manifest = json.load(handle)
-        expected = {
-            "target_triple": target,
-            "backend": backend,
-            "cargo_profile": profile,
-        }
-        for field, value in expected.items():
-            if manifest.get(field) != value:
-                raise SystemExit(
-                    f"native SDK manifest {field} mismatch: "
-                    f"expected {value!r}, got {manifest.get(field)!r}"
-                )
-        PY
+          "$INPUT_PROFILE"
 
         upload_dir="$INPUT_OUTPUT_DIR-upload"
         if [[ -e "$upload_dir" ]]; then

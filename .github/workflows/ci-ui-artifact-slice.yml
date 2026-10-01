@@ -135,25 +135,62 @@ jobs:
       - name: Verify console distribution
         working-directory: ${{ steps.layout.outputs.ui_dir }}
         run: test -s dist/index.html
+      - name: Upload immutable console distribution
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.release_tag != '' && format('{0}-raw', inputs.artifact_name) || inputs.artifact_name }}
+          path: ${{ steps.layout.outputs.ui_dir }}/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+  ui_stamp:
+    name: Bind immutable release console UI
+    needs: [runner_policy, ui_artifact]
+    if: ${{ inputs.release_tag != '' }}
+    runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
+    timeout-minutes: 20
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_4, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.policy_source_sha || github.event.repository.default_branch }}
+          persist-credentials: false
+      - id: automation
+        uses: ./.github/actions/prepare-automation
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - name: Download immutable raw console distribution
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ format('{0}-raw', inputs.artifact_name) }}
+          path: ${{ runner.temp }}/release-ui-dist
       - name: Bind release UI identity and checksums
-        if: ${{ inputs.release_tag != '' }}
-        working-directory: .
         shell: bash
         env:
-          UI_DIR: ${{ steps.layout.outputs.ui_dir }}
+          AUTOMATION_BIN: ${{ steps.automation.outputs.binary_path }}
+          UI_DIST: ${{ runner.temp }}/release-ui-dist
           UI_SOURCE_SHA: ${{ inputs.source_sha }}
           UI_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          python3 scripts/ui-distribution.py stamp \
-            --dist "$UI_DIR/dist" \
+          "$AUTOMATION_BIN" prepared-input ui-distribution stamp \
+            --dist "$UI_DIST" \
             --source-sha "$UI_SOURCE_SHA" \
             --release-tag "$UI_RELEASE_TAG"
       - name: Upload immutable console distribution
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ inputs.artifact_name }}
-          path: ${{ steps.layout.outputs.ui_dir }}/dist
+          path: ${{ runner.temp }}/release-ui-dist
           include-hidden-files: true
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}

@@ -688,6 +688,19 @@
       "image_id": "public-web",
       "scope": "release"
     },
+    "release-ui-stamp": {
+      "image_id": "public-cpu",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "ci-ui-artifact-slice.yml",
+          "job": "ui_stamp",
+          "matrix_selector": null,
+          "image_expression": "{image}",
+          "epoch_field": null
+        }
+      ]
+    },
     "runtime-seed-canary": {
       "image_id": "public-cpu",
       "scope": "ordinary",

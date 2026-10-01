@@ -3162,7 +3162,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 "cli_docs_sync", "authority_sentinel",
             },
             "ci-web-slice.yml": {"runner_policy", "ui_quality", "ui_e2e", "website"},
-            "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},
+            "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact", "ui_stamp"},
             "ci-linux-host-slice.yml": {"runner_policy", "linux_host"},
             "ci-linux-runtime-slice.yml": {"runner_policy", "linux_runtime"},
             "ci-rust-tests-slice.yml": {

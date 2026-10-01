@@ -163,9 +163,9 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         ui_workflow = (ROOT / ".github/workflows/ci-ui-artifact-slice.yml").read_text()
         self.assertIn('echo "VITE_MESH_LLM_DEBUG_UI=false" >> "$GITHUB_ENV"', ui_workflow)
         self.assertLess(ui_workflow.index("Prepare release UI version"), ui_workflow.index("Install UI dependencies"))
-        self.assertIn("python3 scripts/ui-distribution.py stamp", ui_workflow)
+        self.assertIn('"$AUTOMATION_BIN" prepared-input ui-distribution stamp', ui_workflow)
         restore = (ROOT / ".github/actions/restore-release-ui/action.yml").read_text()
-        self.assertIn('"$python_bin" scripts/ui-distribution.py verify', restore)
+        self.assertIn('"$MESH_LLM_AUTOMATION_BIN" prepared-input ui-distribution verify', restore)
         for name, next_name in (("build", "compose_cpu_products"),
                                 ("build_linux_arm64", "compose_linux_arm64_cpu"),
                                 ("windows_host_input", "compose_windows_gpu")):
