@@ -69,5 +69,5 @@
     {"path":".agents/skills/release-validation/assets/release-validation-report-template.md","examples":[],"owner":"retain human-authored report template populated using tools/xtask outputs","cutover_task":5,"status":"reviewed_no_executable_examples"}
   ],
   "unresolved_qualification_count": 4,
-  "unresolved_note": "Exactly four external SDK candidates remain conditional and unqualified because Task 22's isolated advisory environment and isolation proof do not yet exist. They are not approved retained paths. All other tracked instruction assets have actionable/prose-only classifications and owner/cutover examples where applicable; full parser-backed command/caller/transitive closure remains assigned to Task 5, so this count is not an instruction coverage claim."
+  "unresolved_note": "L8 parent decision: retain the required actual OpenAI, LangChain and LiteLLM Python SDK client callers as ecosystem compatibility coverage; do not create an advisory workflow or remove their required coverage. This decision does not establish isolated advisory qualification. Four existing SDK candidates remain conditional and unqualified under Task 22. Generic HTTP workload smoke is replaced by Rust, while actual SDK tests remain. Full parser-backed interpreter reachability remains incomplete."
 }
