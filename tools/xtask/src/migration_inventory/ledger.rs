@@ -231,6 +231,7 @@ pub(super) fn tracked_paths(root: &Path) -> DynResult<Vec<String>> {
     Ok(String::from_utf8(output.stdout)?
         .split('\0')
         .filter(|path| !path.is_empty())
+        .filter(|path| root.join(path).exists())
         .map(str::to_owned)
         .collect())
 }

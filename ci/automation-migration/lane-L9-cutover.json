@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "lane": "L9",
+  "removed_edges": [
+    {"caller": "scripts/check-skippy-generated-family-patch.sh", "removed": "scripts/generate-skippy-family-patch.py", "replacement": "automation native-generator generate"},
+    {"caller": "scripts/check-skippy-generated-family-patch.sh", "removed": "scripts/verify-skippy-family-generator-coverage.py", "replacement": "automation native-generator contracts coverage"},
+    {"caller": "scripts/check-skippy-generated-family-patch.sh", "removed": "scripts/select-skippy-family-shards.py", "replacement": "automation native-generator contracts select-shards"},
+    {"caller": "scripts/check-skippy-generated-family-patch.sh", "removed": "scripts/skippy-rewriter-harness.py", "replacement": "automation rewriter-report"},
+    {"caller": "AGENTS.md", "removed": "scripts/generate-skippy-api-doc.py", "replacement": "automation native-generator contracts api-doc"},
+    {"caller": ".agents/skills/llama-stage-patch-changes/SKILL.md", "removed": "scripts/generate-skippy-api-doc.py", "replacement": "automation native-generator contracts api-doc"},
+    {"caller": "crates/mesh-llm-runtime-event-contracts/README.md", "removed": "scripts/generate-runtime-event-inventory.py", "replacement": "automation native-generator contracts inventory"},
+    {"caller": "crates/mesh-llm-runtime-event-contracts/README.md", "removed": "scripts/extract-runtime-event-spec-manifest.py", "replacement": "automation native-generator contracts spec-manifest"},
+    {"caller": "tools/skippy-stage-rewriter/CMakeLists.txt", "removed": "tools/skippy-stage-rewriter/tests/test_rewriter.py", "replacement": "skippy-stage-rewriter-fixture-native"},
+    {"caller": "tools/xtask/tests/migration_patch_bytes/campaign.rs", "removed": "scripts/generate-skippy-family-patch.py", "replacement": "migration_patch_bytes consumed-byte goldens and migration_native_generator executable tests"}
+  ],
+  "deleted_test_modules": [
+    "scripts/tests/test_generate_skippy_family_patch.py",
+    "scripts/tests/test_verify_skippy_family_generator_coverage.py",
+    "scripts/tests/test_select_skippy_family_shards.py",
+    "scripts/tests/test_skippy_rewriter_harness.py",
+    "scripts/tests/test_generate_skippy_api_doc.py",
+    "scripts/tests/test_generate_runtime_event_inventory.py",
+    "scripts/tests/test_extract_runtime_event_spec_manifest.py",
+    "tools/skippy-stage-rewriter/tests/test_rewriter.py"
+  ],
+  "intent_owners": [
+    "tools/xtask/src/automation/native_contracts",
+    "tools/xtask/src/automation/native_generator",
+    "tools/xtask/tests/migration_report_contract.rs",
+    "tools/xtask/tests/migration_report_safety.rs",
+    "tools/xtask/tests/migration_patch_shards.rs",
+    "tools/skippy-stage-rewriter/tests/rewriter_fixture.cpp"
+  ],
+  "deferred": ["scripts/generate-bench-corpus.py"],
+  "native_execution": "unverified; prohibited by task scope",
+  "generated_provenance_comments": "Legacy generator labels retained as consumed bytes; commands are Rust-owned."
+}

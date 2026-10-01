@@ -80,7 +80,6 @@ fn valid_disposition(path: &str, text: &str, disposition: &OtherDisposition) -> 
             | "tools/xtask/src/ci_validation/producers.rs"
             | "tools/xtask/src/ci_validation/windows_runtime.rs"
             | "tools/xtask/src/ci_validation/crate_coverage.rs"
-            | "tools/xtask/src/automation_parity/legacy.rs"
     ) {
         return matches!(
             disposition,

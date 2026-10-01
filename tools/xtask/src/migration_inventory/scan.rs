@@ -48,7 +48,6 @@ fn executable(path: &str) -> bool {
             "tools/xtask/src/ci_validation/producers.rs"
                 | "tools/xtask/src/ci_validation/windows_runtime.rs"
                 | "tools/xtask/src/ci_validation/crate_coverage.rs"
-                | "tools/xtask/src/automation_parity/legacy.rs"
         )
         || is_instruction(path)
         || [

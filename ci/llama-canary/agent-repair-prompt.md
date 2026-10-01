@@ -30,7 +30,8 @@ Own the repair end to end:
    the broken patches. Keep the queue ordered. Do not delete instrumentation or
    weaken a gate to get a build through.
 3. Generate model-builder stage controls through the Clang rewriter and
-   `scripts/generate-skippy-family-patch.py`. Do not hand-edit per-family stage
+   `cargo xtool automation native-generator generate` with absolute `--git`
+   and `--rewriter` paths and `--max-diff-bytes 16777216`. Do not hand-edit per-family stage
    filtering or `begin_block`/`end_block` patches. Extend general AST rules for
    conventional upstream shapes. Preserve an exact `unsupported_shape` refusal
    for irregular builders until a sound general rule exists.

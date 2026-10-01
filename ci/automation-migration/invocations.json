@@ -883,13 +883,6 @@
   ],
   "source_verified_edges": [
     {
-      "id": "tools/xtask/src/automation_parity/legacy.rs#candidate:8e5999b466237485:1",
-      "owner": "task 10 transitional CI shadow parity (cargo xtool automation parity --suite ci); operator-selected interpreter only, never a required caller",
-      "reason": "Runs the protected scripts/plan-ci.py and scripts/runner-image-identity.py check|diagnose (whose importlib load reaches plan-ci.py) beside the Rust planner on identical inputs; replacement owners tools/xtask ci_plan (task 9) and runner identity (task 12); deletion condition: task 28 removes this command, the Python planner and this edge together",
-      "target": "scripts/plan-ci.py",
-      "replacement_task": 28
-    },
-    {
       "id": ".github/workflows/ci-quality-slice.yml#candidate:78b39ffedbd6d228:1",
       "owner": "Quality Python test setup",
       "reason": "Installs pinned test requirements; nonzero fails the required Quality step",
@@ -1353,7 +1346,6 @@
         "scripts/verify-checksum-sidecar.py",
         "scripts/verify-static-abi-build-stamp.py",
         "scripts/ui-distribution.py",
-        "scripts/verify-swift-xcframework.py",
         "inline Python JSON/archive snippets"
       ],
       "arguments": "Per-call positional flags are captured at source callsites but not fully transcribed in this ledger group; no source caller contract is inferred from filename alone.",
@@ -4378,39 +4370,6 @@
           "path": "scripts/ci-client-readiness-smoke.sh",
           "line": 168,
           "text": "\"$MESH_LLM\" --log-format json --port \"$port\" --no-console \\"
-        }
-      ]
-    },
-    {
-      "id": "boundary:verify-swift-xcframework:144",
-      "disposition": "runtime_selected_boundary",
-      "caller": "scripts/verify-swift-xcframework.py",
-      "line": 144,
-      "source_block": "result = subprocess.run(",
-      "occurrence": 1,
-      "candidate_id": "scripts/verify-swift-xcframework.py#subprocess-or-interpreter:0bb8fafe2022eacf:1",
-      "child": null,
-      "bound_child": null,
-      "selector": "lipo = os.environ.get(\"LIPO\", \"lipo\") at :142: the LIPO environment variable overrides the executable",
-      "reachable_bytes": "lipo (default) or whatever executable LIPO names, run with -archs <binary>",
-      "replacement_owner": "task 15 UI and static/native SDK artifact validators",
-      "deletion_condition": "Remove when the Rust XCFramework verifier reads architectures itself.",
-      "rationale": "Environment override is the recorded boundary; the default value lipo is not claimed as the only target.",
-      "evidence": [
-        {
-          "path": "scripts/verify-swift-xcframework.py",
-          "line": 142,
-          "text": "lipo = os.environ.get(\"LIPO\", \"lipo\")"
-        },
-        {
-          "path": "scripts/verify-swift-xcframework.py",
-          "line": 144,
-          "text": "result = subprocess.run("
-        },
-        {
-          "path": "scripts/verify-swift-xcframework.py",
-          "line": 145,
-          "text": "[lipo, \"-archs\", str(binary)],"
         }
       ]
     },

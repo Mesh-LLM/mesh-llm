@@ -30,8 +30,18 @@ example, `cargo xtool repo-consistency ci-crate-lists`. Keep human-facing Just
 recipes thin and preserve required toolchain wrappers such as
 `just with-lld cargo xtool repo-consistency ci-crate-lists`. Use typed inputs,
 argument arrays, explicit working directories, bounded child processes, and
-stable machine-readable output. Record parity against the existing command
-before changing a caller or deleting its implementation.
+stable machine-readable output. Validate the shape and intent of the existing
+command with Rust or component-owned tests: documented behavior, real output
+formats consumed by callers, valid-input files and exit semantics, and failure
+modes. Preserve exact bytes where a caller consumes or hashes them.
+
+Do not implement Python emulation in xtask: repr/str formatting, argparse or
+JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
+parity. Do not commit differential oracle tests that invoke Python. Legacy
+Python may be deleted in the same change that switches its last caller once
+Rust tests cover the intent; validate the cutover through normal CI. See the
+2026-09-30 Python emulation and lane cutover decision in
+`.omo/evidence/maintainer-decisions.md`.
 
 Do not write new Python tooling, including temporary helpers, inline Python,
 workflow steps, generic test runners, or skill-local scripts. Do not move
