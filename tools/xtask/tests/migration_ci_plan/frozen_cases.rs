@@ -116,6 +116,69 @@ frozen_case!(
     "platform-windows"
 );
 frozen_case!(migration_ci_plan_core_smoke_fallback, "smoke-fallback");
+
+#[test]
+fn windows_catalog_changes_select_unit_row_without_product_builds() -> TestResult {
+    let root = repository_root();
+    let ownership: Value = serde_json::from_slice(&fs::read(root.join("ci/ownership.yml"))?)?;
+    let crates = ownership["crate_rules"]
+        .as_array()
+        .ok_or("crate rules")?
+        .iter()
+        .filter(|rule| rule["domain"] == "platform-windows-cfg")
+        .flat_map(|rule| rule["crates"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(crates.contains(&"mesh-llm-host-runtime"));
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(fixture_root().join("cargo-metadata.json"))?)?;
+    let packages = metadata["packages"].as_array().ok_or("packages")?;
+    let workspace = packages
+        .iter()
+        .map(|package| {
+            let name = package["name"].as_str().ok_or("package name")?;
+            Ok(serde_json::json!({"name": name, "path": format!("crates/{name}")}))
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    let stage = Stage::new("windows-catalog")?;
+    let path = stage.search_path()?;
+    let case: Value =
+        serde_json::from_slice(&fs::read(fixture_root().join("cases/runtime.json"))?)?;
+    for name in crates {
+        let mut input = case["input"].clone();
+        input["changed_files"] = serde_json::json!([format!("crates/{name}/src/lib.rs")]);
+        input["affected_crates"] = serde_json::json!([name]);
+        input["workspace_packages"] = Value::Array(workspace.clone());
+        let bytes = serde_json::to_vec(&input)?;
+        let output = Run {
+            args: &[],
+            stdin: &bytes,
+            path: &path,
+        }
+        .ported()?;
+        assert!(output.status.success(), "{name}: {}", text(&output.stderr));
+        let plan: Value = serde_json::from_slice(&output.stdout)?;
+        assert!(
+            plan["matrices"]["platform_checks"]
+                .as_array()
+                .ok_or("platform checks")?
+                .iter()
+                .any(|row| row["id"] == "windows-unit"),
+            "{name}"
+        );
+        for matrix in ["hosts", "runtime_products"] {
+            assert!(
+                !plan["matrices"][matrix]
+                    .as_array()
+                    .ok_or("matrix")?
+                    .iter()
+                    .any(|row| row["platform"] == "windows"),
+                "{name}: {matrix}"
+            );
+        }
+    }
+    Ok(())
+}
 frozen_case!(migration_ci_plan_rejects_unknown_path, "fail-unknown-path");
 frozen_case!(
     migration_ci_plan_rejects_unknown_input_field,
