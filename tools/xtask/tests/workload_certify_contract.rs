@@ -3,12 +3,15 @@
 
 use std::{
     fs,
-    os::unix::{fs::PermissionsExt as _, process::CommandExt as _},
+    os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
-    thread,
-    time::{Duration, Instant},
+    process::{Command, ExitStatus},
+    time::Duration,
 };
+
+#[allow(dead_code, unused_imports)]
+#[path = "../src/process/mod.rs"]
+mod process;
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -88,34 +91,51 @@ impl Fixture {
         command
     }
 
-    fn run(&self, mut command: Command) -> Receipt {
-        let stdout = self.path().join("stdout");
-        let stderr = self.path().join("stderr");
-        let mut child = command
-            .process_group(0)
-            .stdout(Stdio::from(fs::File::create(&stdout).unwrap()))
-            .stderr(Stdio::from(fs::File::create(&stderr).unwrap()))
-            .spawn()
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let status = loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                break status;
+    fn run(&self, command: Command) -> Receipt {
+        let mut environment = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"]
+            .into_iter()
+            .filter_map(|key| {
+                std::env::var_os(key).map(|value| (key.into(), process::Value::Public(value)))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for (key, value) in command.get_envs() {
+            if let Some(value) = value {
+                environment.insert(key.to_owned(), process::Value::Public(value.to_owned()));
+            } else {
+                environment.remove(key);
             }
-            if Instant::now() >= deadline {
-                let _ = Command::new("/bin/kill")
-                    .args(["-KILL", "--", &format!("-{}", child.id())])
-                    .status();
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("bounded workload fixture exceeded deadline");
-            }
-            thread::sleep(Duration::from_millis(10));
-        };
+        }
+        let result = process::supervise_raw(
+            &process::ProcessSpec {
+                executable: "/bin/bash".into(),
+                cwd: command.get_current_dir().unwrap_or(&root()).to_owned(),
+                arguments: command
+                    .get_args()
+                    .map(|value| process::Value::Public(value.to_owned()))
+                    .collect(),
+                environment,
+            },
+            &process::Limits {
+                execution: Duration::from_secs(8),
+                graceful_shutdown: Duration::from_secs(1),
+                forced_shutdown: Duration::from_secs(1),
+                retained_bytes_per_stream: 65536,
+                readiness: process::Readiness::None,
+                completion: process::Completion::Exit,
+            },
+            &process::Cancellation::default(),
+            process::RawCaptureOptions {
+                stdout: std::num::NonZeroUsize::new(1048576),
+                stderr: std::num::NonZeroUsize::new(1048576),
+            },
+        )
+        .unwrap();
+        assert!(result.process.cleanup.complete, "{:?}", result.process);
+        assert!(result.process.failure.is_none(), "{:?}", result.process);
         Receipt {
-            status,
-            stdout: fs::read_to_string(stdout).unwrap(),
-            stderr: fs::read_to_string(stderr).unwrap(),
+            status: result.process.status.unwrap(),
+            stdout: String::from_utf8(result.stdout.unwrap().as_bytes().to_vec()).unwrap(),
+            stderr: String::from_utf8(result.stderr.unwrap().as_bytes().to_vec()).unwrap(),
         }
     }
 
@@ -208,7 +228,7 @@ fn lane_projector_and_required_oracle_admission_are_mandatory() {
 fn required_embedding_sdk_cannot_be_skipped_before_model_execution() {
     let fixture = Fixture::new();
     let receipt = fixture.wrapper("embedding", "embedding-smoke", &[]);
-    fixture.rejected_without_execution(&receipt, "official openai-python SDK smoke requires");
+    fixture.rejected_without_execution(&receipt, "absolute executable SKIPPY_WORKLOAD_SDK_PYTHON");
     assert!(receipt.stdout.is_empty());
     assert_eq!(
         fs::read_dir(fixture.path().join("work")).unwrap().count(),
@@ -284,26 +304,36 @@ write_stamp() {
   printf 'patched-sha=%s\nbackend=%s\nlink-mode=static\ncmake-arg=-DGGML_METAL=OFF\n' "$1" "$2" > "$CANDIDATE_BUILD_DIR/.mesh-llm-build-stamp"
 }
 workload_owner() {
-  [[ "$*" == 'automation canary-receipts prepared-source --root selected-source' ]] || exit 91
-  printf 'provenance\n' >> "$FIXTURE_ROOT/events"
-  [[ "$PROVENANCE_FAIL" == 0 ]] || return 1
-  printf 'current\n'
+  [[ "$1 $2" == 'automation canary-receipts' ]] || exit 91
+  shift 2
+  case "$1" in
+    prepared-source)
+      [[ "$#" == 3 && "$2" == --root && "$3" == selected-source ]] || exit 92
+      printf 'provenance\n' >> "$FIXTURE_ROOT/events"
+      [[ "$PROVENANCE_FAIL" == 0 ]] || return 1
+      printf 'current\n'
+      ;;
+    workload-manifest)
+      shift
+      mode="$1"; shift
+      [[ "$1" == selected-source && "$2" == candidate/skippy-server && "$3" == "$CANDIDATE_BUILD_DIR" ]] || exit 93
+      case "$mode" in
+        verify) [[ "$#" == 4 && "$4" == manifest ]] || exit 94 ;;
+        fresh) [[ "$#" == 3 ]] || exit 95 ;;
+        *) exit 96 ;;
+      esac
+      printf '%s\n' "$mode" >> "$FIXTURE_ROOT/events"
+      [[ "$CHECK_FAIL" == 0 ]] || return 1
+      ;;
+    *) exit 97 ;;
+  esac
 }
 workload_automation=(workload_owner)
-python3() {
-  [[ "$1" == selected-source/scripts/check-skippy-workload-candidate.py ]] || exit 92
-  shift
-  [[ "$#" == 4 || "$#" == 6 ]] || exit 94
-  [[ "$1" == --candidate-binary && "$2" == candidate/skippy-server &&
-     "$3" == --native-build-dir && "$4" == "$CANDIDATE_BUILD_DIR" ]] || exit 95
-  shift 4
-  if (( $# > 0 )); then
-    [[ "$1" == --producer-manifest && "$2" == manifest ]] || exit 96
-  fi
-  printf 'checked\n' >> "$FIXTURE_ROOT/events"
-  [[ "$CHECK_FAIL" == 0 ]]
+jq() {
+  [[ "$#" == 3 && "$1" == -er && "$2" == .files.test_binary.path && "$3" == manifest ]] || exit 98
+  printf 'prebuilt-test\n'
 }
-jq() { printf 'prebuilt-test\n'; }
+
 cargo() {
   [[ "$*" == 'build -p skippy-server' ]] || exit 93
   printf 'built\n' >> "$FIXTURE_ROOT/events"
@@ -326,7 +356,7 @@ fn cpu_stamp_admission_follows_build_and_never_weakens_prebuilt_consumption() {
         let fixture = Fixture::new();
         let mut command = fixture.command();
         command
-            .args(["-c", &format!("{CPU_FIXTURE}\n{}", candidate_branches())])
+            .args(["-c", &format!("{CPU_FIXTURE}\n{}\nprintf '%s\\n' \"${{TEST_COMMAND[@]}}\" > \"$FIXTURE_ROOT/selected-test\"", candidate_branches())])
             .env("INITIAL", initial)
             .env("BUILT", built)
             .env("SKIP_BUILD", skip.to_string())
@@ -345,15 +375,25 @@ fn cpu_stamp_admission_follows_build_and_never_weakens_prebuilt_consumption() {
             events.lines().filter(|line| *line == "built").count(),
             usize::from(skip == 0)
         );
+        if success {
+            assert_eq!(
+                fs::read_to_string(fixture.path().join("selected-test")).unwrap(),
+                if producer.is_empty() {
+                    "test\n"
+                } else {
+                    "./prebuilt-test\n"
+                }
+            );
+        }
         if success && skip == 0 {
             assert_eq!(
                 events.lines().collect::<Vec<_>>(),
-                ["built", "provenance", "checked"]
+                ["built", "provenance", "fresh"]
             );
         } else if success {
             assert_eq!(
                 events.lines().collect::<Vec<_>>(),
-                ["checked", "provenance", "checked"]
+                ["verify", "provenance", "fresh"]
             );
         }
     }
@@ -380,4 +420,46 @@ fn provenance_and_candidate_verifier_errors_cannot_admit_cpu_outputs() {
                 .contains("built")
         );
     }
+}
+
+#[test]
+fn executable_embedding_sdk_import_failure_stops_before_model_execution() {
+    let fixture = Fixture::new();
+    fixture.executable(
+        "bin/sdk-import-failure",
+        r#"
+[[ "$#" == 3 && "$1" == -I && "$2" == -c && "$3" == 'import openai' ]] || exit 94
+printf '%s\n' "$@" > "$FIXTURE_ROOT/sdk-import.argv"
+exit 23
+"#,
+    );
+    let mut command = fixture.command();
+    command
+        .env(
+            "SKIPPY_WORKLOAD_SDK_PYTHON",
+            fixture.path().join("bin/sdk-import-failure"),
+        )
+        .arg(root().join("scripts/skippy-workload-certify.sh"))
+        .args([
+            "--class",
+            "embedding",
+            "--lane",
+            "embedding-smoke",
+            "--model-path",
+        ])
+        .arg(fixture.path().join("model.gguf"))
+        .args(["--model-id", "fixture", "--work-dir"])
+        .arg(fixture.path().join("work"))
+        .arg("--skip-build");
+    let receipt = fixture.run(command);
+    fixture.rejected_without_execution(&receipt, "official openai-python SDK smoke requires");
+    assert_eq!(
+        fs::read_to_string(fixture.path().join("sdk-import.argv")).unwrap(),
+        "-I\n-c\nimport openai\n"
+    );
+    assert!(receipt.stdout.is_empty());
+    assert_eq!(
+        fs::read_dir(fixture.path().join("work")).unwrap().count(),
+        0
+    );
 }

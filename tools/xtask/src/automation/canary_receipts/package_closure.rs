@@ -55,6 +55,9 @@ struct WorkloadInput {
 }
 
 pub(crate) fn run(args: &[String], workload: bool) -> DynResult<()> {
+    if workload && args.first().is_some_and(|arg| !arg.starts_with('-')) {
+        return self::workload::production::run(args);
+    }
     let grammar = Grammar {
         usage: if workload {
             "cargo xtool automation canary-receipts workload-manifest --input PATH"

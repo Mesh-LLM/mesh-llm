@@ -32,7 +32,7 @@ runs:
           compatibility)
             [[ "$("$host_python" --version)" == 'Python 3.12.'* ]] || { echo "required SDK lock needs existing CPython 3.12" >&2; exit 1; }
             sdk_environment="$RUNNER_TEMP/required-sdk-compatibility"
-            [[ ! -e "$sdk_environment" && ! -L "$sdk_environment" ]]
+            [[ ! -e "$sdk_environment" && ! -L "$sdk_environment" ]] || exit 1
             "$host_python" -I -m venv "$sdk_environment"
             sdk_python="$sdk_environment/bin/python"
             env -u PIP_INDEX_URL -u PIP_EXTRA_INDEX_URL -u PIP_TRUSTED_HOST \

@@ -170,10 +170,10 @@ Notes / gotchas:
 lsof -nP -iTCP:9337 -iTCP:3131 -sTCP:LISTEN
 
 # Models (union of local + mesh peers)
-curl -s http://localhost:9337/v1/models | python3 -m json.tool
+curl -s http://localhost:9337/v1/models
 
 # Status / peers
-curl -s http://localhost:3131/api/status | python3 -m json.tool
+curl -s http://localhost:3131/api/status
 
 # Inference — the returned "model" field tells you which node/model answered
 curl -s http://localhost:9337/v1/chat/completions \

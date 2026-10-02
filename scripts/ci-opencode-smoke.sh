@@ -366,26 +366,8 @@ if ! "${OPENCODE_COMMAND[@]}" "${BASE_RUN_ARGS[@]}" "${TURN1_PROMPT}" >"${TURN1_
     exit 1
 fi
 
-SESSION_ID="$(
-    python3 - "${TURN1_JSONL}" <<'PY'
-import json
-import sys
-
-for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    session = event.get("sessionID")
-    if isinstance(session, str) and session:
-        print(session)
-        raise SystemExit
-print("")
-PY
-)"
-
-if [[ -z "$SESSION_ID" ]]; then
-    echo "OpenCode turn 1 did not emit a sessionID" >&2
+if ! SESSION_ID="$("${opencode_automation[@]}" automation agent-fixture-evidence opencode-session "${TURN1_JSONL}")"; then
+    echo "OpenCode turn 1 did not emit a usable sessionID" >&2
     tail -120 "${TURN1_JSONL}" >&2 || true
     exit 1
 fi
@@ -456,81 +438,11 @@ if prime_sum != 31:
 print("Hidden implementation validation passed")
 PY
 
-python3 - "${OUTPUT_JSONL}" <<'PY'
-import json
-import re
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-raw = path.read_text(encoding="utf-8", errors="replace")
-tool_names = []
-text_chunks = []
-
-def text_values(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from text_values(item)
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            if key in {"text", "content", "message", "delta"}:
-                yield from text_values(item)
-            elif isinstance(item, (dict, list)):
-                yield from text_values(item)
-
-for line in raw.splitlines():
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        text_chunks.append(line)
-        continue
-
-    if event.get("type") == "tool_use":
-        part = event.get("part") or {}
-        tool = part.get("tool") or part.get("name")
-        if isinstance(tool, str):
-            tool_names.append(tool)
-    if event.get("type") in {"text", "message", "assistant"}:
-        text_chunks.extend(text_values(event))
-
-answer_text = "\n".join(text_chunks) + "\n" + raw
-expected = {
-    "CODEWORD": "signal-7429",
-    "CHECKSUM": "FS-319-DELTA",
-    "PRIME_SUM": "10",
-    "QUESTION": "facts/signal.md",
-}
-
-missing = []
-for key, value in expected.items():
-    pattern = rf"(?m)^{re.escape(key)}={re.escape(value)}\s*$"
-    if not re.search(pattern, answer_text):
-        missing.append(f"{key}={value}")
-
-filesystem_tools = {"bash", "read", "grep", "glob", "edit", "write", "apply_patch"}
-used_filesystem_tools = [tool for tool in tool_names if tool in filesystem_tools]
-edit_tools = [tool for tool in tool_names if tool in {"edit", "write", "apply_patch"}]
-
-if missing:
-    print("OpenCode answer did not include expected facts:", file=sys.stderr)
-    for item in missing:
-        print(f"  missing {item}", file=sys.stderr)
-    print("--- output tail ---", file=sys.stderr)
-    print("\n".join(raw.splitlines()[-80:]), file=sys.stderr)
-    sys.exit(1)
-
-if len(tool_names) < 4 or len(used_filesystem_tools) < 4 or not edit_tools:
-    print("OpenCode did not report the expected multi-turn filesystem/coding tool calls.", file=sys.stderr)
-    print(f"  tool events: {tool_names}", file=sys.stderr)
-    print("--- output tail ---", file=sys.stderr)
-    print("\n".join(raw.splitlines()[-80:]), file=sys.stderr)
-    sys.exit(1)
-
-print("OpenCode multi-turn coding smoke passed")
-print("  tools: " + ", ".join(tool_names))
-PY
+if ! "${opencode_automation[@]}" automation agent-fixture-evidence opencode-result "${OUTPUT_JSONL}"; then
+    echo "--- output tail ---" >&2
+    tail -80 "${OUTPUT_JSONL}" >&2 || true
+    exit 1
+fi
 
 if [[ "$SURFACE_CAPTURE" == "true" && "$MODEL" == mesh/* ]]; then
     python3 - "$SURFACE_LOG" <<'PY'

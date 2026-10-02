@@ -13,7 +13,7 @@ pub(crate) fn print_usage() {
         "  cargo xtool automation agent-client-config {{pi BASE MODEL JSON | goose BASE MODEL PROVIDER_JSON CONFIG_YAML | opencode [BASE MODEL]}}"
     );
     println!(
-        "  cargo xtool automation agent-fixture-evidence {{soak RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS | probe RESPONSE LABEL}}"
+        "  cargo xtool automation agent-fixture-evidence {{soak RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS | probe RESPONSE LABEL | opencode-session JSONL | opencode-result JSONL}}"
     );
     println!("  cargo xtool automation family-model-identity MODEL_ID MODEL_PATH");
     println!("  cargo xtool automation family-model-identity --snapshot-revision PATH");
@@ -23,6 +23,10 @@ pub(crate) fn print_usage() {
     println!(
         "  cargo xtool automation family-battery-policy --environment ARTIFACT_ROOT MODEL_ROOT MINIMUM_GIB OUTPUT"
     );
+    println!(
+        "  cargo xtool automation family-battery-policy --cache ROOT MANIFEST PLAN CACHE_ROOT"
+    );
+    println!("  cargo xtool automation family-battery-policy --inspect-gguf PATH");
     println!(
         "  cargo xtool automation openai-smoke-config --output PATH --model-id ID --model-path PATH --layer-end N --ctx-size N"
     );
@@ -38,6 +42,9 @@ pub(crate) fn print_usage() {
         "  cargo xtool automation workload-smoke --base-url <url> --model <id> --class <class> [--media-path <path>]"
     );
     println!("  cargo xtool automation hf-xet-smoke <download-output> <isolated-cache-root>");
+    println!(
+        "  cargo xtool automation cache-family-report --input PATH... [--output PATH] [--use-case-corpus PATH]"
+    );
     println!("  cargo xtool automation split-probe <verb> ...");
     println!(
         "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
@@ -81,6 +88,7 @@ pub(crate) struct Cli<'a> {
 
 pub(crate) enum CliCommand<'a> {
     AgentClientConfig(&'a [String]),
+    CacheFamilyReport(&'a [String]),
     AgentFixtureEvidence(&'a [String]),
     AgentFixtureInputs(&'a [String]),
     FamilyBatteryPolicy(&'a [String]),
@@ -186,6 +194,11 @@ impl<'a> Cli<'a> {
                 if domain == "automation" && scope == "agent-client-config" =>
             {
                 CliCommand::AgentClientConfig(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "cache-family-report" =>
+            {
+                CliCommand::CacheFamilyReport(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "family-battery-policy" =>

@@ -40,6 +40,21 @@ fn admit(root: &Path, manifest: &Path, plan: &Path, requested: &str) -> DynResul
 }
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    if let [mode, root, manifest, plan, cache] = args
+        && mode == "--cache"
+    {
+        return crate::automation::canary_source_plan::battery_cache::admit(
+            Path::new(root),
+            Path::new(manifest),
+            Path::new(plan),
+            Path::new(cache),
+        );
+    }
+    if let [mode, model] = args
+        && mode == "--inspect-gguf"
+    {
+        return crate::automation::canary_source_plan::battery_cache::inspect(Path::new(model));
+    }
     if let [mode, artifact, models, minimum, output] = args
         && mode == "--environment"
     {

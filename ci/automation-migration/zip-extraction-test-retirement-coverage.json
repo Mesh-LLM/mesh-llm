@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "retired_path": "scripts/tests/test_safe_extract_zip.py",
+  "source_sha256": "060a9e77929b879095115af7e0aeba1e2865905f67d27cf54472ce0985d4e0d5",
+  "status": "QUALIFIED: actual 51-test migration_archives target passed before retirement",
+  "legacy_method_count": 4,
+  "methods": [
+    {
+      "legacy_method": "test_extracts_files_and_safe_framework_symlinks",
+      "line": 38,
+      "rust": [
+        {
+          "path": "tools/xtask/tests/migration_archives/zip_extract.rs",
+          "line": 67,
+          "symbol": "migration_archives_zip_extracts_files_dirs_modes_and_links",
+          "target": "migration_archives",
+          "sha256": "17dd2691d37b3d203877d145bc8815621e7827e3945bb828e6eb9a45b66a89fc"
+        }
+      ]
+    },
+    {
+      "legacy_method": "test_rejects_entry_path_escapes",
+      "line": 87,
+      "rust": [
+        {
+          "path": "tools/xtask/tests/migration_archives/zip_extract.rs",
+          "line": 100,
+          "symbol": "migration_archives_zip_rejects_traversal_and_absolute_names",
+          "target": "migration_archives",
+          "sha256": "17dd2691d37b3d203877d145bc8815621e7827e3945bb828e6eb9a45b66a89fc"
+        }
+      ]
+    },
+    {
+      "legacy_method": "test_rejects_escaping_or_ancestor_symlinks",
+      "line": 101,
+      "rust": [
+        {
+          "path": "tools/xtask/tests/migration_archives/zip_extract.rs",
+          "line": 150,
+          "symbol": "migration_archives_zip_rejects_escaping_or_ancestor_symlinks",
+          "target": "migration_archives",
+          "sha256": "17dd2691d37b3d203877d145bc8815621e7827e3945bb828e6eb9a45b66a89fc"
+        }
+      ]
+    },
+    {
+      "legacy_method": "test_rejects_duplicate_entries_and_nonempty_destination",
+      "line": 120,
+      "rust": [
+        {
+          "path": "tools/xtask/tests/migration_archives/zip_extract.rs",
+          "line": 135,
+          "symbol": "migration_archives_zip_rejects_duplicates_and_special_entries",
+          "target": "migration_archives",
+          "sha256": "17dd2691d37b3d203877d145bc8815621e7827e3945bb828e6eb9a45b66a89fc"
+        },
+        {
+          "path": "tools/xtask/tests/migration_archives/zip_extract.rs",
+          "line": 177,
+          "symbol": "migration_archives_zip_rejects_unsafe_destinations",
+          "target": "migration_archives",
+          "sha256": "17dd2691d37b3d203877d145bc8815621e7827e3945bb828e6eb9a45b66a89fc"
+        }
+      ]
+    }
+  ],
+  "observable_contract": "Actual artifact extract-zip CLI fixtures construct archive bytes and assert extracted file bytes/modes/link targets, nonzero traversal/drive/absolute/symlink/duplicate/destination admission failures and absence of unintended writes. No interpreter oracle or diagnostic byte emulation required.",
+  "planned_python_paths": 195,
+  "planned_just_roster": 108,
+  "retained_helper": "scripts/safe-extract-zip.py",
+  "limits": "Test-module-only retirement; helper retained. Local archive intent proof is not physical OS SDK/product qualification.",
+  "qualification": {
+    "log": ".omo/evidence/resume-20261002/next-full-xtask-corrected2.log",
+    "target": "migration_archives",
+    "passed": 51,
+    "failed": 0,
+    "seconds": 0.9,
+    "whole_suite": "failed later in obsolete workload wrapper fixture; not a whole-suite pass"
+  }
+}

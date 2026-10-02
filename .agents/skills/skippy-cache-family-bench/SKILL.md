@@ -61,7 +61,7 @@ production cache mode.
 5. Render README-ready tables from the combined JSON outputs:
 
    ```bash
-   python3 skippy/evals/skippy-cache-family-report.py \
+   just --justfile Justfile automation-run automation cache-family-report \
      --input /tmp/skippy-cache-family-bench/full-gguf/production-cache-bench.json \
      --input /tmp/skippy-cache-family-bench/use-cases/production-cache-bench.json \
      --output /tmp/skippy-cache-family-bench/readme-tables.md

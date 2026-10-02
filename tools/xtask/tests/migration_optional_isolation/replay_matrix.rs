@@ -172,10 +172,16 @@ fn pinned_sampling_accepts_exact_numeric_values_and_rejects_wrong_types() -> Tes
         ("temperature", "0", "0.0", true),
         ("temperature", "0", "-0.0", true),
         ("temperature", "0", "0e10", true),
+        ("temperature", "0", "false", false),
+        ("temperature", "0", "1e-9999", false),
+        ("temperature", "0", "-1e-9999", false),
         ("temperature", "0", "true", false),
         ("temperature", "0", "\"0\"", false),
         ("temperature", "0", "9007199254740993", false),
         ("seed", "42", "42.0", true),
+        ("seed", "42", "4.2e1", true),
+        ("seed", "42", "42.000000000000000000001", false),
+        ("seed", "42", "41.999999999999999999999", false),
         ("seed", "42", "true", false),
         ("seed", "42", "false", false),
         ("seed", "42", "\"42\"", false),
@@ -192,6 +198,33 @@ fn pinned_sampling_accepts_exact_numeric_values_and_rejects_wrong_types() -> Tes
         };
         assert_outcome(
             &format!("{field}={token}"),
+            &stage.input(raw.as_bytes())?,
+            expected,
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn exact_sampling_path_preserves_escaped_keys_duplicate_selection_and_ignored_fields() -> TestResult
+{
+    let stage = Stage::new()?;
+    for (replacement, accepted) in [
+        (r#""temperature":false,"\u0074emperature":0"#, true),
+        (r#""temperature":0,"\u0074emperature":false"#, false),
+        (
+            r#""temperature":0,"ignored":{"temperature":1e-9999,"seed":false}"#,
+            true,
+        ),
+    ] {
+        let raw = mutate(&[(r#""temperature":0"#, replacement)]);
+        let expected = if accepted {
+            (0, SHELL, "")
+        } else {
+            (1, "", SAMPLING_ERROR)
+        };
+        assert_outcome(
+            "exact sampling path",
             &stage.input(raw.as_bytes())?,
             expected,
         );

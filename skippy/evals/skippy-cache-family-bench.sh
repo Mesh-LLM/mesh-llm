@@ -2,6 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+report_automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+    exit 1
+  fi
+  report_automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
 RUN_ID="${SKIPPY_CACHE_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${1:-/tmp/skippy-cache-family-bench-${RUN_ID}}"
 
@@ -43,9 +51,10 @@ COMMON_ARGS=(
   --use-case all \
   "${COMMON_ARGS[@]}")
 
-(cd "$ROOT" && python3 skippy/evals/skippy-cache-family-report.py \
+(cd "$ROOT" && "${report_automation[@]}" automation cache-family-report \
   --input "${FULL_DIR}/production-cache-bench.json" \
   --input "${USECASE_DIR}/production-cache-bench.json" \
+  --use-case-corpus "$ROOT/skippy/evals/skippy-usecase-corpus.json" \
   --output "$REPORT")
 
 printf 'Wrote raw full-GGUF results: %s\n' "${FULL_DIR}/production-cache-bench.json"

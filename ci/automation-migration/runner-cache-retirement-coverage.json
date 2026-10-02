@@ -1,0 +1,188 @@
+{
+  "schema": 1,
+  "legacy_path": "scripts/tests/test_ci_runner_selection_and_cache_policy.py",
+  "legacy_sha256": "3cf46cdc4113040b40dc9d32fab1424aa1f912a215d345111ebccaa7fe7c9815",
+  "method_count": 7,
+  "status": "Parent authorized exact seven-method legacy module retirement after17 owning finite adapter/source-policy tests/current workflow guards/corrected full CI passed; actual deletion and197/109 inventory reconciliation performed by parent only.",
+  "methods": [
+    {
+      "legacy_method": "test_actionlint_installer_verifies_pinned_release_archives",
+      "legacy_line": 24,
+      "status": "Meaningful intent owned by passed finite adapter and semantic source-policy tests; legacy method approved for retirement. Live/native/model/platform qualifications remain separate.",
+      "new_test_symbols": [
+        "ci_runner_cache_contract::installer::pinned_installer_verifies_each_platform_checksum_before_extracting_or_exporting",
+        "ci_runner_cache_contract::installer::installer_verification_failure_or_unsupported_arch_never_extracts_or_exports"
+      ],
+      "intent": "Actual parsed action env/version and Bash run body; download argument/version/checksums, verify-before-extract and failed verifier stops export. Existing actual artifact checksum/extraction tests own integrity parsing itself."
+    },
+    {
+      "legacy_method": "test_sccache_prefers_depot_webdav_with_disk_fallback",
+      "legacy_line": 42,
+      "status": "Meaningful intent owned by passed finite adapter and semantic source-policy tests; legacy method approved for retirement. Live/native/model/platform qualifications remain separate.",
+      "new_test_symbols": [
+        "ci_runner_cache_contract::runtime::denied_provider_and_dispatched_pr_use_disk_without_clearing_later_action_credentials",
+        "ci_runner_cache_contract::runtime::allowed_webdav_masks_token_and_native_remote_failures_fall_back_to_isolated_disk",
+        "ci_runner_cache_contract::runtime::invalid_flags_and_failed_local_start_or_stats_fail_the_action"
+      ],
+      "intent": "Actual parsed github-script evaluated by Node with finite core/io/exec boundaries; authorized WebDAV+masked token, disabled provider disk, native read-write, PR/read-only/dispatch disk, isolated fallback child environment, retained later-action runtime credentials, and local/reset failure status."
+    },
+    {
+      "legacy_method": "test_runner_selection_uses_event_repository_and_ref_policy",
+      "legacy_line": 79,
+      "status": "Meaningful intent owned by passed finite adapter and semantic source-policy tests; legacy method approved for retirement. Live/native/model/platform qualifications remain separate.",
+      "new_test_symbols": [
+        "ci_runner_cache_contract::runtime::exact_runner_identity_events_deadline_and_forced_hosted_preserve_cache_boundaries",
+        "ci_runner_cache_contract::runtime::invalid_canary_selector_cannot_emit_runner_outputs",
+        "ci_runner_cache_contract::consumers::current_consumers_require_central_authority_without_suppressing_workload_jobs",
+        "ci_runner_cache_contract::consumers::cache_authority_proof_rejects_disjunction_truthy_strings_negation_and_comment_decoys",
+        "ci_runner_cache_contract::consumers::changed_cache_consumer_gate_or_either_policy_output_fails_closed",
+        "ci_runner_cache_contract::consumers::swift_package_cache_cannot_enable_on_a_policy_denied_branch",
+        "ci_runner_cache_contract::consumers::release_depot_exclusion_and_native_namespace_cannot_be_widened",
+        "ci_runner_cache_contract::consumers::native_sdk_resolver_preserves_provider_cache_outputs_and_explicit_hosted_macos_exception"
+      ],
+      "intent": "Actual finite Bash selector decisions plus parsed all-caller repository/head/ref/head_sha bindings; numerical caller counts/deprecated approval input counts retired as observations."
+    },
+    {
+      "legacy_method": "test_dispatched_pr_cache_writes_remain_blocked_with_depot",
+      "legacy_line": 601,
+      "status": "Meaningful intent owned by passed finite adapter and semantic source-policy tests; legacy method approved for retirement. Live/native/model/platform qualifications remain separate.",
+      "new_test_symbols": [
+        "ci_runner_cache_contract::consumers::current_consumers_require_central_authority_without_suppressing_workload_jobs",
+        "ci_runner_cache_contract::consumers::cache_authority_proof_rejects_disjunction_truthy_strings_negation_and_comment_decoys",
+        "ci_runner_cache_contract::consumers::changed_cache_consumer_gate_or_either_policy_output_fails_closed",
+        "ci_runner_cache_contract::consumers::swift_package_cache_cannot_enable_on_a_policy_denied_branch",
+        "ci_runner_cache_contract::consumers::release_depot_exclusion_and_native_namespace_cannot_be_widened",
+        "ci_runner_cache_contract::consumers::native_sdk_resolver_preserves_provider_cache_outputs_and_explicit_hosted_macos_exception"
+      ],
+      "intent": "Actual cache adapter isolates dispatched PR writes; parsed namespace/implicit compiler-cache env policy and rust-cache save predicates require main plus exclude dispatched PR/target. Swift uses stricter push+main save policy. Cache authorization remains operation-scoped."
+    },
+    {
+      "legacy_method": "test_depot_pr_native_cache_consumers_obey_central_policy",
+      "legacy_line": 645,
+      "status": "Meaningful intent owned by passed finite adapter and semantic source-policy tests; legacy method approved for retirement. Live/native/model/platform qualifications remain separate.",
+      "new_test_symbols": [
+        "ci_runner_cache_contract::consumers::current_consumers_require_central_authority_without_suppressing_workload_jobs",
+        "ci_runner_cache_contract::consumers::cache_authority_proof_rejects_disjunction_truthy_strings_negation_and_comment_decoys",
+        "ci_runner_cache_contract::consumers::changed_cache_consumer_gate_or_either_policy_output_fails_closed",
+        "ci_runner_cache_contract::consumers::swift_package_cache_cannot_enable_on_a_policy_denied_branch",
+        "ci_runner_cache_contract::consumers::release_depot_exclusion_and_native_namespace_cannot_be_widened",
+        "ci_runner_cache_contract::consumers::native_sdk_resolver_preserves_provider_cache_outputs_and_explicit_hosted_macos_exception"
+      ],
+      "intent": "Parsed every actual native cache operation in CI slices/static ABI/Swift/native SDK, nested Windows default-deny/explicit opt-in, CUDA/Vulkan inputs, seed false exception, Swift false fallback, release provider exclusions and warmer explicit opt-ins. Separate exact PR-scoped ABI saves remain allowed. Actual native SDK Bash resolver preserves denied PR outputs and explicit hosted macOS exception."
+    },
+    {
+      "legacy_method": "test_authority_sentinel_is_explicit_cache_gate_exemption",
+      "legacy_line": 832,
+      "status": "Meaningful intent owned by passed finite adapter and semantic source-policy tests; legacy method approved for retirement. Live/native/model/platform qualifications remain separate.",
+      "new_test_symbols": [
+        "ci_runner_cache_contract::authority::sentinel_exemption_has_no_checkout_no_permissions_and_attests_before_pinned_cache",
+        "ci_runner_cache_contract::authority::sentinel_mutations_cannot_expand_credentials_ref_scope_or_ordinary_cache_gates",
+        "ci_runner_cache_contract::authority::authority_producer_requires_protected_checkout_output_projection_and_clean_hosted_profile"
+      ],
+      "intent": "Typed YAML owner enforces exact direct PR/ref condition, dedicated runner output, permissions{}, no checkout/local audits, pinned cache actions after attestation and no ordinary authorization gate. Mutation fixtures reject bypasses. Existing lane_l2_authority tests own real endpoint/Docker admission. Guard only establishes structural attestation order; live cache isolation and protected bootstrap remain separately unqualified. Also checks current quality immutable protected artifact download→verification→both typed endpoint invocations before cache; verifier behavior owned separately, not asserted by name alone. Sentinel depends on runner_policy; verifier env source/artifact/digest bind exact producer outputs, nonempty admission body. Producer immutable output projections, protected default-branch credential-free checkout and hosted-bare/protected-clean upload profile are checked; mutations reject PR/literal identities and profile changes."
+    },
+    {
+      "legacy_method": "test_depot_sccache_consumers_receive_both_central_cache_outputs",
+      "legacy_line": 857,
+      "status": "Meaningful intent owned by passed finite adapter and semantic source-policy tests; legacy method approved for retirement. Live/native/model/platform qualifications remain separate.",
+      "new_test_symbols": [
+        "ci_runner_cache_contract::consumers::current_consumers_require_central_authority_without_suppressing_workload_jobs",
+        "ci_runner_cache_contract::consumers::cache_authority_proof_rejects_disjunction_truthy_strings_negation_and_comment_decoys",
+        "ci_runner_cache_contract::consumers::changed_cache_consumer_gate_or_either_policy_output_fails_closed",
+        "ci_runner_cache_contract::consumers::swift_package_cache_cannot_enable_on_a_policy_denied_branch",
+        "ci_runner_cache_contract::consumers::release_depot_exclusion_and_native_namespace_cannot_be_widened",
+        "ci_runner_cache_contract::consumers::native_sdk_resolver_preserves_provider_cache_outputs_and_explicit_hosted_macos_exception",
+        "ci_runner_cache_contract::consumers::replacing_the_central_decision_with_a_literal_cannot_authorize_consumers"
+      ],
+      "intent": "Every actual configure-sccache caller in provider slices binds both central outputs, and every select-ci-runners caller binds real repository/head/ref/SHA fields. Parsed release platform/provider output projection retained exactly; this is structural source policy, not GitHub expression or live cache execution."
+    }
+  ],
+  "new_source_owner": "tools/xtask/src/ci_validation/workflow_guards/cache_authority.rs",
+  "registration": "Integrated tools/xtask/src/ci_validation/workflow_guards.rs registers the five source-policy modules and calls their checks; current source SHA is recorded. Parent selected owning test target passed17/0; global CI remains separate.",
+  "existing_owners": {
+    "permissions": "tools/xtask/src/ci_validation/workflow_guards/permissions.rs actual permission downgrade/strictest-grant tests passed in wave-full-xtask.log:867-871; this does not replace sentinel no-permission wiring.",
+    "authority": "tools/xtask/tests/lane_l2_authority.rs real loopback/Docker malformed/authentication cases; no live provider claim.",
+    "lane_statuses": "tools/xtask/src/ci_validation/entrypoints.rs and migration_ci_graph/happy.rs preserve quality/website/linux/macos/windows five lanes across PR/main/manual/draft fixtures; untouched, not newly qualified here.",
+    "runner_identity": "Image/capability/evidence identity owner exists but does not own event selector trust/cache eligibility."
+  },
+  "bounds": [
+    "No Python oracle or interpreter emulation. Actual Bash/JavaScript action bodies run with finite platform tool boundaries.",
+    "Existing xtask process supervisor bounds8+1+1sec, retains1MiB per stream, rejects incomplete cleanup/truncation/non-exit.",
+    "Node required as already-used local JS runtime; no dependency downloads/install.",
+    "Five PR+five main statuses, schedules/cadence, required native/model/SDK/protected qualifications remain unchanged.",
+    "Worker reviewed source/log only; parent executed tests. Manual authority phases still use their retained parser; source policy proof is not live cache isolation or protected manual bootstrap qualification."
+  ],
+  "new_source_owners": [
+    "tools/xtask/src/ci_validation/workflow_guards/cache_authority.rs",
+    "tools/xtask/src/ci_validation/workflow_guards/cache_boundaries.rs",
+    "tools/xtask/src/ci_validation/workflow_guards/cache_callers.rs",
+    "tools/xtask/src/ci_validation/workflow_guards/cache_consumers.rs",
+    "tools/xtask/src/ci_validation/workflow_guards/cache_predicate.rs"
+  ],
+  "candidate_test_count": 17,
+  "qualified_receipt": {
+    "path": ".omo/evidence/resume-20261002/followup-runner-cache-contract-corrected.log",
+    "sha256": "274e6427da825eb6e9fecdd771d494b95ea94344ca706872a372ecb100f3e567",
+    "passed": 17,
+    "failed": 0,
+    "seconds": 3.33,
+    "executor": "parent serial validation",
+    "bounds": "Only selected owning target tests (67 borrowed/process/JSON tests filtered); not global CI/native/live certification."
+  },
+  "source_hashes": {
+    "tools/xtask/tests/ci_runner_cache_contract/authority.rs": "af1d02c2c30d0c886f91afe06431d4baead33be062eece089ab8eb95e13f9e2b",
+    "tools/xtask/tests/ci_runner_cache_contract/consumers.rs": "6d6f7945be343ce3cbc29186468634747c3ed8618fdc930b836d9714c2ba0b1c",
+    "tools/xtask/tests/ci_runner_cache_contract/installer.rs": "3159392d2a7175749b12c1b5042c959d3da343c186f19dfbb2d640ddb1d48460",
+    "tools/xtask/tests/ci_runner_cache_contract/runtime.rs": "a8b6262fa950b67c0ca3143e7a7df05c573a645d53b4f751fa4eed053e158da8",
+    "tools/xtask/tests/ci_runner_cache_contract/support.rs": "a35c228411a04af2e9f3efdf1bfc1262195c2875c0a35e97d2ebfebcb9346e5f",
+    "tools/xtask/tests/ci_runner_cache_contract.rs": "47773780d82208d0293ed445578e39dcb4c6fe0734309bb7d8ed7608cfbae3c0",
+    "tools/xtask/src/ci_validation/workflow_guards.rs": "789a267411172200479b72f025b2d4fd33dd740de28562f98602e5ca0060cda5",
+    "tools/xtask/src/ci_validation/workflow_guards/cache_authority.rs": "9438b6d63528c83ce8dee00856450c33f3d1459401e7d874856a7e8dc333bfa7",
+    "tools/xtask/src/ci_validation/workflow_guards/cache_predicate.rs": "50a48c864ab9ad2a6cdcf14192c1007dc51a3257d163f50037491e4a18b61439",
+    "tools/xtask/src/ci_validation/workflow_guards/cache_consumers.rs": "82f915cbf6f8bda12faa3b7ce6465dcf705cad537cff322761545799ea015820",
+    "tools/xtask/src/ci_validation/workflow_guards/cache_callers.rs": "28b148378b5a2714494dab94ee09dd0f7d0957a7913ea43d5e44c0ea8953bba7",
+    "tools/xtask/src/ci_validation/workflow_guards/cache_boundaries.rs": "a25d71aa4300c8f56c3461e91af0958a5a98617f28dac89b26b72a2c5966657e"
+  },
+  "durable_path": "ci/automation-migration/runner-cache-retirement-coverage.json",
+  "retired_legacy_source_sha256": "3cf46cdc4113040b40dc9d32fab1424aa1f912a215d345111ebccaa7fe7c9815",
+  "retired_methods": [
+    "test_actionlint_installer_verifies_pinned_release_archives",
+    "test_sccache_prefers_depot_webdav_with_disk_fallback",
+    "test_runner_selection_uses_event_repository_and_ref_policy",
+    "test_dispatched_pr_cache_writes_remain_blocked_with_depot",
+    "test_depot_pr_native_cache_consumers_obey_central_policy",
+    "test_authority_sentinel_is_explicit_cache_gate_exemption",
+    "test_depot_sccache_consumers_receive_both_central_cache_outputs"
+  ],
+  "retired_method_count": 7,
+  "retired_paths": [
+    "scripts/tests/test_ci_runner_selection_and_cache_policy.py"
+  ],
+  "validation_receipts": {
+    "followup-runner-cache-contract-corrected.log": {
+      "path": ".omo/evidence/resume-20261002/followup-runner-cache-contract-corrected.log",
+      "sha256": "274e6427da825eb6e9fecdd771d494b95ea94344ca706872a372ecb100f3e567"
+    },
+    "followup-authority-transitional.log": {
+      "path": ".omo/evidence/resume-20261002/followup-authority-transitional.log",
+      "sha256": "e670020536f9bdb94161bf276d86f09ad5139f2cc545227b7a2e245fff4ec749"
+    },
+    "followup-ci-validate-corrected.log": {
+      "path": ".omo/evidence/resume-20261002/followup-ci-validate-corrected.log",
+      "sha256": "e0a77f94831c9b66d552114625fa1b06a3524a173709a2b52a278c2386c1ecff"
+    },
+    "followup-current-workflow-guards.log": {
+      "path": ".omo/evidence/resume-20261002/followup-current-workflow-guards.log",
+      "sha256": "711a21492ec87164e833a1b3ff5cc322aa4d97678c843cdd0f052ea0b22b853d"
+    },
+    "followup-clippy-current.log": {
+      "path": ".omo/evidence/resume-20261002/followup-clippy-current.log",
+      "sha256": "3ad84aaf45af818be1b92464ef231ea754d77983b6c2dd8fc13274b0415cb1e8"
+    },
+    "followup-format-current.log": {
+      "path": ".omo/evidence/resume-20261002/followup-format-current.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "current_validation": "Parent17 runner/cache cases passed in3.33s;8 retained depot cases passed in2.722s; corrected full just ci-validate terminalexit0,1329 legacy cases14 skipped. Current format/Clippy/workflow guards/release targets passed. No live/native/model/SDK/actual-platform or protected-manual qualification claim."
+}

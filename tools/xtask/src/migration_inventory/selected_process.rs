@@ -83,6 +83,9 @@ pub(super) fn check_selected_processes(
         }
         let text = fs::read_to_string(root.join(path))?;
         if path == "scripts/skippy-family-battery.sh"
+            && text
+                .lines()
+                .any(|line| indirect_launch(line) && line.contains("$PLANNER"))
             && !text
                 .lines()
                 .any(|line| line.trim() == "PLANNER=\"$ROOT/scripts/plan-family-battery.py\"")

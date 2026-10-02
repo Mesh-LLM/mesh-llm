@@ -83,3 +83,50 @@ fn embedding_missing_package_rejects_before_native_work_and_nonembedding_needs_n
     );
     assert!(other.status.success());
 }
+
+#[test]
+fn compatibility_setup_rejects_existing_files_directories_and_broken_symlinks_before_install() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let action =
+        fs::read_to_string(root.join(".github/actions/setup-canary-python/action.yml")).unwrap();
+    let script = action
+        .split("      run: |\n")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .map(|line| line.strip_prefix("        ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for kind in ["file", "directory", "broken-symlink"] {
+        let temporary = tempfile::tempdir().unwrap();
+        let bin = temporary.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let python = bin.join("python3");
+        fs::write(&python, "#!/bin/bash\nif [[ $* == --version ]]; then printf 'Python 3.12.9\\n'; exit 0; fi\nprintf called > \"$RUNNER_TEMP/installer-called\"\nexit 23\n").unwrap();
+        fs::set_permissions(&python, fs::Permissions::from_mode(0o700)).unwrap();
+        let environment = temporary.path().join("required-sdk-compatibility");
+        match kind {
+            "file" => fs::write(&environment, "existing").unwrap(),
+            "directory" => fs::create_dir(&environment).unwrap(),
+            _ => std::os::unix::fs::symlink("absent-target", &environment).unwrap(),
+        }
+        let github_environment = temporary.path().join("github-env");
+        let output = Command::new("/bin/bash")
+            .args(["-c", &script])
+            .env_clear()
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("RUNNER_TEMP", temporary.path())
+            .env("SDK_KIND", "compatibility")
+            .env("GITHUB_ENV", &github_environment)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{kind}");
+        assert!(
+            !temporary.path().join("installer-called").exists(),
+            "{kind}"
+        );
+        assert!(!github_environment.exists(), "{kind}");
+        assert!(fs::symlink_metadata(&environment).is_ok(), "{kind}");
+    }
+}
