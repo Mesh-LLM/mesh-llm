@@ -72,6 +72,9 @@ classify as `missing`; stamped packages require `--public-key-file` and
 otherwise report `invalid` with an explicit error. Even `invalid` binaries still
 follow the normal startup path unless mesh policy requires certified builds.
 
+For runtime hardware proof and the client-verifiable TEE routing plan, see
+[Client-verifiable TEE inference](design/TEE_ATTESTATION.md).
+
 Requirement-aware meshes use signed bootstrap tokens. Unrestricted meshes can
 use the default unsigned endpoint-token path; unpublished does not imply signed or owner-restricted.
 

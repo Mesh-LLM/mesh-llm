@@ -20,6 +20,8 @@ use mesh_llm_events::audit::{audit_events, emit_audit};
 use mesh_llm_events::{OutputEvent, emit_event};
 use mesh_mixture_of_agents as moa;
 
+mod tee_routing;
+
 /// The status code an out-of-process plugin sees for path 2's terminal
 /// event, best-effort from [`proxy::RouteDispatchOutcome`] — `None` when the
 /// outcome carries no HTTP status at all (a dropped/failed connection).
@@ -2059,6 +2061,22 @@ async fn handle_buffered_api_request(
                 return;
             }
         };
+
+    let tcp_stream = match tee_routing::route_tee_request(
+        tcp_stream,
+        &mut request,
+        &ctx,
+        ingress_type,
+        lifecycle.route_observer(),
+    )
+    .await
+    {
+        tee_routing::TeeDispatch::Continue(stream) => stream,
+        tee_routing::TeeDispatch::Handled(outcome) => {
+            lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
+            return;
+        }
+    };
 
     let decision = match prepare_auto_route_decision(&mut request, &ctx.route, &descriptors).await {
         Ok(decision) => decision,

@@ -32,6 +32,7 @@ pub const STREAM_CONFIG_SUBSCRIBE: u8 = 0x0b;
 pub const STREAM_CONFIG_PUSH: u8 = 0x0c;
 pub const STREAM_SUBPROTOCOL: u8 = 0x0d;
 pub const STREAM_DIRECT_PATH_REQUEST: u8 = 0x0e;
+pub const STREAM_TEE_ATTESTATION: u8 = 0x0f;
 const _: () = {
     let _ = STREAM_CONFIG_SUBSCRIBE;
     let _ = STREAM_CONFIG_PUSH;

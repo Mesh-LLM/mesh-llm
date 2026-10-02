@@ -180,6 +180,7 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         "api-key",
         super::request_parse::MESH_TARGET_HEADER,
         super::request_parse::MESH_EXCLUDE_HEADER,
+        super::request_parse::MESH_REQUIRE_TEE_HEADER,
     ];
     finalize_forwarded_request(raw, false, None, None, OMITTED_ON_PEER_FORWARD)
 }

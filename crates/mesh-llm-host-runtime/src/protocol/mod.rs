@@ -43,6 +43,7 @@ pub(crate) const STREAM_CONFIG_SUBSCRIBE: u8 = 0x0b;
 pub(crate) const STREAM_CONFIG_PUSH: u8 = 0x0c;
 pub(crate) const STREAM_SUBPROTOCOL: u8 = 0x0d;
 pub(crate) const STREAM_DIRECT_PATH_REQUEST: u8 = 0x0e;
+pub(crate) const STREAM_TEE_ATTESTATION: u8 = 0x0f;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ControlProtocol {
