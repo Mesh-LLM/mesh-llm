@@ -155,12 +155,20 @@ if [[ -n "$ORACLE_TTS" ]]; then
   require_pinned_cpu_oracle "$ORACLE_TTS" llama-tts 'cmake-arg=-DLLAMA_BUILD_TOOLS=ON'
 fi
 
-SDK_PYTHON="${SKIPPY_WORKLOAD_SDK_PYTHON:-python3}"
-if [[ "$MODEL_CLASS" == "embedding" ]] && ! "$SDK_PYTHON" -c 'import openai' >/dev/null 2>&1; then
-  echo "official openai-python SDK smoke requires the openai package in $SDK_PYTHON" >&2
-  exit 1
+# Required SDK environment admission begins.
+SDK_PYTHON="${SKIPPY_WORKLOAD_SDK_PYTHON:-}"
+if [[ "$MODEL_CLASS" == embedding ]]; then
+  if [[ "$SDK_PYTHON" != /* || ! -f "$SDK_PYTHON" || ! -x "$SDK_PYTHON" ]]; then
+    echo "embedding SDK smoke needs an absolute executable SKIPPY_WORKLOAD_SDK_PYTHON from the locked environment" >&2
+    exit 1
+  fi
+  if ! "$SDK_PYTHON" -I -c 'import openai' >/dev/null 2>&1; then
+    echo "official openai-python SDK smoke requires the openai package in $SDK_PYTHON" >&2
+    exit 1
+  fi
 fi
 
+# Required SDK environment admission ends.
 mkdir -p "$WORK_DIR"
 EVIDENCE_PATH="$WORK_DIR/workload-oracle-evidence.json"
 COMPARISON_LOG="$WORK_DIR/workload-oracle-comparison.txt"
@@ -429,7 +437,7 @@ if [[ -n "$ORACLE_TTS" ]]; then
 fi
 
 if [[ "$MODEL_CLASS" == "embedding" ]]; then
-  "$SDK_PYTHON" "$ROOT/scripts/ci-openai-embeddings-smoke.py" \
+  "$SDK_PYTHON" -I "$ROOT/scripts/ci-openai-embeddings-smoke.py" \
     --base-url "http://127.0.0.1:$PORT/v1" \
     --model "$MODEL_ID"
 fi

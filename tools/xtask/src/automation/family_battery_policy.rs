@@ -1,4 +1,7 @@
 //! Current battery plan admission. Native execution remains owned by the battery.
+#[path = "family_battery_environment.rs"]
+mod environment;
+
 use crate::command::DynResult;
 use serde::Deserialize;
 use std::{fs, path::Path};
@@ -37,6 +40,16 @@ fn admit(root: &Path, manifest: &Path, plan: &Path, requested: &str) -> DynResul
 }
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    if let [mode, artifact, models, minimum, output] = args
+        && mode == "--environment"
+    {
+        return environment::run(
+            Path::new(artifact),
+            Path::new(models),
+            minimum,
+            Path::new(output),
+        );
+    }
     let [root, manifest, plan, shard] = args else {
         return Err(
             "usage: automation family-battery-policy ROOT MANIFEST PLAN SHARD_INDEX_OR_EMPTY"

@@ -1,21 +1,16 @@
-//! Python 3.13 argparse for the two native-policy scripts: single-value
-//! options (optionally required or restricted to choices), `store_true`
-//! flags, at most one positional, unique-prefix and `=value` options, `-h`
-//! bundling, the first `--` separator, and argparse's sequential error order.
+//! Exact native-policy options, ordered repeated values, and an optional binary path.
 
-use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
-use crate::ci_operations::ci_metrics_int::python_int_text;
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
 use crate::repository::text::repr;
 
-/// One optional argument of a legacy parser.
+/// One native-policy option.
 pub(super) struct Opt {
     pub(super) name: &'static str,
     pub(super) flag: bool,
     pub(super) required: bool,
     pub(super) choices: &'static [&'static str],
-    /// `type=int`: the value is converted (and shown) as a Python int.
+    /// A bounded unsigned integer, used for CUDA toolkit major choices.
     pub(super) integer: bool,
 }
 
@@ -60,7 +55,7 @@ impl Opt {
     }
 }
 
-/// A legacy parser: program name, usage block, help text and arguments.
+/// The native-policy command grammar and its usage output.
 pub(super) struct Grammar {
     pub(super) prog: &'static str,
     pub(super) usage: &'static str,
@@ -104,13 +99,6 @@ impl Grammar {
         error(self.usage, self.prog, message)
     }
 
-    fn names(&self) -> Vec<&'static str> {
-        let mut names = vec!["-h", "--help"];
-        names.extend(self.options.iter().map(|option| option.name));
-        names
-    }
-
-    /// Parses `args`, or returns the help/usage report argparse would produce.
     pub(super) fn parse(&self, args: &[String]) -> Result<Parsed, CheckReport> {
         let (parsed, extras) = self.parse_known(args)?;
         if !extras.is_empty() {
@@ -119,118 +107,89 @@ impl Grammar {
         Ok(parsed)
     }
 
-    /// `parse_known_args`: the parsed values and the unrecognized words.
     pub(super) fn parse_known(
         &self,
         args: &[String],
     ) -> Result<(Parsed, Vec<String>), CheckReport> {
-        let names = self.names();
+        if args.len() > 4096 || args.iter().map(String::len).sum::<usize>() > 1024 * 1024 {
+            return Err(self.fail("native-policy arguments exceed input limits"));
+        }
         let mut parsed = Parsed::default();
-        let mut extras: Vec<&str> = Vec::new();
+        let mut extras = Vec::new();
         let mut separated = false;
         let mut index = 0;
         while let Some(arg) = args.get(index) {
-            let kind = classify(arg, &names);
-            if separated || arg == "--" || matches!(kind, Kind::Positional) {
-                index = self.positional_run(args, index, &mut separated, &mut parsed, &mut extras);
+            index += 1;
+            if !separated && arg == "--" {
+                separated = true;
                 continue;
             }
-            index += 1;
-            match kind {
-                Kind::Positional | Kind::Unknown => extras.push(arg),
-                Kind::Known("-h" | "--help", explicit, sep) => {
-                    help_flag(explicit, sep, "-h/--help", &|message| self.fail(message))?;
-                    return Err(CheckReport::success(self.help.to_owned()));
+            if separated || !option_like(arg) {
+                if self.positional.is_some() && parsed.positional.is_none() {
+                    parsed.positional = Some(arg.clone());
+                } else {
+                    extras.push(arg.clone());
                 }
-                Kind::Known(name, explicit, sep) => {
-                    let option = self.option(name);
-                    let value = if option.flag {
-                        help_flag(explicit, sep, name, &|message| self.fail(message))?;
-                        String::new()
-                    } else {
-                        self.take_value(option, explicit, args, &mut index, &names)?
-                    };
-                    parsed.values.push((option.name, value));
-                }
+                continue;
             }
+            let (name, explicit) = arg
+                .split_once('=')
+                .map_or((arg.as_str(), None), |(n, v)| (n, Some(v)));
+            if matches!(name, "-h" | "--help") {
+                if explicit.is_some() {
+                    return Err(self.fail("help does not accept a value"));
+                }
+                return Err(CheckReport::success(self.help.to_owned()));
+            }
+            let Some(option) = self.options.iter().find(|option| option.name == name) else {
+                extras.push(arg.clone());
+                continue;
+            };
+            let value = self.take_value(option, explicit, args, &mut index)?;
+            parsed.values.push((option.name, value));
         }
-        let extras = extras.into_iter().map(str::to_owned).collect();
         Ok((self.finish(parsed)?, extras))
-    }
-
-    fn option(&self, name: &str) -> &Opt {
-        self.options
-            .iter()
-            .find(|option| option.name == name)
-            .unwrap_or(&self.options[0])
-    }
-
-    /// Consumes one run of positional words (and the first `--`), filling
-    /// the positional with argparse's `-*A-*` match; the rest are extras.
-    fn positional_run<'a>(
-        &self,
-        args: &'a [String],
-        start: usize,
-        separated: &mut bool,
-        parsed: &mut Parsed,
-        extras: &mut Vec<&'a str>,
-    ) -> usize {
-        let mut separators = Vec::new();
-        let mut end = start;
-        while let Some(arg) = args.get(end) {
-            let separator = !*separated && arg == "--";
-            if !(*separated
-                || separator
-                || matches!(classify(arg, &self.names()), Kind::Positional))
-            {
-                break;
-            }
-            *separated |= separator;
-            separators.push(separator);
-            end += 1;
-        }
-        let mut consumed = 0;
-        if self.positional.is_some() && parsed.positional.is_none() {
-            let value = usize::from(separators.first() == Some(&true));
-            if separators.get(value) == Some(&false) {
-                parsed.positional = Some(args[start + value].clone());
-                let trailing = usize::from(separators.get(value + 1) == Some(&true));
-                consumed = value + 1 + trailing;
-            }
-        }
-        extras.extend(args[start + consumed..end].iter().map(String::as_str));
-        end
     }
 
     fn take_value(
         &self,
         option: &Opt,
-        explicit: Option<String>,
+        explicit: Option<&str>,
         args: &[String],
         index: &mut usize,
-        names: &[&str],
     ) -> Result<String, CheckReport> {
+        if option.flag {
+            return if explicit.is_none() {
+                Ok(String::new())
+            } else {
+                Err(self.fail(&format!("argument {} does not accept a value", option.name)))
+            };
+        }
         let value = match explicit {
-            Some(value) => value,
+            Some(value) => value.to_owned(),
             None => match args.get(*index) {
-                Some(next) if !is_option_like(next, names) => {
+                Some(next) if !option_like(next) => {
                     *index += 1;
                     next.clone()
                 }
                 _ => {
-                    let message = format!("argument {}: expected one argument", option.name);
-                    return Err(self.fail(&message));
+                    return Err(
+                        self.fail(&format!("argument {}: expected one argument", option.name))
+                    );
                 }
             },
         };
         let value = if option.integer {
-            python_int_text(&value).ok_or_else(|| {
-                self.fail(&format!(
-                    "argument {}: invalid int value: {}",
-                    option.name,
-                    repr(&value)
-                ))
-            })?
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(self.fail(&format!(
+                    "argument {}: expected unsigned integer",
+                    option.name
+                )));
+            }
+            value
+                .parse::<u32>()
+                .map_err(|_| self.fail(&format!("argument {}: integer out of range", option.name)))?
+                .to_string()
         } else {
             value
         };
@@ -265,5 +224,67 @@ impl Grammar {
             )));
         }
         Ok(parsed)
+    }
+}
+
+fn option_like(value: &str) -> bool {
+    value.starts_with('-') && value != "-"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Grammar, Opt};
+
+    const GRAMMAR: Grammar = Grammar {
+        prog: "native-policy",
+        usage: "native-policy [options] binary",
+        help: "native-policy help\n",
+        options: &[
+            Opt::value("--scan-dir"),
+            Opt::int_choice("--cuda-major", &["12", "13"]),
+            Opt::flag("--enabled"),
+        ],
+        positional: Some("binary"),
+    };
+
+    fn args(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn exact_options_keep_repeated_unicode_paths_and_separator() {
+        let parsed = GRAMMAR
+            .parse(&args(&[
+                "--scan-dir",
+                "模型 one",
+                "--cuda-major=12",
+                "--scan-dir=second",
+                "--enabled",
+                "--",
+                "-binary",
+            ]))
+            .unwrap_or_else(|error| panic!("{}", error.stderr));
+        assert_eq!(parsed.values("--scan-dir"), ["模型 one", "second"]);
+        assert_eq!(parsed.value("--cuda-major"), Some("12"));
+        assert!(parsed.flag("--enabled"));
+        assert_eq!(parsed.positional.as_deref(), Some("-binary"));
+    }
+
+    #[test]
+    fn compatibility_spellings_and_missing_values_are_rejected() {
+        for words in [
+            vec!["--cuda-major", "+12", "binary"],
+            vec!["--cuda-major", "1_2", "binary"],
+            vec!["--cuda-major", "１２", "binary"],
+            vec!["--cuda-major", "4294967296", "binary"],
+            vec!["--cuda-major", "12", "--scan-dir", "--enabled", "binary"],
+            vec!["--cuda-major", "12", "--ena", "binary"],
+            vec!["--cuda-major", "12", "-hh", "binary"],
+            vec!["--cuda-major", "12", "--enabled=true", "binary"],
+            vec!["--cuda-major", "12", "binary", "--", "--"],
+        ] {
+            assert!(GRAMMAR.parse(&args(&words)).is_err(), "{words:?}");
+        }
+        assert!(GRAMMAR.parse(&vec!["x".to_owned(); 4097]).is_err());
     }
 }

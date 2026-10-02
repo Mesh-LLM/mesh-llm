@@ -136,3 +136,31 @@ fn rejected_soak_inputs_preserve_existing_output_and_emit_no_success() {
             .success()
     );
 }
+
+#[test]
+fn surface_request_preserves_tool_schema_and_compatibility_fields() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("probe request with spaces.json");
+    let model = "selected\"\\\n雪";
+    let result = invoke(&["surface", model, output.to_str().unwrap()]);
+    assert!(result.status.success(), "{result:?}");
+    assert!(result.stdout.is_empty());
+    let request: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+    assert_eq!(
+        request,
+        json!({
+            "model":model,
+            "messages":[{"role":"system","content":"You are a brief CI compatibility probe."},{"role":"user","content":"Reply with ok, or call the tool if needed."}],
+            "tools":[{"type":"function","function":{"name":"get_fixture_fact","description":"Return one known fact from the smoke fixture.",
+                "parameters":{"type":"object","properties":{"key":{"type":"string","enum":["codeword","checksum"]}},"required":["key"],"additionalProperties":false}}}],
+            "tool_choice":"auto","parallel_tool_calls":true,"stream":false,"max_tokens":8,"temperature":0
+        })
+    );
+    fs::write(&output, "existing request").unwrap();
+    assert!(
+        !invoke(&["surface", "", output.to_str().unwrap()])
+            .status
+            .success()
+    );
+    assert_eq!(fs::read(&output).unwrap(), b"existing request");
+}

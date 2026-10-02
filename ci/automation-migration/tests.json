@@ -1362,7 +1362,21 @@
         "test_normal_quality_jobs_keep_the_existing_provider_output",
         "test_selector_truth_table_is_separate_from_normal_policy",
         "test_sentinel_identity_and_key_grammar_are_bounded"
-      ]
+      ],
+      "current_source_sha256": "4fdf81ce51590b57fa18ce9aaf27c2107cd59b225b43d2a5fa19f3dbd2a267e0",
+      "current_test_method_count": 8,
+      "current_test_methods": [
+        "test_authority_attestation_copies_are_identical",
+        "test_authority_backend_attestation_is_value_free_and_fail_closed",
+        "test_authority_job_is_protected_and_has_no_pr_code_or_audit",
+        "test_cache_probe_restores_then_publishes_before_gate",
+        "test_five_pr_entrypoints_and_existing_build_shape_are_unchanged",
+        "test_normal_quality_jobs_keep_the_existing_provider_output",
+        "test_selector_truth_table_is_separate_from_normal_policy",
+        "test_sentinel_identity_and_key_grammar_are_bounded"
+      ],
+      "baseline_inventory_preserved": "Original sha256/test_methods/count preserve Task2 historical baseline; current_* fields bind retained eight-method source after typed quality transition. No methods retired.",
+      "current_transition": "Manual seed_authority_marker/verify_pr_write parser matrices and equality remain; source protection permits only protected controller source identity, forbids actual PR/selected-source bindings. Typed quality consumer/producer wiring is independently checked by registered semantic Rust guards. Transitional Python execution pending parent qualification."
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3725,7 +3739,7 @@
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_skippy_workload_oracles_build.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "tools/xtask/tests/workload_oracle_producer_contract.rs; six actual bounded producer adapter fixtures passed",
       "sha256": "2d32954847c13ace282dd87b95678998a26b67154c757f4c537ed4597a95ef06",
       "test_method_count": 4,
       "test_methods": [
@@ -3733,7 +3747,9 @@
         "test_environment_is_deterministic_and_does_not_override_metal_outputs",
         "test_full_roster_and_cpu_producer_include_non_chat_on_every_trigger",
         "test_rejects_relative_or_environment_injection_paths"
-      ]
+      ],
+      "cutover_status": "deleted after exact four-method intended coverage passed; historical roster/hash retained",
+      "replacement_evidence": "ci/automation-migration/workload-oracle-producer-retirement-coverage.json; .omo/evidence/resume-20261002/workload-oracle-producer-contract-corrected2.log"
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -4123,9 +4139,43 @@
     "canary_result_coverage": "ci/automation-migration/canary-result-retirement-coverage.json",
     "workload_retry_coverage": "ci/automation-migration/workload-retry-retirement-coverage.json",
     "historical_battery_status": "Parent accepted one-method retirement after corrected registered bounded migration_lifecycle fixture passed1/0 in4.66s; durable exact mapping in canary-historical-retirement-coverage.json. Superseded unsupported-argv fixture is not current evidence.",
-    "python_paths": 199,
-    "required_just_roster_modules": 111,
+    "python_paths": 198,
+    "required_just_roster_modules": 110,
     "policy": "Only reviewed per-method retirements; all four modules remain. Historical baseline counts retained; SDK exceptions/native/protected qualification unchanged.",
     "historical_battery_coverage": "ci/automation-migration/canary-historical-retirement-coverage.json"
+  },
+  "workload_oracle_producer_test_retirement": {
+    "coverage": "ci/automation-migration/workload-oracle-producer-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/test_skippy_workload_oracles_build.py"
+    ],
+    "replacement_tests": "tools/xtask/tests/workload_oracle_producer_contract.rs",
+    "replacement_methods": [
+      "print_env_has_exact_export_bytes_and_preserves_spaced_paths",
+      "export_rejects_relative_and_line_injection_paths_before_writes",
+      "default_rust_family_plan_contains_all_six_non_chat_oracle_classes",
+      "cpu_graph_is_isolated_and_exports_all_producer_artifact_paths",
+      "failed_preparation_build_or_stamp_cannot_emit_successful_manifest",
+      "shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_on_failure"
+    ],
+    "parent_pass_receipt": ".omo/evidence/resume-20261002/workload-oracle-producer-contract-corrected2.log",
+    "parent_pass_receipt_sha256": "a08d243d654fbdfedd1b0b628a04909c3d8bf0e743e1bdce67c99e546cd126d9",
+    "parent_result": "6 passed; 0 failed; 66 filtered out; 3.61s",
+    "python_paths": 198,
+    "required_just_roster_modules": 110,
+    "policy": "Four legacy method intentions retired after six actual bounded Rust producer adapters passed. Preserve historical source method roster/hash, all historical baselines, real native CPU producer/SDK/model gates and independent platform qualification.",
+    "coverage_sha256": "9fb0646ca365cb199cf1b091867c62659feb4ab44baf8d293db1e752355c10de"
+  },
+  "runner_cache_current_coverage": {
+    "coverage": "ci/automation-migration/runner-cache-current-coverage.json",
+    "owning_target": "ci_runner_cache_contract",
+    "passed": 17,
+    "failed": 0,
+    "receipt": ".omo/evidence/resume-20261002/followup-runner-cache-contract-corrected.log",
+    "legacy_runner_module_retained": true,
+    "legacy_depot_methods_retained": 8,
+    "python_inventory_count_unchanged": 198,
+    "just_roster_count_unchanged": 110,
+    "policy": "Current parsed gates and finite action adapters only; no retirement, native/model/SDK/platform/live-provider/protected-manual qualification claim."
   }
 }

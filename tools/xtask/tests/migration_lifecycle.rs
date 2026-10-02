@@ -44,6 +44,10 @@ mod agent_client_config_cli;
 mod agent_fixture_evidence_cli;
 #[path = "migration_lifecycle/agent_fixture_inputs_cli.rs"]
 mod agent_fixture_inputs_cli;
+#[path = "migration_lifecycle/automation_producer_admission.rs"]
+mod automation_producer_admission;
+#[path = "migration_lifecycle/automation_restore_admission.rs"]
+mod automation_restore_admission;
 #[path = "migration_lifecycle/canary_controller_battery.rs"]
 mod canary_controller_battery;
 #[path = "migration_lifecycle/canary_timeout_cli.rs"]
@@ -54,3 +58,5 @@ mod family_battery_policy_cli;
 mod family_model_identity_cli;
 #[path = "migration_lifecycle/frozen_selector_integration.rs"]
 mod frozen_selector_integration;
+#[path = "migration_lifecycle/required_sdk_environment_admission.rs"]
+mod required_sdk_environment_admission;

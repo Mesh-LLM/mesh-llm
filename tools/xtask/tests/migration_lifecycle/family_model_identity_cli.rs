@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use std::process::Command;
+use std::{fs, process::Command};
 
 fn inspect(id: &str, path: &str) -> Value {
     let result = Command::new(env!("CARGO_BIN_EXE_xtask"))
@@ -90,5 +90,61 @@ fn quant_inference_does_not_mistake_model_names_for_quant_selectors() {
             inspect("id", &format!("models--Org--Repo/snapshots/pin/{file}"))["selector"],
             selector
         );
+    }
+}
+
+fn snapshot(path: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args([
+            "automation",
+            "family-model-identity",
+            "--snapshot-revision",
+            path,
+        ])
+        .env("PATH", "")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn immutable_snapshot_revision_is_lexical_and_does_not_resolve_the_blob_symlink() {
+    use std::os::unix::fs::symlink;
+    let directory = tempfile::tempdir().unwrap();
+    for size in [40, 64] {
+        let revision = "a".repeat(size);
+        let snapshot_dir = directory
+            .path()
+            .join("models--Org--Repo/snapshots")
+            .join(&revision);
+        fs::create_dir_all(&snapshot_dir).unwrap();
+        let file = snapshot_dir.join("model with spaces.gguf");
+        symlink("../../blobs/does-not-exist", &file).unwrap();
+        let result = snapshot(file.to_str().unwrap());
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(result.stdout, format!("{revision}\n").as_bytes());
+        assert!(result.stderr.is_empty());
+    }
+}
+
+#[test]
+fn missing_malformed_and_ambiguous_snapshot_revisions_emit_no_pin() {
+    let first = "a".repeat(40);
+    let second = "b".repeat(40);
+    for path in [
+        "/local/model.gguf".to_owned(),
+        "/cache/snapshots/main/model.gguf".to_owned(),
+        format!("/cache/snapshots/{}/model.gguf", "A".repeat(40)),
+        format!("/cache/snapshots/{}/model.gguf", "a".repeat(39)),
+        format!("/cache/snapshots/{}/model.gguf", "a".repeat(65)),
+        format!("/cache/snapshots/{first}/nested/snapshots/{second}/model.gguf"),
+    ] {
+        let result = snapshot(&path);
+        assert!(!result.status.success(), "{path}");
+        assert!(result.stdout.is_empty(), "{path}");
+        assert!(!result.stderr.is_empty(), "{path}");
     }
 }

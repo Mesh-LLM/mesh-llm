@@ -137,9 +137,10 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             self.sentinel, "Validate protected sentinel identity"
         )
 
-    def _attestation_script(self) -> str:
+    def _attestation_script(self, phase: str) -> str:
         return "set -euo pipefail\n" + self._step_script(
-            self.sentinel, "Attest provider-injected cache backend"
+            self._job_block(self.canary, phase),
+            "Attest provider-injected cache backend"
         )
 
     def _run_validation(
@@ -168,6 +169,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
 
     def _run_attestation(
         self,
+        phase: str,
         cache_url: str,
         results_url: str,
         *,
@@ -183,7 +185,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         if runtime_token == "":
             environment.pop("ACTIONS_RUNTIME_TOKEN")
         return subprocess.run(
-            ["/bin/bash", "-c", self._attestation_script()],
+            ["/bin/bash", "-c", self._attestation_script(phase)],
             cwd=ROOT,
             env=environment,
             check=False,
@@ -308,11 +310,17 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         self.assertIn("permissions: {}", self.sentinel)
         for forbidden in (
             "actions/checkout@",
-            "source_sha",
+            "inputs.source_sha",
+            "github.event.pull_request.head",
+            "uses: ./",
             "secrets.",
             "audit-depot-pr-isolation@",
         ):
             self.assertNotIn(forbidden, self.sentinel)
+        self.assertNotRegex(
+            self.sentinel,
+            r"(?m)^\s*(?:cargo|rustc|git\s+checkout)(?:\s|$)",
+        )
         self.assertIn("SENTINEL_ID: ${{ vars.DEPOT_PR_SENTINEL_ID }}", self.sentinel)
         self.assertIn(
             "PR_NUMBER: ${{ github.event.pull_request.number }}",
@@ -448,9 +456,14 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         self.assertNotIn("${endpoint,,}", self.sentinel)
 
     def test_authority_backend_attestation_is_value_free_and_fail_closed(self) -> None:
+        for phase in ("seed_authority_marker", "verify_pr_write"):
+            with self.subTest(phase=phase):
+                self._assert_manual_attestation(phase)
+
+    def _assert_manual_attestation(self, phase: str) -> None:
         valid_cache = "http://cache.example.invalid:1234/cache"
         valid_results = "http://results.example.invalid:5678/results"
-        result = self._run_attestation(valid_cache, valid_results)
+        result = self._run_attestation(phase, valid_cache, valid_results)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "")
@@ -463,7 +476,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             "http://[2001:db8::1]:1234/cache",
         ):
             with self.subTest(non_loopback=endpoint):
-                result = self._run_attestation(endpoint, valid_results)
+                result = self._run_attestation(phase, endpoint, valid_results)
                 self.assertEqual(result.returncode, 0, result.stderr)
 
         invalid_cases = (
@@ -495,7 +508,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         )
         for endpoint, reason in invalid_cases:
             with self.subTest(endpoint=endpoint, reason=reason):
-                result = self._run_attestation(endpoint, valid_results)
+                result = self._run_attestation(phase, endpoint, valid_results)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(
                     "cache backend attestation failed (variable=ACTIONS_CACHE_URL "
@@ -508,6 +521,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
                 self.assertNotIn("non-secret-runtime-token", result.stderr)
 
         missing_token = self._run_attestation(
+            phase,
             valid_cache,
             valid_results,
             runtime_token="",
@@ -521,6 +535,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             self.assertIsNotNone(tr_path)
             os.symlink(tr_path, Path(bin_dir) / "tr")
             parser_missing = self._run_attestation(
+                phase,
                 "http://[2001:db8::1]:1234/cache",
                 valid_results,
                 path=bin_dir,
@@ -531,7 +546,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             parser_missing.stderr,
         )
         self.assertNotIn("2001:db8::1", parser_missing.stderr)
-        self.assertIn("sys.version_info < (3, 8)", self._attestation_script())
+        self.assertIn("sys.version_info < (3, 8)", self._attestation_script(phase))
 
         with tempfile.TemporaryDirectory() as bin_dir:
             tr_path = shutil.which("tr")
@@ -541,6 +556,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             fake_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
             fake_python.chmod(0o755)
             classifier_failed = self._run_attestation(
+                phase,
                 "http://[2001:db8::1]:1234/cache",
                 valid_results,
                 path=bin_dir,
@@ -553,17 +569,9 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         self.assertNotIn("2001:db8::1", classifier_failed.stderr)
 
     def test_authority_attestation_copies_are_identical(self) -> None:
-        quality_script = self._attestation_script()
-        seed_script = "set -euo pipefail\n" + self._step_script(
-            self._job_block(self.canary, "seed_authority_marker"),
-            "Attest provider-injected cache backend",
-        )
-        verify_script = "set -euo pipefail\n" + self._step_script(
-            self._job_block(self.canary, "verify_pr_write"),
-            "Attest provider-injected cache backend",
-        )
-        self.assertEqual(quality_script, seed_script)
-        self.assertEqual(quality_script, verify_script)
+        seed_script = self._attestation_script("seed_authority_marker")
+        verify_script = self._attestation_script("verify_pr_write")
+        self.assertEqual(seed_script, verify_script)
         for required in (
             "is_loopback_authority()",
             "127\\.[0-9]{1,3}",
@@ -576,8 +584,8 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             "ACTIONS_CACHE_URL",
             "ACTIONS_RESULTS_URL",
         ):
-            self.assertIn(required, quality_script)
-        self.assertNotIn("ACTIONS_RUNTIME_TOKEN", quality_script)
+            self.assertIn(required, seed_script)
+        self.assertNotIn("ACTIONS_RUNTIME_TOKEN", seed_script)
 
     def test_five_pr_entrypoints_and_existing_build_shape_are_unchanged(self) -> None:
         expected = {

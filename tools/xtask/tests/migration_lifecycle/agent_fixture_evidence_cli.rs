@@ -193,3 +193,26 @@ fn shared_caller_preserves_isolated_home_and_propagates_real_cli_rejection() {
         expect(result, success);
     }
 }
+
+#[test]
+fn compatibility_probe_requires_chat_completion_and_choices_without_error() {
+    let good = json!({"object":"chat.completion","choices":[{"message":{"content":"ok"}}]});
+    expect(
+        invoke("probe", &serde_json::to_vec(&good).unwrap(), None),
+        true,
+    );
+    for value in [
+        json!({}),
+        json!({"object":"wrong","choices":good["choices"]}),
+        json!({"object":"chat.completion","choices":[]}),
+        json!({"object":"chat.completion","choices":{}}),
+        json!({"object":"chat.completion","choices":good["choices"],"error":{"message":"failed"}}),
+    ] {
+        expect(
+            invoke("probe", &serde_json::to_vec(&value).unwrap(), None),
+            false,
+        );
+    }
+    expect(invoke("probe", b"not-json", None), false);
+    expect(invoke("probe", b"\xff", None), false);
+}

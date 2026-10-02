@@ -1715,54 +1715,6 @@
   },
   "github_source_records": [
     {
-      "argv": "uv sync --locked --project ci/canary-python (UV_PYTHON_DOWNLOADS=never)",
-      "deletion_condition": "Retain until the selected canary SDK checks use an approved isolated environment with equivalent lock and import behavior.",
-      "disposition": "execution",
-      "id": ".github/actions/setup-canary-python/action.yml#candidate:e03ffaf780b52d07:1",
-      "owner": "canary SDK environment action",
-      "reason": "Line 12 executes uv; line 13 selects the installed interpreter.",
-      "replacement": "task 22 isolated SDK dependency decision; do not substitute a core requirement install",
-      "source_block": "uv sync --locked --project ci/canary-python",
-      "status_output_effects": "Inherited uv output; nonzero fails the strict shell step; creates/synchronizes the locked ci/canary-python virtual environment.",
-      "transitive_boundary": "ci/canary-python/pyproject.toml and uv.lock; uv-managed dependencies and project virtual environment"
-    },
-    {
-      "argv": "shell assignment only: sdk_python=$PWD/ci/canary-python/.venv/bin/python",
-      "deletion_condition": "Remove with the action environment selection after downstream canary interpreter consumers migrate.",
-      "disposition": "nonexecution",
-      "id": ".github/actions/setup-canary-python/action.yml#candidate:2dbbbaf8dfb0846a:1",
-      "owner": "canary SDK environment action",
-      "reason": "Assignment, not invocation; retained as the selection edge for the next line.",
-      "replacement": "canary SDK environment owner",
-      "source_block": "sdk_python=\"$PWD/ci/canary-python/.venv/bin/python\"",
-      "status_output_effects": "No interpreter launched, no stdout, assignment selects the following import-check executable.",
-      "transitive_boundary": "following line 14 invokes selected ci/canary-python/.venv/bin/python"
-    },
-    {
-      "argv": "$PWD/ci/canary-python/.venv/bin/python -c 'from openai import OpenAI'",
-      "deletion_condition": "Replace only when an equivalent SDK import preflight survives in the approved canary environment.",
-      "disposition": "execution",
-      "id": ".github/actions/setup-canary-python/action.yml#candidate:ea5b1b3e079a2066:1",
-      "owner": "canary SDK import preflight",
-      "reason": "Quoted computed interpreter is executed at line 14 after uv sync.",
-      "replacement": "task 22 isolated SDK compatibility owner",
-      "source_block": "\"$sdk_python\" -c 'from openai import OpenAI'",
-      "status_output_effects": "Normally silent; import errors on stderr and nonzero abort the strict action step; no intended persistent writes.",
-      "transitive_boundary": "inline import of installed openai package from ci/canary-python virtual environment"
-    },
-    {
-      "argv": "echo selected interpreter path >> $GITHUB_ENV",
-      "deletion_condition": "Remove only after downstream canary consumers no longer need the selected interpreter path.",
-      "disposition": "nonexecution",
-      "id": ".github/actions/setup-canary-python/action.yml#candidate:d0054e0fb6889d47:1",
-      "owner": "canary SDK environment action",
-      "reason": "Environment propagation, not interpreter execution.",
-      "replacement": "canary SDK environment owner",
-      "source_block": "echo \"SKIPPY_WORKLOAD_SDK_PYTHON=$sdk_python\" >> \"$GITHUB_ENV\"",
-      "status_output_effects": "Appends job environment setting for subsequent canary steps; does not invoke Python.",
-      "transitive_boundary": "GITHUB_ENV -> SKIPPY_WORKLOAD_SDK_PYTHON downstream interpreter consumers"
-    },
-    {
       "argv": "selected python3/python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 6) else 1)'",
       "deletion_condition": "Equivalent version and audit checks must remain before removing this preflight.",
       "disposition": "execution",
@@ -1804,35 +1756,11 @@
       "disposition": "nonexecution",
       "id": ".github/workflows/smoke.yml#candidate:d7149b0913e92921:1",
       "owner": "Linux/CUDA smoke Python tool provisioning",
-      "reason": "A uses: action is tool provisioning, not a shell run: interpreter call.",
+      "reason": ".github/workflows/smoke.yml:104: A uses: action is tool provisioning, not a shell run: interpreter call.",
       "replacement": "task 21 smoke dependency ownership; task 22 isolated SDK compatibility",
       "source_block": "- uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0",
       "status_output_effects": "Sets up Python and restores its pip cache on bare-metal gpu-nvidia; action failure fails the job, but this YAML line does not run a Python command.",
       "transitive_boundary": "later pip install at smoke.yml:138 and nested smoke scripts; setup action internals not classified as repository interpreter calls"
-    },
-    {
-      "argv": "cache-dependency-path YAML block member (with: actions/setup-python)",
-      "deletion_condition": "Remove cache input only with its setup-python action after dependency cutover.",
-      "disposition": "nonexecution",
-      "id": ".github/workflows/smoke.yml#candidate:e88a4d094ac6519b:1",
-      "owner": "Linux/CUDA smoke setup-python cache identity",
-      "reason": "Nested with.cache-dependency-path block, not run: shell code.",
-      "replacement": "task 21 smoke dependency ownership",
-      "source_block": "ci/requirements-ci-python.txt",
-      "status_output_effects": "Includes requirements file in pip cache key; does not launch Python or install dependencies.",
-      "transitive_boundary": "requirements file is consumed by separate pip install at smoke.yml:138"
-    },
-    {
-      "argv": "python -m pip install --upgrade pip -r ci/requirements-ci-python.txt",
-      "deletion_condition": "Remove only after required smoke works without Python and SDK clients retain separately verified compatibility coverage.",
-      "disposition": "execution",
-      "id": ".github/workflows/smoke.yml#candidate:0c31fa04ed6b31fc:1",
-      "owner": "Linux CPU/CUDA smoke dependency installation",
-      "reason": "run: executes pip in both CPU container and gpu-nvidia bare-metal job rows.",
-      "replacement": "task 21 required smoke dependency split and task 22 isolated Python SDK compatibility",
-      "source_block": "run: python -m pip install --upgrade pip -r ci/requirements-ci-python.txt",
-      "status_output_effects": "pip output inherited; nonzero fails the step; upgrades pip and installs requirements in selected runner environment, including the baked container venv or bare-metal runner.",
-      "transitive_boundary": "ci/requirements-ci-python.txt and its package dependencies; following ci-compat-smoke.sh invokes Python SDK tests through a separate transitive shell edge"
     },
     {
       "argv": "actions/setup-python v6.3.0 with python-version 3.12 when job.container.id == ''",
@@ -1840,35 +1768,119 @@
       "disposition": "nonexecution",
       "id": ".github/workflows/smoke.yml#candidate:d7149b0913e92921:2",
       "owner": "macOS Metal smoke Python tool provisioning",
-      "reason": "A uses: action provisions a runtime; no shell interpreter invocation on this line.",
+      "reason": ".github/workflows/smoke.yml:318: A uses: action provisions a runtime; no shell interpreter invocation on this line.",
       "replacement": "task 21 smoke dependency ownership; task 22 isolated SDK compatibility",
       "source_block": "- uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0",
       "status_output_effects": "Sets up Python and pip cache on macos-15; action failure fails the job, but this YAML line does not execute Python user code.",
       "transitive_boundary": "later pip install at smoke.yml:324 and nested smoke scripts; setup action internals not classified as repository interpreter calls"
     },
     {
-      "argv": "cache-dependency-path YAML block member (with: actions/setup-python)",
-      "deletion_condition": "Remove cache input only with its setup-python action after dependency cutover.",
-      "disposition": "nonexecution",
-      "id": ".github/workflows/smoke.yml#candidate:e88a4d094ac6519b:2",
-      "owner": "macOS smoke setup-python cache identity",
-      "reason": "Nested with.cache-dependency-path block, not run: shell code.",
-      "replacement": "task 21 smoke dependency ownership",
-      "source_block": "ci/requirements-ci-python.txt",
-      "status_output_effects": "Includes requirements file in pip cache key; does not launch Python or install dependencies.",
-      "transitive_boundary": "requirements file is consumed by separate pip install at smoke.yml:324"
+      "id": ".github/actions/setup-canary-python/action.yml#candidate:83f68861fdc8455e:1",
+      "source_block": "export UV_CACHE_DIR=\"$RUNNER_TEMP/required-sdk-uv-cache\"",
+      "owner": "Required genuine SDK dependency environment action",
+      "disposition": "execution",
+      "argv": "shell export of isolated uv cache directory",
+      "status_output_effects": "Sets UV_CACHE_DIR for the embedding branch; no interpreter invocation or download on this export statement.",
+      "transitive_boundary": "ci/canary-python/pyproject.toml and ci/canary-python/uv.lock; existing host Python and preinstalled uv; SDK-only embedding venv",
+      "replacement": "Retained actual third-party SDK-only environment owner; generic orchestration is source-bound here, no generic Python exception",
+      "deletion_condition": "Remove only with an approved equivalent actual SDK dependency environment and unchanged required client/runtime gates; platform/model qualification remains unverified.",
+      "reason": ".github/actions/setup-canary-python/action.yml:25 exact source scope; sdk-kind branches at21/32, host interpreter selection at19 and version admission at33, selected SDK paths at28/37 and export last at51. Shell-only and continuation lines do not launch additional interpreters; execution disposition denotes this source-bound shell operation, not a separate Python call."
     },
     {
-      "argv": "python -m pip install --upgrade pip -r ci/requirements-ci-python.txt",
-      "deletion_condition": "Remove only after required macOS smoke works without Python and SDK clients retain separately verified compatibility coverage.",
+      "id": ".github/actions/setup-canary-python/action.yml#candidate:c412ef5d7ebffcd5:1",
+      "source_block": "uv sync --locked --project \"$PWD/ci/canary-python\" --python \"$host_python\"",
+      "owner": "Required genuine SDK dependency environment action",
       "disposition": "execution",
-      "id": ".github/workflows/smoke.yml#candidate:0c31fa04ed6b31fc:2",
-      "owner": "macOS Metal smoke dependency installation",
-      "reason": "run: executes pip in the macos-15 job.",
-      "replacement": "task 21 required smoke dependency split and task 22 isolated Python SDK compatibility",
-      "source_block": "run: python -m pip install --upgrade pip -r ci/requirements-ci-python.txt",
-      "status_output_effects": "pip output inherited; nonzero fails the step; upgrades pip and installs requirements in macOS runner Python environment.",
-      "transitive_boundary": "ci/requirements-ci-python.txt and package dependencies; ci-compat-smoke.sh downstream Python SDK invocations are separate transitive edges"
+      "argv": "uv sync --locked with existing selected host Python",
+      "status_output_effects": "Embedding branch synchronizes only ci/canary-python locked OpenAI-only environment; UV_PYTHON_DOWNLOADS=never; inherited output and nonzero abort before export.",
+      "transitive_boundary": "ci/canary-python/pyproject.toml and ci/canary-python/uv.lock; existing host Python and preinstalled uv; SDK-only embedding venv",
+      "replacement": "Retained actual third-party SDK-only environment owner; generic orchestration is source-bound here, no generic Python exception",
+      "deletion_condition": "Remove only with an approved equivalent actual SDK dependency environment and unchanged required client/runtime gates; platform/model qualification remains unverified.",
+      "reason": ".github/actions/setup-canary-python/action.yml:27 exact source scope; sdk-kind branches at21/32, host interpreter selection at19 and version admission at33, selected SDK paths at28/37 and export last at51. Shell-only and continuation lines do not launch additional interpreters; execution disposition denotes this source-bound shell operation, not a separate Python call."
+    },
+    {
+      "id": ".github/actions/setup-canary-python/action.yml#candidate:f59ebd44fa35e321:1",
+      "source_block": "\"$sdk_python\" -I -c 'from openai import OpenAI'",
+      "owner": "Required genuine SDK dependency environment action",
+      "disposition": "execution",
+      "argv": "selected embedding SDK interpreter -I -c OpenAI import",
+      "status_output_effects": "Imports actual OpenAI SDK from the locked embedding environment; failure aborts before export; import success is dependency proof only.",
+      "transitive_boundary": "ci/canary-python/pyproject.toml and ci/canary-python/uv.lock; existing host Python and preinstalled uv; SDK-only embedding venv",
+      "replacement": "Retained actual third-party SDK-only environment owner; generic orchestration is source-bound here, no generic Python exception",
+      "deletion_condition": "Remove only with an approved equivalent actual SDK dependency environment and unchanged required client/runtime gates; platform/model qualification remains unverified.",
+      "reason": ".github/actions/setup-canary-python/action.yml:29 exact source scope; sdk-kind branches at21/32, host interpreter selection at19 and version admission at33, selected SDK paths at28/37 and export last at51. Shell-only and continuation lines do not launch additional interpreters; execution disposition denotes this source-bound shell operation, not a separate Python call."
+    },
+    {
+      "id": ".github/actions/setup-canary-python/action.yml#candidate:960175896abf2d7d:1",
+      "source_block": "\"$host_python\" -I -m venv \"$sdk_environment\"",
+      "owner": "Required genuine SDK dependency environment action",
+      "disposition": "execution",
+      "argv": "selected existing CPython3.12 -I -m venv",
+      "status_output_effects": "Compatibility branch creates a fresh RUNNER_TEMP SDK-only stdlib venv with existing Python authority; no Python/runtime download or global installation.",
+      "transitive_boundary": "ci/required-sdk-python/pyproject.toml, ci/required-sdk-python/uv.lock and ci/required-sdk-python/requirements.lock; existing CPython3.12 plus stdlib venv/ensurepip and reviewed hash-locked SDK wheels",
+      "replacement": "Retained actual third-party SDK-only environment owner; generic orchestration is source-bound here, no generic Python exception",
+      "deletion_condition": "Remove only with an approved equivalent actual SDK dependency environment and unchanged required client/runtime gates; platform/model qualification remains unverified.",
+      "reason": ".github/actions/setup-canary-python/action.yml:36 exact source scope; sdk-kind branches at21/32, host interpreter selection at19 and version admission at33, selected SDK paths at28/37 and export last at51. Shell-only and continuation lines do not launch additional interpreters; execution disposition denotes this source-bound shell operation, not a separate Python call."
+    },
+    {
+      "id": ".github/actions/setup-canary-python/action.yml#candidate:0cafae9ff6076c0f:1",
+      "source_block": "\"$sdk_python\" -I -m pip --isolated install --disable-pip-version-check --no-input \\",
+      "owner": "Required genuine SDK dependency environment action",
+      "disposition": "execution",
+      "argv": "SDK-only interpreter -I -m pip --isolated install with continued flags",
+      "status_output_effects": "Installs reviewed binary wheels from exact ci/required-sdk-python/requirements.lock with require-hashes/no-deps/no-cache and explicit PyPI index, blank HF credentials and removed pip overrides; inherited output and nonzero abort before export.",
+      "transitive_boundary": "ci/required-sdk-python/pyproject.toml, ci/required-sdk-python/uv.lock and ci/required-sdk-python/requirements.lock; existing CPython3.12 plus stdlib venv/ensurepip and reviewed hash-locked SDK wheels",
+      "replacement": "Retained actual third-party SDK-only environment owner; generic orchestration is source-bound here, no generic Python exception",
+      "deletion_condition": "Remove only with an approved equivalent actual SDK dependency environment and unchanged required client/runtime gates; platform/model qualification remains unverified.",
+      "reason": ".github/actions/setup-canary-python/action.yml:40 exact source scope; sdk-kind branches at21/32, host interpreter selection at19 and version admission at33, selected SDK paths at28/37 and export last at51. Shell-only and continuation lines do not launch additional interpreters; execution disposition denotes this source-bound shell operation, not a separate Python call."
+    },
+    {
+      "id": ".github/actions/setup-canary-python/action.yml#candidate:5bc8d0011e2ac016:1",
+      "source_block": "-r \"$PWD/ci/required-sdk-python/requirements.lock\"",
+      "owner": "Required genuine SDK dependency environment action",
+      "disposition": "execution",
+      "argv": "continued -r argument of preceding pip installation",
+      "status_output_effects": "Not an independent process: binds the exact required-sdk-python requirements.lock argument to the continued pip operation beginning line40.",
+      "transitive_boundary": "ci/required-sdk-python/pyproject.toml, ci/required-sdk-python/uv.lock and ci/required-sdk-python/requirements.lock; existing CPython3.12 plus stdlib venv/ensurepip and reviewed hash-locked SDK wheels",
+      "replacement": "Retained actual third-party SDK-only environment owner; generic orchestration is source-bound here, no generic Python exception",
+      "deletion_condition": "Remove only with an approved equivalent actual SDK dependency environment and unchanged required client/runtime gates; platform/model qualification remains unverified.",
+      "reason": ".github/actions/setup-canary-python/action.yml:43 exact source scope; sdk-kind branches at21/32, host interpreter selection at19 and version admission at33, selected SDK paths at28/37 and export last at51. Shell-only and continuation lines do not launch additional interpreters; execution disposition denotes this source-bound shell operation, not a separate Python call."
+    },
+    {
+      "id": ".github/actions/setup-canary-python/action.yml#candidate:6950a29076627fdf:1",
+      "source_block": "\"$sdk_python\" -I -m pip --isolated check",
+      "owner": "Required genuine SDK dependency environment action",
+      "disposition": "execution",
+      "argv": "SDK-only interpreter -I -m pip --isolated check",
+      "status_output_effects": "Checks installed dependency closure; failure aborts before export. Does not run model requests or certify endpoint behavior.",
+      "transitive_boundary": "ci/required-sdk-python/pyproject.toml, ci/required-sdk-python/uv.lock and ci/required-sdk-python/requirements.lock; existing CPython3.12 plus stdlib venv/ensurepip and reviewed hash-locked SDK wheels",
+      "replacement": "Retained actual third-party SDK-only environment owner; generic orchestration is source-bound here, no generic Python exception",
+      "deletion_condition": "Remove only with an approved equivalent actual SDK dependency environment and unchanged required client/runtime gates; platform/model qualification remains unverified.",
+      "reason": ".github/actions/setup-canary-python/action.yml:44 exact source scope; sdk-kind branches at21/32, host interpreter selection at19 and version admission at33, selected SDK paths at28/37 and export last at51. Shell-only and continuation lines do not launch additional interpreters; execution disposition denotes this source-bound shell operation, not a separate Python call."
+    },
+    {
+      "id": ".github/actions/setup-canary-python/action.yml#candidate:cba20a6a331f018d:1",
+      "source_block": "\"$sdk_python\" -I -c 'from openai import OpenAI; from langchain_openai import ChatOpenAI; from litellm import completion'",
+      "owner": "Required genuine SDK dependency environment action",
+      "disposition": "execution",
+      "argv": "SDK-only interpreter -I -c official SDK imports",
+      "status_output_effects": "Imports actual OpenAI, LangChainOpenAI and LiteLLM components; failure aborts before export; dependency proof only, actual client/runtime qualification remains required.",
+      "transitive_boundary": "ci/required-sdk-python/pyproject.toml, ci/required-sdk-python/uv.lock and ci/required-sdk-python/requirements.lock; existing CPython3.12 plus stdlib venv/ensurepip and reviewed hash-locked SDK wheels",
+      "replacement": "Retained actual third-party SDK-only environment owner; generic orchestration is source-bound here, no generic Python exception",
+      "deletion_condition": "Remove only with an approved equivalent actual SDK dependency environment and unchanged required client/runtime gates; platform/model qualification remains unverified.",
+      "reason": ".github/actions/setup-canary-python/action.yml:45 exact source scope; sdk-kind branches at21/32, host interpreter selection at19 and version admission at33, selected SDK paths at28/37 and export last at51. Shell-only and continuation lines do not launch additional interpreters; execution disposition denotes this source-bound shell operation, not a separate Python call."
+    },
+    {
+      "id": ".github/actions/setup-canary-python/action.yml#candidate:fbc1dc180de2a42a:1",
+      "source_block": "[[ \"$sdk_python\" == /* && -f \"$sdk_python\" && -x \"$sdk_python\" ]] || exit 1",
+      "owner": "Required genuine SDK dependency environment action",
+      "disposition": "execution",
+      "argv": "shell absolute regular executable SDK interpreter admission guard",
+      "status_output_effects": "No interpreter invocation; checks selected SDK path absolute/regular/executable and explicitly exits on failure before job environment export, including Bash3.2.",
+      "transitive_boundary": "ci/required-sdk-python/pyproject.toml, ci/required-sdk-python/uv.lock and ci/required-sdk-python/requirements.lock; existing CPython3.12 plus stdlib venv/ensurepip and reviewed hash-locked SDK wheels",
+      "replacement": "Retained actual third-party SDK-only environment owner; generic orchestration is source-bound here, no generic Python exception",
+      "deletion_condition": "Remove only with an approved equivalent actual SDK dependency environment and unchanged required client/runtime gates; platform/model qualification remains unverified.",
+      "reason": ".github/actions/setup-canary-python/action.yml:50 exact source scope; sdk-kind branches at21/32, host interpreter selection at19 and version admission at33, selected SDK paths at28/37 and export last at51. Shell-only and continuation lines do not launch additional interpreters; execution disposition denotes this source-bound shell operation, not a separate Python call."
     }
   ],
   "inline_source_records": [
@@ -1950,59 +1962,11 @@
       "disposition": "execution",
       "id": ".github/workflows/ci-quality-slice.yml#candidate:78b39ffedbd6d228:1",
       "owner": "Quality Python test requirements install",
-      "reason": ".github/workflows/ci-quality-slice.yml:179-180 is an unconditional step of quality_contracts before the unittest step at :186.",
+      "reason": ".github/workflows/ci-quality-slice.yml:205: .github/workflows/ci-quality-slice.yml:179-180 is an unconditional step of quality_contracts before the unittest step at :186.",
       "replacement": "task 22 isolated SDK dependencies; task 28 removes the required pip edge",
       "source_block": "run: python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt",
       "status_output_effects": "Installs PyYAML, huggingface_hub[cli], langchain-openai, litellm and openai into the setup-python environment; output inherited; nonzero fails the required quality_contracts job step.",
       "transitive_boundary": "ci/requirements-ci-python.txt; pip resolver and package index; no repository script child"
-    },
-    {
-      "argv": "printf '%s\\n' $host | python3 -c '<ipaddress program 417-429>' >/dev/null 2>&1",
-      "deletion_condition": "Remove when the no-checkout attestation classifies bracketed loopback authorities without Python.",
-      "disposition": "execution",
-      "id": ".github/workflows/ci-quality-slice.yml#candidate:ed80ea8633907110:1",
-      "owner": "Depot authority sentinel IPv6 loopback classifier",
-      "reason": ".github/workflows/ci-quality-slice.yml:353-360 gates the job; :410-416 guards the bracketed branch.",
-      "replacement": "tools/xtask runner trust audit, task 12",
-      "source_block": "if printf '%s\\n' \"$host\" | python3 -c '",
-      "status_output_effects": "Only inside the authority_sentinel job (Depot-enabled PR sentinel ref) and only for bracketed hosts after command -v python3. Exit 0 loopback, 3 non-loopback, 2 invalid/old Python; stdout/stderr discarded; status mapped by is_loopback_authority. No writes.",
-      "transitive_boundary": "inline stdlib ipaddress/sys; no repository child or subprocess"
-    },
-    {
-      "argv": "printf '%s' $inspect_json | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"status\"])'",
-      "deletion_condition": "Remove when the compatibility runner extracts and compares inspect status in Rust.",
-      "disposition": "execution",
-      "id": "scripts/ci-compat-smoke.sh#candidate:ed14dc5c15b455f4:1",
-      "owner": "compat smoke attestation inspect status",
-      "reason": "scripts/ci-compat-smoke.sh:22-37 inspect_release_attestation; first occurrence of this block in the file.",
-      "replacement": "task 22 advisory SDK compatibility orchestration",
-      "source_block": "inspect_status=\"$(printf '%s' \"$inspect_json\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"status\"])')\"",
-      "status_output_effects": "Only when MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE is set (:23-26). Captures status into inspect_status; parse/key error fails the function under set -euo pipefail; stderr inherited. No writes.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child or subprocess"
-    },
-    {
-      "argv": "printf '%s' $MODELS_JSON | python3 -c '<print first data[].id or empty>' 2>/dev/null || echo ''",
-      "deletion_condition": "Remove after readiness retry, malformed JSON fallback and timeout parity.",
-      "disposition": "execution",
-      "id": "scripts/ci-compat-smoke.sh#candidate:11301e711a20d947:1",
-      "owner": "compat smoke first served model",
-      "reason": "scripts/ci-compat-smoke.sh:98-117 readiness loop.",
-      "replacement": "task 22 advisory SDK compatibility orchestration",
-      "source_block": "python3 -c 'import json,sys; data=json.load(sys.stdin).get(\"data\", []); print(data[0].get(\"id\", \"\") if data else \"\")' 2>/dev/null ||",
-      "status_output_effects": "Prints the first model id or empty into MODEL_ID; stderr discarded and failure falls back to empty, so the loop retries until MAX_WAIT then fails. Reads stdin only.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child or subprocess"
-    },
-    {
-      "argv": "curl -sf http://127.0.0.1:${CONSOLE_PORT}/api/status | python3 -c '<print release_attestation.status or empty>' 2>/dev/null || echo ''",
-      "deletion_condition": "Remove when the runner preserves empty fallback and conditional status comparison.",
-      "disposition": "execution",
-      "id": "scripts/ci-compat-smoke.sh#candidate:6d666741099c13b1:1",
-      "owner": "compat smoke served attestation status",
-      "reason": "scripts/ci-compat-smoke.sh:121-130 runs once after readiness.",
-      "replacement": "task 22 advisory SDK compatibility orchestration",
-      "source_block": "python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"release_attestation\", {}).get(\"status\", \"\"))' 2>/dev/null ||",
-      "status_output_effects": "Prints status or empty into RUNTIME_ATTESTATION_STATUS; stderr discarded, failure becomes empty; compared only when a public key file is set. Reads stdin only.",
-      "transitive_boundary": "inline stdlib json/sys; no repository child or subprocess"
     },
     {
       "argv": "python3 - $native_sdk_artifact_dir/manifest.json with quoted heredoc 39-46 inside native_sdk_uniffi_library=$(...)",
@@ -2612,27 +2576,17 @@
       "caller": "scripts/skippy-family-battery.sh",
       "child": "scripts/plan-family-battery.py",
       "child_source_known": false,
-      "line": 190,
+      "line": 202,
       "replacement_owner": "tools/xtask family certification planner, task 24",
       "source_block": "\"${plan_args[@]}\"",
       "status_streams_effects": "Inherited stdout/stderr, nonzero aborts battery under set -e; writes policy-plan.json. With --plan, copies provided plan instead and does not launch this generation call. $ROOT is derived from the battery script location; checkout-selected bytes on canary workers are not known from local checkout."
-    },
-    {
-      "argv": "$ROOT/scripts/plan-family-battery.py --manifest $MANIFEST --verify-plan $ARTIFACT_DIR/policy-plan.json",
-      "caller": "scripts/skippy-family-battery.sh",
-      "child": "scripts/plan-family-battery.py",
-      "child_source_known": false,
-      "line": 205,
-      "replacement_owner": "tools/xtask family certification planner, task 24",
-      "source_block": "\"$PLANNER\" --manifest \"$MANIFEST\" --verify-plan \"$POLICY_PLAN_COPY\"",
-      "status_streams_effects": "Inherited streams, nonzero aborts before inline plan integrity check; reads policy plan, no intended write. Runs whether plan is provided or generated. Source root may be selected canary checkout."
     },
     {
       "argv": "$ROOT/scripts/plan-family-battery.py --inspect-gguf $target",
       "caller": "scripts/skippy-family-battery.sh",
       "child": "scripts/plan-family-battery.py",
       "child_source_known": false,
-      "line": 408,
+      "line": 362,
       "replacement_owner": "tools/xtask family certification model inspection, task 24",
       "source_block": "if ! dimensions=\"$(\"$PLANNER\" --inspect-gguf \"$target\")\"; then",
       "status_streams_effects": "Captures JSON dimensions stdout, inherits stderr; failure is caught by if ! and records model-metadata failure in results.jsonl, then returns 1. Reads GGUF, no direct write; actual model and checkout bytes are runtime inputs."
@@ -2645,13 +2599,6 @@
       "reason": "Installs pinned test requirements; nonzero fails the required Quality step",
       "replacement_task": 11,
       "target": "ci/requirements-ci-python.txt"
-    },
-    {
-      "id": ".github/workflows/ci-quality-slice.yml#candidate:ed80ea8633907110:1",
-      "owner": "Quality authority sentinel",
-      "reason": "Inline ipaddress check receives host on stdin; status controls preflight",
-      "replacement_task": 12,
-      "target": "inline ipaddress code"
     },
     {
       "id": ".github/workflows/depot-canary.yml#candidate:ed80ea8633907110:1",
@@ -2682,5 +2629,112 @@
       "target": "scripts/plan-family-battery.py"
     }
   ],
-  "source_verified_scope": "Nine original source-reviewed edges and separate GitHub source records. Selected process and bounded Just recipe calls are separately bound; full transitive scope remains incomplete."
+  "source_verified_scope": "Nine original source-reviewed edges and separate GitHub source records. Selected process and bounded Just recipe calls are separately bound; full transitive scope remains incomplete.",
+  "current_wave_source_bindings": [
+    {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "871cfcfa39e1b5d3cda74f15cec6c942696b6348a7b850937eacda1f2c2d12d3",
+      "line_count": 994
+    },
+    {
+      "path": "scripts/ci-opencode-smoke.sh",
+      "sha256": "5ad9d164a8fd83c0a009e3078bc8ff59d2a4a5e2dc118ea4e2faa244dc0674ce",
+      "line_count": 613
+    },
+    {
+      "path": "scripts/ci-compat-smoke.sh",
+      "sha256": "80f9a48e8d6f5f98946623ae6cdc11ccbe653aa8d882faedf80b173f091b82de",
+      "line_count": 164
+    },
+    {
+      "path": "scripts/skippy-workload-certify.sh",
+      "sha256": "c28021c11b1465c0b2042997607e805a67bf1495fa1651505761d7145aa1dbe9",
+      "line_count": 461
+    },
+    {
+      "path": ".github/actions/upload-automation/action.yml",
+      "sha256": "fcd8cbeb697b636551cd7183b9bc25507dbc2f5b62a4b6f045b489f70772cbd1",
+      "line_count": 116
+    },
+    {
+      "path": ".github/actions/restore-automation/action.yml",
+      "sha256": "8f189c95535696cce7164866f0e6d0412f13648dce84f2e4035bc7fb40c49309",
+      "line_count": 96
+    },
+    {
+      "path": ".github/workflows/ci-quality-slice.yml",
+      "sha256": "0e4e430011f4ba3967908d9e017a0827a8173aee5af1cf3a12d7f887366a6a1c",
+      "line_count": 650
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "sha256": "0d3a61d66e5590c54e62c1ea6241b12015b9cc564387898d291aa0b1591aa71e",
+      "line_count": 51
+    },
+    {
+      "path": ".github/workflows/smoke.yml",
+      "sha256": "9752ca1e1f0408d6fd8dc52aa46652aeaa5c44c4a195250c1302ffc92f7558fc",
+      "line_count": 454
+    },
+    {
+      "path": "ci/required-sdk-python/pyproject.toml",
+      "sha256": "50191adcecfd5e387d42d21b577cae76fa82d25c2627864021f8ada9c7de7cd7",
+      "line_count": 5
+    },
+    {
+      "path": "ci/required-sdk-python/uv.lock",
+      "sha256": "c83abb8b07ea1ab8f84267c87fd136182596c1bbb626321e1aff90783eeb00e6",
+      "line_count": 1236
+    },
+    {
+      "path": "ci/required-sdk-python/requirements.lock",
+      "sha256": "e60a887ad0e8f353d0df5fc764dd00b663c8f766a246b33282e041ebf3d31ec6",
+      "line_count": 720
+    }
+  ],
+  "current_wave_intent_proofs": {
+    "battery": "family_battery_policy_cli; family_model_identity_cli; family_battery_environment; family_battery_prepared_source; source_plan/battery_tests",
+    "opencode": "opencode_config_adapter; agent_client_config_cli; agent_fixture_inputs_cli; agent_fixture_evidence_cli",
+    "protected": "automation_restore_admission; automation_producer_admission",
+    "sdk": "required_sdk_environment_admission; actual required clients remain required; SDK dependency receipt is not runtime/model qualification",
+    "validation": "Parent validation pending; no retirement or aggregate counts changed"
+  },
+  "current_oracle_producer_retirement": {
+    "coverage": "ci/automation-migration/workload-oracle-producer-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/test_skippy_workload_oracles_build.py"
+    ],
+    "replacement_tests": "tools/xtask/tests/workload_oracle_producer_contract.rs",
+    "replacement_methods": [
+      "print_env_has_exact_export_bytes_and_preserves_spaced_paths",
+      "export_rejects_relative_and_line_injection_paths_before_writes",
+      "default_rust_family_plan_contains_all_six_non_chat_oracle_classes",
+      "cpu_graph_is_isolated_and_exports_all_producer_artifact_paths",
+      "failed_preparation_build_or_stamp_cannot_emit_successful_manifest",
+      "shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_on_failure"
+    ],
+    "parent_pass_receipt": ".omo/evidence/resume-20261002/workload-oracle-producer-contract-corrected2.log",
+    "parent_pass_receipt_sha256": "a08d243d654fbdfedd1b0b628a04909c3d8bf0e743e1bdce67c99e546cd126d9",
+    "parent_result": "6 passed; 0 failed; 66 filtered out; 3.61s",
+    "python_paths": 198,
+    "required_just_roster_modules": 110,
+    "policy": "Four legacy method intentions retired after six actual bounded Rust producer adapters passed. Preserve historical source method roster/hash, all historical baselines, real native CPU producer/SDK/model gates and independent platform qualification.",
+    "coverage_sha256": "9fb0646ca365cb199cf1b091867c62659feb4ab44baf8d293db1e752355c10de"
+  },
+  "current_sdk_environment_graph_binding": {
+    "source": ".github/actions/setup-canary-python/action.yml",
+    "sha256": "0d3a61d66e5590c54e62c1ea6241b12015b9cc564387898d291aa0b1591aa71e",
+    "contract_lines": [
+      25,
+      27,
+      29,
+      36,
+      40,
+      43,
+      44,
+      45,
+      50
+    ],
+    "policy": "Exact nine current source operations, including three non-interpreter shell/continuation lines; no blanket boundary, exception, SDK/platform/model qualification or test-count claim."
+  }
 }

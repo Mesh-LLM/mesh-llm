@@ -7,9 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub type TestResult = Result<(), Box<dyn Error>>;
 pub const SHELL: &str = "all\t16\t2\t131072\t32768\t32768\t131072\t5\t2\t4\t2048\t1,2,4,8\n";
-pub const ROOT_ERROR: &str = "replay matrix input: root must be an object\n";
 pub const SAMPLING_ERROR: &str = "replay sampling must be pinned to temperature 0 and seed 42\n";
-pub const WAVES_ERROR: &str = "session count does not cover the required worker waves\n";
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn fixtures() -> PathBuf {

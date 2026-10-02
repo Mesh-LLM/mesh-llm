@@ -1,68 +1,84 @@
 use super::support::{self, *};
-use serde::Deserialize;
-use std::collections::BTreeSet;
-use std::fs;
 
-#[derive(Deserialize)]
-struct Receipt {
-    cases: Vec<Case>,
-}
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    status: i32,
-    stdout: String,
-    stderr: String,
+fn rejected_fixtures(names: &[&str]) -> TestResult {
+    let stage = Stage::new()?;
+    for name in names {
+        let path = fixtures().join(format!("{name}.json"));
+        let actual = stage.run(&["--matrix", path.to_str().ok_or("fixture path")?])?;
+        assert_eq!(actual.code, 1, "{name}");
+        assert!(actual.stdout.is_empty(), "{name}");
+        assert!(!actual.stderr.is_empty(), "{name}");
+    }
+    Ok(())
 }
 
 #[test]
-fn migration_optional_isolation_frozen_replay_contract() -> TestResult {
-    let receipt: Receipt =
-        serde_json::from_slice(&fs::read(fixtures().join("legacy-print-shell.json"))?)?;
+fn nightly_all_profile_preserves_shell_fields_and_requested_concurrency_order() -> TestResult {
     let stage = Stage::new()?;
-    let mut names = BTreeSet::new();
-    let mut mismatches = Vec::new();
-    let (mut successes, mut policies, mut gaps) = (0, 0, 0);
-    for case in receipt.cases {
-        assert!(names.insert(case.name.clone()), "duplicate receipt name");
-        let path = fixtures().join(format!("{}.json", case.name));
+    for (name, expected) in [
+        ("valid", SHELL),
+        (
+            "concurrency-reordered",
+            "all\t16\t2\t131072\t32768\t32768\t131072\t5\t2\t4\t2048\t8,1,4,2\n",
+        ),
+    ] {
+        let path = fixtures().join(format!("{name}.json"));
         let actual = stage.run(&["--matrix", path.to_str().ok_or("fixture path")?])?;
-        let stderr = if case.name == "matrix-array" {
-            gaps += 1;
-            assert_ne!(
-                case.stderr, ROOT_ERROR,
-                "unapproved diagnostic gap retained"
-            );
-            ROOT_ERROR
-        } else {
-            if case.status == 0 {
-                successes += 1;
-            } else {
-                policies += 1;
-            }
-            &case.stderr
-        };
-        if actual.code != case.status
-            || actual.stdout != case.stdout.as_bytes()
-            || (case.status == 0 && actual.stderr != stderr.as_bytes())
-            || (case.status != 0 && actual.stderr.is_empty())
-        {
-            mismatches.push(format!("{}: {actual:?}", case.name));
-        }
-        eprintln!(
-            "frozen {}: {}",
-            case.name,
-            if case.name == "matrix-array" {
-                "unapproved stderr gap, rejection only"
-            } else {
-                "exact status/stdout/stderr comparison"
-            }
-        );
+        assert_outcome(name, &actual, (0, expected, ""));
     }
-    assert_eq!((names.len(), successes, policies, gaps), (31, 3, 27, 1));
-    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     Ok(())
+}
+
+#[test]
+fn nightly_profile_requires_a_replay_object_and_all_mode() -> TestResult {
+    rejected_fixtures(&[
+        "matrix-array",
+        "replay-absent",
+        "replay-array",
+        "mode-checkpoint",
+        "mode-final",
+        "mode-missing",
+        "mode-array",
+    ])
+}
+
+#[test]
+fn nightly_counts_require_positive_integer_values_and_unique_concurrency() -> TestResult {
+    rejected_fixtures(&[
+        "positive-bool",
+        "positive-float",
+        "positive-null",
+        "positive-missing",
+        "positive-zero",
+        "positive-negative",
+        "concurrency-empty",
+        "concurrency-duplicate",
+        "concurrency-bool",
+        "concurrency-float",
+        "concurrency-null",
+        "concurrency-missing",
+        "concurrency-zero",
+    ])
+}
+
+#[test]
+fn nightly_profile_requires_worker_waves_frameworks_context_and_selection_window() -> TestResult {
+    rejected_fixtures(&[
+        "sessions-waves",
+        "sessions-frameworks",
+        "context-short",
+        "window-equal",
+    ])
+}
+
+#[test]
+fn nightly_profile_pins_sampling_backend_and_selection() -> TestResult {
+    rejected_fixtures(&[
+        "backend-cuda",
+        "selection-unknown",
+        "temperature-drift",
+        "seed-drift",
+    ])
 }
 
 #[test]
@@ -125,7 +141,7 @@ fn migration_optional_isolation_integer_identity_and_waves() -> TestResult {
 }
 
 #[test]
-fn migration_optional_isolation_policy_order() -> TestResult {
+fn nightly_positive_fields_reject_zero() -> TestResult {
     let stage = Stage::new()?;
     for (name, original) in [
         ("sessions_per_concurrency", "16"),
@@ -146,95 +162,20 @@ fn migration_optional_isolation_policy_order() -> TestResult {
             (1, "", &format!("{name} must be a positive integer\n")),
         );
     }
-    let cases: &[(&[(&str, &str)], &str)] = &[
-        (
-            &[
-                ("\"min_turns\":5", "\"min_turns\":0"),
-                ("\"passes\":2", "\"passes\":0"),
-            ],
-            "min_turns must be a positive integer\n",
-        ),
-        (
-            &[("\"passes\":2", "\"passes\":0"), ("[1,2,4,8]", "[1,1]")],
-            "passes must be a positive integer\n",
-        ),
-        (
-            &[
-                (
-                    "\"sessions_per_concurrency\":16",
-                    "\"sessions_per_concurrency\":2",
-                ),
-                (
-                    "\"minimum_context_tokens\":131072",
-                    "\"minimum_context_tokens\":1",
-                ),
-            ],
-            WAVES_ERROR,
-        ),
-        (
-            &[
-                (
-                    "\"sessions_per_concurrency\":16",
-                    "\"sessions_per_concurrency\":2",
-                ),
-                ("[1,2,4,8]", "[1]"),
-                (
-                    "\"minimum_context_tokens\":131072",
-                    "\"minimum_context_tokens\":1",
-                ),
-            ],
-            "session count must cover all three frameworks\n",
-        ),
-        (
-            &[
-                (
-                    "\"minimum_context_tokens\":131072",
-                    "\"minimum_context_tokens\":1",
-                ),
-                ("\"max_isl\":131072", "\"max_isl\":32768"),
-            ],
-            "nightly requires at least 128K effective context\n",
-        ),
-        (
-            &[
-                ("\"max_isl\":131072", "\"max_isl\":32768"),
-                ("\"seed\":42", "\"seed\":43"),
-            ],
-            "invalid selection window\n",
-        ),
-        (
-            &[
-                ("\"seed\":42", "\"seed\":43"),
-                ("\"backend\":\"metal\"", "\"backend\":\"cuda\""),
-            ],
-            SAMPLING_ERROR,
-        ),
-    ];
-    for (changes, expected) in cases {
-        assert_outcome(
-            expected,
-            &stage.input(mutate(changes).as_bytes())?,
-            (1, "", expected),
-        );
-    }
     Ok(())
 }
 
 #[test]
-fn migration_optional_isolation_sampling_numeric_kinds() -> TestResult {
+fn pinned_sampling_accepts_exact_numeric_values_and_rejects_wrong_types() -> TestResult {
     let stage = Stage::new()?;
     for (field, original, token, accepted) in [
         ("temperature", "0", "0.0", true),
         ("temperature", "0", "-0.0", true),
         ("temperature", "0", "0e10", true),
-        ("temperature", "0", "1e-4000", true),
-        ("temperature", "0", "false", true),
         ("temperature", "0", "true", false),
         ("temperature", "0", "\"0\"", false),
         ("temperature", "0", "9007199254740993", false),
         ("seed", "42", "42.0", true),
-        ("seed", "42", "42.0000000000000001", true),
-        ("seed", "42", "42.00000000000001", false),
         ("seed", "42", "true", false),
         ("seed", "42", "false", false),
         ("seed", "42", "\"42\"", false),

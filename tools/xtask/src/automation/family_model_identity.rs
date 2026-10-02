@@ -74,7 +74,41 @@ fn identity(model_id: &str, model_path: &str) -> Value {
     Value::Object(identity)
 }
 
+fn snapshot_revision(path: &Path) -> DynResult<&str> {
+    let mut revision = None;
+    let mut parts = path.components();
+    while let Some(part) = parts.next() {
+        if part.as_os_str() != "snapshots" {
+            continue;
+        }
+        let Some(Component::Normal(candidate)) = parts.next() else {
+            continue;
+        };
+        let Some(candidate) = candidate.to_str() else {
+            continue;
+        };
+        if !(40..=64).contains(&candidate.len())
+            || !candidate
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            continue;
+        }
+        if revision.is_some_and(|previous| previous != candidate) {
+            return Err("ambiguous immutable snapshot revision".into());
+        }
+        revision = Some(candidate);
+    }
+    revision.ok_or_else(|| "path has no immutable snapshot revision".into())
+}
+
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    if let [option, path] = args
+        && option == "--snapshot-revision"
+    {
+        return CheckReport::success(format!("{}\n", snapshot_revision(Path::new(path))?)).emit();
+    }
+
     let [model_id, model_path] = args else {
         return Err("usage: automation family-model-identity MODEL_ID MODEL_PATH".into());
     };

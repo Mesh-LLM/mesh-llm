@@ -1645,15 +1645,6 @@
       "required": true
     },
     {
-      "classification": "generic native build test",
-      "deletion_condition": "Oracle closure build contract migrated without replacing native binaries.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_workload_oracles_build.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask native patch/build tests",
-      "required": true
-    },
-    {
       "classification": "generic artifact test",
       "deletion_condition": "Static ABI producer/consumer contract tests migrated.",
       "exception": null,
@@ -1927,7 +1918,7 @@
   },
   "path_reconciliation": {
     "dynamic_import_targets_are_not_counted_as_new_paths": true,
-    "method": "Exact projected path set after reviewed replay, local-port, Swift producer and workload-wrapper retirements: 199 ledger paths; parent must check tracked-path equality. Historical baseline_comparison remains unchanged.",
+    "method": "Exact current path set after reviewed replay, local-port, Swift producer, workload-wrapper and oracle-producer test retirements: 198 ledger paths; parent checks tracked-path equality. Historical baseline_comparison remains unchanged.",
     "scope_note": "This reconciles file paths only; it does not prove invocation reachability or call-contract completeness.",
     "tracked_paths_are_authoritative": true
   },
@@ -1935,7 +1926,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 199,
+  "tracked_file_count": 198,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -1953,5 +1944,27 @@
       "evals/test_agentic_replay_l3.py"
     ],
     "policy": "Exact seven-path retirement after parent validation; retained DuckDB reader and independent workflow/SDK/native gates remain. Source review is not live model or platform qualification."
+  },
+  "workload_oracle_producer_test_retirement": {
+    "coverage": "ci/automation-migration/workload-oracle-producer-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/test_skippy_workload_oracles_build.py"
+    ],
+    "replacement_tests": "tools/xtask/tests/workload_oracle_producer_contract.rs",
+    "replacement_methods": [
+      "print_env_has_exact_export_bytes_and_preserves_spaced_paths",
+      "export_rejects_relative_and_line_injection_paths_before_writes",
+      "default_rust_family_plan_contains_all_six_non_chat_oracle_classes",
+      "cpu_graph_is_isolated_and_exports_all_producer_artifact_paths",
+      "failed_preparation_build_or_stamp_cannot_emit_successful_manifest",
+      "shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_on_failure"
+    ],
+    "parent_pass_receipt": ".omo/evidence/resume-20261002/workload-oracle-producer-contract-corrected2.log",
+    "parent_pass_receipt_sha256": "a08d243d654fbdfedd1b0b628a04909c3d8bf0e743e1bdce67c99e546cd126d9",
+    "parent_result": "6 passed; 0 failed; 66 filtered out; 3.61s",
+    "python_paths": 198,
+    "required_just_roster_modules": 110,
+    "policy": "Four legacy method intentions retired after six actual bounded Rust producer adapters passed. Preserve historical source method roster/hash, all historical baselines, real native CPU producer/SDK/model gates and independent platform qualification.",
+    "coverage_sha256": "9fb0646ca365cb199cf1b091867c62659feb4ab44baf8d293db1e752355c10de"
   }
 }

@@ -1,4 +1,4 @@
-//! Shared Pi/Goose fixture evidence. Hidden implementation execution stays separate.
+//! Shared agent fixture evidence. Hidden implementation execution stays separate.
 mod result;
 use crate::{command::DynResult, repository::check_report::CheckReport};
 use serde::Deserialize;
@@ -47,8 +47,28 @@ fn soak(bytes: &[u8], label: &str) -> DynResult<String> {
     Ok(format!("{label} long prompt soak passed\n"))
 }
 
+#[derive(Deserialize)]
+struct ProbeResponse {
+    object: String,
+    choices: Vec<serde_json::Value>,
+    #[serde(default)]
+    error: Option<serde_json::Value>,
+}
+
+fn probe(bytes: &[u8], label: &str) -> DynResult<String> {
+    let response: ProbeResponse = serde_json::from_slice(bytes)?;
+    if response.object != "chat.completion"
+        || response.choices.is_empty()
+        || response.error.is_some()
+    {
+        return Err(format!("{label} compatibility probe response is invalid").into());
+    }
+    Ok(String::new())
+}
+
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let output = match args {
+        [verb, path, label] if verb == "probe" => probe(&read(Path::new(path))?, label)?,
         [verb, path, label] if verb == "soak" => soak(&read(Path::new(path))?, label)?,
         [verb, path, label, required] if verb == "result" => {
             let required = match required.to_ascii_lowercase().as_str() {
@@ -57,7 +77,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
             };
             result::validate(&read(Path::new(path))?, label, required)?
         }
-        _ => return Err("usage: automation agent-fixture-evidence {soak RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS}".into()),
+        _ => return Err("usage: automation agent-fixture-evidence {soak RESPONSE LABEL | probe RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS}".into()),
     };
     CheckReport::success(output).emit()
 }

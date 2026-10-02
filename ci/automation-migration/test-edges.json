@@ -275,15 +275,15 @@
           "_run_selector runs extracted Bash with fake event/ref and temporary GITHUB_OUTPUT; checks sentinel authorization",
           [
             98,
-            152
+            153
           ]
         ],
         [
           "fixture",
-          "depot sentinel Attest provider-injected cache backend step",
-          "_run_attestation executes extracted Bash with fake cache endpoints and interpreter probe; no live cache request",
+          "depot-canary seed_authority_marker and verify_pr_write Attest provider-injected cache backend Bash steps",
+          "_run_attestation executes each of the two retained manual parser phases independently with synthetic endpoint/token/interpreter failure cases; no live cache request. Current typed quality attestation is separately covered by Rust endpoint and semantic workflow guards.",
           [
-            185
+            187
           ]
         ]
       ]
@@ -1150,21 +1150,6 @@
           "assert_called_once_with compares expected Python checker argv; subprocess is mocked, so this line does not launch it",
           [
             59
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_skippy_workload_oracles_build.py",
-      [
-        [
-          "launch",
-          "scripts/skippy-workload-oracles-build.sh --print-env",
-          "Bash producer prints deterministic paths or rejects unsafe input; no oracle is built",
-          [
-            14,
-            60,
-            28
           ]
         ]
       ]
@@ -2500,7 +2485,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "40e451ca904fb065ffc06dd1d5b4e8c5cb8e0cbbb8dd8cb20e8ca17457740806",
+  "observed_source_sha256": "81658f726f842122e6df0f344e75322d40bcaf095571fe8c2130255e62db2671",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency."
