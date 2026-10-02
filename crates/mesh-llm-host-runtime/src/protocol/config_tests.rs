@@ -40,6 +40,7 @@ fn config_sync_full_config_roundtrip() {
             enabled: Some(true),
             web_ui_enabled: Some(false),
             web_ui_primary_tab: Some(true),
+            allow_peer_blocks: None,
             command: Some("mesh-llm".to_string()),
             args: vec!["--plugin".to_string()],
             url: None,

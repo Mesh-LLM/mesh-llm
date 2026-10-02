@@ -2069,6 +2069,7 @@ mod tests {
                 enabled: Some(true),
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
+                allow_peer_blocks: None,
                 command: Some("invalid-blobstore-command".to_owned()),
                 args: Vec::new(),
                 url: None,

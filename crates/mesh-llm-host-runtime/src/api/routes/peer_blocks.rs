@@ -5,6 +5,9 @@
 //! change takes effect in the router first and is then published once on
 //! `routing.choice.v1` to the local plugins that declare it.
 //!
+//! Both carry `not_saved` (why) when `peer_blocks.json` could not be loaded
+//! at start: changes still apply for this run but are not saved.
+//!
 //! Loopback-only (`api::access::requires_trusted_local_access`).
 
 use std::collections::BTreeMap;
@@ -43,13 +46,19 @@ struct UnblockRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct ListResponse {
+struct ListResponse<'a> {
     blocks: BTreeMap<String, ActiveBlock>,
+    /// Why changes are not being saved this run, when `peer_blocks.json`
+    /// could not be loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_saved: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
-struct ChangeResponse {
+struct ChangeResponse<'a> {
     choice: RoutingChoice,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_saved: Option<&'a str>,
 }
 
 pub(super) async fn handle(
@@ -67,6 +76,7 @@ pub(super) async fn handle(
                 200,
                 &ListResponse {
                     blocks: node.peer_blocks.snapshot(now_ms()),
+                    not_saved: node.peer_blocks.not_saved(),
                 },
             )
             .await;
@@ -103,7 +113,15 @@ pub(super) async fn handle(
     match result {
         Ok(choice) => {
             peer_blocks::publish(&node, &choice).await;
-            respond_json(stream, 200, &ChangeResponse { choice }).await
+            respond_json(
+                stream,
+                200,
+                &ChangeResponse {
+                    choice,
+                    not_saved: node.peer_blocks.not_saved(),
+                },
+            )
+            .await
         }
         Err(error) => respond_error(stream, error_status(&error), &error.to_string()).await,
     }

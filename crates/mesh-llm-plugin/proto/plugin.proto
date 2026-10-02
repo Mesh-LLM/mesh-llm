@@ -48,6 +48,11 @@ message InitializeRequest {
   string host_version = 2;
   string host_info_json = 3;
   MeshVisibility mesh_visibility = 4;
+  // Optional host features this host implements (see
+  // `mesh_llm_plugin::host_capabilities`). A plugin checks one before using
+  // the feature it names, so it fails clearly against an older host, which
+  // sends none.
+  repeated string host_capabilities = 5;
 }
 
 message InitializeResponse {
@@ -652,7 +657,9 @@ message StreamError {
 // A plugin asks this node to stop (or resume) routing to a peer. The block is
 // local to this node, names the plugin as its requester, and a plugin can
 // re-block or undo only a block it requested. `reason_json` is opaque to the host: stored and
-// echoed on the `routing.choice.v1` event, never read.
+// echoed on the `routing.choice.v1` event, never read. The host refuses the request unless its
+// operator set `allow_peer_blocks = true` for this plugin, and handles it only if it lists the
+// `peer_blocks.v1` host capability.
 message PeerBlockRequest {
   enum Change {
     CHANGE_UNSPECIFIED = 0;

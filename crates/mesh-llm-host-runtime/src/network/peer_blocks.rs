@@ -141,8 +141,11 @@ pub(crate) struct PeerBlocks {
     /// Serialises writers across build-save-swap, so a slow disk never holds
     /// the lock routing reads.
     writer: Arc<Mutex<()>>,
-    /// `None` keeps the store in memory only (tests, or no state directory).
+    /// `None` keeps the store in memory only (tests, no state directory, or
+    /// a file that could not be loaded).
     directory: Option<PathBuf>,
+    /// Set when the file could not be loaded: why nothing is saved.
+    not_saved: Option<Arc<str>>,
 }
 
 pub(crate) fn peer_key(peer: &EndpointId) -> String {
@@ -169,6 +172,7 @@ impl PeerBlocks {
             store: Arc::new(RwLock::new(store)),
             writer: Arc::default(),
             directory,
+            not_saved: None,
         }
     }
 
@@ -176,27 +180,71 @@ impl PeerBlocks {
         Self::with_store(Store::default(), None)
     }
 
-    /// A missing file is an empty store. An unreadable one is set aside as
-    /// `peer_blocks.json.corrupt-<ms>` (never overwritten) and routing
-    /// carries on with no blocks: a bad file must never stop routing.
+    /// Load the store saved in `directory`.
+    ///
+    /// A missing file is an empty store. A bad file must never stop routing,
+    /// so any other failure starts with no blocks, but never at the cost of
+    /// the file: a file that cannot be read, or that cannot be decoded and
+    /// then cannot be set aside as `peer_blocks.json.corrupt-<ms>`, is left
+    /// where it is and nothing is saved for the rest of the process (see
+    /// [`Self::not_saved`]), so a later change can never overwrite it.
     pub(crate) fn load(directory: &Path) -> Self {
+        Self::load_at(directory, now_ms())
+    }
+
+    fn load_at(directory: &Path, now_ms: u64) -> Self {
         let path = directory.join(FILE_NAME);
-        let store = match std::fs::read(&path) {
-            Err(_) => Store::default(),
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-                let aside = path.with_extension(format!("json.corrupt-{}", now_ms()));
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Self::with_store(Store::default(), Some(directory.to_path_buf()));
+            }
+            Err(error) => {
+                return Self::not_persisting(format!(
+                    "{} could not be read ({error})",
+                    path.display()
+                ));
+            }
+        };
+        let error = match serde_json::from_slice(&bytes) {
+            Ok(store) => return Self::with_store(store, Some(directory.to_path_buf())),
+            Err(error) => error,
+        };
+        let aside = path.with_extension(format!("json.corrupt-{now_ms}"));
+        match std::fs::rename(&path, &aside) {
+            Ok(()) => {
                 tracing::warn!(
                     "peer blocks: {} is unreadable ({error}); moved to {} and starting empty",
                     path.display(),
                     aside.display()
                 );
-                if let Err(error) = std::fs::rename(&path, &aside) {
-                    tracing::warn!("peer blocks: could not set the unreadable file aside: {error}");
-                }
-                Store::default()
-            }),
-        };
-        Self::with_store(store, Some(directory.to_path_buf()))
+                Self::with_store(Store::default(), Some(directory.to_path_buf()))
+            }
+            Err(rename_error) => Self::not_persisting(format!(
+                "{} is unreadable ({error}) and could not be moved to {} ({rename_error})",
+                path.display(),
+                aside.display()
+            )),
+        }
+    }
+
+    /// An empty store that never saves, because the file on disk could not
+    /// be loaded or set aside and must not be overwritten.
+    fn not_persisting(problem: String) -> Self {
+        tracing::error!(
+            "peer blocks: {problem}; starting with no blocks, and changes this run will not be saved"
+        );
+        Self {
+            not_saved: Some(Arc::from(problem)),
+            ..Self::with_store(Store::default(), None)
+        }
+    }
+
+    /// Why changes are not being saved this run, when the file could not be
+    /// loaded. `None` when blocks persist (or the store is in memory only by
+    /// design).
+    pub(crate) fn not_saved(&self) -> Option<&str> {
+        self.not_saved.as_deref()
     }
 
     /// The store for this node's identity, or an in-memory one when the
@@ -213,15 +261,25 @@ impl PeerBlocks {
         }
     }
 
+    /// Write the store durably: the new file is synced before it replaces
+    /// the old one, and the directory is synced after, so a crash or power
+    /// loss leaves either the old store or the new one, never a torn file.
     fn save(&self, store: &Store) -> std::io::Result<()> {
+        use std::io::Write as _;
+
         let Some(directory) = &self.directory else {
             return Ok(());
         };
         std::fs::create_dir_all(directory)?;
         let path = directory.join(FILE_NAME);
         let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, serde_json::to_vec_pretty(store)?)?;
-        std::fs::rename(temp, path)
+        {
+            let mut file = std::fs::File::create(&temp)?;
+            file.write_all(&serde_json::to_vec_pretty(store)?)?;
+            file.sync_all()?;
+        }
+        std::fs::rename(&temp, &path)?;
+        sync_directory(directory)
     }
 
     fn read(&self) -> std::sync::RwLockReadGuard<'_, Store> {
@@ -232,7 +290,8 @@ impl PeerBlocks {
 
     /// Build the next store from the current one, save it, and only then make
     /// it the one routing reads. A failed save or a refused change leaves the
-    /// store as it was.
+    /// store in force as it was. (If only the final directory sync fails, the
+    /// renamed file may already hold the change, and a restart would load it.)
     fn update<T>(
         &self,
         change: impl FnOnce(&mut Store) -> Result<T, BlockError>,
@@ -374,6 +433,20 @@ impl PeerBlocks {
     }
 }
 
+/// Make a rename inside `directory` durable. On Unix that means syncing the
+/// directory itself. The standard library cannot open a directory as a file
+/// on Windows, so there the file is synced before the rename and the
+/// rename's own durability is left to the filesystem.
+#[cfg(unix)]
+fn sync_directory(directory: &Path) -> std::io::Result<()> {
+    std::fs::File::open(directory)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_directory: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Deliver `choice` once to the local plugins that declare
 /// [`ROUTING_CHOICE_CHANNEL`]. Best effort: a plugin that is slow or gone
 /// never holds up or undoes the change, which is already in force.
@@ -408,27 +481,45 @@ pub(crate) async fn publish(node: &crate::mesh::Node, choice: &RoutingChoice) {
 }
 
 /// Apply a plugin's `PeerBlockRequest`, as a change requested by
-/// `plugin:<plugin_id>`, and publish it.
+/// `plugin:<plugin_id>`, and publish it. Refused unless the operator has set
+/// `allow_peer_blocks = true` on that plugin's config entry.
 pub(crate) async fn apply_plugin_request(
     node: &crate::mesh::Node,
     plugin_id: String,
     request: crate::plugin::proto::PeerBlockRequest,
 ) -> Result<crate::plugin::proto::PeerBlockResponse, crate::plugin::proto::ErrorResponse> {
-    let choice = plugin_request_choice(&node.peer_blocks, plugin_id, request, now_ms())?;
+    let allowed = plugin_may_request(node.config_state.lock().await.config(), &plugin_id);
+    let choice = plugin_request_choice(&node.peer_blocks, plugin_id, allowed, request, now_ms())?;
     publish(node, &choice).await;
     let choice_json =
         serde_json::to_string(&choice).map_err(|error| request_error(error.to_string()))?;
     Ok(crate::plugin::proto::PeerBlockResponse { choice_json })
 }
 
+/// Whether the operator lets `plugin_id` request peer blocks. Read from the
+/// live config on every request, so turning it off takes effect at once.
+fn plugin_may_request(config: &crate::plugin::MeshConfig, plugin_id: &str) -> bool {
+    config
+        .plugins
+        .iter()
+        .any(|plugin| plugin.name == plugin_id && plugin.peer_blocks_allowed())
+}
+
 fn plugin_request_choice(
     blocks: &PeerBlocks,
     plugin_id: String,
+    allowed: bool,
     request: crate::plugin::proto::PeerBlockRequest,
     now_ms: u64,
 ) -> Result<RoutingChoice, crate::plugin::proto::ErrorResponse> {
     use crate::plugin::proto::peer_block_request::{Change, Length};
 
+    if !allowed {
+        return Err(request_error(format!(
+            "plugin `{plugin_id}` may not change peer blocks: the operator has not set \
+             allow_peer_blocks = true for it"
+        )));
+    }
     let peer = parse_peer(&request.peer_id)
         .ok_or_else(|| request_error("peer_id must be a 64-hex endpoint id"))?;
     let reason = request
@@ -685,10 +776,13 @@ mod tests {
     #[test]
     fn a_failed_save_changes_nothing_in_force() {
         let directory = tempfile::tempdir().unwrap();
-        // A file where the directory should be: every save fails.
-        let not_a_dir = directory.path().join("blocked");
-        std::fs::write(&not_a_dir, b"").unwrap();
-        let blocks = PeerBlocks::load(&not_a_dir);
+        let state = directory.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let blocks = PeerBlocks::load(&state);
+        assert_eq!(blocks.not_saved(), None);
+        // Then a file where the directory was: every save fails.
+        std::fs::remove_dir(&state).unwrap();
+        std::fs::write(&state, b"").unwrap();
         let bad = peer();
         assert!(
             blocks
@@ -718,6 +812,173 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_cannot_be_read_is_left_alone_and_nothing_is_saved() {
+        let directory = tempfile::tempdir().unwrap();
+        // A directory where the file should be: reading it fails, and not
+        // with NotFound.
+        let path = directory.path().join(FILE_NAME);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep"), b"kept").unwrap();
+
+        let blocks = PeerBlocks::load(directory.path());
+        assert!(blocks.snapshot(0).is_empty());
+        assert!(
+            blocks
+                .not_saved()
+                .is_some_and(|why| why.contains("could not be read")),
+            "{:?}",
+            blocks.not_saved()
+        );
+
+        // Routing carries on: a change is in force for this run, but never
+        // written over what is on disk.
+        let bad = peer();
+        blocks
+            .block(&bad, BlockLength::UntilUndone, Requester::Operator, None, 1)
+            .unwrap();
+        assert!(blocks.is_blocked(&bad, 2));
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read(path.join("keep")).unwrap(), b"kept");
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn a_missing_file_is_an_empty_store_that_saves() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocks = PeerBlocks::load(directory.path());
+        assert!(blocks.snapshot(0).is_empty());
+        assert_eq!(blocks.not_saved(), None);
+        blocks
+            .block(
+                &peer(),
+                BlockLength::SevenDays,
+                Requester::Operator,
+                None,
+                0,
+            )
+            .unwrap();
+        assert!(directory.path().join(FILE_NAME).is_file());
+        assert!(
+            !directory
+                .path()
+                .join(FILE_NAME)
+                .with_extension("json.tmp")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn a_bad_file_that_cannot_be_set_aside_is_never_overwritten() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(FILE_NAME);
+        std::fs::write(&path, b"not json").unwrap();
+        // A non-empty directory already at the set-aside name: the rename fails.
+        let aside = path.with_extension("json.corrupt-7");
+        std::fs::create_dir(&aside).unwrap();
+        std::fs::write(aside.join("occupied"), b"").unwrap();
+
+        let blocks = PeerBlocks::load_at(directory.path(), 7);
+        assert!(blocks.snapshot(0).is_empty());
+        assert!(
+            blocks
+                .not_saved()
+                .is_some_and(|why| why.contains("could not be moved")),
+            "{:?}",
+            blocks.not_saved()
+        );
+
+        let bad = peer();
+        blocks
+            .block(&bad, BlockLength::UntilUndone, Requester::Operator, None, 8)
+            .unwrap();
+        assert!(blocks.is_blocked(&bad, 9));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"not json",
+            "the original file is still there, unchanged"
+        );
+    }
+
+    fn config_with_plugin(
+        name: &str,
+        allow_peer_blocks: Option<bool>,
+    ) -> crate::plugin::MeshConfig {
+        let mut config = crate::plugin::MeshConfig::default();
+        config.plugins.push(crate::plugin::PluginConfigEntry {
+            name: name.into(),
+            enabled: None,
+            web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks,
+            command: None,
+            args: Vec::new(),
+            url: None,
+            settings: BTreeMap::new(),
+            startup: crate::plugin::PluginStartupConfig::default(),
+        });
+        config
+    }
+
+    #[test]
+    fn only_a_plugin_the_operator_opted_in_may_request_blocks() {
+        assert!(!plugin_may_request(
+            &crate::plugin::MeshConfig::default(),
+            "a"
+        ));
+        assert!(!plugin_may_request(&config_with_plugin("a", None), "a"));
+        assert!(!plugin_may_request(
+            &config_with_plugin("a", Some(false)),
+            "a"
+        ));
+        assert!(plugin_may_request(
+            &config_with_plugin("a", Some(true)),
+            "a"
+        ));
+        assert!(!plugin_may_request(
+            &config_with_plugin("a", Some(true)),
+            "b"
+        ));
+    }
+
+    #[test]
+    fn a_plugin_request_without_opt_in_changes_nothing() {
+        use crate::plugin::proto::{
+            PeerBlockRequest,
+            peer_block_request::{Change, Length},
+        };
+        let blocks = PeerBlocks::in_memory();
+        let bad = peer();
+        let mut request = PeerBlockRequest {
+            peer_id: peer_key(&bad),
+            ..Default::default()
+        };
+        request.set_change(Change::Block);
+        request.set_length(Length::UntilUndone);
+
+        let refused =
+            plugin_request_choice(&blocks, "a".into(), false, request.clone(), 0).unwrap_err();
+        assert!(
+            refused.message.contains("allow_peer_blocks"),
+            "{}",
+            refused.message
+        );
+        assert!(!blocks.is_blocked(&bad, 1));
+
+        plugin_request_choice(&blocks, "a".into(), true, request, 2).unwrap();
+        assert!(blocks.is_blocked(&bad, 3));
+        // Operator blocks never need it.
+        blocks
+            .block(
+                &peer(),
+                BlockLength::UntilUndone,
+                Requester::Operator,
+                None,
+                4,
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn a_plugin_request_is_applied_as_that_plugin() {
         use crate::plugin::proto::{
             PeerBlockRequest,
@@ -733,20 +994,21 @@ mod tests {
         request.set_change(Change::Block);
         request.set_length(Length::SevenDays);
 
-        let choice = plugin_request_choice(&blocks, "a".into(), request.clone(), 0).unwrap();
+        let choice = plugin_request_choice(&blocks, "a".into(), true, request.clone(), 0).unwrap();
         assert_eq!(choice.requested_by, plugin("a"));
         assert_eq!(choice.reason, Some(serde_json::json!({ "n": 3 })));
         assert_eq!(choice.until_ms, Some(TIMED_BLOCK_MS));
         assert!(blocks.is_blocked(&bad, 1));
 
         request.set_change(Change::Unblock);
-        let refused = plugin_request_choice(&blocks, "b".into(), request.clone(), 1).unwrap_err();
+        let refused =
+            plugin_request_choice(&blocks, "b".into(), true, request.clone(), 1).unwrap_err();
         assert!(
             refused.message.contains("only the operator"),
             "{}",
             refused.message
         );
-        plugin_request_choice(&blocks, "a".into(), request, 2).unwrap();
+        plugin_request_choice(&blocks, "a".into(), true, request, 2).unwrap();
         assert!(!blocks.is_blocked(&bad, 3));
     }
 
@@ -771,7 +1033,7 @@ mod tests {
         bad_peer.peer_id = "zz".into();
 
         for request in [PeerBlockRequest::default(), no_length, bad_reason, bad_peer] {
-            assert!(plugin_request_choice(&blocks, "a".into(), request, 0).is_err());
+            assert!(plugin_request_choice(&blocks, "a".into(), true, request, 0).is_err());
         }
         assert!(blocks.snapshot(1).is_empty());
     }

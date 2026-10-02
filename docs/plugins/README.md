@@ -206,8 +206,8 @@ The config route is also host-owned and plugin-scoped. `GET` returns:
 
 The `plugin` field must match the mounted plugin when present. Mutations may
 only touch plugin-owned `settings` keys; host-owned fields such as `enabled`,
-`web_ui_enabled`, `web_ui_primary_tab`, `command`, `args`, `url`, and `startup`
-are rejected.
+`web_ui_enabled`, `web_ui_primary_tab`, `allow_peer_blocks`, `command`, `args`,
+`url`, and `startup` are rejected.
 Malformed requests return `400`; schema-invalid setting values return `422`;
 successful mutations return the newly visible plugin config.
 
@@ -1182,13 +1182,38 @@ fallback and consult-peer selection skip that peer; local targets are never
 affected.
 
 A plugin may request the same change with a `PeerBlockRequest`
-(`PluginContext::request_peer_block`). The host records the plugin as the
-requester (by the name the host knows the plugin connection by) and stores the
-plugin's optional `reason_json` without reading it. A plugin can re-block or
-undo only a block it requested, so it can never take over or lift the
-operator's block or another plugin's; the operator can change or undo any
-block. By design a plugin can block any peer, including all of them; blocks
-stay local to this node and the operator can lift them.
+(`PluginContext::request_peer_block`), but only if the operator has opted that
+plugin in:
+
+```toml
+[[plugin]]
+name = "example"
+allow_peer_blocks = true
+```
+
+Without it (the default) the host refuses the request and nothing changes. The
+setting is read on every request, so turning it off takes effect at once;
+blocks the plugin already holds stay until they lapse or the operator lifts
+them. The host records the plugin as the requester (by the name the host knows
+the plugin connection by) and stores the plugin's optional `reason_json`
+without reading it. A plugin can re-block or undo only a block it requested,
+so it can never take over or lift the operator's block or another plugin's;
+the operator can change or undo any block. An opted-in plugin can block any
+peer, including all of them; blocks stay local to this node and the operator
+can lift them.
+
+The host advertises the `peer_blocks.v1` host capability in its
+`InitializeRequest`. Against a host without it, `request_peer_block` fails at
+once with an "unsupported by host" error instead of waiting; every request is
+also bounded by its own timeout.
+
+Blocks are saved to `peer_blocks.json` in the identity state directory. Each
+save writes a temporary file, syncs it, renames it over the old one, and syncs
+the directory, so a crash leaves the old store or the new one. A missing file
+is an empty store. If the file cannot be read, or cannot be decoded and then
+cannot be set aside as `peer_blocks.json.corrupt-<ms>`, the node starts with no
+blocks and saves nothing for the rest of the run, so the file is never
+overwritten; `GET /api/peer-blocks` reports why as `not_saved`.
 
 Every change is published once, as JSON, on the local channel
 `routing.choice.v1` to the plugins that declare it:

@@ -309,6 +309,10 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::Boolean,
         ),
         plugin_setting(
+            &format!("{plugin_prefix}.allow_peer_blocks"),
+            ConfigValueSchema::Boolean,
+        ),
+        plugin_setting(
             &format!("{plugin_prefix}.command"),
             ConfigValueSchema::String,
         ),

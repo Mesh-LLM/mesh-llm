@@ -925,6 +925,15 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
             )
             .hint("toggle"),
         ),
+        "plugin.<plugin-name>.allow_peer_blocks" => Some(
+            sp(
+                "Peer block requests",
+                "Let the plugin ask this node to stop (or resume) routing to a peer. Off unless turned on.",
+                PLUGIN_HOST_CATEGORY,
+                17,
+            )
+            .hint("toggle"),
+        ),
         "plugin.<plugin-name>.url" => Some(
             sp(
                 "Base URL",

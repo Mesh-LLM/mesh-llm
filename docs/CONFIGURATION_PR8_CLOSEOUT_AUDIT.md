@@ -134,7 +134,7 @@ schema row or stale manifest row from passing review:
 `multimodal.batch_max_tokens`, `multimodal.glm_dsa_policy`,
 `multimodal.generation_signal_window`, `plugin.<name>.name`,
 `plugin.<name>.enabled`, `plugin.<name>.web_ui_enabled`,
-`plugin.<name>.web_ui_primary_tab`,
+`plugin.<name>.web_ui_primary_tab`, `plugin.<name>.allow_peer_blocks`,
 `plugin.<name>.command`, `plugin.<name>.args`, `plugin.<name>.url`,
 `plugin.<name>.startup.connect_timeout_secs`,
 `plugin.<name>.startup.init_timeout_secs`, `plugin.<name>.startup.optional`,

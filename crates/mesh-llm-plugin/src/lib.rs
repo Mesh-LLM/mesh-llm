@@ -88,6 +88,14 @@ pub mod proto {
 // initialize successfully and fail only when a task method is invoked.
 pub const PROTOCOL_VERSION: u32 = 3;
 
+/// Optional host features, as listed in `InitializeRequest.host_capabilities`.
+/// Additive protobuf messages alone do not tell a plugin whether its host
+/// handles them; these do.
+pub mod host_capabilities {
+    /// The host accepts `PeerBlockRequest`.
+    pub const PEER_BLOCKS: &str = "peer_blocks.v1";
+}
+
 #[macro_export]
 macro_rules! plugin_manifest {
     ($($item:expr_2021),* $(,)?) => {{
