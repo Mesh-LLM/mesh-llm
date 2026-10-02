@@ -73,7 +73,7 @@ fn make_runtime_cli(args: &[&str]) -> RuntimeOptions {
 }
 
 #[test]
-fn small_auto_join_selects_laya_as_startup_model() {
+fn small_auto_join_selects_default_as_startup_model() {
     let mut options = make_runtime_cli(&["mesh-llm", "serve", "--auto"]);
     let candidates = vec![("invite".to_string(), None)];
 

@@ -43,12 +43,12 @@ mesh-llm serve --auto
 
 `--auto` discovers published meshes, chooses the best candidate, joins it, and
 starts serving if this machine has usable hardware. With no configured model, a
-node with 1–8 GB of local model-fit capacity offers the small CPU-default
-`meshllm/laya-multilingual-F16-GGUF` model, including when it joins an existing
-mesh. Laya serves typed `/systemone` decisions, not chat completions. Larger
-nodes starting a new mesh keep the chat-model tiers; an explicit `--model` or
-configured model takes precedence. Use `mesh-llm client --auto` for an API-only
-node.
+node with 1–8 GB of local model-fit capacity offers the small-node default,
+including when it joins an existing mesh. The current default is the CPU-default
+`meshllm/laya-multilingual-F16-GGUF`, which serves typed `/systemone` decisions
+rather than chat completions. Larger nodes starting a new mesh keep the
+chat-model tiers; an explicit `--model` or configured model takes precedence.
+Use `mesh-llm client --auto` for an API-only node.
 
 ## Immutable mesh requirements
 

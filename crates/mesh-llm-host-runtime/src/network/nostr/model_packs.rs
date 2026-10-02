@@ -10,8 +10,8 @@ fn parse_size_gb(s: &str) -> f64 {
 
 /// Build model tiers from the catalog, sorted largest first.
 /// Each entry is (model_ref, min_vram_gb) where min_vram = file_size * 1.1.
-/// Excludes draft models (< 1GB). Laya's decision-only tier is selected
-/// separately because its published GGUF is smaller than that cutoff.
+/// Excludes draft models (< 1GB). The small-node default is a separate policy
+/// choice and may be smaller than the catalog cutoff.
 fn model_tiers() -> Vec<(String, f64)> {
     let _ = crate::models::remote_catalog::ensure_catalog();
     let mut tiers: Vec<_> = crate::models::remote_catalog::loaded_models()
@@ -39,15 +39,24 @@ fn catalog_ref(name: &str) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
-const LAYA_AUTO_MODEL_REF: &str = "meshllm/laya-multilingual-F16-GGUF";
+struct SmallNodeAutoTier {
+    model_ref: &'static str,
+    min_fit_gb: f64,
+    max_fit_gb: f64,
+}
 
-/// Small nodes contribute System One decisions instead of a chat model.
-/// The published F16 GGUF plus its largest-read reserve needs about 0.91 GB
-/// after Mesh's fit headroom, so require at least 1 GB of local fit budget.
-pub(crate) fn small_node_auto_model(capacity_gb: f64) -> Option<&'static str> {
-    (1.0..=8.0)
+/// The current model needs about 0.91 GB including its largest-read reserve
+/// and fit headroom. Keep the fit bounds with the model when updating this tier.
+const SMALL_NODE_AUTO_TIER: SmallNodeAutoTier = SmallNodeAutoTier {
+    model_ref: "meshllm/laya-multilingual-F16-GGUF",
+    min_fit_gb: 1.0,
+    max_fit_gb: 8.0,
+};
+
+pub(crate) fn small_node_default_model(capacity_gb: f64) -> Option<&'static str> {
+    (SMALL_NODE_AUTO_TIER.min_fit_gb..=SMALL_NODE_AUTO_TIER.max_fit_gb)
         .contains(&capacity_gb)
-        .then_some(LAYA_AUTO_MODEL_REF)
+        .then_some(SMALL_NODE_AUTO_TIER.model_ref)
 }
 
 fn auto_model_pack_with<F>(
@@ -59,7 +68,7 @@ fn auto_model_pack_with<F>(
 where
     F: Fn(&str) -> String,
 {
-    if let Some(model) = small_node_auto_model(vram_gb) {
+    if let Some(model) = small_node_default_model(vram_gb) {
         return vec![model.to_string()];
     }
 
@@ -215,31 +224,37 @@ mod auto_pack_tests {
     }
 
     #[test]
-    fn pack_4gb_serves_laya_decisions() {
+    fn pack_4gb_uses_small_node_default() {
         let pack = test_auto_model_pack(4.0);
-        assert_single_pack_model(&pack, LAYA_AUTO_MODEL_REF);
+        assert_single_pack_model(&pack, SMALL_NODE_AUTO_TIER.model_ref);
     }
 
     #[test]
-    fn pack_8gb_serves_laya_decisions() {
+    fn pack_8gb_uses_small_node_default() {
         let pack = test_auto_model_pack(8.0);
-        assert_single_pack_model(&pack, LAYA_AUTO_MODEL_REF);
+        assert_single_pack_model(&pack, SMALL_NODE_AUTO_TIER.model_ref);
     }
 
     #[test]
-    fn laya_tier_respects_fit_floor_and_upper_boundary() {
-        assert_eq!(small_node_auto_model(0.99), None);
-        assert_eq!(small_node_auto_model(1.0), Some(LAYA_AUTO_MODEL_REF));
-        assert_eq!(small_node_auto_model(8.0), Some(LAYA_AUTO_MODEL_REF));
-        assert_eq!(small_node_auto_model(8.01), None);
+    fn small_node_tier_respects_fit_floor_and_upper_boundary() {
+        assert_eq!(small_node_default_model(0.99), None);
+        assert_eq!(
+            small_node_default_model(1.0),
+            Some(SMALL_NODE_AUTO_TIER.model_ref)
+        );
+        assert_eq!(
+            small_node_default_model(8.0),
+            Some(SMALL_NODE_AUTO_TIER.model_ref)
+        );
+        assert_eq!(small_node_default_model(8.01), None);
     }
 
     #[test]
-    fn new_small_mesh_starts_with_laya_before_demand_seeds() {
+    fn new_small_mesh_starts_with_default_before_demand_seeds() {
         let models = default_models_for_vram_with(4.0, &[], &test_tiers(), &identity_ref);
         assert_eq!(
             models.first().map(String::as_str),
-            Some(LAYA_AUTO_MODEL_REF)
+            Some(SMALL_NODE_AUTO_TIER.model_ref)
         );
         assert_contains_catalog_alias(&models, "Qwen3-4B-Q4_K_M");
     }

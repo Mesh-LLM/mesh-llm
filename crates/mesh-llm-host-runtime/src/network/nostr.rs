@@ -16,7 +16,7 @@ pub use contracts::{DEFAULT_RELAYS, DiscoveredMesh, MeshListing};
 pub use discovery::{MeshFilter, discover};
 pub use keys::{load_or_create_keys, rotate_keys};
 pub use model_packs::default_models_for_vram;
-pub(crate) use model_packs::small_node_auto_model;
+pub(crate) use model_packs::small_node_default_model;
 pub use publish::{
     PublishLoopConfig, PublishStateUpdate, Publisher, publish_loop, publish_watchdog,
 };

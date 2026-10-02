@@ -110,9 +110,9 @@ pub(super) async fn maybe_discover_join_candidates(
     Ok(Some(my_vram_gb))
 }
 
-/// Let a small, otherwise unconfigured `serve --auto` node contribute Laya
-/// after discovery selects an existing mesh. Explicit models and on-demand
-/// mode retain their startup behavior.
+/// Let a small, otherwise unconfigured `serve --auto` node contribute the
+/// small-node default after discovery selects an existing mesh. Explicit
+/// models and on-demand mode retain their startup behavior.
 pub(super) fn maybe_select_small_auto_contribution(
     options: &mut RuntimeOptions,
     effective_mode: mesh_llm_config::RuntimeMode,
@@ -127,12 +127,12 @@ pub(super) fn maybe_select_small_auto_contribution(
     {
         return;
     }
-    let Some(model) = local_fit_gb.and_then(nostr::small_node_auto_model) else {
+    let Some(model) = local_fit_gb.and_then(nostr::small_node_default_model) else {
         return;
     };
     options.model.push(PathBuf::from(model));
     let _ = emit_event(OutputEvent::Info {
-        message: format!("Small-node auto contribution: serving {model} for System One decisions"),
+        message: format!("Small-node auto contribution: serving {model}"),
         context: None,
     });
 }
