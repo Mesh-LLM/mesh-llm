@@ -35,10 +35,21 @@ impl Summary {
         ])
     }
 
-    /// `(p95 or -1, mean or -1)`: zero and `None` both become -1.
+    /// Known durations rank above missing data, including measured zero.
     pub(crate) fn sort_key(&self) -> (f64, f64) {
-        let truthy = |value: Option<f64>| value.filter(|number| *number != 0.0).unwrap_or(-1.0);
-        (truthy(self.p95()), truthy(self.mean()))
+        (self.p95().unwrap_or(-1.0), self.mean().unwrap_or(-1.0))
+    }
+}
+
+#[cfg(test)]
+mod ranking_tests {
+    use super::*;
+
+    #[test]
+    fn measured_zero_ranks_above_absent_samples() {
+        let measured = summarize([Some(0.0)]);
+        let missing = summarize([None]);
+        assert!(measured.sort_key() > missing.sort_key());
     }
 }
 

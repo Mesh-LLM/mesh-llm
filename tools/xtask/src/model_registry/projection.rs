@@ -6,7 +6,7 @@ use super::family_roster::{
     Entries, entry, field, files_of, in_suite, integrity, object_of, paths, render, str_field,
 };
 use super::fields::{ModelResult, fail, get, has};
-use super::python_json::{PRETTY, dumps};
+use super::json_bytes::{PRETTY, dumps};
 use crate::ci_plan::document::Json;
 
 const MANIFEST_DIR: &str = "ci/model-artifacts/manifests";

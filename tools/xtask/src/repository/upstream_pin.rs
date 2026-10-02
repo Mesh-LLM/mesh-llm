@@ -9,7 +9,7 @@ mod upstream_mirror;
 use crate::command::DynResult;
 use crate::repository::check_args::Grammar;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::{repr, strip};
+use crate::repository::text::{repr, strip};
 use git::PinGuardError;
 use std::path::{Path, PathBuf};
 use upstream_mirror::UpstreamMirror;

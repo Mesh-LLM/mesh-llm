@@ -8,7 +8,12 @@ import base64
 import math
 import struct
 
-from workload_fixtures import EMBEDDING_INPUTS
+# This SDK client owns its inputs; it must not import generic workload tooling.
+EMBEDDING_INPUTS = (
+    "search_query: distributed GPU inference",
+    "search_document: GPUs share one language model over a mesh",
+    "search_document: A recipe for tomato soup",
+)
 
 
 def main() -> None:

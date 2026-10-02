@@ -3,7 +3,7 @@
 //! matrix/conditional consumers must select the declared image.
 
 use crate::ci_operations::identity_text::REPOSITORY;
-use crate::ci_operations::python_access::{
+use crate::ci_operations::json_access::{
     Outcome, eq, is_str, item, item_by, object, require, string,
 };
 use crate::ci_operations::workflow_census::{Workflows, job};
@@ -11,7 +11,7 @@ use crate::ci_operations::workflow_text::{
     image_values, matrix_rows, one_field, row_has_cuda_major,
 };
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_value::display;
+use crate::prepared_input::value_format::display;
 use std::collections::BTreeMap;
 
 fn selector(key: &str, value: &str) -> Json {
@@ -101,7 +101,7 @@ fn check_binding(binding: &Binding<'_>, body: &str) -> Outcome<()> {
         require(rows.len() == 1, || {
             format!(
                 "{place}: missing or duplicate CUDA matrix row {}",
-                crate::prepared_input::python_value::repr(Some(selected_selector))
+                crate::prepared_input::value_format::repr(Some(selected_selector))
             )
         })?;
         selected = rows[0];
@@ -149,7 +149,7 @@ fn check_conditional(binding: &Binding<'_>, body: &str) -> Outcome<()> {
         branches
             .get(tag)
             .cloned()
-            .ok_or_else(|| crate::repository::python_text::repr(tag))
+            .ok_or_else(|| crate::repository::text::repr(tag))
     };
     let expression = format!(
         "${{{{ inputs.release_tag != '' && '{}' || '{}' }}}}",

@@ -6,7 +6,7 @@
 //! line with status 1.
 
 use super::argv::{Grammar, Opt};
-use super::manifest_json::{Raised, load_manifest, python_str, subscript};
+use super::manifest_json::{Raised, load_manifest, subscript, toolkit_text};
 use crate::ci_plan::catalog::python_path_display;
 use crate::ci_plan::document::Json;
 use crate::repository::check_report::CheckReport;
@@ -148,7 +148,7 @@ fn matches_request(document: &Json, request: &Request<'_>, expected: &str) -> Re
         return Ok(false);
     }
     if expected == "cuda" && !request.cuda_major.is_empty() {
-        let major = python_str(backend, "cuda", "toolkit_major")?;
+        let major = toolkit_text(backend, "cuda", "toolkit_major")?;
         if major != request.cuda_major {
             return Ok(false);
         }

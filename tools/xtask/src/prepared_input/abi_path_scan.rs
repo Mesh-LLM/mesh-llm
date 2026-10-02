@@ -1,5 +1,5 @@
-use super::{Checked, Rejected, python_io};
-use crate::repository::python_text;
+use super::{Checked, Rejected, text_io};
+use crate::repository::text;
 use std::path::{Path, PathBuf};
 
 struct ScanOperands<'a> {
@@ -33,7 +33,7 @@ fn scan(operands: &ScanOperands<'_>) -> Checked<()> {
         if !path.is_file() {
             continue;
         }
-        let bytes = std::fs::read(&path).map_err(|error| python_io::os_error(&path, &error))?;
+        let bytes = std::fs::read(&path).map_err(|error| text_io::os_error(&path, &error))?;
         for value in &operands.forbidden {
             if bytes
                 .windows(value.len())
@@ -41,7 +41,7 @@ fn scan(operands: &ScanOperands<'_>) -> Checked<()> {
             {
                 return Err(Rejected(format!(
                     "portable static ABI retained producer-local path {} in {}",
-                    python_text::repr(value),
+                    text::repr(value),
                     relative.display()
                 )));
             }

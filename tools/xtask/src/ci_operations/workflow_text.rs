@@ -3,8 +3,8 @@
 //! at the end; a `\s*` before `$` or a capture may cross line breaks, which
 //! is why a declaration's value can be read from the following line.
 
-use crate::ci_operations::python_access::{Outcome, require};
-use crate::repository::python_text::{self, is_space};
+use crate::ci_operations::json_access::{Outcome, require};
+use crate::repository::text::{self, is_space};
 
 /// Start offsets of every line (`^` positions).
 pub(crate) fn line_starts(text: &str) -> Vec<usize> {
@@ -76,7 +76,7 @@ pub(crate) fn declarations<'a>(text: &'a str, name: &str, indent: Option<usize>)
 
 /// `scalar(value)`: strip, then drop one pair of matching quotes.
 pub(crate) fn scalar(value: &str) -> String {
-    let value = python_text::strip(value);
+    let value = text::strip(value);
     let chars: Vec<char> = value.chars().collect();
     if chars.len() >= 2
         && chars[0] == chars[chars.len() - 1]

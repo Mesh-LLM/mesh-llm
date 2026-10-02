@@ -182,37 +182,8 @@ mod tests {
             .collect()
     }
 
-    fn stderr(text: &str) -> String {
-        match parse(&argv(text)) {
-            Ok(_) => String::new(),
-            Err(report) => report.stderr.lines().last().unwrap_or("").to_owned(),
-        }
-    }
-
     #[test]
-    fn migration_release_classify_argv_matches_argparse() {
-        let prefix = "release-notes-classify.py: error: ";
-        let cases = [
-            ("--r x", "the following arguments are required: --body"),
-            ("--h", "the following arguments are required: --body"),
-            ("--body --x", "argument --body: expected one argument"),
-            (
-                "--range r zz",
-                "the following arguments are required: --body",
-            ),
-            ("--body b zz", "unrecognized arguments: zz"),
-            (
-                "--body b --has-entries=1",
-                "argument --has-entries: ignored explicit argument \"1\"",
-            ),
-            (
-                "--body b --range r --out o",
-                "the following arguments are required: --version, --date",
-            ),
-        ];
-        for (args, message) in cases {
-            assert_eq!(stderr(args), format!("{prefix}{message}"), "{args}");
-        }
+    fn has_entries_mode_accepts_empty_body_without_render_metadata() {
         let parsed = parse(&argv("--body= --has-entries --range r"));
         assert!(matches!(parsed, Ok(Invocation::HasEntries(body)) if body.is_empty()));
     }

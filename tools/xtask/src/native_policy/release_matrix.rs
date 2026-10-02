@@ -1,6 +1,6 @@
 use crate::ci_plan::document::Json;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 use std::collections::BTreeSet;
 
 const USAGE: &str = "usage: validate-release-native-runtime-matrix.py [-h] --manifest MANIFEST\n                                                 [--required-target REQUIRED_TARGET]\n                                                 [assets ...]\n";

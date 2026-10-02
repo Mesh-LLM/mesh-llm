@@ -1,6 +1,6 @@
 use super::document::{self, Identity, sha256};
 use super::{Error, WriteRequest};
-use crate::repository::python_text::{splitlines, strip};
+use crate::repository::text::{splitlines, strip};
 use std::fs;
 
 pub(crate) fn write_evidence(request: &WriteRequest) -> Result<(), Error> {

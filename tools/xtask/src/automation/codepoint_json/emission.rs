@@ -1,5 +1,5 @@
 use super::strings::JsonString;
-use crate::prepared_input::python_value::float_repr;
+use crate::prepared_input::value_format::float_repr;
 
 pub(in crate::automation) fn write_float(output: &mut String, number: f64) {
     if number.is_nan() {

@@ -42,14 +42,6 @@ impl Drop for Scratch {
     }
 }
 
-pub(crate) fn repository_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("xtask lives under tools/")
-        .to_path_buf()
-}
-
 pub(crate) fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/product")

@@ -20,26 +20,11 @@ pub(crate) fn head<'a>(value: &'a Value, key: &str, top: usize) -> &'a [Value] {
     }
 }
 
-/// Python truthiness.
-pub(crate) fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Int(int) => *int != 0,
-        Value::BigInt(_) => true,
-        Value::Float(float) => *float != 0.0,
-        Value::Str(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(entries) => !entries.is_empty(),
-    }
-}
-
-/// `value or 'n/a'`, as `str`.
+/// Render an available worker count, including zero.
 pub(crate) fn or_na(value: &Value) -> String {
-    if truthy(value) {
-        display(value)
-    } else {
-        "n/a".to_owned()
+    match value {
+        Value::Int(count) if *count >= 0 => count.to_string(),
+        _ => "n/a".to_owned(),
     }
 }
 
@@ -55,15 +40,9 @@ pub(crate) fn escape(value: &Value) -> String {
 
 /// `markdown_escape(value or 'n/a')`.
 pub(crate) fn escape_or_na(value: &Value) -> String {
-    escape_text(&or_na(value))
-}
-
-fn type_name(value: &Value) -> &'static str {
     match value {
-        Value::Str(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-        _ => "int",
+        Value::Str(text) if !text.is_empty() => escape_text(text),
+        _ => "n/a".to_owned(),
     }
 }
 
@@ -72,24 +51,18 @@ fn type_name(value: &Value) -> &'static str {
 fn rounded(value: &Value) -> Outcome<Option<i128>> {
     match value {
         Value::Null => Ok(None),
-        Value::Bool(flag) => Ok(Some(i128::from(*flag))),
-        Value::Int(int) => Ok(Some(*int)),
-        Value::Float(float) if float.is_nan() => Err(Failure::Reported(
-            "cannot convert float NaN to integer".to_owned(),
+        Value::Int(int) if *int >= 0 => Ok(Some(*int)),
+        Value::Float(float) if float.is_finite() && *float >= 0.0 => {
+            format!("{:.0}", float.round_ties_even())
+                .parse()
+                .map(Some)
+                .map_err(|_| {
+                    Failure::Reported("CI duration is outside the supported range".to_owned())
+                })
+        }
+        _ => Err(Failure::Reported(
+            "CI duration must be a finite nonnegative number".to_owned(),
         )),
-        Value::Float(float) if float.is_infinite() => Err(Failure::Uncaught(
-            "OverflowError: cannot convert float infinity to integer".to_owned(),
-        )),
-        Value::Float(float) => format!("{:.0}", float.round_ties_even())
-            .parse()
-            .map(Some)
-            .map_err(|_| {
-                Failure::Uncaught("OverflowError: seconds beyond the i128 range".to_owned())
-            }),
-        other => Err(Failure::Uncaught(format!(
-            "TypeError: type {} doesn't define __round__ method",
-            type_name(other)
-        ))),
     }
 }
 
@@ -115,21 +88,18 @@ pub(crate) fn percent(value: &Value) -> Outcome<String> {
     let share = match value {
         Value::Float(float) => *float,
         Value::Int(int) => int.to_string().parse().unwrap_or(f64::INFINITY),
-        Value::Bool(flag) => f64::from(u8::from(*flag)),
-        other => {
-            return Err(Failure::Reported(format!(
-                "Unknown format code '%' for object of type '{}'",
-                type_name(other)
-            )));
+        _ => {
+            return Err(Failure::Reported(
+                "CI share must be a number between zero and one".to_owned(),
+            ));
         }
     };
+    if !share.is_finite() || !(0.0..=1.0).contains(&share) {
+        return Err(Failure::Reported(
+            "CI share must be a finite number between zero and one".to_owned(),
+        ));
+    }
     let scaled = share * 100.0;
-    if scaled.is_nan() {
-        return Ok("nan%".to_owned());
-    }
-    if scaled.is_infinite() {
-        return Ok(if scaled > 0.0 { "inf%" } else { "-inf%" }.to_owned());
-    }
     Ok(format!("{scaled:.1}%"))
 }
 
@@ -138,7 +108,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn human_matches_python() {
+    fn human_formats_available_nonnegative_durations() {
         let cases = [
             (Value::Null, "n/a"),
             (Value::Float(0.5), "0s"),
@@ -146,7 +116,6 @@ mod tests {
             (Value::Float(59.6), "1m 0s"),
             (Value::Int(3600), "1h 0m 0s"),
             (Value::Float(3725.0), "1h 2m 5s"),
-            (Value::Float(-61.0), "-1h 58m 59s"),
         ];
         for (value, expected) in cases {
             assert_eq!(human(&value).ok().as_deref(), Some(expected));
@@ -154,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn percent_and_escape_match_python() {
+    fn shares_and_dimensions_have_domain_formats() {
         assert_eq!(
             percent(&Value::Float(0.3333)).ok().as_deref(),
             Some("33.3%")
@@ -162,5 +131,22 @@ mod tests {
         assert_eq!(percent(&Value::Float(1.0)).ok().as_deref(), Some("100.0%"));
         assert_eq!(escape(&Value::text("a|b\nc")), "a\\|b c");
         assert_eq!(escape_or_na(&Value::text("")), "n/a");
+        assert_eq!(escape_or_na(&Value::Bool(true)), "n/a");
+        assert_eq!(or_na(&Value::Int(0)), "0");
+    }
+
+    #[test]
+    fn invalid_numeric_report_values_are_rejected() {
+        for value in [
+            Value::Bool(true),
+            Value::Float(-1.0),
+            Value::Float(f64::NAN),
+            Value::Float(f64::INFINITY),
+            Value::text("1"),
+        ] {
+            assert!(human(&value).is_err());
+            assert!(percent(&value).is_err());
+        }
+        assert!(percent(&Value::Float(1.1)).is_err());
     }
 }

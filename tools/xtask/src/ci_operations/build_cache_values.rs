@@ -2,7 +2,7 @@
 //! `parse_age` (Python `int()`), `human_size`, and non-strict
 //! `Path.resolve()`.
 
-use crate::repository::python_text::{is_space, strip};
+use crate::repository::text::{is_space, strip};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 

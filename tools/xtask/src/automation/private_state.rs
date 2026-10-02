@@ -54,6 +54,10 @@ pub(super) struct PrivateState {
 }
 
 impl PrivateState {
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub(super) fn create(parent: &Path, prefix: &'static str) -> Result<Self, Error> {
         let mut random = [0_u8; 16];
         getrandom::fill(&mut random).map_err(|_| Error::EntropyUnavailable)?;
@@ -75,7 +79,7 @@ impl PrivateState {
             "runtime",
             "tmp",
         ] {
-            private_directory(&self.root.join(name))?;
+            private_directory(&self.root().join(name))?;
         }
         Ok(())
     }
@@ -97,7 +101,7 @@ impl PrivateState {
             ("TEMP", "tmp"),
             ("TMP", "tmp"),
         ] {
-            environment.insert(key.into(), Value::Public(self.root.join(relative).into()));
+            environment.insert(key.into(), Value::Public(self.root().join(relative).into()));
         }
         environment.insert(
             "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR".into(),
@@ -108,15 +112,37 @@ impl PrivateState {
 
     pub(super) fn output_files(&self) -> OutputFiles {
         OutputFiles {
-            stdout: Some(self.root.join("stdout.log")),
-            stderr: Some(self.root.join("stderr.log")),
+            stdout: Some(self.root().join("stdout.log")),
+            stderr: Some(self.root().join("stderr.log")),
         }
+    }
+
+    pub(super) fn retain_runtime_logs(&self, destination: &Path) -> io::Result<()> {
+        fn copy_logs(source: &Path, destination: &Path, in_logs: bool) -> io::Result<()> {
+            for entry in fs::read_dir(source)? {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                let target = destination.join(entry.file_name());
+                if kind.is_dir() {
+                    copy_logs(
+                        &entry.path(),
+                        &target,
+                        in_logs || entry.file_name() == "logs",
+                    )?;
+                } else if kind.is_file() && in_logs {
+                    fs::create_dir_all(destination)?;
+                    fs::copy(entry.path(), target)?;
+                }
+            }
+            Ok(())
+        }
+        copy_logs(&self.root().join("runtime"), destination, false)
     }
 
     pub(super) fn model_fit(&self, sizes: Option<(u32, u32)>) -> Result<(), Error> {
         if let Some((batch, ubatch)) = sizes {
             fs::write(
-                self.root.join("config.toml"),
+                self.root().join("config.toml"),
                 format!(
                     "version = 1\n\n[defaults.model_fit]\nbatch = {batch}\nubatch = {ubatch}\n"
                 ),

@@ -5,7 +5,7 @@
 use super::argv::Program;
 use crate::ci_plan::catalog::os_error_text;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::{repr, splitlines};
+use crate::repository::text::{repr, splitlines};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
@@ -31,7 +31,7 @@ fn verify(argument: &str) -> Result<(), String> {
     let artifact = pure_posix(argument);
     let name = artifact.rsplit('/').next().unwrap_or_default();
     if name.is_empty() || name == "." {
-        return Err(format!("PosixPath({}) has an empty name", repr(&artifact)));
+        return Err(format!("artifact path has an empty filename: {artifact:?}"));
     }
     let sidecar = format!("{artifact}.sha256");
     let populated = std::fs::metadata(&sidecar).is_ok_and(|meta| meta.is_file() && meta.len() > 0);
@@ -41,7 +41,8 @@ fn verify(argument: &str) -> Result<(), String> {
         ));
     }
     let bytes = std::fs::read(&sidecar).map_err(|error| os_error_text(&error, &sidecar))?;
-    let text = std::str::from_utf8(&bytes).map_err(|error| decode_error(&bytes, &error))?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|error| format!("checksum sidecar is not valid UTF-8: {error}"))?;
     let [line] = splitlines(text)[..] else {
         return Err("checksum sidecar must contain exactly one canonical line".to_owned());
     };
@@ -107,27 +108,12 @@ fn pure_posix(text: &str) -> String {
     }
 }
 
-/// Python's `UnicodeDecodeError.__str__` for the first invalid UTF-8 run.
-fn decode_error(bytes: &[u8], error: &std::str::Utf8Error) -> String {
-    let start = error.valid_up_to();
-    let (length, reason) = match error.error_len() {
-        None => (bytes.len() - start, "unexpected end of data"),
-        Some(1) if matches!(bytes[start], 0x80..=0xc1 | 0xf5..=0xff) => (1, "invalid start byte"),
-        Some(length) => (length, "invalid continuation byte"),
-    };
-    let position = match length {
-        1 => format!("byte 0x{:02x} in position {start}", bytes[start]),
-        _ => format!("bytes in position {start}-{}", start + length - 1),
-    };
-    format!("'utf-8' codec can't decode {position}: {reason}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn migration_archives_pure_posix_matches_pathlib() {
+    fn archive_posix_paths_preserve_required_component_and_anchor_rules() {
         for (input, expected) in [
             ("./dist//runtime.tar.gz", "dist/runtime.tar.gz"),
             ("//runtime", "//runtime"),
@@ -138,29 +124,6 @@ mod tests {
             ("dist/", "dist"),
         ] {
             assert_eq!(pure_posix(input), expected, "{input:?}");
-        }
-    }
-
-    #[test]
-    fn migration_archives_decode_error_matches_python() {
-        for (bytes, expected) in [
-            (
-                &b"\xff\n"[..],
-                "byte 0xff in position 0: invalid start byte",
-            ),
-            (b"\xe2\x82", "bytes in position 0-1: unexpected end of data"),
-            (
-                b"a\xe2\x82x",
-                "bytes in position 1-2: invalid continuation byte",
-            ),
-            (
-                b"\xe2x",
-                "byte 0xe2 in position 0: invalid continuation byte",
-            ),
-        ] {
-            let error = std::str::from_utf8(bytes).expect_err("invalid UTF-8");
-            let message = decode_error(bytes, &error);
-            assert_eq!(message, format!("'utf-8' codec can't decode {expected}"));
         }
     }
 

@@ -2,9 +2,7 @@
 //! (critical-path candidate) jobs and the slowest observations.
 
 use crate::ci_operations::ci_metrics_markdown::timing;
-use crate::ci_operations::ci_metrics_markdown_format::{
-    escape, field, head, human, percent, truthy,
-};
+use crate::ci_operations::ci_metrics_markdown_format::{escape, field, head, human, percent};
 use crate::ci_operations::ci_metrics_normalize::Outcome;
 use crate::ci_operations::ci_metrics_value::{Value, display};
 
@@ -70,10 +68,9 @@ pub(crate) fn slowest(lines: &mut Vec<String>, jobs: &Value, top: usize) -> Outc
     for item in head(jobs, "slowest_observations", top) {
         let run_id = display(field(item, "run_id"));
         let url = field(item, "run_url");
-        let run = if truthy(url) {
-            format!("[{run_id}]({})", display(url))
-        } else {
-            run_id
+        let run = match url {
+            Value::Str(url) if !url.is_empty() => format!("[{run_id}]({url})"),
+            _ => run_id,
         };
         lines.push(format!(
             "| {run} | {} | {} | {} |",

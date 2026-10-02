@@ -7,11 +7,9 @@ use crate::ci_operations::evidence_input::{
     IMAGE, MAX_SAFE, decode, digest, fields, hash_bytes, require, revision, text,
 };
 use crate::ci_operations::evidence_timestamp::check_timestamp;
-use crate::ci_operations::python_access::{
-    Outcome, eq, is_int_one, is_str, item, string, type_name,
-};
+use crate::ci_operations::json_access::{Outcome, eq, is_int_one, is_str, item, string, type_name};
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_value::display;
+use crate::prepared_input::value_format::display;
 
 pub(crate) fn origin(value: &Json) -> Outcome<()> {
     fields(
@@ -67,7 +65,7 @@ pub(crate) fn provenance(value: &Json) -> Outcome<()> {
 /// The architectures a validated cohort's index candidate declares.
 pub(crate) fn candidate_architectures(image: &Json, cohort: &Json) -> Outcome<Vec<String>> {
     let key = item(item(image, "receipt")?, "index_candidate_key")?;
-    let candidate = crate::ci_operations::python_access::item_by(item(cohort, "candidates")?, key)?;
+    let candidate = crate::ci_operations::json_access::item_by(item(cohort, "candidates")?, key)?;
     let mut architectures: Vec<String> = Vec::new();
     for child in item(candidate, "children")?.as_array().unwrap_or_default() {
         let architecture = display(Some(item(child, "architecture")?));

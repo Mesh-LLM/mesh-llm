@@ -3,6 +3,7 @@ name = "xtask"
 version.workspace = true
 edition = "2024"
 publish = false
+default-run = "xtask"
 
 [dependencies]
 ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
@@ -17,7 +18,7 @@ num-bigint = "=0.4.8"
 plist = "=1.10.0"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.11"
 syn = { version = "2", features = ["full", "visit"] }
 thiserror = "2"
@@ -33,6 +34,11 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "laya-product-fixture"
+path = "tests/laya_product/fixture.rs"
+test = false
 
 [[example]]
 name = "migration_process_driver"

@@ -8,7 +8,7 @@ use super::tar_header::Member;
 use super::tar_read::{self, Archive};
 use crate::ci_plan::catalog::os_error_text;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 #[cfg(unix)]
@@ -87,9 +87,8 @@ fn validate(members: &[Member]) -> Result<Vec<(&Member, Parts)>, String> {
         }
         if !(member.is_dir() || member.is_reg() || member.is_sym() || member.is_lnk()) {
             return Err(format!(
-                "unsupported archive member type for {}: {}",
-                member.name,
-                bytes_repr(member.kind)
+                "unsupported archive member type for {}: 0x{:02x}",
+                member.name, member.kind
             ));
         }
         if member.is_sym() || member.is_lnk() {
@@ -101,19 +100,6 @@ fn validate(members: &[Member]) -> Result<Vec<(&Member, Parts)>, String> {
         validated.push((member, parts));
     }
     Ok(validated)
-}
-
-/// Python's `repr(bytes([kind]))`.
-fn bytes_repr(kind: u8) -> String {
-    match kind {
-        b'\'' => "b\"'\"".to_owned(),
-        b'\\' => "b'\\\\'".to_owned(),
-        b'\t' => "b'\\t'".to_owned(),
-        b'\n' => "b'\\n'".to_owned(),
-        b'\r' => "b'\\r'".to_owned(),
-        0x20..=0x7e => format!("b'{}'", char::from(kind)),
-        _ => format!("b'\\x{kind:02x}'"),
-    }
 }
 
 /// `Path.mkdir(parents=True, exist_ok=True)`.

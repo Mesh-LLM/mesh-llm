@@ -13,6 +13,7 @@ pub(crate) enum Profile {
     CudaRelease,
     Smoke,
     RunnerContract,
+    CanaryPreflight,
 }
 
 impl Profile {
@@ -24,6 +25,7 @@ impl Profile {
             "cuda-release" => Ok(Self::CudaRelease),
             "smoke" => Ok(Self::Smoke),
             "runner-contract" => Ok(Self::RunnerContract),
+            "canary-preflight" => Ok(Self::CanaryPreflight),
             _ => Err(Error::Input("unknown cleanup profile")),
         }
     }
@@ -152,5 +154,13 @@ pub(crate) fn from_environment(
             &roots.workspace,
             roots.workspace.join("target"),
         )])),
+        Profile::CanaryPreflight => Ok(Plan::files(if options.evidence_uploaded {
+            vec![super::Target::new(
+                &roots.temporary,
+                roots.temporary.join("llama-canary-preflight"),
+            )]
+        } else {
+            Vec::new()
+        })),
     }
 }

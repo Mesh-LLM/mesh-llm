@@ -11,6 +11,9 @@ pub(crate) mod build_cache_options;
 mod build_cache_prune;
 mod build_cache_tree;
 mod build_cache_values;
+mod cache_configuration;
+mod cache_configuration_command;
+mod cache_home;
 mod catalog_contracts;
 mod catalog_release_pair;
 mod catalog_validation;
@@ -33,7 +36,7 @@ mod ci_metrics_report;
 mod ci_metrics_rollup;
 mod ci_metrics_runner;
 mod ci_metrics_stats;
-mod ci_metrics_time;
+pub(crate) mod ci_metrics_time;
 pub(crate) mod ci_metrics_value;
 mod evidence_binding;
 mod evidence_catalog;
@@ -41,8 +44,8 @@ mod evidence_input;
 mod evidence_platforms;
 mod evidence_timestamp;
 mod identity_text;
-pub(crate) mod python_access;
-pub(crate) mod python_json_decode;
+pub(crate) mod json_access;
+pub(crate) mod json_decode;
 mod registry_pulls;
 mod runner_cleanup;
 mod runner_identity;
@@ -83,6 +86,7 @@ pub(crate) enum CiOperationsCommand {
     RegistryPulls,
     ChatDisplay,
     RuntimeSeed,
+    ConfigureCanaryCache,
 }
 
 impl CiOperationsCommand {
@@ -97,6 +101,7 @@ impl CiOperationsCommand {
             "registry-pulls" => Some(Self::RegistryPulls),
             "chat-display" => Some(Self::ChatDisplay),
             "runtime-seed" => Some(Self::RuntimeSeed),
+            "configure-canary-cache" => Some(Self::ConfigureCanaryCache),
             _ => None,
         }
     }
@@ -109,6 +114,9 @@ pub(crate) fn run(
     args: &[String],
     root: impl FnOnce() -> DynResult<PathBuf>,
 ) -> DynResult<()> {
+    if matches!(command, CiOperationsCommand::ConfigureCanaryCache) {
+        return cache_configuration_command::run(args);
+    }
     if matches!(command, CiOperationsCommand::ChatDisplay) {
         return chat_display::run(args);
     }
@@ -116,6 +124,7 @@ pub(crate) fn run(
         return runner_cleanup::command::run(args);
     }
     let report = match command {
+        CiOperationsCommand::ConfigureCanaryCache => unreachable!(),
         CiOperationsCommand::RunnerCleanup => unreachable!(),
         CiOperationsCommand::ChatDisplay => unreachable!(),
         CiOperationsCommand::AuthorityAudit => authority_command::run(args),

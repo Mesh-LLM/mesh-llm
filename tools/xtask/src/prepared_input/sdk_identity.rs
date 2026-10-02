@@ -3,12 +3,12 @@
 //! `prepare-native-sdk-input` and `scripts/restore-native-sdk-input.sh`) and
 //! `native-sdk-library-dir` (the JNA library directory the Kotlin smoke uses).
 
-use super::{Checked, Rejected, positional, python_json, python_value};
+use super::{Checked, Rejected, json_bytes, positional, value_format};
 use crate::ci_plan::document::Json;
 use std::path::Path;
 
 fn load(manifest: &str) -> Checked<Json> {
-    python_json::load(Path::new(manifest))
+    json_bytes::load(Path::new(manifest))
         .map_err(|error| Rejected(format!("native SDK manifest is not valid JSON: {error}")))
 }
 
@@ -25,8 +25,8 @@ pub(super) fn identity(args: &[String]) -> Checked<String> {
         if actual.and_then(Json::as_str) != Some(expected) {
             return Err(Rejected(format!(
                 "native SDK manifest {field} mismatch: expected {}, got {}",
-                crate::repository::python_text::repr(expected),
-                python_value::repr(actual)
+                crate::repository::text::repr(expected),
+                value_format::repr(actual)
             )));
         }
     }

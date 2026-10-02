@@ -4,10 +4,7 @@
 //! `run_tool`: a `shutil.which` probe, then `subprocess.check_output` with
 //! stderr merged into stdout, text decoding, and `LC_ALL=C`.
 
-use crate::ci_operations::python_json_decode::{DecodeError, Hooks, loads};
 use crate::ci_plan::catalog::os_error_text;
-use crate::ci_plan::document::Json;
-use crate::repository::python_text::repr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -208,80 +205,53 @@ pub(super) fn run_tool(tools: &dyn Toolchain, argv: &[String]) -> Result<String,
     match captured.exit {
         Exit::Code(0) => decode(&captured.output),
         Exit::Code(code) => Err(format!(
-            "Command '{}' returned non-zero exit status {code}.",
-            tuple(argv)
+            "native inspection command {argv:?} exited with status {code}"
         )),
         Exit::Signal(signal) => Err(format!(
-            "Command '{}' died with {}.",
-            tuple(argv),
-            signal_name(signal)
+            "native inspection command {argv:?} terminated by signal {signal}"
         )),
     }
-}
-
-/// Python `repr(tuple_of_str)`.
-fn tuple(argv: &[String]) -> String {
-    let items: Vec<String> = argv.iter().map(|arg| repr(arg)).collect();
-    format!("({})", items.join(", "))
-}
-
-/// `repr(signal.Signals(n))` for the signals every POSIX platform numbers
-/// alike; others fall back to CPython's `unknown signal n`.
-fn signal_name(signal: i32) -> String {
-    let name = match signal {
-        1 => "SIGHUP",
-        2 => "SIGINT",
-        3 => "SIGQUIT",
-        4 => "SIGILL",
-        5 => "SIGTRAP",
-        6 => "SIGABRT",
-        8 => "SIGFPE",
-        9 => "SIGKILL",
-        11 => "SIGSEGV",
-        13 => "SIGPIPE",
-        14 => "SIGALRM",
-        15 => "SIGTERM",
-        _ => return format!("unknown signal {signal}"),
-    };
-    format!("<Signals.{name}: {signal}>")
-}
-
-fn keep(pairs: Vec<(String, Json)>) -> Result<Json, String> {
-    Ok(Json::Object(pairs))
-}
-
-fn constant(_: &str) -> Result<Json, String> {
-    Ok(Json::Null)
 }
 
 /// `text=True`: strict UTF-8 with universal newlines.
 pub(super) fn decode(output: &[u8]) -> Result<String, String> {
-    match std::str::from_utf8(output) {
-        Ok(text) => Ok(text.replace("\r\n", "\n").replace('\r', "\n")),
-        Err(_) => {
-            let hooks = Hooks {
-                pairs: keep,
-                constant,
-            };
-            // The shared decoder words an invalid byte as CPython's codec does.
-            match loads(output, &hooks) {
-                Err(DecodeError::Value(message)) => Err(message),
-                _ => Err("'utf-8' codec can't decode output".to_owned()),
-            }
-        }
-    }
+    std::str::from_utf8(output)
+        .map(|text| text.replace("\r\n", "\n").replace('\r', "\n"))
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    struct FailedTool(bool);
+    impl Toolchain for FailedTool {
+        fn which(&self, _: &str) -> bool {
+            true
+        }
+        fn capture(&self, _: &[String]) -> std::io::Result<Captured> {
+            Ok(Captured {
+                output: Vec::new(),
+                exit: if self.0 {
+                    Exit::Signal(15)
+                } else {
+                    Exit::Code(7)
+                },
+            })
+        }
+    }
+
     #[test]
-    fn migration_native_policy_tool_failures_use_python_wording() {
-        let argv = ["otool".to_owned(), "-L".to_owned(), "a'b".to_owned()];
-        assert_eq!(tuple(&argv), "(\"otool\", \"-L\", \"a'b\")");
-        assert_eq!(signal_name(9), "<Signals.SIGKILL: 9>");
-        assert_eq!(signal_name(64), "unknown signal 64");
+    fn native_inspector_failures_retain_actual_process_status_and_arguments() {
+        let argv = ["otool".into(), "-L".into(), "a'b".into()];
+        let exited = run_tool(&FailedTool(false), &argv).unwrap_err();
+        assert!(exited.contains("status 7") && exited.contains("otool") && exited.contains("a'b"));
+        let signaled = run_tool(&FailedTool(true), &argv).unwrap_err();
+        assert!(signaled.contains("signal 15") && signaled.contains("otool"));
+    }
+
+    #[test]
+    fn native_inspection_requires_utf8_and_normalizes_line_endings() {
         assert_eq!(decode(b"a\r\nb\rc").ok().as_deref(), Some("a\nb\nc"));
         assert!(decode(b"ab\xff").is_err());
     }

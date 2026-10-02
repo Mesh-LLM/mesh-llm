@@ -146,10 +146,10 @@ from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
 cannot be combined with this input. Keep the Actions workflow ref on `main`;
 selecting `mesh_ref` always runs a complete certify-only pass, without Goose,
 source repair, an independent upgrade-verification pass, or PR publication.
-The main controller, handoff validation, and aggregation remain at the workflow
-revision; the canonical planner, source build scripts, and battery run from a
-separate checkout of the selected SHA. The controller sorts only the scheduling
-matrix, leaving the source-owned canonical plan unchanged. The package binds both revisions, and workers
+The approved Rust source-plan API uses the current controller planner for every
+selected SHA; source build scripts and the battery remain selected-source code.
+Rust `gguf_metadata` yields `metadata_admitted`; other modes stay `pending`, with downgrade rejection.
+The upstream preflight caller now invokes Rust canary-receipts preflight after protected-controller preparation. It admits exact cached GGUF metadata and memory placement; native tensor, runtime, disk and certification checks remain in the selected real battery. This receipt is not environment readiness. The package binds both revisions, and workers
 reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
 Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
@@ -165,7 +165,10 @@ The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;
 a branch moving later cannot change the selected source for that run.
 
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
-aggregate. The producer performs prepare, manifest-policy, full native and Rust
+aggregate. The protected controller prepares automation and invokes `canary-receipts build`
+with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
+Its bounded process owner retains redacted logs and owns the repair heartbeat tree.
+The retained repair wrapper performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
 the immutable HF cache before compilation and exports a candidate Git bundle,
 one-family-per-shard plan, four arm64 certification binaries, a prebuilt
@@ -184,7 +187,7 @@ CTest result files under the build job's 14-day repair evidence artifact.
 
 Before compilation, the controller runs the selected battery in cache-free
 `--dry-run --skip-build` mode against its own planner output. This checks the
-actual producer/consumer plan contract, including older planner order and
+actual producer/consumer plan contract, without historical planner emulation and with
 source-relative manifest paths. Handoff schema 3 also carries a digest-bound,
 one-commit prepared llama.cpp bundle and preparation markers. Workers restore
 and verify that source against the selected pin and patch queue before lanes
@@ -1107,7 +1110,8 @@ L11 replay callers now use `automation replay-matrix` export/run-family plus
 offline pin, digest and hosted repair-admission commands. The locked DuckDB
 replay workload remains. Workload oracle evidence callers use Rust write/verify;
 HF conversion adapters require `MESH_LLM_AUTOMATION_BIN` for existing converted
-artifact preflight. History/card and remote HF orchestration remain transitional.
+artifact preflight. Nightly history, card, hardware, anonymous history fetch and
+explicit shard/card upload now use typed Rust owners.
 No live optional qualification or publication was performed for this cutover.
 
 `just no-console-print` forbids the print macros and direct `io::stdout()` /
@@ -1453,3 +1457,12 @@ guards and build-script fixtures, followed by the explicitly enumerated
 remain required. No provider, permission, cache-authority or five-entrypoint
 contract changed. The shared runtime-reuse adapter honors the prepared automation
 executable, so copied SDK consumers do not depend on local Cargo aliases.
+
+Laya parity and packaged-product smoke now use Rust `automation laya parity`
+and `automation laya product` through the shared automation adapter. Their
+Python drivers and direct tests are removed; Rust golden and retained-process
+fixtures cover the replaced behavior. This source cutover does not establish
+live hardware qualification. `run-family` now supervises Rust `execute-run`
+with a verified local GGUF path and retained immutable matrix URI. Manual
+comparative caller migration remains open. The explicitly
+retained DuckDB trajectory reader is the only approved replay reader exception.

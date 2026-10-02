@@ -10,7 +10,7 @@ use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_op
 use crate::ci_operations::build_cache_values::{Age, parse_age, parse_size};
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 pub(crate) const DEFAULT_MAX_BYTES: i128 = 80 * 1024 * 1024 * 1024;
 const COMMANDS: [&str; 3] = ["status", "prune", "build"];

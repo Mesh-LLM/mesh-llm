@@ -93,13 +93,13 @@ become full-session baselines. Missing cells/turns/metrics, OOM, qualification
 failures and cancellation cannot trigger performance repair. All available
 artifacts survive failure/cancellation. Warmup is never included in history.
 
-Example, after resolving the pinned dataset:
+Example, after resolving and verifying the pinned model and dataset:
 
 ```sh
 cargo xtool automation replay-matrix run-family \
   --matrix ci/agentic-replay-nightly/matrix.json \
   --python "$PWD/ci/agentic-replay-nightly/.venv/bin/python3" --timeout 21600 \
-  --run-family granite-3.1-2b --ref main=HEAD \
+  --run-family granite-3.1-2b --ref main=HEAD --model-file /path/to/verified.gguf \
   --dataset-file /path/to/sessions.parquet --output /path/to/evidence/dense
 ```
 
@@ -109,6 +109,12 @@ remain complete and long. Runtime/canary work on micstudio must be coordinated
 before starting a validation run.
 
 Matrix validation, export, immutable pin projection and downloaded-byte checks
-belong to `cargo xtool automation replay-matrix`. The measured workload remains
-`evals/agentic-replay.py` in the existing locked DuckDB environment. Generic
-history/card tooling remains transitional, not an approved Python exception.
+belong to `cargo xtool automation replay-matrix`. `run-family` admits the explicit
+local GGUF against the selected immutable pin, selects whole trajectories through
+the retained locked DuckDB reader, and supervises the Rust `execute-run` owner.
+The verified family-to-local-path mapping is retained for repair; repair never
+rediscovers or downloads a model. `--python` selects only the reader interpreter
+and preserves its virtual environment path. Progress uses typed stderr records;
+request JSONL remains the evidence source. History, card rendering and hardware
+capture have typed Rust owners. The manual comparative/L3 caller cutover remains
+migration work, outside the approved reader exception.

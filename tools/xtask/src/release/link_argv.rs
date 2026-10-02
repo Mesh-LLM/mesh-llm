@@ -6,7 +6,7 @@ use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_op
 use crate::ci_operations::ci_metrics_int::python_int;
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 const PROG: &str = "release-notes-link.py";
 /// The legacy `-h` output with `COLUMNS` unset (80 columns).
@@ -145,42 +145,8 @@ mod tests {
             .collect()
     }
 
-    fn stderr(text: &str) -> String {
-        match parse(&argv(text)) {
-            Ok(_) => String::new(),
-            Err(report) => report.stderr.lines().last().unwrap_or("").to_owned(),
-        }
-    }
-
     #[test]
-    fn migration_release_link_argv_matches_argparse() {
-        let prefix = "release-notes-link.py: error: ";
-        let cases = [
-            (
-                "--api-budget x --out y",
-                "argument --api-budget: invalid int value: \"x\"",
-            ),
-            (
-                "zz --out",
-                "the following arguments are required: --body, --range, --repo, --out-body, --out-links",
-            ),
-            ("--body --x", "argument --body: expected one argument"),
-            (
-                "--body=1 --range 2 --repo-root 3 --api-budget 4 zz",
-                "the following arguments are required: --repo, --out-body, --out-links",
-            ),
-            (
-                "--body b --range r --repo o --out-body x --out-links y -- z",
-                "unrecognized arguments: -- z",
-            ),
-            (
-                "--help=1",
-                "argument -h/--help: ignored explicit argument \"1\"",
-            ),
-        ];
-        for (args, message) in cases {
-            assert_eq!(stderr(args), format!("{prefix}{message}"), "{args}");
-        }
+    fn link_options_accept_empty_body_and_zero_api_budget() {
         let parsed = parse(&argv(
             "--body= --range r --repo o --out-body x --out-links y --api-budget 0",
         ));

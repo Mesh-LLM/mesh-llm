@@ -1,9 +1,6 @@
 use super::{Error, Git, Profile, admission, deletion, fixtures::Fixture};
-use crate::{
-    command_interrupt::Interrupt,
-    process::{
-        self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,
-    },
+use crate::process::{
+    self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,
 };
 use std::{collections::BTreeMap, ffi::OsString, num::NonZeroUsize, path::Path, time::Duration};
 
@@ -124,7 +121,7 @@ impl Repository {
         let plan = self.fixture.plan(Profile::Replay, false);
         self.fixture.check_plan(&plan);
         let admitted = admission::admit(&plan)?;
-        let interrupt = Interrupt::install().map_err(Error::Interrupt)?;
+        let interrupt = super::fixtures::interrupt().map_err(Error::Interrupt)?;
         let mut output = Vec::new();
         let result = deletion::execute(admitted, Some(&self.git), (&interrupt, &mut output));
         super::finalization::finalize(result.map(|()| output), interrupt.finish())
@@ -217,7 +214,7 @@ fn replay_root_symlink_when_admitted_file_list_is_safe_rejects_before_git_and_de
     std::os::unix::fs::symlink(&outside, &root).unwrap();
     let plan = fixture.plan(Profile::Replay, true);
     fixture.seed(&plan.targets[0].path);
-    let interrupt = Interrupt::install().unwrap();
+    let interrupt = super::fixtures::interrupt().unwrap();
     fixture.check_plan(&plan);
     let result = deletion::execute(
         admission::admit(&plan).unwrap(),

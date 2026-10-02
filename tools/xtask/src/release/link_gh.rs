@@ -1,11 +1,11 @@
 //! `Gh` of `scripts/release-notes-link.py`: a best-effort `gh` caller that
 //! stops after its budget or its first timeout and reports each failure on
-//! stderr with Python's exception text.
+//! stderr with native process and JSON diagnostics.
 
 use crate::ci_operations::ci_metrics_value::{Value, parse};
-use crate::prepared_input::python_io::os_error;
+use crate::prepared_input::text_io::os_error;
+use crate::release::command_failure::{argv_repr, called_process_error};
 use crate::release::link_host::{Exit, ReleaseHost, text_streams};
-use crate::release::python_failure::{Uncaught, argv_repr, called_process_error};
 use std::time::Duration;
 
 /// `Gh(timeout=30)`: the per-call timeout in seconds.
@@ -31,9 +31,8 @@ impl<'h> Gh<'h> {
         }
     }
 
-    /// `Gh.json(args)`: parsed JSON, or `None` if it did not work out. An
-    /// exception the legacy method does not catch is returned as an error.
-    pub(crate) fn json(&mut self, args: &[String]) -> Result<Option<Value>, Uncaught> {
+    /// Best-effort JSON response, with failures recorded for the caller.
+    pub(crate) fn json(&mut self, args: &[String]) -> Option<Value> {
         if self.remaining <= 0 {
             if !self.exhausted {
                 self.stderr.push_str(
@@ -42,79 +41,45 @@ impl<'h> Gh<'h> {
                 );
             }
             self.exhausted = true;
-            return Ok(None);
+            return None;
         }
         self.remaining -= 1;
-        match self.call(args)? {
-            Ok(value) => Ok(Some(value)),
+        match self.call(args) {
+            Ok(value) => Some(value),
             Err(message) => {
                 self.failures += 1;
                 self.stderr.push_str(&format!(
                     "release-notes-link: gh {} failed: {message}\n",
                     args.join(" ")
                 ));
-                Ok(None)
+                None
             }
         }
     }
 
-    /// The outer error escapes `Gh.json`; the inner one is caught there.
-    fn call(&mut self, args: &[String]) -> Result<Result<Value, String>, Uncaught> {
+    fn call(&mut self, args: &[String]) -> Result<Value, String> {
         let argv = argv_repr("gh", args);
         let output = match self.host.gh(args, Duration::from_secs(TIMEOUT_SECONDS)) {
             Ok(output) => output,
-            Err(failure) => return Ok(Err(os_error(&failure.filename, &failure.error))),
+            Err(failure) => return Err(os_error(&failure.filename, &failure.error)),
         };
         if output.exit == Exit::TimedOut {
             self.remaining = 0;
-            return Ok(Err(format!(
-                "Command '{argv}' timed out after {TIMEOUT_SECONDS} seconds"
-            )));
+            return Err(format!(
+                "command {argv} timed out after {TIMEOUT_SECONDS} seconds"
+            ));
         }
         let stdout = match text_streams(&output) {
             Ok((stdout, _)) => stdout,
-            Err(message) => return Ok(Err(message)),
+            Err(message) => return Err(message),
         };
         match output.exit {
             Exit::Code(0) | Exit::TimedOut => {}
-            Exit::Code(code) => return Ok(Err(called_process_error(&argv, Some(code), None))),
+            Exit::Code(code) => return Err(called_process_error(&argv, Some(code), None)),
             Exit::Signal(signal) => {
-                return Ok(Err(called_process_error(&argv, None, Some(signal))));
+                return Err(called_process_error(&argv, None, Some(signal)));
             }
         }
-        match parse(stdout.as_bytes()) {
-            Ok(value) => Ok(Ok(value)),
-            Err(message) if message.starts_with("maximum recursion depth") => {
-                Err(Uncaught::new("RecursionError", message))
-            }
-            Err(message) => Ok(Err(message)),
-        }
-    }
-}
-
-/// Python truthiness of a JSON value.
-pub(crate) fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Int(int) => *int != 0,
-        Value::BigInt(_) => true,
-        Value::Float(float) => *float != 0.0,
-        Value::Str(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(entries) => !entries.is_empty(),
-    }
-}
-
-/// Python's type name for `TypeError`/`AttributeError` text.
-pub(crate) fn type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Int(_) | Value::BigInt(_) => "int",
-        Value::Float(_) => "float",
-        Value::Str(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
+        parse(stdout.as_bytes())
     }
 }

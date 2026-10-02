@@ -3,8 +3,8 @@
 //! disk, and emits a JSON summary or single-line GitHub step outputs.
 
 use super::fields::{ModelError, ModelResult, fail};
+use super::json_bytes::{ASCII, ASCII_COMPACT, dumps};
 use super::manifest::{PinnedFile, Resolved, Selection, resolve};
-use super::python_json::{ASCII, ASCII_COMPACT, dumps};
 use crate::ci_plan::catalog::{os_error_text, python_path_display};
 use crate::ci_plan::document::Json;
 use crate::repository::check_args::Grammar;

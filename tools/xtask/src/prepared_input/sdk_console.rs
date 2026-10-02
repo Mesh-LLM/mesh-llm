@@ -1,5 +1,5 @@
 use super::html_modules::asset_references;
-use super::{Checked, Rejected, positional, python_io};
+use super::{Checked, Rejected, positional, text_io};
 use std::fs;
 use std::path::Path;
 
@@ -13,7 +13,7 @@ pub(super) fn manifest(args: &[String]) -> Checked<String> {
     entries.sort();
     let path = root.join("manifest.txt");
     fs::write(&path, entries.join("\n") + "\n")
-        .map_err(|error| Rejected(python_io::os_error(&path, &error)))?;
+        .map_err(|error| Rejected(text_io::os_error(&path, &error)))?;
     Ok(String::new())
 }
 
@@ -21,15 +21,15 @@ fn collect(directory: &Path, prefix: &str, entries: &mut Vec<String>) -> Checked
     let children = match fs::read_dir(directory) {
         Ok(children) => children,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(Rejected(python_io::os_error(directory, &error))),
+        Err(error) => return Err(Rejected(text_io::os_error(directory, &error))),
     };
     for child in children {
-        let child = child.map_err(|error| Rejected(python_io::os_error(directory, &error)))?;
+        let child = child.map_err(|error| Rejected(text_io::os_error(directory, &error)))?;
         let path = child.path();
         let name = format!("{prefix}{}", child.file_name().to_string_lossy());
         let kind = child
             .file_type()
-            .map_err(|error| Rejected(python_io::os_error(&path, &error)))?;
+            .map_err(|error| Rejected(text_io::os_error(&path, &error)))?;
         if kind.is_dir() {
             collect(&path, &format!("{name}/"), entries)?;
         } else if path.is_file() && name != "manifest.txt" && !name.starts_with('.') {
@@ -48,7 +48,7 @@ pub(super) fn verify(args: &[String]) -> Checked<String> {
             return Err(format!("missing console {name}: {}", path.display()).into());
         }
     }
-    let html = python_io::read_text(&root.join("index.html"))?;
+    let html = text_io::read_text(&root.join("index.html"))?;
     let refs = asset_references(&html)?;
     let local: Vec<String> = refs
         .iter()
@@ -92,7 +92,7 @@ fn normalized_directory(directory: &str) -> std::path::PathBuf {
 }
 
 fn verify_manifest(root: &Path) -> Checked<()> {
-    let text = python_io::read_text(&root.join("manifest.txt"))?;
+    let text = text_io::read_text(&root.join("manifest.txt"))?;
     let entries: Vec<&str> = text
         .split([
             '\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}',
@@ -134,10 +134,10 @@ fn has_suffix(root: &Path, suffix: &str) -> Checked<bool> {
         {
             return Ok(false);
         }
-        Err(error) => return Err(Rejected(python_io::os_error(&directory, &error))),
+        Err(error) => return Err(Rejected(text_io::os_error(&directory, &error))),
     };
     for child in children {
-        let child = child.map_err(|error| Rejected(python_io::os_error(&directory, &error)))?;
+        let child = child.map_err(|error| Rejected(text_io::os_error(&directory, &error)))?;
         let name = child.file_name();
         let name = name.to_string_lossy();
         if name.len() > suffix.len() && name.ends_with(suffix) {

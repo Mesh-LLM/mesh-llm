@@ -4,7 +4,7 @@
 
 use super::certification::OPTIONAL_ARTIFACTS;
 use super::fields::{ModelResult, fail, get};
-use super::python_json::{INLINE, dumps};
+use super::json_bytes::{INLINE, dumps};
 use super::registry::FAMILY_SUITE;
 use crate::ci_plan::document::Json;
 

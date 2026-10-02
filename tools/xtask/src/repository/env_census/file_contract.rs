@@ -7,7 +7,7 @@ use super::source_scan::{
     is_serial_attribute, mutation_lines, nearest_function, preceding_comment_block,
 };
 use crate::command::DynResult;
-use crate::repository::python_text::{split_whitespace, splitlines};
+use crate::repository::text::{split_whitespace, splitlines};
 use std::path::Path;
 
 /// The file-wide classification that selects which rule applies.

@@ -4,7 +4,7 @@
 use crate::ci_operations::runner_identity_argv::{Args, Cursor, error, is_optional, resolve};
 use crate::ci_operations::runner_identity_help::{PROG, sub_help, sub_usage};
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 const FIELDS: [&str; 4] = [
     "reference",

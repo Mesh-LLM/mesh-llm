@@ -43,7 +43,7 @@ pub(crate) fn file_sha256(path: &Path) -> Result<String, IoFailure> {
     file_digest(path).map(hex::encode)
 }
 
-pub(super) fn tree_sha256(root: &Path) -> Result<String, IoFailure> {
+pub(crate) fn tree_sha256(root: &Path) -> Result<String, IoFailure> {
     let mut files = Vec::new();
     collect(root, "", &mut files);
     files.sort();

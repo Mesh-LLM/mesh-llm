@@ -5,7 +5,7 @@
 
 use super::toolchain::{Exit, Toolchain, decode};
 use crate::ci_plan::catalog::os_error_text;
-use crate::repository::python_text::{splitlines, strip};
+use crate::repository::text::{splitlines, strip};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::io::Read;

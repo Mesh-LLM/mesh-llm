@@ -2,16 +2,15 @@
 //! `scripts/release-notes-classify.py`: the Conventional Commits type,
 //! scope and trailers of a commit choose its Keep a Changelog section.
 //! Commit records are JSON-shaped [`Value`]s because `--links` supplies
-//! them verbatim; their Python access errors are reproduced.
+//! them verbatim; required record fields are validated by domain type.
 
 use crate::ci_operations::ci_metrics_value::Value;
 use crate::release::classify_subject::{
     HYGIENE, internal_scope, parse_subject, title, type_section,
 };
+use crate::release::command_failure::Uncaught;
 use crate::release::link_commits::pr_suffix;
-use crate::release::link_gh::{truthy, type_name};
-use crate::release::python_failure::Uncaught;
-use crate::repository::python_text::{repr, strip};
+use crate::repository::text::strip;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -36,31 +35,26 @@ const INTERNAL_SUMMARY: &str =
 const SUBGROUP_THRESHOLD: usize = 20;
 const MIN_GROUP: usize = 4;
 
-/// `commit[key]` on a JSON-shaped record.
+/// Required field lookup on an authored commit record.
 fn index<'a>(record: &'a Value, key: &str) -> Result<&'a Value, Uncaught> {
-    let message = match record {
-        Value::Object(_) => {
-            return record
-                .get(key)
-                .ok_or_else(|| Uncaught::new("KeyError", repr(key)));
-        }
-        Value::Str(_) => "string indices must be integers, not 'str'".to_owned(),
-        Value::Array(_) => "list indices must be integers or slices, not str".to_owned(),
-        other => format!("'{}' object is not subscriptable", type_name(other)),
-    };
-    Err(Uncaught::new("TypeError", message))
+    if !matches!(record, Value::Object(_)) {
+        return Err(Uncaught::new(
+            "commit",
+            "commit record must be an object".into(),
+        ));
+    }
+    record
+        .get(key)
+        .ok_or_else(|| Uncaught::new("commit", format!("commit record is missing {key}")))
 }
 
 /// `TRAILING_PR_RE.sub("", commit["subject"])`.
 fn authored(commit: &Value) -> Result<&str, Uncaught> {
     match index(commit, "subject")? {
         Value::Str(text) => Ok(pr_suffix(text).map_or(text.as_str(), |(at, _)| &text[..at])),
-        other => Err(Uncaught::new(
-            "TypeError",
-            format!(
-                "expected string or bytes-like object, got '{}'",
-                type_name(other)
-            ),
+        _ => Err(Uncaught::new(
+            "commit",
+            "commit subject must be a string".into(),
         )),
     }
 }
@@ -83,15 +77,30 @@ pub(crate) fn classify(commit: Option<&Value>) -> Result<Placement, Uncaught> {
     };
     let trailers = index(commit, "trailers")?;
     let Value::Object(keys) = trailers else {
-        let kind = type_name(trailers);
-        let message = format!("'{kind}' object has no attribute 'get'");
-        return Err(Uncaught::new("AttributeError", message));
+        return Err(Uncaught::new(
+            "commit",
+            "commit trailers must be an object".into(),
+        ));
     };
-    if let Some(value) = trailers.get("release-notes").filter(|value| truthy(value)) {
+    if keys
+        .iter()
+        .any(|(_, value)| !matches!(value, Value::Str(_)))
+    {
+        return Err(Uncaught::new(
+            "commit",
+            "commit trailer values must be strings".into(),
+        ));
+    }
+    if let Some(value) = trailers.get("release-notes") {
         let Value::Str(text) = value else {
-            let message = format!("'{}' object has no attribute 'strip'", type_name(value));
-            return Err(Uncaught::new("AttributeError", message));
+            return Err(Uncaught::new(
+                "commit",
+                "release-notes trailer must be a string".into(),
+            ));
         };
+        if text.is_empty() {
+            return classify_without_override(commit, keys);
+        }
         let wanted = title(strip(text));
         let known = SECTION_ORDER.contains(&wanted.as_str()) || wanted == "Internal";
         return Ok(if known {
@@ -100,6 +109,13 @@ pub(crate) fn classify(commit: Option<&Value>) -> Result<Placement, Uncaught> {
             None
         });
     }
+    classify_without_override(commit, keys)
+}
+
+fn classify_without_override(
+    commit: &Value,
+    keys: &[(String, Value)],
+) -> Result<Placement, Uncaught> {
     let Some(found) = parse_subject(authored(commit)?) else {
         return Ok(None);
     };
@@ -249,4 +265,54 @@ pub(crate) fn build_plan(
         ));
     }
     Ok((Value::Object(plan), unclassified))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn record(subject: Value, trailers: Value) -> Value {
+        Value::Object(vec![
+            ("subject".into(), subject),
+            ("trailers".into(), trailers),
+        ])
+    }
+    #[test]
+    fn authored_commit_fields_are_typed_and_null_remains_unclassified() {
+        assert_eq!(classify(Some(&Value::Null)).unwrap(), None);
+        assert!(classify(Some(&Value::text("fix: repair"))).is_err());
+        assert!(classify(Some(&record(Value::Bool(true), Value::Object(vec![])))).is_err());
+        assert!(
+            classify(Some(&record(
+                Value::text("fix: repair"),
+                Value::Array(vec![])
+            )))
+            .is_err()
+        );
+        for value in [
+            Value::Null,
+            Value::Bool(false),
+            Value::Int(0),
+            Value::Float(f64::NAN),
+        ] {
+            let trailers = Value::Object(vec![("release-notes".into(), value)]);
+            assert!(classify(Some(&record(Value::text("fix: repair"), trailers))).is_err());
+        }
+    }
+    #[test]
+    fn empty_override_falls_back_and_named_override_preserves_authored_scope() {
+        let make = |text: &str| {
+            record(
+                Value::text("fix(skippy): repair (#7)"),
+                Value::Object(vec![("release-notes".into(), Value::text(text))]),
+            )
+        };
+        assert_eq!(
+            classify(Some(&make(""))).unwrap(),
+            Some(("Fixed".into(), Some("skippy".into())))
+        );
+        assert_eq!(
+            classify(Some(&make("Security"))).unwrap(),
+            Some(("Security".into(), Some("skippy".into())))
+        );
+    }
 }

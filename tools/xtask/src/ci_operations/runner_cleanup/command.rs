@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-const USAGE: &str = "ci-ops runner-cleanup --job {build|family|replay|cuda-release|smoke|runner-contract} --evidence-uploaded {true|false} [--package-uploaded {true|false}] [--git <absolute-executable>]";
+const USAGE: &str = "ci-ops runner-cleanup --job {build|family|replay|cuda-release|smoke|runner-contract|canary-preflight} --evidence-uploaded {true|false} [--package-uploaded {true|false}] [--git <absolute-executable>]";
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     if args == ["--help"] {
@@ -66,6 +66,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         | Profile::CudaRelease
         | Profile::Smoke
         | Profile::RunnerContract => None,
+        Profile::CanaryPreflight => None,
     };
     Ok(super::run(
         &options,

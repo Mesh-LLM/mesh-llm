@@ -3,8 +3,8 @@
 //! the scalar checks shared by provenance and cohort validation. Every
 //! failure is the legacy `runner evidence: ...` text.
 
-use crate::ci_operations::python_access::{Outcome, type_name};
-use crate::ci_operations::python_json_decode::{self, DecodeError, Hooks};
+use crate::ci_operations::json_access::{Outcome, type_name};
+use crate::ci_operations::json_decode::{self, DecodeError, Hooks};
 use crate::ci_plan::catalog::{os_error_text, python_path_display};
 use crate::ci_plan::document::Json;
 use sha2::{Digest, Sha256};
@@ -25,7 +25,7 @@ pub(crate) fn require(ok: bool, message: &str) -> Outcome<()> {
 
 /// `isinstance(value, dict) and set(value) == set(names.split())`.
 pub(crate) fn fields(value: &Json, names: &str) -> Outcome<()> {
-    let exact = crate::ci_operations::python_access::has_exact_fields(value, names);
+    let exact = crate::ci_operations::json_access::has_exact_fields(value, names);
     require(exact, &format!("invalid fields: {names}"))
 }
 
@@ -76,10 +76,6 @@ fn pairs(items: Vec<(String, Json)>) -> Result<Json, String> {
     Ok(Json::Object(items))
 }
 
-fn nonfinite(_: &str) -> Result<Json, String> {
-    Err("runner evidence: nonfinite JSON".to_owned())
-}
-
 /// `decode(raw)`: strict JSON within the size, depth and integer bounds.
 pub(crate) fn decode(raw: &[u8]) -> Outcome<Json> {
     require(raw.len() as u64 <= MAX_BYTES, "JSON exceeds 32 MiB")?;
@@ -99,11 +95,8 @@ pub(crate) fn decode(raw: &[u8]) -> Outcome<Json> {
 const DECODE_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 fn decode_bounded(raw: &[u8]) -> Outcome<Json> {
-    let hooks = Hooks {
-        pairs,
-        constant: nonfinite,
-    };
-    let value = python_json_decode::loads(raw, &hooks).map_err(|error| match error {
+    let hooks = Hooks { pairs };
+    let value = json_decode::loads(raw, &hooks).map_err(|error| match error {
         DecodeError::Value(text) => text,
         DecodeError::Recursion => "runner evidence: JSON nesting exceeds parser limit".to_owned(),
     })?;

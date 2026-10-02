@@ -97,10 +97,25 @@ Attempted automated repair by Goose from nightly run evidence."
   run_untrusted cargo xtool automation replay-matrix pins --matrix "$MATRIX_FILE" \
     --canonical evals/skippy-competitive-benchmark.json \
     --models-output "$REPLAY_MODELS_FILE" --dataset-output "$REPLAY_DATASET_PINS_FILE"
-  while IFS=$'\t' read -r family _; do
+  while IFS=$'\t' read -r family _repo _revision _file expected_sha; do
     if [[ "$RERUN_FAILED" == "1" && -z "$REPLAY_DATASET_FILE" ]]; then break; fi
+    model_path=""
+    matches=0
+    if [[ -f "${REPLAY_MODELS_LOCAL_FILE:-}" ]]; then
+      while IFS=$'\t' read -r local_family local_path local_sha; do
+        if [[ "$local_family" == "$family" ]]; then
+          matches=$((matches + 1))
+          if [[ "$local_sha" == "$expected_sha" ]]; then model_path="$local_path"; fi
+        fi
+      done < "$REPLAY_MODELS_LOCAL_FILE"
+    fi
+    if [[ "$matches" != 1 || ! -f "$model_path" ]]; then
+      echo "verified local model mapping is unavailable for $family — needs-attention" >&2
+      RERUN_FAILED=1
+      continue
+    fi
     run_untrusted cargo xtool automation replay-matrix run-family \
-      --matrix "$MATRIX_FILE" --run-family "$family" \
+      --matrix "$MATRIX_FILE" --run-family "$family" --model-file "$model_path" \
       --python "${REPLAY_PYTHON:?locked replay interpreter required}" --timeout 21600 \
       --ref fixed=HEAD --ref "base=$BASE_SHA" \
       --dataset-file "$REPLAY_DATASET_FILE" \
@@ -120,7 +135,7 @@ Attempted automated repair by Goose from nightly run evidence."
   if [[ -d "$HISTORY_RUNS" ]]; then
     HISTORY_ARGS+=(--baseline "$HISTORY_RUNS")
   fi
-  if [[ "$RERUN_FAILED" == "0" ]] && run_untrusted python3 scripts/agentic-replay-history.py "${HISTORY_ARGS[@]}"; then
+  if [[ "$RERUN_FAILED" == "0" ]] && run_untrusted cargo xtool automation replay-matrix history "${HISTORY_ARGS[@]}"; then
     RESOLVED=1
   fi
 fi

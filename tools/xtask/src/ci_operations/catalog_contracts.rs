@@ -6,11 +6,11 @@ use crate::ci_operations::catalog_validation::{fields, image_digest, named_map};
 use crate::ci_operations::identity_text::{
     is_identifier, is_pinned_rust_action, is_recipe_input, is_seed_prefix, is_workflow_name,
 };
-use crate::ci_operations::python_access::{
+use crate::ci_operations::json_access::{
     Outcome, contains_key, eq, is_str, item, item_by, require, type_name,
 };
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_value::display;
+use crate::prepared_input::value_format::display;
 
 pub(crate) fn validate_runtime_rows(catalog: &Json, images: &Json) -> Outcome<()> {
     for (row_id, row) in named_map(item(catalog, "runtime_rows")?, "runtime_rows")? {
@@ -57,7 +57,7 @@ fn unique(list: &[Json]) -> Outcome<bool> {
         let key = format!(
             "{}:{}",
             type_name(entry),
-            crate::prepared_input::python_value::repr(Some(entry))
+            crate::prepared_input::value_format::repr(Some(entry))
         );
         if seen.contains(&key) {
             return Ok(false);
@@ -188,7 +188,7 @@ pub(crate) fn validate_sdk_rust(catalog: &Json, roles: &Json) -> Outcome<()> {
         let value = item(sdk, key)?;
         let present = value
             .as_str()
-            .is_some_and(|text| !crate::repository::python_text::strip(text).is_empty());
+            .is_some_and(|text| !crate::repository::text::strip(text).is_empty());
         require(present, || format!("sdk_rust.{key}: expected a string"))?;
     }
     let action = item(sdk, "rust_action_ref")?;

@@ -1,5 +1,5 @@
 use super::{Attestation, Check, Rejection};
-use crate::ci_operations::ci_metrics_value::{self as python, Value};
+use serde_json::Value;
 
 pub(crate) const RESPONSE_LIMIT: usize = 1024 * 1024;
 
@@ -79,18 +79,17 @@ fn unavailable(check: Check) -> Result<Evidence, Rejection> {
 }
 
 fn runtime(body: &[u8]) -> Evidence {
-    let Ok(value) = python::parse(body) else {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
         return Evidence::Pending;
     };
     match value.get("llama_ready") {
         Some(Value::Bool(true)) => Evidence::Accepted,
-        Some(Value::Str(text)) if text.trim_end_matches('\n') == "True" => Evidence::Accepted,
         _ => Evidence::Pending,
     }
 }
 
 fn model(body: &[u8]) -> Evidence {
-    let Ok(value) = python::parse(body) else {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
         return Evidence::Pending;
     };
     let Some(Value::Array(models)) = value.get("data") else {
@@ -99,15 +98,13 @@ fn model(body: &[u8]) -> Evidence {
     let Some(Value::Object(first)) = models.first() else {
         return Evidence::Pending;
     };
-    let Some((_, id)) = first.iter().find(|(key, _)| key == "id") else {
+    let Some(Value::String(id)) = first.get("id") else {
         return Evidence::Pending;
     };
-    let rendered = python::display(id);
-    let rendered = rendered.trim_end_matches('\n');
-    if rendered.is_empty() {
+    if id.trim().is_empty() {
         Evidence::Pending
     } else {
-        Evidence::Model(rendered.to_owned())
+        Evidence::Model(id.to_owned())
     }
 }
 
@@ -116,7 +113,7 @@ fn attestation_matches(body: &[u8], check: Check, requirement: &Attestation) -> 
         Attestation::Required { expected } => expected,
         Attestation::Disabled => return false,
     };
-    let Ok(value) = python::parse(body) else {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
         return false;
     };
     let status = match check {
@@ -132,7 +129,7 @@ fn attestation_matches(body: &[u8], check: Check, requirement: &Attestation) -> 
         | Check::HeadlessModels
         | Check::HeadlessStatus => None,
     };
-    status.is_some_and(|value| python::display(value).trim_end_matches('\n') == expected)
+    status.and_then(Value::as_str) == Some(expected.as_str())
 }
 
 fn chat(body: &[u8], require_object: bool) -> bool {
@@ -150,13 +147,7 @@ fn chat(body: &[u8], require_object: bool) -> bool {
         .and_then(|choices| choices.first())
         .and_then(|choice| choice.get("message"))
         .and_then(|message| message.get("content"));
-    match content {
-        Some(serde_json::Value::String(text)) => !text.is_empty(),
-        Some(serde_json::Value::Array(items)) => !items.is_empty(),
-        Some(serde_json::Value::Object(fields)) => !fields.is_empty(),
-        Some(serde_json::Value::Number(number)) => {
-            number.as_f64().is_some_and(|value| value.abs() > 0.0)
-        }
-        Some(serde_json::Value::Null | serde_json::Value::Bool(_)) | None => false,
-    }
+    content
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.is_empty())
 }

@@ -6,7 +6,7 @@ use crate::ci_plan::diagnostics::{
     PlanError, PlanResult, fail, nonempty_string, repr, string_list,
 };
 use crate::ci_plan::document::Json;
-use crate::repository::python_text;
+use crate::repository::text;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -158,7 +158,7 @@ fn rules(
 
 /// `str.strip()` for subprocess diagnostics.
 pub(super) fn stripped(text: &str) -> &str {
-    python_text::strip(text)
+    text::strip(text)
 }
 
 #[cfg(test)]

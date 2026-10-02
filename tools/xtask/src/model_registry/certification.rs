@@ -7,7 +7,7 @@ use super::fields::{
     string,
 };
 use crate::ci_plan::document::Json;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 const CERTIFICATION_KEYS: &[&str] = &[
     "class",

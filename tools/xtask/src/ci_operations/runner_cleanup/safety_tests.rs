@@ -9,6 +9,7 @@ fn repeated_cleanup_when_outputs_are_missing_preserves_sentinels_and_line_order(
         Profile::CudaRelease,
         Profile::Smoke,
         Profile::RunnerContract,
+        Profile::CanaryPreflight,
     ] {
         let fixture = Fixture::new();
         let mut plan = fixture.plan(profile, true);

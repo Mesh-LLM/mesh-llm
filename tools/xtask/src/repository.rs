@@ -6,7 +6,7 @@ pub(crate) mod check_report;
 mod conventional_commit;
 mod env_census;
 mod publish_order;
-pub(crate) mod python_text;
+pub(crate) mod text;
 mod upstream_pin;
 
 use crate::cli::RepositoryCheck;

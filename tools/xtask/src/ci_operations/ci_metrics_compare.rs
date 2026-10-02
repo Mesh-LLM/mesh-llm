@@ -6,7 +6,7 @@
 //! `dimensions` falling back to `jobs.by_runner`, `job_names` to
 //! `jobs.by_name`).
 
-use crate::ci_operations::ci_metrics_markdown_format::{field, truthy};
+use crate::ci_operations::ci_metrics_markdown_format::field;
 use crate::ci_operations::ci_metrics_observe::{
     MIN_HEURISTIC_SAMPLES, QUEUE_CONTAMINATION_SECONDS, QUEUE_WARN_SECONDS,
 };
@@ -34,7 +34,7 @@ fn by_runner(report: &Value) -> &[Value] {
 }
 
 fn known_provider(value: &Value) -> bool {
-    truthy(value) && !matches!(value, Value::Str(text) if text == "unknown")
+    matches!(value, Value::Str(text) if !text.is_empty() && text != "unknown")
 }
 
 /// `_providers(report)`.
@@ -65,7 +65,7 @@ fn dimension_values(report: &Value, key: &str) -> BTreeSet<String> {
     };
     values
         .into_iter()
-        .filter(|value| truthy(value))
+        .filter(|value| matches!(value, Value::Str(text) if !text.is_empty()))
         .map(display)
         .collect()
 }
@@ -74,21 +74,29 @@ fn dimension_values(report: &Value, key: &str) -> BTreeSet<String> {
 fn job_names(report: &Value) -> BTreeSet<String> {
     let listed: BTreeSet<String> = cohort(report)
         .get("job_names")
-        .map(|names| items(names).iter().map(display).collect())
+        .map(|names| items(names).iter().filter_map(text).collect())
         .unwrap_or_default();
     if !listed.is_empty() {
         return listed;
     }
     items(field(field(report, "jobs"), "by_name"))
         .iter()
-        .map(|item| display(field(item, "name")))
+        .filter_map(|item| text(field(item, "name")))
         .collect()
 }
 
 fn number(value: &Value) -> Option<f64> {
-    match value {
+    let number = match value {
         Value::Float(float) => Some(*float),
         Value::Int(int) => int.to_string().parse().ok(),
+        _ => None,
+    };
+    number.filter(|number| number.is_finite())
+}
+
+fn text(value: &Value) -> Option<String> {
+    match value {
+        Value::Str(text) if !text.is_empty() => Some(text.clone()),
         _ => None,
     }
 }
@@ -96,9 +104,7 @@ fn number(value: &Value) -> Option<f64> {
 /// `int(summary.get("count") or 0)`.
 fn count(summary: &Value) -> i128 {
     match field(summary, "count") {
-        Value::Int(int) => *int,
-        Value::Float(float) if float.is_finite() => float.trunc() as i128,
-        Value::Bool(flag) => i128::from(*flag),
+        Value::Int(int) if *int >= 0 => *int,
         _ => 0,
     }
 }

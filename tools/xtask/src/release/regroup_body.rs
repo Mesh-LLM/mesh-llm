@@ -2,7 +2,7 @@
 //! `parse_body`, `render_entry` and `normalize_subject`.
 
 use crate::release::link_body::entry_pr;
-use crate::repository::python_text::{is_space, splitlines, strip};
+use crate::repository::text::{is_space, splitlines, strip};
 use std::collections::HashMap;
 
 /// `DISPLAY_TYPES`, in the regex alternation's order.

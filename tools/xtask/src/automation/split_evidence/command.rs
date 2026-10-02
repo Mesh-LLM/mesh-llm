@@ -30,7 +30,7 @@ pub(super) fn execute(request: &Request) -> Result<String, Error> {
 }
 
 fn execute_inner(request: &Request) -> Result<String, Error> {
-    let label = crate::repository::python_text::strip(&request.model_label);
+    let label = crate::repository::text::strip(&request.model_label);
     if label.is_empty() {
         return Err(Error::Contract("model label must be non-empty".into()));
     }

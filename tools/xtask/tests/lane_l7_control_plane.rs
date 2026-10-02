@@ -3,7 +3,14 @@ use std::{
     path::Path,
 };
 
+// Each narrative releases a reserved port range before its child binds it.
+// Keep this target's narratives exclusive across that handoff window.
+static NARRATIVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run(marker: Option<&str>) -> (tempfile::TempDir, std::process::Output) {
+    let _exclusive = NARRATIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let root = tempfile::tempdir().unwrap();
     let location = root.path().canonicalize().unwrap();
     if let Some(marker) = marker {

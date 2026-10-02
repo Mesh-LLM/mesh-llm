@@ -1,4 +1,4 @@
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct PurePath {

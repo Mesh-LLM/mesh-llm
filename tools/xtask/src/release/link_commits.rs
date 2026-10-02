@@ -3,7 +3,7 @@
 //! trailers, the `(#N)` suffix, and the `links.json` records.
 
 use crate::ci_operations::ci_metrics_value::Value;
-use crate::repository::python_text::{is_space, splitlines, strip};
+use crate::repository::text::{is_space, splitlines, strip};
 
 /// One commit of the range, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq)]

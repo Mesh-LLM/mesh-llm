@@ -66,11 +66,11 @@ fn migration_archives_tar_rejects_duplicate_normalized_members() -> TestResult {
 fn migration_archives_tar_rejects_device_and_fifo_members() -> TestResult {
     refuses(
         &[TarMember::new("dev", b'3', 0o644)],
-        "unsupported archive member type for dev: b'3'",
+        "unsupported archive member type for dev: 0x33",
     )?;
     refuses(
         &[TarMember::new("pipe", b'6', 0o644)],
-        "unsupported archive member type for pipe: b'6'",
+        "unsupported archive member type for pipe: 0x36",
     )
 }
 
@@ -191,6 +191,6 @@ fn migration_archives_tar_rejects_member_below_extracted_file() -> TestResult {
 fn migration_archives_tar_rejects_unknown_member_type_after_skipping_payload() -> TestResult {
     refuses(
         &[TarMember::new("vendor", b'Z', 0o644).with_data(b"opaque")],
-        "unsupported archive member type for vendor: b'Z'",
+        "unsupported archive member type for vendor: 0x5a",
     )
 }

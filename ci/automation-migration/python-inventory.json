@@ -62,11 +62,11 @@
     },
     {
       "classification": "evaluation manifest tooling",
-      "deletion_condition": "Port generic manifest logic or isolate with explicit optional caller.",
-      "exception": null,
+      "deletion_condition": "Retained by explicit maintainer decision on 2026-10-01; Rust execution must invoke only this reader as a bounded external step.",
+      "exception": "Maintainer-retained DuckDB Parquet trajectory reader; not a blanket replay execution exception.",
       "path": "evals/agentic-trajectory-manifest.py",
       "phase": 5,
-      "replacement_owner": "tools/xtask repository/artifact",
+      "replacement_owner": "Python DuckDB trajectory reader; tools/xtask owns caller supervision and all other replay execution",
       "required": false
     },
     {
@@ -367,24 +367,6 @@
       "required": false
     },
     {
-      "classification": "manual-only replay evidence",
-      "deletion_condition": "Port generic card formatting/validation; retain replay boundary and evidence gates.",
-      "exception": null,
-      "path": "scripts/agentic-replay-card.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask automation evidence",
-      "required": false
-    },
-    {
-      "classification": "manual-only replay history adapter",
-      "deletion_condition": "Port generic history/process behavior or isolate actual service client.",
-      "exception": null,
-      "path": "scripts/agentic-replay-history.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask process/qa or isolated history adapter",
-      "required": false
-    },
-    {
       "classification": "workload/canary identity validation",
       "deletion_condition": "Map all canary/workload callers and port generic identity checks before deleting.",
       "exception": null,
@@ -404,48 +386,39 @@
     },
     {
       "classification": "external SDK compatibility",
-      "deletion_condition": "Retain only behind approved compatibility workflow and pinned local dependency.",
-      "exception": "Actual LangChain SDK compatibility only; must be separately declared, advisory and isolated.",
+      "deletion_condition": "Retain actual required SDK coverage by L8 maintainer decision; qualify an SDK-only locked environment before claiming isolation.",
+      "exception": "Actual LangChain SDK compatibility retained; no generic automation exemption or advisory substitution.",
       "path": "scripts/ci-langchain-openai-smoke.py",
       "phase": 5,
-      "replacement_owner": "python-sdk-compatibility workflow after task 22",
-      "required": false
-    },
-    {
-      "classification": "main Laya smoke migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
-      "path": "scripts/ci-laya-smoke.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa Laya owner after behavioral qualification",
+      "replacement_owner": "Existing required smoke/release SDK client gate; dependency qualification pending",
       "required": true
     },
     {
       "classification": "external SDK compatibility",
-      "deletion_condition": "Retain only behind approved compatibility workflow and pinned local dependency.",
-      "exception": "Actual LiteLLM SDK compatibility only; must be separately declared, advisory and isolated.",
+      "deletion_condition": "Retain actual required SDK coverage by L8 maintainer decision; qualify an SDK-only locked environment before claiming isolation.",
+      "exception": "Actual LiteLLM SDK compatibility retained; no generic automation exemption or advisory substitution.",
       "path": "scripts/ci-litellm-smoke.py",
       "phase": 5,
-      "replacement_owner": "python-sdk-compatibility workflow after task 22",
-      "required": false
+      "replacement_owner": "Existing required smoke/release SDK client gate; dependency qualification pending",
+      "required": true
     },
     {
       "classification": "external OpenAI SDK compatibility",
-      "deletion_condition": "Retain only as separately gated advisory SDK coverage or port actual contract after approved decision.",
-      "exception": "Actual OpenAI Python embeddings SDK check; inclusion and coverage need explicit task-22 policy evidence.",
+      "deletion_condition": "Retain actual embeddings SDK behavior and validator tests by L8 decision; qualify local locked dependencies.",
+      "exception": "Actual OpenAI embeddings client in explicit workload certification; generic workload fixture import removed, generic orchestration remains migration debt.",
       "path": "scripts/ci-openai-embeddings-smoke.py",
       "phase": 5,
-      "replacement_owner": "python-sdk-compatibility workflow after task 22",
+      "replacement_owner": "Existing embedding workload SDK client; dependency qualification pending",
       "required": false
     },
     {
       "classification": "external OpenAI SDK compatibility",
-      "deletion_condition": "Retain only with dedicated dependency declaration and successful eligibility isolation.",
-      "exception": "Actual OpenAI Python SDK check; permitted only behind isolated advisory compatibility workflow.",
+      "deletion_condition": "Retain actual required SDK coverage by L8 maintainer decision; qualify an SDK-only locked environment before claiming isolation.",
+      "exception": "Actual OpenAI SDK compatibility retained; no generic automation exemption or advisory substitution.",
       "path": "scripts/ci-openai-python-smoke.py",
       "phase": 5,
-      "replacement_owner": "python-sdk-compatibility workflow after task 22",
-      "required": false
+      "replacement_owner": "Existing required smoke/release SDK client gate; dependency qualification pending",
+      "required": true
     },
     {
       "classification": "workload oracle coordination",
@@ -481,15 +454,6 @@
       "path": "scripts/compare-event-benchmark-matrix.py",
       "phase": 5,
       "replacement_owner": "tools/xtask automation evidence/benchmark",
-      "required": false
-    },
-    {
-      "classification": "canary cache adapter",
-      "deletion_condition": "Port generic configuration or demonstrate it is a thin adapter and isolated from required paths.",
-      "exception": null,
-      "path": "scripts/configure-canary-cache.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask automation or thin cache action",
       "required": false
     },
     {
@@ -709,15 +673,6 @@
       "required": false
     },
     {
-      "classification": "main Laya smoke migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
-      "path": "scripts/skippy-laya-parity.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa Laya owner after behavioral qualification",
-      "required": true
-    },
-    {
       "classification": "upstream/native parity validation",
       "deletion_condition": "Port generic inventory/report logic; preserve only proven upstream-specific operations if isolated.",
       "exception": null,
@@ -814,15 +769,6 @@
       "path": "scripts/tests/test_agentic_replay_evidence.py",
       "phase": 2,
       "replacement_owner": "tools/xtask evidence tests",
-      "required": true
-    },
-    {
-      "classification": "generic automation test",
-      "deletion_condition": "All behavior mapped and tested in Rust/component owner.",
-      "exception": null,
-      "path": "scripts/tests/test_agentic_replay_history.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask history adapter tests",
       "required": true
     },
     {
@@ -967,15 +913,6 @@
       "path": "scripts/tests/test_ci_lane_workflows.py",
       "phase": 2,
       "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
-      "classification": "main Laya smoke migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
-      "path": "scripts/tests/test_ci_laya_smoke.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa Laya owner after behavioral qualification",
       "required": true
     },
     {
@@ -1138,15 +1075,6 @@
       "path": "scripts/tests/test_compute_changes_justfiles.py",
       "phase": 2,
       "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
-      "classification": "generic CI helper test",
-      "deletion_condition": "Cache configuration behavior covered without external mutations.",
-      "exception": null,
-      "path": "scripts/tests/test_configure_canary_cache.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation tests",
       "required": true
     },
     {
@@ -1708,15 +1636,6 @@
       "required": true
     },
     {
-      "classification": "main Laya smoke migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_laya_parity.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa Laya owner after behavioral qualification",
-      "required": true
-    },
-    {
       "classification": "generic native parity test",
       "deletion_condition": "Parity inventory and source checks migrated.",
       "exception": null,
@@ -1906,72 +1825,72 @@
       "required": true
     },
     {
-      "classification": "main Python SDK ecosystem migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
+      "classification": "retained Python SDK packaging component",
+      "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
+      "exception": "Python SDK Hatch wheel hook verifies packaged native bridge presence; no SDK isolation qualification claimed.",
       "path": "sdk/python/hatch_build.py",
       "phase": 5,
-      "replacement_owner": "Python SDK component; isolation decision remains pending",
+      "replacement_owner": "Python SDK component packaging",
       "required": false
     },
     {
-      "classification": "main Python SDK ecosystem migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
+      "classification": "retained Python SDK package interface",
+      "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
+      "exception": "Python SDK exports and native identity binding; no SDK isolation qualification claimed.",
       "path": "sdk/python/src/meshllm/__init__.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
     },
     {
-      "classification": "main Python SDK ecosystem migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
+      "classification": "retained Python SDK binding loader",
+      "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
+      "exception": "Lazy loading of the actual generated Python native binding; no SDK isolation qualification claimed.",
       "path": "sdk/python/src/meshllm/_binding.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
     },
     {
-      "classification": "main Python SDK ecosystem migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
+      "classification": "retained generated Python SDK package",
+      "deletion_condition": "Retained ecosystem component by task decision; generated binding package marker.",
+      "exception": "UniFFI-generated Python package marker; no SDK isolation qualification claimed.",
       "path": "sdk/python/src/meshllm/_generated/__init__.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
     },
     {
-      "classification": "main Python SDK ecosystem migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
+      "classification": "retained generated Python SDK bindings",
+      "deletion_condition": "Retained ecosystem component by task decision; regenerate only through the component binding generator.",
+      "exception": "Actual UniFFI Python ABI bindings; no SDK isolation qualification claimed.",
       "path": "sdk/python/src/meshllm/_generated/mesh_ffi.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
     },
     {
-      "classification": "main Python SDK ecosystem migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
+      "classification": "retained Python SDK client implementation",
+      "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
+      "exception": "Python asynchronous SDK lifecycle and protocol-preserving native client; no SDK isolation qualification claimed.",
       "path": "sdk/python/src/meshllm/client.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
     },
     {
-      "classification": "main Python SDK ecosystem migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
+      "classification": "retained Python SDK public types",
+      "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
+      "exception": "Python SDK response, stream, model and error types; no SDK isolation qualification claimed.",
       "path": "sdk/python/src/meshllm/types.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
       "required": false
     },
     {
-      "classification": "main Python SDK ecosystem migration debt",
-      "deletion_condition": "Retained new main file; do not delete until owning Rust behavior and platform evidence pass",
-      "exception": null,
+      "classification": "retained Python SDK component tests",
+      "deletion_condition": "Retained ecosystem component coverage by task decision; no interpreter differential oracle.",
+      "exception": "Tests the actual Python SDK lifecycle, stream cancellation and protocol behavior; no SDK isolation qualification claimed.",
       "path": "sdk/python/tests/test_client.py",
       "phase": 5,
       "replacement_owner": "Python SDK component; isolation decision remains pending",
@@ -2115,7 +2034,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 285,
+  "tracked_file_count": 210,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",

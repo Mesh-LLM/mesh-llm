@@ -4,7 +4,7 @@
 
 use super::sdk_artifact_file::{artifact_file, sha256_file};
 use super::sdk_identity_contract::{Manifest, check_identity, reject};
-use super::{Checked, Rejected, positional, python_json, python_value};
+use super::{Checked, Rejected, json_bytes, positional, value_format};
 use crate::ci_plan::document::Json;
 use std::path::Path;
 
@@ -52,8 +52,8 @@ pub(super) fn run(args: &[String]) -> Checked<String> {
     let [artifact_dir, manifest_path] = positional(args, "ARTIFACT_DIR MANIFEST")?;
     let root = Path::new(artifact_dir)
         .canonicalize()
-        .map_err(|error| Rejected(super::python_io::os_error(Path::new(artifact_dir), &error)))?;
-    let value = python_json::load(Path::new(manifest_path))
+        .map_err(|error| Rejected(super::text_io::os_error(Path::new(artifact_dir), &error)))?;
+    let value = json_bytes::load(Path::new(manifest_path))
         .map_err(|error| format!("native SDK manifest is not valid JSON: {error}"))?;
     if value.as_object().is_none() {
         return reject("native SDK manifest must be a JSON object".to_owned());
@@ -69,7 +69,7 @@ pub(super) fn run(args: &[String]) -> Checked<String> {
     if !schema.is_some_and(Json::equals_one) {
         return reject(format!(
             "unsupported schema_version: {}",
-            python_value::repr(schema)
+            value_format::repr(schema)
         ));
     }
     for field in STRINGS {

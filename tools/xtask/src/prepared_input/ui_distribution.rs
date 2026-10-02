@@ -4,7 +4,7 @@
 //! symlink refusal and module-reference requirement are unchanged.
 
 use super::html_modules::module_sources;
-use super::{Checked, Rejected, python_io, python_json};
+use super::{Checked, Rejected, json_bytes, text_io};
 use crate::ci_plan::document::Json;
 use crate::repository::check_args::Grammar;
 use crate::repository::check_report::CheckReport;
@@ -72,8 +72,8 @@ pub(super) fn run(args: &[String]) -> CheckReport {
 fn write_stamp(root: &Path, identity: &Identity<'_>) -> Checked<()> {
     let manifest = describe(root, identity)?;
     let path = root.join(MANIFEST);
-    let bytes = python_json::dumps_indented(&manifest) + "\n";
-    fs::write(&path, bytes).map_err(|error| Rejected(python_io::os_error(&path, &error)))
+    let bytes = json_bytes::dumps_indented(&manifest) + "\n";
+    fs::write(&path, bytes).map_err(|error| Rejected(text_io::os_error(&path, &error)))
 }
 
 fn verify(root: &Path, identity: &Identity<'_>) -> Checked<()> {
@@ -83,10 +83,10 @@ fn verify(root: &Path, identity: &Identity<'_>) -> Checked<()> {
     if !regular {
         return Err("UI distribution is missing its release manifest".into());
     }
-    let text = python_io::read_text(&path)?;
+    let text = text_io::read_text(&path)?;
     let recorded = Json::parse(text.as_bytes())
         .map_err(|error| format!("UI release manifest is not valid JSON: {error}"))?;
-    if !python_json::equal(&recorded, &expected) {
+    if !json_bytes::equal(&recorded, &expected) {
         return Err("UI release identity or file checksums do not match".into());
     }
     Ok(())
@@ -111,7 +111,7 @@ fn describe(root: &Path, identity: &Identity<'_>) -> Checked<Json> {
     if !files.contains_key("index.html") {
         return Err("UI distribution is missing index.html".into());
     }
-    let index = python_io::read_text(&root.join("index.html"))?;
+    let index = text_io::read_text(&root.join("index.html"))?;
     references_local_module(&index, &files)?;
     let files = files
         .into_iter()
@@ -134,7 +134,7 @@ fn describe(root: &Path, identity: &Identity<'_>) -> Checked<Json> {
 /// Every regular file below `dir` by POSIX relative path. Any symbolic link
 /// rejects the distribution; other special files are ignored.
 fn collect(dir: &Path, prefix: &str, files: &mut BTreeMap<String, String>) -> Checked<()> {
-    let io = |error: std::io::Error| Rejected(python_io::os_error(dir, &error));
+    let io = |error: std::io::Error| Rejected(text_io::os_error(dir, &error));
     for entry in fs::read_dir(dir).map_err(io)? {
         let entry = entry.map_err(io)?;
         let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
@@ -146,7 +146,7 @@ fn collect(dir: &Path, prefix: &str, files: &mut BTreeMap<String, String>) -> Ch
             collect(&entry.path(), &format!("{name}/"), files)?;
         } else if kind.is_file() {
             let path = entry.path();
-            let bytes = fs::read(&path).map_err(|error| python_io::os_error(&path, &error))?;
+            let bytes = fs::read(&path).map_err(|error| text_io::os_error(&path, &error))?;
             files.insert(name, hex::encode(Sha256::digest(&bytes)));
         }
     }

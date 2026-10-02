@@ -1,14 +1,14 @@
 //! The plan side of `scripts/release-notes-regroup.py`: `validate_metadata`,
 //! `plan_groups` + `validate`, and `render`. A plan is agent-authorable, so
-//! every Python failure mode of these functions is kept.
+//! its object, collection and text fields are validated before rendering.
 
 use crate::ci_operations::ci_metrics_value::Value;
-use crate::release::link_gh::truthy;
-use crate::release::python_failure::Uncaught;
+use crate::release::command_failure::Uncaught;
 use crate::release::regroup_body::Body;
 use crate::release::regroup_date::is_iso_date;
-use crate::release::regroup_py::{
-    contains, get, get_or_null, get_truthy, item, iterate, key, length, pr_key, quoted, text,
+use crate::release::regroup_values::{
+    contains, get, get_or_null, internal_present, item, iterate, key, length, populated_text,
+    pr_key, quoted, text,
 };
 use std::collections::HashSet;
 
@@ -91,7 +91,7 @@ pub(crate) fn validate_metadata(plan: &Value) -> Result<(), Stop> {
         }
     }
     let internal = get_or_null(plan, "internal")?;
-    if truthy(&internal) {
+    if internal_present(&internal)? {
         let summary = get_or_null(&internal, "summary")?;
         check_title(&mut problems, "internal summary", &summary);
         for group in items(&internal, "groups")? {
@@ -132,7 +132,7 @@ fn plan_groups(
         }
     }
     let internal = get_or_null(plan, "internal")?;
-    if truthy(&internal) {
+    if internal_present(&internal)? {
         for group in items(&internal, "groups")? {
             item(&group, "title")?;
             each(item(&group, "prs")?)?;
@@ -201,10 +201,15 @@ fn entry_lines(body: &Body, prs: &Value) -> Result<Vec<String>, Uncaught> {
     for pr in iterate(prs)? {
         let pr_key = key(&pr)?;
         let canonical = pr_key.strip_prefix("int:").unwrap_or_default();
-        let line = body
-            .entries
-            .get(canonical)
-            .ok_or_else(|| Uncaught::new("KeyError", text(&pr)))?;
+        let line = body.entries.get(canonical).ok_or_else(|| {
+            Uncaught::new(
+                "plan",
+                format!(
+                    "plan references a missing pull-request entry: {}",
+                    text(&pr)
+                ),
+            )
+        })?;
         lines.push(line.clone());
     }
     Ok(lines)
@@ -213,9 +218,9 @@ fn entry_lines(body: &Body, prs: &Value) -> Result<Vec<String>, Uncaught> {
 /// `render(plan, entries, tail)`.
 pub(crate) fn render(plan: &Value, body: &Body) -> Result<String, Uncaught> {
     let mut out: Vec<String> = Vec::new();
-    if get_truthy(plan, "version")? {
+    if populated_text(plan, "version")? {
         let mut heading = format!("## [{}]", text(item(plan, "version")?));
-        if get_truthy(plan, "date")? {
+        if populated_text(plan, "date")? {
             heading.push_str(&format!(" - {}", text(item(plan, "date")?)));
         }
         out.extend([heading, String::new()]);
@@ -232,7 +237,7 @@ pub(crate) fn render(plan: &Value, body: &Body) -> Result<String, Uncaught> {
         render_groups(&mut out, body, &items(&section, "groups")?)?;
     }
     let internal = get_or_null(plan, "internal")?;
-    if truthy(&internal) {
+    if internal_present(&internal)? {
         let groups = iterate(item(&internal, "groups")?)?;
         let mut count = 0;
         for group in &groups {
@@ -255,7 +260,7 @@ pub(crate) fn render(plan: &Value, body: &Body) -> Result<String, Uncaught> {
     let joined = out.join("\n");
     Ok(format!(
         "{}\n",
-        joined.trim_end_matches(crate::repository::python_text::is_space)
+        joined.trim_end_matches(crate::repository::text::is_space)
     ))
 }
 

@@ -3,7 +3,7 @@
 
 use crate::repository::check_args::{Grammar, ParsedArgs};
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 pub(super) fn parse(
     grammar: &Grammar,

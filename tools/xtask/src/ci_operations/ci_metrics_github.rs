@@ -8,7 +8,7 @@ use crate::ci_operations::build_cache_tree::io_text;
 use crate::ci_operations::ci_metrics_argv::Args;
 use crate::ci_operations::ci_metrics_normalize::{Failure, Outcome};
 use crate::ci_operations::ci_metrics_value::{Value, display, object, parse};
-use crate::repository::python_text::strip;
+use crate::repository::text::strip;
 use std::path::Path;
 use std::process::{Command, Stdio};
 

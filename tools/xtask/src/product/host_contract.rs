@@ -1,5 +1,5 @@
 //! Read the immutable producer's build contract before composing product bytes.
-use super::python_object::{display, item};
+use super::json_object::{display, item};
 use crate::ci_plan::document::Json;
 use crate::process::{
     self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,

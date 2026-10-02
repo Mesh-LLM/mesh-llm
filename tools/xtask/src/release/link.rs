@@ -2,16 +2,16 @@
 //! of a range with its pull request, credits pull requests GitHub's body
 //! left out, and writes the augmented body plus the API-linked records.
 
-use crate::ci_operations::ci_metrics_value::{Value, display};
-use crate::prepared_input::python_io::decode_utf8;
+use crate::ci_operations::ci_metrics_value::Value;
+use crate::prepared_input::text_io::decode_utf8;
+use crate::release::command_failure::{Uncaught, argv_repr, called_process_error};
 use crate::release::link_argv::{Args, parse};
 use crate::release::link_body::{Body, augment, canonical, dump_links, entry_line, read_body};
 use crate::release::link_commits::{
     Commit, commit_links, log_args, parse_log, pr_suffix, without_suffix,
 };
-use crate::release::link_gh::{Gh, truthy, type_name};
+use crate::release::link_gh::Gh;
 use crate::release::link_host::{Exit, ReleaseHost, text_streams};
-use crate::release::python_failure::{Uncaught, argv_repr, called_process_error};
 use crate::repository::check_report::CheckReport;
 use std::path::Path;
 
@@ -125,34 +125,37 @@ fn resolve_pull_requests(
         commit.pr = None;
         let endpoint = format!("repos/{repo}/commits/{}/pulls", commit.sha);
         let call = ["api", &endpoint, "--jq", "[.[].number]"].map(str::to_owned);
-        if let Some(numbers) = gh.json(&call)?.filter(truthy) {
-            commit.pr = Some(python_int(&first_item(&numbers)?)?);
-            commit.linked_by_api = true;
+        if let Some(numbers) = gh.json(&call) {
+            let Value::Array(items) = numbers else {
+                return Err(Uncaught::new(
+                    "pull_request",
+                    "pull-request lookup must return an array of integer numbers".into(),
+                ));
+            };
+            let numbers = items
+                .iter()
+                .map(pull_request_number)
+                .collect::<Result<Vec<_>, _>>()?;
+            if let Some(number) = numbers.first() {
+                commit.pr = Some(number.clone());
+                commit.linked_by_api = true;
+            }
         }
     }
     Ok(())
 }
 
-/// `numbers[0]` of a truthy JSON value.
-fn first_item(numbers: &Value) -> Result<Value, Uncaught> {
-    match numbers {
-        Value::Array(items) => Ok(items.first().cloned().unwrap_or(Value::Null)),
-        Value::Str(text) => Ok(Value::Str(text.chars().take(1).collect())),
-        // JSON object keys are strings, so the int key `0` is never present.
-        Value::Object(_) => Err(Uncaught::new("KeyError", "0".to_owned())),
-        other => Err(Uncaught::new(
-            "TypeError",
-            format!("'{}' object is not subscriptable", type_name(other)),
-        )),
-    }
-}
-
-fn python_int(value: &Value) -> Result<String, Uncaught> {
+fn pull_request_number(value: &Value) -> Result<String, Uncaught> {
     match value {
-        Value::Int(number) if u64::try_from(*number).is_ok() => Ok(number.to_string()),
+        Value::Int(number) if u64::try_from(*number).is_ok_and(|number| number > 0) => {
+            Ok(number.to_string())
+        }
+        Value::BigInt(number) if number.parse::<u64>().is_ok_and(|number| number > 0) => {
+            Ok(number.clone())
+        }
         _ => Err(Uncaught::new(
             "pull_request",
-            "pull-request number must be a u64 integer".into(),
+            "pull-request number must be a positive u64 integer".into(),
         )),
     }
 }
@@ -192,22 +195,14 @@ fn recover_entries(
     Ok((insertions, pending))
 }
 
-/// `mapping.get(key)` with the `AttributeError` of a non-dict.
-fn get(value: &Value, key: &str) -> Result<Value, Uncaught> {
-    match value {
-        Value::Object(_) => Ok(value.get(key).cloned().unwrap_or(Value::Null)),
-        other => Err(Uncaught::new(
-            "AttributeError",
-            format!("'{}' object has no attribute 'get'", type_name(other)),
+fn optional_text<'a>(record: &'a Value, key: &str) -> Result<Option<&'a str>, Uncaught> {
+    match record.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Str(text)) => Ok((!text.is_empty()).then_some(text.as_str())),
+        Some(_) => Err(Uncaught::new(
+            "pull_request",
+            format!("pull-request {key} must be a string or null"),
         )),
-    }
-}
-
-fn or_empty(value: Value) -> Value {
-    if truthy(&value) {
-        value
-    } else {
-        Value::Object(Vec::new())
     }
 }
 
@@ -220,19 +215,76 @@ fn build_entry(
     gh: &mut Gh<'_>,
 ) -> Result<Option<String>, Uncaught> {
     let call = ["pr", "view", pr, "--repo", repo, "--json", "title,author"].map(str::to_owned);
-    let details = or_empty(gh.json(&call)?.unwrap_or(Value::Null));
-    let author = get(&or_empty(get(&details, "author")?), "login")?;
-    if !truthy(&author) {
+    let details = gh.json(&call).unwrap_or(Value::Object(Vec::new()));
+    if !matches!(details, Value::Object(_)) {
+        return Err(Uncaught::new(
+            "pull_request",
+            "pull-request details must be an object".into(),
+        ));
+    }
+    let author = match details.get("author") {
+        None | Some(Value::Null) => None,
+        Some(author @ Value::Object(_)) => optional_text(author, "login")?,
+        Some(_) => {
+            return Err(Uncaught::new(
+                "pull_request",
+                "pull-request author must be an object or null".into(),
+            ));
+        }
+    };
+    let Some(author) = author else {
         gh.stderr.push_str(&format!(
             "release-notes-link: cannot credit #{pr} without its author; skipping it\n"
         ));
         return Ok(None);
-    }
-    let title = get(&details, "title")?;
-    let title = if truthy(&title) {
-        display(&title)
-    } else {
-        without_suffix(&commit.subject).to_owned()
     };
-    Ok(Some(entry_line(repo, pr, &title, &display(&author))))
+    let title =
+        optional_text(&details, "title")?.unwrap_or_else(|| without_suffix(&commit.subject));
+    Ok(Some(entry_line(repo, pr, title, author)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn api_pull_request_numbers_require_positive_integer_identity() {
+        assert_eq!(pull_request_number(&Value::Int(7)).unwrap(), "7");
+        assert_eq!(
+            pull_request_number(&Value::BigInt(u64::MAX.to_string())).unwrap(),
+            u64::MAX.to_string()
+        );
+        for value in [
+            Value::Bool(true),
+            Value::Int(0),
+            Value::Int(-1),
+            Value::Int(i128::MAX),
+            Value::Float(7.0),
+            Value::Float(f64::NAN),
+            Value::text("7"),
+            Value::Null,
+        ] {
+            assert!(pull_request_number(&value).is_err());
+        }
+    }
+    #[test]
+    fn api_author_and_title_fields_are_optional_strings_without_coercion() {
+        let record = |value| Value::Object(vec![("login".into(), value)]);
+        assert_eq!(optional_text(&record(Value::Null), "login").unwrap(), None);
+        assert_eq!(
+            optional_text(&record(Value::text("")), "login").unwrap(),
+            None
+        );
+        assert_eq!(
+            optional_text(&record(Value::text("writer")), "login").unwrap(),
+            Some("writer")
+        );
+        for value in [
+            Value::Bool(false),
+            Value::Int(12),
+            Value::Float(3.5),
+            Value::Object(vec![]),
+        ] {
+            assert!(optional_text(&record(value), "login").is_err());
+        }
+    }
 }

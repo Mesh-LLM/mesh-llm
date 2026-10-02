@@ -64,7 +64,7 @@ jobs:
           missing=0
           export PATH="/Users/lab/.local/bin:$PATH"
           echo "/Users/lab/.local/bin" >> "$GITHUB_PATH"
-          for cmd in cargo just sccache jq python3 uv cmake ninja git-lfs hf; do
+          for cmd in cargo just sccache jq python3 uv cmake ninja git-lfs hf curl; do
             if ! command -v "$cmd" >/dev/null 2>&1; then
               echo "missing on micstudio image: $cmd" >&2
               missing=1
@@ -108,17 +108,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$OUTPUT_DIR/summary"
-          python3 - <<'PY' > "$OUTPUT_DIR/hardware.json"
-          import json, subprocess
-          sysctl = lambda k: subprocess.check_output(["sysctl", "-n", k]).decode().strip()
-          print(json.dumps({
-              "machine_model": sysctl("hw.model"),
-              "chip": sysctl("machdep.cpu.brand_string"),
-              "gpu_cores": 80,
-              "unified_memory_bytes": int(sysctl("hw.memsize")),
-              "os_version": subprocess.check_output(["sw_vers", "-productVersion"]).decode().strip(),
-          }))
-          PY
+          cargo xtool automation replay-matrix hardware \
+            --gpu-cores 80 --output "$OUTPUT_DIR/hardware.json"
 
       - name: Verify pinned replay inputs
         id: inputs
@@ -136,10 +127,21 @@ jobs:
             --matrix "$MATRIX_FILE" \
             --json-output "$RUNNER_TEMP/agentic-replay-params.json" \
             --github-env "$GITHUB_ENV"
+          REPLAY_MODELS_LOCAL_FILE="$RUNNER_TEMP/agentic-replay-model-paths.tsv"
+          : > "$REPLAY_MODELS_LOCAL_FILE"
+          echo "REPLAY_MODELS_LOCAL_FILE=$REPLAY_MODELS_LOCAL_FILE" >> "$GITHUB_ENV"
           while IFS=$'\t' read -r family repo revision file expected_sha; do
             # Request path-only stdout from the installed CLI, not system Python.
             model_path=$(hf download "$repo" "$file" --revision "$revision" --format quiet)
             cargo xtool automation replay-matrix verify-digest --file "$model_path" --sha256 "$expected_sha"
+            case "$model_path" in *$'\t'*|*$'\n'*) echo "model path is not a TSV field" >&2; exit 1 ;; esac
+            printf '%s\t%s\t%s\n' "$family" "$model_path" "$expected_sha" >> "$REPLAY_MODELS_LOCAL_FILE"
+            case "$family" in
+              granite-3.1-2b) echo "GRANITE_2B_MODEL_FILE=$model_path" >> "$GITHUB_ENV" ;;
+              granite-3.1-3b-a800m) echo "GRANITE_MOE_MODEL_FILE=$model_path" >> "$GITHUB_ENV" ;;
+              qwen3.5-4b) echo "QWEN_MODEL_FILE=$model_path" >> "$GITHUB_ENV" ;;
+              *) echo "unknown model family: $family" >&2; exit 1 ;;
+            esac
             echo "verified $family"
           done < "$RUNNER_TEMP/agentic-replay-models.tsv"
 
@@ -157,7 +159,7 @@ jobs:
           set -euo pipefail
           ulimit -n 65536
           cargo xtool automation replay-matrix run-family --matrix "$MATRIX_FILE" --python "$REPLAY_PYTHON" --timeout 21600 \
-            --run-family granite-3.1-2b --ref main=HEAD \
+            --run-family granite-3.1-2b --ref main=HEAD --model-file "$GRANITE_2B_MODEL_FILE" \
             --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/granite-3.1-2b"
 
       - name: Replay granite-3.1-3b-a800m complete sessions
@@ -168,7 +170,7 @@ jobs:
           set -euo pipefail
           ulimit -n 65536
           cargo xtool automation replay-matrix run-family --matrix "$MATRIX_FILE" --python "$REPLAY_PYTHON" --timeout 21600 \
-            --run-family granite-3.1-3b-a800m --ref main=HEAD \
+            --run-family granite-3.1-3b-a800m --ref main=HEAD --model-file "$GRANITE_MOE_MODEL_FILE" \
             --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/granite-3.1-3b-a800m"
 
       - name: Replay qwen3.5-4b complete sessions
@@ -179,7 +181,7 @@ jobs:
           set -euo pipefail
           ulimit -n 65536
           cargo xtool automation replay-matrix run-family --matrix "$MATRIX_FILE" --python "$REPLAY_PYTHON" --timeout 21600 \
-            --run-family qwen3.5-4b --ref main=HEAD \
+            --run-family qwen3.5-4b --ref main=HEAD --model-file "$QWEN_MODEL_FILE" \
             --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/qwen3.5-4b"
 
       - name: Require every model replay
@@ -208,63 +210,14 @@ jobs:
           # run; auth, permission, and network failures must fail loudly so
           # the gate never fails open on infrastructure errors.
           rm -rf "$HISTORY_LOCAL"
-          if HF_HUB_OFFLINE=0 hf download "$DATASET_REPO" \
-            --repo-type dataset --local-dir "$HISTORY_LOCAL" --exclude "*.md" 2> "$RUNNER_TEMP/hf-download.err"; then
-            exit 0
-          fi
-          # Only a genuinely missing dataset is a bootstrap run; auth,
-          # permission, and network failures must fail loudly.
-          if HF_HUB_OFFLINE=0 python3 - "$DATASET_REPO" <<'PY' > "$RUNNER_TEMP/repo-exists.out" 2>&1; then
-          import sys
-          from urllib.error import HTTPError
-          from urllib.parse import quote
-          from urllib.request import urlopen
-          repo = sys.argv[1]
-          try:
-              with urlopen("https://huggingface.co/api/datasets/" + quote(repo, safe="/"), timeout=30):
-                  pass
-          except Exception as exc:
-              # Authentication errors can also say "Repository Not Found".
-              # Only an actual HTTP 404 permits bootstrap.
-              if isinstance(exc, HTTPError) and exc.code == 404:
-                  sys.exit(3)
-              sys.exit(1)
-          PY
-            rc=0
-          else
-            rc=$?
-          fi
-          if [[ "$rc" == "0" ]]; then
-            echo "history dataset exists but download failed:" >&2
-            cat "$RUNNER_TEMP/hf-download.err" >&2; cat "$RUNNER_TEMP/repo-exists.out" >&2
-            exit 1
-          elif [[ "$rc" == "3" ]]; then
-            echo "no history yet (bootstrap run)"
-          else
-            echo "history dataset lookup failed:" >&2
-            cat "$RUNNER_TEMP/hf-download.err" >&2; cat "$RUNNER_TEMP/repo-exists.out" >&2
-            exit 1
-          fi
+          cargo xtool automation replay-matrix history-fetch \
+            --dataset-repo "$DATASET_REPO" --output "$HISTORY_LOCAL"
 
       - name: Normalize history and gate on regression
         id: history
         if: ${{ !cancelled() && steps.benchmark.outcome == 'success' && steps.baseline.outcome == 'success' }}
         run: |
           set -euo pipefail
-          BACKEND_SHA=$(python3 - "$OUTPUT_DIR" <<'PY'
-          import json, sys, pathlib
-          output = pathlib.Path(sys.argv[1])
-          digests = set()
-          for run_doc in output.glob("*/run.json"):
-              for build in json.loads(run_doc.read_text()).get("builds", []):
-                  if build.get("binary_sha256"):
-                      digests.add(build["binary_sha256"])
-          if len(digests) > 1:
-              print(f"multiple backend binaries: {sorted(digests)}", file=sys.stderr)
-              sys.exit(1)
-          print(digests.pop() if digests else "")
-          PY
-          )
           args=(
             --matrix "$MATRIX_FILE"
             --replay-dir "$OUTPUT_DIR"
@@ -275,16 +228,13 @@ jobs:
             --output "$OUTPUT_DIR/summary/history.jsonl"
             --github-output "$GITHUB_OUTPUT"
           )
-          if [[ -n "$BACKEND_SHA" ]]; then
-            args+=(--backend-binary-sha256 "$BACKEND_SHA")
-          fi
           if [[ -d "$HISTORY_LOCAL/data/runs" ]]; then
             args+=(--baseline "$HISTORY_LOCAL/data/runs")
           fi
           if [[ "$GATE_ENABLED" == "1" ]]; then
             args+=(--gate)
           fi
-          python3 scripts/agentic-replay-history.py "${args[@]}"
+          cargo xtool automation replay-matrix history "${args[@]}"
 
       - name: Publish immutable run shard and card
         if: ${{ !cancelled() && steps.history.outcome == 'success' }}
@@ -293,16 +243,15 @@ jobs:
         run: |
           set -euo pipefail
           RUN_DATE=$(date -u +%F)
-          HF_HUB_OFFLINE=0 hf upload "$DATASET_REPO" \
-            "$OUTPUT_DIR/summary/history.jsonl" "data/runs/$RUN_DATE/${{ github.run_id }}.jsonl" \
-            --repo-type dataset --commit-message "run $RUN_DATE ${{ github.run_id }} @ ${{ github.sha }}"
-          python3 scripts/agentic-replay-card.py \
+          cargo xtool automation replay-matrix history-upload \
+            --dataset-repo "$DATASET_REPO" --output-dir "$OUTPUT_DIR" --kind shard \
+            --run-date "$RUN_DATE" --run-id "${{ github.run_id }}" --source-sha "${{ github.sha }}"
+          cargo xtool automation replay-matrix card \
             --history "$HISTORY_LOCAL/data/runs" \
             --latest "$OUTPUT_DIR/summary/history.jsonl" \
             --output "$OUTPUT_DIR/card.md"
-          HF_HUB_OFFLINE=0 hf upload "$DATASET_REPO" \
-            "$OUTPUT_DIR/card.md" "card.md" --repo-type dataset \
-            --commit-message "card refresh $RUN_DATE"
+          cargo xtool automation replay-matrix history-upload \
+            --dataset-repo "$DATASET_REPO" --output-dir "$OUTPUT_DIR" --kind card --run-date "$RUN_DATE"
 
       - name: Prepare repair PR artifact on regression (Goose)
         id: repair

@@ -8,7 +8,7 @@ use crate::ci_operations::catalog_validation::validate;
 use crate::ci_operations::evidence_catalog::{BindRequest, bind};
 use crate::ci_operations::evidence_input::{decode, read_bytes};
 use crate::ci_operations::identity_text::lower_hex;
-use crate::ci_operations::python_access::{
+use crate::ci_operations::json_access::{
     Outcome, contains_key, item, item_by, object, require, string,
 };
 use crate::ci_operations::runner_identity_argv::{Args, Parsed, parse};
@@ -17,10 +17,10 @@ use crate::ci_operations::workflow_census::{job, workflow_jobs};
 use crate::ci_operations::workflow_text::one_field;
 use crate::ci_plan::catalog::python_path_display;
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_json::dumps_indented;
-use crate::prepared_input::python_value::display;
+use crate::prepared_input::json_bytes::dumps_indented;
+use crate::prepared_input::value_format::display;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 use std::path::{Path, PathBuf};
 
 /// `default_root` is the checkout the legacy script lived in.

@@ -2,7 +2,7 @@
 //! `augment`, `entry_line`, and the `json.dump(..., indent=2)` of the links.
 
 use crate::ci_operations::ci_metrics_value::Value;
-use crate::repository::python_text::{is_space, splitlines};
+use crate::repository::text::{is_space, splitlines};
 
 /// The canonical decimal text of an `int`, as `str(int(digits))`.
 pub(crate) fn canonical(digits: &str) -> String {

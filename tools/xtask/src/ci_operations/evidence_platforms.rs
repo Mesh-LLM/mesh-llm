@@ -4,9 +4,9 @@
 
 use crate::ci_operations::evidence_binding::{CandidateBinding, field};
 use crate::ci_operations::evidence_input::{IMAGE, digest, fields, require};
-use crate::ci_operations::python_access::{Outcome, eq, is_int_one, is_str, item, object, string};
+use crate::ci_operations::json_access::{Outcome, eq, is_int_one, is_str, item, object, string};
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_value::display;
+use crate::prepared_input::value_format::display;
 
 impl CandidateBinding<'_> {
     pub(crate) fn check_children(&self) -> Outcome<()> {

@@ -856,7 +856,7 @@
       "file": ".agents/skills/manage-ci/references/current-inventory.md",
       "members": [
         [
-          180,
+          183,
           "dfb3282ee54d32f3",
           1,
           "prose",
@@ -864,7 +864,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          424,
+          427,
           "b4b4c134cd581a78",
           1,
           "prose",
@@ -872,7 +872,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          466,
+          469,
           "3858c48032d98379",
           1,
           "prose",
@@ -880,7 +880,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          704,
+          707,
           "eeb405e9c110db5a",
           1,
           "prose",
@@ -888,7 +888,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          810,
+          813,
           "374b927a548a1046",
           1,
           "prose",
@@ -896,7 +896,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1119,
+          1123,
           "b7a562e2b1d3673f",
           1,
           "prose",
@@ -904,7 +904,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1160,
+          1164,
           "0934d1ce8f661df3",
           1,
           "prose",
@@ -912,7 +912,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1186,
+          1190,
           "3894bbba68037f7b",
           1,
           "prose",
@@ -920,7 +920,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1214,
+          1218,
           "d1e95ba515d2e6ee",
           1,
           "prose",
@@ -928,7 +928,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1218,
+          1222,
           "d6b4ea35c364a6aa",
           1,
           "prose",
@@ -936,7 +936,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1222,
+          1226,
           "fd29fdc80ac15e00",
           1,
           "prose",
@@ -944,7 +944,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1247,
+          1251,
           "fdc0a30f00b17d4e",
           1,
           "prose",
@@ -1457,26 +1457,10 @@
   ],
   "outside_scanner_source_calls": [
     {
-      "boundary": "optional developer plan; --ref stable/main --model and --trajectories-per-framework; no worktree build on plan",
-      "file": "evals/README.md",
-      "kind": "instruction",
-      "line": 15,
-      "source_block": "python3 evals/agentic-replay.py plan \\",
-      "target": "evals/agentic-replay.py plan"
-    },
-    {
-      "boundary": "optional explicit A/B run --dataset-file/--output; creates worktrees/builds/benchmark evidence; not required PR/main CI",
-      "file": "evals/README.md",
-      "kind": "instruction",
-      "line": 26,
-      "source_block": "python3 evals/agentic-replay.py run \\",
-      "target": "evals/agentic-replay.py run"
-    },
-    {
       "boundary": "optional captured-harness replay with --trajectory-manifest and acceptance gates; distinct invocation from dataset variant",
       "file": "evals/README.md",
       "kind": "instruction",
-      "line": 91,
+      "line": 46,
       "source_block": "python3 evals/agentic-replay.py run \\",
       "target": "evals/agentic-replay.py run"
     },
@@ -1484,7 +1468,7 @@
       "boundary": "optional cross-engine plan --engine-config, selected external runtimes still conditional",
       "file": "evals/README.md",
       "kind": "instruction",
-      "line": 231,
+      "line": 35,
       "source_block": "python3 evals/agentic-replay.py plan \\",
       "target": "evals/agentic-replay.py plan"
     },
@@ -1492,7 +1476,7 @@
       "boundary": "optional read-only L3 lifecycle plan for one selected candidate with captured trajectories and required source cohorts; no server or worktree build",
       "file": "evals/README.md",
       "kind": "instruction",
-      "line": 136,
+      "line": 156,
       "source_block": "python3 evals/agentic-replay.py l3-plan \\",
       "target": "evals/agentic-replay.py l3-plan"
     },
@@ -1500,7 +1484,7 @@
       "boundary": "optional L3 lifecycle certification for selected candidate, captured trajectories, cache root and output artifact; builds and restarts local server; not required CI",
       "file": "evals/README.md",
       "kind": "instruction",
-      "line": 144,
+      "line": 164,
       "source_block": "python3 evals/agentic-replay.py l3-run \\",
       "target": "evals/agentic-replay.py l3-run"
     },
@@ -1551,6 +1535,22 @@
       "line": 2,
       "source_block": "model_fit.ctx_size\tdocs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml\tpython3 docs/skippy/manual-smoke/runtime_smoke.py --binary target/debug/mesh-llm --fixture docs/skippy/manual-smoke/fixtures/model_fit/runtime-single-stage.toml --model-path $MESH_LLM_SMOKE_MODEL_PATH --api-port 9437 --console-port 3231 --max-wait 600\tunsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL\twait for /api/status and /v1/models, then send /v1/chat/completions\tLive local runtime smoke succeeded; see model_fit section in evidence for /api/status, /v1/models, chat completion, and cleanup.\t.sisyphus/evidence/task-11-manual-runtime-smoke.txt\tPASS",
       "target": "docs/skippy/manual-smoke/runtime_smoke.py"
+    },
+    {
+      "boundary": "Manual captured checkpoint replay with acceptance gates; retained until checkpoint CLI and external/L3 cutover.",
+      "file": "evals/README.md",
+      "kind": "instruction",
+      "line": 111,
+      "source_block": "python3 evals/agentic-replay.py run \\",
+      "target": "evals/agentic-replay.py run"
+    },
+    {
+      "boundary": "Manual external-engine plan; retained until typed mixed-engine CLI cutover.",
+      "file": "evals/README.md",
+      "kind": "instruction",
+      "line": 251,
+      "source_block": "python3 evals/agentic-replay.py plan \\",
+      "target": "evals/agentic-replay.py plan"
     }
   ],
   "python_implementation_edges": [

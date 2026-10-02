@@ -6,7 +6,7 @@
 //! its directory. A malformed or ambiguous report is rejected; nothing is
 //! built as a fallback.
 
-use super::{Checked, Rejected, positional, python_json, python_value};
+use super::{Checked, Rejected, json_bytes, positional, value_format};
 use crate::ci_plan::document::Json;
 use std::path::{Path, PathBuf};
 
@@ -21,7 +21,7 @@ pub(super) fn run(args: &[String]) -> Checked<String> {
         "hip" => "rocm",
         other => other,
     };
-    let report = python_json::load(Path::new(report)).map_err(|error| {
+    let report = json_bytes::load(Path::new(report)).map_err(|error| {
         format!("native runtime compatibility output is not valid JSON: {error}")
     })?;
     let runtime_id = selected_id(&report, backend)?;
@@ -65,7 +65,7 @@ fn selected_id(report: &Json, backend: &str) -> Checked<String> {
         }
     };
     match selected.get("id").and_then(Json::as_str) {
-        Some(id) if !crate::repository::python_text::strip(id).is_empty() => Ok(id.to_owned()),
+        Some(id) if !crate::repository::text::strip(id).is_empty() => Ok(id.to_owned()),
         _ => Err("compatible native runtime is missing its id".into()),
     }
 }
@@ -73,7 +73,7 @@ fn selected_id(report: &Json, backend: &str) -> Checked<String> {
 /// `f"{row.get('id', '<missing-id>')}:{row.get('backend', '<missing-backend>')}"`.
 fn label(row: &Json) -> String {
     let part = |key: &str, missing: &str| match row.get(key) {
-        Some(value) => python_value::display(Some(value)),
+        Some(value) => value_format::display(Some(value)),
         None => missing.to_owned(),
     };
     format!(
@@ -104,7 +104,7 @@ fn manifest_paths(root: &Path) -> Vec<PathBuf> {
 fn adjacent_directory(root: &Path, runtime_id: &str, abi: &str) -> Checked<PathBuf> {
     let mut matches = Vec::new();
     for manifest_path in manifest_paths(root) {
-        let manifest = python_json::load(&manifest_path)
+        let manifest = json_bytes::load(&manifest_path)
             .map_err(|error| format!("native runtime manifest is not valid JSON: {error}"))?;
         let runtime = manifest.get("runtime").filter(|value| truthy(value));
         let field = |key| runtime.and_then(|runtime| runtime.get(key));
@@ -114,7 +114,7 @@ fn adjacent_directory(root: &Path, runtime_id: &str, abi: &str) -> Checked<PathB
         if field("skippy_abi").and_then(Json::as_str) != Some(abi) {
             return Err(Rejected(format!(
                 "adjacent native runtime {runtime_id} has Skippy ABI {}, expected {abi}",
-                python_value::display(Some(field("skippy_abi").unwrap_or(&Json::Null)))
+                value_format::display(Some(field("skippy_abi").unwrap_or(&Json::Null)))
             )));
         }
         let parent = manifest_path.parent().unwrap_or(root);
@@ -157,6 +157,6 @@ fn absolute(root: &Path) -> Checked<PathBuf> {
     match root.canonicalize() {
         Ok(path) => Ok(path),
         Err(_) => std::path::absolute(root)
-            .map_err(|error| Rejected(super::python_io::os_error(root, &error))),
+            .map_err(|error| Rejected(super::text_io::os_error(root, &error))),
     }
 }

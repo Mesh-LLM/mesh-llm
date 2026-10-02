@@ -24,11 +24,13 @@
     "cache_hit_pct",
     "finish_reason_length_pct",
     "complete",
-    "artifact_result"
+    "artifact_result",
+    "session_cohort_sha256",
+    "recurrent_restores"
   ],
   "properties": {
     "schema_version": {
-      "const": 2
+      "const": 3
     },
     "created_utc": {
       "type": "string"
@@ -126,11 +128,14 @@
         "dataset_revision",
         "dataset_file",
         "dataset_sha256",
-        "trajectories_per_framework",
         "passes",
         "warmup_turns",
         "concurrency",
-        "max_output_tokens"
+        "max_output_tokens",
+        "sessions_per_concurrency",
+        "minimum_worker_waves",
+        "minimum_context_tokens",
+        "minimum_session_prompt_tokens"
       ],
       "properties": {
         "mode": {
@@ -150,9 +155,6 @@
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         },
-        "trajectories_per_framework": {
-          "type": "integer"
-        },
         "passes": {
           "type": "integer"
         },
@@ -165,6 +167,22 @@
         },
         "max_output_tokens": {
           "type": "integer"
+        },
+        "sessions_per_concurrency": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimum_worker_waves": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimum_context_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimum_session_prompt_tokens": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     },
@@ -224,6 +242,24 @@
     },
     "artifact_result": {
       "type": "string"
+    },
+    "session_cohort_sha256": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "uniqueItems": true
+    },
+    "recurrent_restores": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
     }
   },
   "additionalProperties": false

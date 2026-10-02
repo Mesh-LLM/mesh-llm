@@ -5,49 +5,71 @@ use std::{
     process::{Command, Output},
 };
 
-const MATRIX: &[u8] = include_bytes!("../fixtures/migration/optional_replay/valid.json");
+#[path = "fixture_inputs.rs"]
+mod fixture_inputs;
+
+pub(super) const SHELL_LINE: &str = "all\t3\t2\t131072\t1\t1\t100\t1\t1\t1\t2048\t1\n";
+pub(super) const MODEL_URI: &str =
+    "fixture/model@0123456789abcdef0123456789abcdef01234567/model.gguf";
 
 pub(super) struct Fixture {
     pub(super) root: tempfile::TempDir,
-    rust_fixture: PathBuf,
     pub(super) marker: PathBuf,
     pub(super) argv: PathBuf,
-    cleanup_marker: PathBuf,
     pub(super) json: PathBuf,
     pub(super) env: PathBuf,
+    pub(super) model: PathBuf,
+    pub(super) worktrees: PathBuf,
+    reader: PathBuf,
+    rust_fixture: PathBuf,
 }
 
 impl Fixture {
     pub(super) fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let fixture_parent = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/task25-run-family/fixture-roots");
-        fs::create_dir_all(&fixture_parent)?;
-        let root = tempfile::Builder::new()
-            .prefix("run-family ")
-            .tempdir_in(fixture_parent)?;
+        let root = tempfile::Builder::new().prefix("run-family ").tempdir()?;
         fs::create_dir_all(root.path().join("tools/xtask"))?;
         fs::create_dir(root.path().join("evals"))?;
         fs::write(root.path().join("Cargo.toml"), "[workspace]\n")?;
         fs::write(root.path().join("tools/xtask/Cargo.toml"), "[package]\n")?;
         fs::write(
-            root.path().join("evals/agentic-replay.py"),
-            "printf '%s\\n' \"$0\" \"$@\" > \"$REPLAY_ARGV\"\ntest -s \"$REPLAY_JSON\" || exit 90\ntest -s \"$REPLAY_ENV\" || exit 91\ntest \"$1\" = run || exit 92\ntest \"$2\" = --model || exit 93\ntest \"$3\" = bartowski/granite-3.1-2b-instruct-GGUF@e47b8b46c04cede00f9e19d5a846551b14b2efce/granite-3.1-2b-instruct-Q4_K_M.gguf || exit 94\nexport REPLAY_SUPERVISOR_PID=\"$PPID\"\nexec \"$REPLAY_RUST_FIXTURE\" --exact run_family_rust_child_fixture --nocapture\n",
+            root.path().join("evals/agentic-trajectory-manifest.py"),
+            "# Retained reader path fixture; executed by a Rust adapter.\n",
         )?;
-        fs::write(root.path().join("matrix.json"), MATRIX)?;
+        let model = root.path().join("model.gguf");
+        fixture_inputs::inputs(root.path(), &model)?;
+        let worktrees = root.path().join("worktrees");
+        fixture_inputs::builds(root.path(), &worktrees)?;
+        let reader = root.path().join("reader-fixture");
+        fixture_inputs::executable(
+            &reader,
+            concat!(
+                "#!/bin/sh\n",
+                "case \"$1\" in */evals/agentic-trajectory-manifest.py) ;; *) exit 90;; esac\n",
+                "printf '%s\\n' \"$@\" > \"$REPLAY_ARGV\"\n",
+                "shift\n",
+                "while [ \"$#\" -gt 0 ]; do\n",
+                "  if [ \"$1\" = --output ]; then export REPLAY_MANIFEST_TARGET=\"$2\"; fi\n",
+                "  shift 2\n",
+                "done\n",
+                "exec \"$REPLAY_RUST_FIXTURE\" --exact reader::run_family_reader_fixture --nocapture\n",
+            ),
+        )?;
         Ok(Self {
-            marker: root.path().join("child-started"),
-            cleanup_marker: root.path().join("child-cleanup"),
-            argv: root.path().join("argv.txt"),
+            marker: root.path().join("reader-started.json"),
+            argv: root.path().join("reader-argv.txt"),
             json: root.path().join("params.json"),
             env: root.path().join("github.env"),
             rust_fixture: std::env::current_exe()?,
             root,
+            reader,
+            model,
+            worktrees,
         })
     }
 
     pub(super) fn command(&self, family: &str, timeout: Option<u64>) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
-        let arguments = [
+        let mut command = fixture_environment(self);
+        command.args([
             "--repo-root",
             self.root.path().to_str().unwrap_or_default(),
             "automation",
@@ -61,37 +83,19 @@ impl Fixture {
             "main=HEAD",
             "--dataset-file",
             "data.parquet",
+            "--model-file",
+            self.model.to_str().unwrap_or_default(),
             "--output",
             "result",
             "--python",
-            "/bin/sh",
+            self.reader.to_str().unwrap_or_default(),
             "--json-output",
             self.json.to_str().unwrap_or_default(),
             "--github-env",
             self.env.to_str().unwrap_or_default(),
             "--print-shell",
-        ]
-        .map(OsString::from);
-        command
-            .args(arguments)
-            .current_dir(self.root.path())
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("HOME", self.root.path())
-            .env("TMPDIR", self.root.path())
-            .env("LANG", "C.UTF-8")
-            .env("REPLAY_FIXTURE_MODE", "exit")
-            .env("REPLAY_FIXTURE_EXIT", "0")
-            .env("REPLAY_RUST_CHILD", "1")
-            .env("REPLAY_FIXTURE_MARKER", &self.marker)
-            .env("REPLAY_CLEANUP_MARKER", &self.cleanup_marker)
-            .env("REPLAY_ARGV", &self.argv)
-            .env("REPLAY_JSON", &self.json)
-            .env("REPLAY_ENV", &self.env)
-            .env("REPLAY_RUST_FIXTURE", &self.rust_fixture);
-        if let Some(timeout) = timeout {
-            command.args(["--timeout", &timeout.to_string()]);
-        }
+        ]);
+        command.args(["--timeout", &timeout.unwrap_or(30).to_string()]);
         command
     }
 
@@ -99,40 +103,49 @@ impl Fixture {
         &self,
         family: &str,
         mode: &str,
-        child_status: i32,
+        status: i32,
         timeout: Option<u64>,
-    ) -> Result<Output, std::io::Error> {
-        let mut command = self.command(family, timeout);
-        command
+    ) -> std::io::Result<Output> {
+        self.command(family, timeout)
             .env("REPLAY_FIXTURE_MODE", mode)
-            .env("REPLAY_FIXTURE_EXIT", child_status.to_string());
-        command.output()
+            .env("REPLAY_FIXTURE_EXIT", status.to_string())
+            .output()
     }
 
     pub(super) fn run_without_dataset(&self) -> Result<Output, Box<dyn std::error::Error>> {
-        let command = self.command("granite-3.1-2b", None);
-        let tokens: Vec<_> = command.get_args().map(OsString::from).collect();
-        let dataset = tokens
+        self.without("--dataset-file")
+    }
+
+    pub(super) fn without(&self, option: &str) -> Result<Output, Box<dyn std::error::Error>> {
+        let mut tokens: Vec<_> = self
+            .command("granite-3.1-2b", None)
+            .get_args()
+            .map(OsString::from)
+            .collect();
+        let index = tokens
             .windows(2)
-            .position(|pair| pair[0] == "--dataset-file")
-            .ok_or("dataset option")?;
-        let mut command = fixture_environment(self);
-        command
-            .args(&tokens[..dataset])
-            .args(&tokens[dataset + 2..]);
-        Ok(command.output()?)
+            .position(|pair| pair[0] == option)
+            .ok_or("missing option")?;
+        tokens.drain(index..index + 2);
+        Ok(self.execute(tokens)?)
     }
 
     pub(super) fn execute(
         &self,
         arguments: impl IntoIterator<Item = OsString>,
-    ) -> Result<Output, std::io::Error> {
-        let mut command = fixture_environment(self);
-        command.args(arguments);
-        command.output()
+    ) -> std::io::Result<Output> {
+        fixture_environment(self).args(arguments).output()
     }
-    pub(super) fn cleanup_marker_exists(&self) -> bool {
-        self.cleanup_marker.is_file()
+
+    pub(super) fn execute_at(
+        &self,
+        arguments: impl IntoIterator<Item = OsString>,
+        cwd: &Path,
+    ) -> std::io::Result<Output> {
+        fixture_environment(self)
+            .args(arguments)
+            .current_dir(cwd)
+            .output()
     }
 }
 
@@ -141,19 +154,29 @@ fn fixture_environment(fixture: &Fixture) -> Command {
     command
         .current_dir(fixture.root.path())
         .env_clear()
-        .env("PATH", "/usr/bin:/bin")
+        .env(
+            "PATH",
+            format!(
+                "{}:/usr/bin:/bin",
+                fixture.root.path().join("bin").display()
+            ),
+        )
         .env("HOME", fixture.root.path())
         .env("TMPDIR", fixture.root.path())
         .env("LANG", "C.UTF-8")
+        .env("AGENTIC_REPLAY_WORKTREE_ROOT", &fixture.worktrees)
         .env("REPLAY_FIXTURE_MODE", "exit")
         .env("REPLAY_FIXTURE_EXIT", "0")
-        .env("REPLAY_RUST_CHILD", "1")
+        .env("REPLAY_RUST_READER", "1")
         .env("REPLAY_FIXTURE_MARKER", &fixture.marker)
-        .env("REPLAY_CLEANUP_MARKER", &fixture.cleanup_marker)
         .env("REPLAY_ARGV", &fixture.argv)
         .env("REPLAY_JSON", &fixture.json)
         .env("REPLAY_ENV", &fixture.env)
-        .env("REPLAY_RUST_FIXTURE", &fixture.rust_fixture);
+        .env("REPLAY_RUST_FIXTURE", &fixture.rust_fixture)
+        .env(
+            "REPLAY_MANIFEST_SOURCE",
+            fixture.root.path().join("manifest.json"),
+        );
     command
 }
 

@@ -3,14 +3,14 @@ pub(crate) mod plan_bytes;
 mod ci_plan {
     pub(crate) use crate::plan_bytes;
 }
-#[path = "../src/repository/python_text.rs"]
+#[path = "../src/repository/text.rs"]
 #[expect(
     dead_code,
     reason = "The isolated target consumes only document separator semantics"
 )]
-pub(crate) mod python_text;
+pub(crate) mod text;
 mod repository {
-    pub(crate) use crate::python_text;
+    pub(crate) use crate::text;
 }
 #[expect(
     dead_code,
@@ -38,3 +38,6 @@ mod support;
 mod top_level_duplicates;
 #[path = "migration_canary_receipts/writer.rs"]
 mod writer;
+
+#[path = "migration_canary_receipts/handoff_cli.rs"]
+mod handoff_cli;

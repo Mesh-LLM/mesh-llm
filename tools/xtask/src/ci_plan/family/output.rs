@@ -49,7 +49,7 @@ fn render(value: &Json, depth: usize) -> Result<String, String> {
         Json::Null => "null".into(),
         Json::Bool(flag) => flag.to_string(),
         Json::Integer(number) => number.to_string(),
-        Json::Float(number) => crate::prepared_input::python_value::float_repr(*number),
+        Json::Float(number) => crate::prepared_input::value_format::float_repr(*number),
         Json::String(text) => {
             let mut output = String::new();
             text.write_json(&mut output);

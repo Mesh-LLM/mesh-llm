@@ -2,9 +2,9 @@
 //! Reads candidate tags from stdin and prints the newest stable `vX.Y.Z` tag
 //! older than the target, or nothing when there is none.
 
-use crate::prepared_input::python_io::decode_utf8;
+use crate::prepared_input::text_io::decode_utf8;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::strip;
+use crate::repository::text::strip;
 use std::cmp::Ordering;
 
 const USAGE: &str = "usage: select-release-notes-base.py <target-tag>\n";

@@ -1,6 +1,6 @@
 //! Textual source-version extraction used by the native runtime packager.
 
-use crate::repository::python_text::{is_space, strip};
+use crate::repository::text::{is_space, strip};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

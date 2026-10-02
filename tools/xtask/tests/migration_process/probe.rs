@@ -30,7 +30,9 @@ impl ReadinessProbe for Observer {
         self.ticks += 1;
         assert_eq!(*self.pid.get_or_insert(context.pid), context.pid);
         assert_eq!(context.elapsed + context.remaining, Duration::from_secs(1));
-        if self.ready {
+        // Separate pipes do not promise cross-stream delivery order. Admit only
+        // after the complete intended fixture census has reached the observer.
+        if self.ready && self.stdout >= 32 && self.stderr >= 33 {
             if self.reject {
                 ProbeDecision::Rejected(Rejection::Fixture)
             } else {

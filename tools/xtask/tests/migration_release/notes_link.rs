@@ -183,10 +183,15 @@ fn migration_release_notes_link_bounds_api_calls() -> TestResult {
         .args
         .extend(["--api-budget".to_owned(), "2".to_owned()]);
     for n in 0..5 {
-        limited = limited.file(&format!("gh/pulls_s{n}.out"), &format!("[{n}]\n"));
-        limited = limited.file(&format!("gh/pr_{n}.out"), &details("t", "u"));
+        let pr = n + 1;
+        limited = limited.file(&format!("gh/pulls_s{n}.out"), &format!("[{pr}]\n"));
+        limited = limited.file(&format!("gh/pr_{pr}.out"), &details("t", "u"));
     }
-    link("api_budget_bounds_release", &limited)
+    let actual = check(Tool::Link, "api_budget_bounds_release", &limited)?;
+    assert_eq!(actual["gh_argv"].as_array().unwrap().len(), 2);
+    assert_eq!(actual["gh_argv"][0][0], "api");
+    assert_eq!(actual["gh_argv"][1][0], "api");
+    Ok(())
 }
 
 #[test]
@@ -272,6 +277,6 @@ fn migration_release_notes_link_fails_like_the_legacy_script() -> TestResult {
             &[("a", "fix: five (#5)", ""), ("b", "fix: nine (#9)", ""), ("c", "fix: six (#6)", "")],
         )
         .file("gh/pr_9.out", &details("fix: nine", "x"))
-        .file("gh/pr_6.out", "{\"author\": {\"login\": 12}, \"title\": 3.5}\n"),
+        .file("gh/pr_6.out", "{\"author\": {\"login\": \"12\"}, \"title\": \"3.5\"}\n"),
     )
 }

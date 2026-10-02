@@ -14,7 +14,7 @@ use crate::ci_operations::ci_metrics_github::{GhCli, fetch_runs, github_source};
 use crate::ci_operations::ci_metrics_input::{labels, load_runs};
 use crate::ci_operations::ci_metrics_markdown::render_markdown;
 use crate::ci_operations::ci_metrics_normalize::{Failure, Outcome, normalize_run};
-use crate::ci_operations::ci_metrics_report::{Request, analyze};
+use crate::ci_operations::ci_metrics_report::{Request, analyze, validate_finite};
 use crate::ci_operations::ci_metrics_value::{Value, dumps, object};
 use crate::ci_plan::catalog::python_path_display;
 use crate::repository::check_report::CheckReport;
@@ -93,6 +93,9 @@ fn collect(args: &Args, out: &mut CheckReport) -> Outcome<()> {
             entries.push(("comparison".to_owned(), comparison));
         }
     }
+    validate_finite(&report)?;
+    // Rendering also validates report field types before any output is published.
+    let summary = render_markdown(&report, request_top(args))?;
     if let Some(path) = truthy(args.raw_out.as_ref()) {
         let raw = object([
             ("schema_version", Value::Int(1)),
@@ -103,9 +106,6 @@ fn collect(args: &Args, out: &mut CheckReport) -> Outcome<()> {
     if let Some(path) = truthy(args.json_out.as_ref()) {
         write(out, path, &(dumps(&report, true) + "\n"))?;
     }
-    // The legacy script renders even when it only writes JSON, so a
-    // rendering failure (e.g. `human()` of an infinite wait) still surfaces.
-    let summary = render_markdown(&report, request_top(args))?;
     let markdown_out = truthy(args.markdown_out.as_ref());
     if let Some(path) = markdown_out {
         write(out, path, &summary)?;

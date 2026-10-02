@@ -3,6 +3,27 @@ use crate::automation::client_readiness::Error;
 use crate::process::Value;
 
 #[test]
+fn native_logs_are_retained_without_private_runtime_metadata() {
+    let parent = tempfile::tempdir().unwrap();
+    let state = PrivateState::create(parent.path(), "mlc-state").unwrap();
+    state.prepare().unwrap();
+    let logs = state.root.join("runtime/123/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("skippy-native.log"), b"native evidence").unwrap();
+    std::fs::write(state.root.join("runtime/123/identity.json"), b"private").unwrap();
+    let destination = parent.path().join("evidence");
+
+    state.retain_runtime_logs(&destination).unwrap();
+    state.finish(Ok::<_, Error>(())).unwrap();
+
+    assert_eq!(
+        std::fs::read(destination.join("123/logs/skippy-native.log")).unwrap(),
+        b"native evidence"
+    );
+    assert!(!destination.join("123/identity.json").exists());
+}
+
+#[test]
 fn model_fit_writes_recurrent_sizing_when_requested() {
     let parent = tempfile::tempdir().unwrap();
     let state = PrivateState::create(parent.path(), "mlc-state").unwrap();
