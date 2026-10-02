@@ -203,7 +203,7 @@ jobs:
           # there is to *select* this row when that crate changes; it is a
           # shared owner already resolved by the step above, so it is
           # deliberately absent here rather than run twice.
-          crates: '["mesh-llm-analytics","mesh-llm-config","mesh-llm-events","mesh-llm-identity","mesh-llm-payments","mesh-llm-plugin","mesh-llm-plugin-manager","mesh-llm-tui","mesh-llm-ui","mesh-llm-wallet","mesh-wallet-lexe"]'
+          crates: '["mesh-llm-analytics","mesh-llm-config","mesh-llm-events","mesh-llm-identity","mesh-llm-payments","mesh-llm-plugin","mesh-llm-plugin-manager","mesh-llm-tui","mesh-llm-ui","mesh-llm-wallet"]'
       - name: Run macOS unit tests
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         env:

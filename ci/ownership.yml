@@ -567,8 +567,7 @@
         "mesh-llm-plugin-manager",
         "mesh-llm-tui",
         "mesh-llm-ui",
-        "mesh-llm-wallet",
-        "mesh-wallet-lexe"
+        "mesh-llm-wallet"
       ]
     },
     {
