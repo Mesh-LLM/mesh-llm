@@ -475,15 +475,6 @@
       "required": false
     },
     {
-      "classification": "optional local certification port allocator",
-      "deletion_condition": "Port family and workload shell callers to a typed local port allocator with OS-assigned semantics.",
-      "exception": null,
-      "path": "scripts/lib/allocate_local_ports.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask process/qa port allocation",
-      "required": false
-    },
-    {
       "classification": "canary memory admission/process supervision",
       "deletion_condition": "Port generic admission/process primitives and preserve canary memory evidence.",
       "exception": null,
@@ -724,15 +715,6 @@
       "path": "scripts/tests/test_agentic_trajectory_manifest.py",
       "phase": 2,
       "replacement_owner": "tools/xtask artifact tests",
-      "required": true
-    },
-    {
-      "classification": "generic local port allocation test",
-      "deletion_condition": "OS-assigned port selection and release are exercised by component-owned Rust tests.",
-      "exception": null,
-      "path": "scripts/tests/test_allocate_local_ports.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask process tests",
       "required": true
     },
     {
@@ -1663,15 +1645,6 @@
       "required": true
     },
     {
-      "classification": "generic workload contract test",
-      "deletion_condition": "Workload identity, orchestration, tolerances and failure behavior tested in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_workload_certify.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask qa/evidence tests",
-      "required": true
-    },
-    {
       "classification": "generic native build test",
       "deletion_condition": "Oracle closure build contract migrated without replacing native binaries.",
       "exception": null,
@@ -1687,15 +1660,6 @@
       "path": "scripts/tests/test_static_abi_artifacts.py",
       "phase": 2,
       "replacement_owner": "tools/xtask artifact tests",
-      "required": true
-    },
-    {
-      "classification": "generic macOS SDK test",
-      "deletion_condition": "Swift/XCFramework environment contract tested on macOS.",
-      "exception": null,
-      "path": "scripts/tests/test_swift_xcframework_env.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask artifact tests on macOS",
       "required": true
     },
     {
@@ -1963,7 +1927,7 @@
   },
   "path_reconciliation": {
     "dynamic_import_targets_are_not_counted_as_new_paths": true,
-    "method": "Projected exact path set after seven reviewed deletions: 203 ledger paths; parent must check tracked-path equality after applying deletions. Historical baseline_comparison remains unchanged.",
+    "method": "Exact projected path set after reviewed replay, local-port, Swift producer and workload-wrapper retirements: 199 ledger paths; parent must check tracked-path equality. Historical baseline_comparison remains unchanged.",
     "scope_note": "This reconciles file paths only; it does not prove invocation reachability or call-contract completeness.",
     "tracked_paths_are_authoritative": true
   },
@@ -1971,7 +1935,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 203,
+  "tracked_file_count": 199,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",

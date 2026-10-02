@@ -24,6 +24,7 @@ mod sdk_identity;
 mod sdk_identity_contract;
 mod sdk_manifest;
 mod sdk_manifest_writer;
+mod swift_api_checksum;
 pub(crate) mod text_io;
 mod ui_distribution;
 pub(crate) mod value_format;
@@ -69,6 +70,9 @@ fn positional<'a, const N: usize>(args: &'a [String], names: &str) -> Checked<[&
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let outcome = match args {
+        [command, rest @ ..] if command == "swift-api-checksum" => {
+            return swift_api_checksum::run(rest);
+        }
         [command, rest @ ..] if command == "native-sdk-manifest-write" => {
             return sdk_manifest_writer::run(rest);
         }

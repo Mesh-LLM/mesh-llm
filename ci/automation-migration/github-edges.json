@@ -321,13 +321,6 @@
           1,
           "script",
           "scripts/llama-canary-resolve-mesh-ref.py; only when MESH_REF nonempty; freezes trusted same-repo revision and writes GITHUB_OUTPUT"
-        ],
-        [
-          195,
-          "472a55ce62b4f573",
-          1,
-          "inline",
-          "python3 - heredoc 186-216 parses NEEDS_JSON, gates three repair+independent verify passes, writes publish/package/identity/head/branch GITHUB_OUTPUT on success; selected source case has no publication"
         ]
       ]
     },

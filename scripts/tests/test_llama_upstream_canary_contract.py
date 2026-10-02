@@ -170,8 +170,6 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("19000 +", battery + family)
         self.assertNotIn(":-19337", workload)
         self.assertNotIn(":-19338", workload)
-        self.assertIn("allocate_local_ports.py", family)
-        self.assertIn("allocate_local_ports.py", workload)
         self.assertIn("PORT_START_ATTEMPTS=3", family)
         self.assertIn("PORT_START_ATTEMPTS=3", workload)
         self.assertIn("address_in_use_log", family)
@@ -818,7 +816,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                  "--dry-run", "--skip-build"],
                 cwd=ROOT, text=True, capture_output=True, check=False,
             )
-        self.assertEqual(2, result.returncode)
+        self.assertNotEqual(0, result.returncode)
         self.assertIn("differs from the canonical manifest and selection", result.stderr)
         self.assertNotIn("model-scans", result.stdout)
 

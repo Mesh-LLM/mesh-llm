@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+  # Current controller admission uses the protected Rust owner. Historical and
+  # standalone callers without that owner retain their complete existing gate.
+  if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+    if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+      echo "MESH_LLM_AUTOMATION_BIN must be an absolute executable" >&2
+      return 1
+    fi
+    "$MESH_LLM_AUTOMATION_BIN" automation family-battery-policy \
+      "$ROOT" "$MANIFEST" "$POLICY_PLAN_COPY" "$SHARD_INDEX"
+    return $?
+  fi
+
 set -euo pipefail
 
 # Supported-families certification battery (issue #1434; tiers dropped 2026-08-25).

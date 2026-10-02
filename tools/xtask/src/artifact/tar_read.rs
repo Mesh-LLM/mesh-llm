@@ -100,8 +100,8 @@ impl Reader {
             b'L' | b'K' => self.gnu_long(data, &member),
             _ => {
                 member.data_start = self.tell;
-                self.offset = self.tell + self.payload_blocks(&member);
-                apply_pax(&mut member, &self.global);
+                apply_pax(&mut member, &self.global)?;
+                self.offset = self.payload_end(&member)?;
                 if member.is_dir() {
                     member.name = member.name.trim_end_matches('/').to_owned();
                 }
@@ -110,12 +110,16 @@ impl Reader {
         }
     }
 
-    fn payload_blocks(&self, member: &Member) -> usize {
-        if member.is_reg() || !member.is_supported() {
-            member.size.div_ceil(BLOCK) * BLOCK
+    fn payload_end(&self, member: &Member) -> Result<usize, HeaderError> {
+        let length = if member.is_reg() || !member.is_supported() {
+            rounded_payload(member.size)?
         } else {
             0
-        }
+        };
+        member
+            .data_start
+            .checked_add(length)
+            .ok_or_else(offset_overflow)
     }
 
     fn read_block_payload<'a>(
@@ -123,8 +127,8 @@ impl Reader {
         data: &'a [u8],
         size: usize,
     ) -> Result<&'a [u8], HeaderError> {
-        let length = size.div_ceil(BLOCK) * BLOCK;
-        let end = self.tell + length;
+        let length = rounded_payload(size)?;
+        let end = self.tell.checked_add(length).ok_or_else(offset_overflow)?;
         let buf = data
             .get(self.tell..end)
             .ok_or_else(|| HeaderError::Read("unexpected end of data".to_owned()))?;
@@ -153,9 +157,9 @@ impl Reader {
         }
         let mut next = self.following(data)?;
         if header.kind != b'g' {
-            apply_pax(&mut next, &records);
+            apply_pax(&mut next, &records)?;
             if records.iter().any(|(key, _)| key == "size") {
-                self.offset = next.data_start + self.payload_blocks(&next);
+                self.offset = self.payload_end(&next)?;
             }
         }
         Ok(next)
@@ -174,4 +178,14 @@ impl Reader {
         }
         Ok(next)
     }
+}
+
+fn rounded_payload(size: usize) -> Result<usize, HeaderError> {
+    size.div_ceil(BLOCK)
+        .checked_mul(BLOCK)
+        .ok_or_else(offset_overflow)
+}
+
+fn offset_overflow() -> HeaderError {
+    HeaderError::Read("tar payload offset overflow".to_owned())
 }

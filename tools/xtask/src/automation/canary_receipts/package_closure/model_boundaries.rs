@@ -88,6 +88,9 @@ fn blank(mask: &mut [u8], start: usize, end: usize) {
     }
 }
 pub(super) fn mask(text: &str) -> String {
+    mask_with_preserved(text, &[])
+}
+pub(super) fn mask_with_preserved(text: &str, preserved: &[&str]) -> String {
     let bytes = text.as_bytes();
     let mut masked = bytes.to_vec();
     let mut at = 0;
@@ -123,7 +126,9 @@ pub(super) fn mask(text: &str) -> String {
                     break;
                 }
             }
-            blank(&mut masked, at, end);
+            if quote != b'"' || !preserved.contains(&&text[at..end]) {
+                blank(&mut masked, at, end);
+            }
             at = end;
         } else {
             at += 1;

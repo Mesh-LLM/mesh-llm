@@ -4,6 +4,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Frozen automation selection begins.
+agent_automation_home="${HOME:-}"
+agent_automation=(env "HOME=$agent_automation_home" just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+    exit 1
+  fi
+  agent_automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+# Frozen automation selection ends.
 # shellcheck source=scripts/ci-agent-live-fixture-lib.sh
 source "${SCRIPT_DIR}/ci-agent-live-fixture-lib.sh"
 
@@ -44,33 +56,8 @@ export GOOSE_PROVIDER_SKIP_BACKOFF="true"
 export GOOSE_CLI_THEME="ansi"
 
 mkdir -p "${GOOSE_PATH_ROOT}/config/custom_providers"
-python3 - "$BASE_URL" "$MODEL" "${GOOSE_PATH_ROOT}/config/custom_providers/mesh.json" "${GOOSE_PATH_ROOT}/config/config.yaml" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-base_url, model, provider_path, config_path = sys.argv[1:5]
-provider = {
-    "name": "mesh",
-    "engine": "openai",
-    "display_name": "mesh-llm",
-    "description": "Distributed LLM inference via mesh-llm",
-    "api_key_env": "",
-    "base_url": base_url.rstrip("/"),
-    "models": [{"name": model, "context_limit": 32768}],
-    "timeout_seconds": 600,
-    "supports_streaming": True,
-    "requires_auth": False,
-}
-Path(provider_path).write_text(json.dumps(provider, indent=2) + "\n", encoding="utf-8")
-Path(config_path).write_text(
-    "GOOSE_PROVIDER: mesh\n"
-    f"GOOSE_MODEL: {json.dumps(model)}\n"
-    "GOOSE_MODE: auto\n"
-    "GOOSE_DISABLE_KEYRING: true\n",
-    encoding="utf-8",
-)
-PY
+"${agent_automation[@]}" automation agent-client-config goose "$BASE_URL" "$MODEL" \
+    "${GOOSE_PATH_ROOT}/config/custom_providers/mesh.json" "${GOOSE_PATH_ROOT}/config/config.yaml"
 
 echo "=== CI Goose Live Smoke ==="
 echo "  mesh:     ${BASE_URL%/}"

@@ -49,6 +49,16 @@ fn run() -> DynResult<()> {
         .map(|path| repository::RepositoryRoot::resolve(Some(path)))
         .transpose()?;
     match parsed.command {
+        cli::CliCommand::AgentClientConfig(rest) => automation::agent_client_config::run(rest),
+        cli::CliCommand::AgentFixtureEvidence(rest) => {
+            automation::agent_fixture_evidence::run(rest)
+        }
+        cli::CliCommand::AgentFixtureInputs(rest) => automation::agent_fixture_inputs::run(rest),
+        cli::CliCommand::FamilyBatteryPolicy(rest) => automation::family_battery_policy::run(rest),
+        cli::CliCommand::FamilyModelIdentity(rest) => automation::family_model_identity::run(rest),
+        cli::CliCommand::LocalPorts(rest) => automation::local_ports::run(rest),
+        cli::CliCommand::OpenaiSmokeConfig(rest) => automation::openai_smoke_config::run(rest),
+        cli::CliCommand::WorkloadSmokeConfig(rest) => automation::workload_smoke_config::run(rest),
         cli::CliCommand::SplitProbe(rest) => automation::split_probe::run(rest),
         cli::CliCommand::SmokeObservation(rest) => automation::smoke_observation::run(rest),
         cli::CliCommand::HfXetSmoke(rest) => automation::hf_xet_smoke::run(rest),

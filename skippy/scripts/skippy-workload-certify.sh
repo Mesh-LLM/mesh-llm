@@ -2,6 +2,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Frozen automation selection begins.
+workload_automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+    exit 1
+  fi
+  workload_automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+# Frozen automation selection ends.
 MODEL_CLASS=""
 LANE=""
 MODEL_PATH=""
@@ -98,7 +108,7 @@ require_pinned_cpu_oracle() {
     echo "oracle executable is not executable: $executable" >&2
     return 1
   fi
-  patched_sha="$(python3 "$ROOT/scripts/llama-oracle-source.py")" || return 1
+  patched_sha="$("${workload_automation[@]}" automation canary-receipts prepared-source --root "$ROOT")" || return 1
   build_dir="$(cd "$(dirname "$executable")/.." && pwd -P)"
   stamp="$build_dir/.mesh-llm-build-stamp"
   if [[ "$(basename "$executable")" != "$expected_name" ]] ||
@@ -113,7 +123,7 @@ require_pinned_cpu_oracle() {
 }
 require_pinned_cpu_candidate() {
   local stamp="$CANDIDATE_BUILD_DIR/.mesh-llm-build-stamp" patched_sha
-  patched_sha="$(python3 "$ROOT/scripts/llama-oracle-source.py")" || return 1
+  patched_sha="$("${workload_automation[@]}" automation canary-receipts prepared-source --root "$ROOT")" || return 1
   if [[ ! -f "$stamp" ]] ||
      ! grep -Fxq "patched-sha=$patched_sha" "$stamp" ||
      ! grep -Fxq 'backend=cpu' "$stamp" ||
@@ -228,42 +238,10 @@ if [[ -n "$PORT" ]] && { [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65
   exit 1
 fi
 CONFIG_PATH="$WORK_DIR/stage-openai.json"
-python3 - "$CONFIG_PATH" "$MODEL_ID" "$MODEL_PATH" "$MODEL_SHA256" "$LAYER_END" "$N_GPU_LAYERS" "$PROJECTOR_PATH" <<'PY'
-import json
-import sys
-
-config_path, model_id, model_path, model_sha256, layer_end, n_gpu_layers, projector_path = sys.argv[1:]
-config = {
-    "run_id": "workload-http-smoke",
-    "topology_id": "workload-http-smoke-local",
-    "model_id": model_id,
-    "model_path": model_path,
-    "source_model_sha256": model_sha256,
-    "stage_id": "stage-0",
-    "stage_index": 0,
-    "layer_start": 0,
-    "layer_end": int(layer_end),
-    "ctx_size": 2048,
-    "lane_count": 1,
-    "n_batch": 2048,
-    "n_ubatch": 2048,
-    "n_gpu_layers": int(n_gpu_layers),
-    "selected_device": ({"backend_device": "CPU"} if int(n_gpu_layers) == 0 else None),
-    "kv_offload": (False if int(n_gpu_layers) == 0 else None),
-    "op_offload": (False if int(n_gpu_layers) == 0 else None),
-    # An unsplit full-model load does not admit a tensor subset or stage frontier.
-    "resident_tensor_names": [],
-    "execution_contract": "",
-    "native_mtp_enabled": False,
-    "load_mode": "runtime-slice",
-    "bind_addr": "127.0.0.1:0",
-}
-if projector_path:
-    config["projector_path"] = projector_path
-with open(config_path, "w", encoding="utf-8") as handle:
-    json.dump(config, handle, indent=2)
-    handle.write("\n")
-PY
+"${workload_automation[@]}" automation workload-smoke-config \
+  --output "$CONFIG_PATH" --model-id "$MODEL_ID" --model-path "$MODEL_PATH" \
+  --model-sha256 "$MODEL_SHA256" --layer-end "$LAYER_END" \
+  --n-gpu-layers "$N_GPU_LAYERS" --projector-path "$PROJECTOR_PATH"
 
 SERVER_LOG="$WORK_DIR/workload-openai-server.log"
 SERVER_PID=""
@@ -313,7 +291,7 @@ start_candidate_server() {
   fi
   while (( attempt <= PORT_START_ATTEMPTS )); do
     if (( dynamic == 1 )); then
-      PORT="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 1)"
+      PORT="$("${workload_automation[@]}" automation local-ports 1)"
     fi
     attempt_log="$SERVER_LOG.attempt-$attempt"
     rm -f "$attempt_log"
@@ -345,10 +323,7 @@ start_candidate_server() {
 }
 
 start_candidate_server
-workload_automation=(cargo xtool)
-if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
-  workload_automation=("$MESH_LLM_AUTOMATION_BIN")
-fi
+
 "${workload_automation[@]}" automation workload-smoke \
   --base-url "http://127.0.0.1:$PORT/v1" \
   --model "$MODEL_ID" \
@@ -379,7 +354,7 @@ if [[ -n "$ORACLE_SERVER" ]]; then
     fi
     while (( attempt <= PORT_START_ATTEMPTS )); do
       if (( dynamic == 1 )); then
-        ORACLE_PORT="$(python3 "$ROOT/scripts/lib/allocate_local_ports.py" 1)"
+        ORACLE_PORT="$("${workload_automation[@]}" automation local-ports 1)"
         ORACLE_ARGS=(
           -m "$MODEL_PATH" -a "$MODEL_ID" --host 127.0.0.1 --port "$ORACLE_PORT"
           -c 2048 -b 2048 -ub 2048 -ngl 0 --parallel 1 --no-repack
@@ -461,7 +436,7 @@ fi
 
 if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; then
   ORACLE_EXECUTABLE="${ORACLE_SERVER:-${ORACLE_COMPLETION:-$ORACLE_TTS}}"
-  evidence_command=(cargo xtool automation workload-oracle-evidence write
+  evidence_command=("${workload_automation[@]}" automation workload-oracle-evidence write
     --output "$EVIDENCE_PATH"
     --comparison-log "$COMPARISON_LOG"
     --class "$MODEL_CLASS"
@@ -470,7 +445,7 @@ if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; the
     --model-sha256 "$MODEL_SHA256"
     --candidate-executable "$CANDIDATE_BIN_DIR/skippy"
     --oracle-executable "$ORACLE_EXECUTABLE"
-    --pinned-patch-sha "$(python3 "$ROOT/scripts/llama-oracle-source.py")"
+    --pinned-patch-sha "$("${workload_automation[@]}" automation canary-receipts prepared-source --root "$ROOT")"
     --work-dir "$WORK_DIR")
   if [[ -n "$PROJECTOR_PATH" ]]; then
     evidence_command+=(--projector-path "$PROJECTOR_PATH")

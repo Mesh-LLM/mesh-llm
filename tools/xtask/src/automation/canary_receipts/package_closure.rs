@@ -14,6 +14,10 @@ mod candidate_view;
 mod executable;
 #[path = "package_closure/packing.rs"]
 mod packing;
+#[path = "package_closure/parity_inventory.rs"]
+mod parity_inventory;
+#[path = "package_closure/prepared_source.rs"]
+pub(crate) mod prepared_source;
 #[path = "package_closure/process.rs"]
 mod process;
 #[path = "package_closure/producer_receipt.rs"]
@@ -22,6 +26,8 @@ mod producer_receipt;
 mod restore_transaction;
 #[path = "package_closure/restoring.rs"]
 mod restoring;
+#[path = "package_closure/runtime_slice.rs"]
+mod runtime_slice;
 #[path = "package_closure/source.rs"]
 mod source;
 #[path = "package_closure/split_roster.rs"]
@@ -127,6 +133,7 @@ pub(crate) fn transaction(args: &[String], verb: &str) -> DynResult<()> {
         "pack" => packing::pack(&serde_json::from_slice(&bytes)?),
         "restore" => restoring::restore(&serde_json::from_slice(&bytes)?),
         "manifest-policy" => manifest_policy::execute(&serde_json::from_slice(&bytes)?),
+        "parity-inventory" => parity_inventory::execute(&serde_json::from_slice(&bytes)?),
         "split-roster" => split_roster::execute(&serde_json::from_slice(&bytes)?),
         "certify" => certification::execute(&serde_json::from_slice(&bytes)?),
         _ => Err("unknown package transaction".into()),

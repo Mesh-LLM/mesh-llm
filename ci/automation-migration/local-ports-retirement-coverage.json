@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "implementation": "tools/xtask/src/automation/local_ports.rs",
+  "retired_paths": [
+    "scripts/lib/allocate_local_ports.py",
+    "scripts/tests/test_allocate_local_ports.py"
+  ],
+  "policy": "Rust behavioral tests preserve OS selection, distinct ports, immediate release and bounded invalid-input rejection. Generic Python argument/error quirks are not an acceptance requirement. Current family/workload callers use the Rust owner through frozen controller selection or the normal Just bootstrap.",
+  "methods": [
+    {
+      "legacy": "AllocateLocalPortsTests.test_ports_are_distinct_and_released_for_immediate_use",
+      "owner": "tools/xtask/tests/local_ports.rs::local_ports_cli_emits_only_distinct_csv_os_ports_without_occupied_endpoint"
+    },
+    {
+      "legacy": "AllocateLocalPortsTests.test_os_selection_avoids_an_occupied_port",
+      "owner": "tools/xtask/tests/local_ports.rs::local_ports_cli_emits_only_distinct_csv_os_ports_without_occupied_endpoint"
+    },
+    {
+      "legacy": "AllocateLocalPortsTests.test_invalid_counts_fail_closed",
+      "owner": "tools/xtask/tests/local_ports.rs::invalid_cli_counts_fail_without_port_output"
+    }
+  ],
+  "evidence_limit": "This map identifies intended coverage. Parent validation must pass before last-caller retirement. It is not native/model/platform qualification."
+}

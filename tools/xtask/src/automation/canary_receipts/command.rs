@@ -5,6 +5,8 @@ use crate::command::DynResult;
 use crate::repository::check_args::{Grammar, ParsedArgs};
 use crate::repository::check_report::CheckReport;
 use std::{fs::OpenOptions, io::Write, path::Path};
+#[path = "result_gate.rs"]
+mod result_gate;
 
 pub(crate) const USAGE: &str = "cargo xtool automation canary-receipts aggregate --package <path> --identity <sha256> --evidence <path> --run-id <id> --run-attempt <attempt> [--controller-revision <sha>] [--selected-source <sha>]";
 
@@ -24,6 +26,7 @@ const GRAMMAR: Grammar = Grammar {
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     match args {
+        [verb, rest @ ..] if verb == "result" => return result_gate::run(rest),
         [verb, rest @ ..] if verb == "receipt" || verb == "publication" => {
             return super::canary_handoff::run(rest, verb == "publication");
         }
@@ -37,12 +40,16 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
                     | "certify"
                     | "split-roster"
                     | "manifest-policy"
+                    | "parity-inventory"
             ) =>
         {
             return super::canary_package_closure::transaction(rest, verb);
         }
         [verb, rest @ ..] if verb == "workload-manifest" => {
             return super::canary_package_closure::run(rest, true);
+        }
+        [verb, rest @ ..] if verb == "prepared-source" => {
+            return super::canary_package_closure::prepared_source::run(rest);
         }
         [verb, rest @ ..] if verb == "verify-package-closure" => {
             return super::canary_package_closure::run(rest, false);
