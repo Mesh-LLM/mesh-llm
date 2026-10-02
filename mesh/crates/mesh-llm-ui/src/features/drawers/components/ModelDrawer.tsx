@@ -25,7 +25,7 @@ function modelSubtitle(model: DrawerModel) {
 
 function modelQuant(model: ModelSummary) {
   if (model.quant) return model.quant
-  if (!model.fullId?.startsWith(`${model.name}-`)) return 'Q4_K_XL'
+  if (!model.fullId?.startsWith(`${model.name}-`)) return 'Unknown'
   return model.fullId.slice(model.name.length + 1)
 }
 
@@ -142,6 +142,9 @@ function ModelDrawerContent({
             {availability} node{availability === 1 ? '' : 's'}
           </KV>
           <KV icon={drawerIcon(HardDrive)} label="Mesh VRAM">
+            {formatModelSizeGB(model.meshVramGB)}
+          </KV>
+          <KV icon={drawerIcon(HardDrive)} label="File size">
             {modelSummarySize(model)}
           </KV>
           <KV icon={drawerIcon(Cpu)} label="Context">
@@ -195,7 +198,7 @@ function ModelDrawerContent({
                     observerId: peer.latencyObserverId ?? null
                   })}
                 </span>
-                <span>{modelSummarySize(model)}</span>
+                <span>{formatModelSizeGB(peer.vramGB)}</span>
                 <StatusBadge tone="accent">100%</StatusBadge>
               </div>
             ))

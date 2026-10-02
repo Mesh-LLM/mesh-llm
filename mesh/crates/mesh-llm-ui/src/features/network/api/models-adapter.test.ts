@@ -63,6 +63,20 @@ describe('adaptModelsToSummary', () => {
     )
   })
 
+  it('maps mesh_vram_gb through to meshVramGB', () => {
+    const models: MeshModelRaw[] = [
+      { name: 'Bonsai-27B-GGUF:Q1_0', status: 'warm', size_gb: 14.2, node_count: 1, mesh_vram_gb: 61.7 }
+    ]
+
+    expect(adaptModelsToSummary(models)[0]).toEqual(expect.objectContaining({ meshVramGB: 61.7 }))
+  })
+
+  it('leaves meshVramGB undefined when the backend does not report it', () => {
+    const models: MeshModelRaw[] = [{ name: 'Bonsai-27B-GGUF:Q1_0', status: 'warm', size_gb: 14.2, node_count: 1 }]
+
+    expect(adaptModelsToSummary(models)[0].meshVramGB).toBeUndefined()
+  })
+
   it('prefers nested capabilities when available', () => {
     const models: MeshModelRaw[] = [
       {

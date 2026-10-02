@@ -82,6 +82,7 @@ export type ModelSummary = {
   paramsLabel?: string
   quant?: string
   sizeGB?: number
+  meshVramGB?: number
   diskGB?: number
   ctxMaxK?: number
   ctxPerGB?: number
