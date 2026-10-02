@@ -274,7 +274,7 @@ fn actual_corpus_callers_preserve_repeat_append_quit_and_same_system_prefix() {
     assert_eq!(requests[0]["messages"][0], requests[1]["messages"][0]);
     let text = requests[0]["messages"][0]["content"].as_str().unwrap();
     assert_eq!(
-        text.matches("Cache smoke shared system prefix. ").count(),
+        text.matches("Cache smoke shared system prefix.").count(),
         32
     );
     assert!(text.len() > 1000);
