@@ -439,7 +439,7 @@ parallel   = 2        # total parallel inference slots across all models
 
 [owner_control]
 bind           = "0.0.0.0:7447"          # QUIC listen address
-advertise_addr = "203.0.113.10:18443"    # address announced to peers
+advertise_addr = "203.0.113.10:7447"     # address announced to peers (same port as bind)
 
 # ---------------------------------------------------------------------------
 # Telemetry
@@ -460,7 +460,7 @@ batch            = 512           # n_batch — prompt-processing chunk
 ubatch           = 128           # n_ubatch — micro-batch within a batch
 cache_type_k     = "auto"        # KV key dtype: auto f16 f32 bf16 q8_0 q4_0 …
 cache_type_v     = "auto"        # KV value dtype (same enum)
-flash_attention  = "auto"        # auto on off
+flash_attention  = "auto"        # auto enabled disabled
 kv_offload       = "auto"        # bool or "auto" — KV residency / offload policy
 kv_unified       = "auto"        # bool or "auto" — unified KV layout (schema-reserved)
 cache_ram_mib    = 0             # host-RAM L2 budget in MiB; 0 = disabled; requires L3
@@ -726,7 +726,7 @@ batch           = 1024
 ubatch           = 256
 cache_type_k    = "f16"
 cache_type_v    = "f16"
-flash_attention  = "on"
+flash_attention  = "enabled"
 prompt_cache     = true
 
 [models.model_fit.prefix_cache]
@@ -1093,7 +1093,7 @@ strategy = "ngram-suffix"
 ngram_proposer = "suffix"
 ngram_min = 5
 ngram_max = 32
-draft_model = "…"
+draft_model = "org/draft-GGUF:Q4_K_M"
 ngram_fallback = "draft"
 verify_window_pipeline_depth = 2
 ```
