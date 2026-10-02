@@ -566,7 +566,7 @@
   "scope": "tracked .github/workflows/*.yml and .github/actions/**/action.yml; candidate IDs are <file>#candidate:<hash>:<occurrence>",
   "status": "GitHub source shard only; not task-1 completion or a transitive Python closure certificate",
   "unresolved_targets": [
-    "scripts/agentic-replay-params.py --run-family starts evals/agentic-replay.py; that program's workload process closure is not owned by this YAML shard",
+    "agentic-replay-nightly.yml invokes typed Rust replay-matrix run-family; bounded evals/agentic-trajectory-manifest.py is the retained locked DuckDB reader, not a Python execution/evidence owner",
     "scripts/llama-canary-family-evidence.py dynamically loads source-selected scripts/plan-family-battery.py and calls scripts/skippy-family-battery.sh; historical mesh_source checkout changes executable target bytes",
     "python3 -m unittest discover reaches all scripts/tests imports, dynamic imports and subprocesses; the test closure belongs to task 2/5, not a claim of zero transitive edges here",
     "nightly qa shebang programs can spawn configured external agent clients and live-endpoint workloads; their runtime-selected commands remain script-owner closure",

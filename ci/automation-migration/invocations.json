@@ -2391,7 +2391,7 @@
     },
     {
       "arguments": "explicit no-project mode, jinja2 3.1.6, architecture and build-llama flags from shell variables",
-      "caller": "scripts/llama-canary-agent-repair.sh:408-410",
+      "caller": "scripts/llama-canary-agent-repair.sh:510-511",
       "deletion_criteria": "Replace generic orchestration only after same build argv, output, failure and native artifact behavior are retained; do not remove upstream-required dependency without proving it unused",
       "failure_output": "nonzero build or uv status is recorded and returned by run_verification_logged",
       "interpreter_edge": "uv run --no-project --with jinja2==3.1.6 -- arch -arm64 bash scripts/build-llama.sh ...",

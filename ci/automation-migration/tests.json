@@ -314,9 +314,6 @@
           "scripts/tests/test_llama_canary_family_evidence.py",
           "scripts/tests/test_llama_canary_handoff_contract.py",
           "scripts/tests/test_llama_canary_mesh_ref.py",
-          "scripts/tests/test_agentic_replay.py",
-          "scripts/tests/test_agentic_replay_engines.py",
-          "scripts/tests/test_agentic_replay_evidence.py",
           "scripts/tests/test_agentic_replay_nightly_workflow.py",
           "scripts/tests/test_agentic_replay_params.py",
           "scripts/tests/test_agentic_replay_repair_contract.py",
@@ -335,9 +332,9 @@
         "removal_condition": "Generic policy parity is tested in Rust and model/canary runtime evidence is preserved; optional cadence alone is not a reason to keep generic Python",
         "source_tests": [
           "test_llama_canary_family_evidence.*.test_newer_failure_never_falls_back_to_old_success",
-          "test_agentic_replay.*.test_stream_request_rejects_truncated_stream_without_done",
           "test_skippy_radix_cache_ab.*.test_empty_telemetry_does_not_invent_cache_metrics"
-        ]
+        ],
+        "replay_retirement_coverage": "ci/automation-migration/replay-retirement-coverage.json"
       },
       {
         "executing_gate": "future typed unit tests and explicitly authorized optional remote-job gate",
@@ -428,10 +425,13 @@
       "scripts/tests/test_agentic_replay_params.py",
       "scripts/tests/test_agentic_replay_repair_contract.py",
       "scripts/tests/test_hf_skippy_convert_job.py",
-      "scripts/tests/test_verify_workload_oracle_evidence.py"
+      "scripts/tests/test_verify_workload_oracle_evidence.py",
+      "scripts/tests/test_agentic_replay.py",
+      "scripts/tests/test_agentic_replay_engines.py",
+      "scripts/tests/test_agentic_replay_evidence.py",
+      "evals/test_agentic_replay_l3.py"
     ],
     "moved_cases": {
-      "scripts/tests/test_agentic_replay_evidence.py::test_same_matrix_command_is_used_for_original_and_repair": "migration_run_family and replay_matrix::invocation intent tests",
       "scripts/tests/test_agentic_replay_nightly_workflow.py::test_input_verification_uses_cli_paths_without_python_package": "lane_l11_optional_tooling pin projection and corrupt-byte rejection; live HF acquisition remains unexecuted",
       "scripts/tests/test_cleanup_self_hosted.py::test_replay_builds_use_the_job_owned_worktree_root": "replay_matrix::invocation worktree projection and runner_cleanup::replay tests"
     },
@@ -461,117 +461,6 @@
     "source": "current worktree"
   },
   "python_test_modules": [
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
-      "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
-      "module": "scripts/tests/test_agentic_replay.py",
-      "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "a2306ce7479be8ad8cea59e951565852961ebfe0a2467b95c2bfd3c19940c815",
-      "test_method_count": 54,
-      "test_methods": [
-        "test_ab_order_reverses_every_other_pass",
-        "test_acceptance_gate_failure_is_explicit",
-        "test_acceptance_gate_rejects_failed_measured_requests",
-        "test_acceptance_gates_are_not_evaluated_without_configuration",
-        "test_acceptance_gates_cover_19k_cache_output_and_ttft",
-        "test_build_resume_identity_compares_external_version_hashes",
-        "test_captured_message_decodes_legacy_tool_calls_without_forwarding_alias",
-        "test_captured_message_omits_null_optional_fields",
-        "test_captured_message_preserves_openai_fields_and_tool_calls",
-        "test_captured_tool_call_sizes_the_generated_output_budget",
-        "test_cli_rejects_a_single_wave_concurrency_cohort",
-        "test_cli_rejects_zero_cache_threshold",
-        "test_command_for_build_launches_the_preflight_resolved_executable",
-        "test_context_probe_accepts_hidden_first_token_but_measurement_does_not",
-        "test_default_cli_workload_has_external_concurrency_only",
-        "test_external_config_reuses_the_validated_snapshot",
-        "test_external_config_without_snapshot_loads_from_path",
-        "test_imported_manifest_is_copied_hashed_and_summarized",
-        "test_isolated_server_state_preserves_the_model_cache",
-        "test_manifest_allows_dataset_null_recorded_model",
-        "test_manifest_contract_is_validated_before_builds",
-        "test_manifest_rejects_non_object_trajectory",
-        "test_measured_cohort_can_explicitly_allow_one_worker_wave",
-        "test_measured_cohort_requires_two_worker_waves",
-        "test_output_hash_ignores_tool_call_chunking_and_generated_ids",
-        "test_plan_appends_external_arms_to_the_same_abba_order",
-        "test_plan_counts_total_sessions_without_framework_multiplier",
-        "test_plan_order_uses_verified_engine_identity_when_supplied",
-        "test_plan_records_exact_default_server_command",
-        "test_pooled_rows_compare_each_ref_to_first_ref",
-        "test_pooled_rows_preserve_legacy_comparability_without_hashes",
-        "test_pooled_rows_require_a_hash_for_every_successful_pass",
-        "test_pooled_rows_suppress_deltas_for_different_failed_requests",
-        "test_pooled_rows_weight_decode_and_pool_raw_ttft_samples",
-        "test_removed_sampling_modes_are_rejected",
-        "test_report_escapes_backticks_and_pipes_in_version_cells",
-        "test_report_writes_tables_charts_and_inventory",
-        "test_required_frameworks_are_checked_in_every_measured_cohort",
-        "test_resume_mismatch_message_reports_arm_identity_not_binary_claims",
-        "test_resumed_empty_cells_cannot_pass_configured_gates",
-        "test_runtime_evidence_collects_logs_without_copying_identity_state",
-        "test_server_command_keeps_mesh_planning_at_defaults",
-        "test_single_ref_runs_once_per_pass",
-        "test_stream_request_latches_valid_usage_across_later_invalid_events",
-        "test_stream_request_preserves_in_stream_server_errors",
-        "test_stream_request_records_terminal_finish_reason",
-        "test_stream_request_rejects_truncated_stream_without_done",
-        "test_summarize_requests_computes_stream_windows_and_cache_rate",
-        "test_trajectory_replay_honors_warmup_turn_limit",
-        "test_trajectory_replay_uses_recorded_history_in_strict_turn_order",
-        "test_trajectory_tools_are_stable_and_schema_shaped",
-        "test_trajectory_tools_preserve_captured_harness_schemas",
-        "test_ttft_gate_fails_closed_when_delta_is_unavailable",
-        "test_warmup_capacity_is_validated_before_builds"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
-      "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
-      "module": "scripts/tests/test_agentic_replay_engines.py",
-      "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "87df6a3e79730c8349329498aafef310ed1c2f2429adc51676d3d0f32c4c0dc2",
-      "test_method_count": 15,
-      "test_methods": [
-        "test_bare_executable_name_resolves_on_runner_path",
-        "test_config_digest_and_arms_come_from_one_read",
-        "test_duplicate_external_labels_are_rejected",
-        "test_engine_commands_preserve_capacity_and_cache_controls",
-        "test_engine_order_specs_use_verified_identity_when_supplied",
-        "test_engine_version_passes_timeout_cwd_and_resolved_executable",
-        "test_external_identity_hashes_reported_version_only",
-        "test_load_config_records_paths_without_file_hash_gates",
-        "test_missing_relative_executable_fails_preflight_with_cwd_context",
-        "test_preflight_records_the_resolved_executable",
-        "test_relative_executable_resolves_against_arm_cwd",
-        "test_sglang_version_query_runs_in_arm_cwd_not_runner_cwd",
-        "test_venv_python_symlink_is_not_dereferenced",
-        "test_version_command_failure_is_a_preflight_error",
-        "test_version_command_timeout_is_a_preflight_error"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
-      "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
-      "module": "scripts/tests/test_agentic_replay_evidence.py",
-      "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "190cd8485c28cb0a0cfd1358a6de342ae7013fb6d91ee61b37c210692a41d814",
-      "test_method_count": 6,
-      "test_methods": [
-        "test_capture_counters_cannot_substitute_for_recurrent_restores",
-        "test_exact_order_and_coverage_are_required",
-        "test_long_context_needs_effective_stage_window",
-        "test_prompt_plus_output_must_fit_and_short_sessions_are_not_substituted",
-        "test_same_matrix_command_is_used_for_original_and_repair",
-        "test_trivial_restore_does_not_pass_long_context_gate"
-      ]
-    },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
@@ -3712,7 +3601,7 @@
       "module": "scripts/tests/test_skippy_workload_oracles_build.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "baba5808f4a1a707d68dc6284d182a0e5bfacc7347c620bee67c2542963dc170",
+      "sha256": "2d32954847c13ace282dd87b95678998a26b67154c757f4c537ed4597a95ef06",
       "test_method_count": 4,
       "test_methods": [
         "test_both_canary_paths_build_then_export_the_same_cpu_producers",
@@ -4027,7 +3916,9 @@
         "test_method_count": 1
       }
     ],
-    "skill_local_generic_tests": [],
+    "skill_local_generic_tests": [
+
+    ],
     "skill_local_test_note": "No test_*.py modules were found under .agents/skills. Skill-local scripts and their caller classifications are tracked separately by the task-3 instructions/exception ledger.",
     "tracked_python_test_modules": 147
   },
@@ -4063,5 +3954,18 @@
       "mount_identity": "symlinked_mount_identity_is_accepted_without_rewriting_exports"
     },
     "live_runner_qualification": "not executed"
+  },
+  "manual_replay_retirement": {
+    "coverage": "ci/automation-migration/replay-retirement-coverage.json",
+    "removed_paths": [
+      "evals/agentic-replay.py",
+      "evals/agentic_replay_engines.py",
+      "evals/agentic_replay_evidence.py",
+      "scripts/tests/test_agentic_replay.py",
+      "scripts/tests/test_agentic_replay_engines.py",
+      "scripts/tests/test_agentic_replay_evidence.py",
+      "evals/test_agentic_replay_l3.py"
+    ],
+    "policy": "Exact seven-path retirement after parent validation; retained DuckDB reader and independent workflow/SDK/native gates remain. Source review is not live model or platform qualification."
   }
 }

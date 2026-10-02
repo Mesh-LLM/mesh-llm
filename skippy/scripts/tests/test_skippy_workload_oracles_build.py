@@ -32,7 +32,9 @@ class WorkloadOracleProducerTests(unittest.TestCase):
         """Repair and independent-verification passes share one producer graph and handoff."""
         repair = (ROOT / "scripts/llama-canary-agent-repair.sh").read_text()
         self.assertIn("just skippy-workload-oracles-build", repair)
-        self.assertIn('--workload-oracles "${LLAMA_STAGE_BUILD_DIR:?}-workloads"', repair)
+        self.assertIn('--arg workload_oracles "${LLAMA_STAGE_BUILD_DIR:?}-workloads"', repair)
+        self.assertIn("workload_oracles:$workload_oracles", repair)
+        self.assertIn("automation canary-receipts pack --input", repair)
         # The repair pass, the pinned/forced pass, and the independent
         # verification pass all funnel through run_candidate_gates, so one
         # build phase covers every canary path.

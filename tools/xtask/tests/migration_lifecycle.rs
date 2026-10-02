@@ -37,3 +37,6 @@ mod pty;
 mod runner_cleanup;
 #[path = "migration_lifecycle/support.rs"]
 mod support;
+
+#[path = "migration_lifecycle/canary_timeout_cli.rs"]
+mod canary_timeout_cli;

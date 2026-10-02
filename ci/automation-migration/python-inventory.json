@@ -52,39 +52,12 @@
       "required": false
     },
     {
-      "classification": "evaluation/replay orchestration",
-      "deletion_condition": "Port generic orchestration; retain only domain-specific evaluation code in isolated project.",
-      "exception": null,
-      "path": "evals/agentic-replay.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask process/qa plus language-specific replay engine",
-      "required": false
-    },
-    {
       "classification": "evaluation manifest tooling",
       "deletion_condition": "Retained by explicit maintainer decision on 2026-10-01; Rust execution must invoke only this reader as a bounded external step.",
       "exception": "Maintainer-retained DuckDB Parquet trajectory reader; not a blanket replay execution exception.",
       "path": "evals/agentic-trajectory-manifest.py",
       "phase": 5,
       "replacement_owner": "Python DuckDB trajectory reader; tools/xtask owns caller supervision and all other replay execution",
-      "required": false
-    },
-    {
-      "classification": "evaluation engine",
-      "deletion_condition": "Keep only if proven domain-specific and opt-in with local dependencies.",
-      "exception": "Potential evaluation-specific implementation; exact isolation/caller remains to be proven.",
-      "path": "evals/agentic_replay_engines.py",
-      "phase": 5,
-      "replacement_owner": "Language-specific evaluation owner",
-      "required": false
-    },
-    {
-      "classification": "evaluation evidence helper",
-      "deletion_condition": "Port generic evidence validation or prove isolated domain-specific implementation.",
-      "exception": null,
-      "path": "evals/agentic_replay_evidence.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask automation evidence",
       "required": false
     },
     {
@@ -337,15 +310,6 @@
       "path": "evals/skippy-waiting-prefix-ab.py",
       "phase": 5,
       "replacement_owner": "tools/xtask benchmark orchestration",
-      "required": false
-    },
-    {
-      "classification": "optional evaluation test",
-      "deletion_condition": "Preserve L3 lifecycle assertions in the replacement replay owner before removal.",
-      "exception": null,
-      "path": "evals/test_agentic_replay_l3.py",
-      "phase": 5,
-      "replacement_owner": "component-owned L3 replay tests",
       "required": false
     },
     {
@@ -742,33 +706,6 @@
       "path": "scripts/tests/test_affected_crates_layout.py",
       "phase": 2,
       "replacement_owner": "tools/xtask repository tests",
-      "required": true
-    },
-    {
-      "classification": "generic automation test",
-      "deletion_condition": "Behavioral cases mapped and replacement test evidence passes.",
-      "exception": null,
-      "path": "scripts/tests/test_agentic_replay.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask qa/replay tests",
-      "required": true
-    },
-    {
-      "classification": "generic automation test",
-      "deletion_condition": "Behavioral cases mapped to component-owned tests.",
-      "exception": null,
-      "path": "scripts/tests/test_agentic_replay_engines.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask or language-specific replay tests",
-      "required": true
-    },
-    {
-      "classification": "generic automation test",
-      "deletion_condition": "Evidence contract cases pass in Rust tests.",
-      "exception": null,
-      "path": "scripts/tests/test_agentic_replay_evidence.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask evidence tests",
       "required": true
     },
     {
@@ -2026,7 +1963,7 @@
   },
   "path_reconciliation": {
     "dynamic_import_targets_are_not_counted_as_new_paths": true,
-    "method": "Independent sorted-set comparison of GIT_MASTER=1 git ls-files '*.py' against files[].path; current recorded evidence: 285 tracked, 285 ledger paths, 0 missing, 0 extra.",
+    "method": "Projected exact path set after seven reviewed deletions: 203 ledger paths; parent must check tracked-path equality after applying deletions. Historical baseline_comparison remains unchanged.",
     "scope_note": "This reconciles file paths only; it does not prove invocation reachability or call-contract completeness.",
     "tracked_paths_are_authoritative": true
   },
@@ -2034,10 +1971,23 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 210,
+  "tracked_file_count": 203,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
     "script_tests_are_repository_owned_tests": true
+  },
+  "manual_replay_retirement": {
+    "coverage": "ci/automation-migration/replay-retirement-coverage.json",
+    "removed_paths": [
+      "evals/agentic-replay.py",
+      "evals/agentic_replay_engines.py",
+      "evals/agentic_replay_evidence.py",
+      "scripts/tests/test_agentic_replay.py",
+      "scripts/tests/test_agentic_replay_engines.py",
+      "scripts/tests/test_agentic_replay_evidence.py",
+      "evals/test_agentic_replay_l3.py"
+    ],
+    "policy": "Exact seven-path retirement after parent validation; retained DuckDB reader and independent workflow/SDK/native gates remain. Source review is not live model or platform qualification."
   }
 }

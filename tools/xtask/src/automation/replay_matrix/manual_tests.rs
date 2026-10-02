@@ -167,6 +167,26 @@ fn documented_default_and_explicit_modes_keep_manual_defaults() {
     assert!(captured.output_match);
 }
 #[test]
+fn zero_minimum_cache_percentage_is_rejected_before_plan_creation() {
+    assert!(
+        parse(
+            &[
+                "--ref",
+                "main=HEAD",
+                "--model",
+                "model.gguf",
+                "--trajectory-manifest",
+                "capture.json",
+                "--min-cache-pct",
+                "0",
+            ],
+            false,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn invalid_manual_inputs_fail_before_tools_or_output() {
     for extra in [
         vec!["--concurrency", "4", "--concurrency", "4"],

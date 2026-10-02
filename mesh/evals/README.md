@@ -6,7 +6,7 @@ The nightly and repair full-session paths use the Rust owner after pinned model
 and dataset bytes have been resolved and verified:
 
 ```sh
-cargo xtool automation replay-matrix run-family \
+just automation-run automation replay-matrix run-family \
   --matrix ci/agentic-replay-nightly/matrix.json \
   --run-family granite-3.1-2b --ref main=HEAD \
   --model-file /path/to/verified.gguf --dataset-file /path/to/sessions.parquet \
@@ -18,21 +18,23 @@ The interpreter is used only by the retained DuckDB/Parquet trajectory reader.
 Rust owns model admission, ordered builds, disposable context qualification,
 ABBA passes, recurrent evidence, reports and progress. This local code path does
 not establish live long-context calibration. The manual comparative and disk-L3
-contracts below remain transitional until their typed owners are implemented.
+commands below also use Rust owners.
 
 ## Compare Mesh releases and inference engines
 
-`agentic-replay.py` remains the transitional manual entrypoint for comparing two or more Mesh
-refs and, optionally, external llama.cpp, vLLM, and SGLang arms on one model.
+Use `just automation-run automation replay-matrix plan` and `run` to compare
+one or more Mesh refs and, optionally, external llama.cpp, vLLM, and SGLang arms
+on one model. At least one Mesh `--ref` is required by this manual adapter.
 It creates isolated detached worktrees, builds each Mesh release host and native
 runtime, replays a pinned subset of the Thoughtworks
 agentic-coding trajectories, and produces raw JSONL, CSV/JSON/Markdown tables,
 SVG throughput and TTFT charts, logs, binary hashes, and an artifact inventory.
 
-Inspect the exact build order and launch command without changing anything:
+Inspect resolved Mesh commits, build order and launch arguments without
+building a model host/runtime or starting an inference server:
 
 ```bash
-python3 mesh/evals/agentic-replay.py plan \
+just automation-run automation replay-matrix plan \
   --ref stable=v0.75.1 \
   --ref main=origin/main \
   --model '<model-uri>' \
@@ -43,12 +45,13 @@ Run the default fast A/B release gate after materializing the pinned parquet fro
 `thoughtworks/agentic-coding-trajectories`:
 
 ```bash
-python3 mesh/evals/agentic-replay.py run \
+just automation-run automation replay-matrix run \
   --ref stable=v0.75.1 \
   --ref main=origin/main \
   --model '<model-uri>' \
   --trajectories-per-framework 4 \
   --dataset-file /path/to/sessions.parquet \
+  --python "$PWD/ci/agentic-replay-nightly/.venv/bin/python3" \
   --output /path/to/artifact
 ```
 
@@ -56,8 +59,10 @@ The server command is always `mesh-llm serve --model <model> --log-format
 json`. The runner never sets context size, Mesh execution lanes, KV budget, or
 backend tuning; `--concurrency` controls simultaneous client requests only.
 Trajectory count is deliberately explicit rather than hidden behind a default.
-Each measured cohort must contain at least twice the maximum offered client
-concurrency so the high-concurrency cells have more than one worker wave. With
+Generated datasets need a per-cohort session count of at least twice the maximum
+offered client concurrency. Captured cohorts must each cover their own
+concurrency times `--minimum-worker-waves` (default two), so high-concurrency
+cells have more than one worker wave. With
 the example above and client concurrency 1/2/4, the runner selects 36 measured
 whole trajectories: four from each of the three recorded agent frameworks for
 each disjoint concurrency cohort. It also selects a disjoint 12-trajectory
@@ -70,21 +75,76 @@ middle, late, and final stage. Every request contains the complete recorded
 history before that checkpoint. Skipped assistant turns and tool observations
 are appended from the dataset in strict order, so every experiment arm receives
 an identical prefix without paying for discarded generations at every step.
-This is 36 requests per ref and 72 for a two-ref A/B gate. Use `--passes 2` for
-reverse-order ABBA confirmation when the first-pass result is ambiguous.
+This example measures 36 requests per ref and 72 for a two-ref A/B gate. Use
+`--passes 2` for reverse-order ABBA confirmation when the first-pass result is ambiguous.
 
 For nightly or research runs, `--replay-mode all --passes 2 --warmup-turns 14`
 restores exhaustive assistant-turn replay. The manifest records all selected
 session IDs, framework and turn counts, context bounds, and hashes. Use `report`
-to regenerate tables and charts from a completed artifact without rerunning the
-model.
+to regenerate tables and charts from retained `run.json` and per-pass evidence without rerunning the model:
+
+```bash
+just automation-run automation replay-matrix report --artifact /path/to/artifact
+```
+
+Manual `plan` and `run` default to `--replay-mode checkpoint`. `final` selects
+the last recorded assistant turn in every session; `all` measures every recorded
+assistant turn. Both selected profiles preserve the original request IDs and
+complete recorded prefix. Warm-up always replays initial ordered turns, even
+when the measured profile is checkpoint or final. The nightly `run-family`
+path remains All. Full-session context and recurrent qualification require
+`--replay-mode all`; checkpoint/final results cannot certify those properties
+or enter qualified nightly history.
+
+Use `--sessions-per-concurrency N` for a total session count per cohort instead
+of `--trajectories-per-framework N`; choose one count option. Total counts are
+not multiplied by the number of frameworks. `plan` reports selected session
+counts but leaves measured request counts unknown until the manifest is read.
+
+`--hf-home /path/to/shared-hf-cache` shares only the model download cache with
+disposable Mesh server state. Without it, the owner preserves the ambient
+`HF_HOME` cache. `--resume` resumes the same output directory with the same
+original options and retained manifest, arm identities and configuration. It
+checks requested Mesh labels and resolved commits against retained builds, and
+verifies completed passes and their raw evidence before skipping them.
+Configuration, model, executable/version or retained-evidence drift fails
+admission. New runs require an unused output directory.
+
+An unpinned captured run may pass a Mesh model URI directly to the server;
+that path does not inspect local GGUF bytes. For local byte admission, supply
+`--model-file /absolute/path/model.gguf --expected-model-sha256 <sha256>` while
+keeping the immutable URI in `--model`. A local `--model` path also works and
+is resolved before launching from another worktree. `plan` records an expected
+digest as a caller claim; `run` verifies pinned model bytes before any build or
+launch. Full-session qualification additionally requires that local file and
+digest, using `--minimum-context-tokens`,
+`--minimum-session-prompt-tokens` and, when applicable,
+`--require-recurrent-restores`. These qualification options are restricted to
+All replay and Mesh arms.
+
+The Python exception is the DuckDB/Parquet reader, not replay orchestration.
+For example, materialize a captured manifest with the locked interpreter:
+
+```bash
+ci/agentic-replay-nightly/.venv/bin/python3 mesh/evals/agentic-trajectory-manifest.py \
+  --dataset-file /path/to/sessions.parquet \
+  --dataset-revision '<immutable-dataset-revision>' \
+  --output /path/to/captured-trajectories.json \
+  --cohort warmup --cohort 1 --cohort 2 --cohort 4 \
+  --framework swe-agent --framework mini-swe-agent --framework openhands \
+  --source-dataset swe-smith-claude-3-7-sonnet \
+  --source-dataset kwai-klear-swe-smith-mini \
+  --source-dataset nebius-swe-rebench-openhands \
+  --sessions-per-cohort 12
+```
 
 The default per-turn output cap is 2,048 tokens. Reports lead with token-weighted
 decode throughput measured after first generated content and show end-to-end
 output throughput separately because it includes prompt ingestion. They also
 show realized mean in-flight concurrency, slot utilization, failed requests,
 and the per-pass range. Percent deltas are suppressed unless compared arms
-fail the same request IDs.
+have matching successful request IDs, generated-output identities, and failed
+request IDs.
 
 This is a deterministic hash-ordered stress sample, not a stratified sample of
 the corpus. Tool names are preserved but tool schemas are permissive stubs, and
@@ -108,7 +168,7 @@ recorded prefix. The optional gates make a qualifying run fail closed while
 retaining its complete artifact:
 
 ```bash
-python3 mesh/evals/agentic-replay.py run \
+just automation-run automation replay-matrix run \
   --ref parent=<parent-commit> \
   --ref candidate=<candidate-commit> \
   --model '<model-uri>' \
@@ -153,7 +213,7 @@ preserving the same cache root across verified process restarts. It requires
 named captured Buzz, OpenCode, and Goose sources plus c64/c128/c256 cohorts.
 
 ```bash
-python3 evals/agentic-replay.py l3-plan \
+just automation-run automation replay-matrix l3-plan \
   --ref candidate=<candidate-commit> \
   --model '<model-uri>' \
   --trajectory-manifest /path/to/captured-l3-trajectories.json \
@@ -161,7 +221,7 @@ python3 evals/agentic-replay.py l3-plan \
   --require-source-dataset opencode \
   --require-source-dataset goose
 
-python3 evals/agentic-replay.py l3-run \
+just automation-run automation replay-matrix l3-run \
   --ref candidate=<candidate-commit> \
   --model '<model-uri>' \
   --trajectory-manifest /path/to/captured-l3-trajectories.json \
@@ -189,11 +249,29 @@ retained. Run the same artifact recipe on every supported backend/model family
 and on each stage of the real two-machine split; the harness never treats a
 single-node pass as full-chain evidence.
 
+Regenerate the lifecycle report from the retained artifact with:
+
+```bash
+just automation-run automation replay-matrix l3-report --artifact /path/to/l3-artifact
+```
+
+`l3-run` owns the persistent cache roots for this run, preserves them across
+its server restarts, then removes them after owned server cleanup. Its default
+backend is Metal; select another supported runtime with `--backend`. It also
+accepts `--hf-home`, `--startup-timeout` and `--request-timeout`. The lifecycle
+CLI has its own contract and does not accept comparative `--replay-mode`,
+`--resume`, `--engine-config` or `--expected-model-sha256` options. `l3-plan`
+prints that contract without reading the manifest, resolving/building a ref,
+or starting a server. Typed lifecycle report regeneration recomputes gates;
+retained legacy receipts can be rendered without treating them as new runtime
+evidence.
+
 ### Compare Mesh with llama.cpp, vLLM, and SGLang
 
 Pass `--engine-config` to append external OpenAI-compatible server arms to the
-same ordered replay. The two Mesh refs remain required, so release-versus-main
-and cross-engine comparisons share one manifest, client, request order,
+same ordered replay. At least one Mesh ref is
+required by the manual adapter; two refs provide a release-versus-main
+comparison. All arms share one manifest, client, request order,
 sampling parameters, warm-up policy, and report. Arms run sequentially on the
 same host and port.
 
@@ -206,6 +284,17 @@ queries the engine's reported version (`--version`, or Python package metadata
 for SGLang, bounded by a 30-second timeout) on that same resolved executable
 and uses SHA-256 of that version string as the arm identity. It does not gate
 on executable, model, or tokenizer file hashes.
+
+The config is validated and hashed before builds. Its digest is pinned from
+the manual plan into execution; execution verifies it and reuses that exact
+prepared snapshot across builds and launch. Editing the config path afterward
+cannot change the admitted arms. Config-byte SHA256 identifies that snapshot;
+each external arm's version-string SHA256 identifies the engine separately.
+Resume re-probes reported versions and rejects changed arm settings or
+identities. Read-only `plan` constructs external launch arguments but does not
+probe versions, so it does not claim verified engine identities. Full-session
+Mesh context/recurrent qualification rejects external arms before version
+probes; captured comparisons can use them without that certification.
 
 ```json
 {
@@ -248,7 +337,7 @@ on executable, model, or tokenizer file hashes.
 Inspect the exact five-arm ABBA plan before running it:
 
 ```bash
-python3 mesh/evals/agentic-replay.py plan \
+just automation-run automation replay-matrix plan \
   --ref stable=v0.75.1 \
   --ref main=origin/main \
   --engine-config /path/to/engines.json \

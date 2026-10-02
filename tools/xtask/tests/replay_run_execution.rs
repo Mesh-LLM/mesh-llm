@@ -74,7 +74,7 @@ fn execute_case(minimum_cache: f64, passed: bool, mode: &str) {
     let manifest = state.path().join("manifest.json");
     std::fs::write(
         &manifest,
-        serde_json::to_vec(&serde_json::json!({"cohorts":{
+        serde_json::to_vec(&serde_json::json!({"metadata":{"name":"real harness capture","revision":"r1"},"cohorts":{
             "warmup":[trajectory("warmup")],"1":[trajectory("first"),trajectory("second")]
         }}))
         .unwrap(),
@@ -197,6 +197,7 @@ fn execute_case(minimum_cache: f64, passed: bool, mode: &str) {
             "captured"
         }
     );
+    assert_imported_capture(&manifest, &output, &run, mode);
     let comparison: serde_json::Value =
         serde_json::from_slice(&std::fs::read(output.join("summary/comparison.json")).unwrap())
             .unwrap();
@@ -208,3 +209,26 @@ fn execute_case(minimum_cache: f64, passed: bool, mode: &str) {
 mod report;
 #[path = "replay_run_report/resume.rs"]
 mod resume;
+
+fn assert_imported_capture(
+    manifest: &std::path::Path,
+    output: &std::path::Path,
+    run: &serde_json::Value,
+    mode: &str,
+) {
+    use sha2::{Digest, Sha256};
+    let copied = output.join("inputs/captured-trajectories.json");
+    let source_bytes = std::fs::read(manifest).unwrap();
+    let copied_bytes = std::fs::read(copied).unwrap();
+    assert_eq!(copied_bytes, source_bytes);
+    let source_digest = hex::encode(Sha256::digest(&source_bytes));
+    assert_eq!(run["inputs"]["manifest_sha256"], source_digest);
+    assert_eq!(run["inputs"]["cohorts"]["1"]["assistant_turns"], 4);
+    let copied_document: serde_json::Value = serde_json::from_slice(&copied_bytes).unwrap();
+    assert_eq!(copied_document["metadata"]["revision"], "r1");
+    if mode != "dataset" {
+        assert_eq!(run["inputs"]["dataset"]["revision"], "r1");
+        assert_eq!(run["inputs"]["metadata"], copied_document["metadata"]);
+        assert_eq!(run["inputs"]["source_manifest_sha256"], source_digest);
+    }
+}

@@ -14,6 +14,7 @@ pub(crate) mod canary_package_closure;
 pub(crate) mod canary_receipts;
 #[path = "canary_receipts/source_plan.rs"]
 pub(crate) mod canary_source_plan;
+pub(crate) mod canary_timeout;
 pub(crate) mod client_readiness;
 mod codepoint_json;
 pub(crate) mod control_plane_qa;
@@ -98,11 +99,12 @@ pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>)
         [verb, rest @ ..] if verb == "pins" => replay_matrix::pins::run(rest),
         [verb, rest @ ..] if verb == "verify-digest" => replay_matrix::digest::run(rest),
         [verb, rest @ ..] if verb == "publication-verify" => replay_matrix::publication::run(rest),
+        [verb, rest @ ..] if verb == "publication-prepare" => replay_matrix::publication_prepare::run(rest),
         [verb, rest @ ..] if verb == "session-evidence" => replay_matrix::session_evidence::run(rest),
         [verb, rest @ ..] if verb == "recorded-requests" => replay_matrix::recorded_requests_command::run(rest),
         [verb, rest @ ..] if verb == "trajectory-reader" => replay_matrix::trajectory_reader::run(root, rest),
         _ => Err(format!(
-            "usage: cargo xtool automation replay-matrix {{plan|run|validate|export|run-family|execute-run|history|history-fetch|history-upload|card|hardware|l3-plan|l3-run|l3-report|external-config|external-cell|pins|verify-digest|publication-verify}} ...\n  {}",
+            "usage: cargo xtool automation replay-matrix {{plan|run|validate|export|run-family|execute-run|history|history-fetch|history-upload|card|hardware|l3-plan|l3-run|l3-report|external-config|external-cell|pins|verify-digest|publication-verify|publication-prepare}} ...\n  {}",
             REPLAY_RUN_FAMILY_USAGE
         )
         .into()),

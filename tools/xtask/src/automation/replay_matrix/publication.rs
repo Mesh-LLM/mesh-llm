@@ -17,7 +17,7 @@ const GRAMMAR: Grammar = Grammar {
     flags: &["--help"],
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct Status {
     schema_version: u32,
@@ -31,7 +31,7 @@ struct Status {
     body_sha256: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 enum Resolution {
     #[serde(rename = "fix-verified")]
     FixVerified,
@@ -96,27 +96,7 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
 }
 
 fn verify(directory: &Path) -> DynResult<Status> {
-    if !std::fs::symlink_metadata(directory)?.file_type().is_dir() {
-        return Err("repair publication must be a non-symlink directory".into());
-    }
-    let names = std::fs::read_dir(directory)?
-        .map(|entry| entry.map(|entry| entry.file_name()))
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    let expected = ["pr-body.md", "repair.patch", "status.json"]
-        .map(std::ffi::OsString::from)
-        .into_iter()
-        .collect();
-    if names != expected {
-        return Err("repair publication must contain exactly its three data files".into());
-    }
-    for name in ["pr-body.md", "repair.patch", "status.json"] {
-        if !std::fs::symlink_metadata(directory.join(name))?
-            .file_type()
-            .is_file()
-        {
-            return Err("repair publication files must be regular and not symlinks".into());
-        }
-    }
+    check_directory(directory, true)?;
     let status: Status = serde_json::from_slice(&std::fs::read(directory.join("status.json"))?)?;
     if status.schema_version != 1 {
         return Err("repair publication status schema is invalid".into());
@@ -156,4 +136,98 @@ fn bound_file(path: &Path, bytes: u64, digest: &str, limit: u64) -> DynResult<()
         return Err("repair publication digest does not match status".into());
     }
     Ok(())
+}
+
+fn check_directory(directory: &Path, status_present: bool) -> DynResult<()> {
+    if !std::fs::symlink_metadata(directory)?.file_type().is_dir() {
+        return Err("repair publication must be a non-symlink directory".into());
+    }
+    let names = std::fs::read_dir(directory)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let mut expected: BTreeSet<_> = ["pr-body.md", "repair.patch"]
+        .map(std::ffi::OsString::from)
+        .into_iter()
+        .collect();
+    if status_present {
+        expected.insert("status.json".into());
+    }
+    if names != expected {
+        return Err("repair publication must contain exactly its three data files".into());
+    }
+    for name in expected {
+        if !std::fs::symlink_metadata(directory.join(&name))?
+            .file_type()
+            .is_file()
+        {
+            return Err("repair publication files must be regular and not symlinks".into());
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn prepare_status(
+    directory: &Path,
+    base_sha: &str,
+    run_id: &str,
+    attempt: &str,
+) -> DynResult<()> {
+    if base_sha.len() != 40
+        || !base_sha
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        || (run_id != "local"
+            && (run_id.is_empty() || !run_id.bytes().all(|byte| byte.is_ascii_digit())))
+        || attempt.is_empty()
+        || attempt.starts_with('0')
+        || !attempt.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err("invalid repair publication identity".into());
+    }
+    check_directory(directory, false)?;
+    let patch = directory.join("repair.patch");
+    let body = directory.join("pr-body.md");
+    let (patch_bytes, patch_sha256) = prepare_identity(&patch, 64 * 1024 * 1024)?;
+    let (body_bytes, body_sha256) = prepare_identity(&body, 1024 * 1024)?;
+    let status = Status {
+        schema_version: 1,
+        base_sha: base_sha.into(),
+        run_id: run_id.into(),
+        run_attempt: attempt.parse()?,
+        resolution: Resolution::FixVerified,
+        patch_bytes,
+        patch_sha256,
+        body_bytes,
+        body_sha256,
+    };
+    bound_file(
+        &patch,
+        status.patch_bytes,
+        &status.patch_sha256,
+        64 * 1024 * 1024,
+    )?;
+    bound_file(&body, status.body_bytes, &status.body_sha256, 1024 * 1024)?;
+    let path = directory.join("status.json");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    use std::io::Write;
+    writeln!(file, "{}", serde_json::to_string(&status)?)?;
+    if let Err(error) = verify(directory) {
+        std::fs::remove_file(path)?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn prepare_identity(path: &Path, limit: u64) -> DynResult<(u64, String)> {
+    let bytes = std::fs::metadata(path)?.len();
+    if bytes == 0 || bytes > limit {
+        return Err("repair publication size is outside the allowed bounds".into());
+    }
+    Ok((
+        bytes,
+        crate::product::digest::file_sha256(path).map_err(|error| error.error)?,
+    ))
 }

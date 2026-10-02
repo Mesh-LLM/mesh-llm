@@ -6,8 +6,9 @@
     {
       "path": "evals/agentic-trajectory-manifest.py",
       "callers": [
-        "tools/xtask/src/automation/replay_matrix/run_input.rs::prepare via bounded trajectory_reader",
-        "evals/agentic-replay.py::build_trajectory_manifest (remaining manual external/L3 path)"
+        "tools/xtask/src/automation/replay_matrix/run_input.rs::prepare via bounded trajectory_reader for execute-run/run-family",
+        "tools/xtask/src/automation/replay_matrix/trajectory_reader.rs::run direct typed trajectory-reader CLI",
+        "evals/README.md explicit locked-interpreter manifest example"
       ],
       "local_dependency_files": [
         "ci/agentic-replay-nightly/pyproject.toml",
@@ -15,7 +16,7 @@
       ],
       "cadence": "Trusted-main optional agentic replay and explicit manual replay only",
       "purpose": "Read the pinned Parquet trajectory dataset through DuckDB and emit the existing deterministic trajectory manifest. This exception does not retain replay execution or evidence processing in Python.",
-      "isolation_test": "Maintainer retention decision on 2026-10-01. Rust trajectory-reader bounds the fixed reader path and explicit executable. migration_run_family executes the production Rust child with a non-Python reader fixture, including reader failure, timeout and process-tree cleanup; manual Python replay remains until its external/L3 cutover.",
+      "isolation_test": "Maintainer retention decision on 2026-10-01. Rust trajectory-reader bounds the fixed reader path and explicit executable. migration_run_family and manual replay fixtures exercise Rust owners with bounded reader fixtures, including failure, timeout and process-tree cleanup. The seven obsolete manual replay implementations/tests are retired with the durable replay-retirement coverage map; real DuckDB dataset and live model qualification are separate.",
       "status": "maintainer_retained"
     },
     {
@@ -227,14 +228,18 @@
     },
     {
       "path": ".agents/skills/release-validation/references/evidence-and-gates.md",
-      "examples": [],
+      "examples": [
+
+      ],
       "owner": "retain human evidence matrix and decision criteria; machine evidence commands belong to tools/xtask",
       "cutover_task": 5,
       "status": "reviewed_no_interpreter_automation"
     },
     {
       "path": ".agents/skills/release-validation/assets/release-validation-report-template.md",
-      "examples": [],
+      "examples": [
+
+      ],
       "owner": "retain human-authored report template populated using tools/xtask outputs",
       "cutover_task": 5,
       "status": "reviewed_no_executable_examples"
