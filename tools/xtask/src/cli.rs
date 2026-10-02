@@ -5,6 +5,27 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
     "usage: cargo xtool hf-converted-artifact preflight --artifact-dir <directory>";
 
 pub(crate) fn print_usage() {
+    println!("  cargo xtool automation local-ports COUNT");
+    println!(
+        "  cargo xtool automation agent-fixture-inputs {{sha256 FILE | soak MODEL TARGET_CHARS OUTPUT}}"
+    );
+    println!(
+        "  cargo xtool automation agent-client-config {{pi BASE MODEL JSON | goose BASE MODEL PROVIDER_JSON CONFIG_YAML}}"
+    );
+    println!(
+        "  cargo xtool automation agent-fixture-evidence {{soak RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS}}"
+    );
+    println!("  cargo xtool automation family-model-identity MODEL_ID MODEL_PATH");
+    println!(
+        "  cargo xtool automation family-battery-policy ROOT MANIFEST PLAN SHARD_INDEX_OR_EMPTY"
+    );
+    println!(
+        "  cargo xtool automation openai-smoke-config --output PATH --model-id ID --model-path PATH --layer-end N --ctx-size N"
+    );
+    println!(
+        "  cargo xtool automation workload-smoke-config --output PATH --model-id ID --model-path PATH --model-sha256 SHA --layer-end N --n-gpu-layers N [--projector-path PATH]"
+    );
+    println!("  cargo xtool prepared-input swift-api-checksum LIBRARY GENERATED_SWIFT");
     println!(
         "  cargo xtool automation smoke-inputs <product-root> <binary-name> <expected-backend>"
     );
@@ -55,6 +76,14 @@ pub(crate) struct Cli<'a> {
 }
 
 pub(crate) enum CliCommand<'a> {
+    AgentClientConfig(&'a [String]),
+    AgentFixtureEvidence(&'a [String]),
+    AgentFixtureInputs(&'a [String]),
+    FamilyBatteryPolicy(&'a [String]),
+    FamilyModelIdentity(&'a [String]),
+    LocalPorts(&'a [String]),
+    OpenaiSmokeConfig(&'a [String]),
+    WorkloadSmokeConfig(&'a [String]),
     SmokeInputs(&'a [String]),
     WorkloadSmoke(&'a [String]),
     HfXetSmoke(&'a [String]),
@@ -139,6 +168,44 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "agent-fixture-inputs" =>
+            {
+                CliCommand::AgentFixtureInputs(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "agent-fixture-evidence" =>
+            {
+                CliCommand::AgentFixtureEvidence(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "agent-client-config" =>
+            {
+                CliCommand::AgentClientConfig(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "family-battery-policy" =>
+            {
+                CliCommand::FamilyBatteryPolicy(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "family-model-identity" =>
+            {
+                CliCommand::FamilyModelIdentity(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "local-ports" => {
+                CliCommand::LocalPorts(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "openai-smoke-config" =>
+            {
+                CliCommand::OpenaiSmokeConfig(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "workload-smoke-config" =>
+            {
+                CliCommand::WorkloadSmokeConfig(rest)
+            }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "laya" => {
                 CliCommand::Laya(rest)
             }

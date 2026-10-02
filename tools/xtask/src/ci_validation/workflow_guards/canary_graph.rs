@@ -26,10 +26,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     preflight(h::job(document, "preflight")?)?;
     candidate(h::job(document, "candidate")?)?;
     verification(h::job(document, "verification")?)?;
-    h::needs(
-        h::job(document, "result")?,
-        &["resolve", "preflight", "candidate", "verification"],
-    )?;
+    result(h::job(document, "result")?)?;
     let publish = h::job(document, "publish-certified-canary")?;
     h::needs(publish, &["resolve", "result"])?;
     h::condition(publish, "${{ needs.result.outputs.publish == 'true' }}")?;
@@ -44,6 +41,62 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "${{ needs.result.outputs.head }}",
     )?;
     h::binding(env, "CANARY_BRANCH", "${{ needs.result.outputs.branch }}")
+}
+
+fn result(job: &Node) -> DynResult<()> {
+    h::needs(job, &["resolve", "preflight", "candidate", "verification"])?;
+    h::condition(job, "${{ !cancelled() }}")?;
+    let steps = h::steps(job)?;
+    let (resolution, guard) = h::step(
+        steps,
+        "name",
+        "Require successful protected source resolution before checkout",
+    )?;
+    h::binding(
+        h::member(guard, "env")?,
+        "RESOLVE_RESULT",
+        "${{ needs.resolve.result }}",
+    )?;
+    h::command(
+        guard,
+        &[
+            "if",
+            "[",
+            "\"$RESOLVE_RESULT\"",
+            "!=",
+            "success",
+            "];",
+            "then",
+        ],
+        &[],
+    )?;
+    h::command(guard, &["exit", "1"], &[])?;
+    let controller = h::checkout(steps, "${{ needs.resolve.outputs.source }}", None)?;
+    let (prepare, prepared) = h::step(steps, "uses", "./.github/actions/prepare-automation")?;
+    h::binding(
+        h::member(prepared, "with")?,
+        "runner-profile",
+        "hosted-bare",
+    )?;
+    let (decision, command) = h::step(steps, "id", "result")?;
+    h::binding(
+        h::member(command, "env")?,
+        "NEEDS_JSON",
+        "${{ toJSON(needs) }}",
+    )?;
+    h::command(
+        command,
+        &[
+            "\"$MESH_LLM_AUTOMATION_BIN\"",
+            "automation",
+            "canary-receipts",
+            "result",
+        ],
+        &[],
+    )?;
+    h::before(resolution, controller)?;
+    h::before(controller, prepare)?;
+    h::before(prepare, decision)
 }
 
 fn preflight(job: &Node) -> DynResult<()> {
@@ -225,6 +278,27 @@ mod tests {
             let mut node = document();
             h::replace(&mut node, &path, value);
             assert!(validate(node).is_err(), "{path:?}");
+        }
+    }
+    #[test]
+    fn result_cannot_substitute_input_or_use_only_a_comment() {
+        for comment in [false, true] {
+            let mut node = document();
+            let Node::Seq(steps) =
+                h::mutable(h::mutable(h::mutable(&mut node, "jobs"), "result"), "steps")
+            else {
+                unreachable!()
+            };
+            let result = steps
+                .iter_mut()
+                .find(|step| super::super::field(step, "id") == Some("result"))
+                .unwrap();
+            if comment {
+                *h::mutable(result, "run") = Node::Scalar("# \"$MESH_LLM_AUTOMATION_BIN\" automation canary-receipts result\necho skipped".into());
+            } else {
+                *h::mutable(h::mutable(result, "env"), "NEEDS_JSON") = Node::Scalar("{}".into());
+            }
+            assert!(validate(node).is_err());
         }
     }
     #[test]

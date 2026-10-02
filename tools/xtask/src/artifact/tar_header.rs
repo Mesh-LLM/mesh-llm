@@ -46,15 +46,31 @@ pub(super) enum HeaderError {
 }
 
 /// `_apply_pax_info` for the fields the extractor reads.
-pub(super) fn apply_pax(member: &mut Member, records: &[(String, String)]) {
+pub(super) fn apply_pax(
+    member: &mut Member,
+    records: &[(String, String)],
+) -> Result<(), HeaderError> {
+    // Validate all sizes before changing any member fields.
+    for (_, value) in records.iter().filter(|(key, _)| key == "size") {
+        pax_size(value)?;
+    }
     for (key, value) in records {
         match key.as_str() {
             "path" => member.name = value.trim_end_matches('/').to_owned(),
             "linkpath" => member.link.clone_from(value),
-            "size" => member.size = value.parse().unwrap_or(0),
+            "size" => member.size = pax_size(value)?,
             _ => {}
         }
     }
+    Ok(())
+}
+
+fn pax_size(value: &str) -> Result<usize, HeaderError> {
+    let invalid = || HeaderError::Read("invalid PAX size".to_owned());
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    value.parse().map_err(|_| invalid())
 }
 
 /// `"%d %s=%s\n"` records up to the first NUL.
@@ -170,4 +186,53 @@ fn nti(field: &[u8]) -> Result<i64, HeaderError> {
         return Ok(0);
     }
     i64::from_str_radix(text, 8).map_err(|_| INVALID)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HeaderError, Member, apply_pax};
+
+    fn member() -> Member {
+        Member {
+            name: "original".to_owned(),
+            kind: b'0',
+            mode: 0o644,
+            link: "original-link".to_owned(),
+            data_start: 512,
+            size: 3,
+        }
+    }
+
+    #[test]
+    fn invalid_size_does_not_partially_apply_pax_fields() {
+        let mut member = member();
+        let records = vec![
+            ("path".to_owned(), "changed".to_owned()),
+            ("linkpath".to_owned(), "changed-link".to_owned()),
+            ("size".to_owned(), "5".to_owned()),
+            ("size".to_owned(), "malformed".to_owned()),
+        ];
+        assert!(matches!(
+            apply_pax(&mut member, &records),
+            Err(HeaderError::Read(_))
+        ));
+        assert_eq!(member.name, "original");
+        assert_eq!(member.link, "original-link");
+        assert_eq!(member.size, 3);
+    }
+
+    #[test]
+    fn valid_pax_fields_preserve_ordered_overrides() {
+        let mut member = member();
+        let records = vec![
+            ("path".to_owned(), "changed/".to_owned()),
+            ("linkpath".to_owned(), "changed-link".to_owned()),
+            ("size".to_owned(), "0".to_owned()),
+            ("size".to_owned(), "00012".to_owned()),
+        ];
+        assert!(apply_pax(&mut member, &records).is_ok());
+        assert_eq!(member.name, "changed");
+        assert_eq!(member.link, "changed-link");
+        assert_eq!(member.size, 12);
+    }
 }

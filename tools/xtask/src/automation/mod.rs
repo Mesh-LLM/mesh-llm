@@ -1,3 +1,6 @@
+pub(crate) mod agent_client_config;
+pub(crate) mod agent_fixture_evidence;
+pub(crate) mod agent_fixture_inputs;
 pub(crate) mod agent_model;
 #[path = "canary_receipts/command.rs"]
 pub(crate) mod canary_aggregate_command;
@@ -19,12 +22,17 @@ pub(crate) mod client_readiness;
 mod codepoint_json;
 pub(crate) mod control_plane_qa;
 pub(crate) mod daemon_lifecycle;
+pub(crate) mod family_battery_policy;
+pub(crate) mod family_model_identity;
 pub(crate) mod laya;
+pub(crate) mod local_ports;
 pub(crate) mod logging_console;
 pub(crate) mod logging_recovery;
+pub(crate) mod openai_smoke_config;
 pub(crate) mod runtime_install;
 pub(crate) mod sdk_fixture;
 pub(crate) mod startup_recovery;
+pub(crate) mod workload_smoke_config;
 pub(crate) use crate::command_interrupt;
 pub(crate) mod daemon_readiness;
 pub(crate) mod hf_converted_artifact;

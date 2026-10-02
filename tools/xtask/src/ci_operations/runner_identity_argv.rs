@@ -1,7 +1,5 @@
-//! argparse emulation for `scripts/runner-image-identity.py`: top-level
-//! `--root`/`--catalog`, one required subcommand that receives every later
-//! argument, unique-prefix option abbreviations, `--name=value`, `-h`, and
-//! unknown arguments collected and reported after a successful parse.
+//! Runner identity command arguments: exact named options, attached long-option
+//! values, and one required subcommand that receives its own arguments.
 
 use crate::ci_operations::runner_identity_help::{PROG, TOP_USAGE, top_help};
 use crate::ci_operations::runner_identity_subargs::parse_subcommand;
@@ -37,7 +35,7 @@ fn top_error(message: &str) -> CheckReport {
     error(TOP_USAGE, PROG, message)
 }
 
-/// Whether argparse classifies `arg` as an option string ('O'): a dash
+/// Recognize an option string: a dash
 /// prefix that is neither a lone `-`, a negative number, nor spaced text.
 pub(crate) fn is_optional(arg: &str) -> bool {
     let Some(rest) = arg.strip_prefix('-') else {
@@ -54,24 +52,16 @@ pub(crate) fn is_optional(arg: &str) -> bool {
     !rest.is_empty() && !negative_number && !arg.contains(' ')
 }
 
-/// Resolves an option string to one of `options` (exact or unique prefix
-/// of a long option), splitting an attached `=value`.
+/// Resolve an exact option, splitting an attached long-option value.
 pub(crate) fn resolve<'o>(arg: &str, options: &[&'o str]) -> Option<(&'o str, Option<String>)> {
     let (name, inline) = match arg.split_once('=') {
         Some((name, value)) if arg.starts_with("--") => (name, Some(value.to_owned())),
         _ => (arg, None),
     };
-    if let Some(exact) = options.iter().find(|option| **option == name) {
-        return Some((exact, inline));
-    }
-    if !name.starts_with("--") || name.len() < 3 {
-        return None;
-    }
-    let matches: Vec<&&str> = options
+    options
         .iter()
-        .filter(|option| option.starts_with(name))
-        .collect();
-    (matches.len() == 1).then(|| (*matches[0], inline))
+        .find(|option| **option == name)
+        .map(|exact| (*exact, inline))
 }
 
 pub(crate) struct Cursor<'a> {

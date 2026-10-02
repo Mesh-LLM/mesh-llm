@@ -1,12 +1,12 @@
-//! `ci-ops runner-identity` parity for each subcommand's happy path, the
-//! argparse surface, and catalog/workflow drift that must fail closed.
+//! Runner identity output contracts, exact CLI options, and catalog/workflow
+//! drift that must fail closed.
 
 use super::support::{Stage, TestResult, check_case, raw_case};
 
 const HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
-fn every_read_only_subcommand_matches_legacy_on_the_checkout() -> TestResult {
+fn every_read_only_subcommand_preserves_checkout_output_contracts() -> TestResult {
     let stage = Stage::checkout("happy")?;
     let cases: [(&str, &[&str]); 7] = [
         ("validate", &["validate"]),
@@ -19,7 +19,7 @@ fn every_read_only_subcommand_matches_legacy_on_the_checkout() -> TestResult {
         ),
         (
             "lookup_receipt_abbrev",
-            &["lookup", "release-ui-artifact", "--f=receipt"],
+            &["lookup", "release-ui-artifact", "--field=receipt"],
         ),
         ("seed_key", &["seed-key", "--recipe-hash", HASH]),
     ];
@@ -31,7 +31,7 @@ fn every_read_only_subcommand_matches_legacy_on_the_checkout() -> TestResult {
 }
 
 #[test]
-fn argparse_usage_errors_exit_two_with_legacy_wording() -> TestResult {
+fn invalid_arguments_exit_two_without_machine_output() -> TestResult {
     let stage = Stage::empty("usage")?;
     let cases: [(&str, &[&str]); 14] = [
         ("usage_missing_command", &[]),
@@ -53,9 +53,33 @@ fn argparse_usage_errors_exit_two_with_legacy_wording() -> TestResult {
         ("usage_catalog_missing_value", &["--root", "x", "--catalog"]),
     ];
     for (name, args) in cases {
-        let outcome = raw_case(name, &stage, args)?;
+        let mut argv = vec!["ci-ops".into(), "runner-identity".into()];
+        argv.extend(args.iter().map(|arg| (*arg).to_owned()));
+        let outcome = super::support::xtask_in(stage.path(), &argv)?;
         assert_eq!(outcome.code, 2, "{name}");
         assert!(outcome.stdout.is_empty(), "{name}");
+    }
+    Ok(())
+}
+
+#[test]
+fn abbreviated_options_and_malformed_help_are_rejected() -> TestResult {
+    let stage = Stage::empty("exact-options")?;
+    for (name, args) in [
+        ("root_prefix", &["--roo=.", "validate"][..]),
+        ("catalog_prefix", &["--cat=missing.json", "validate"]),
+        ("field_prefix", &["lookup", "rust-clippy", "--f=receipt"]),
+        ("recipe_prefix", &["seed-key", "--recipe-h", HASH]),
+        ("help_prefix", &["--hel"]),
+        ("help_bundle", &["-hh"]),
+        ("help_suffix", &["lookup", "-hgarbage"]),
+    ] {
+        let mut argv = vec!["ci-ops".into(), "runner-identity".into()];
+        argv.extend(args.iter().map(|arg| (*arg).to_owned()));
+        let outcome = super::support::xtask_in(stage.path(), &argv)?;
+        assert_eq!(outcome.code, 2, "{name}");
+        assert!(outcome.stdout.is_empty(), "{name}");
+        assert!(!outcome.stderr.is_empty(), "{name}");
     }
     Ok(())
 }

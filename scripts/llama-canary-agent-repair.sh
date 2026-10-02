@@ -697,11 +697,22 @@ run_candidate_gates() {
   run_full_build || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
     run_early_metal_certification || return 1
-    run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
-      python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate
+    controller_parity_inventory
   else
     run_certification
   fi
+}
+
+controller_parity_inventory() {
+  local transaction_root input context
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-parity.XXXXXXXX")" || return 1
+  input="$transaction_root/input.json"
+  context="$(controller_package_context)" || return 1
+  jq -n --argjson context "$context" --arg root "$ROOT" --arg base "$CANDIDATE_BASE_HEAD" \
+    --arg source_revision "${CERTIFIED_SHA:-$BASE_HEAD}" \
+    '{context:$context,root:$root,base:$base,source_revision:$source_revision}' > "$input" || return 1
+  run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
+    "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts parity-inventory --input "$input"
 }
 
 controller_split_roster() {

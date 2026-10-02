@@ -1,5 +1,25 @@
 #!/usr/bin/env bash
 
+# Preserve toolchain discovery when Pi later exports its isolated client HOME.
+AGENT_SMOKE_AUTOMATION_HOME="${HOME:-}"
+AGENT_SMOKE_AUTOMATION_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+agent_smoke_automation() {
+    if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+        if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+            echo "MESH_LLM_AUTOMATION_BIN must be an absolute executable" >&2
+            return 1
+        fi
+        "$MESH_LLM_AUTOMATION_BIN" automation "$@"
+    else
+        env HOME="$AGENT_SMOKE_AUTOMATION_HOME" just --justfile "$AGENT_SMOKE_AUTOMATION_ROOT/Justfile" automation-run automation "$@"
+    fi
+}
+
+agent_smoke_evidence() {
+    agent_smoke_automation agent-fixture-evidence "$@"
+}
+
 agent_smoke_normalize_v1_base() {
     local base_url="${1:?base URL required}"
     base_url="${base_url%/}"
@@ -19,7 +39,7 @@ agent_smoke_pick_model() {
     fi
 
     curl -sf "${base_url%/}/models" |
-        cargo xtool automation agent-pick-model
+        agent_smoke_automation agent-pick-model
 }
 
 agent_smoke_write_fixture() {
@@ -96,13 +116,7 @@ tracked files:
 - README.md
 EOF
 
-    python3 - "${work_dir}/src/smoke_calc.py" <<'PY'
-import hashlib
-import sys
-
-with open(sys.argv[1], "rb") as fh:
-    print(hashlib.sha256(fh.read()).hexdigest())
-PY
+    agent_smoke_automation agent-fixture-inputs sha256 "${work_dir}/src/smoke_calc.py"
 }
 
 agent_smoke_prompt() {
@@ -144,42 +158,7 @@ agent_smoke_long_prompt_soak() {
     local payload="${work_dir}/${slug}-long-prompt-payload.json"
     local response="${work_dir}/${slug}-long-prompt-response.json"
 
-    python3 - "$model" "$target_chars" "$payload" <<'PY'
-import json
-import sys
-
-model, target_chars, path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-start = "ALPHA-719"
-middle = "MID-482"
-end = "OMEGA-503"
-header = (
-    "This is a long-context CI soak document. Extract the three sentinel values. "
-    "Return exactly LONG_SOAK=ALPHA-719|MID-482|OMEGA-503 and no extra text.\n\n"
-)
-chunk = (
-    "FILLER: mesh long prompt soak line with predictable neutral text. "
-    "Do not use this filler as the answer.\n"
-)
-prefix = f"SENTINEL_START={start}\n"
-mid = f"\nSENTINEL_MIDDLE={middle}\n"
-suffix = f"\nSENTINEL_END={end}\n"
-remaining = max(target_chars - len(header) - len(prefix) - len(mid) - len(suffix), 0)
-left = chunk * max((remaining // 2) // len(chunk), 1)
-right = chunk * max((remaining - len(left)) // len(chunk), 1)
-document = header + prefix + left + mid + right + suffix
-payload = {
-    "model": model,
-    "messages": [
-        {"role": "system", "content": "You are a precise long-context extraction probe."},
-        {"role": "user", "content": document},
-    ],
-    "stream": False,
-    "max_tokens": 64,
-    "temperature": 0,
-}
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(payload, fh)
-PY
+    agent_smoke_automation agent-fixture-inputs soak "$model" "$target_chars" "$payload"
 
     curl -fsS --max-time "$max_time" \
         "${base_url%/}/chat/completions" \
@@ -187,18 +166,7 @@ PY
         -d @"$payload" \
         -o "$response"
 
-    python3 - "$response" "$label" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    body = json.load(fh)
-content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
-expected = "LONG_SOAK=ALPHA-719|MID-482|OMEGA-503"
-if expected not in content:
-    raise SystemExit(f"{sys.argv[2]} long prompt sentinel validation failed: {content!r}")
-print(f"{sys.argv[2]} long prompt soak passed")
-PY
+    agent_smoke_evidence soak "$response" "$label"
 }
 
 agent_smoke_validate_fixture() {
@@ -263,71 +231,5 @@ if prime_sum != 31:
 print("Hidden implementation validation passed")
 PY
 
-    python3 - "${output_path}" "${label}" "${require_tool_events}" <<'PY'
-import json
-import re
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-label = sys.argv[2]
-require_tool_events = sys.argv[3].lower() == "true"
-raw = path.read_text(encoding="utf-8", errors="replace")
-tool_names = []
-
-def collect_tools(value):
-    if isinstance(value, dict):
-        tool_name = value.get("toolName") or value.get("tool_name")
-        if isinstance(tool_name, str):
-            tool_names.append(tool_name)
-        if value.get("type") in {"tool_call", "tool_request", "toolRequest"}:
-            nested = value.get("toolCall") or value.get("tool_call") or value.get("toolRequest") or value.get("tool_request")
-            if isinstance(nested, dict) and isinstance(nested.get("name"), str):
-                tool_names.append(nested["name"])
-        for item in value.values():
-            collect_tools(item)
-    elif isinstance(value, list):
-        for item in value:
-            collect_tools(item)
-
-for line in raw.splitlines():
-    try:
-        collect_tools(json.loads(line))
-    except json.JSONDecodeError:
-        continue
-
-expected = {
-    "CODEWORD": "signal-7429",
-    "CHECKSUM": "FS-319-DELTA",
-    "PRIME_SUM": "10",
-    "QUESTION": "facts/signal.md",
-}
-
-missing = []
-for key, value in expected.items():
-    pattern = rf"(?m)^{re.escape(key)}={re.escape(value)}\s*$"
-    if not re.search(pattern, raw):
-        missing.append(f"{key}={value}")
-
-if missing:
-    print(f"{label} answer did not include expected facts:", file=sys.stderr)
-    for item in missing:
-        print(f"  missing {item}", file=sys.stderr)
-    print("--- output tail ---", file=sys.stderr)
-    print("\n".join(raw.splitlines()[-120:]), file=sys.stderr)
-    sys.exit(1)
-
-if require_tool_events:
-    edit_like = {"edit", "write", "text_editor", "developer__text_editor", "patch"}
-    if len(tool_names) < 3 or not any(tool in edit_like for tool in tool_names):
-        print(f"{label} did not report expected filesystem/coding tool events.", file=sys.stderr)
-        print(f"  tool events: {tool_names}", file=sys.stderr)
-        print("--- output tail ---", file=sys.stderr)
-        print("\n".join(raw.splitlines()[-120:]), file=sys.stderr)
-        sys.exit(1)
-
-print(f"{label} live coding smoke passed")
-if tool_names:
-    print("  tools: " + ", ".join(tool_names))
-PY
+    agent_smoke_evidence result "$output_path" "$label" "$require_tool_events"
 }

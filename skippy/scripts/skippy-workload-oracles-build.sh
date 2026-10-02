@@ -3,6 +3,16 @@
 # Called through just; never touches the canary's Metal/native or Rust outputs.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Frozen automation selection begins.
+workload_automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+    exit 1
+  fi
+  workload_automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+# Frozen automation selection ends.
 PRINT_ENV=0
 if [[ "${1:-}" == "--print-env" ]]; then
   PRINT_ENV=1
@@ -29,7 +39,7 @@ fi
 cd "$ROOT"
 mkdir -p "$BUILD_ROOT"
 python3 scripts/check-skippy-workload-candidate.py --write-source-snapshot "$BUILD_ROOT/source.json"
-python3 scripts/llama-oracle-source.py
+"${workload_automation[@]}" automation canary-receipts prepared-source --root "$ROOT"
 export LLAMA_STAGE_BACKEND=cpu LLAMA_STAGE_LINK_MODE=static
 export LLAMA_BUILD_DIR="$NATIVE_DIR" LLAMA_STAGE_BUILD_DIR="$NATIVE_DIR"
 export LLAMA_STAGE_WORKLOAD_ORACLE=ON LLAMA_STAGE_UPSTREAM_TESTS=OFF

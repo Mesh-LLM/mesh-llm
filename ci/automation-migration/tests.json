@@ -1871,7 +1871,59 @@
         "test_worker_provenance_must_be_valid",
         "test_workload_class_mismatch_is_rejected",
         "test_workload_family_requires_its_class_lanes"
-      ]
+      ],
+      "current_source_sha256": "ab0a1e115d2771f471c74580dd1a60b06b05778d1c5b5a74d43d268bc3338a2e",
+      "current_test_method_count": 42,
+      "current_test_methods": [
+        "test_aggregate_only_rerun_reuses_complete_prior_pass",
+        "test_artifact_selection_is_bound_to_producer_across_attempts",
+        "test_candidate_cannot_replace_trusted_worker_code",
+        "test_changed_results_are_detected",
+        "test_complete_distributed_pass",
+        "test_current_roster_generates_one_job_per_family",
+        "test_duplicate_certification_is_rejected",
+        "test_duplicate_worker_cannot_pass",
+        "test_failed_certification_is_retryable_after_evidence_upload",
+        "test_failed_timed_out_or_cancelled_family_cannot_pass",
+        "test_family_battery_writes_compact_json_lines",
+        "test_family_pass_has_no_cross_pass_feedback_loop",
+        "test_foreign_run_and_attempt_are_rejected",
+        "test_global_battery_preflight_is_validated_separately",
+        "test_invalid_producer_attempt_is_rejected",
+        "test_missing_multimodal_smoke_is_rejected",
+        "test_missing_worker_cannot_pass",
+        "test_mtp_family_cannot_certify_without_its_all_head_lane",
+        "test_newer_corrupt_results_never_fall_back",
+        "test_newer_failure_never_falls_back_to_old_success",
+        "test_other_candidate_or_pass_cannot_be_mixed",
+        "test_partial_rerun_reuses_build_and_successful_sibling",
+        "test_plan_requires_exactly_one_job_per_family",
+        "test_prepared_source_inputs_are_digest_bound",
+        "test_pretty_printed_worker_evidence_is_accepted",
+        "test_publisher_rejects_repair_only_package",
+        "test_rebuilt_producer_cannot_reuse_previous_receipts",
+        "test_reports_all_failed_workers_without_emitting_green",
+        "test_rerun_binds_verifier_to_producer_branch_from_identity",
+        "test_rerun_still_rejects_tampered_package",
+        "test_restore_changed_candidate_is_exact_and_detached",
+        "test_restore_materializes_relocatable_workload_closure",
+        "test_restore_pinned_source_moves_exact_executable_bytes",
+        "test_selected_source_and_controller_are_bound_across_reruns",
+        "test_selected_source_build_uses_controller_wrapper_and_denies_repair",
+        "test_skipped_lane_is_not_certification",
+        "test_success_exit_without_core_lanes_is_rejected",
+        "test_tampered_package_is_rejected",
+        "test_tampered_workload_closure_is_rejected",
+        "test_worker_provenance_must_be_valid",
+        "test_workload_class_mismatch_is_rejected",
+        "test_workload_family_requires_its_class_lanes"
+      ],
+      "baseline_inventory_preserved": "sha256, test_method_count and test_methods retain historical Task2 baseline; current_* fields bind the present partial-retirement source.",
+      "partial_retirement": {
+        "coverage": "ci/automation-migration/canary-result-retirement-coverage.json",
+        "retired_methods": 6,
+        "status": "Only terminal-gate class retired after verified actual Rust gate and semantic workflow coverage; other family/package/rerun methods remain required."
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -1887,7 +1939,33 @@
         "test_pack_restore_and_source_owned_workload_verification",
         "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
         "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
-      ]
+      ],
+      "current_source_sha256": "4dfe328aab46662ac1814cdf14625a458beb2f8d10a4793ff47650e8930becd3",
+      "current_test_method_count": 3,
+      "current_test_methods": [
+        "test_pack_restore_and_source_owned_workload_verification",
+        "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
+        "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
+      ],
+      "baseline_inventory_preserved": "sha256, test_method_count and test_methods retain historical Task2 baseline; current_* fields bind the present partial-retirement source.",
+      "partial_retirement": {
+        "retired_methods": 1,
+        "coverage": "ci/automation-migration/canary-historical-retirement-coverage.json",
+        "status": "Parent accepted only the historical nested-battery method retirement after the corrected bounded actual Rust CLI fixture passed; surviving three methods remain required.",
+        "replacement_target": "migration_lifecycle",
+        "replacement_owner": "tools/xtask/tests/migration_lifecycle/canary_controller_battery.rs",
+        "replacement_method": "nested_selected_battery_uses_frozen_controller_plan_and_ignores_historical_planner",
+        "replacement_sha256": "e6af971e20e949234fc01cc22b5811f21617f5289d4186cafb2458ae00f1d530",
+        "validation": {
+          "log": ".omo/evidence/resume-20261002/canary-controller-battery-corrected.log",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 4.66
+        },
+        "superseded_attempt": "Initial standalone fixture failed unsupported --root argv positioning. It was removed and replaced by the registered bounded lifecycle fixture using selected cwd; the corrected fixture passed.",
+        "qualification_bounds": "Local actual CLI/selected-battery admission and immutable-plan intent only; no native/model/SDK/platform/protected-live qualification."
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -1986,7 +2064,51 @@
         "test_workflow_builds_binaries_before_skipping_per_lane_builds",
         "test_workflow_runs_only_daily_or_by_manual_dispatch",
         "test_workload_dry_run_needs_no_oracle_and_forwards_startup_deadline"
-      ]
+      ],
+      "current_source_sha256": "741f7fd3bf034604fcd81057a0eb55814a9596040a0e0f607e8bb20498b4cc4e",
+      "current_test_method_count": 38,
+      "current_test_methods": [
+        "test_battery_builds_once_then_skips_build_in_each_lane",
+        "test_build_and_workers_load_runner_cache_configuration",
+        "test_changed_pin_jobs_configure_local_git_identity_before_harness",
+        "test_changed_pin_never_pushes_directly_to_main",
+        "test_changed_pin_uses_linear_preflight_candidate_and_verification",
+        "test_dry_run_reconciles_every_planned_family",
+        "test_family_battery_has_no_activation_wire_dtype_switches",
+        "test_family_certification_uses_os_assigned_ports",
+        "test_family_filter_limits_the_resolved_dry_run",
+        "test_family_results_have_typed_failure_outcomes",
+        "test_large_family_certification_budget_is_not_truncated",
+        "test_mixed_roster_keeps_workload_and_split_certification_separate",
+        "test_mmproj_failure_is_accounted_separately_from_core_certification",
+        "test_mmproj_smoke_image_fixture_is_deterministic",
+        "test_mmproj_smoke_lane_runs_only_for_families_with_a_projector",
+        "test_native_mtp_planning_includes_all_head_lane_load_budget",
+        "test_native_mtp_uses_one_target_model_and_correctness_sidebands",
+        "test_new_canary_queues_behind_active_runner_work",
+        "test_next_boundary_target_global_llama_src_before_subcommand",
+        "test_outcome_classifier_uses_terminal_evidence_not_option_names",
+        "test_persistent_runner_executes_goose_preflight",
+        "test_persistent_runner_executes_only_trusted_main_with_read_access",
+        "test_portable_timeout_runner_bounds_the_process_group",
+        "test_post_green_modifying_review_is_removed",
+        "test_preflight_pins_snapshot_and_records_native_mtp_models",
+        "test_rewriter_check_reexecs_and_pins_native_architecture",
+        "test_skip_build_omits_the_one_time_build",
+        "test_supplied_plan_cannot_omit_a_manifest_selected_family",
+        "test_timeout_runner_cleans_process_group_when_signalled",
+        "test_timeout_runner_closes_manifest_stdin_for_children",
+        "test_trusted_canary_owns_split_roster_promotion",
+        "test_two_scheduled_failures_raise_one_reconciled_issue",
+        "test_update_pin_script_writes_pin_and_rejects_invalid_sha",
+        "test_validate_global_llama_src_before_subcommand",
+        "test_workflow_and_wrapper_use_valid_invocations",
+        "test_workflow_builds_binaries_before_skipping_per_lane_builds",
+        "test_workflow_runs_only_daily_or_by_manual_dispatch",
+        "test_workload_dry_run_needs_no_oracle_and_forwards_startup_deadline"
+      ],
+      "baseline_inventory_preserved": "sha256, test_method_count and test_methods retain historical Task2 baseline; current_* fields bind the present partial-retirement source.",
+      "current_change": "Two rejection assertions use nonzero status, preserving diagnostics and no model scans; source method count and required native gates unchanged."
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3573,7 +3695,7 @@
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_skippy_workload_certify.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "tools/xtask/tests/workload_certify_contract.rs plus earlier workload_smoke_config unsplit JSON fixtures",
       "sha256": "2f3b9c1e5f6da8f86b7347bb236362d4795552dab04b435fe409aab95da7feca",
       "test_method_count": 15,
       "test_methods": [
@@ -3592,7 +3714,10 @@
         "test_startup_deadline_rejects_invalid_values_before_execution",
         "test_startup_timeout_must_be_positive",
         "test_unknown_class_fails_before_model_execution"
-      ]
+      ],
+      "cutover_status": "deleted after owning seven Rust adapter fixtures passed; historical15method baseline retained",
+      "current_retirement_coverage": "ci/automation-migration/workload-certify-retirement-coverage.json",
+      "current_retirement_method_count": 14
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3649,23 +3774,6 @@
         "test_rejects_digest_mismatch",
         "test_rejects_fast_percentage_only_improvement",
         "test_requires_unique_samples_per_source"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
-      "gate": "Legacy just ci-validate plus owning build/install/platform gate",
-      "module": "scripts/tests/test_swift_xcframework_env.py",
-      "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "2b99f3196a6258cd3ba63bff5a87d34a25821ca2533fd8c0b1517715b70ae4df",
-      "test_method_count": 5,
-      "test_methods": [
-        "test_assembly_mode_requires_every_apple_target",
-        "test_cargo_build_gets_platform_specific_deployment_target",
-        "test_deployment_targets_are_not_globally_exported",
-        "test_macos_native_target_matches_the_cargo_override",
-        "test_target_mode_stages_one_library_for_parallel_ci"
       ]
     },
     {
@@ -3820,7 +3928,22 @@
         "test_missing_oracle_records_both_failures_and_continues",
         "test_readiness_uses_deadline_for_each_server_and_rejects_dead_process",
         "test_summary_preserves_preflight_classes_without_claiming_certification"
-      ]
+      ],
+      "current_source_sha256": "6d24be570d3a1daa1649bbcda909aa90b604bd792b932ab3dbdc4567f8f619a9",
+      "current_test_method_count": 5,
+      "current_test_methods": [
+        "test_address_in_use_detection_is_narrow",
+        "test_dry_run_prints_both_certified_rows_without_oracles",
+        "test_missing_oracle_records_both_failures_and_continues",
+        "test_readiness_uses_deadline_for_each_server_and_rejects_dead_process",
+        "test_summary_preserves_preflight_classes_without_claiming_certification"
+      ],
+      "baseline_inventory_preserved": "sha256, test_method_count and test_methods retain historical Task2 baseline; current_* fields bind the present partial-retirement source.",
+      "partial_retirement": {
+        "coverage": "ci/automation-migration/workload-retry-retirement-coverage.json",
+        "retired_methods": 2,
+        "status": "Only two startup-retry methods retired after parent owning target passed2; five remaining methods required."
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3916,9 +4039,7 @@
         "test_method_count": 1
       }
     ],
-    "skill_local_generic_tests": [
-
-    ],
+    "skill_local_generic_tests": [],
     "skill_local_test_note": "No test_*.py modules were found under .agents/skills. Skill-local scripts and their caller classifications are tracked separately by the task-3 instructions/exception ledger.",
     "tracked_python_test_modules": 147
   },
@@ -3967,5 +4088,44 @@
       "evals/test_agentic_replay_l3.py"
     ],
     "policy": "Exact seven-path retirement after parent validation; retained DuckDB reader and independent workflow/SDK/native gates remain. Source review is not live model or platform qualification."
+  },
+  "local_ports_retirement": {
+    "removed_paths": [
+      "scripts/lib/allocate_local_ports.py",
+      "scripts/tests/test_allocate_local_ports.py"
+    ],
+    "replacement_tests": "tools/xtask/tests/local_ports.rs",
+    "intents": [
+      "OS-selected nonzero distinct endpoints exclude an occupied listener",
+      "All advertised endpoints can be acquired together immediately after allocator exit",
+      "Finite count budget rejects zero, negative, over-budget and non-integer arguments without port output"
+    ],
+    "policy": "Parent validation and exact last-caller retirement required; historical baseline counts and required SDK/native gates are preserved.",
+    "coverage": "ci/automation-migration/local-ports-retirement-coverage.json"
+  },
+  "swift_producer_environment_retirement": {
+    "removed_paths": [
+      "scripts/tests/test_swift_xcframework_env.py"
+    ],
+    "coverage": "ci/automation-migration/swift-producer-retirement-coverage.json",
+    "replacement_tests": "tools/xtask/tests/swift_producer_environment.rs",
+    "policy": "Parent reports five behavioral fixtures passed before exact test retirement; checksum fixtures are separate coverage. Historical baseline counts, native build gates and platform qualification boundaries are preserved."
+  },
+  "workload_certify_retirement": {
+    "removed_paths": [
+      "scripts/tests/test_skippy_workload_certify.py"
+    ],
+    "coverage": "ci/automation-migration/workload-certify-retirement-coverage.json",
+    "replacement_tests": "tools/xtask/tests/workload_certify_contract.rs",
+    "policy": "Fourteen current method intents map to seven passed actual Rust adapter fixtures. Historical baseline15method roster/count/hash retained; prior unsplit configuration fixture has a separate Rust owner. Required actual SDK/native gates unchanged."
+  },
+  "canary_terminal_and_retry_partial_retirement": {
+    "canary_result_coverage": "ci/automation-migration/canary-result-retirement-coverage.json",
+    "workload_retry_coverage": "ci/automation-migration/workload-retry-retirement-coverage.json",
+    "historical_battery_status": "Parent accepted one-method retirement after corrected registered bounded migration_lifecycle fixture passed1/0 in4.66s; durable exact mapping in canary-historical-retirement-coverage.json. Superseded unsupported-argv fixture is not current evidence.",
+    "python_paths": 199,
+    "required_just_roster_modules": 111,
+    "policy": "Only reviewed per-method retirements; all four modules remain. Historical baseline counts retained; SDK exceptions/native/protected qualification unchanged.",
+    "historical_battery_coverage": "ci/automation-migration/canary-historical-retirement-coverage.json"
   }
 }

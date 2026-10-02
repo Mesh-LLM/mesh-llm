@@ -201,3 +201,118 @@ fn migration_archives_tar_rejects_bad_usage() -> TestResult {
     assert!(outcome.stderr.starts_with("usage: "), "{}", outcome.stderr);
     Ok(())
 }
+
+fn pax_size_record(value: &str) -> Vec<u8> {
+    let body = format!(" size={value}\n");
+    let mut length = body.len() + 1;
+    loop {
+        let record = format!("{length}{body}");
+        if record.len() == length {
+            return record.into_bytes();
+        }
+        length = record.len();
+    }
+}
+
+fn overwrite_tar_size(archive: &mut [u8], offset: usize, size: usize) {
+    let header = &mut archive[offset..offset + 512];
+    header[124..136].copy_from_slice(format!("{size:011o}\0").as_bytes());
+    header[148..156].fill(b' ');
+    let sum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
+    header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+}
+
+#[test]
+fn migration_archives_tar_pax_size_controls_payload_and_next_header() -> TestResult {
+    for kind in *b"xg" {
+        let payload = vec![b'p'; 600];
+        let mut archive = tar(&[
+            TarMember::file("kept", 0o644, b"k"),
+            TarMember::new("pax", kind, 0o644).with_data(&pax_size_record("000600")),
+            TarMember::file("first", 0o640, &payload),
+            TarMember::file("second", 0o644, &payload),
+        ]);
+        // The physical payload follows PAX, rather than the overridden ustar size.
+        overwrite_tar_size(&mut archive, 2048, 1);
+        if kind == b'g' {
+            overwrite_tar_size(&mut archive, 3584, 1);
+        }
+        let outcome = extract(archive)?;
+        outcome.assert(0, "");
+        for name in ["first", "second"] {
+            assert_eq!(
+                std::fs::read(outcome.path(&format!("output/{name}")))?,
+                payload
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn migration_archives_tar_pax_zero_size_is_valid() -> TestResult {
+    let mut archive = tar(&[
+        TarMember::new("pax", b'x', 0o644).with_data(&pax_size_record("0")),
+        TarMember::file("empty", 0o644, b""),
+        TarMember::file("next", 0o644, b"next"),
+    ]);
+    overwrite_tar_size(&mut archive, 1024, 600);
+    let outcome = extract(archive)?;
+    outcome.assert(0, "");
+    assert!(std::fs::read(outcome.path("output/empty"))?.is_empty());
+    assert_eq!(std::fs::read(outcome.path("output/next"))?, b"next");
+    Ok(())
+}
+
+#[test]
+fn migration_archives_tar_rejects_invalid_pax_size_before_extracting_any_member() -> TestResult {
+    let overflow = format!("{}0", usize::MAX);
+    for kind in *b"xg" {
+        for value in ["", "-1", "+1", "1.0", " 1", "1 ", "bad", &overflow] {
+            for earlier_member in [false, true] {
+                let mut members = Vec::new();
+                if earlier_member {
+                    members.push(TarMember::file("kept", 0o644, b"kept"));
+                }
+                members.extend([
+                    TarMember::new("pax", kind, 0o644).with_data(&pax_size_record(value)),
+                    TarMember::file("bad", 0o644, b"payload"),
+                ]);
+                let outcome = extract(tar(&members))?;
+                outcome.assert(1, &rejected("invalid PAX size"));
+                assert!(
+                    outcome.stderr.contains("invalid PAX size"),
+                    "{}",
+                    outcome.stderr
+                );
+                assert!(!outcome.path("output/kept").exists());
+                assert!(!outcome.path("output/bad").exists());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn migration_archives_tar_rejects_pax_payload_rounding_and_offset_overflow() -> TestResult {
+    // The first value overflows block rounding; the second rounds successfully
+    // but cannot be added to the payload's nonzero starting offset.
+    for size in [usize::MAX, usize::MAX - 511] {
+        for kind in *b"xg" {
+            let outcome = extract(tar(&[
+                TarMember::file("kept", 0o644, b"kept"),
+                TarMember::new("pax", kind, 0o644).with_data(&pax_size_record(&size.to_string())),
+                TarMember::file("bad", 0o644, b"payload"),
+            ]))?;
+            outcome.assert(1, &rejected("tar payload offset overflow"));
+            assert!(
+                outcome.stderr.contains("tar payload offset overflow"),
+                "{}",
+                outcome.stderr
+            );
+            assert!(!outcome.path("output/kept").exists());
+            assert!(!outcome.path("output/bad").exists());
+        }
+    }
+    Ok(())
+}

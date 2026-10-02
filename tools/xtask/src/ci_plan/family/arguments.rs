@@ -157,19 +157,6 @@ fn classify(arg: &str) -> Token<'_> {
             inline,
         };
     }
-    if let Some(tail) = arg.strip_prefix("-h") {
-        let tail = tail.trim_start_matches('h');
-        let inline = if tail.starts_with(['=', '-']) {
-            Some(tail.strip_prefix('=').unwrap_or(tail))
-        } else {
-            None
-        };
-        return Token::Option {
-            option: OptionName::Help,
-            name: "--help",
-            inline,
-        };
-    }
     let negative = arg.strip_prefix('-').is_some_and(|rest| {
         rest.strip_prefix('.')
             .unwrap_or(rest)

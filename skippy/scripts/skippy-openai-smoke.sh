@@ -2,8 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-automation=(cargo run --quiet --manifest-path "$ROOT/tools/xtask/Cargo.toml" --)
-if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+# Frozen automation selection begins.
+# Standalone fallback follows the existing Just bootstrap/build policy.
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo "MESH_LLM_AUTOMATION_BIN must be an absolute executable" >&2
+    exit 1
+  fi
+# Frozen automation selection ends.
   automation=("$MESH_LLM_AUTOMATION_BIN")
 fi
 LLAMA_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-.deps/llama-build/build-stage-abi-static}"
@@ -54,7 +61,7 @@ trap cleanup EXIT
 require_cmd curl
 require_cmd jq
 require_cmd lsof
-require_cmd python3
+
 
 if [[ ! -d "$LLAMA_BUILD_DIR" ]]; then
   echo "llama build dir not found: $LLAMA_BUILD_DIR" >&2
@@ -103,39 +110,9 @@ if [[ -z "$LAYER_END" || "$LAYER_END" == "null" ]]; then
 fi
 
 CONFIG_PATH="${WORK_DIR}/stage-openai-smoke.json"
-python3 - "$CONFIG_PATH" "$MODEL_ID" "$MODEL_PATH" "$LAYER_END" "$CTX_SIZE" <<'PY'
-import json
-import hashlib
-import sys
-
-config_path, model_id, model_path, layer_end, ctx_size = sys.argv[1:]
-model_digest = hashlib.sha256()
-with open(model_path, "rb") as model_file:
-    for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
-        model_digest.update(chunk)
-config = {
-    "run_id": "openai-smoke",
-    "topology_id": "openai-smoke-single-stage",
-    "model_id": model_id,
-    "model_path": model_path,
-    "source_model_sha256": model_digest.hexdigest(),
-    "stage_id": "stage-0",
-    "stage_index": 0,
-    "layer_start": 0,
-    "layer_end": int(layer_end),
-    "ctx_size": int(ctx_size),
-    "n_gpu_layers": 0,
-    "load_mode": "runtime-slice",
-    "execution_contract": "",
-    "bind_addr": "127.0.0.1:19000",
-    "upstream": None,
-    "downstream": None,
-    "kv_server": None,
-}
-with open(config_path, "w", encoding="utf-8") as handle:
-    json.dump(config, handle, indent=2)
-    handle.write("\n")
-PY
+"${automation[@]}" automation openai-smoke-config \
+  --output "$CONFIG_PATH" --model-id "$MODEL_ID" --model-path "$MODEL_PATH" \
+  --layer-end "$LAYER_END" --ctx-size "$CTX_SIZE"
 
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "port ${PORT} is already listening" >&2

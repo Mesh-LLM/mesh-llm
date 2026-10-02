@@ -38,5 +38,19 @@ mod runner_cleanup;
 #[path = "migration_lifecycle/support.rs"]
 mod support;
 
+#[path = "migration_lifecycle/agent_client_config_cli.rs"]
+mod agent_client_config_cli;
+#[path = "migration_lifecycle/agent_fixture_evidence_cli.rs"]
+mod agent_fixture_evidence_cli;
+#[path = "migration_lifecycle/agent_fixture_inputs_cli.rs"]
+mod agent_fixture_inputs_cli;
+#[path = "migration_lifecycle/canary_controller_battery.rs"]
+mod canary_controller_battery;
 #[path = "migration_lifecycle/canary_timeout_cli.rs"]
 mod canary_timeout_cli;
+#[path = "migration_lifecycle/family_battery_policy_cli.rs"]
+mod family_battery_policy_cli;
+#[path = "migration_lifecycle/family_model_identity_cli.rs"]
+mod family_model_identity_cli;
+#[path = "migration_lifecycle/frozen_selector_integration.rs"]
+mod frozen_selector_integration;
