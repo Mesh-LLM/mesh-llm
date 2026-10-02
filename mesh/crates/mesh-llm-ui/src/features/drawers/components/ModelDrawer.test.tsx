@@ -31,10 +31,10 @@ function peerHosting(id: string, vramGB: number): Peer {
 
 describe('ModelDrawer', () => {
   it('shows real mesh VRAM alongside file size instead of conflating them', () => {
-    render(<ModelDrawer open model={MODEL} peers={[peerHosting('peer-1', 61.7)]} onClose={() => {}} />)
+    render(<ModelDrawer open model={MODEL} peers={[peerHosting('peer-1', 48)]} onClose={() => {}} />)
 
     expect(screen.getByText('Mesh VRAM')).toBeInTheDocument()
-    expect(screen.getAllByText('61.7 GB').length).toBeGreaterThan(0)
+    expect(screen.getByText('61.7 GB')).toBeInTheDocument()
     expect(screen.getByText('File size')).toBeInTheDocument()
     expect(screen.getByText('14.2 GB')).toBeInTheDocument()
   })
