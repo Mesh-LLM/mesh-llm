@@ -58,15 +58,19 @@ impl PaidServedExchange {
         })
     }
 
+    /// `payer` is the node that asked, the payments stream's QUIC-authenticated
+    /// remote id (never taken from the request), named on the terminal as
+    /// `requested_by_node_id` the way the free path names the tunnel's.
     pub(crate) async fn finish(
         &self,
         node: &mesh::Node,
         model_name: &str,
         outcome: &proxy::RouteDispatchOutcome,
         request_digest: Option<&str>,
+        payer: iroh::EndpointId,
     ) {
-        // Served here, on this node's own weights. The payer is not named:
-        // it asked over the payments protocol, not the HTTP tunnel.
+        let requested_by_node_id = hex::encode(payer.as_bytes());
+        // Served here, on this node's own weights.
         publish_raw_proxy_terminal(
             node,
             self.channel.as_ref(),
@@ -76,7 +80,7 @@ impl PaidServedExchange {
             RawProxyTerminalFacts {
                 served_locally: true,
                 request_digest,
-                requested_by_node_id: None,
+                requested_by_node_id: Some(&requested_by_node_id),
             },
         )
         .await;
