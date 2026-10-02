@@ -186,14 +186,14 @@ jobs:
       - name: Resolve platform unit-test owners
         if: ${{ matrix.check.kind == 'unit' }}
         id: packages
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@196eba4c21f9b445d0bf11f7938f87e799dd7c8c # product-layout compatibility helpers
         with:
           generation: legacy
           crates: '["model-artifact","mesh-llm-host-runtime","mesh-llm"]'
       - name: Resolve Windows unit-test owners
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         id: windows_packages
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@196eba4c21f9b445d0bf11f7938f87e799dd7c8c # product-layout compatibility helpers
         with:
           generation: legacy
           # The `platform-windows-cfg` catalog routes these crates to the

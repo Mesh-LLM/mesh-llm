@@ -1049,8 +1049,11 @@ both domains until the later catalog cleanup; existing main routing is unchanged
 
 ### Protected executor compatibility for the product extraction
 
-The protected executor workflows pin both resolver actions to commit
-`38d63b2f6e27998034fdf0452150c7cc081fe921`, so older PR source checkouts do not need
+The protected executor workflows pin `resolve-source-layout` to commit
+`38d63b2f6e27998034fdf0452150c7cc081fe921` and `resolve-cargo-packages` to
+`196eba4c21f9b445d0bf11f7938f87e799dd7c8c` (which passes planned packages
+absent from the candidate through to the checked-out-workspace filter, so a PR
+that deletes a crate is not rejected), so older PR source checkouts do not need
 the new helper files. The package resolver loads its Python implementation
 from that same pinned action checkout and inspects the candidate only through
 Cargo metadata in the existing executor trust context.
