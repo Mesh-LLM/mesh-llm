@@ -61,10 +61,11 @@ fn migration_ci_plan_missing_manifest_names_the_unreadable_catalog() -> TestResu
 fn migration_ci_plan_rejects_unknown_arguments_with_usage_status() -> TestResult {
     // Given/When: an argument the legacy parser does not define.
     let output = plan(&["--bogus"], b"{}")?;
-    // Then: argparse's usage status is kept and nothing is planned.
+    // Then: admission rejects the inputs with status 2 and no plan.
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(text(&output.stdout), "");
     assert!(text(&output.stderr).contains("unrecognized arguments: --bogus"));
+    assert!(text(&output.stderr).starts_with("usage: ci plan "));
     Ok(())
 }
 
@@ -128,5 +129,17 @@ fn source_catalog_root_does_not_move_workspace_metadata_or_affected_discovery() 
     assert!(output.status.success(), "{}", text(&output.stderr));
     let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(plan["domains"], serde_json::json!(["docs"]));
+    Ok(())
+}
+
+#[test]
+fn ci_plan_missing_value_and_positionals_reject_before_reading_or_planning() -> TestResult {
+    for args in [&["--manifest-root"][..], &["unexpected"][..]] {
+        let output = plan(args, b"not json")?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(text(&output.stderr).starts_with("usage: ci plan "));
+        assert!(!text(&output.stderr).contains("unable to build CI plan"));
+    }
     Ok(())
 }

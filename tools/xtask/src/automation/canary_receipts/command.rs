@@ -41,6 +41,9 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
                     | "split-roster"
                     | "manifest-policy"
                     | "parity-inventory"
+                    | "local-manifest-policy"
+                    | "local-parity-inventory"
+                    | "local-split-roster"
             ) =>
         {
             return super::canary_package_closure::transaction(rest, verb);

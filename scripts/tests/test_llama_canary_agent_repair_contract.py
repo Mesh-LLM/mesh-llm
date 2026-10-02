@@ -59,6 +59,7 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as temp_dir:
                     fixture = "\n".join([
                         "set -euo pipefail",
+                        "HARNESS_MODE=verify",
                         "LLAMA_STAGE_BUILD_DIR=native HF_CACHE=cache PLAN_PATH=plan FAMILY_BATTERY_RUN_ID=fixture",
                         f'CERTIFY_LOG="{temp_dir}/certify.log"',
                         f"bash() {{ printf '%s' '{output}'; return {status}; }}",

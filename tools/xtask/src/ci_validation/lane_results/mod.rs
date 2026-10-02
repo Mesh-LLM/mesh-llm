@@ -1,12 +1,7 @@
-//! `ci validate-lane`: the Rust owner of `scripts/validate-ci-lane-results.py`,
-//! and `ci validate-graph`: the parsed entrypoint graph contracts.
-//!
-//! `validate-lane --lane-plan J --needs J` keeps the legacy argv, `ERROR:`
-//! messages and status 2. Optional, additive inputs extend the check without
-//! changing any schema: `--workflow` checks the lane's parsed producer/
-//! consumer graph against the planned jobs, and `--plan-digest` with
-//! `--canonical-plan` binds the projection to the digest-bound plan.
-//! Callers are unchanged; cutover belongs to a later task.
+//! Lane result admission and parsed entrypoint graph contracts.
+//! Exact named options provide JSON plans/results and optional workflow/digest
+//! evidence. Usage and domain failures retain status2; domain reports retain
+//! the consumed ERROR prefix.
 
 mod digest;
 mod entrypoint_graph;
@@ -22,14 +17,16 @@ use std::path::Path;
 
 type Checked<T> = Result<T, String>;
 
-const PROGRAM: &str = "validate-ci-lane-results.py";
-const USAGE: &str = "validate-ci-lane-results.py [-h] --lane-plan LANE_PLAN --needs NEEDS";
-const HELP: &str = "usage: validate-ci-lane-results.py [-h] --lane-plan LANE_PLAN --needs NEEDS
+const USAGE: &str = "cargo xtool ci validate-lane --lane-plan JSON --needs JSON [--workflow FILE] [--plan-digest SHA256 --canonical-plan JSON]";
+const HELP: &str = "Validate every planned lane job and optional immutable graph evidence.
 
-options:
-  -h, --help            show this help message and exit
-  --lane-plan LANE_PLAN
-  --needs NEEDS
+Options:
+  -h, --help
+  --lane-plan JSON
+  --needs JSON
+  --workflow FILE
+  --plan-digest SHA256
+  --canonical-plan JSON
 ";
 const LANE_OPTIONS: [&str; 5] = [
     "--lane-plan",
@@ -63,14 +60,14 @@ fn error(message: String) -> CheckReport {
 fn usage_error(message: &str) -> CheckReport {
     CheckReport {
         stdout: String::new(),
-        stderr: format!("usage: {USAGE}\n{PROGRAM}: error: {message}\n"),
+        stderr: format!("usage: {USAGE}\nerror: {message}\n"),
         code: 2,
     }
 }
 
 fn lane_report(args: &[String]) -> CheckReport {
-    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
-        return CheckReport::success(HELP.to_owned());
+    if matches!(args, [argument] if argument == "-h" || argument == "--help") {
+        return CheckReport::success(format!("usage: {USAGE}\n\n{HELP}"));
     }
     let options = match Options::parse(args) {
         Ok(options) => options,
@@ -90,72 +87,50 @@ fn lane_report(args: &[String]) -> CheckReport {
     }
 }
 
-/// argparse order: a value-less option fails at once, then missing required
-/// options, then unrecognized arguments. Later values replace earlier ones.
-struct Options<'a>(Vec<(&'static str, &'a str)>);
+/// This command has no positional arguments or ambiguous repeated options.
+struct Options<'a>(std::collections::BTreeMap<&'static str, &'a str>);
 
 impl<'a> Options<'a> {
     fn parse(args: &'a [String]) -> Checked<Self> {
-        let mut values = Vec::new();
-        let mut extras = Vec::new();
+        let mut values = std::collections::BTreeMap::new();
         let mut rest = args.iter();
         while let Some(arg) = rest.next() {
-            if arg == "--" {
-                extras.extend(rest.by_ref().map(String::as_str));
-                break;
-            }
             let (name, inline) = match arg.split_once('=') {
                 Some((name, value)) if arg.starts_with("--") => (name, Some(value)),
                 _ => (arg.as_str(), None),
             };
-            let Some(option) = LANE_OPTIONS.iter().find(|option| **option == name) else {
-                extras.push(arg.as_str());
-                continue;
-            };
+            let option = LANE_OPTIONS
+                .iter()
+                .find(|option| **option == name)
+                .ok_or_else(|| format!("unknown lane option or positional argument: {arg}"))?;
             let value = match inline {
                 Some(value) => value,
                 None => rest
                     .next()
-                    .filter(|value| !looks_like_option(value))
-                    .ok_or_else(|| format!("argument {option}: expected one argument"))?,
+                    .map(String::as_str)
+                    .filter(|value| !value.starts_with('-'))
+                    .ok_or_else(|| format!("{option} requires a value"))?,
             };
-            values.push((*option, value));
+            if value.is_empty() {
+                return Err(format!("{option} requires a nonempty value"));
+            }
+            if values.insert(*option, value).is_some() {
+                return Err(format!("{option} must be supplied once"));
+            }
         }
-        let options = Self(values);
-        let missing: Vec<&str> = ["--lane-plan", "--needs"]
-            .into_iter()
-            .filter(|flag| options.get(flag).is_none())
-            .collect();
-        if !missing.is_empty() {
-            let list = missing.join(", ");
-            return Err(format!("the following arguments are required: {list}"));
+        for required in ["--lane-plan", "--needs"] {
+            if !values.contains_key(required) {
+                return Err(format!("missing required option {required}"));
+            }
         }
-        if !extras.is_empty() {
-            return Err(format!("unrecognized arguments: {}", extras.join(" ")));
-        }
-        Ok(options)
+        Ok(Self(values))
     }
-
     fn get(&self, name: &str) -> Option<&'a str> {
-        self.0
-            .iter()
-            .rev()
-            .find(|(option, _)| *option == name)
-            .map(|(_, value)| *value)
+        self.0.get(name).copied()
     }
-
     fn value(&self, name: &str) -> &'a str {
         self.get(name).unwrap_or_default()
     }
-}
-
-/// argparse treats a dash-prefixed word without spaces that is not a
-/// negative number as the next option rather than a value.
-fn looks_like_option(value: &str) -> bool {
-    value.len() > 1
-        && value.starts_with('-')
-        && !value.contains(' ')
-        && value[1..].parse::<f64>().is_err()
 }
 
 struct Request<'a> {
@@ -190,7 +165,7 @@ fn graph_report(args: &[String]) -> CheckReport {
         Err(report) => return report,
     };
     let Some(workflows) = parsed.last("--workflows") else {
-        return GRAPH.error("the following arguments are required: --workflows");
+        return GRAPH.error("missing required option --workflows");
     };
     match entrypoint_graph::validate(Path::new(workflows)) {
         Ok(()) => CheckReport::default(),

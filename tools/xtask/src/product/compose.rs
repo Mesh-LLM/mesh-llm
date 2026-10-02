@@ -1,10 +1,8 @@
 //! `product compose`: the port of `scripts/compose-product-bundle.py`.
 //!
-//! Validation and digests run in the legacy order, so the first failure is
-//! the one Python would have raised. Every failure is an uncaught exception
-//! in the legacy script; the port prints its traceback's last line and
-//! exits with status 1. Success prints nothing and writes (or with
-//! `--check`, compares) `product-manifest.json`.
+//! Validation checks runtime compatibility and bundle containment before writing.
+//! Failures report the domain error with status 1. Success prints nothing and
+//! writes (or with `--check`, compares) `product-manifest.json`.
 
 use super::compose_argv::{Args, parse};
 use super::digest::{IoFailure, file_sha256, tree_sha256};
@@ -34,8 +32,8 @@ fn io(failure: IoFailure) -> String {
     os_error_line(&failure.error, &shown)
 }
 
-fn value_error(message: String) -> String {
-    format!("ValueError: {message}")
+fn composition_error(message: String) -> String {
+    format!("product composition failed: {message}")
 }
 
 /// `BACKEND_KIND_ALIASES.get(backend, backend)` for a string backend.
@@ -63,7 +61,7 @@ fn compose(args: &Args) -> Result<(), String> {
     if args.check {
         let existing = load(Path::new(&manifest_path), &manifest_path)?;
         if !equal(&existing, &manifest) {
-            return Err(value_error(format!(
+            return Err(composition_error(format!(
                 "product manifest does not match composed bytes: {manifest_path}"
             )));
         }
@@ -84,7 +82,7 @@ fn compose_manifest(args: &Args, bundle: &PurePath) -> Result<Json, String> {
         .and_then(Json::as_int)
         != Some(2)
     {
-        return Err(value_error(
+        return Err(composition_error(
             "native runtime manifest requires schema_version 2; import legacy caches explicitly"
                 .to_owned(),
         ));
@@ -94,9 +92,9 @@ fn compose_manifest(args: &Args, bundle: &PurePath) -> Result<Json, String> {
     validate_backend(runtime_id, &runtime_manifest, runtime_data, &args.backend)?;
     let contract = super::host_contract::read(Path::new(&host.display()))?;
     super::host_contract::validate(&contract, runtime_data, runtime_id, version)?;
-    let host_path = host.relative_to(bundle).map_err(value_error)?;
+    let host_path = host.relative_to(bundle).map_err(composition_error)?;
     let host_sha = file_sha256(Path::new(&host.display())).map_err(io)?;
-    let runtime_path = runtime.relative_to(bundle).map_err(value_error)?;
+    let runtime_path = runtime.relative_to(bundle).map_err(composition_error)?;
     let runtime_sha = tree_sha256(Path::new(&runtime.display())).map_err(io)?;
     let manifest_sha = file_sha256(Path::new(&runtime_manifest_path)).map_err(io)?;
     let text = |value: &str| Json::String(value.to_owned());
@@ -147,7 +145,7 @@ fn validate_backend(
     let expected = expected_kind(requested);
     let runtime_kind = item(item(runtime_data, "backend")?, "kind")?;
     if runtime_kind.as_str() != Some(expected) {
-        return Err(value_error(format!(
+        return Err(composition_error(format!(
             "native runtime {} backend mismatch: found {}, expected {expected} for requested \
              backend {requested}",
             display(runtime_id),
@@ -160,7 +158,7 @@ fn validate_backend(
     let build_backend = item(build, "backend")?;
     let build_kind = expected_kind_of(build_backend)?;
     if build_kind.as_str() != Some(expected) {
-        return Err(value_error(format!(
+        return Err(composition_error(format!(
             "native runtime {} build backend mismatch: found {}, expected runtime family \
              {expected} for requested backend {requested}",
             display(runtime_id),
@@ -200,6 +198,40 @@ mod tests {
         let args = parse(&args).unwrap_or_else(|_| panic!("valid arguments"));
         assert!(compose(&args).unwrap_err().contains("schema_version 2"));
         assert!(!temp.path().join(MANIFEST).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_schema_product_uses_executable_host_contract_and_independent_release() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let host = temp.path().join("mesh-llm");
+        std::fs::write(&host, "#!/bin/sh\n[ \"$*\" = \"--log-format json --print-build-contract\" ] || exit 9\nprintf '%s\\n' '{\"schema_version\":1,\"product_version\":\"2.0.0\",\"runtime_release\":\"1.0.0\",\"skippy_abi\":\"7\"}'\n").unwrap();
+        std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runtime = temp.path().join("runtime");
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::write(runtime.join("manifest.json"), br#"{"schema_version":2,"runtime":{"id":"runtime-fixture","release_version":"9.0.0","skippy_abi":"7","backend":{"kind":"cpu"}}}"#).unwrap();
+        let argv = [
+            "--bundle",
+            temp.path().to_str().unwrap(),
+            "--host",
+            host.to_str().unwrap(),
+            "--runtime",
+            runtime.to_str().unwrap(),
+            "--version",
+            "v2.0.0",
+            "--backend",
+            "cpu",
+        ]
+        .map(str::to_owned);
+        let args = parse(&argv).unwrap_or_else(|_| panic!("valid arguments"));
+        compose(&args).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(temp.path().join(MANIFEST)).unwrap()).unwrap();
+        assert_eq!(manifest["mesh_version"], "2.0.0");
+        assert_eq!(manifest["host"]["required_skippy_abi"], "7");
+        assert_eq!(manifest["runtime"]["release_version"], "9.0.0");
+        assert_eq!(manifest["runtime"]["skippy_abi"], "7");
     }
 
     #[test]

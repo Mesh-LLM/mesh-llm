@@ -1,10 +1,16 @@
+#[path = "selected_repair.rs"]
+mod repair;
+#[cfg(test)]
+#[path = "selected_repair_tests.rs"]
+mod repair_tests;
 use super::ledger::SelectedProcessCall;
 use crate::command::DynResult;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-const SELECTED_SCRIPTS: [&str; 7] = [
+const SELECTED_SCRIPTS: [&str; 8] = [
+    "scripts/skippy-system-one-smoke.sh",
     "scripts/ci-compose-product-input.sh",
     "scripts/package-native-runtime.sh",
     "scripts/verify-native-runtime-package.sh",
@@ -32,6 +38,8 @@ fn indirect_launch(path: &str, line: &str) -> bool {
         || line.starts_with("\"${plan_args[@]}\"")
         || line.starts_with("\"$PLANNER\" ")
         || line.contains("\"$PLANNER\" --inspect-gguf ")
+        || (path == "scripts/skippy-system-one-smoke.sh"
+            && line.starts_with("\"${case_command[@]}\""))
         || (typed_caller(path) && typed_launch(line))
 }
 
@@ -142,11 +150,60 @@ fn typed_owner(argv: &str) -> Option<&'static str> {
     .map(|(_, owner)| owner)
 }
 
+const SYSTEM_ONE_OWNER: &str = "tools/xtask/src/automation/system_one_cases/mod.rs; retained explicit SYSTEMONE_SMOKE_DRIVER Python override";
+
+fn check_system_one_binding(
+    record: &SelectedProcessCall,
+    lines: &[&str],
+    index: usize,
+) -> DynResult<()> {
+    if record.caller != "scripts/skippy-system-one-smoke.sh" {
+        return Ok(());
+    }
+    let start = index
+        .checked_sub(4)
+        .ok_or("selected process: missing System One selector")?;
+    let expected = [
+        "local case_command=(\"${automation[@]}\" automation system-one-cases)",
+        "if [[ \"${SYSTEMONE_SMOKE_DRIVER+set}\" == set ]]; then",
+        "case_command=(python3 \"$CASES_DRIVER\")",
+        "fi",
+    ];
+    if lines[start..index]
+        .iter()
+        .map(|line| line.trim())
+        .ne(expected)
+    {
+        return Err("selected process: changed System One default or explicit override".into());
+    }
+    let argv = format!(
+        "{}\n{}",
+        expected.join("\n"),
+        typed_source_argv(lines, index)?
+    );
+    if record.argv != argv
+        || record.replacement_owner != SYSTEM_ONE_OWNER
+        || record.child != "tools/xtask default; explicit Python $CASES_DRIVER override"
+    {
+        return Err("selected process: changed System One mixed launch binding".into());
+    }
+    Ok(())
+}
+
 fn check_typed_binding(
     record: &SelectedProcessCall,
     lines: &[&str],
     index: usize,
 ) -> DynResult<()> {
+    if let Some(binding) = repair::binding(&record.caller, lines, index)? {
+        if record.argv != binding.argv
+            || record.replacement_owner != binding.owner
+            || record.child != binding.child
+        {
+            return Err("selected process: changed repair launch binding".into());
+        }
+        return Ok(());
+    }
     if !typed_caller(&record.caller) || !typed_launch(lines[index].trim()) {
         return Ok(());
     }
@@ -238,8 +295,9 @@ pub(super) fn check_selected_processes(
             return Err("selected interpreter: changed family planner binding".into());
         }
         let lines = text.lines().collect::<Vec<_>>();
+        repair::check_shape(path, &lines)?;
         for (index, line) in lines.iter().enumerate() {
-            if !indirect_launch(path, line) {
+            if !indirect_launch(path, line) && !repair::is_launch(path, &lines, index) {
                 continue;
             }
             let number = index + 1;
@@ -250,6 +308,7 @@ pub(super) fn check_selected_processes(
                 )
                 .into());
             };
+            check_system_one_binding(record, &lines, index)?;
             check_typed_binding(record, &lines, index)?;
             if record.source_block != line.trim() {
                 return Err(format!("selected interpreter: changed source {path}:{number}").into());

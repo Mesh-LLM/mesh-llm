@@ -3,7 +3,7 @@ use crate::repository::check_report::CheckReport;
 use crate::repository::text::repr;
 use std::collections::BTreeSet;
 
-const USAGE: &str = "usage: validate-release-native-runtime-matrix.py [-h] --manifest MANIFEST\n                                                 [--required-target REQUIRED_TARGET]\n                                                 [assets ...]\n";
+const USAGE: &str = "usage: native release-matrix [-h] --manifest MANIFEST\n                                                 [--required-target REQUIRED_TARGET]\n                                                 [assets ...]\n";
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct Target {
@@ -231,7 +231,10 @@ pub(super) fn run(args: &[String]) -> CheckReport {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    return CheckReport::failure(String::new(), format!("ValueError: {error}\n"));
+                    return CheckReport::failure(
+                        String::new(),
+                        format!("release matrix error: {error}\n"),
+                    );
                 }
             }
         }
@@ -263,7 +266,30 @@ pub(super) fn run(args: &[String]) -> CheckReport {
 fn usage_error(message: &str) -> CheckReport {
     CheckReport {
         stdout: String::new(),
-        stderr: format!("{USAGE}validate-release-native-runtime-matrix.py: error: {message}\n"),
+        stderr: format!("{USAGE}native release-matrix: error: {message}\n"),
         code: 2,
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_asset_suffix_rejects_without_a_completion_claim_or_writes() {
+        let scratch = tempfile::tempdir().unwrap();
+        let manifest = scratch.path().join("native-runtimes.json");
+        let original = b"{\"artifacts\":[]}";
+        std::fs::write(&manifest, original).unwrap();
+        let report = run(&[
+            "--manifest".into(),
+            manifest.to_str().unwrap().into(),
+            "mesh-llm-v1-x86_64-unknown-linux-gnu-cuda-invalid.tar.gz".into(),
+        ]);
+        assert_eq!(report.code, 1);
+        assert!(report.stdout.is_empty());
+        assert!(report.stderr.contains("unsupported CUDA release suffix"));
+        assert_eq!(std::fs::read(manifest).unwrap(), original);
+        assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
     }
 }

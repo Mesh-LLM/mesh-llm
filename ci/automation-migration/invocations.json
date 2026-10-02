@@ -2916,7 +2916,7 @@
     },
     {
       "arguments": "explicit no-project mode, jinja2 3.1.6, architecture and build-llama flags from shell variables",
-      "caller": "scripts/llama-canary-agent-repair.sh:536-537",
+      "caller": "scripts/llama-canary-agent-repair.sh:548-549",
       "deletion_criteria": "Replace generic orchestration only after same build argv, output, failure and native artifact behavior are retained; do not remove upstream-required dependency without proving it unused",
       "failure_output": "nonzero build or uv status is recorded and returned by run_verification_logged",
       "interpreter_edge": "uv run --no-project --with jinja2==3.1.6 -- arch -arm64 bash scripts/build-llama.sh ...",
@@ -3384,7 +3384,7 @@
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",
-      "line": 413,
+      "line": 485,
       "source_block": "\"${repair_workload_automation[@]}\" automation canary-receipts workload-manifest verify \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3401,6 +3401,66 @@
       "argv": "evidence_command=(\"${workload_automation[@]}\" automation workload-oracle-evidence write\n--output \"$EVIDENCE_PATH\"\n--comparison-log \"$COMPARISON_LOG\"\n--class \"$MODEL_CLASS\"\n--smoke-lane \"$EXPECTED_LANE\"\n--model-id \"$MODEL_ID\"\n--model-sha256 \"$MODEL_SHA256\"\n--candidate-executable \"$CANDIDATE_BIN_DIR/skippy-server\"\n--oracle-executable \"$ORACLE_EXECUTABLE\"\n--pinned-patch-sha \"$(\"${workload_automation[@]}\" automation canary-receipts prepared-source --root \"$ROOT\")\"\n--work-dir \"$WORK_DIR\")\nif [[ -n \"$PROJECTOR_PATH\" ]]; then\nevidence_command+=(--projector-path \"$PROJECTOR_PATH\")\nfi",
       "replacement_owner": "tools/xtask/src/automation/workload_oracle_evidence/mod.rs",
       "status_streams_effects": "Actual launch of constructed evidence command after comparison. Declaration445 and optional projector append/condition are bound as argv source data, not distinct processes; inner prepared-source command substitution454 is separately owned. Dynamic variable expansion remains a bounded unresolved source boundary."
+    },
+    {
+      "caller": "scripts/llama-canary-agent-repair.sh",
+      "line": 196,
+      "source_block": "if \"${automation[@]}\" automation canary-timeout --input \"$input\"; then",
+      "child": "tools/xtask configured absolute regular executable admitted before repair agent work; existing protected build controller for *-build",
+      "child_source_known": true,
+      "argv": "if \"${automation[@]}\" automation canary-timeout --input \"$input\"; then",
+      "replacement_owner": "tools/xtask/src/automation/canary_timeout.rs",
+      "status_streams_effects": "Function-local automation copies the admitted repair_workload_automation only in normal repair after controller digest recheck; protected *-build retains MESH_LLM_AUTOMATION_BIN authority. Bounded JSON request preserves cwd, executable and argument array; real typed timeout inherits environment/live streams and propagates natural exit, timeout124, cancellation and cleanup125. Normal verify retains Python helper. No later Just bootstrap or dirty-candidate controller build."
+    },
+    {
+      "caller": "scripts/skippy-system-one-smoke.sh",
+      "line": 330,
+      "source_block": "\"${case_command[@]}\" \\",
+      "child": "tools/xtask default; explicit Python $CASES_DRIVER override",
+      "child_source_known": false,
+      "argv": "local case_command=(\"${automation[@]}\" automation system-one-cases)\nif [[ \"${SYSTEMONE_SMOKE_DRIVER+set}\" == set ]]; then\ncase_command=(python3 \"$CASES_DRIVER\")\nfi\n\"${case_command[@]}\" \\\n--base-url \"http://127.0.0.1:${port}\" \\\n--model \"$model_id\" \\\n--alias \"$ALIAS\" \\\n--mode \"$mode\" \\\n--timeout \"$request_timeout\" \\\n--json-out \"$REPORT_DIR/system-one-${mode}.json\" || rc=$?",
+      "replacement_owner": "tools/xtask/src/automation/system_one_cases/mod.rs; retained explicit SYSTEMONE_SMOKE_DRIVER Python override",
+      "status_streams_effects": "Default uses admitted automation facade system-one-cases. Explicit SYSTEMONE_SMOKE_DRIVER retains Python and caller-selected path. Both receive same bounded request/report argv. Nonzero child produces wrapper failure1 and owned stage cleanup. Report status remains mandatory. Real native/model and remaining Python orchestration unqualified by finite HTTP fixtures."
+    },
+    {
+      "caller": "scripts/llama-canary-agent-repair.sh",
+      "line": 228,
+      "source_block": "run_verification_logged \"full family certification plan\" \"$log\" \"$@\"",
+      "child": "pre-agent frozen normal-repair controller; closed source-owned command set",
+      "child_source_known": false,
+      "argv": "repair_family_plan_step() {\nlocal log=\"$1\"\nshift\nrepair_workload_controller_unchanged || return 1\nif [[ -n \"$log\" ]]; then\nrun_verification_logged \"full family certification plan\" \"$log\" \"$@\"\nelse\n\"$@\"\nfi\n}\nrepair_family_plan() {\nlocal shards=\"$1\" log=\"${2:-}\" manifest=\"$ROOT/ci/llama-canary/family-certified.json\"\nmkdir -p \"$(dirname \"$PLAN_PATH\")\" || return 1\nrepair_family_plan_step \"$log\" \"${repair_workload_automation[@]}\" --repo-root \"$ROOT\" ci family-plan \\\n--manifest \"$manifest\" --shard-count \"$shards\" --output \"$PLAN_PATH\" || return 1\nrepair_family_plan_step \"$log\" \"${repair_workload_automation[@]}\" --repo-root \"$ROOT\" ci family-plan \\\n--manifest \"$manifest\" --verify-plan \"$PLAN_PATH\" || return 1\nrepair_family_plan_step \"$log\" \"${repair_workload_automation[@]}\" automation family-battery-policy --cache \\\n\"$ROOT\" \"$manifest\" \"$PLAN_PATH\" \"${HF_CACHE:?}\" || return 1\n}\nrepair_family_plan 256\nrepair_family_plan 1 \"$CERTIFY_LOG\" || return 1",
+      "replacement_owner": "tools/xtask/src/ci_plan/family/mod.rs; tools/xtask/src/automation/family_battery_policy.rs",
+      "status_streams_effects": "Normal repair-only bounded plan-step forwards exact admitted controller/root/manifest/shards/output/verify/cache argv; rechecks frozen controller before logged or direct execution. Existing verification deadline/cancellation owns logged execution. Real blob/GGUF admission remains required; no cache or model qualification implied."
+    },
+    {
+      "caller": "scripts/llama-canary-agent-repair.sh",
+      "line": 230,
+      "source_block": "\"$@\"",
+      "child": "pre-agent frozen normal-repair controller; closed source-owned command set",
+      "child_source_known": false,
+      "argv": "repair_family_plan_step() {\nlocal log=\"$1\"\nshift\nrepair_workload_controller_unchanged || return 1\nif [[ -n \"$log\" ]]; then\nrun_verification_logged \"full family certification plan\" \"$log\" \"$@\"\nelse\n\"$@\"\nfi\n}\nrepair_family_plan() {\nlocal shards=\"$1\" log=\"${2:-}\" manifest=\"$ROOT/ci/llama-canary/family-certified.json\"\nmkdir -p \"$(dirname \"$PLAN_PATH\")\" || return 1\nrepair_family_plan_step \"$log\" \"${repair_workload_automation[@]}\" --repo-root \"$ROOT\" ci family-plan \\\n--manifest \"$manifest\" --shard-count \"$shards\" --output \"$PLAN_PATH\" || return 1\nrepair_family_plan_step \"$log\" \"${repair_workload_automation[@]}\" --repo-root \"$ROOT\" ci family-plan \\\n--manifest \"$manifest\" --verify-plan \"$PLAN_PATH\" || return 1\nrepair_family_plan_step \"$log\" \"${repair_workload_automation[@]}\" automation family-battery-policy --cache \\\n\"$ROOT\" \"$manifest\" \"$PLAN_PATH\" \"${HF_CACHE:?}\" || return 1\n}\nrepair_family_plan 256\nrepair_family_plan 1 \"$CERTIFY_LOG\" || return 1",
+      "replacement_owner": "tools/xtask/src/ci_plan/family/mod.rs; tools/xtask/src/automation/family_battery_policy.rs",
+      "status_streams_effects": "Normal repair-only bounded plan-step forwards exact admitted controller/root/manifest/shards/output/verify/cache argv; rechecks frozen controller before logged or direct execution. Existing verification deadline/cancellation owns logged execution. Real blob/GGUF admission remains required; no cache or model qualification implied."
+    },
+    {
+      "caller": "scripts/llama-canary-agent-repair.sh",
+      "line": 432,
+      "source_block": "\"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
+      "child": "pre-agent frozen normal-repair controller; closed source-owned command set",
+      "child_source_known": false,
+      "argv": "repair_source_inspection() {\nlocal verb=\"$1\" check=\"${2:-}\" log=\"${3:-}\" transaction_root input status\nrepair_workload_controller_unchanged || return 1\ntransaction_root=\"$(mktemp -d \"${RUNNER_TEMP:-/tmp}/local-repair-inspection.XXXXXXXX\")\" || return 1\ninput=\"$transaction_root/input.json\"\nif ! jq -n --arg controller_root \"$TRUSTED_ROOT\" --arg controller_revision \"$BASE_HEAD\" \\\n--arg controller_sha \"$repair_workload_controller_sha\" --arg root \"$ROOT\" \\\n--arg base \"$CANDIDATE_BASE_HEAD\" --arg check \"$check\" \\\n'{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},root:$root,base:$base}}\n+ (if $check == \"true\" then {check:true} elif $check == \"false\" then {check:false} else {} end)' \\\n> \"$input\"; then\nrm -rf \"$transaction_root\"\nreturn 1\nfi\nif [[ -n \"$log\" ]]; then\nif run_verification_logged \"parity manifest validation\" \"$log\" \\\n\"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then\nstatus=0\nelse\nstatus=$?\nfi\nelif \"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then\nstatus=0\nelse\nstatus=$?\nfi\nrm -rf \"$transaction_root\" || return 1\nreturn \"$status\"\n}\nrepair_source_inspection local-manifest-policy > >(tee -a \"$MANIFEST_POLICY_LOG\") 2>&1\nrepair_source_inspection local-parity-inventory \"\" \"$CERTIFY_LOG\" || return 1\nrepair_source_inspection local-split-roster false\nrepair_source_inspection local-split-roster true",
+      "replacement_owner": "tools/xtask/src/automation/canary_receipts/package_closure/local_inspection.rs",
+      "status_streams_effects": "Normal repair-only helper admits closed local-manifest-policy/local-parity-inventory/local-split-roster inputs with pre-agent controller/root/base and digest recheck; logged/direct bounded execution propagates failure. Local dirty-source inspection is not workflow receipt publication. Protected build modes retain their immutable package-context verbs; verify retains explicit Python fallbacks."
+    },
+    {
+      "caller": "scripts/llama-canary-agent-repair.sh",
+      "line": 437,
+      "source_block": "elif \"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
+      "child": "pre-agent frozen normal-repair controller; closed source-owned command set",
+      "child_source_known": false,
+      "argv": "repair_source_inspection() {\nlocal verb=\"$1\" check=\"${2:-}\" log=\"${3:-}\" transaction_root input status\nrepair_workload_controller_unchanged || return 1\ntransaction_root=\"$(mktemp -d \"${RUNNER_TEMP:-/tmp}/local-repair-inspection.XXXXXXXX\")\" || return 1\ninput=\"$transaction_root/input.json\"\nif ! jq -n --arg controller_root \"$TRUSTED_ROOT\" --arg controller_revision \"$BASE_HEAD\" \\\n--arg controller_sha \"$repair_workload_controller_sha\" --arg root \"$ROOT\" \\\n--arg base \"$CANDIDATE_BASE_HEAD\" --arg check \"$check\" \\\n'{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},root:$root,base:$base}}\n+ (if $check == \"true\" then {check:true} elif $check == \"false\" then {check:false} else {} end)' \\\n> \"$input\"; then\nrm -rf \"$transaction_root\"\nreturn 1\nfi\nif [[ -n \"$log\" ]]; then\nif run_verification_logged \"parity manifest validation\" \"$log\" \\\n\"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then\nstatus=0\nelse\nstatus=$?\nfi\nelif \"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then\nstatus=0\nelse\nstatus=$?\nfi\nrm -rf \"$transaction_root\" || return 1\nreturn \"$status\"\n}\nrepair_source_inspection local-manifest-policy > >(tee -a \"$MANIFEST_POLICY_LOG\") 2>&1\nrepair_source_inspection local-parity-inventory \"\" \"$CERTIFY_LOG\" || return 1\nrepair_source_inspection local-split-roster false\nrepair_source_inspection local-split-roster true",
+      "replacement_owner": "tools/xtask/src/automation/canary_receipts/package_closure/local_inspection.rs",
+      "status_streams_effects": "Normal repair-only helper admits closed local-manifest-policy/local-parity-inventory/local-split-roster inputs with pre-agent controller/root/base and digest recheck; logged/direct bounded execution propagates failure. Local dirty-source inspection is not workflow receipt publication. Protected build modes retain their immutable package-context verbs; verify retains explicit Python fallbacks."
     }
   ],
   "source_verified_edges": [
@@ -3576,9 +3636,7 @@
     "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
     "python_paths": 196,
     "just_roster": 109,
-    "removed_edges": [
-
-    ],
+    "removed_edges": [],
     "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
   },
   "zip_extraction_test_retirement": {
@@ -3635,8 +3693,9 @@
       },
       {
         "path": "scripts/llama-canary-agent-repair.sh",
-        "sha256": "4c0a8a8cde5c90b7c24ce71811452dba6134e0fbaad2ad743b3144d5f7495891",
-        "line_count": 889
+        "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
+        "line_count": 973,
+        "previous_projected_source_sha256": "e5b5a7edf0bbaaa5ad418e60a2a0d96d94aad08a727bd743a3340d82971eb9ac"
       },
       {
         "path": ".github/workflows/ci-quality-slice.yml",
@@ -3780,12 +3839,8 @@
       }
     ],
     "limits": "Source-bound caller reconciliation only. Generic Python implementations and unqualified test methods retained; required SDK, native, model, platform and protected gates unchanged. Literal typed command selection and continued argv are reviewed, but runtime dynamic expansion is not parser-complete reachability proof.",
-    "removed_edges": [
-
-    ],
-    "rebound_rows": [
-
-    ]
+    "removed_edges": [],
+    "rebound_rows": []
   },
   "next_wave_comparator_and_test_retirement": {
     "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
@@ -3880,7 +3935,7 @@
     "unit_target": "xtask",
     "sources": {
       "just/ci.just": {
-        "sha256": "74ef6a128266450bb05f03fc83ec16078836677498c701946844ae22019faf9b",
+        "sha256": "3383a8eb8d10fdfebbf08512a5fc5d4643d2defffe5d99327543827f806621c8",
         "line_count": 270
       },
       ".github/workflows/ci-quality-slice.yml": {
@@ -3938,6 +3993,132 @@
     "new_records": 2,
     "scope": "Only the two exact observed platform selectors. No interpreter edge removed, no optional downgrade, no assertion that runtime platform/native/SDK execution has qualified."
   },
+  "repair_timeout_integration": {
+    "source": {
+      "path": "scripts/llama-canary-agent-repair.sh",
+      "preimage_sha256": "4c0a8a8cde5c90b7c24ce71811452dba6134e0fbaad2ad743b3144d5f7495891",
+      "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
+      "line_count": 973,
+      "previous_projected_source_sha256": "e5b5a7edf0bbaaa5ad418e60a2a0d96d94aad08a727bd743a3340d82971eb9ac"
+    },
+    "qualification": "Authored, unrun; parent must qualify the transaction before any legacy retirement",
+    "retained": "All Python helpers and legacy tests remain. Normal verify timeout helper remains reachable; no inventory/roster reductions.",
+    "rebound_rows": []
+  },
+  "current_selected_ref_cutover": {
+    "status": "Authored isolated combined selected-ref and repair/build/SDK transaction; root integration and all new owning qualification pending",
+    "caller": {
+      "path": ".github/workflows/llama-upstream-canary.yml",
+      "line": 59,
+      "source_block": "\"$MESH_LLM_AUTOMATION_BIN\" repository selected-ref \\",
+      "argv": "\"$MESH_LLM_AUTOMATION_BIN\" repository selected-ref \\\n--ref \"$MESH_REF\" --event \"$GITHUB_EVENT_NAME\" --upstream \"$UPSTREAM\" \\\n--expected-origin \"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY\" \\\n--github-output \"$GITHUB_OUTPUT\" --summary \"$GITHUB_STEP_SUMMARY\"",
+      "owner": "tools/xtask/src/repository/selected_ref.rs",
+      "transport_owner": "tools/xtask/src/repository/selected_ref/git.rs",
+      "admission_guard": "tools/xtask/src/ci_validation/workflow_guards/selected_ref.rs",
+      "trust": "Protected same-repository main job; immutable github.sha checkout then hosted-bare protected controller bootstrap; manual mesh_ref only; expected origin derived from GITHUB_SERVER_URL/GITHUB_REPOSITORY",
+      "admission": "Branch/full lowercase SHA; workflow_dispatch only; no simultaneous upstream override; exact normalized origin; branch-only origin fetch; branch-reachable selected commit; exactly one supported regular pin blob and valid lowercase SHA; frozen controller source distinct from mesh_source",
+      "failure_effects": "No selected outputs or selected summary before successful admission; existing protected source=HEAD output precedes resolver. Bounded raw Git stdout requires EOF/cap and exact Exited plus report.success; sanitized stderr; owned process cancellation/deadline",
+      "guarded_output": "mesh_source/upstream/changed/mode/certify and selected summary only after admission"
+    },
+    "source_bindings": [
+      {
+        "path": ".github/workflows/llama-upstream-canary.yml",
+        "sha256": "717ea2ee85480a0ba61625d46db34d4b634842991b3f43fee9ff0b70d7e49e43",
+        "line_count": 363
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards.rs",
+        "sha256": "715935baac61b653f0a6e4b144e98e4c3398a4821a3ebfc0579293a6946a3814",
+        "line_count": 90
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards/selected_ref.rs",
+        "sha256": "9e0a405fca045ac0f52c7576319b59c69440e93a5660d7852d48a5fd3c88c2b6",
+        "line_count": 83
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards/selected_ref_tests.rs",
+        "sha256": "775375f39bc7028bbb314de2b2042e6a3ba34c48a4e40c69616aa37c07917eae",
+        "line_count": 108
+      },
+      {
+        "path": "tools/xtask/src/cli.rs",
+        "sha256": "2f7977a11674337af946303b5c0e94dd253672ab3edba3fb47f1ecf337d03cd0",
+        "line_count": 472
+      },
+      {
+        "path": "tools/xtask/src/repository.rs",
+        "sha256": "e90cedfb828bf14d0d52cabe8012b580e75a28eb25f749a052abfa0e7acc4041",
+        "line_count": 82
+      },
+      {
+        "path": "tools/xtask/src/repository/selected_ref.rs",
+        "sha256": "13d7133404c3663a913c1463634f86a993a54ac61517913586e4c749db1d8d4f",
+        "line_count": 287
+      },
+      {
+        "path": "tools/xtask/src/repository/selected_ref/git.rs",
+        "sha256": "5d5ef597963fb3c7e8d5a4f50e8d4bc3c914372c8776bb358320a7e7b070ae5d",
+        "line_count": 102
+      },
+      {
+        "path": "tools/xtask/src/repository/selected_ref/git_tests.rs",
+        "sha256": "572f48aa04f5284fc5975a3e6bcacc8e6bd6f300fb4576c45222f85a2956291a",
+        "line_count": 44
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle.rs",
+        "sha256": "2a0579b2e88854dc3e13f4c060b44fe2bfba4f003a01d6f7d9eeaef15e8ac6ab",
+        "line_count": 135
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/selected_ref.rs",
+        "sha256": "4ef1ff76d4314ac518833c3963357b31a04623fdbcaf9e49141f528c169a64be",
+        "line_count": 296
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/selected_ref/adversarial.rs",
+        "sha256": "e956dccda93f7906529f9bb775329c0a6460cd87f857bc6fee5a653724699861",
+        "line_count": 150
+      }
+    ],
+    "canonical_quality": {
+      "integration_targets": 84,
+      "unit_target": "xtask",
+      "unchanged": true,
+      "witness": [
+        {
+          "path": "just/ci.just",
+          "sha256": "74ef6a128266450bb05f03fc83ec16078836677498c701946844ae22019faf9b"
+        },
+        {
+          "path": ".github/workflows/ci-quality-slice.yml",
+          "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9"
+        },
+        {
+          "path": "ci/automation-migration/quality-rust-contract-targets.json",
+          "sha256": "a1b66b9c480574d113aac599072ec66212cee7cd93810204f03cb13ba517a7a5"
+        },
+        {
+          "path": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts.rs",
+          "sha256": "6d2b0ef4962d375ed5d39ceaba9ff8f56886f1ea7261719548e55f170ae2100d"
+        },
+        {
+          "path": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts_tests.rs",
+          "sha256": "653cf1008baba505becf6081684de4cef7fe3d3097cb4ac623a4f9157762f5a0"
+        }
+      ]
+    },
+    "retained": {
+      "helper": "scripts/llama-canary-resolve-mesh-ref.py",
+      "importer": "scripts/tests/test_llama_canary_mesh_ref.py",
+      "methods": 6,
+      "helper_sha256": "8b5ceed5a9a380c2dc6a8578e571db99c02b02ab7076fccda3d0fe0e2d93817d",
+      "importer_sha256": "8c13e9737863d799cb1490d5a760ce4e47972a0b4f2827745eb74f57c5548117",
+      "retirement": false
+    },
+    "limits": "No worker execution, remote/bootstrap/platform/native/model qualification; existing roster counts and required gates preserved"
+  },
   "just_layout_whitelist_source_refresh": {
     "source": "scripts/tests/test_justfile_layout.py",
     "previous_source_sha256": "4cebd783ecfa111da9d64dc9ed70793b0cf45f0d532dccc604f5466c51a5fc05",
@@ -3948,5 +4129,232 @@
     "qualified_parent_receipt": "Parent reports all3 retained layout tests PASS after exact whitelist addition; canonical Rust3319pass/0fail/2ignored across85targets. No worker execution. Full legacy rerun remains parent-owned.",
     "count_or_roster_changes": false,
     "held_payload_integration": false
+  },
+  "system_one_request_driver_integration": {
+    "source_sha256": "72fe086ff07ee9a33dee3be3ffb6470ac6ca01941dcfd44adea657817b2d1dfa",
+    "default_disposition": "typed_request_matrix_and_report_driver",
+    "explicit_override_disposition": "retained_runtime_selected_python_boundary",
+    "qualification": "authored/unrun; no model qualification; no retirements",
+    "owner": "tools/xtask/src/automation/system_one_cases/mod.rs; retained explicit SYSTEMONE_SMOKE_DRIVER Python override",
+    "layer2_manifest": "0bc116416a93c402a81f588d6f335c34b0fec3c5d12aad0963a559658a837ca5"
+  },
+  "projected_final_repair_caller_binding": {
+    "source": "scripts/llama-canary-agent-repair.sh",
+    "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
+    "line_count": 973,
+    "inputs": {
+      ".omo/evidence/resume-20261002/just-layout-whitelist-ledger-refresh/manifest.json": "f77250464ed20b532d0a6674d974fedae622c53e28097acc49537f3f89050b7e",
+      ".omo/evidence/resume-20261002/next-wave-post-whitelist-rebase/combined/manifest.json": "7110ce7d6cd11a7fa99ad68d9b5437645e88656ac7f2888c483367fe038e2e08",
+      ".omo/evidence/resume-20261002/repair-family-plan-cache-candidate/manifest.json": "37a437bd5b856eda3e2856a4a34b1bb13af3851e9ab91342389dd5beaf9dd3cf",
+      ".omo/evidence/resume-20261002/local-repair-inspection-candidate/manifest.json": "46b5d4cd5484966a05e57e8a15b6fd85d7d6f3f718c49ed317e0f211d0d15910",
+      ".omo/evidence/resume-20261002/local-repair-inspection-candidate/layer-1/manifest.json": "e67cdcc84d92268c46d7570010d90fa6d3fe32bfad26382d65e1ac368c434339",
+      ".omo/evidence/resume-20261002/system-one-cases-candidate/manifest.json": "18d9bb1660613ab33cd7ab3eb8c34ab8ea7538b70c5310114a1b385936788626",
+      ".omo/evidence/resume-20261002/system-one-cases-candidate/layer-1/manifest.json": "11bff1ed60981379791c58fa84801428c3beec628a8efaa8923ba1519d9c6c97",
+      ".omo/evidence/resume-20261002/system-one-cases-candidate/layer-2/manifest.json": "0bc116416a93c402a81f588d6f335c34b0fec3c5d12aad0963a559658a837ca5",
+      ".omo/evidence/resume-20261002/next-wave-post-whitelist-rebase/system-one/manifest.json": "a1e00edc5234bf6fa0a2d62b9fcf4022bf963afd7731b8e2004114539b0153b4"
+    },
+    "qualification": "Authored/source-only; required scanner correction and parent tests/inventory pending",
+    "retained_python_fallback_lines": [
+      208,
+      266,
+      272,
+      464,
+      672,
+      679,
+      752,
+      762
+    ],
+    "retained_component_environment_line": 608,
+    "local_inspection_calls": [
+      461,
+      669,
+      750,
+      760
+    ],
+    "no_counts_or_roster_changes": true,
+    "workflow_trust_boundaries": "All workflow payloads/permissions/pins/platform records unchanged by this ledger transaction; normal repair local authority never becomes immutable workflow receipt."
+  },
+  "phase_a_five_module_retirement": {
+    "status": "activated by root qualification; application and post-retirement inventory/normal validation pending",
+    "coverage": "ci/automation-migration/phase-a-five-module-retirement-coverage.json",
+    "deleted_paths": [
+      "scripts/tests/test_package_release.py",
+      "scripts/tests/test_build_release.py",
+      "scripts/tests/test_build_development_product.py",
+      "scripts/tests/test_build_linux.py",
+      "scripts/tests/test_ci_sdk_json_consumer.py"
+    ],
+    "legacy_method_count": 24,
+    "proof_receipts": [
+      {
+        "path": ".omo/evidence/resume-20261002/phase-a-focused-integration.log",
+        "sha256": "f80f200ebd2e186e1f6a93872133f4a3aa9d6054f6fb3ff4ed36b58ab4316672",
+        "terminal": [
+          "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s",
+          "test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.13s",
+          "test result: FAILED. 558 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 212.97s"
+        ]
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/phase-a-sdk-corrected.log",
+        "sha256": "0e3e391f9cbe1c586ca61f47273d4765a8774ffffbda17ba78e393820be3fa5d",
+        "terminal": [
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 557 filtered out; finished in 3.50s"
+        ]
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/phase-a-ci-batch-corrected.log",
+        "sha256": "4c4f2c9a3e0d0b17e41680e5ad2735d5903cf3a9d063149c5068db6ea590cfa4",
+        "terminal": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 556 filtered out; finished in 3.23s"
+        ]
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/phase-a-runtime-events-corrected.log",
+        "sha256": "e98ba9ae92201779886544c3572c308f04a1f9e4976953a452dab916c671fb60",
+        "terminal": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 556 filtered out; finished in 2.07s"
+        ]
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/phase-a-native-product.log",
+        "sha256": "9d9ccdd498fd374177bf4f4bb881110685206d5ca44e810f6a6a27ef67dd703d",
+        "terminal": [
+          "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.70s",
+          "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s"
+        ]
+      }
+    ],
+    "observed_source_bindings": [
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/package_release_adapter.rs",
+        "sha256": "2eaf96fd4d59380c120c26f410029b0477581a90b45388b6696278e20fa4a14d"
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/build_product/host.rs",
+        "sha256": "c07d2ae41cbd64807eb173b5d523a3b3d67398ae127ce5a5c2c6bb39c9c1f182"
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/build_product/development.rs",
+        "sha256": "c993885e9c4a98790504eddc3b499bba07a7833d3bf20c950c769ce80cfb80c0"
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/sdk_json_consumer/routing.rs",
+        "sha256": "e1dfbcb83cdedf154039a087b81d5946639e55d1a5b9809cc46ea28dcda60420"
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/sdk_json_consumer/mod.rs",
+        "sha256": "01187150f10f5b7917cb82c45e9e778aa7f5252943eb07a7f79060f689f1a1ff"
+      }
+    ],
+    "current_census": {
+      "python_paths_before": 181,
+      "python_paths_after": 176,
+      "just_roster_before": 100,
+      "just_roster_after": 95,
+      "just_source_sha256": "3383a8eb8d10fdfebbf08512a5fc5d4643d2defffe5d99327543827f806621c8",
+      "just_line_count": 270,
+      "just_roster": [
+        "scripts.tests.test_cuda_toolkit",
+        "scripts.tests.test_prepare_llama",
+        "scripts.tests.test_package_native_runtime",
+        "scripts.tests.test_depot_authority_sentinel",
+        "scripts.tests.test_generate_split_certified",
+        "scripts.tests.test_skippy_llama_parity",
+        "scripts.tests.test_ci_compute_changes_expression_limit",
+        "scripts.tests.test_ci_windows_composition",
+        "scripts.tests.test_skippy_scheduler_fixtures",
+        "scripts.tests.test_ci_workflow_artifacts",
+        "scripts.tests.test_llama_canary_handoff_contract",
+        "scripts.tests.test_reusable_workflow_runner_trust",
+        "scripts.tests.test_pr_builds_summary",
+        "scripts.tests.test_qa_agent_tool_call_reliability",
+        "scripts.tests.test_static_abi_artifacts",
+        "scripts.tests.test_promote_layer_package_snapshot",
+        "scripts.tests.test_runtime_events_native_gate",
+        "scripts.tests.test_performance_history",
+        "scripts.tests.test_workload_lane_execution",
+        "scripts.tests.test_depot_registry_canary_workflow",
+        "scripts.tests.test_skippy_waiting_prefix_ab",
+        "scripts.tests.test_claude_compatibility_workflow",
+        "scripts.tests.test_build_accelerator_defaults",
+        "scripts.tests.test_build_ui",
+        "scripts.tests.test_build_windows",
+        "scripts.tests.test_skippy_radix_cache_ab",
+        "scripts.tests.test_kv_nightly_workflow_contract",
+        "scripts.tests.test_sccache_evidence",
+        "scripts.tests.test_compute_changes_justfiles",
+        "scripts.tests.test_generate_native_runtime_release_manifest",
+        "scripts.tests.test_ci_batch_crate_filter",
+        "scripts.tests.test_download_skippy_parity_candidates",
+        "scripts.tests.test_agentic_replay_nightly_workflow",
+        "scripts.tests.test_ci_pr_canary_workflow",
+        "scripts.tests.test_install_sh",
+        "scripts.tests.test_ci_lane_workflows",
+        "scripts.tests.test_ci_product_composer",
+        "scripts.tests.test_justfile_shell_portability",
+        "scripts.tests.test_skippy_native_evidence_contract",
+        "scripts.tests.test_run_event_benchmark_matrix",
+        "scripts.tests.test_ci_two_node_split_smoke",
+        "scripts.tests.test_ci_native_toolchain_routing",
+        "scripts.tests.test_ci_prepare_native_runtime",
+        "scripts.tests.test_justfile_source",
+        "scripts.tests.test_skippy_competitive_benchmark",
+        "scripts.tests.test_qa_kv_tool_loop_stability",
+        "scripts.tests.test_llama_canary_agent_manifest_policy",
+        "scripts.tests.test_native_artifact_verifiers",
+        "scripts.tests.test_release_version_script",
+        "scripts.tests.test_model_artifact_registry",
+        "scripts.tests.test_pr_workflow_artifacts",
+        "scripts.tests.test_hf_skippy_mtp_certify_job",
+        "scripts.tests.test_install_sccache",
+        "scripts.tests.test_ci_source_layout",
+        "scripts.tests.test_ci_openai_embeddings_smoke",
+        "scripts.tests.test_logging_api_docs",
+        "scripts.tests.test_check_skippy_workload_candidate",
+        "scripts.tests.test_resume_crates_release_workflow",
+        "scripts.tests.test_compare_event_benchmark_matrix",
+        "scripts.tests.test_llama_canary_family_evidence",
+        "scripts.tests.test_install_ps1",
+        "scripts.tests.test_hf_xet_portability_smoke",
+        "scripts.tests.test_kv_restart_replay",
+        "scripts.tests.test_llama_canary_agent_repair_contract",
+        "scripts.tests.test_logging_module_boundaries",
+        "scripts.tests.test_release_script",
+        "scripts.tests.test_run_command_with_timeout",
+        "scripts.tests.test_synthetic_graph_registry",
+        "scripts.tests.test_affected_crates_layout",
+        "scripts.tests.test_agentic_trajectory_manifest",
+        "scripts.tests.test_justfile_layout",
+        "scripts.tests.test_plan_family_battery",
+        "scripts.tests.test_macos_deployment_target",
+        "scripts.tests.test_llama_upstream_canary_contract",
+        "scripts.tests.test_llama_review_regressions",
+        "scripts.tests.test_skippy_adaptive_prefill_ab",
+        "scripts.tests.test_canary_family_memory",
+        "scripts.tests.test_skippy_agentic_prompt_manifest",
+        "scripts.tests.test_skippy_mixed_prefill_decode_ab",
+        "scripts.tests.test_ci_sdk_producers",
+        "scripts.tests.test_cleanup_self_hosted",
+        "scripts.tests.test_lld_lib",
+        "scripts.tests.test_llama_canary_mesh_ref",
+        "scripts.tests.test_llama_native_full_replay",
+        "scripts.tests.test_ci_artifact_actions",
+        "scripts.tests.test_depot_canary_workflow",
+        "scripts.tests.test_skippy_system_one_smoke",
+        "scripts.tests.test_qa_nightly_stability",
+        "scripts.tests.test_pr_sibling_cancellation",
+        "scripts.tests.test_skippy_static_link",
+        "scripts.tests.test_justfile_release_runtime",
+        "scripts.tests.test_skippy_dynamic_link",
+        "scripts.tests.test_cli_inventory_contract",
+        "scripts.tests.test_release_workflow_artifacts",
+        "scripts.tests.test_collect_ci_metrics"
+      ],
+      "test_tree_before": "f0875ce098be5965697349a92ea0f8b94a58dd68ca286a2dc0346af0bdb9b472",
+      "test_tree_after": "bff93499cc7c0dfefed448187171222b12526e91cd1b1b67004bbfd983e1227f"
+    },
+    "historical_records": "Retain prior baselines, method rosters, whitelist and platform boundaries; only current path/source/edge views refreshed.",
+    "limits": "Phase A broad lifecycle had 558 PASS/4 FAIL; corrected SDK5/batch6/runtime6 passed. Package3/build10 passed in that broad receipt. Native policy20/product19 passed separately. No claim of latest complete canonical suite, real SDK runtime, native/model/platform/protected qualification."
   }
 }

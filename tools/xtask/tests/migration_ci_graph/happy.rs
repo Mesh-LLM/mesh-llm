@@ -106,13 +106,22 @@ fn migration_ci_graph_real_entrypoints_keep_five_native_lanes() -> TestResult {
 }
 
 #[test]
-fn migration_ci_graph_help_matches_legacy_usage() -> TestResult {
-    // Given/When: the legacy help flag.
-    let output = Call::raw(&["-h"]).run()?;
-    // Then: argparse's help text and status 0.
-    assert_eq!(output.status.code(), Some(0));
-    assert!(text(&output.stdout).starts_with(
-        "usage: validate-ci-lane-results.py [-h] --lane-plan LANE_PLAN --needs NEEDS\n"
-    ));
+fn lane_help_names_current_command_and_complete_evidence_options() -> TestResult {
+    for flag in ["-h", "--help"] {
+        let output = Call::raw(&[flag]).run()?;
+        assert_eq!(output.status.code(), Some(0));
+        assert!(output.stderr.is_empty());
+        let help = text(&output.stdout);
+        assert!(help.starts_with("usage: cargo xtool ci validate-lane "));
+        for option in [
+            "--lane-plan",
+            "--needs",
+            "--workflow",
+            "--plan-digest",
+            "--canonical-plan",
+        ] {
+            assert!(help.contains(option), "{option}");
+        }
+    }
     Ok(())
 }

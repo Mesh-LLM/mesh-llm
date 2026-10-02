@@ -926,7 +926,7 @@ Linux CPU composition readiness runs the composed host's `runtime list
 (`ci-prepare-native-runtime.sh`) with fallback building disabled. This protects
 that CLI/consumer boundary without selecting full SDK suites for every runtime
 change or requiring accelerator drivers on composition workers.
-`test_ci_sdk_json_consumer.py` checks the original #1675 changed paths select
+`migration_lifecycle::sdk_json_consumer` checks the original #1675 changed paths select
 this product and its producers, and that invalid CLI JSON blocks publication.
 The protected workflow checks out candidate source before invoking the existing
 composition action; no catalog or workflow-definition change is needed.

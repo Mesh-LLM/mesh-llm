@@ -1,7 +1,5 @@
-//! Lane result rules: each rejected input keeps the legacy `ERROR:` message
-//! and status 2 (verified side by side when the legacy interpreter is set).
-//! Each case has exactly one offending job because the legacy script walks
-//! its planned jobs in Python set order.
+//! Rejected lane plans/results retain domain visibility and status2.
+//! Each fixture isolates one offending job; no interpreter ordering oracle.
 
 use crate::support::{Call, TestResult, assert_output, text};
 
@@ -170,37 +168,44 @@ fn migration_ci_graph_invalid_json_keeps_prefix_and_status() -> TestResult {
 }
 
 #[test]
-fn migration_ci_graph_argument_errors_match_argparse() -> TestResult {
-    // Given/When/Then: argparse's usage line, program-prefixed error and 2.
-    let usage = "usage: validate-ci-lane-results.py [-h] --lane-plan LANE_PLAN --needs NEEDS\n";
-    for (args, error) in [
-        (
-            &[][..],
-            "the following arguments are required: --lane-plan, --needs",
-        ),
-        (
-            &["--bogus"][..],
-            "the following arguments are required: --lane-plan, --needs",
-        ),
-        (
-            &["--needs", "{}"][..],
-            "the following arguments are required: --lane-plan",
-        ),
-        (
-            &["--lane-plan"][..],
-            "argument --lane-plan: expected one argument",
-        ),
-        (
-            &["--lane-plan", "{}", "extra", "--needs", "{}"][..],
-            "unrecognized arguments: extra",
-        ),
+fn lane_argument_admission_rejects_missing_unknown_ambiguous_and_positional_inputs() -> TestResult {
+    for args in [
+        &[][..],
+        &["--bogus"][..],
+        &["--needs", "{}"][..],
+        &["--lane-plan"][..],
+        &["--lane-plan", "{}", "extra", "--needs", "{}"][..],
+        &["--lane-plan", "{}", "--need", "{}"][..],
+        &["--lane-plan", "{}", "--needs", "{}", "--needs", "{}"][..],
+        &["--lane-plan=", "--needs={}"][..],
+        &["--lane-plan", "--needs", "{}"][..],
+        &["--help", "--bogus"][..],
     ] {
         let output = Call::raw(args).run()?;
-        assert_output(
-            &output,
-            2,
-            &format!("{usage}validate-ci-lane-results.py: error: {error}\n"),
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(
+            output.stdout.is_empty(),
+            "failed admission cannot emit lane success"
         );
+        let diagnostic = text(&output.stderr);
+        assert!(
+            diagnostic.starts_with("usage: cargo xtool ci validate-lane "),
+            "{diagnostic}"
+        );
+        assert!(diagnostic.contains("\nerror: "), "{diagnostic}");
     }
+    Ok(())
+}
+
+#[test]
+fn lane_inline_and_reordered_exact_options_reach_domain_validation() -> TestResult {
+    let output = Call::raw(&["--needs={}", &format!("--lane-plan={QUALITY}")]).run()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(text(&output.stderr).starts_with("ERROR: "));
+    let no_op = r#"{"lane":"quality","required":false,"required_slices":[],"matrices":{}}"#;
+    let output = Call::raw(&["--needs={}", &format!("--lane-plan={no_op}")]).run()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
     Ok(())
 }

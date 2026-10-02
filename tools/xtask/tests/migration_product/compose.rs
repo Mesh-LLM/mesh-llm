@@ -57,6 +57,37 @@ fn run_group(group: &str) -> TestResult {
                 assert_eq!(ported["products"], golden["products"], "{group}/{name}");
                 assert_eq!(ported["stdout"], golden["stdout"], "{group}/{name}");
                 assert!(!ported["stderr"].as_str().ok_or("stderr")?.is_empty());
+                if matches!(
+                    name.as_str(),
+                    "version_mismatch"
+                        | "runtime_backend_mismatch"
+                        | "build_backend_mismatch"
+                        | "stale_host_digest"
+                        | "stale_runtime_file"
+                ) {
+                    assert!(
+                        ported["stderr"]
+                            .as_str()
+                            .ok_or("stderr")?
+                            .starts_with("product composition failed:")
+                    );
+                }
+            } else if group == "argv" && name.starts_with("help") {
+                assert_eq!(ported["code"], 0);
+                assert_eq!(ported["stderr"], "");
+                assert_eq!(ported["products"], serde_json::json!({}));
+                let help = ported["stdout"].as_str().ok_or("help")?;
+                assert!(help.starts_with("usage: product compose "));
+                for option in [
+                    "--bundle",
+                    "--host",
+                    "--runtime",
+                    "--version",
+                    "--backend",
+                    "--check",
+                ] {
+                    assert!(help.contains(option));
+                }
             } else {
                 assert_eq!(&ported, golden, "golden for {group}/{name}");
             }

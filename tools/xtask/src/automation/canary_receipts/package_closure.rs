@@ -12,6 +12,11 @@ mod candidate_plan;
 mod candidate_view;
 #[path = "package_closure/executable.rs"]
 mod executable;
+#[path = "package_closure/input.rs"]
+mod input;
+#[cfg(test)]
+#[path = "package_closure/input_tests.rs"]
+mod input_tests;
 #[path = "package_closure/packing.rs"]
 mod packing;
 #[path = "package_closure/parity_inventory.rs"]
@@ -90,8 +95,9 @@ pub(crate) fn run(args: &[String], workload: bool) -> DynResult<()> {
     if !parsed.positionals.is_empty() {
         return grammar.error("unexpected positional arguments").emit();
     }
-    let bytes = fs::read(parsed.last("--input").ok_or("missing --input")?)?;
+    let path = parsed.last("--input").ok_or("missing --input")?;
     let output = process::operation(|| {
+        let bytes = input::read(std::path::Path::new(path))?;
         if workload {
             workload_document(&bytes)
         } else {
@@ -138,21 +144,27 @@ pub(crate) fn transaction(args: &[String], verb: &str) -> DynResult<()> {
     if !parsed.positionals.is_empty() {
         return grammar.error("unexpected positional arguments").emit();
     }
-    let bytes = fs::read(parsed.last("--input").ok_or("missing --input")?)?;
-    let result = process::operation(|| match verb {
-        "producer-receipt" => Ok(
-            serde_json::json!({"producer_receipt_sha256":producer_receipt::write(&serde_json::from_slice(&bytes)?)?}),
-        ),
-        "candidate-plan" => Ok(
-            serde_json::json!({"admitted_identity_sha256":candidate_plan::admit(&serde_json::from_slice(&bytes)?)?}),
-        ),
-        "pack" => packing::pack(&serde_json::from_slice(&bytes)?),
-        "restore" => restoring::restore(&serde_json::from_slice(&bytes)?),
-        "manifest-policy" => manifest_policy::execute(&serde_json::from_slice(&bytes)?),
-        "parity-inventory" => parity_inventory::execute(&serde_json::from_slice(&bytes)?),
-        "split-roster" => split_roster::execute(&serde_json::from_slice(&bytes)?),
-        "certify" => certification::execute(&serde_json::from_slice(&bytes)?),
-        _ => Err("unknown package transaction".into()),
+    let path = parsed.last("--input").ok_or("missing --input")?;
+    let result = process::operation(|| {
+        let bytes = input::read(std::path::Path::new(path))?;
+        match verb {
+            "producer-receipt" => Ok(
+                serde_json::json!({"producer_receipt_sha256":producer_receipt::write(&serde_json::from_slice(&bytes)?)?}),
+            ),
+            "candidate-plan" => Ok(
+                serde_json::json!({"admitted_identity_sha256":candidate_plan::admit(&serde_json::from_slice(&bytes)?)?}),
+            ),
+            "pack" => packing::pack(&serde_json::from_slice(&bytes)?),
+            "restore" => restoring::restore(&serde_json::from_slice(&bytes)?),
+            "local-manifest-policy" | "local-parity-inventory" | "local-split-roster" => {
+                local_inspection::execute(&bytes, verb)
+            }
+            "manifest-policy" => manifest_policy::execute(&serde_json::from_slice(&bytes)?),
+            "parity-inventory" => parity_inventory::execute(&serde_json::from_slice(&bytes)?),
+            "split-roster" => split_roster::execute(&serde_json::from_slice(&bytes)?),
+            "certify" => certification::execute(&serde_json::from_slice(&bytes)?),
+            _ => Err("unknown package transaction".into()),
+        }
     });
     match result {
         Ok(output) => {
@@ -199,6 +211,11 @@ mod fixture_scope;
 #[path = "package_closure/certification.rs"]
 mod certification;
 
+#[path = "package_closure/policy_document.rs"]
+mod policy_document;
+
+#[path = "package_closure/local_inspection.rs"]
+mod local_inspection;
 #[path = "package_closure/manifest_policy.rs"]
 mod manifest_policy;
 #[path = "package_closure/model_boundaries.rs"]

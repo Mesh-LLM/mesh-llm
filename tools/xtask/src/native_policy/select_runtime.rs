@@ -1,9 +1,8 @@
 //! `native select-runtime`: the Rust owner of
-//! `scripts/select-native-runtime.py`. Selects the one runtime directory
+//! `scripts/native select-runtime`. Selects the one runtime directory
 //! under `--root` whose `manifest.json` matches the platform and backend,
 //! printing it; an ambiguous or empty selection (and any malformed manifest)
-//! fails like the legacy script's uncaught exception, as its final traceback
-//! line with status 1.
+//! fails with a native runtime selection diagnostic and status 1.
 
 use super::argv::{Grammar, Opt};
 use super::manifest_json::{Raised, load_manifest, subscript, toolkit_text};
@@ -13,13 +12,13 @@ use crate::repository::check_report::CheckReport;
 use std::path::Path;
 
 const GRAMMAR: Grammar = Grammar {
-    prog: "select-native-runtime.py",
+    prog: "native select-runtime",
     usage: "\
-usage: select-native-runtime.py [-h] --root ROOT --os OS --arch ARCH
+usage: native select-runtime [-h] --root ROOT --os OS --arch ARCH
                                 --backend BACKEND [--cuda-major CUDA_MAJOR]
 ",
     help: "\
-usage: select-native-runtime.py [-h] --root ROOT --os OS --arch ARCH
+usage: native select-runtime [-h] --root ROOT --os OS --arch ARCH
                                 --backend BACKEND [--cuda-major CUDA_MAJOR]
 
 options:
@@ -126,7 +125,7 @@ fn select(request: &Request<'_>) -> Result<String, Raised> {
                 matches.join(", ")
             };
             Err(Raised(format!(
-                "ValueError: expected exactly one native runtime for {}/{}/{}; found {rendered} under {root}",
+                "native runtime selection failed: expected exactly one native runtime for {}/{}/{}; found {rendered} under {root}",
                 request.os, request.arch, request.backend
             )))
         }
@@ -165,5 +164,57 @@ mod tests {
         assert_eq!(child(".", "cpu"), "cpu");
         assert_eq!(child("/", "cpu"), "/cpu");
         assert_eq!(child("dist/runtimes", "cpu"), "dist/runtimes/cpu");
+    }
+}
+
+#[cfg(test)]
+mod selection_diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn empty_and_ambiguous_selection_fail_without_modifying_runtime_manifests() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().to_str().unwrap();
+        let args = [
+            "--root",
+            root,
+            "--os",
+            "linux",
+            "--arch",
+            "x86_64",
+            "--backend",
+            "cpu",
+        ]
+        .map(str::to_owned);
+        let empty = run(&args);
+        assert_eq!(empty.code, 1);
+        assert!(empty.stdout.is_empty());
+        assert!(empty.stderr.contains("expected exactly one native runtime"));
+        assert!(empty.stderr.contains("found none"));
+        assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
+        let bytes =
+            br#"{"runtime":{"platform":{"os":"linux","arch":"x86_64"},"backend":{"kind":"cpu"}}}"#;
+        for name in ["first", "second"] {
+            let directory = scratch.path().join(name);
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("manifest.json"), bytes).unwrap();
+        }
+        let ambiguous = run(&args);
+        assert_eq!(ambiguous.code, 1);
+        assert!(ambiguous.stdout.is_empty());
+        assert!(
+            ambiguous
+                .stderr
+                .contains("expected exactly one native runtime")
+        );
+        for name in ["first", "second"] {
+            assert!(ambiguous.stderr.contains(name));
+            let directory = scratch.path().join(name);
+            assert_eq!(
+                std::fs::read(directory.join("manifest.json")).unwrap(),
+                bytes
+            );
+            assert_eq!(std::fs::read_dir(directory).unwrap().count(), 1);
+        }
     }
 }
