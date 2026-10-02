@@ -355,6 +355,8 @@ struct RemoteDeliveredFacts<'a> {
     /// The peer `route_model_request` saw deliver the attempt.
     observed_served_by_hex: Option<String>,
     request_digest: Option<String>,
+    /// The client's `x-mesh-twin-bracket` value, copied unread.
+    twin_bracket_id: Option<String>,
 }
 
 /// The terminal envelope for an exchange a peer delivered: `RemoteMesh`,
@@ -374,7 +376,8 @@ fn remote_delivered_terminal(
         facts.nonce,
         facts.nonce_source,
         facts.peer_capsule_id,
-    );
+    )
+    .with_twin_bracket_id(facts.twin_bracket_id);
     if let Some(provenance) =
         serving_provenance_for_remote_mesh(facts.target, facts.observed_served_by_hex, outcome)
     {
@@ -391,6 +394,33 @@ fn remote_delivered_terminal(
         terminal = terminal.with_output_digests(output_digests);
     }
     terminal
+}
+
+/// The facts for a local-candidates exchange that election delivered from a
+/// peer: the request's nonce and twin bracket, as on the remote-mesh branch,
+/// and the peer that delivered it.
+fn local_route_delivered_by_peer<'a>(
+    request: &proxy::BufferedHttpRequest,
+    exchange_id: String,
+    model_name: &'a str,
+    peer_hex: String,
+    peer_capsule_id: Option<String>,
+    request_digest: Option<String>,
+) -> RemoteDeliveredFacts<'a> {
+    let (nonce, nonce_origin) = request.capsule_nonce_headers();
+    let nonce_source = remote_mesh_nonce_source(&nonce, &nonce_origin);
+    RemoteDeliveredFacts {
+        exchange_id,
+        model_name,
+        nonce,
+        nonce_source,
+        peer_capsule_id,
+        target: None,
+        observed_served_by_hex: Some(peer_hex),
+        request_digest,
+        // Validated in `route_request`; copied unread.
+        twin_bracket_id: twin_bracket_id(request).ok().flatten(),
+    }
 }
 
 /// The terminal for the local-candidates route. Election there may deliver
@@ -1151,10 +1181,10 @@ async fn route_missing_local_model(
                         target,
                         observed_served_by_hex: served_by_node_id_sink.take(),
                         request_digest,
+                        twin_bracket_id: twin_bracket,
                     },
                     &outcome,
-                )
-                .with_twin_bracket_id(twin_bracket);
+                );
                 ch.publish(&terminal).await;
             }
             return outcome;
@@ -1752,18 +1782,14 @@ async fn route_request(
         .await;
         if let Some((plugin_manager, exchange_id)) = announce.as_ref() {
             let delivered_by_peer = served_by_node_id_sink.take().map(|peer_hex| {
-                let (nonce, nonce_origin) = request.capsule_nonce_headers();
-                let nonce_source = remote_mesh_nonce_source(&nonce, &nonce_origin);
-                RemoteDeliveredFacts {
-                    exchange_id: exchange_id.clone(),
+                local_route_delivered_by_peer(
+                    request,
+                    exchange_id.clone(),
                     model_name,
-                    nonce,
-                    nonce_source,
-                    peer_capsule_id: peer_capsule_id_sink.take(),
-                    target: None,
-                    observed_served_by_hex: Some(peer_hex),
-                    request_digest: request_digest.clone(),
-                }
+                    peer_hex,
+                    peer_capsule_id_sink.take(),
+                    request_digest.clone(),
+                )
             });
             publish_local_route_terminal(
                 ctx.node,
