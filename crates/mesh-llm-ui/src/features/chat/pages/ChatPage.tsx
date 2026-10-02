@@ -481,7 +481,13 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   )
 
   const submitPromptNow = useCallback(
-    async (submission: ComposerSubmission, conversationId = activeConversationKey || chatConversationId) => {
+    async (
+      submission: ComposerSubmission,
+      conversationId = activeConversationKey || chatConversationId,
+      // Taken at submit and carried with the request: attachment processing below can take
+      // a while, and a target change during it must not reroute this prompt.
+      targetSnapshot = target ?? ''
+    ) => {
       const promptSnapshot = submission.prompt
       const attachmentsSnapshot = [...submission.attachments]
       const ensuredConversationId = ensureConversation(conversationId)
@@ -525,7 +531,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
           }
         })
         setAttachmentProcessingStatus((current) => (current?.conversationId === ensuredConversationId ? null : current))
-        await chat.sendMessage(content)
+        await chat.sendMessage(content, { body: { target: targetSnapshot } })
       } catch (error) {
         setAttachmentProcessingStatus((current) => (current?.conversationId === ensuredConversationId ? null : current))
         const pendingSend = pendingSendRef.current
@@ -561,6 +567,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       clearStoppedConversation,
       ensureConversation,
       setComposerDraft,
+      target,
       updateThread
     ]
   )
@@ -577,7 +584,8 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         ...submission,
         id: createQueuedSubmissionId(),
         timestamp: new Date().toISOString(),
-        conversationId: composerConversationId
+        conversationId: composerConversationId,
+        target: target ?? ''
       }
       setQueuedSubmissions((current) => {
         const next = [...current, queued]
@@ -598,7 +606,8 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     composerDraft,
     composerShouldQueue,
     requestJumpToLatest,
-    submitPromptNow
+    submitPromptNow,
+    target
   ])
 
   useEffect(() => {
@@ -621,7 +630,8 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       try {
         await submitPromptNow(
           { prompt: nextSubmission.prompt, attachments: [...nextSubmission.attachments] },
-          nextSubmission.conversationId
+          nextSubmission.conversationId,
+          nextSubmission.target
         )
       } finally {
         queueDrainInFlightRef.current = false

@@ -1,12 +1,16 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { MultimodalContent } from '@tanstack/ai-client'
+import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { ChatLayout } from '@/features/chat/layouts/ChatLayout'
 import {
   attachmentPreprocessingMock,
+  ChatPage,
   chatMock,
   createDeferred,
+  DataModeProvider,
+  FeatureFlagProvider,
   createObjectUrlMock,
   expectPartialAssistantReply,
   queryAllByTextContent,
@@ -250,6 +254,45 @@ describe('ChatPage', () => {
       expect(chatMock.sendCalls).toHaveLength(1)
     })
     expect(screen.queryByLabelText('Attachment preparation status')).not.toBeInTheDocument()
+  })
+
+  it('keeps the submitted target when the target is cleared during attachment processing', async () => {
+    const user = userEvent.setup()
+    const node = 'a70d3967bea3b22fa48a28f77c5d2b3764fc8bd5204a82c09ff8430f3f2a0a00'
+    const imageDescription = createDeferred<{ imageDescription?: string }>()
+    attachmentPreprocessingMock.describeImageForPrompt.mockImplementation(() => imageDescription.promise)
+    chatMock.sendStatus = 'ready'
+
+    function TargetedChat() {
+      const [target, setTarget] = useState<string | undefined>(node)
+      return <ChatPage target={target} onClearTarget={() => setTarget(undefined)} />
+    }
+    render(
+      <FeatureFlagProvider>
+        <DataModeProvider initialMode="live" persist={false}>
+          <TargetedChat />
+        </DataModeProvider>
+      </FeatureFlagProvider>
+    )
+
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement
+    await user.upload(picker, new File(['image-bytes'], 'slow.png', { type: 'image/png' }))
+    await user.type(screen.getByLabelText('Prompt'), 'Describe this for the selected node')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByLabelText('Attachment preparation status')
+
+    await user.click(screen.getByRole('button', { name: 'clear' }))
+    expect(screen.queryByText(/Sending to/)).not.toBeInTheDocument()
+    imageDescription.resolve({ imageDescription: '[Image description: A diagram]' })
+
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(1))
+    expect(chatMock.sendCalls[0]?.target).toBe(node)
+
+    await user.type(screen.getByLabelText('Prompt'), 'And now route as usual')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(2))
+    expect(chatMock.sendCalls[1]?.target).toBe('')
   })
 
   it('reuses the loaded browser analyzer state for later attachment submissions', async () => {

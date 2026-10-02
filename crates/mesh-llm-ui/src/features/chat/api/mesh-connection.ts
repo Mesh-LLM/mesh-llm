@@ -393,6 +393,14 @@ async function* runConnect(
   yield { type: EventType.RUN_FINISHED, threadId: requestId, runId: requestId }
 }
 
+/** The target a submission carried (`sendMessage(content, { body: { target } })`), if any. It was
+ *  taken when the prompt was submitted, so it wins over the current target: changing or
+ *  clearing the target later never reroutes a prompt that was already submitted. */
+function submittedTarget(data: Record<string, unknown> | undefined): string | undefined {
+  const target = data?.target
+  return typeof target === 'string' ? target : undefined
+}
+
 export function createMeshConnectionAdapter(
   model: StringSource,
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
@@ -407,7 +415,7 @@ export function createMeshConnectionAdapter(
         abortSignal,
         onResponseMetadata,
         resolveOptionalString(systemPrompt),
-        resolveOptionalString(target)
+        submittedTarget(_data) ?? resolveOptionalString(target)
       )
   }
 }
