@@ -21,6 +21,13 @@ pub(crate) fn timestamp(value: &str) -> Result<Option<Instant>, TimeError> {
 }
 
 impl Instant {
+    pub(crate) fn from_system_time(time: std::time::SystemTime) -> Option<Self> {
+        let unix =
+            i64::try_from(time.duration_since(std::time::UNIX_EPOCH).ok()?.as_micros()).ok()?;
+        let value = (days_before_year(1970) * DAY_US).checked_add(unix)?;
+        (value < days_before_year(10_000) * DAY_US).then_some(Self(value))
+    }
+
     pub(crate) fn micros(self) -> i64 {
         self.0
     }

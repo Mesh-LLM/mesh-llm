@@ -12,7 +12,7 @@ use super::imports::{elf_imports, macho_imports, pe_imports};
 use super::toolchain::{Toolchain, run_tool};
 use crate::ci_plan::catalog::{os_error_text, python_path_display};
 use crate::ci_plan::document::Json;
-use crate::model_registry::python_json::{ASCII, Style, dumps};
+use crate::model_registry::json_bytes::{ASCII, Style, dumps};
 use crate::repository::check_report::CheckReport;
 use std::path::{Path, PathBuf};
 

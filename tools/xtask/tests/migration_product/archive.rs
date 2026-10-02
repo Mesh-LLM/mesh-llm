@@ -46,94 +46,92 @@ fn composed(source: &Path, host: &str) -> TestResult {
 }
 
 #[test]
-fn migration_product_archive_matches_legacy_unpacked_contents_and_modes() -> TestResult {
+fn migration_product_archive_preserves_composed_members_bytes_modes_and_checksum() -> TestResult {
     let scratch = Scratch::new()?;
     let source = scratch.path().join("mesh-bundle");
     fs::create_dir_all(&source)?;
     fs::write(source.join("mesh-llm"), b"host")?;
     composed(&source, "mesh-llm")?;
-    let legacy = scratch.path().join("legacy.tar.gz");
-    let modern = scratch.path().join("modern.tar.gz");
-    let historical = Command::new("git")
-        .current_dir(crate::support::repository_root())
-        .args(["show", "9cf28138c"])
-        .output()?;
-    assert!(historical.status.success());
-    let script = String::from_utf8(historical.stdout)?;
-    let start = script
-        .find("create_archive() {")
-        .ok_or("missing legacy create_archive")?;
-    let end = script[start..]
-        .find("\nwrite_checksum_sidecar() {")
-        .ok_or("missing legacy sidecar")?
-        + start;
-    let legacy_function = &script[start..end];
-    let old = Command::new("bash")
-        .arg("-c").arg(format!("set -euo pipefail\npython_bin() {{ command -v python3; }}\n{legacy_function}\ncreate_archive \"$1\" \"$2\" tar.gz"))
-        .arg("bash").arg(&source).arg(&legacy).output()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(source.join("mesh-llm"), fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(
+            source.join("native-runtimes/rt/manifest.json"),
+            fs::Permissions::from_mode(0o644),
+        )?;
+    }
+    let archive = scratch.path().join("product.tar.gz");
+    let output = command(scratch.path(), "archive-write", &source, &archive, "tar.gz")?;
     assert!(
-        old.status.success(),
+        output.status.success(),
         "{}",
-        String::from_utf8_lossy(&old.stderr)
+        String::from_utf8_lossy(&output.stderr)
     );
-    let new = command(scratch.path(), "archive-write", &source, &modern, "tar.gz")?;
+    let listing = Command::new("tar").arg("-tzf").arg(&archive).output()?;
     assert!(
-        new.status.success(),
+        listing.status.success(),
         "{}",
-        String::from_utf8_lossy(&new.stderr)
+        String::from_utf8_lossy(&listing.stderr)
     );
-    let inspect = |archive: &Path| -> Result<String, Box<dyn std::error::Error>> {
-        let result = Command::new("tar").arg("-tvzf").arg(archive).output()?;
-        assert!(result.status.success());
-        Ok(String::from_utf8(result.stdout)?)
-    };
-    let old_listing = inspect(&legacy)?;
-    let new_listing = inspect(&modern)?;
-    let old_entries: Vec<_> = old_listing
-        .lines()
-        .map(|line| {
-            (
-                line.split_whitespace().next().unwrap_or(""),
-                line.split_whitespace().last().unwrap_or(""),
-            )
-        })
-        .collect();
-    let new_entries: Vec<_> = new_listing
-        .lines()
-        .map(|line| {
-            (
-                line.split_whitespace().next().unwrap_or(""),
-                line.split_whitespace().last().unwrap_or(""),
-            )
-        })
-        .collect();
-    assert_eq!(old_entries, new_entries);
-    for entry in [
-        "mesh-bundle/mesh-llm",
-        "mesh-bundle/product-manifest.json",
-        "mesh-bundle/native-runtimes/rt/manifest.json",
+    assert_eq!(
+        String::from_utf8(listing.stdout)?,
+        concat!(
+            "mesh-bundle/\n",
+            "mesh-bundle/mesh-llm\n",
+            "mesh-bundle/native-runtimes/\n",
+            "mesh-bundle/native-runtimes/rt/\n",
+            "mesh-bundle/native-runtimes/rt/manifest.json\n",
+            "mesh-bundle/product-manifest.json\n",
+        )
+    );
+    for relative in [
+        "mesh-llm",
+        "product-manifest.json",
+        "native-runtimes/rt/manifest.json",
     ] {
-        let extract = |archive: &Path| -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-            let output = Command::new("tar")
-                .arg("-xOzf")
-                .arg(archive)
-                .arg(entry)
-                .output()?;
-            assert!(output.status.success());
-            Ok(output.stdout)
-        };
+        let extracted = Command::new("tar")
+            .arg("-xOzf")
+            .arg(&archive)
+            .arg(format!("mesh-bundle/{relative}"))
+            .output()?;
+        assert!(
+            extracted.status.success(),
+            "{relative}: {}",
+            String::from_utf8_lossy(&extracted.stderr)
+        );
         assert_eq!(
-            Sha256::digest(extract(&legacy)?),
-            Sha256::digest(extract(&modern)?),
-            "{entry}"
+            extracted.stdout,
+            fs::read(source.join(relative))?,
+            "{relative}"
         );
     }
-    let sidecar = fs::read_to_string(modern.with_file_name("modern.tar.gz.sha256"))?;
+    #[cfg(unix)]
+    {
+        let listing = Command::new("tar").arg("-tvzf").arg(&archive).output()?;
+        assert!(listing.status.success());
+        let listing = String::from_utf8(listing.stdout)?;
+        for (relative, permissions) in [
+            ("mesh-bundle/mesh-llm", "-rwxr-xr-x"),
+            ("mesh-bundle/native-runtimes/rt/manifest.json", "-rw-r--r--"),
+        ] {
+            let entry = listing
+                .lines()
+                .find(|line| line.split_whitespace().last() == Some(relative))
+                .ok_or("archive member missing")?;
+            assert_eq!(
+                entry.split_whitespace().next(),
+                Some(permissions),
+                "{relative}"
+            );
+        }
+    }
+    let sidecar = fs::read_to_string(archive.with_file_name("product.tar.gz.sha256"))?;
     assert_eq!(
         sidecar,
         format!(
-            "{}  modern.tar.gz\n",
-            hex::encode(Sha256::digest(fs::read(modern)?))
+            "{}  product.tar.gz\n",
+            hex::encode(Sha256::digest(fs::read(archive)?))
         )
     );
     Ok(())

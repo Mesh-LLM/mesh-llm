@@ -1,9 +1,8 @@
 {
-  "origin": "source-derived, not executable oracle capture",
-  "oracle_capture": "pending",
+  "origin": "product field contracts and source-derived smoke decisions; no executable oracle",
   "cases": [
     {"name":"runtime-ready","check":"runtime","body":"{\"llama_ready\":true}","expected":"advance"},
-    {"name":"runtime-string-true","check":"runtime","body":"{\"llama_ready\":\"True\"}","expected":"advance"},
+    {"name":"runtime-string-true","check":"runtime","body":"{\"llama_ready\":\"True\"}","expected":"pending"},
     {"name":"runtime-false","check":"runtime","body":"{\"llama_ready\":false}","expected":"pending"},
     {"name":"runtime-number","check":"runtime","body":"{\"llama_ready\":1}","expected":"pending"},
     {"name":"runtime-invalid","check":"runtime","body":"{","expected":"pending"},
@@ -15,7 +14,7 @@
     {"name":"models-malformed","check":"models","body":"{\"data\":42}","expected":"pending"},
     {"name":"chat-content","check":"chat","body":"{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":\"hello\"}}]}","expected":"advance"},
     {"name":"chat-whitespace","check":"chat","body":"{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":\" \"}}]}","expected":"advance"},
-    {"name":"chat-array-content","check":"chat","body":"{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":[1]}}]}","expected":"advance"},
+    {"name":"chat-array-content","check":"chat","body":"{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":[1]}}]}","expected":"reject"},
     {"name":"chat-empty-content","check":"chat","body":"{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":\"\"}}]}","expected":"reject"},
     {"name":"chat-wrong-object","check":"chat","body":"{\"object\":\"wrong\",\"choices\":[{\"message\":{\"content\":\"hello\"}}]}","expected":"reject"},
     {"name":"chat-null","check":"chat","body":"null","expected":"reject"},

@@ -1,7 +1,4 @@
-//! argparse emulation for `scripts/release-notes-regroup.py` under Python
-//! 3.13: string options, the `--list`/`--check` flags, unique-prefix
-//! abbreviations, `=value`, `-h`, the required `--body`, unrecognized
-//! arguments, and the script's own `parser.error` messages.
+//! Closed options for release-note regrouping.
 
 use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::ci_operations::runner_identity_argv::error;
@@ -57,7 +54,8 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, CheckReport> {
             continue;
         }
         match classify(arg, &OPTIONS) {
-            Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
+            Kind::Positional => extras.push(arg.clone()),
+            Kind::Unknown => return Err(fail(&format!("unrecognized argument: {arg}"))),
             Kind::Known("-h" | "--help", explicit, sep) => {
                 help_flag(explicit, sep, "-h/--help", &fail)?;
                 return Err(CheckReport::success(HELP.to_owned()));
@@ -116,32 +114,8 @@ fn take_value(
 mod tests {
     use super::*;
 
-    fn stderr(text: &str) -> String {
-        let argv: Vec<String> = text.split(' ').map(str::to_owned).collect();
-        match parse(&argv) {
-            Ok(_) => String::new(),
-            Err(report) => report.stderr.lines().last().unwrap_or("").to_owned(),
-        }
-    }
-
     #[test]
-    fn migration_release_regroup_argv_matches_argparse() {
-        let prefix = "release-notes-regroup.py: error: ";
-        let cases = [
-            ("--body --x", "argument --body: expected one argument"),
-            (
-                "--plan p zz",
-                "the following arguments are required: --body",
-            ),
-            ("--body b zz", "unrecognized arguments: zz"),
-            (
-                "--body b --list=1",
-                "argument --list: ignored explicit argument \"1\"",
-            ),
-        ];
-        for (args, message) in cases {
-            assert_eq!(stderr(args), format!("{prefix}{message}"), "{args}");
-        }
+    fn regroup_options_select_body_metadata_and_modes() {
         let argv: Vec<String> = ["--body=x", "--check", "--metadata-from", "t", "--list"]
             .map(str::to_owned)
             .to_vec();

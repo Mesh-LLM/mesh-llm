@@ -11,7 +11,7 @@ use super::{Error, Interrupt, invocation, parent, publish_count, scope};
 use crate::automation::rewriter_report::generator::{self, Pass, Summary};
 use crate::command::DynResult;
 use crate::process::Cancellation;
-use crate::repository::python_text::strip;
+use crate::repository::text::strip;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 

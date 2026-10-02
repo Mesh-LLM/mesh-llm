@@ -61,16 +61,13 @@ pub(crate) fn run_pass<'a>(runs: &'a [Run], requested: &str) -> Outcome<Pass<'a>
     Ok(pass)
 }
 
-/// Python's `hash()` rejects list and dict job ids in `sample_by_job_id`.
-fn check_hashable(id: &Value) -> Outcome<()> {
-    let kind = match id {
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-        _ => return Ok(()),
-    };
-    Err(Failure::Uncaught(format!(
-        "TypeError: unhashable type: '{kind}'"
-    )))
+/// Terminal sample correlation requires a type-distinct scalar identity.
+fn check_scalar_identity(id: &Value) -> Outcome<()> {
+    if matches!(id, Value::Array(_) | Value::Object(_)) {
+        Err(Failure::Uncaught("CI job identity must be a scalar".into()))
+    } else {
+        Ok(())
+    }
 }
 
 fn add_run<'a>(pass: &mut Pass<'a>, run: &'a Run) -> Outcome<()> {
@@ -93,7 +90,7 @@ fn add_run<'a>(pass: &mut Pass<'a>, run: &'a Run) -> Outcome<()> {
     }
     let samples = &pass.observations[first..];
     for sample in samples {
-        check_hashable(&sample.job.id)?;
+        check_scalar_identity(&sample.job.id)?;
     }
     let mut terminal: Option<&Job> = None;
     for job in jobs.iter().filter(|job| job.completed.is_some()) {

@@ -1,11 +1,8 @@
-//! ZIP central directory parsing with Python 3.13 `zipfile` semantics: the
-//! same end-of-central-directory search, ZIP64 extra decoding, filename
-//! decoding and the exception text a legacy traceback ends with.
+//! ZIP central directory, extra field and filename validation.
 
-use super::zip_text::{InfoView, cp437, info_repr};
+use super::zip_text::cp437;
 
-/// Why extraction stopped: a legacy `SystemExit` diagnostic or the final
-/// line of an uncaught Python exception.
+/// Unsafe extraction request or malformed/unsupported archive data.
 #[derive(Debug)]
 pub(super) enum Failure {
     Unsafe(String),
@@ -13,7 +10,7 @@ pub(super) enum Failure {
 }
 
 pub(super) fn bad_zip(message: &str) -> Failure {
-    Failure::Raised(format!("zipfile.BadZipFile: {message}"))
+    Failure::Raised(format!("invalid ZIP archive: {message}"))
 }
 
 /// A central-directory record (`ZipInfo`).
@@ -35,15 +32,15 @@ impl Info {
         self.filename.ends_with('/')
     }
 
-    /// `repr(ZipInfo)`.
-    pub(super) fn repr(&self) -> String {
-        info_repr(&InfoView {
-            filename: &self.filename,
-            method: self.method,
-            external: self.external,
-            file_size: self.file_size,
-            compress_size: self.compress_size,
-        })
+    pub(super) fn describe(&self) -> String {
+        format!(
+            "entry {:?} (method {}, mode {:#o}, size {}, compressed {})",
+            self.filename,
+            self.method,
+            self.external >> 16,
+            self.file_size,
+            self.compress_size
+        )
     }
 }
 
@@ -64,18 +61,8 @@ pub(super) fn decode_name(raw: &[u8], flags: u16) -> Result<String, Failure> {
     if flags & 0x800 == 0 {
         return Ok(cp437(raw));
     }
-    String::from_utf8(raw.to_vec()).map_err(|error| {
-        let at = error.utf8_error().valid_up_to();
-        let reason = match error.utf8_error().error_len() {
-            None => "unexpected end of data",
-            Some(_) if raw[at] >= 0xc2 && raw[at] <= 0xf4 => "invalid continuation byte",
-            Some(_) => "invalid start byte",
-        };
-        Failure::Raised(format!(
-            "UnicodeDecodeError: 'utf-8' codec can't decode byte {:#04x} in position {at}: {reason}",
-            raw[at]
-        ))
-    })
+    String::from_utf8(raw.to_vec())
+        .map_err(|error| Failure::Raised(format!("invalid UTF-8 ZIP filename: {error}")))
 }
 
 /// `_EndRecData`: (`offset of the record`, `size_cd`, `offset_cd`).
@@ -174,7 +161,7 @@ pub(super) fn open(data: Vec<u8>) -> Result<Archive, Failure> {
         if header[6] > 63 {
             let version = f64::from(header[6]) / 10.0;
             return Err(Failure::Raised(format!(
-                "NotImplementedError: zip file version {version:.1}"
+                "unsupported ZIP version {version:.1}"
             )));
         }
         let mut info = Info {

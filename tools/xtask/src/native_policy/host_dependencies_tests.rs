@@ -125,7 +125,7 @@ fn migration_native_policy_tool_failures_exit_two() {
     let report = run(&args(&["--format", "pe", "m.exe"]), &tools, &mut no_floor);
     assert_eq!(
         report.stderr,
-        "Command '(\"objdump\", \"-p\", \"m.exe\")' returned non-zero exit status 3.\n"
+        "native inspection command [\"objdump\", \"-p\", \"m.exe\"] exited with status 3\n"
     );
     assert_eq!(report.code, 2);
     let missing = FakeToolchain::new(Vec::new());

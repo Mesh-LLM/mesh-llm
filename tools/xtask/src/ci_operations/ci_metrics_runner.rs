@@ -3,7 +3,7 @@
 //! architecture, role and Depot size derived from runner labels.
 
 use crate::ci_operations::ci_metrics_value::{Value, object};
-use crate::repository::python_text::strip;
+use crate::repository::text::strip;
 use std::collections::BTreeSet;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]

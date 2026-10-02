@@ -3,7 +3,7 @@
 //! single-dash values, and the negative-number/space positional rules.
 
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 /// One argument as argparse classifies it.
 pub(crate) enum Kind<'o> {

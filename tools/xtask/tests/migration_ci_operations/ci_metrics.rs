@@ -296,13 +296,12 @@ fn migration_ci_operations_ci_metrics_reports_runner_dimensions() -> TestResult 
 /// duplicate keys, codec errors, and the tracebacks (status 1) of
 /// exceptions the legacy script does not catch.
 #[test]
-fn migration_ci_operations_ci_metrics_matches_python_values() -> TestResult {
+fn migration_ci_operations_ci_metrics_preserves_json_and_rejects_invalid_job_shapes() -> TestResult
+{
     for (name, input) in [
         ("value_bom", "bom.json"),
         ("value_bad_utf8", "bad_utf8.json"),
         ("value_duplicate_keys", "duplicate_keys.json"),
-        ("value_equal_job_ids", "equal_job_ids.json"),
-        ("value_inert_list_job", "inert_list_job.json"),
     ] {
         report(name, input, &["--raw-out", RAW_OUTPUT])?;
     }
@@ -310,6 +309,8 @@ fn migration_ci_operations_ci_metrics_matches_python_values() -> TestResult {
         ("uncaught_list_job_id", "list_job_id.json"),
         ("uncaught_string_job", "string_job.json"),
         ("uncaught_timestamp_overflow", "timestamp_overflow.json"),
+        ("invalid_attempt", "equal_job_ids.json"),
+        ("invalid_list_job", "inert_list_job.json"),
     ] {
         uncaught(name, input)?;
     }
@@ -326,6 +327,61 @@ fn uncaught(name: &str, input: &str) -> TestResult {
     assert!(matches!(actual.code, 1 | 2), "{name}");
     assert!(actual.stdout.is_empty());
     assert!(!actual.stderr.is_empty());
+    assert!(actual.output.is_none());
+    Ok(())
+}
+
+#[test]
+fn migration_ci_operations_ci_metrics_typed_admission_precedes_publication() -> TestResult {
+    let sandbox = Sandbox::new("typed-admission")?;
+    let args = [
+        "--input",
+        "typed.json",
+        "--json-out",
+        OUTPUT,
+        "--raw-out",
+        RAW_OUTPUT,
+        "--markdown-out",
+        MARKDOWN_OUTPUT,
+    ];
+    let valid = fs::read_to_string(sandbox.stage.path().join("equal_job_ids.json"))?
+        .replace("\" 0_1 \"", "\"1\"")
+        .replace(
+            "\"id\":1.0,\"name\":\"b\"",
+            "\"id\":1.0,\"name\":\"b\",\"dependency_wait_seconds\":4.5",
+        );
+    sandbox.stage.write("typed.json", valid.as_bytes())?;
+    let actual = port(&sandbox, &args, None)?;
+    assert_eq!(actual.code, 0, "{}", actual.stderr);
+    let report = report_json(&actual)?;
+    assert_eq!(report["jobs"]["sample_count"], 2);
+    assert_eq!(report["runs"][0]["terminal_job"], "a");
+    assert!(report["runs"][0]["terminal_job_dependency_wait_seconds"].is_null());
+    for attempt in ["true", "1.5", "0", "\" 1 \"", "\"1_0\""] {
+        let invalid = valid.replace("\"attempt\":\"1\"", &format!("\"attempt\":{attempt}"));
+        sandbox.stage.write("typed.json", invalid.as_bytes())?;
+        let actual = port(&sandbox, &args, None)?;
+        assert_eq!(actual.code, 2, "{attempt}");
+        assert!(
+            actual
+                .stderr
+                .contains("CI run attempt must be a positive integer")
+        );
+        assert!(
+            actual.output.is_none()
+                && actual.raw_output.is_none()
+                && actual.markdown_output.is_none()
+        );
+    }
+    // Finite durations can overflow statistics; no non-JSON aggregate is published.
+    let overflow = br#"[{"jobs":[{"id":1,"dependency_wait_seconds":1e308},{"id":2,"dependency_wait_seconds":1e308}],"status":"completed","conclusion":"success"}]"#;
+    sandbox.stage.write("typed.json", overflow)?;
+    let actual = port(&sandbox, &args, None)?;
+    assert_eq!(actual.code, 2, "{}", actual.stderr);
+    assert!(actual.stderr.contains("nonfinite"));
+    assert!(
+        actual.output.is_none() && actual.raw_output.is_none() && actual.markdown_output.is_none()
+    );
     Ok(())
 }
 
@@ -522,7 +578,8 @@ fn migration_ci_operations_ci_metrics_renders_markdown_streams() -> TestResult {
         ],
     )?;
     let stdin = fs::read(fixture_dir().join("ci_metrics/inputs/epoch_timestamps.json"))?;
-    case_with_stdin("markdown_stdin_default", &["--input", "-"], Some(&stdin))?;
+    let zero_capacity = case_with_stdin("markdown_stdin_default", &["--input", "-"], Some(&stdin))?;
+    assert!(zero_capacity.stdout.contains("peak workers: **0**"));
     case(
         "markdown_parent_is_file",
         &[

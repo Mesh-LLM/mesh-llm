@@ -139,10 +139,10 @@ from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
 cannot be combined with this input. Keep the Actions workflow ref on `main`;
 selecting `mesh_ref` always runs a complete certify-only pass, without Goose,
 source repair, an independent upgrade-verification pass, or PR publication.
-The main controller, handoff validation, and aggregation remain at the workflow
-revision; the canonical planner, source build scripts, and battery run from a
-separate checkout of the selected SHA. The controller sorts only the scheduling
-matrix, leaving the source-owned canonical plan unchanged. The package binds both revisions, and workers
+The approved Rust source-plan API uses the current controller planner for every
+selected SHA; source build scripts and the battery remain selected-source code.
+Rust `gguf_metadata` yields `metadata_admitted`; other modes stay `pending`, with downgrade rejection.
+Python callers remain unchanged; metadata is not environment readiness. The package binds both revisions, and workers
 reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
 Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
@@ -177,7 +177,7 @@ in the repair session and trusted build; the per-case timeout remains 900 second
 
 Before compilation, the controller runs the selected battery in cache-free
 `--dry-run --skip-build` mode against its own planner output. This checks the
-actual producer/consumer plan contract, including older planner order and
+actual producer/consumer plan contract, without historical planner emulation and with
 source-relative manifest paths. Handoff schema 3 also carries a digest-bound,
 one-commit prepared llama.cpp bundle and preparation markers. Workers restore
 and verify that source against the selected pin and patch queue before lanes
@@ -746,9 +746,12 @@ runtime producers are not duplicated.
   uncertified PR runner before the workflow gate reaches main.
   Windows product restore passes LF-terminated manifest fields to Git Bash so
   its runtime path does not retain Python's Windows carriage return. The Laya
-  parity driver decodes golden fixtures as UTF-8 on Windows, and the smoke
-  harness preserves its result if a child briefly holds its log open during
-  temporary-directory cleanup.
+  parity driver is Rust `automation laya parity`, with UTF-8 fixture decoding
+  and source-order-preserving request objects. `automation laya product`
+  owns startup, a bounded golden-read worker, and process-tree cleanup through
+  the shared retained-session supervisor. The canary shell uses the same parity
+  owner through the automation adapter. The replaced Laya Python drivers and
+  their tests are deleted; hardware qualification remains a CI operation.
   Windows CUDA/ROCm/Vulkan remain build-only because CI has no matching Windows
   accelerator runners. The core smoke restores the
   registry-derived dense SmolLM2-135M Q8 and recurrent IBM Granite 4.0 H 350M
@@ -1357,9 +1360,12 @@ preserve the basis beyond remote artifact expiry.
 The L11 optional-tooling cutover uses typed xtask replay matrix export and
 bounded family execution, canonical model/dataset pin projection, downloaded
 SHA-256 checks and hosted repair publication admission. The measured replay
-still uses its locked DuckDB environment. Workload oracle evidence write/verify
+uses Rust whole-session execution and the isolated locked DuckDB reader.
+The caller supplies the verified local GGUF path; Rust progress events stay on
+stderr and request JSONL remains separate. Rust history consumes the retained
+artifact with complete-only regression and repair admission. Workload oracle evidence write/verify
 and HF converted-artifact preflight now use their existing Rust owners.
-Replay history/card and other optional generic tooling remain transitional;
+Replay history is owned by the Rust replay-matrix command; card and other optional generic tooling remain transitional;
 no live replay, HF job or publication qualification is implied.
 
 `just no-console-print` forbids the print macros and direct `io::stdout()` /
@@ -1506,7 +1512,8 @@ promote an estimate-selected row but cannot demote it; plans without the field
 remain estimate-only. GLM-4.5-Air, Qwen4exp and Llama4 currently require the
 256-plus tier through this policy.
 
-`scripts/lib/canary_family_memory.py` uses the greater of pinned file sizes and
+The controller Rust canary preflight placement owner and retained worker
+`scripts/lib/canary_family_memory.py` use the greater of pinned file sizes and
 the model estimate, including projector/draft artifacts. Causal parity releases
 the monolithic oracle before partitioned execution and releases state source
 before restore: one aggregate weight copy plus a 25% tensor/KV/state/scratch

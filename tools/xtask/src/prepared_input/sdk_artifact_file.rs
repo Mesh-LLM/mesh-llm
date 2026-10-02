@@ -50,6 +50,6 @@ fn drive_prefixed(raw: &str) -> bool {
 
 pub(super) fn sha256_file(path: &Path) -> Checked<String> {
     let bytes =
-        std::fs::read(path).map_err(|error| Rejected(super::python_io::os_error(path, &error)))?;
+        std::fs::read(path).map_err(|error| Rejected(super::text_io::os_error(path, &error)))?;
     Ok(hex::encode(Sha256::digest(&bytes)))
 }

@@ -2,12 +2,12 @@
 //! `scripts/runner-image-identity.py`: one exact seed key expression, one
 //! restore action per consumer, a single publisher and the SDK cache key.
 
-use crate::ci_operations::python_access::{Outcome, is_str, item, item_by, require};
+use crate::ci_operations::json_access::{Outcome, is_str, item, item_by, require};
 use crate::ci_operations::workflow_census::{Workflows, job, read_text};
 use crate::ci_operations::workflow_text::{any_line, job_steps, line_is, one_field, seed_keys};
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_value::display;
-use crate::repository::python_text::repr;
+use crate::prepared_input::value_format::display;
+use crate::repository::text::repr;
 use std::path::Path;
 
 type JobId = (String, String);
@@ -164,7 +164,7 @@ fn check_canary(
 ) -> Outcome<()> {
     let bindings = item(canary, "bindings")?.as_array().unwrap_or_default();
     let bound =
-        crate::ci_operations::python_access::eq(item(canary, "image_id")?, item(seed, "image_id")?)
+        crate::ci_operations::json_access::eq(item(canary, "image_id")?, item(seed, "image_id")?)
             && is_str(item(canary, "scope")?, "ordinary")
             && bindings.len() == 1
             && is_str(item(&bindings[0], "workflow")?, &canary_id.0)

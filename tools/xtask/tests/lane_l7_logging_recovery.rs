@@ -4,6 +4,10 @@ use std::{
 };
 
 fn execute(marker: Option<&str>, endpoint: bool) -> (tempfile::TempDir, std::process::Output) {
+    // Each scenario releases a reserved port range before its child binds it.
+    // Keep these scenarios sequential so another fixture cannot reuse that gap.
+    static SCENARIO: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _scenario = SCENARIO.lock().unwrap();
     let root = tempfile::tempdir().unwrap();
     let location = root.path().canonicalize().unwrap();
     if let Some(marker) = marker {
@@ -105,8 +109,9 @@ fn missing_endpoint_marks_inference_prerequisite_without_skipping_fail_open() {
     let (root, output) = execute(None, false);
     assert!(
         output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        "{}; {}",
+        String::from_utf8_lossy(&output.stderr),
+        std::fs::read_to_string(directory(root.path()).join("session.json")).unwrap_or_default()
     );
     let summary: serde_json::Value = serde_json::from_slice(
         &std::fs::read(directory(root.path()).join("summary.json")).unwrap(),

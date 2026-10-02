@@ -318,8 +318,8 @@
           "bash -c repair-loop fixture",
           "two Bash bodies with stubbed bash function or temporary cwd test repair guard and configured outcomes",
           [
-            67,
-            84
+            68,
+            85
           ]
         ],
         [
@@ -327,10 +327,10 @@
           "scripts/run-command-with-timeout.py --seconds 1 --label agent developer task",
           "wrapper runs Python -c sleep(30) under timeout; asserts exit 124 and timeout diagnostic, no Goose",
           [
-            107,
-            292,
-            403,
-            420
+            108,
+            293,
+            404,
+            421
           ]
         ],
         [
@@ -338,7 +338,7 @@
           "Python -c time.sleep(30) child argv",
           "sys.executable continuation of timeout-wrapper subprocess at line 107; not another Python launch at this line",
           [
-            115
+            116
           ]
         ]
       ]
@@ -443,7 +443,7 @@
           "_run helper passes test args and captures parity verdict; next interpreter vector is same process",
           [
             68,
-            609
+            639
           ]
         ],
         [
@@ -646,7 +646,7 @@
           ".github/workflows/agentic-replay-nightly.yml: Verify pinned replay runner run block",
           "bash -c preflight with stub uname/git/xcrun and fixture RUNNER_NAME; asserts accepted arm64 micstudio and rejected alternatives",
           [
-            60
+            58
           ]
         ]
       ]
@@ -758,20 +758,6 @@
           [
             491,
             1029
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_configure_canary_cache.py",
-      [
-        [
-          "launch",
-          "scripts/configure-canary-cache.py",
-          "fixed CLI with fixture HF_HOME and GITHUB_ENV; missing mount rejects and valid mount masks token and writes environment",
-          [
-            39,
-            59
           ]
         ]
       ]
@@ -1237,20 +1223,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_agentic_replay_history.py",
-      "members": [
-        [
-          15,
-          "c9a5aac18a3ec828",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/agentic-replay-history.py",
-          "SCRIPT is a fixed repository path loaded in-process"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_agentic_trajectory_manifest.py",
       "members": [
         [
@@ -1457,20 +1429,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_configure_canary_cache.py",
-      "members": [
-        [
-          10,
-          "a47d6bc4ebe877bf",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/configure-canary-cache.py",
-          "SCRIPT is fixed ROOT-relative module"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_generate_split_certified.py",
       "members": [
         [
@@ -1516,7 +1474,7 @@
       "file": "scripts/tests/test_llama_canary_agent_repair_contract.py",
       "members": [
         [
-          435,
+          436,
           "51209f5cb2aad7e3",
           1,
           "dynamic-import",
@@ -1525,7 +1483,7 @@
           "test-local parity path is bound to the repository script before exec_module"
         ],
         [
-          178,
+          179,
           "13ca18bc3a83fc8c",
           1,
           "subprocess-or-interpreter",
@@ -1534,7 +1492,7 @@
           "Main bd5514dd8 retained source: return subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          289,
+          290,
           "a64ba1ba06692892",
           1,
           "subprocess-or-interpreter",
@@ -2396,24 +2354,10 @@
       ]
     },
     {
-      "file": "scripts/tests/test_ci_laya_smoke.py",
-      "members": [
-        [
-          11,
-          "161eedf470a7be36",
-          1,
-          "dynamic-import",
-          "fixture",
-          "scripts/ci-laya-smoke.py import",
-          "Main bd5514dd8 retained source: SPEC = importlib.util.spec_from_file_location(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_llama_upstream_canary_contract.py",
       "members": [
         [
-          231,
+          261,
           "0bb8fafe2022eacf",
           1,
           "subprocess-or-interpreter",
@@ -2422,7 +2366,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          242,
+          272,
           "fcde2ef6bba29634",
           1,
           "subprocess-or-interpreter",
@@ -2431,7 +2375,7 @@
           "Main bd5514dd8 retained source: invalid = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          261,
+          291,
           "ada8261f4230c053",
           1,
           "subprocess-or-interpreter",
@@ -2440,7 +2384,7 @@
           "Main bd5514dd8 retained source: prepared = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          397,
+          427,
           "0bb8fafe2022eacf",
           2,
           "subprocess-or-interpreter",
@@ -2449,7 +2393,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          414,
+          444,
           "0bb8fafe2022eacf",
           3,
           "subprocess-or-interpreter",
@@ -2458,7 +2402,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          422,
+          452,
           "b055144f6196d6bd",
           1,
           "subprocess-or-interpreter",
@@ -2467,7 +2411,7 @@
           "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          438,
+          468,
           "199ce1cfcc1f5f1c",
           1,
           "subprocess-or-interpreter",
@@ -2476,7 +2420,7 @@
           "Main bd5514dd8 retained source: wrapper = subprocess.Popen(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          446,
+          476,
           "b055144f6196d6bd",
           2,
           "subprocess-or-interpreter",
@@ -2485,7 +2429,7 @@
           "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          479,
+          509,
           "0bb8fafe2022eacf",
           4,
           "subprocess-or-interpreter",
@@ -2494,7 +2438,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          487,
+          517,
           "b055144f6196d6bd",
           3,
           "subprocess-or-interpreter",
@@ -2503,7 +2447,7 @@
           "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          731,
+          761,
           "53c026884edc220c",
           1,
           "subprocess-or-interpreter",
@@ -2512,7 +2456,7 @@
           "Main bd5514dd8 retained source: generated = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          742,
+          772,
           "0bb8fafe2022eacf",
           5,
           "subprocess-or-interpreter",
@@ -2521,7 +2465,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          952,
+          982,
           "0bb8fafe2022eacf",
           6,
           "subprocess-or-interpreter",
@@ -2530,63 +2474,13 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          996,
+          1026,
           "b0c6e8c6c4abee0f",
           1,
           "subprocess-or-interpreter",
           "fixture",
           "existing source-owned command or inert source reference retained from main",
           "Main bd5514dd8 retained source: incomplete = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_skippy_laya_parity.py",
-      "members": [
-        [
-          11,
-          "dc454cc3781ea700",
-          1,
-          "dynamic-import",
-          "fixture",
-          "scripts/skippy-laya-parity.py import and CLI fixture",
-          "Main bd5514dd8 retained source: SPEC = importlib.util.spec_from_file_location(\"laya_parity\", ROOT / \"scripts\" / \"skippy-laya-parity.py\"); preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          81,
-          "dffbaca47b54b6d0",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "scripts/skippy-laya-parity.py import and CLI fixture",
-          "Main bd5514dd8 retained source: original = parity.subprocess.run; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          82,
-          "af63d8a80465e955",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "scripts/skippy-laya-parity.py import and CLI fixture",
-          "Main bd5514dd8 retained source: parity.subprocess.run = fake_run; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          86,
-          "73c287b5d7a5296a",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "scripts/skippy-laya-parity.py import and CLI fixture",
-          "Main bd5514dd8 retained source: parity.subprocess.run = original; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ],
-        [
-          93,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "scripts/skippy-laya-parity.py import and CLI fixture",
-          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
     },
@@ -2683,7 +2577,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "c72c89700bbfdf493d843bacb52608bc57acb67fb893dda6db998d9f4c5216a3",
+  "observed_source_sha256": "b567b59f5f87c6552bea0fc0ca41aee0d1416f844e7e3140a68e1f40caccbd2c",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency."

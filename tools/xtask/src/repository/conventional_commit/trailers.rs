@@ -1,7 +1,7 @@
 //! Attribution-trailer policy from `scripts/check-conventional-commit.py`:
 //! agent, bot and relay identities are rejected from `*-by:` trailers.
 
-use crate::repository::python_text::{is_space, strip};
+use crate::repository::text::{is_space, strip};
 
 const DENIED_DOMAINS: &[&str] = &["buzz.xyz"];
 const DENIED_ADDRESSES: &[&str] = &["noreply@anthropic.com", "noreply@coderabbit.ai"];

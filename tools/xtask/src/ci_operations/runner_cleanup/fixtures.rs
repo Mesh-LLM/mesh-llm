@@ -83,10 +83,26 @@ impl Fixture {
     pub fn delete(&self, plan: &Plan) -> Vec<u8> {
         self.check_plan(plan);
         let admitted = super::admission::admit(plan).unwrap();
-        let interrupt = crate::command_interrupt::Interrupt::install().unwrap();
+        let interrupt = interrupt().unwrap();
         let mut output = Vec::new();
         super::deletion::execute(admitted, None, (&interrupt, &mut output)).unwrap();
         interrupt.finish().unwrap();
         output
+    }
+}
+
+// Signal registration is process-global; parallel fixtures must wait for the
+// preceding fixture to release it. Production still rejects overlapping owners.
+pub(super) fn interrupt()
+-> Result<crate::command_interrupt::Interrupt, crate::command_interrupt::Reason> {
+    use crate::command_interrupt::{Interrupt, Reason};
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match Interrupt::install() {
+            Err(Reason::ScopeBusy) if std::time::Instant::now() < deadline => {
+                std::thread::park_timeout(std::time::Duration::from_millis(1));
+            }
+            result => return result,
+        }
     }
 }

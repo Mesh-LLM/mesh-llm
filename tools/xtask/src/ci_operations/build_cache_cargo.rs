@@ -5,7 +5,7 @@
 
 use crate::ci_operations::build_cache_tree::io_text;
 use crate::ci_operations::build_cache_values::resolve;
-use crate::ci_operations::python_json_decode::{DecodeError, Hooks, loads};
+use crate::ci_operations::json_decode::{DecodeError, Hooks, loads};
 use crate::ci_plan::document::Json;
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
@@ -19,10 +19,6 @@ const COMPILERS: [&str; 4] = ["cargo", "rustc", "rustdoc", "clippy-driver"];
 
 fn keep(pairs: Vec<(String, Json)>) -> Result<Json, String> {
     Ok(Json::Object(pairs))
-}
-
-fn constant(_: &str) -> Result<Json, String> {
-    Err("unsupported JSON constant in cargo metadata".to_owned())
 }
 
 fn program_error(error: &std::io::Error, program: &str) -> Failure {
@@ -39,10 +35,7 @@ pub(crate) fn cargo_metadata(workspace: &Path) -> Result<Json, Failure> {
     if !output.status.success() {
         return Err("cargo metadata failed; refusing build-cache management".to_owned());
     }
-    let hooks = Hooks {
-        pairs: keep,
-        constant,
-    };
+    let hooks = Hooks { pairs: keep };
     loads(&output.stdout, &hooks).map_err(|error| match error {
         DecodeError::Value(text) => text,
         DecodeError::Recursion => "maximum recursion depth exceeded".to_owned(),
@@ -50,7 +43,7 @@ pub(crate) fn cargo_metadata(workspace: &Path) -> Result<Json, Failure> {
 }
 
 fn key_error(key: &str) -> Failure {
-    crate::repository::python_text::repr(key)
+    crate::repository::text::repr(key)
 }
 
 /// `cargo_packages`: the sorted, de-duplicated workspace package names.

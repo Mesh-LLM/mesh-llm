@@ -1,5 +1,5 @@
 use super::ManifestError;
-use crate::repository::python_text::is_space;
+use crate::repository::text::is_space;
 use std::ops::Range;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -23,9 +23,18 @@ pub(crate) struct PackageVerification {
 pub(crate) struct VerifiedPackage {
     inputs: super::VerifiedPackageInputs,
     current: WorkflowRun,
+    candidate_bundle: bool,
 }
 
 impl VerifiedPackage {
+    pub(crate) fn publication_context(&self) -> (&ProducerIdentity, usize, bool) {
+        (
+            &self.inputs.identity,
+            self.inputs.plan.models.len(),
+            self.candidate_bundle,
+        )
+    }
+
     pub(super) fn into_parts(self) -> (super::VerifiedPackageInputs, WorkflowRun) {
         (self.inputs, self.current)
     }
@@ -48,7 +57,7 @@ pub(crate) fn verify_package(
 
     if !identity
         .get("schema")
-        .is_some_and(|schema| schema.as_u64() == Some(3) || schema.as_f64() == Some(3.0))
+        .is_some_and(|schema| schema.as_u64() == Some(3))
         || identity.get("platform").and_then(Value::as_str) != Some("macos-arm64-metal")
     {
         return Err(package_identity_error("unknown build identity"));
@@ -72,7 +81,7 @@ pub(crate) fn verify_package(
     if !verification.selected_source.is_empty()
         && (candidate != verification.selected_source
             || base != verification.selected_source
-            || python_truthy(required_field(&identity, "bundle_sha256")?)
+            || optional_digest(&identity, "bundle_sha256")?.is_some()
             || string_field(&identity, "pass_id")? != "repair-1")
     {
         return Err(package_identity_error(
@@ -104,16 +113,17 @@ pub(crate) fn verify_package(
     for (name, key) in ARTIFACTS {
         verify_artifact(package, &identity, name, key)?;
     }
-    if identity.get("summary_sha256").is_some_and(python_truthy) {
+    if optional_digest(&identity, "summary_sha256")?.is_some() {
         verify_artifact(package, &identity, "upstream-summary.md", "summary_sha256")?;
     }
-    if python_truthy(required_field(&identity, "bundle_sha256")?) {
+    if optional_digest(&identity, "bundle_sha256")?.is_some() {
         verify_artifact(package, &identity, "candidate.bundle", "bundle_sha256")?;
     }
 
     let plan = SourceFamilyPlan::parse(&plan_bytes)?;
     let producer_identity: ProducerIdentity = serde_json::from_slice(&identity_bytes)?;
     Ok(VerifiedPackage {
+        candidate_bundle: optional_digest(&identity, "bundle_sha256")?.is_some(),
         inputs: super::VerifiedPackageInputs {
             identity: producer_identity,
             identity_sha256,
@@ -170,17 +180,17 @@ fn string_field<'a>(identity: &'a Value, key: &str) -> Result<&'a str, Error> {
         .ok_or_else(|| package_identity_error(format!("invalid identity field: {key}")))
 }
 
-fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64() != Some(0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(fields) => !fields.is_empty(),
-    }
-}
-
 fn package_identity_error(message: impl Into<String>) -> Error {
     Error::new(ErrorKind::PackageIdentity, message)
+}
+
+fn optional_digest<'a>(identity: &'a Value, key: &str) -> Result<Option<&'a str>, Error> {
+    match identity.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) if text.is_empty() => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text)),
+        Some(_) => Err(package_identity_error(format!(
+            "invalid identity field: {key}"
+        ))),
+    }
 }

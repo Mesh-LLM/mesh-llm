@@ -4,7 +4,7 @@
 
 use super::fields::{ModelResult, escapes_root, fail, get, is_lower_hex};
 use crate::ci_plan::document::Json;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 /// One integrity-pinned file of a resolved artifact.
 pub(super) struct PinnedFile {

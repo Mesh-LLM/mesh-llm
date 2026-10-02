@@ -1,4 +1,10 @@
+mod canary_build;
+mod canary_execution;
+mod canary_graph;
+mod handoffs;
+mod laya;
 mod permissions;
+mod replay;
 mod shell;
 
 use super::lane_results::workflow_yaml::{self, Node};
@@ -27,6 +33,10 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
         shell::check_containers(&document).map_err(|error| format!("{name}: {error}"))?;
         workflows.insert(name, document);
     }
+    replay::check(&workflows)?;
+    canary_graph::check(&workflows)?;
+    canary_build::check(&workflows)?;
+    laya::check(root, &workflows)?;
     permissions::check(&workflows)
 }
 

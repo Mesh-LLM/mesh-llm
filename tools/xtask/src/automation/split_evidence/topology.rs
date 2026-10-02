@@ -116,7 +116,7 @@ pub(super) fn statuses(value: &Value, label: &str) -> Result<[Status; 2], Error>
     }
     if first.state.0 != *"ready" || second.state.0 != *"ready" {
         let states = [&first.state, &second.state]
-            .map(|state| crate::repository::python_text::repr(&state.display()));
+            .map(|state| crate::repository::text::repr(&state.display()));
         return Err(Error::Contract(format!(
             "{label} stage statuses must both be ready, got [{}, {}]",
             states[0], states[1]

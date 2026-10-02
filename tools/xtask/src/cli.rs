@@ -81,6 +81,7 @@ pub(crate) enum CliCommand<'a> {
     CiValidate(&'a str, &'a [String]),
     Qualification(&'a str, &'a [String]),
     ReplayMatrix(&'a [String]),
+    Laya(&'a [String]),
     AgentPickModel(&'a [String]),
     WorkloadOracleEvidence(&'a [String]),
     CanaryReceipts(&'a [String]),
@@ -137,6 +138,9 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "laya" => {
+                CliCommand::Laya(rest)
+            }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "split-probe" => {
                 CliCommand::SplitProbe(rest)
             }

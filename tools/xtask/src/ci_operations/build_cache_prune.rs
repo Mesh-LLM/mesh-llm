@@ -5,7 +5,7 @@
 
 use crate::ci_operations::build_cache_cargo::{Failure, cargo_packages, clean_package};
 use crate::ci_operations::build_cache_tree::{artifact_roots, children, remove_tree, tree_metrics};
-use crate::ci_operations::python_access::{object, string};
+use crate::ci_operations::json_access::{object, string};
 use crate::ci_plan::document::Json;
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};

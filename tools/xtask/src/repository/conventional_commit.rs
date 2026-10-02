@@ -8,7 +8,7 @@ mod trailers;
 use crate::command::DynResult;
 use crate::repository::check_args::{Grammar, ParsedArgs};
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::{splitlines, strip};
+use crate::repository::text::{splitlines, strip};
 use std::path::Path;
 use std::process::Command;
 

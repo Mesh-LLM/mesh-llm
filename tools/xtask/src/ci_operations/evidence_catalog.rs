@@ -7,11 +7,11 @@ use crate::ci_operations::evidence_binding::{
     candidate_architectures, provenance, validate_binding,
 };
 use crate::ci_operations::evidence_input::{decode, evidence_path, fields, read_bytes, require};
-use crate::ci_operations::python_access::{Outcome, contains_key, eq, item, object, string};
+use crate::ci_operations::json_access::{Outcome, contains_key, eq, item, object, string};
 use crate::ci_plan::catalog::{os_error_text, python_path_display};
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_json::dumps_indented;
-use crate::prepared_input::python_value::display;
+use crate::prepared_input::json_bytes::dumps_indented;
+use crate::prepared_input::value_format::display;
 use std::path::Path;
 
 type Platforms = Vec<(String, Vec<String>)>;
@@ -25,7 +25,7 @@ fn entries(value: &Json) -> Outcome<&[(String, Json)]> {
     value.as_object().ok_or_else(|| {
         format!(
             "'{}' object has no attribute 'items'",
-            crate::ci_operations::python_access::type_name(value)
+            crate::ci_operations::json_access::type_name(value)
         )
     })
 }

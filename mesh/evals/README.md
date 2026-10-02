@@ -1,8 +1,28 @@
 # mesh-llm Router Evals
 
+## Whole-session matrix replay
+
+The nightly and repair full-session paths use the Rust owner after pinned model
+and dataset bytes have been resolved and verified:
+
+```sh
+cargo xtool automation replay-matrix run-family \
+  --matrix ci/agentic-replay-nightly/matrix.json \
+  --run-family granite-3.1-2b --ref main=HEAD \
+  --model-file /path/to/verified.gguf --dataset-file /path/to/sessions.parquet \
+  --python "$PWD/ci/agentic-replay-nightly/.venv/bin/python3" \
+  --timeout 21600 --output /path/to/evidence
+```
+
+The interpreter is used only by the retained DuckDB/Parquet trajectory reader.
+Rust owns model admission, ordered builds, disposable context qualification,
+ABBA passes, recurrent evidence, reports and progress. This local code path does
+not establish live long-context calibration. The manual comparative and disk-L3
+contracts below remain transitional until their typed owners are implemented.
+
 ## Compare Mesh releases and inference engines
 
-`agentic-replay.py` is the durable entrypoint for comparing two or more Mesh
+`agentic-replay.py` remains the transitional manual entrypoint for comparing two or more Mesh
 refs and, optionally, external llama.cpp, vLLM, and SGLang arms on one model.
 It creates isolated detached worktrees, builds each Mesh release host and native
 runtime, replays a pinned subset of the Thoughtworks

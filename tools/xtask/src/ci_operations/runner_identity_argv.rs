@@ -6,7 +6,7 @@
 use crate::ci_operations::runner_identity_help::{PROG, TOP_USAGE, top_help};
 use crate::ci_operations::runner_identity_subargs::parse_subcommand;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 const COMMANDS: [&str; 6] = [
     "validate", "check", "diagnose", "lookup", "seed-key", "bind",

@@ -46,9 +46,10 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
             "BUILD_REPAIR_TURNS",
             "CERTIFY_REPAIR_TURNS",
             "report_terminal",
-            "while true",
         ):
             self.assertNotIn(obsolete, self.wrapper)
+        self.assertNotIn("while true", repair)
+        self.assertNotIn("while true", main)
 
     def test_certification_rejects_failed_or_empty_producer_environment(self) -> None:
         """A failed print-env must not fall through to certification on default binaries."""

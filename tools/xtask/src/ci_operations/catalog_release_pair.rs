@@ -2,7 +2,7 @@
 //! must form exactly one complete UI artifact pair.
 
 use crate::ci_operations::catalog_validation::is_conditional;
-use crate::ci_operations::python_access::{Outcome, is_str, require};
+use crate::ci_operations::json_access::{Outcome, is_str, require};
 use crate::ci_plan::document::Json;
 
 fn all_bindings(roles: &Json) -> Vec<&Json> {

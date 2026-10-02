@@ -2,7 +2,7 @@
 //! `MUTATION_RE`, `FUNCTION_RE`, `SERIAL_ATTR_RE` and the adjacent comment
 //! block walk.
 
-use crate::repository::python_text::{is_space, strip};
+use crate::repository::text::{is_space, strip};
 
 /// `(?:std::)?env::(?:set_var|remove_var)\s*\(` anywhere in the line.
 pub(super) fn is_mutation(line: &str) -> bool {

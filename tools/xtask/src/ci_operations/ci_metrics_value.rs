@@ -5,8 +5,8 @@
 
 use crate::ci_plan::document::Json;
 use crate::ci_plan::plan_bytes::write_string;
-use crate::prepared_input::python_value::float_repr;
-use crate::repository::python_text;
+use crate::prepared_input::value_format::float_repr;
+use crate::repository::text;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Value {
@@ -101,7 +101,7 @@ pub(crate) fn repr(value: &Value) -> String {
         Value::Int(int) => int.to_string(),
         Value::BigInt(text) => text.clone(),
         Value::Float(float) => float_repr(*float),
-        Value::Str(text) => python_text::repr(text),
+        Value::Str(text) => text::repr(text),
         Value::Array(items) => {
             let items: Vec<String> = items.iter().map(repr).collect();
             format!("[{}]", items.join(", "))
@@ -109,7 +109,7 @@ pub(crate) fn repr(value: &Value) -> String {
         Value::Object(entries) => {
             let entries: Vec<String> = entries
                 .iter()
-                .map(|(key, item)| format!("{}: {}", python_text::repr(key), repr(item)))
+                .map(|(key, item)| format!("{}: {}", text::repr(key), repr(item)))
                 .collect();
             format!("{{{}}}", entries.join(", "))
         }

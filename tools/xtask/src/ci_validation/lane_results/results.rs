@@ -4,8 +4,8 @@
 
 use super::Checked;
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_value::repr;
-use crate::repository::python_text;
+use crate::prepared_input::value_format::repr;
+use crate::repository::text;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -80,7 +80,7 @@ fn ids(plan: &Json, matrix: &str) -> Checked<Vec<String>> {
         None => return Ok(Vec::new()),
         Some(Json::Array(rows)) => rows,
         Some(_) => {
-            let name = python_text::repr(matrix);
+            let name = text::repr(matrix);
             return Err(format!("lane plan matrix {name} must be an array"));
         }
     };
@@ -93,7 +93,7 @@ fn ids(plan: &Json, matrix: &str) -> Checked<Vec<String>> {
                 .and_then(Json::as_str)
                 .ok_or_else(|| format!("lane plan matrix {matrix}[{index}] needs an ID"))?;
             if !seen.insert(id) {
-                let id = python_text::repr(id);
+                let id = text::repr(id);
                 return Err(format!(
                     "lane plan matrix {matrix} contains duplicate ID {id}"
                 ));
@@ -197,8 +197,7 @@ fn required_jobs(plan: &Json) -> Checked<Outcome> {
     {
         return Err("lane plan required_slices must contain only scalars".to_owned());
     }
-    let lane =
-        Lane::parse(name).ok_or_else(|| format!("unknown CI lane {}", python_text::repr(name)))?;
+    let lane = Lane::parse(name).ok_or_else(|| format!("unknown CI lane {}", text::repr(name)))?;
     let mut planner = Planner {
         plan,
         slices,
@@ -239,14 +238,14 @@ pub(super) fn validate(plan: &Json, needs: &Json) -> Checked<Outcome> {
     for job in &outcome.planned {
         let state = result(needs.get(job));
         if !is(state, "success") {
-            let (job, state) = (python_text::repr(job), repr(state));
+            let (job, state) = (text::repr(job), repr(state));
             return Err(format!("planned job {job} finished with {state}"));
         }
     }
     for (job, state) in needs.as_object().unwrap_or_default() {
         let state = result(Some(state));
         if !outcome.planned.contains(&job.as_str()) && !is(state, "skipped") {
-            let (job, state) = (python_text::repr(job), repr(state));
+            let (job, state) = (text::repr(job), repr(state));
             return Err(format!("lane job {job} finished with {state}"));
         }
     }

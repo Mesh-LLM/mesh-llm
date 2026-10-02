@@ -162,6 +162,21 @@ record_failure_class() {
 }
 
 check_family_cache() {
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    local transaction_root input source_revision
+    transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-cache-plan.XXXXXXXX")" || return 1
+    input="$transaction_root/input.json"
+    source_revision="$(git rev-parse HEAD)" || return 1
+    jq -n --arg controller_root "$TRUSTED_ROOT" --arg source_root "$ROOT" \
+      --arg controller_revision "${CANARY_CONTROLLER_SHA:?}" --arg selected_revision "$source_revision" \
+      --arg output "$transaction_root/admitted" --arg cache_root "${HF_CACHE:?}" \
+      '{controller_root:$controller_root,source_root:$source_root,controller_revision:$controller_revision,selected_revision:$selected_revision,
+        manifest:"ci/llama-canary/family-certified.json",output:$output,cache:{mode:"gguf_metadata",root:$cache_root}}' > "$input" || return 1
+    "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts preflight --input "$input" || return 1
+    mkdir -p "$(dirname "$PLAN_PATH")" || return 1
+    cp "$transaction_root/admitted/plan.json" "$PLAN_PATH"
+    return
+  fi
   mkdir -p "$(dirname "$PLAN_PATH")"
   python3 scripts/plan-family-battery.py \
     --manifest ci/llama-canary/family-certified.json \
@@ -274,19 +289,30 @@ agent_session_step() {
     return 124
   fi
   started="$(date +%s)"
-  set -m
   # shellcheck disable=SC2016
   env -i PATH="$PATH" bash -c '
     root="$1"
     started="$2"
-    while sleep 600; do
+    sleeper=""
+    stop_heartbeat() {
+      if [[ -n "$sleeper" ]]; then
+        kill "$sleeper" 2>/dev/null || true
+        wait "$sleeper" 2>/dev/null || true
+      fi
+    }
+    trap stop_heartbeat EXIT
+    trap "exit 0" TERM INT
+    while true; do
+      sleep 600 &
+      sleeper=$!
+      wait "$sleeper" || break
+      sleeper=""
       newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/skippy/llama_cpp/upstream.txt" -print -quit 2>/dev/null || true)"
       printf "heartbeat: agent task running for %dm; recent llama.cpp activity: %s\n" \
         "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
     done
   ' heartbeat "$ROOT" "$started" &
   heartbeat_pid=$!
-  set +m
   set +e
   goose_args=(
     run
@@ -310,7 +336,7 @@ agent_session_step() {
     > >(tee -a "$AGENT_LOG") 2>&1
   status=$?
   set -e
-  kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
+  kill "$heartbeat_pid" 2>/dev/null || true
   wait "$heartbeat_pid" 2>/dev/null || true
   if (( status != 0 )); then
     printf 'agent developer task exited with status %s\n' "$status" \
@@ -348,6 +374,18 @@ assert_agent_control_unchanged() {
 }
 
 validate_agent_manifest_changes() {
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    local transaction_root input context
+    transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-manifest-policy.XXXXXXXX")" || return 1
+    input="$transaction_root/input.json"
+    context="$(controller_package_context)" || return 1
+    jq -n --argjson context "$context" --arg root "$ROOT" --arg base "$CANDIDATE_BASE_HEAD" \
+      '{context:$context,root:$root,base:$base}' > "$input" || return 1
+    : > "$MANIFEST_POLICY_LOG"
+    "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts manifest-policy --input "$input" \
+      > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+    return
+  fi
   : > "$MANIFEST_POLICY_LOG"
   python3 scripts/validate-llama-canary-agent-manifests.py \
     --base-ref "$CANDIDATE_BASE_HEAD" \
@@ -364,13 +402,18 @@ snapshot_candidate_tree() {
   assert_agent_control_unchanged || return 1
   verify_repair_pin || return 1
   validate_agent_manifest_changes || return 1
-  # Verify the dirty-tree producer before snapshotting changes its source identity.
-  local closure="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
-  python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
-    --candidate-binary "$closure/cargo/debug/skippy" \
-    --native-build-dir "$closure/native" --producer-manifest "$closure/producer.json"
-  CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')"
-  export CANARY_VERIFIED_WORKLOAD_PRODUCER
+  # Freeze the actual dirty-tree producer before staging changes Git identity.
+  if [[ "$HARNESS_MODE" == "repair-build" ]]; then
+    controller_producer_receipt || return 1
+  else
+    # Local legacy repair remains on its existing caller until it has workflow context.
+    local closure="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
+    python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
+      --candidate-binary "$closure/cargo/debug/skippy" \
+      --native-build-dir "$closure/native" --producer-manifest "$closure/producer.json"
+    CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')"
+    export CANARY_VERIFIED_WORKLOAD_PRODUCER
+  fi
   git add -A
   if git diff --cached --quiet; then
     echo "agent produced no candidate changes to verify" >&2
@@ -626,7 +669,7 @@ run_candidate_gates() {
   validate_agent_manifest_changes || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
     run_verification_logged "validate family plan before compilation" "$CERTIFY_LOG" \
-      python3 scripts/plan-family-battery.py --shard-count 256 \
+      "${MESH_LLM_AUTOMATION_BIN:?}" --repo-root "$ROOT" ci family-plan --shard-count 256 \
         --output "$PLAN_PATH" || return 1
   fi
   run_full_build || return 1
@@ -639,12 +682,30 @@ run_candidate_gates() {
   fi
 }
 
+controller_split_roster() {
+  local check="$1" transaction_root input context
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-roster.XXXXXXXX")" || return 1
+  input="$transaction_root/input.json"
+  context="$(controller_package_context)" || return 1
+  jq -n --argjson context "$context" --arg root "$ROOT" --argjson check "$check" \
+    '{context:$context,root:$root,check:$check}' > "$input" || return 1
+  "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts split-roster --input "$input"
+}
+
 write_split_certification_roster() {
-  python3 scripts/generate-split-certified.py
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    controller_split_roster false
+  else
+    python3 scripts/generate-split-certified.py
+  fi
 }
 
 check_split_certification_roster() {
-  python3 scripts/generate-split-certified.py --check
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    controller_split_roster true
+  else
+    python3 scripts/generate-split-certified.py --check
+  fi
 }
 
 repair_candidate_until_green() {
@@ -739,14 +800,66 @@ finalize_certified_tree() {
   echo "certified local canary commit: branch=$BRANCH head=$CERTIFIED_SHA"
 }
 
+controller_package_context() {
+  jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "${CANARY_CONTROLLER_SHA:?}" \
+    --arg selected_source "${CANARY_MESH_SOURCE:-}" --arg run_id "${GITHUB_RUN_ID:?}" \
+    --arg run_attempt "${GITHUB_RUN_ATTEMPT:?}" \
+    '{controller_root:$controller_root,controller_revision:$controller_revision,selected_source:$selected_source,run_id:$run_id,run_attempt:$run_attempt}'
+}
+
+controller_producer_receipt() {
+  local transaction_root input result context
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-package.XXXXXXXX")" || return 1
+  CANARY_PRODUCER_RECEIPT="$transaction_root/producer.json"
+  input="$transaction_root/producer-input.json"
+  context="$(controller_package_context)" || return 1
+  jq -n --argjson context "$context" --arg root "$ROOT" \
+    --arg closure "${LLAMA_STAGE_BUILD_DIR:?}-workloads" --arg output "$CANARY_PRODUCER_RECEIPT" \
+    '{context:$context,root:$root,closure:$closure,output:$output}' > "$input" || return 1
+  if result="$("${MESH_LLM_AUTOMATION_BIN:?protected automation required}" automation canary-receipts producer-receipt --input "$input")"; then
+    CANARY_PRODUCER_RECEIPT_SHA="$(jq -er '.producer_receipt_sha256' <<< "$result")" || return 1
+  else
+    record_failure_class infrastructure producer-receipt
+    return 1
+  fi
+}
+
 export_family_inputs() {
   local destination="${CANARY_EXPORT_DIR:?CANARY_EXPORT_DIR required}"
+  local context transaction_root input result admission admission_sha
+  [[ -n "${CANARY_PRODUCER_RECEIPT:-}" ]] || controller_producer_receipt || return 1
+  context="$(controller_package_context)" || return 1
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-admission.XXXXXXXX")" || return 1
+  admission="$transaction_root/admitted"
+  input="$transaction_root/plan-input.json"
+  jq -n --argjson context "$context" --arg root "$ROOT" --arg base "$CANDIDATE_BASE_HEAD" \
+    --arg candidate "$CERTIFIED_SHA" --arg cache_root "${HF_CACHE:?}" --arg output "$admission" \
+    '{context:$context,root:$root,base:$base,candidate:$candidate,cache_root:$cache_root,output:$output}' > "$input" || return 1
+  if result="$("${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts candidate-plan --input "$input")"; then
+    admission_sha="$(jq -er '.admitted_identity_sha256' <<< "$result")" || return 1
+  else
+    record_failure_class infrastructure candidate-plan
+    return 1
+  fi
   write_upstream_summary
-  python3 "$TRUSTED_ROOT/scripts/llama-canary-family-evidence.py" pack \
-    --root "$ROOT" --output "$destination" --candidate "$CERTIFIED_SHA" \
-    --base "$CANDIDATE_BASE_HEAD" --branch "$BRANCH" --pass-id "$PASS_ID" \
-    --test-build "$STATE_DIR/mm-build.jsonl" --bundle "$BUNDLE" --summary "$UPSTREAM_SUMMARY" \
-    --workload-oracles "${LLAMA_STAGE_BUILD_DIR:?}-workloads"
+  input="$transaction_root/pack-input.json"
+  jq -n --argjson context "$context" --arg root "$ROOT" --arg output "$destination" \
+    --arg candidate "$CERTIFIED_SHA" --arg base "$CANDIDATE_BASE_HEAD" --arg branch "$BRANCH" \
+    --arg pass_id "$PASS_ID" --arg mode "$HARNESS_MODE" --arg test_build "$STATE_DIR/mm-build.jsonl" \
+    --arg bundle "$BUNDLE" --arg summary "$UPSTREAM_SUMMARY" \
+    --arg workload_oracles "${LLAMA_STAGE_BUILD_DIR:?}-workloads" --arg admitted_plan "$admission" \
+    --arg admitted_identity_sha256 "$admission_sha" --arg producer_receipt "$CANARY_PRODUCER_RECEIPT" \
+    --arg producer_receipt_sha256 "$CANARY_PRODUCER_RECEIPT_SHA" \
+    '{context:$context,root:$root,output:$output,candidate:$candidate,base:$base,branch:$branch,pass_id:$pass_id,mode:$mode,
+      test_build:$test_build,bundle:(if $mode == "pinned-build" then null else $bundle end),summary:$summary,
+      workload_oracles:$workload_oracles,admitted_plan:$admitted_plan,admitted_identity_sha256:$admitted_identity_sha256,
+      producer_receipt:$producer_receipt,producer_receipt_sha256:$producer_receipt_sha256}' > "$input" || return 1
+  if "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts pack --input "$input"; then
+    :
+  else
+    record_failure_class infrastructure artifact-export
+    return 1
+  fi
 }
 
 if ! check_family_cache; then

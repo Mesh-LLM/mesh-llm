@@ -132,7 +132,7 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Ve
 /// `subprocess`'s text mode: strict UTF-8, then universal newlines. Stdout
 /// is decoded before stderr, so its error wins.
 pub(crate) fn text_streams(output: &ProcessOutput) -> Result<(String, String), String> {
-    use crate::prepared_input::python_io::decode_utf8;
+    use crate::prepared_input::text_io::decode_utf8;
     let translate = |text: String| text.replace("\r\n", "\n").replace('\r', "\n");
     let stdout = decode_utf8(output.stdout.clone())?;
     let stderr = decode_utf8(output.stderr.clone())?;

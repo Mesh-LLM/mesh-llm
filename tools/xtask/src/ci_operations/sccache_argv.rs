@@ -7,7 +7,7 @@
 use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 
 const PROG: &str = "capture.py";
 const USAGE: &str = "\

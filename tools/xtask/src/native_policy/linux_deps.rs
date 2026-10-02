@@ -13,7 +13,7 @@ use crate::ci_operations::build_cache_options::{Kind, classify, help_flag};
 use crate::ci_operations::runner_identity_argv::error;
 use crate::ci_plan::catalog::python_path_display;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 use std::path::Path;
 
 const PROG: &str = "linux-native-runtime-deps.py";

@@ -10,7 +10,7 @@ pub(super) fn success_output(
     if print_shell {
         stdout.extend_from_slice(shell_line.as_bytes());
     }
-    RunFamilyReport::success(stdout, report.stderr.bytes_retained)
+    RunFamilyReport::success(stdout, retained_diagnostics(&report.stderr.bytes_retained))
 }
 
 pub(super) fn report(report: ProcessReport) -> RunFamilyReport {
@@ -31,7 +31,7 @@ pub(super) fn report(report: ProcessReport) -> RunFamilyReport {
             "run-family child failed: outcome={outcome}, status={status:?}, cleanup={:?}, failure={:?}\nstderr: {}",
             report.cleanup,
             report.failure,
-            String::from_utf8_lossy(&report.stderr.bytes_retained)
+            String::from_utf8_lossy(&retained_diagnostics(&report.stderr.bytes_retained))
         ),
     )
 }
@@ -41,4 +41,13 @@ pub(super) fn interrupted(report: ProcessReport) -> RunFamilyReport {
         "run-family cancelled; outcome={:?}, status={:?}, cleanup={:?}\n",
         report.outcome, report.status, report.cleanup
     ))
+}
+
+fn retained_diagnostics(bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .split_inclusive(|byte| *byte == b'\n')
+        .filter(|line| crate::automation::replay_matrix::progress::decode(line).is_none())
+        .flatten()
+        .copied()
+        .collect()
 }

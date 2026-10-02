@@ -3,8 +3,8 @@
 //! `json.load(handle)["runtime"]["mesh_version"]` when no version input is
 //! given. A failure prints the uncaught exception's last line and exits 1.
 
+use super::json_object::{display, item};
 use super::manifest_load::load;
-use super::python_object::{display, item};
 use crate::repository::check_report::CheckReport;
 use std::path::Path;
 

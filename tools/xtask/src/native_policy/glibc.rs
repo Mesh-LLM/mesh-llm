@@ -4,7 +4,7 @@
 
 use crate::ci_operations::ci_metrics_int::python_int_text;
 use crate::ci_plan::catalog::os_error_text;
-use crate::repository::python_text::{repr, splitlines, strip};
+use crate::repository::text::{repr, splitlines, strip};
 use std::cmp::Ordering;
 use std::path::Path;
 

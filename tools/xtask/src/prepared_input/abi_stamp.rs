@@ -1,10 +1,10 @@
 //! `static-abi-stamp`: the portable llama.cpp static-ABI build-stamp contract
 //! from `scripts/verify-static-abi-build-stamp.py`.
 
-use super::python_io;
+use super::text_io;
 use crate::repository::check_args::Grammar;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::{repr, splitlines};
+use crate::repository::text::{repr, splitlines};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -103,7 +103,7 @@ fn field_name(key: &str) -> bool {
 }
 
 fn parse(path: &Path) -> Result<Stamp, String> {
-    let text = python_io::read_text(path)
+    let text = text_io::read_text(path)
         .map_err(|error| format!("unable to read static ABI build stamp: {error}"))?;
     let mut fields = BTreeMap::new();
     let mut cmake_arguments = 0;

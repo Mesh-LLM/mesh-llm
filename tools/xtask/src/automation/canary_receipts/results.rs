@@ -1,6 +1,6 @@
 use super::boundary::{ExitSuccess, ModelClass, Truth, object_rows_last_wins};
 use super::{Error, ErrorKind, Family, FamilyModel};
-use crate::repository::python_text::is_space;
+use crate::repository::text::is_space;
 use serde::{Deserialize, de::IgnoredAny};
 
 #[derive(Debug, Deserialize)]

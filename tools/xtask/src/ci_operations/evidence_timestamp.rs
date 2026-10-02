@@ -1,5 +1,5 @@
 use super::ci_metrics_calendar::days_in_month;
-use crate::ci_operations::python_access::Outcome;
+use crate::ci_operations::json_access::Outcome;
 
 pub(crate) fn check_timestamp(value: &str) -> Outcome<()> {
     if value.len() != 14 || !value.bytes().all(|byte| byte.is_ascii_digit()) {

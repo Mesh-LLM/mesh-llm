@@ -97,7 +97,6 @@
           "scripts/tests/test_manage_build_cache.py",
           "scripts/tests/test_sccache_evidence.py",
           "scripts/tests/test_collect_ci_metrics.py",
-          "scripts/tests/test_configure_canary_cache.py",
           "scripts/tests/test_cleanup_self_hosted.py",
           "scripts/tests/test_generate_runtime_event_inventory.py",
           "scripts/tests/test_kv_nightly_workflow_contract.py"
@@ -318,7 +317,6 @@
           "scripts/tests/test_agentic_replay.py",
           "scripts/tests/test_agentic_replay_engines.py",
           "scripts/tests/test_agentic_replay_evidence.py",
-          "scripts/tests/test_agentic_replay_history.py",
           "scripts/tests/test_agentic_replay_nightly_workflow.py",
           "scripts/tests/test_agentic_replay_params.py",
           "scripts/tests/test_agentic_replay_repair_contract.py",
@@ -338,7 +336,6 @@
         "source_tests": [
           "test_llama_canary_family_evidence.*.test_newer_failure_never_falls_back_to_old_success",
           "test_agentic_replay.*.test_stream_request_rejects_truncated_stream_without_done",
-          "test_agentic_replay_history.*.test_only_complete_gated_regression_requests_repair",
           "test_skippy_radix_cache_ab.*.test_empty_telemetry_does_not_invent_cache_metrics"
         ]
       },
@@ -579,40 +576,10 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
       "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
-      "module": "scripts/tests/test_agentic_replay_history.py",
-      "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "f75b28d3c4fa218fc9524174d20c2ea4bb7c66a750e5884e8ab48480ccbcd627",
-      "test_method_count": 18,
-      "test_methods": [
-        "test_baseline_replay_identity_includes_dataset",
-        "test_baseline_with_other_model_sha_does_not_count_toward_bootstrap",
-        "test_bootstrap_does_not_gate",
-        "test_bootstrap_incomplete_row_fails_without_baseline",
-        "test_build_rows_counts_terminal_length_finishes",
-        "test_changed_hardware_starts_a_new_baseline",
-        "test_dropped_requests_make_row_incomplete",
-        "test_finish_reason_length_regression_is_gateable",
-        "test_history_rejects_unpinned_model",
-        "test_incomplete_model_does_not_mask_regression_of_complete_model",
-        "test_incomplete_run_always_flags",
-        "test_matrix_requires_all_passes_and_concurrency_levels",
-        "test_missing_family_preserves_complete_family_rows",
-        "test_only_complete_gated_regression_requests_repair",
-        "test_regression_after_bootstrap_fails",
-        "test_replay_requires_pinned_dataset_identity",
-        "test_small_drift_within_tolerance_passes",
-        "test_zero_baseline_median_uses_absolute_tolerance_only"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
-      "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
       "module": "scripts/tests/test_agentic_replay_nightly_workflow.py",
       "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "17de3fa1f7003965c5c58547225941efb0a263be4145497f8fc9493e663864ff",
+      "sha256": "bd45ed81c1bf97e97fab323fc021515e6b04c3c85792989abfa87dcff7c66417",
       "test_method_count": 8,
       "test_methods": [
         "test_daily_and_manual_admission_stays_on_canonical_main",
@@ -815,7 +782,7 @@
       "module": "scripts/tests/test_canary_family_memory.py",
       "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "dac7559fd9dd1cc81d961e8bf0fb237bc819d9654bf2eb2e7b512fad21aa186d",
+      "sha256": "91bc73d22afb6786f0837a8a46bd1bd19c4b6dcb39407a5ea7adc9391ac00480",
       "test_method_count": 14,
       "test_methods": [
         "test_admission_checks_actual_host_and_other_workloads",
@@ -1468,24 +1435,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
       "gate": "Legacy just ci-validate plus owning build/install/platform gate",
-      "module": "scripts/tests/test_configure_canary_cache.py",
-      "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "d824f075e54a2556d04bb54d8f2104606ec2d2cd8cb00dafc3020158b5751c32",
-      "test_method_count": 6,
-      "test_methods": [
-        "test_conflicting_hub_override_is_not_silently_discarded",
-        "test_exports_existing_credentials_with_mask_and_offline_policy",
-        "test_legacy_and_xdg_cache_configuration",
-        "test_machine_home_wins_over_stale_legacy_service_variable",
-        "test_missing_mount_fails_without_creating_cache_or_exporting_token",
-        "test_multiline_credentials_cannot_inject_actions_environment"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
-      "gate": "Legacy just ci-validate plus owning build/install/platform gate",
       "module": "scripts/tests/test_cuda_toolkit.py",
       "owner": "tools/xtask semantic owner or existing platform/tool component",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -1952,7 +1901,7 @@
       "module": "scripts/tests/test_llama_canary_agent_repair_contract.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "588c465804f9337abfb8a2465e146f44784db9892d8d07faceb068d48ab6c662",
+      "sha256": "a70f233d9efffaa4f4e7e4cd4c3caf9bdbf0334512ba42e34bfad093f415c34f",
       "test_method_count": 23,
       "test_methods": [
         "test_agent_and_final_verification_have_explicit_budgets",
@@ -2109,7 +2058,7 @@
       "module": "scripts/tests/test_llama_upstream_canary_contract.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "029dfe2793a8f0cb4e554a4f167d4fa0c2835cb58cbc14fa27d201777bdea29f",
+      "sha256": "1ce90c16527c66534941cf9f41f86f3dcbcbe3a0270fb59a582a514482cb5e28",
       "test_method_count": 36,
       "test_methods": [
         "test_battery_builds_once_then_skips_build_in_each_lane",
@@ -4081,5 +4030,38 @@
     "skill_local_generic_tests": [],
     "skill_local_test_note": "No test_*.py modules were found under .agents/skills. Skill-local scripts and their caller classifications are tracked separately by the task-3 instructions/exception ledger.",
     "tracked_python_test_modules": 147
+  },
+  "history_cutover": {
+    "retired_modules": [
+      "scripts/agentic-replay-history.py",
+      "scripts/tests/test_agentic_replay_history.py"
+    ],
+    "owner": "tools/xtask/src/automation/replay_matrix/history.rs",
+    "executing_gate": "cargo test -p xtask --test replay_history --test migration_run_family",
+    "coverage": "Artifact identity, cohort completeness, weighted metrics, exact three-run matching baseline, five regression metrics, bootstrap and complete-only repair policy; actual run-family output consumed by history fixture. Live nightly execution remains unqualified."
+  },
+  "card_hardware_cutover": {
+    "retired_modules": [
+      "scripts/agentic-replay-card.py"
+    ],
+    "owners": [
+      "tools/xtask/src/automation/replay_matrix/card.rs",
+      "tools/xtask/src/automation/replay_matrix/hardware.rs"
+    ],
+    "coverage": "Complete-only latest results, nullable percentages, seven dates at concurrency four, recursive immutable shards, missing-history bootstrap, malformed and nonfinite data; typed hardware fields and fixed native probes. Native macOS hardware execution and dataset publication remain unqualified."
+  },
+  "canary_cache_cutover": {
+    "owner": "tools/xtask/src/ci_operations/cache_configuration.rs",
+    "caller": ".github/actions/use-canary-cache/action.yml",
+    "gate": "cargo test --offline -p xtask --test canary_cache_configuration",
+    "result": "5 actual CLI fixtures passed; all six retired test intents preserved",
+    "coverage": {
+      "home_precedence_and_existing_credentials": "mounted_home_wins_and_existing_credentials_are_masked_before_export",
+      "legacy_xdg_and_home_defaults": "legacy_xdg_and_home_relative_configuration_preserve_existing_cache",
+      "missing_mount_and_multiline": "missing_mount_and_multiline_credentials_have_no_exports_or_secret_logs",
+      "conflicting_hub": "conflicting_existing_hub_override_fails_before_export",
+      "mount_identity": "symlinked_mount_identity_is_accepted_without_rewriting_exports"
+    },
+    "live_runner_qualification": "not executed"
   }
 }

@@ -1,4 +1,4 @@
-use super::{Checked, positional, python_io};
+use super::{Checked, positional, text_io};
 use std::path::PathBuf;
 
 struct CacheOperands {
@@ -17,7 +17,7 @@ pub(super) fn run(args: &[String]) -> Checked<String> {
 }
 
 fn filter(operands: &CacheOperands) -> Checked<()> {
-    let source = python_io::read_text(&operands.source)?;
+    let source = text_io::read_text(&operands.source)?;
     let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
     let mut output = String::from("# Portable MeshLLM static ABI link metadata\n");
     for line in normalized
@@ -27,7 +27,7 @@ fn filter(operands: &CacheOperands) -> Checked<()> {
         output.push_str(line);
     }
     std::fs::write(&operands.destination, output)
-        .map_err(|error| python_io::os_error(&operands.destination, &error).into())
+        .map_err(|error| text_io::os_error(&operands.destination, &error).into())
 }
 
 fn retained(line: &str) -> bool {

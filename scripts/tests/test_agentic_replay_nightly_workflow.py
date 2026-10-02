@@ -8,8 +8,6 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
-from unittest.mock import patch
-from urllib.error import HTTPError, URLError
 from pathlib import Path
 
 import yaml
@@ -75,27 +73,11 @@ class NightlyWorkflowTests(unittest.TestCase):
 
     def test_history_probe_only_bootstraps_on_http_404(self):
         script = self.step("Download cohort-matched history")["run"]
-        probe = script.split("<<'PY'", 1)[1].split("\n", 1)[1].split("\nPY", 1)[0]
-        for code in (200, 401, 403, 404, 500, "network"):
-            with self.subTest(code=code):
-                error = None if code == 200 else (
-                    URLError("offline") if code == "network" else
-                    HTTPError("https://huggingface.co/api/datasets/owner/repo", code, "fixture", {}, None)
-                )
-                with patch("sys.argv", ["-", "owner/repo"]), patch(
-                    "urllib.request.urlopen", side_effect=error
-                ) as request:
-                    status = 0
-                    try:
-                        exec(compile(probe, "history-probe", "exec"), {})
-                    except SystemExit as exc:
-                        status = exc.code
-                    self.assertEqual(status, 0 if code == 200 else 3 if code == 404 else 1)
-                    if isinstance(error, HTTPError):
-                        error.close()
-                    request.assert_called_once_with(
-                        "https://huggingface.co/api/datasets/owner/repo", timeout=30
-                    )
+        self.assertIn("cargo xtool automation replay-matrix history-fetch", script)
+        self.assertIn('--dataset-repo "$DATASET_REPO" --output "$HISTORY_LOCAL"', script)
+        self.assertNotIn("HF_TOKEN", script)
+        # HTTP failure/404 behavior executes through the retained Rust owner in
+        # replay_history_hub; this guard protects the actual workflow handoff.
 
     def test_replay_environment_is_locked_and_prepared_before_inputs(self):
         prepare = self.step("Prepare pinned replay Python environment")

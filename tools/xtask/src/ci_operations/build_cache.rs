@@ -14,9 +14,9 @@ use crate::ci_operations::build_cache_prune::{
 };
 use crate::ci_operations::build_cache_tree::{immediate_entries, io_text, tree_metrics};
 use crate::ci_operations::build_cache_values::{human_size, resolve};
-use crate::ci_operations::python_access::{object, string};
+use crate::ci_operations::json_access::{object, string};
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_json::dumps_indented;
+use crate::prepared_input::json_bytes::dumps_indented;
 use crate::repository::check_report::CheckReport;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

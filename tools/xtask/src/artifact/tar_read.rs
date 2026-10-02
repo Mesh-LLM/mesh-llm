@@ -3,7 +3,7 @@
 //! v7, pax (`x`/`g`) and GNU long-name headers, and the end-of-archive rules
 //! (a bad header after the first member ends the archive silently).
 
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 use std::io::Read;
 
 use super::tar_header::{BLOCK, HeaderError, Member, apply_pax, frombuf, nts, pax_records};

@@ -3,18 +3,16 @@
 //! [`ReleaseHost`]) and optional `--links` records, and writes the
 //! deterministic Keep a Changelog plan.
 
-use crate::ci_operations::ci_metrics_int::python_int_text;
 use crate::ci_operations::ci_metrics_value::{Value, dumps, parse as parse_json};
-use crate::prepared_input::python_io::decode_utf8;
+use crate::prepared_input::text_io::decode_utf8;
 use crate::release::classify_argv::{Invocation, PlanArgs, parse};
 use crate::release::classify_rules::build_plan;
+use crate::release::command_failure::{Uncaught, argv_repr, called_process_error};
 use crate::release::link_body::{canonical, entry_pr};
 use crate::release::link_commits::{pr_suffix, trailers};
-use crate::release::link_gh::type_name;
 use crate::release::link_host::{Exit, ReleaseHost, text_streams};
-use crate::release::python_failure::{Uncaught, argv_repr, called_process_error};
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::{repr, strip};
+use crate::repository::text::strip;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -136,28 +134,25 @@ fn parse_log(stdout: &str) -> HashMap<String, Value> {
 /// `load_links(path)`: `{int(pr): record}` in file order.
 fn load_links(path: &str) -> Result<Vec<(String, Value)>, Uncaught> {
     let bytes = std::fs::read(path).map_err(|error| Uncaught::os(Path::new(path), &error))?;
-    let value = parse_json(&bytes).map_err(|message| {
-        let class = if message.starts_with("'utf-8' codec") {
-            "UnicodeDecodeError"
-        } else if message == "maximum recursion depth exceeded" {
-            "RecursionError"
-        } else {
-            "json.decoder.JSONDecodeError"
-        };
-        Uncaught::new(class, message)
-    })?;
+    let value = parse_json(&bytes).map_err(|message| Uncaught::new("links", message))?;
     let Value::Object(entries) = value else {
-        let message = format!("'{}' object has no attribute 'items'", type_name(&value));
-        return Err(Uncaught::new("AttributeError", message));
+        return Err(Uncaught::new(
+            "links",
+            "release links must be an object keyed by pull-request numbers".into(),
+        ));
     };
     let mut links: Vec<(String, Value)> = Vec::new();
     for (pr, record) in entries {
-        let key = python_int_text(&pr).ok_or_else(|| {
-            Uncaught::new(
-                "ValueError",
-                format!("invalid literal for int() with base 10: {}", repr(&pr)),
-            )
-        })?;
+        if pr.is_empty()
+            || !pr.bytes().all(|byte| byte.is_ascii_digit())
+            || pr.bytes().all(|byte| byte == b'0')
+        {
+            return Err(Uncaught::new(
+                "links",
+                "release link key must be a positive decimal pull-request number".into(),
+            ));
+        }
+        let key = canonical(&pr);
         match links.iter_mut().find(|(seen, _)| *seen == key) {
             Some(entry) => entry.1 = record,
             None => links.push((key, record)),

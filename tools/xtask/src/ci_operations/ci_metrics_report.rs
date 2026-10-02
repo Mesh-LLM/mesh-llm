@@ -4,7 +4,7 @@
 
 use crate::ci_operations::ci_metrics_aggregate::{by_name, by_runner, by_step, comparison_cohort};
 use crate::ci_operations::ci_metrics_analyze::run_pass;
-use crate::ci_operations::ci_metrics_normalize::{Outcome, Run};
+use crate::ci_operations::ci_metrics_normalize::{Failure, Outcome, Run};
 use crate::ci_operations::ci_metrics_observe::{capacity_metrics, queue_heuristics};
 use crate::ci_operations::ci_metrics_rollup::{
     critical, job_summaries, slowest, workflow_summaries,
@@ -58,6 +58,20 @@ const DEFINITIONS: [(&str, &str); 12] = [
     ),
     ("step_duration_seconds", "step started_at to completed_at"),
 ];
+
+/// A report must remain JSON even when finite inputs overflow an aggregate.
+pub(crate) fn validate_finite(value: &Value) -> Outcome<()> {
+    match value {
+        Value::Float(number) if !number.is_finite() => Err(Failure::Reported(
+            "CI report contains a nonfinite numeric value".to_owned(),
+        )),
+        Value::Array(items) => items.iter().try_for_each(validate_finite),
+        Value::Object(entries) => entries
+            .iter()
+            .try_for_each(|(_, value)| validate_finite(value)),
+        _ => Ok(()),
+    }
+}
 
 fn summaries(entries: &[(&'static str, Summary)]) -> Vec<(String, Value)> {
     entries
@@ -147,4 +161,32 @@ pub(crate) fn analyze(runs: &[Run], request: Request<'_>) -> Outcome<Value> {
         ("capacity", capacity_metrics(&pass.observations)),
         ("heuristics", heuristics),
     ]))
+}
+
+#[cfg(test)]
+mod numeric_schema_tests {
+    use super::*;
+
+    #[test]
+    fn nested_reports_require_finite_numbers() {
+        for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                validate_finite(&object([(
+                    "jobs",
+                    Value::Array(vec![Value::Float(number)])
+                )]))
+                .is_err()
+            );
+        }
+        assert!(
+            validate_finite(&object([
+                (
+                    "identity",
+                    Value::BigInt("1234567890123456789012345678901234567890".into())
+                ),
+                ("duration", Value::Float(0.0))
+            ]))
+            .is_ok()
+        );
+    }
 }

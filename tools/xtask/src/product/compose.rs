@@ -8,9 +8,9 @@
 
 use super::compose_argv::{Args, parse};
 use super::digest::{IoFailure, file_sha256, tree_sha256};
+use super::json_object::{display, dumps, equal, get, item, require_hashable};
 use super::manifest_load::load;
 use super::pure_path::PurePath;
-use super::python_object::{display, dumps, equal, get, item, require_hashable};
 use crate::artifact::zip_extract::os_error_line;
 use crate::ci_plan::document::Json;
 use crate::repository::check_report::CheckReport;

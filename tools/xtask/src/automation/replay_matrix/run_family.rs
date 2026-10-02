@@ -17,6 +17,8 @@ mod run_family_invocation;
 mod run_family_process;
 #[path = "run_family_process_failure.rs"]
 mod run_family_process_failure;
+#[path = "run_family_progress.rs"]
+mod run_family_progress;
 #[path = "run_family_report.rs"]
 mod run_family_report;
 #[path = "run_family_spec.rs"]
@@ -28,6 +30,7 @@ const GRAMMAR: Grammar = Grammar {
         "--run-family",
         "--ref",
         "--dataset-file",
+        "--model-file",
         "--output",
         "--python",
         "--json-output",
@@ -43,6 +46,7 @@ struct Options {
     family: Option<String>,
     refs: Vec<OsString>,
     dataset: Option<PathBuf>,
+    model: Option<PathBuf>,
     output: Option<PathBuf>,
     python: Option<PathBuf>,
     timeout: Option<Duration>,
@@ -53,7 +57,7 @@ pub(in crate::automation) fn run(args: &[String], explicit_root: Option<&Path>) 
         Err(report) => RunFamilyReport::from_check(report),
         Ok(parsed) if parsed.flag("--help") => {
             RunFamilyReport::from_check(CheckReport::success(format!(
-                "usage: {}\n\nExport replay parameters, select one pinned family, then supervise one replay child. The replay child is never launched without --python; fixture tests use only an isolated fixture executable. Paths are relative to the invocation directory.\n\nOptions:\n  --matrix <path>       Required complete replay matrix\n  --run-family <name>   Required unique model family\n  --ref <label=ref>     Ordered repeatable replay ref\n  --dataset-file <path> Required replay dataset path\n  --output <path>       Required replay output directory\n  --python <path>       Absolute child interpreter executable\n  --json-output <path> Export sorted replay JSON before selection\n  --github-env <path>  Append replay environment before selection\n  --print-shell         Print shell line only after child success\n  --timeout <seconds>  Child deadline, 1..=86400 (default 3600)\n  --help                Show this help\n",
+                "usage: {}\n\nExport replay parameters, select one pinned family, then supervise the typed Rust replay owner. --python selects only the retained locked trajectory reader. Paths are relative to the invocation directory.\n\nOptions:\n  --matrix <path>       Required complete replay matrix\n  --run-family <name>   Required unique model family\n  --ref <label=ref>     Ordered repeatable replay ref\n  --dataset-file <path> Required replay dataset path\n  --model-file <path>   Required verified local pinned GGUF\n  --output <path>       Required replay output directory\n  --python <path>       Absolute locked trajectory reader interpreter\n  --json-output <path> Export sorted replay JSON before selection\n  --github-env <path>  Append replay environment before selection\n  --print-shell         Print shell line only after child success\n  --timeout <seconds>  Child deadline, 1..=86400 (default 3600)\n  --help                Show this help\n",
                 GRAMMAR.usage
             )))
         }
@@ -87,6 +91,7 @@ fn options(parsed: ParsedArgs) -> Result<Options, CheckReport> {
         .map(OsString::from)
         .collect();
     let dataset = parsed.last("--dataset-file").map(PathBuf::from);
+    let model = parsed.last("--model-file").map(PathBuf::from);
     let output = parsed.last("--output").map(PathBuf::from);
     let python = parsed.last("--python").map(PathBuf::from);
     Ok(Options {
@@ -95,6 +100,7 @@ fn options(parsed: ParsedArgs) -> Result<Options, CheckReport> {
         family,
         refs,
         dataset,
+        model,
         output,
         python,
         timeout,
@@ -137,6 +143,10 @@ fn execute(options: &Options, explicit_root: Option<&Path>) -> RunFamilyReport {
         Some(path) => path,
         None => return usage_failure("--python is required for bounded child execution"),
     };
+    let model = match options.model.as_deref() {
+        Some(path) => path,
+        None => return usage_failure("--run-family needs --model-file"),
+    };
     let timeout = options.timeout.unwrap_or(Duration::from_secs(3600));
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
@@ -163,6 +173,7 @@ fn execute(options: &Options, explicit_root: Option<&Path>) -> RunFamilyReport {
             family,
             python,
             dataset,
+            model,
             output,
             cwd: &cwd,
             repo_root: &root,

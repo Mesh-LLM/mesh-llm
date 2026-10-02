@@ -74,21 +74,21 @@ fn numeric_cases() {
         .unwrap_or_else(|| fallback.path().to_owned());
     let parent = evidence.as_path();
     for (case, replacement, expected) in [
-        ("bool", "true", true),
-        ("float", "1.0", true),
+        ("bool", "true", false),
+        ("float", "1.0", false),
         ("wrong", "2", false),
         ("fraction", "1.5", false),
         ("nan", "NaN", false),
         ("infinity", "Infinity", false),
         ("negative-infinity", "-Infinity", false),
         ("overflow", "1e400", false),
-        ("signed-zero", "1", true),
-        ("nested", "1", true),
+        ("signed-zero", "1", false),
+        ("nested", "1", false),
         ("ordered", "1", false),
         ("decoded-key", "1", true),
         ("distinct-key", "1", false),
         ("adjacent53", "1", false),
-        ("exact53", "1", true),
+        ("exact53", "1", false),
     ] {
         let root = tempfile::Builder::new()
             .prefix(case)

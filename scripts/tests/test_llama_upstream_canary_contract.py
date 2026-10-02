@@ -131,10 +131,22 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertEqual(family['strategy']['max-parallel'], 8)
         self.assertIn('fromJSON(needs.build.outputs.matrix)', family['strategy']['matrix'])
         commands = '\n'.join(step.get('run', '') for step in family['steps'])
-        self.assertIn('llama-canary-family-evidence.py certify', commands)
-        controller = (ROOT / 'scripts/llama-canary-family-evidence.py').read_text()
-        self.assertIn('"--skip-build", "--plan"', controller)
-        self.assertIn('--shard-index', commands)
+        certify = next(step for step in family['steps'] if step.get('id') == 'certify')
+        certify_lines = [line.strip() for line in certify['run'].splitlines()
+                         if line.strip() and not line.lstrip().startswith('#')]
+        self.assertIn('"$MESH_LLM_AUTOMATION_BIN" automation canary-receipts certify --input "$input"', certify_lines)
+        self.assertEqual(certify['env']['SHARD_INDEX'], '${{ matrix.shard_index }}')
+        self.assertEqual(certify['env']['MEMORY_TIER'], '${{ matrix.memory_tier }}')
+        self.assertIn('--argjson shard_index "$SHARD_INDEX" --arg memory_tier "$MEMORY_TIER"', '\n'.join(certify_lines))
+        self.assertIn('shard_index:$shard_index,memory_tier:$memory_tier', '\n'.join(certify_lines))
+        # The owning controller still invokes the restored battery with the
+        # immutable package plan and skip-build arguments, never a worker build.
+        controller = (ROOT / 'tools/xtask/src/automation/canary_receipts/package_closure/certification.rs').read_text()
+        self.assertIn('"--skip-build".into(),\n            "--plan".into(),\n            input.package.canonicalize()?.join("plan.json").into(),\n            "--shard-index".into(),\n            input.shard_index.to_string().into(),', controller)
+        restore_index = next(i for i, step in enumerate(family['steps'])
+                             if '"$MESH_LLM_AUTOMATION_BIN" automation canary-receipts restore --input "$input"'
+                             in [line.strip() for line in step.get('run', '').splitlines()])
+        self.assertLess(restore_index, family['steps'].index(certify))
         self.assertNotIn('cargo ', commands)
         wrapper = (ROOT / 'scripts/llama-canary-agent-repair.sh').read_text()
         self.assertIn('arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64', wrapper)
@@ -143,7 +155,9 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertEqual(build['env']['LLAMA_STAGE_BACKEND'], 'metal')
         self.assertIn('inputs.pass_id', build['env']['LLAMA_STAGE_BUILD_DIR'])
         self.assertIn('SCCACHE_C_CUSTOM_CACHE_BUSTER', setup_step('Isolate compiler cache identity'))
-        self.assertNotIn('SCCACHE_GHA_ENABLED', PASS_WORKFLOW.read_text())
+        for step in build['steps']:
+            if 'SCCACHE_GHA_ENABLED' in step.get('env', {}):
+                self.assertEqual('false', step['env']['SCCACHE_GHA_ENABLED'])
         self.assertIn('force_certify:', WORKFLOW.read_text())
 
     def test_family_certification_uses_os_assigned_ports(self) -> None:
@@ -177,16 +191,32 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 
     def test_build_and_workers_load_runner_cache_configuration(self) -> None:
         setup = yaml.safe_load(SETUP_ACTION.read_text())
-        worker = yaml.safe_load(PASS_WORKFLOW.read_text())["jobs"]["family"]
+        jobs = yaml.safe_load(PASS_WORKFLOW.read_text())["jobs"]
+        worker = jobs["family"]
         cache_action = "./.github/actions/use-canary-cache"
-        self.assertEqual(setup["runs"]["steps"][0]["uses"], cache_action)
-        cache_index = next(i for i, step in enumerate(worker["steps"]) if step.get("uses") == cache_action)
-        certify_index = next(i for i, step in enumerate(worker["steps"]) if step.get("id") == "certify")
-        self.assertLess(cache_index, certify_index)
-        self.assertFalse(any(key.startswith("HF_") for key in worker["env"]))
+        self.assertFalse(any(step.get("uses") == cache_action for step in setup["runs"]["steps"]))
+        preflight = yaml.safe_load(WORKFLOW.read_text())["jobs"]["preflight"]
+        for job, consumer in [(jobs["build"], "Build exact candidate for distributed certification"),
+                              (worker, "Certify one family"),
+                              (preflight, "Verify immutable family plan and pinned cache")]:
+            steps = job["steps"]
+            cache_indexes = [i for i, step in enumerate(steps) if step.get("uses") == cache_action]
+            self.assertEqual(len(cache_indexes), 1)
+            cache_index = cache_indexes[0]
+            prepare_index = next(i for i, step in enumerate(steps)
+                                 if step.get("uses") == "./.github/actions/prepare-automation")
+            consumer_index = next(i for i, step in enumerate(steps) if step.get("name") == consumer)
+            self.assertLess(prepare_index, cache_index)
+            self.assertLess(cache_index, consumer_index)
+            self.assertEqual(steps[prepare_index]["with"]["allow_depot_remote_cache"], "false")
+            self.assertEqual(steps[prepare_index]["with"]["allow_native_github_cache"], "false")
+            self.assertFalse(any(key.startswith("HF_") for key in job["env"]))
         self.assertNotIn("/Users/lab", SETUP_ACTION.read_text() + PASS_WORKFLOW.read_text())
         cache = yaml.safe_load((ROOT / cache_action / "action.yml").read_text())
         self.assertEqual(cache["runs"]["steps"][0]["shell"], "/bin/zsh -il {0}")
+        cache_commands = [line.strip() for line in cache["runs"]["steps"][0]["run"].splitlines()
+                          if line.strip() and not line.lstrip().startswith("#")]
+        self.assertIn('"${MESH_LLM_AUTOMATION_BIN:?protected controller automation required}" ci-ops configure-canary-cache', cache_commands)
 
     def test_persistent_runner_executes_goose_preflight(self) -> None:
         preflight = setup_step("Verify changed-pin agent executable")
@@ -274,8 +304,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         jobs = workflow['jobs']
         self.assertEqual(jobs['preflight']['needs'], ['resolve'])
         preflight_commands = '\n'.join(step.get('run', '') for step in jobs['preflight']['steps'])
-        self.assertIn('llama-canary-family-evidence.py preflight', preflight_commands)
-        self.assertIn('--root "$CANARY_SOURCE_ROOT"', preflight_commands)
+        self.assertIn('canary-receipts preflight', preflight_commands)
+        self.assertIn('--arg source_root "$CANARY_SOURCE_ROOT"', preflight_commands)
         repair = jobs['repair_1']
         self.assertEqual(repair['needs'], ['resolve', 'preflight'])
         self.assertEqual(repair['uses'], './.github/workflows/llama-canary-family-pass.yml')

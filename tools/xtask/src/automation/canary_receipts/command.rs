@@ -23,6 +23,44 @@ const GRAMMAR: Grammar = Grammar {
 };
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    match args {
+        [verb, rest @ ..] if verb == "receipt" || verb == "publication" => {
+            return super::canary_handoff::run(rest, verb == "publication");
+        }
+        [verb, rest @ ..]
+            if matches!(
+                verb.as_str(),
+                "producer-receipt"
+                    | "candidate-plan"
+                    | "pack"
+                    | "restore"
+                    | "certify"
+                    | "split-roster"
+                    | "manifest-policy"
+            ) =>
+        {
+            return super::canary_package_closure::transaction(rest, verb);
+        }
+        [verb, rest @ ..] if verb == "workload-manifest" => {
+            return super::canary_package_closure::run(rest, true);
+        }
+        [verb, rest @ ..] if verb == "verify-package-closure" => {
+            return super::canary_package_closure::run(rest, false);
+        }
+        [verb, rest @ ..] if verb == "build" => {
+            return super::canary_build::run(rest);
+        }
+        [verb, rest @ ..] if verb == "preflight" => {
+            return super::canary_source_plan::preflight(rest);
+        }
+        [verb, rest @ ..] if verb == "source-plan" => {
+            return super::canary_source_plan::run(rest, false);
+        }
+        [verb, rest @ ..] if verb == "verify-source-plan" => {
+            return super::canary_source_plan::run(rest, true);
+        }
+        _ => (),
+    }
     let rest = match args {
         [verb, rest @ ..] if verb == "aggregate" => rest,
         _ => return GRAMMAR.error("an aggregate command is required").emit(),

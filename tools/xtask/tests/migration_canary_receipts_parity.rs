@@ -3,14 +3,14 @@ pub(crate) mod plan_bytes;
 mod ci_plan {
     pub(crate) use crate::plan_bytes;
 }
-#[path = "../src/repository/python_text.rs"]
+#[path = "../src/repository/text.rs"]
 #[expect(
     dead_code,
     reason = "The isolated parity target consumes only document separator semantics"
 )]
-pub(crate) mod python_text;
+pub(crate) mod text;
 mod repository {
-    pub(crate) use crate::python_text;
+    pub(crate) use crate::text;
 }
 #[expect(
     dead_code,

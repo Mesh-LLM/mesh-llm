@@ -3,10 +3,8 @@
 //! dict-literal order, so the first invalid timestamp reported matches.
 
 use crate::ci_operations::ci_metrics_input::check_job_shape;
-use crate::ci_operations::ci_metrics_int::python_int_text;
 use crate::ci_operations::ci_metrics_time::{Instant, TimeError, elapsed, timestamp};
-use crate::ci_operations::ci_metrics_value::{Value, display};
-use crate::ci_operations::sccache_argv::python_float;
+use crate::ci_operations::ci_metrics_value::Value;
 
 /// How a legacy exception surfaces.
 #[derive(Debug)]
@@ -72,7 +70,10 @@ fn pick<'a>(data: &'a Value, names: &[&str]) -> Option<&'a Value> {
 }
 
 fn text(data: &Value, names: &[&str], default: &str) -> String {
-    pick(data, names).map_or_else(|| default.to_owned(), display)
+    match pick(data, names) {
+        Some(Value::Str(text)) => text.clone(),
+        _ => default.to_owned(),
+    }
 }
 
 fn raw(data: &Value, names: &[&str]) -> Value {
@@ -85,7 +86,7 @@ fn time(data: &Value, names: &[&str]) -> Outcome<Option<Instant>> {
             timestamp(value).map_err(|error| match error {
                 TimeError::Invalid(message) => Failure::Reported(message),
                 TimeError::Overflow => {
-                    Failure::Uncaught("OverflowError: date value out of range".to_owned())
+                    Failure::Uncaught("CI timestamp is outside the supported range".to_owned())
                 }
             })
         }
@@ -107,24 +108,26 @@ fn normalize_step(raw_step: &Value) -> Outcome<Step> {
 fn number(value: Option<&Value>) -> Outcome<Option<f64>> {
     let parsed = match value {
         Some(Value::Int(int)) => int.to_string().parse::<f64>().ok(),
-        Some(Value::BigInt(text)) => match text.parse::<f64>() {
-            Ok(float) if float.is_finite() => Some(float),
-            _ => {
-                return Err(Failure::Uncaught(
-                    "OverflowError: int too large to convert to float".to_owned(),
-                ));
-            }
-        },
+        Some(Value::BigInt(text)) => text.parse::<f64>().ok(),
         Some(Value::Float(float)) => Some(*float),
-        Some(Value::Str(text)) => python_float(text),
+        Some(Value::Str(text)) => text.parse::<f64>().ok(),
         _ => None,
     };
+    if parsed.is_some_and(|seconds| !seconds.is_finite()) {
+        return Err(Failure::Reported("CI duration must be finite".into()));
+    }
     Ok(parsed.filter(|seconds| *seconds >= 0.0))
 }
 
 fn string_list(value: Option<&Value>) -> Vec<String> {
     match value {
-        Some(Value::Array(items)) => items.iter().map(display).collect(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item {
+                Value::Str(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -161,30 +164,28 @@ fn normalize_job(raw_job: &Value) -> Outcome<Job> {
     })
 }
 
-/// `max(int(raw_attempt), 1)` with `TypeError`/`ValueError` meaning 1; the
-/// result is exact however large (`int(1e30)` keeps every binary digit).
+/// A missing attempt is the first attempt; explicit attempts are positive
+/// integers or exact decimal strings from saved CLI snapshots.
 fn attempt(value: Option<&Value>) -> Outcome<Value> {
     let digits = match value {
-        None => None,
-        Some(Value::Int(int)) => Some(int.to_string()),
-        Some(Value::BigInt(text)) => Some(text.clone()),
-        Some(Value::Bool(flag)) => Some(u8::from(*flag).to_string()),
-        Some(Value::Float(float)) if float.is_infinite() => {
-            return Err(Failure::Uncaught(
-                "OverflowError: cannot convert float infinity to integer".to_owned(),
+        None | Some(Value::Null) => return Ok(Value::Int(1)),
+        Some(Value::Int(int)) if *int > 0 => int.to_string(),
+        Some(Value::BigInt(text) | Value::Str(text))
+            if !text.is_empty()
+                && text.bytes().all(|byte| byte.is_ascii_digit())
+                && text.bytes().any(|byte| byte != b'0') =>
+        {
+            text.trim_start_matches('0').to_owned()
+        }
+        Some(_) => {
+            return Err(Failure::Reported(
+                "CI run attempt must be a positive integer or decimal string".into(),
             ));
         }
-        Some(Value::Float(float)) if float.is_nan() => None,
-        Some(Value::Float(float)) => Some(format!("{:.0}", float.trunc())),
-        Some(Value::Str(text)) => python_int_text(text),
-        Some(_) => None,
     };
-    let positive =
-        digits.filter(|text| !text.starts_with('-') && !text.trim_start_matches('0').is_empty());
-    Ok(positive.map_or(Value::Int(1), |text| {
-        text.parse::<i128>()
-            .map_or_else(|_| Value::BigInt(text.clone()), Value::Int)
-    }))
+    Ok(digits
+        .parse::<i128>()
+        .map_or_else(|_| Value::BigInt(digits), Value::Int))
 }
 
 const METADATA: [(&str, [&str; 2]); 6] = [
@@ -236,4 +237,36 @@ pub(crate) fn normalize_run(raw_run: &Value) -> Outcome<Run> {
         metadata,
         jobs,
     })
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[test]
+    fn saved_decimal_attempts_and_durations_remain_supported() {
+        assert!(matches!(
+            attempt(Some(&Value::text("01"))),
+            Ok(Value::Int(1))
+        ));
+        assert_eq!(number(Some(&Value::text("4.5"))).ok().flatten(), Some(4.5));
+        assert_eq!(number(Some(&Value::Int(-3))).ok().flatten(), None);
+        for value in [
+            Value::Bool(true),
+            Value::Float(1.0),
+            Value::text(" 1 "),
+            Value::text("1_0"),
+            Value::Int(0),
+        ] {
+            assert!(attempt(Some(&value)).is_err());
+        }
+        assert!(number(Some(&Value::Float(f64::INFINITY))).is_err());
+        assert_eq!(
+            string_list(Some(&Value::Array(vec![
+                Value::text("linux"),
+                Value::Bool(true)
+            ]))),
+            vec!["linux"]
+        );
+    }
 }

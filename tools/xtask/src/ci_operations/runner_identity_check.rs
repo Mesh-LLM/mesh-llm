@@ -3,7 +3,7 @@
 //! SDK Rust consumers must agree with the catalog.
 
 use crate::ci_operations::catalog_validation::validate;
-use crate::ci_operations::python_access::{Outcome, item, item_by, object, require};
+use crate::ci_operations::json_access::{Outcome, item, item_by, object, require};
 use crate::ci_operations::runner_identity::read_json;
 use crate::ci_operations::sdk_census::check_sdk;
 use crate::ci_operations::seed_census::check_seed;
@@ -12,8 +12,8 @@ use crate::ci_operations::workflow_census::{Workflows, job, workflow_jobs};
 use crate::ci_operations::workflow_text::one_field;
 use crate::ci_plan::catalog::{os_error_text, python_path_display};
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_value::display;
-use crate::repository::python_text::repr;
+use crate::prepared_input::value_format::display;
+use crate::repository::text::repr;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 

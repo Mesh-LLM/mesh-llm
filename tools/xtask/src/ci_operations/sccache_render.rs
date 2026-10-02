@@ -5,7 +5,7 @@
 use crate::ci_operations::sccache_evidence::{
     Assessment, Counters, OUTPUT_COUNTERS, REQUIRED_COUNT_MAPS, REQUIRED_COUNTERS,
 };
-use crate::prepared_input::python_value::float_repr;
+use crate::prepared_input::value_format::float_repr;
 use std::fmt::Write as _;
 
 /// `str(value)` / f-string of an optional float (`None` when absent).

@@ -124,9 +124,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.12'
       - uses: ./.github/actions/run-laya-product-smoke
         with:
           artifact_name: ci-product-linux-amd64-cpu
@@ -149,9 +146,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.12'
       - uses: ./.github/actions/run-laya-product-smoke
         with:
           artifact_name: ci-product-linux-amd64-cuda
@@ -167,7 +161,12 @@ jobs:
         env:
           CLEANUP_ARTIFACT_PATH: ci-artifacts/laya-linux-cuda
           CLEANUP_BINARY_PATH: target/release/mesh-llm
-        run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
+        run: |
+          if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+            "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
+          else
+            cargo xtool ci-ops runner-cleanup --job smoke --evidence-uploaded false
+          fi
 
   # Case-sensitive exact-`true` gate for the two hardware-backed Laya rows.
   #
@@ -225,9 +224,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.12'
       - uses: ./.github/actions/run-laya-product-smoke
         with:
           artifact_name: ci-product-linux-amd64-vulkan
@@ -244,7 +240,12 @@ jobs:
         env:
           CLEANUP_ARTIFACT_PATH: ci-artifacts/laya-linux-vulkan
           CLEANUP_BINARY_PATH: target/release/mesh-llm
-        run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
+        run: |
+          if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+            "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
+          else
+            cargo xtool ci-ops runner-cleanup --job smoke --evidence-uploaded false
+          fi
 
   laya_rocm:
     name: Laya smoke (Linux ROCm)
@@ -259,9 +260,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.12'
       - uses: ./.github/actions/run-laya-product-smoke
         with:
           artifact_name: ci-product-linux-amd64-rocm
@@ -277,4 +275,9 @@ jobs:
         env:
           CLEANUP_ARTIFACT_PATH: ci-artifacts/laya-linux-rocm
           CLEANUP_BINARY_PATH: target/release/mesh-llm
-        run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
+        run: |
+          if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+            "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job smoke --evidence-uploaded false
+          else
+            cargo xtool ci-ops runner-cleanup --job smoke --evidence-uploaded false
+          fi

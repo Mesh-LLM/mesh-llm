@@ -7,11 +7,11 @@ use crate::ci_operations::evidence_catalog;
 use crate::ci_operations::identity_text::{
     EPOCH_PREFIX, is_identifier, is_reference, is_workflow_name,
 };
-use crate::ci_operations::python_access::{
+use crate::ci_operations::json_access::{
     Outcome, contains_key, eq, has_exact_fields, is_str, item, item_by, object, require, string,
 };
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_value::repr;
+use crate::prepared_input::value_format::repr;
 use std::path::Path;
 
 /// `fields(value, expected, where)`.

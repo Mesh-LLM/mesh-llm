@@ -35,7 +35,7 @@ enum Expected {
 }
 
 #[test]
-fn source_derived_cases_distinguish_legacy_decisions() {
+fn source_derived_cases_enforce_product_evidence_types() {
     let fixtures: Fixtures =
         serde_json::from_str(include_str!("fixtures/standalone.json")).unwrap();
     assert_eq!(fixtures.cases.len(), 25);
@@ -72,15 +72,86 @@ fn source_derived_cases_distinguish_legacy_decisions() {
 }
 
 #[test]
-fn models_preserve_python_stringification_instead_of_claiming_model_identity() {
-    for (body, expected) in [
-        (br#"{"data":[{"id":null}]}"#.as_slice(), "null"),
-        (br#"{"data":[{"id":7}]}"#, "7"),
-        (br#"{"data":[{"id":false}]}"#, "false"),
-        (br#"{"data":[{"id":"first\n\n"}]}"#, "first"),
+fn models_require_a_nonempty_string_identifier() {
+    for body in [
+        br#"{"data":[{"id":null}]}"#.as_slice(),
+        br#"{"data":[{"id":7}]}"#,
+        br#"{"data":[{"id":false}]}"#,
+        br#"{"data":[{"id":[]}]}"#,
+        br#"{"data":[{"id":{}}]}"#,
+        br#"{"data":[{"id":" \n"}]}"#,
     ] {
         let result = classify(Check::Models, response(body), &Attestation::Disabled);
-        assert!(matches!(result, Ok(Evidence::Model(model)) if model == expected));
+        assert!(matches!(result, Ok(Evidence::Pending)));
+    }
+    for id in ["org/repo:Q4_K_M", "fixture", "opaque\nidentifier"] {
+        let body = serde_json::json!({"data": [{"id": id}]}).to_string();
+        let result = classify(
+            Check::Models,
+            response(body.as_bytes()),
+            &Attestation::Disabled,
+        );
+        assert!(matches!(result, Ok(Evidence::Model(model)) if model == id));
+    }
+}
+
+#[test]
+fn runtime_readiness_requires_a_boolean() {
+    for body in [
+        br#"{"llama_ready":"True"}"#.as_slice(),
+        br#"{"llama_ready":1}"#,
+        br#"{"llama_ready":null}"#,
+    ] {
+        assert!(matches!(
+            classify(Check::Runtime, response(body), &Attestation::Disabled),
+            Ok(Evidence::Pending)
+        ));
+    }
+}
+
+#[test]
+fn attestation_status_requires_the_exact_string() {
+    let requirement = Attestation::Required {
+        expected: "missing".into(),
+    };
+    for status in [
+        serde_json::json!(null),
+        serde_json::json!(false),
+        serde_json::json!(7),
+        serde_json::json!(["missing"]),
+        serde_json::json!({"status": "missing"}),
+        serde_json::json!("missing\n"),
+    ] {
+        let body = serde_json::json!({"status": status}).to_string();
+        assert_eq!(
+            classify(
+                Check::InspectAttestation,
+                response(body.as_bytes()),
+                &requirement
+            )
+            .err(),
+            Some(Rejection::Evidence(Check::InspectAttestation))
+        );
+    }
+}
+
+#[test]
+fn chat_evidence_requires_product_assistant_text() {
+    for content in [
+        serde_json::json!(7),
+        serde_json::json!(true),
+        serde_json::json!(["text"]),
+        serde_json::json!({"text": "text"}),
+    ] {
+        let body = serde_json::json!({"object": "chat.completion",
+            "choices": [{"message": {"content": content}}]})
+        .to_string();
+        for check in [Check::Chat, Check::Auto] {
+            assert_eq!(
+                classify(check, response(body.as_bytes()), &Attestation::Disabled).err(),
+                Some(Rejection::Evidence(check))
+            );
+        }
     }
 }
 

@@ -10,7 +10,7 @@ mod source_scan;
 use crate::command::DynResult;
 use crate::repository::check_args::Grammar;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::splitlines;
+use crate::repository::text::splitlines;
 use registry::{AUDITED_FILES, KNOWN_UNAUDITED_MUTATION_COUNTS};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

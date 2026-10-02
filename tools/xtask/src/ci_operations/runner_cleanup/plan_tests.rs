@@ -1,6 +1,28 @@
 use super::{Options, Profile, boundary, fixtures::Fixture};
 
 #[test]
+fn preflight_evidence_is_retained_until_uploaded_and_other_outputs_survive() {
+    let fixture = Fixture::new();
+    let evidence = fixture.temporary.join("llama-canary-preflight");
+    let sentinel = fixture.temporary.join("independent-evidence");
+    fixture.seed(&evidence);
+    fixture.seed(&sentinel);
+    let retained = fixture.plan(Profile::CanaryPreflight, false);
+    assert!(retained.targets.is_empty());
+    fixture.delete(&retained);
+    assert!(evidence.join("payload").exists());
+    let uploaded = fixture.plan(Profile::CanaryPreflight, true);
+    assert_eq!(uploaded.targets.len(), 1);
+    assert_eq!(uploaded.targets[0].base, fixture.temporary);
+    assert_eq!(uploaded.targets[0].path, evidence);
+    assert!(uploaded.replay.is_none());
+    fixture.delete(&uploaded);
+    assert!(!evidence.exists());
+    assert!(sentinel.join("payload").exists());
+    assert!(Options::parse("canary-preflight", "true", None).is_ok());
+}
+
+#[test]
 fn roster_order_when_each_profile_is_selected() {
     let fixture = Fixture::new();
     let cases = [

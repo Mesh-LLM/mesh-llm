@@ -1,6 +1,6 @@
 use super::shard_count::ShardCount;
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 use std::path::PathBuf;
 
 const USAGE: &str = "cargo xtool ci family-plan [--manifest PATH] [--families LABELS] [--shard-count N] [--output PATH] [--github-output PATH] [--verify-plan PATH]";

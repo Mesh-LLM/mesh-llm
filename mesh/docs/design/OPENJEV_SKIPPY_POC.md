@@ -302,8 +302,8 @@ The upstream PyTorch golden fixtures are vendored in
 `llama-laya-cli` build, against them:
 
 ```bash
-python3 scripts/skippy-laya-parity.py --base-url http://127.0.0.1:9337 --model laya-multilingual-F16
-python3 scripts/skippy-laya-parity.py --cli path/to/llama-laya-cli --gguf /tmp/laya-multilingual-F16.gguf
+cargo xtool automation laya parity --base-url http://127.0.0.1:9337 --model laya-multilingual-F16
+cargo xtool automation laya parity --cli path/to/llama-laya-cli --gguf /tmp/laya-multilingual-F16.gguf
 ```
 
 Each fixture may differ from its golden by upstream's own CPU error on it plus

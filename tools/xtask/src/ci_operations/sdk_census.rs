@@ -2,13 +2,13 @@
 //! pinned toolchain action and cache key expression match the catalog.
 
 use crate::ci_operations::catalog_validation::image_digest;
-use crate::ci_operations::python_access::{Outcome, item, item_by, require};
+use crate::ci_operations::json_access::{Outcome, item, item_by, require};
 use crate::ci_operations::seed_census::inputs_repr;
 use crate::ci_operations::workflow_census::{Workflows, job, read_text};
 use crate::ci_operations::workflow_text::one_field;
 use crate::ci_plan::document::Json;
-use crate::prepared_input::python_value::display;
-use crate::repository::python_text::repr;
+use crate::prepared_input::value_format::display;
+use crate::repository::text::repr;
 use std::path::Path;
 
 fn sdk_cache_expression(catalog: &Json) -> Outcome<String> {

@@ -281,6 +281,12 @@ class MemoryTests(unittest.TestCase):
         steps = family['steps']
         self.assertTrue(any(s.get('uses') == './.github/actions/setup-canary-python' for s in steps))
         certify = next(s for s in steps if s.get('id') == 'certify')
-        self.assertIn('llama-canary-family-evidence.py certify', certify['run'])
-        self.assertIn('--root "$CANARY_SOURCE_ROOT"', certify['run'])
-        self.assertIn('--identity "$IDENTITY"', certify['run'])
+        lines = [line.strip() for line in certify['run'].splitlines()
+                 if line.strip() and not line.lstrip().startswith('#')]
+        self.assertIn('"$MESH_LLM_AUTOMATION_BIN" automation canary-receipts certify --input "$input"', lines)
+        command = '\n'.join(lines)
+        self.assertIn('--arg root "$CANARY_SOURCE_ROOT" --arg package "$PACKAGE" --arg identity_sha256 "$IDENTITY"', command)
+        self.assertIn('root:$root,package:$package,identity_sha256:$identity_sha256', command)
+        self.assertEqual(certify['env']['MEMORY_TIER'], '${{ matrix.memory_tier }}')
+        self.assertIn('--arg memory_tier "$MEMORY_TIER"', command)
+        self.assertIn('memory_tier:$memory_tier', command)

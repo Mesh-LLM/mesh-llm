@@ -2,7 +2,7 @@
 //! to the same acceptance as its `SUBJECT_RE`, `EXEMPT_RE` and
 //! `TRAILING_PR_RE`.
 
-use crate::repository::python_text::{is_decimal, is_space, is_upper, split_whitespace, strip};
+use crate::repository::text::{is_decimal, is_space, is_upper, split_whitespace, strip};
 
 /// The closed type set; each maps to one release-notes section.
 pub(super) const TYPES: &[&str] = &[

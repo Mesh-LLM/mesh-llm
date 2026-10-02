@@ -25,11 +25,11 @@ fn rejected(message: &str) -> String {
     format!("{PREFIX}{message}\n")
 }
 
-/// Legacy `zipfile` failures are uncaught tracebacks; only the final
-/// exception line is compared.
-fn raises(archive: Vec<u8>, exception: &str) -> Result<Outcome, Box<dyn Error>> {
+/// Reject malformed/unsupported archive data with an actionable category.
+fn raises(archive: Vec<u8>, category: &str) -> Result<Outcome, Box<dyn Error>> {
     let outcome = extract_as(archive, Parity::LastLine, |_| Ok(()))?;
-    outcome.assert(1, &format!("{exception}\n"));
+    outcome.assert(1, "failure");
+    assert!(outcome.stderr.contains(category), "{}", outcome.stderr);
     Ok(outcome)
 }
 
@@ -216,7 +216,7 @@ fn migration_archives_zip_reports_missing_archive_and_usage() -> TestResult {
 fn migration_archives_zip_rejects_non_zip_bytes() -> TestResult {
     let outcome = raises(
         b"hello world".to_vec(),
-        "zipfile.BadZipFile: File is not a zip file",
+        "invalid ZIP archive: File is not a zip file",
     )?;
     assert_eq!(outcome.entry("output"), Some("dir 755"));
     Ok(())
@@ -225,10 +225,10 @@ fn migration_archives_zip_rejects_non_zip_bytes() -> TestResult {
 #[test]
 fn migration_archives_zip_rejects_bad_crc_after_creating_file() -> TestResult {
     let archive = zip_with(&[ZipEntry::file("a/b.txt", 0o644, b"hi").deflated()], 1);
-    let outcome = raises(archive, "zipfile.BadZipFile: Bad CRC-32 for file 'a/b.txt'")?;
+    let outcome = raises(archive, "Bad CRC-32 for file")?;
     assert!(outcome.entry("output/a/b.txt").is_some());
     let archive = zip_with(&[ZipEntry::symlink("link", "target")], 1);
-    let outcome = raises(archive, "zipfile.BadZipFile: Bad CRC-32 for file 'link'")?;
+    let outcome = raises(archive, "Bad CRC-32 for file")?;
     assert_eq!(outcome.entry("output"), Some("dir 755"));
     Ok(())
 }
@@ -238,14 +238,10 @@ fn migration_archives_zip_rejects_unsupported_method_and_encryption() -> TestRes
     let archive = zip(&[ZipEntry::file("a/b.txt", 0o644, b"hi")]);
     let outcome = raises(
         patch_first(archive.clone(), 8, 10, 99),
-        "NotImplementedError: That compression method is not supported",
+        "unsupported ZIP compression method",
     )?;
     assert_eq!(outcome.entry("output/a"), Some("dir 755"));
     assert!(outcome.entry("output/a/b.txt").is_none());
-    raises(
-        patch_first(archive, 6, 8, 0x0801),
-        "RuntimeError: File <ZipInfo filename='a/b.txt' filemode='-rw-r--r--' \
-         file_size=2> is encrypted, password required for extraction",
-    )?;
+    raises(patch_first(archive, 6, 8, 0x0801), "encrypted ZIP entry")?;
     Ok(())
 }

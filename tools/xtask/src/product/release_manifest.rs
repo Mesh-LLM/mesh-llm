@@ -12,10 +12,10 @@
 //! or unsafe archive fails.
 
 use super::digest::file_sha256;
+use super::json_object::{display, dumps, equal, is_dict, type_name};
 use super::manifest_load::load;
 use super::posix_path::{abspath, dirname, join};
 use super::pure_path::PurePath;
-use super::python_object::{display, dumps, equal, is_dict, type_name};
 use super::release_manifest_order::{manifest_paths, sort_by_id};
 use crate::artifact::tar_extract::safe_extract;
 use crate::artifact::zip_extract::os_error_line;

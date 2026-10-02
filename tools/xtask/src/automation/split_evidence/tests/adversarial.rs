@@ -87,8 +87,8 @@ fn sorted_reordered_stages_and_statuses_are_accepted() {
 }
 
 #[test]
-fn verification_preserves_bytes_when_numeric_replacements_match_python() {
-    for (replacement, accepted) in [(json!(true), true), (json!(1.0), true), (json!(2), false)] {
+fn verification_preserves_rejected_bytes_when_schema_type_or_version_differs() {
+    for (replacement, accepted) in [(json!(true), false), (json!(1.0), false), (json!(2), false)] {
         let root = tempfile::tempdir().unwrap();
         let mut request = request(root.path());
         let path = root.path().join("split-evidence.json");

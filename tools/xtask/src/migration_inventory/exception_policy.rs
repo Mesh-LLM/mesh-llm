@@ -12,7 +12,10 @@ const SDK_CANDIDATES: [&str; 4] = [
 pub(super) fn check_exceptions(paths: &[String], ledgers: &MigrationLedgers) -> DynResult<()> {
     let mut exception_paths = BTreeSet::new();
     for entry in &ledgers.exceptions.exceptions {
-        if !exception_paths.insert(&entry.path) || !SDK_CANDIDATES.contains(&entry.path.as_str()) {
+        let retained_reader = entry.path == "evals/agentic-trajectory-manifest.py";
+        if !exception_paths.insert(&entry.path)
+            || !(SDK_CANDIDATES.contains(&entry.path.as_str()) || retained_reader)
+        {
             return Err(format!(
                 "automation policy: fabricated or duplicate Python exception {}",
                 entry.path
@@ -53,6 +56,7 @@ pub(super) fn check_exceptions(paths: &[String], ledgers: &MigrationLedgers) -> 
             .iter()
             .any(|path| path == ".github/workflows/python-sdk-compatibility.yml");
         match entry.status.as_str() {
+            "maintainer_retained" if retained_reader && source_recorded => {}
             "conditional_unqualified" if !advisory_workflow => {}
             "qualified" if source_recorded && advisory_workflow => {}
             _ => {

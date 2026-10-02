@@ -3,10 +3,10 @@
 //! workflow must be a registered binding with the catalogued digest.
 
 use crate::ci_operations::identity_text::REPOSITORY;
-use crate::ci_operations::python_access::{Outcome, require};
+use crate::ci_operations::json_access::{Outcome, require};
 use crate::ci_operations::workflow_text::{blank_to_eol, line_starts};
 use crate::ci_plan::catalog::{os_error_text, python_path_display};
-use crate::repository::python_text::splitlines;
+use crate::repository::text::splitlines;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -78,9 +78,7 @@ pub(crate) fn workflow_jobs(path: &Path, seed_guard_job: Option<&str>) -> Outcom
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     for (number, line) in splitlines(&text).into_iter().enumerate() {
-        if line.contains(REPOSITORY)
-            && !crate::repository::python_text::strip(line).starts_with('#')
-        {
+        if line.contains(REPOSITORY) && !crate::repository::text::strip(line).starts_with('#') {
             require(declaration_allowed(line), || {
                 format!(
                     "{name}:{}: unsupported runner image reference declaration",
@@ -110,7 +108,7 @@ pub(crate) fn workflow_jobs(path: &Path, seed_guard_job: Option<&str>) -> Outcom
             body[*start..]
                 .chars()
                 .next()
-                .is_some_and(|ch| !crate::repository::python_text::is_space(ch))
+                .is_some_and(|ch| !crate::repository::text::is_space(ch))
         })
         .map_or(body, |stop| &body[..stop]);
     let headers: Vec<(usize, usize, &str)> = line_starts(body)

@@ -3,7 +3,7 @@
 //! lists because callers and reviewers match the legacy text.
 
 use crate::ci_plan::document::Json;
-use crate::repository::python_text;
+use crate::repository::text;
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -25,7 +25,7 @@ pub(super) fn fail<T>(message: impl Into<String>) -> PlanResult<T> {
 
 /// Python `repr(str)`.
 pub(super) fn repr(text: &str) -> String {
-    python_text::repr(text)
+    text::repr(text)
 }
 
 /// Python `repr(list[str])`, e.g. `['a', 'b']`.

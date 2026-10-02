@@ -3,7 +3,7 @@
 //! to stdout.
 
 use crate::ci_operations::ci_metrics_markdown_format::{
-    escape, escape_or_na, field, head, human, or_na, truthy,
+    escape, escape_or_na, field, head, human, or_na,
 };
 use crate::ci_operations::ci_metrics_markdown_jobs;
 use crate::ci_operations::ci_metrics_normalize::Outcome;
@@ -54,7 +54,7 @@ fn header(lines: &mut Vec<String>, report: &Value) {
     ));
     lines.push(String::new());
     let excluded = field(selection, "workflow_timing_excluded_reruns");
-    if truthy(excluded) {
+    if matches!(excluded, Value::Int(count) if *count > 0) {
         lines.push(format!(
             "> Excluded workflow wall, workflow queue, and job start-delay timing from \
              **{}** rerun attempt(s). GitHub retains the original run timestamps when \
@@ -141,7 +141,7 @@ fn capacity(lines: &mut Vec<String>, report: &Value) -> Outcome<()> {
 }
 
 fn step_timing(lines: &mut Vec<String>, steps: &Value, top: usize) -> Outcome<()> {
-    if !truthy(field(steps, "by_name")) {
+    if !matches!(field(steps, "by_name"), Value::Array(items) if !items.is_empty()) {
         lines.push(
             "No job step timestamps were available; cache, context-upload, and \
              export/import phases are not inferred from logs."
@@ -190,7 +190,7 @@ fn providers(separation: &Value, key: &str) -> String {
 
 fn comparison(lines: &mut Vec<String>, report: &Value) {
     let comparison = field(report, "comparison");
-    if !truthy(comparison) {
+    if !matches!(comparison, Value::Object(entries) if !entries.is_empty()) {
         return;
     }
     let separation = field(comparison, "provider_cohort_separation");

@@ -6,7 +6,7 @@
 use super::zip_directory::{self, Archive, Failure, Info};
 use crate::ci_plan::catalog::{os_error_text, python_path_display};
 use crate::repository::check_report::CheckReport;
-use crate::repository::python_text::repr;
+use crate::repository::text::repr;
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;

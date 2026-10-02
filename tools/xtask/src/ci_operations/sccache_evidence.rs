@@ -2,7 +2,7 @@
 //! text, `sanitize_stats` (required counters and totalled count maps, every
 //! other field dropped) and `assess_cache`.
 
-use crate::ci_operations::python_json_decode::{DecodeError, Hooks, loads};
+use crate::ci_operations::json_decode::{DecodeError, Hooks, loads};
 use crate::ci_plan::document::Json;
 
 pub(crate) type Failure = String;
@@ -61,10 +61,6 @@ fn pairs(items: Vec<(String, Json)>) -> Result<Json, String> {
     Ok(Json::Object(merged))
 }
 
-fn constant(_: &str) -> Result<Json, String> {
-    Ok(Json::Null)
-}
-
 /// Decodes on a large-stack thread: the scanner recurses per container.
 pub(crate) fn decode(text: String) -> Result<Json, Failure> {
     let worker = std::thread::Builder::new()
@@ -83,7 +79,7 @@ fn decode_text(text: &str) -> Result<Json, Failure> {
             "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)",
         ));
     }
-    let hooks = Hooks { pairs, constant };
+    let hooks = Hooks { pairs };
     loads(text.as_bytes(), &hooks).map_err(|error| match error {
         DecodeError::Value(message) => invalid(&message),
         DecodeError::Recursion => "maximum recursion depth exceeded".to_owned(),

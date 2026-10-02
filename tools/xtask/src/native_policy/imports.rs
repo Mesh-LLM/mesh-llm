@@ -3,7 +3,7 @@
 //! rows, indented `otool -L` rows, and PE `DLL Name:`/`Name:` rows. Each
 //! result is `sorted(set(...))`.
 
-use crate::repository::python_text::{is_space, splitlines, strip};
+use crate::repository::text::{is_space, splitlines, strip};
 use std::collections::BTreeSet;
 
 /// `re.IGNORECASE` equality of an input character with a lowercase ASCII
