@@ -12,7 +12,7 @@ use mesh_llm_payments_types::contract::{
     AdvertisedPricing, ArrivalResponse, AuthorizeRequest, CancelRequest, Empty, FinishRequest,
     IdRequest, InvoiceRequest, OpError, OutputReceivableResponse, PayInputRequest,
     RecordDeliveredRequest, RoutingBudgetRequest, ServeBeginRequest, ServeFinishRequest,
-    ServeInputInvoiceRequest, SettleOutputRequest,
+    ServeInputInvoiceRequest, SettleOutputRequest, SettledReceived,
 };
 use mesh_llm_payments_types::engine::AdvertisedPrices;
 use mesh_llm_plugin::{
@@ -265,8 +265,14 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
         "Wait for an invoice to settle and record it received.",
         |service, request: InvoiceRequest| async move {
             // Durable settlement continues even if the caller goes away.
-            tokio::spawn(async move { service.settle_received(&request.invoice).await }).await??;
-            Ok(Empty {})
+            let payment =
+                tokio::spawn(async move { service.settle_received(&request.invoice).await })
+                    .await??;
+            // A wallet that reports no amount reports 0; never claim a 0 credit.
+            Ok(SettledReceived {
+                credited_msat: (payment.amount_msat > 0).then_some(payment.amount_msat),
+                fee_msat: Some(payment.fee_msat),
+            })
         },
     );
     add_op(
