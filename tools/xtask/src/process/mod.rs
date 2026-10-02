@@ -18,6 +18,7 @@
 
 mod capture;
 mod control;
+mod inherited;
 mod line;
 mod observed;
 mod output;
@@ -41,6 +42,7 @@ mod unix;
 #[cfg(windows)]
 mod windows;
 
+pub use inherited::{InheritedReport, supervise_inherited};
 pub use line::{LineEnding, LineMatcher, ObservedLine};
 pub use probe::{
     Probe, ProbeContext, ProbeDecision, ProbeReport, ReadinessProbe, supervise_with_probe,

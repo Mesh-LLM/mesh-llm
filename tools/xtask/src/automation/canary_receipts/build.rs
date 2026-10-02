@@ -83,7 +83,9 @@ fn execute(input: &Input) -> DynResult<()> {
             execution: Duration::from_secs(
                 input.agent_timeout_seconds + input.verification_timeout_seconds + 600,
             ),
-            graceful_shutdown: Duration::from_secs(20),
+            // Inner canary-timeout owns 10s graceful + 10s forced cleanup.
+            // Leave 10s for that owner to finish before the wrapper is killed.
+            graceful_shutdown: Duration::from_secs(30),
             forced_shutdown: Duration::from_secs(5),
             retained_bytes_per_stream: 64 * 1024,
             readiness: Readiness::None,

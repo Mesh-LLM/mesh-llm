@@ -75,6 +75,20 @@ impl OwnedChild {
         })
     }
 
+    /// Bypass macOS private capture FIFOs when both streams intentionally inherit.
+    pub(super) fn spawn_inherited(command: &mut Command) -> Result<Self, Failure> {
+        command.process_group(0);
+        let child = command
+            .spawn()
+            .map_err(|error| Failure::io("spawn inherited", error))?;
+        let group = libc::pid_t::try_from(child.id())
+            .map_err(|_| Failure::InvalidSpec("PID out of range"))?;
+        Ok(Self {
+            child,
+            group,
+            armed: true,
+        })
+    }
     pub(super) fn id(&self) -> u32 {
         self.child.id()
     }

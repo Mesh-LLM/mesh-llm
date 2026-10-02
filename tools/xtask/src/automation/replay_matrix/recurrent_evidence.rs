@@ -200,6 +200,12 @@ mod tests {
             {"event":"stage.openai_kv_lookup_decision","start_time_unix_nanos":1,"attributes":{"openai.prompt_cache_key":"s","skippy.kv.decision":"exact_hit","skippy.exact_cache.payload_kind":"kv-recurrent","skippy.exact_cache.restored_tokens":39000}}
         ])).unwrap();
         assert!(evaluate(&requests, &lookups, 32768).passed);
+        lookups[1].attributes.decision = "miss".into();
+        assert!(!evaluate(&requests, &lookups, 32768).passed);
+        lookups[1].attributes.decision = "exact_hit".into();
+        lookups[1].attributes.restored_tokens = 999999;
+        assert!(!evaluate(&requests, &lookups, 32768).passed);
+        lookups[1].attributes.restored_tokens = 39000;
         lookups[1].attributes.payload = Some("full-state".into());
         assert!(!evaluate(&requests, &lookups, 32768).passed);
         lookups[1].attributes.payload = Some("kv-recurrent".into());

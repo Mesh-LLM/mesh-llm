@@ -63,6 +63,44 @@ impl Fixture {
 }
 
 #[test]
+fn enabled_cache_commands_preserve_context_and_capacity_flags_for_each_engine() {
+    for (engine, context, capacity, disabled) in [
+        ("llama", "--ctx-size", "--parallel", "--no-cache-prompt"),
+        (
+            "vllm",
+            "--max-model-len",
+            "--max-num-seqs",
+            "--no-enable-prefix-caching",
+        ),
+        (
+            "sglang",
+            "--context-length",
+            "--max-running-requests",
+            "--disable-radix-cache",
+        ),
+    ] {
+        let fixture = Fixture::new(engine);
+        fixture.modify(|document| document["arms"][0]["prefix_cache"] = true.into());
+        let output = fixture.state.path().join("enabled.json");
+        assert_success(&fixture.plan(&output));
+        let plan: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        let args = plan["external_server_commands"][0].as_array().unwrap();
+        for (flag, value) in [(context, "131072"), (capacity, "4")] {
+            let index = args.iter().position(|arg| arg == flag).unwrap();
+            assert_eq!(args[index + 1], value);
+        }
+        assert!(!args.iter().any(|arg| arg == disabled));
+        if engine == "llama" {
+            assert!(args.iter().any(|arg| arg == "--kv-unified"));
+        }
+        if engine == "vllm" {
+            assert!(args.iter().any(|arg| arg == "--enable-prefix-caching"));
+        }
+        assert!(!fixture.state.path().join("argv.txt").exists());
+    }
+}
+
+#[test]
 fn config_probes_exact_identity_and_constructs_each_engine_command() {
     for (engine, required, forbidden) in [
         ("llama", "--no-cache-prompt", "--load-format"),

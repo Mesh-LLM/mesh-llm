@@ -109,6 +109,10 @@ impl OwnedChild {
         Ok(owned)
     }
 
+    pub(super) fn spawn_inherited(command: &mut Command) -> Result<Self, Failure> {
+        Self::spawn(command)
+    }
+
     pub(super) fn id(&self) -> u32 {
         self.child.id()
     }

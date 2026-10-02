@@ -135,6 +135,7 @@ fn configured_acceptance_rejects_failed_requests_missing_delta_and_empty_measure
 
 fn receive_http(socket: &mut std::net::TcpStream) -> String {
     use std::io::Read;
+    socket.set_nonblocking(false).unwrap();
     socket
         .set_read_timeout(Some(std::time::Duration::from_secs(2)))
         .unwrap();

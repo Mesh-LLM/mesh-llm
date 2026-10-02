@@ -12,7 +12,7 @@
       "file": "scripts/agentic-replay-repair.sh",
       "members": [
         [
-          119,
+          143,
           "56b336db65410fd0",
           1,
           "indirect",
@@ -946,39 +946,10 @@
       ]
     },
     {
-      "file": "scripts/agentic-replay-repair.sh",
-      "members": [
-        [
-          38,
-          "344399374f69781e",
-          1,
-          "script",
-          "scripts/run-command-with-timeout.py",
-          "run_untrusted wrapper: --seconds 60 --label agentic-replay-goose-preflight -- env GOOSE_PROVIDER/GOOSE_MODEL goose info --check; inherited output/status; strips credentials"
-        ],
-        [
-          59,
-          "344399374f69781e",
-          2,
-          "script",
-          "scripts/run-command-with-timeout.py",
-          "run_untrusted wrapper: --seconds 3600 --label agentic-replay-agent -- env GOOSE_MODE and provider/model goose run with developer builtin, session name and text prompt; agent may edit source; timeout/status propagate"
-        ],
-        [
-          192,
-          "03824798b744457d",
-          1,
-          "inline",
-          "repair publication status writer",
-          "python3 - argv STATUS_FILE PATCH_FILE BODY_FILE RUN_ID RUN_ATTEMPT RESOLUTION BASE_SHA; verifies IDs and nonempty patch/body, hashes both and writes status.json; errors abort publication"
-        ]
-      ]
-    },
-    {
       "file": "scripts/llama-canary-agent-repair.sh",
       "members": [
         [
-          147,
+          169,
           "7f0ae9a73f4448bd",
           1,
           "script",
@@ -986,7 +957,7 @@
           "run_for: --seconds timeout --label label optional --cleanup-on-exit -- remaining command array; combined output tee log, nonzero/124 budget failure propagated"
         ],
         [
-          343,
+          365,
           "1d0915cce3e94cb3",
           1,
           "script",
@@ -994,7 +965,7 @@
           "--base-ref BASE_HEAD --llama-src selected prepared tree; output tee policy log, failure rejects agent candidate"
         ],
         [
-          364,
+          386,
           "90fc69b829bfcaf2",
           1,
           "script",
@@ -1002,7 +973,7 @@
           "--candidate-binary selected skippy-server --native-build-dir selected build --producer-manifest selected manifest; source and executable gate, failure rejects candidate"
         ],
         [
-          488,
+          510,
           "5af7e4058f86f917",
           1,
           "environment",
@@ -1010,7 +981,7 @@
           "LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- arch -arm64 bash scripts/build-llama.sh with CMake flags; environment installs dependency and runs native build, failures abort"
         ],
         [
-          549,
+          571,
           "61060159e19b736b",
           1,
           "script",
@@ -1018,7 +989,7 @@
           "--llama-src .deps/llama.cpp validate with continued options; stdout/stderr inherited; nonzero fails canary gate"
         ],
         [
-          179,
+          201,
           "8faf38bee64ae451",
           1,
           "script",
@@ -1026,7 +997,7 @@
           "--manifest ci/llama-canary/family-certified.json --shard-count 1 --check-cache --cache-root selected cache --output selected plan; writes plan JSON; failure rejects canary"
         ],
         [
-          591,
+          613,
           "c1c61cc7de080110",
           1,
           "script",
@@ -1034,7 +1005,7 @@
           "--llama-src .deps/llama.cpp validate; inherited output/status, nonzero fails certification"
         ],
         [
-          611,
+          633,
           "2cb072e565e9e041",
           1,
           "script",
@@ -1042,7 +1013,7 @@
           "no args; writes split certification roster; output/status inherited, failure rejects canary"
         ],
         [
-          619,
+          641,
           "180a08a4e49894c0",
           1,
           "script",
@@ -1050,7 +1021,7 @@
           "--check validates generated roster without writing; inherited diagnostics, nonzero rejects canary"
         ],
         [
-          185,
+          207,
           "b4ca5a08609ed376",
           1,
           "script",
@@ -1058,7 +1029,7 @@
           "Main bd5514dd8 retained source: python3 scripts/plan-family-battery.py --verify-plan \"$PLAN_PATH\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          552,
+          574,
           "8faf38bee64ae451",
           2,
           "script",
@@ -1230,7 +1201,7 @@
       "members": [
         [
           24,
-          "66745b96bbceb535",
+          "7e73701ea8682daa",
           1,
           "environment",
           "explicit surviving scripts.tests modules",

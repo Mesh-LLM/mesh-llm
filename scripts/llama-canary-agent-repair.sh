@@ -142,6 +142,28 @@ rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || t
 run_for() {
   local label="$1" seconds="$2"
   shift 2
+  if [[ "$HARNESS_MODE" == *-build ]]; then
+    local transaction_root input executable result
+    transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-timeout.XXXXXXXX")" || return 125
+    input="$transaction_root/input.json"
+    executable="$(command -v "$1")" || return 125
+    if [[ "$executable" != /* ]]; then
+      echo "$label requires an absolute executable" >&2
+      return 125
+    fi
+    shift
+    jq -n --arg label "$label" --argjson seconds "$seconds" --arg cwd "$PWD" \
+      --arg executable "$executable" --args \
+      '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
+      -- "$@" > "$input" || return 125
+    if "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-timeout --input "$input"; then
+      result=0
+    else
+      result=$?
+    fi
+    rm -rf "$transaction_root"
+    return "$result"
+  fi
   local cleanup=()
   if [[ "$label" == "agent developer task" ]]; then
     cleanup+=(--cleanup-on-exit)

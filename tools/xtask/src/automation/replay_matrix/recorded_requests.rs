@@ -179,12 +179,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn captured_assistant_openai_fields_and_direct_tool_calls_are_preserved() {
+        let recorded = serde_json::json!({"role":"assistant","content":"","name":"agent",
+            "reasoning_content":"private reasoning","provider_extension":{"cache_control":"ephemeral"},
+            "tool_calls":[{"id":"call-1","type":"function"}]});
+        let actual = message(recorded.as_object().unwrap()).unwrap();
+        assert_eq!(serde_json::Value::Object(actual), recorded);
+    }
+
+    #[test]
     fn every_turn_uses_the_recorded_prefix_and_exact_captured_tools() {
         let trajectory: Trajectory = serde_json::from_value(serde_json::json!({
             "session_id":"s", "source_dataset":"capture", "agent_framework":"goose", "recorded_model":null,
             "tools":[{"type":"function","function":{"name":"search","parameters":{"type":"object","required":["query"]}}}],
             "messages":[{"role":"user","content":"task","extension":{"private":false}},
-                {"role":"assistant","content":"recorded","tool_calls_json":"[{\"id\":\"call-1\",\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]"},
+                {"role":"assistant","content":"recorded","name":"recorded-agent","reasoning_content":"recorded private reasoning","provider_extension":{"opaque":"unchanged"},"tool_calls_json":"[{\"id\":\"call-1\",\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]"},
                 {"role":"tool","tool_call_id":"call-1","content":"observation","optional":null},
                 {"role":"assistant","content":"final"}]
         })).unwrap();
@@ -201,6 +210,18 @@ mod tests {
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].body["messages"].as_array().unwrap().len(), 1);
         assert_eq!(turns[1].body["messages"][1]["content"], "recorded");
+        assert_eq!(
+            turns[1].body["messages"][1],
+            serde_json::json!({
+                "role":"assistant", "content":"recorded", "name":"recorded-agent",
+                "reasoning_content":"recorded private reasoning", "provider_extension":{"opaque":"unchanged"},
+                "tool_calls":[{"id":"call-1","function":{"name":"search","arguments":"{}"}}]
+            })
+        );
+        for message in turns[1].body["messages"].as_array().unwrap() {
+            assert!(message.get("tool_calls_json").is_none());
+            assert!(message.get("reasoning").is_none());
+        }
         assert_eq!(
             turns[1].body["messages"][1]["tool_calls"][0]["id"],
             "call-1"

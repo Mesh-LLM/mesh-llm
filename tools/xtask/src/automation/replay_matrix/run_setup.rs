@@ -36,6 +36,11 @@ pub(super) fn prepare(root: Option<&Path>, mut input: Input) -> DynResult<Prepar
     let bytes = std::fs::read(&input.manifest)?;
     let manifest: Manifest = serde_json::from_slice(&bytes)?;
     let metadata = super::manifest_preflight::validate(&manifest, &input.requirements)?;
+    let captured = if input.dataset.is_none() {
+        Some(captured_provenance(&input.manifest, &bytes)?)
+    } else {
+        None
+    };
     let config = super::run_arms::append(&mut input, &budget)?;
     input.verify_builds(&budget)?;
     let destination = input.output.join("inputs/captured-trajectories.json");
@@ -50,6 +55,12 @@ pub(super) fn prepare(root: Option<&Path>, mut input: Input) -> DynResult<Prepar
         manifest_sha256,
         serde_json::to_value(metadata)?,
     )?;
+    if let Some(captured) = captured {
+        document["inputs"]
+            .as_object_mut()
+            .ok_or("missing inputs object")?
+            .extend(captured);
+    }
     if !input.context_qualification.is_mesh() {
         for build in &input.builds {
             document["context_preflight"][build.label()] =
@@ -75,6 +86,47 @@ pub(super) fn prepare(root: Option<&Path>, mut input: Input) -> DynResult<Prepar
         run_path,
         budget,
     })
+}
+
+fn captured_provenance(
+    source: &Path,
+    bytes: &[u8],
+) -> DynResult<serde_json::Map<String, serde_json::Value>> {
+    let parsed: serde_json::Value = serde_json::from_slice(bytes)?;
+    let metadata = match parsed.get("metadata") {
+        None => serde_json::Map::new(),
+        Some(serde_json::Value::Object(metadata)) => metadata.clone(),
+        Some(_) => return Err("captured manifest metadata must be an object".into()),
+    };
+    for key in ["name", "revision"] {
+        if metadata
+            .get(key)
+            .is_some_and(|value| value.as_str().is_none_or(str::is_empty))
+        {
+            return Err(
+                format!("captured manifest metadata {key} must be a nonempty string").into(),
+            );
+        }
+    }
+    let digest = hex::encode(Sha256::digest(bytes));
+    let name = match metadata.get("name") {
+        Some(name) => name.clone(),
+        None => serde_json::to_value(
+            source
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or("non-Unicode manifest filename")?,
+        )?,
+    };
+    let revision = metadata
+        .get("revision")
+        .cloned()
+        .unwrap_or(serde_json::Value::String(digest.clone()));
+    let value = serde_json::json!({"dataset":{"name":name,"revision":revision},"metadata":metadata,"source_manifest":source,"source_manifest_sha256":digest});
+    Ok(value
+        .as_object()
+        .ok_or("missing captured provenance object")?
+        .clone())
 }
 
 fn prepare_builds(root: Option<&Path>, input: &mut Input) -> DynResult<bool> {
@@ -141,4 +193,29 @@ fn document(
     }
     document["plan_sha256"] = super::cohort_identity::digest(&serde_json::to_value(input)?)?.into();
     Ok(document)
+}
+
+#[cfg(test)]
+mod captured_tests {
+    use super::*;
+    #[test]
+    fn captured_metadata_has_digest_defaults_and_rejects_malformed_fields() {
+        let bytes = br#"{"cohorts":{}}"#;
+        let provenance = captured_provenance(Path::new("/fixture/capture.json"), bytes).unwrap();
+        assert_eq!(provenance["dataset"]["name"], "capture");
+        assert_eq!(
+            provenance["dataset"]["revision"],
+            hex::encode(Sha256::digest(bytes))
+        );
+        assert_eq!(provenance["metadata"], serde_json::json!({}));
+        for metadata in [
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!({"revision":7}),
+            serde_json::json!({"name":""}),
+        ] {
+            let bytes = serde_json::to_vec(&serde_json::json!({"metadata":metadata})).unwrap();
+            assert!(captured_provenance(Path::new("/fixture/capture.json"), &bytes).is_err());
+        }
+    }
 }

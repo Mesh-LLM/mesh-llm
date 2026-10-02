@@ -128,6 +128,31 @@ mod tests {
     }
 
     #[test]
+    fn single_ref_runs_once_in_each_pass_without_a_comparison_arm() {
+        let mut document = input();
+        document["passes"] = 2.into();
+        document["labels"] = serde_json::json!(["baseline"]);
+        document["current"]["builds"]
+            .as_object_mut()
+            .unwrap()
+            .remove("candidate");
+        let order = schedule(&serde_json::from_value(document).unwrap()).unwrap();
+        assert_eq!(
+            order,
+            vec![
+                Scheduled {
+                    pass: 1,
+                    label: "baseline".into()
+                },
+                Scheduled {
+                    pass: 2,
+                    label: "baseline".into()
+                }
+            ]
+        );
+    }
+
+    #[test]
     fn passes_reverse_arm_order_without_sorting_labels() {
         let input: Input = serde_json::from_value(input()).unwrap();
         let order = schedule(&input).unwrap();

@@ -1189,7 +1189,7 @@
           "Bash producer prints deterministic paths or rejects unsafe input; no oracle is built",
           [
             14,
-            58,
+            60,
             28
           ]
         ]
@@ -1208,20 +1208,6 @@
     "launch": "subprocess executes the named test command; exit, stdout and side effects depend on enclosing test and fixture"
   },
   "groups": [
-    {
-      "file": "scripts/tests/test_agentic_replay.py",
-      "members": [
-        [
-          21,
-          "ce33fd937305ee0d",
-          1,
-          "dynamic-import",
-          "import",
-          "evals/agentic-replay.py",
-          "SCRIPT is the repository replay program; test module loads it for in-process checks"
-        ]
-      ]
-    },
     {
       "file": "scripts/tests/test_agentic_trajectory_manifest.py",
       "members": [
@@ -1875,20 +1861,6 @@
           "import",
           "scripts/ci-workload-monolithic-oracle.py",
           "fixed SCRIPT in oracle tests"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_agentic_replay_engines.py",
-      "members": [
-        [
-          138,
-          "e2660e855d46f9cc",
-          1,
-          "subprocess-or-interpreter",
-          "assembly",
-          "sys.executable as executable field",
-          "arm constructs vllm engine configuration; no subprocess launch"
         ]
       ]
     },
@@ -2577,7 +2549,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "b567b59f5f87c6552bea0fc0ca41aee0d1416f844e7e3140a68e1f40caccbd2c",
+  "observed_source_sha256": "231522fd8b2e7019b44db09a288795d491f12426c31b1639e4f7de33b7fe6df2",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency."

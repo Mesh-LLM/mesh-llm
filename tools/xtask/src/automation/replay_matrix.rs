@@ -32,6 +32,7 @@ mod pooled_metrics;
 pub(super) mod pooled_rows;
 mod progress;
 pub(super) mod publication;
+pub(super) mod publication_prepare;
 pub(super) mod recorded_requests;
 pub(super) mod recorded_requests_command;
 mod recurrent_evidence;

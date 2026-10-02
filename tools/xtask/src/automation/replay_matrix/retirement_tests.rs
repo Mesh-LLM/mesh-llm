@@ -307,6 +307,29 @@ fn bounded_version_probe_timeout_is_a_preflight_error() {
 }
 
 #[test]
+fn each_measured_cohort_requires_framework_coverage_even_when_union_is_complete() {
+    let trajectory = |id: &str, framework: &str| json!({"session_id":id,"source_dataset":"fixture","agent_framework":framework,"recorded_model":null,"messages":[{"role":"user","content":"task"},{"role":"assistant","content":"answer"}]});
+    let document = json!({"cohorts":{
+        "warmup":[trajectory("w", "goose")],
+        "1":[trajectory("a", "goose"), trajectory("b", "openhands")],
+        "2":[trajectory("c", "goose"), trajectory("d", "openhands")]
+    }});
+    let requirements:super::manifest_preflight::Requirements=serde_json::from_value(json!({"concurrency":[1,2],"minimum_worker_waves":1,"warmup_turns":1,"required_frameworks":["goose","openhands"]})).unwrap();
+    let manifest = serde_json::from_value(document.clone()).unwrap();
+    assert!(super::manifest_preflight::validate(&manifest, &requirements).is_ok());
+    for cohort in ["1", "2"] {
+        let mut incomplete = document.clone();
+        incomplete["cohorts"][cohort][1]["agent_framework"] = "goose".into();
+        let manifest = serde_json::from_value(incomplete).unwrap();
+        let error = super::manifest_preflight::validate(&manifest, &requirements).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("{cohort}: missing required framework")
+        );
+    }
+}
+
+#[test]
 fn manifest_admission_covers_shape_warmup_waves_and_each_framework() {
     let trajectory = |id: &str| json!({"session_id":id,"source_dataset":"fixture","agent_framework":"goose","recorded_model":null,"messages":[{"role":"user","content":"task"},{"role":"assistant","content":"answer"}]});
     let document =

@@ -34,9 +34,34 @@ run_untrusted() {
   env -u CANARY_REPAIR_TOKEN -u GH_TOKEN -u GITHUB_TOKEN -u HF_TOKEN "$@"
 }
 
+# The typed owner inherits live streams and owns the entire command group.
+# This handoff is built before Goose can modify any candidate source.
+run_timed_untrusted() (
+  local label="$1" seconds="$2" transaction_root input executable result
+  shift 2
+  transaction_root=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/replay-timeout.XXXXXXXX") || return 125
+  trap 'rm -rf -- "$transaction_root"' EXIT
+  input="$transaction_root/input.json"
+  executable=$(command -v "$1") || return 125
+  if [[ "$executable" != /* ]]; then
+    echo "$label requires an absolute executable" >&2
+    return 125
+  fi
+  shift
+  jq -n --arg label "$label" --argjson seconds "$seconds" --arg cwd "$PWD" \
+    --arg executable "$executable" --args \
+    '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
+    -- "$@" > "$input" || return 125
+  if run_untrusted cargo xtool automation canary-timeout --input "$input"; then
+    result=0
+  else
+    result=$?
+  fi
+  exit "$result"
+)
+
 run_untrusted goose --version
-run_untrusted python3 scripts/run-command-with-timeout.py \
-  --seconds 60 --label agentic-replay-goose-preflight -- \
+run_timed_untrusted agentic-replay-goose-preflight 60 \
   env GOOSE_PROVIDER="$AGENT_PROVIDER" GOOSE_MODEL="$AGENT_MODEL" goose info --check
 git config user.name "mesh-replay-bot"
 git config user.email "replay-bot@meshllm.invalid"
@@ -56,8 +81,7 @@ done
 # 1. Goose analyzes the regression evidence and attempts a fix. It must not
 # see GitHub credentials. The same wrapper is used for every command that can
 # execute repair-modified repository code.
-run_untrusted python3 scripts/run-command-with-timeout.py \
-  --seconds 3600 --label agentic-replay-agent -- \
+run_timed_untrusted agentic-replay-agent 3600 \
   env GOOSE_MODE=auto GOOSE_DISABLE_SESSION_NAMING=true \
   goose run --provider "$AGENT_PROVIDER" --model "$AGENT_MODEL" \
     --with-builtin developer --no-profile --max-turns 1000 --output-format text \
@@ -154,86 +178,30 @@ fi
 rm -rf -- "$PUBLICATION_DIR"
 install -d -m 700 -- "$PUBLICATION_DIR"
 PATCH_FILE="$PUBLICATION_DIR/repair.patch"
-BODY_FILE="$PUBLICATION_DIR/pr-body.md"
-STATUS_FILE="$PUBLICATION_DIR/status.json"
 BASE_SHA=$(git rev-parse HEAD^)
 RESOLUTION="fix-verified"
-BODY=$'The nightly agentic replay regressed; Goose analyzed the evidence and this fix passes the re-run benchmark.\n\nResults and repair logs are retained in the replay-artifacts workflow artifact.'
 
 # A format-patch artifact is data for the hosted publisher. It is never
 # sourced, executed, or used as a workflow/action definition in this job.
 git format-patch -1 --binary --stdout HEAD > "$PATCH_FILE"
 
-# Fill the PR template from the run evidence where available; fall back to
-# the short body if the template or fill data is missing.
+# The trusted replay/history commands already succeeded before this data-only
+# preparation. Credentials remain absent; only the hosted job publishes.
 TEMPLATE_FILE="$(git rev-parse --show-toplevel)/.github/AGENTIC_REPLAY_REPAIR_PR_TEMPLATE.md"
+PUBLICATION_ARGS=(
+  --publication-dir "$PUBLICATION_DIR"
+  --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --base-sha "$BASE_SHA"
+  --run-date "$(date -u +%F)" --server-url "${GITHUB_SERVER_URL:-}"
+  --dataset-repo "${DATASET_REPO:-meshllm/agentic-replay-nightly}"
+  --fix-summary "$(git log -1 --format=%s HEAD)"
+  --files-changed "$(git diff --name-only HEAD~1..HEAD | tr '\n' ' ')"
+  --regressing-cohorts "${REPAIR_REGRESSING_COHORTS:-unavailable}"
+  --bootstrap-state "${REPAIR_BOOTSTRAP_STATE:-unavailable}"
+  --history-outcome success --rerun-outcome success
+)
 if [[ -f "$TEMPLATE_FILE" ]]; then
-  sed -e "s|{{RESOLUTION_STATUS}}|$( [[ $RESOLVED == 1 ]] && echo 'fix verified' || echo 'NEEDS ATTENTION' )|" \
-      -e "s|{{RUN_URL}}|${GITHUB_SERVER_URL:-}/Mesh-LLM/mesh-llm/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}|g" \
-      -e "s|{{RUN_DATE}}|$(date -u +%F)|g" \
-      -e "s|{{RUN_ID}}|${RUN_ID}|g" \
-      -e "s|{{SOURCE_SHA}}|${BASE_SHA}|g" \
-      -e "s|{{DATASET_REPO}}|${DATASET_REPO:-meshllm/agentic-replay-nightly}|g" \
-      -e "s|{{REGRESSING_COHORTS}}|${REPAIR_REGRESSING_COHORTS:-unavailable}|g" \
-      -e "s|{{GATE_OUTPUT}}|see run artifacts|g" \
-      -e "s|{{DIAGNOSIS}}|see Goose output in repair.log|g" \
-      -e "s|{{FIX_SUMMARY}}|$( git log -1 --format=%s HEAD )|g" \
-      -e "s|{{FILES_CHANGED}}|$( git diff --name-only HEAD~1..HEAD | tr '\n' ' ' )|g" \
-      -e "s|{{RATIONALE}}|automated repair attempt|g" \
-      -e "s|{{RESULT_ROWS}}|see history-repair.jsonl artifact|g" \
-      -e "s|{{RERUN_GATE_RESULT}}|$( [[ $RESOLVED == 1 ]] && echo 'pass' || echo 'fail' )|g" \
-      -e "s|{{BOOTSTRAP_STATE}}|${REPAIR_BOOTSTRAP_STATE:-unavailable}|g" \
-      "$TEMPLATE_FILE" > "$BODY_FILE"
-  printf '\n---\n%s\n' "$BODY" >> "$BODY_FILE"
-else
-  printf '%s\n' "$BODY" > "$BODY_FILE"
+  PUBLICATION_ARGS+=(--template "$TEMPLATE_FILE")
 fi
-
-python3 - "$STATUS_FILE" "$PATCH_FILE" "$BODY_FILE" "$RUN_ID" "$RUN_ATTEMPT" "$RESOLUTION" "$BASE_SHA" <<'PY'
-import hashlib
-import json
-import pathlib
-import re
-import sys
-
-status_path = pathlib.Path(sys.argv[1])
-patch_path = pathlib.Path(sys.argv[2])
-body_path = pathlib.Path(sys.argv[3])
-run_id, run_attempt, resolution, base_sha = sys.argv[4:]
-
-if resolution not in {"fix-verified", "needs-attention"}:
-    raise SystemExit(f"invalid repair resolution: {resolution!r}")
-if run_id != "local" and not re.fullmatch(r"[0-9]+", run_id):
-    raise SystemExit(f"invalid GitHub run id: {run_id!r}")
-if not re.fullmatch(r"[1-9][0-9]*", run_attempt):
-    raise SystemExit(f"invalid GitHub run attempt: {run_attempt!r}")
-for name, value in (("base_sha", base_sha),):
-    if not re.fullmatch(r"[0-9a-f]{40}", value):
-        raise SystemExit(f"invalid {name}: {value!r}")
-
-def digest(path: pathlib.Path) -> str:
-    hasher = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-patch_bytes = patch_path.stat().st_size
-body_bytes = body_path.stat().st_size
-if patch_bytes <= 0 or body_bytes <= 0:
-    raise SystemExit("repair publication files must be non-empty")
-metadata = {
-    "base_sha": base_sha,
-    "body_bytes": body_bytes,
-    "body_sha256": digest(body_path),
-    "patch_bytes": patch_bytes,
-    "patch_sha256": digest(patch_path),
-    "resolution": resolution,
-    "run_id": run_id,
-    "run_attempt": int(run_attempt),
-    "schema_version": 1,
-}
-status_path.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
-PY
+run_untrusted cargo xtool automation replay-matrix publication-prepare "${PUBLICATION_ARGS[@]}"
 echo "repair publication artifact written to $PUBLICATION_DIR ($RESOLUTION)"
 exit 0 # the nightly is red; the hosted job owns publication

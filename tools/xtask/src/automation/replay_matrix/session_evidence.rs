@@ -199,6 +199,12 @@ mod tests {
         let trajectories: Vec<Trajectory> = serde_json::from_value(serde_json::json!([{"session_id":"s", "messages":[{"role":"user"},{"role":"assistant"},{"role":"tool"},{"role":"assistant"}]}])).unwrap();
         let mut requests: Vec<Request> = serde_json::from_value(serde_json::json!([{"session_id":"s","request_id":"s:0"},{"session_id":"s","request_id":"s:1"}])).unwrap();
         assert!(complete(&trajectories, &requests).passed);
+        requests.push(
+            serde_json::from_value(serde_json::json!({"session_id":"s","request_id":"s:0"}))
+                .unwrap(),
+        );
+        assert!(!complete(&trajectories, &requests).passed);
+        requests.pop();
         requests.reverse();
         assert!(!complete(&trajectories, &requests).passed);
         requests.reverse();
