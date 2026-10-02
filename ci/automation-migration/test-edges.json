@@ -58,19 +58,6 @@
       ]
     ],
     [
-      "scripts/tests/test_ci_cargo_packages.py",
-      [
-        [
-          "fixture",
-          "ci-rust-tests-slice.yml safetensors smoke Bash run block",
-          "Executes extracted protected step with temporary Cargo and test binary stubs; asserts exactly one selected crate compile and rejects absent named test",
-          [
-            104
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_ci_pr_canary_workflow.py",
       [
         [
@@ -362,19 +349,10 @@
       [
         [
           "fixture",
-          "git -C fixture source or worker tree",
-          "helper takes test-selected git subcommands; separate local clone copies fixture source",
+          "git -C fixture source tree",
+          "Retained helper takes test-selected Git subcommands for prepared-source roundtrip and sealed snapshot assertions; removed pack-worker clone intention is owned by typed pipeline.",
           [
-            30,
-            139
-          ]
-        ],
-        [
-          "launch",
-          "worker clone scripts/check-skippy-workload-candidate.py",
-          "runs Python checker from temporary cloned source with fixture binary/manifest; target bytes depend on fixture checkout",
-          [
-            144
+            28
           ]
         ]
       ]
@@ -401,22 +379,6 @@
           "Bash builder once or twice under stub cmake/ctest/git and forced/cache flags; no native compilation or real CTest",
           [
             147
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_llama_oracle_source.py",
-      [
-        [
-          "fixture",
-          "git in temporary oracle checkout",
-          "init, read HEAD, commit fixture source and capture new SHA; no remote fetch",
-          [
-            80,
-            81,
-            86,
-            92
           ]
         ]
       ]
@@ -1001,19 +963,6 @@
       ]
     ],
     [
-      "scripts/tests/test_publish_crates.py",
-      [
-        [
-          "launch",
-          "scripts/publish-crates.sh",
-          "Bash publisher with fake registry/commands and temporary workspace; callers vary args and assert no real publication",
-          [
-            353
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_run_event_benchmark_matrix.py",
       [
         [
@@ -1030,43 +979,6 @@
           "interpreter/script argv continuation of the preceding run, not a second process",
           [
             1202
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_safe_extract_tar.py",
-      [
-        [
-          "launch",
-          "scripts/safe-extract-tar.py",
-          "run_extract helper executes python3 extractor on caller-provided archive/destination fixtures",
-          [
-            23,
-            154
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_select_release_notes_base.py",
-      [
-        [
-          "launch",
-          "scripts/select-release-notes-base.py",
-          "helper reads test tag list from stdin for valid target; invalid version fixture separately asserts rejection",
-          [
-            15,
-            68
-          ]
-        ],
-        [
-          "assembly",
-          "scripts/select-release-notes-base.py argv",
-          "each interpreter/script vector continues its preceding subprocess.run",
-          [
-            16,
-            69
           ]
         ]
       ]
@@ -1111,19 +1023,6 @@
           "runs build script with static ABI environment and test-created libraries",
           [
             87
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_skippy_tts_oracle.py",
-      [
-        [
-          "assembly",
-          "scripts/check-skippy-workload-candidate.py argv in mocked verify assertion",
-          "assert_called_once_with compares expected Python checker argv; subprocess is mocked, so this line does not launch it",
-          [
-            59
           ]
         ]
       ]
@@ -1439,7 +1338,7 @@
       "file": "scripts/tests/test_llama_canary_handoff_contract.py",
       "members": [
         [
-          16,
+          14,
           "546bf09b0468dd09",
           1,
           "dynamic-import",
@@ -1460,20 +1359,6 @@
           "import",
           "scripts/llama-canary-resolve-mesh-ref.py",
           "fixed mesh ref resolver"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_llama_oracle_source.py",
-      "members": [
-        [
-          13,
-          "5a78749a1bd793e9",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/llama-oracle-source.py",
-          "fixed oracle source module"
         ]
       ]
     },
@@ -1691,20 +1576,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_skippy_ocr_asr_oracle.py",
-      "members": [
-        [
-          18,
-          "af10afe85077572f",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/generate-ocr-oracle-fixture.py | scripts/skippy-ocr-asr-oracle.py",
-          "import_script(name,path) takes a variable path; both module-level callers bind exact ROOT-relative targets"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_skippy_radix_cache_ab.py",
       "members": [
         [
@@ -1733,20 +1604,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_skippy_tts_oracle.py",
-      "members": [
-        [
-          19,
-          "66e2113f3e2b21ee",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/skippy-tts-oracle.py",
-          "fixed SCRIPT in oracle tests"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_skippy_waiting_prefix_ab.py",
       "members": [
         [
@@ -1757,34 +1614,6 @@
           "import",
           "evals/skippy-waiting-prefix-ab.py",
           "fixed evals path in loader"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_workload_monolithic_oracle.py",
-      "members": [
-        [
-          14,
-          "ca1c1600a466fcf0",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/ci-workload-monolithic-oracle.py",
-          "fixed SCRIPT in oracle tests"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_ci_cargo_packages.py",
-      "members": [
-        [
-          15,
-          "dbea9b19b54e8891",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/ci-cargo-packages.py",
-          "Module-level file-location loader executes the fixed candidate package translation module in-process; tests exercise legacy and extracted workspace mapping"
         ]
       ]
     },
@@ -2445,7 +2274,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "c711979f658cdfad82cb18fdf40b10097dbb131a6567101a4bde6c2fbe52fc63",
+  "observed_source_sha256": "f0875ce098be5965697349a92ea0f8b94a58dd68ca286a2dc0346af0bdb9b472",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -2457,5 +2286,125 @@
     "just_roster": 108,
     "helper_retained": "scripts/safe-extract-zip.py",
     "gates_unchanged": true
+  },
+  "tar_release_test_retirement": {
+    "coverage": "ci/automation-migration/tar-release-test-retirement-coverage.json",
+    "removed_test_paths": [
+      "scripts/tests/test_safe_extract_tar.py",
+      "scripts/tests/test_select_release_notes_base.py"
+    ],
+    "methods": 14,
+    "component_proof": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+        "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+        "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+        "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+        "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+      }
+    ],
+    "python_paths": 193,
+    "just_roster": 106,
+    "helpers_retained": [
+      "scripts/safe-extract-tar.py",
+      "scripts/verify-checksum-sidecar.py",
+      "scripts/select-release-notes-base.py"
+    ],
+    "limits": "Actual local current typed component targets only. No latest whole wave/platform/native/model/SDK/protected qualification. Preserve historical census/test rosters/hashes and all unrelated active gates."
+  },
+  "next_wave_comparator_and_test_retirement": {
+    "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/test_publish_crates.py",
+      "scripts/tests/test_llama_oracle_source.py",
+      "scripts/tests/test_ci_cargo_packages.py",
+      "scripts/tests/test_skippy_tts_oracle.py",
+      "scripts/skippy-tts-oracle.py",
+      "scripts/tts_oracle_metrics.py",
+      "scripts/tests/test_workload_monolithic_oracle.py",
+      "scripts/ci-workload-monolithic-oracle.py",
+      "scripts/workload_fixtures.py",
+      "scripts/tests/test_skippy_ocr_asr_oracle.py",
+      "scripts/skippy-ocr-asr-oracle.py",
+      "scripts/generate-ocr-oracle-fixture.py"
+    ],
+    "legacy_methods": 53,
+    "python_paths": 181,
+    "just_roster": 100,
+    "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+    "helpers_retained": [
+      "scripts/llama-oracle-source.py",
+      "scripts/ci-cargo-packages.py",
+      "scripts/check-skippy-workload-candidate.py",
+      "all actual required SDK clients"
+    ],
+    "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+    "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+    "projected_just_launch_hash": "88eb6efa25e33eb3",
+    "original_test_tree_sha256": "25c3aa9a7c85a679796901508076615baaafd06cda488530d676a3e3d54473ad",
+    "projected_test_tree_sha256": "27b7a961d97e8954d6c4e34755df207876649eed6ada86b709102876e42c63f2",
+    "original_candidate_source_count": 91,
+    "projected_candidate_source_count": 85
+  },
+  "current_handoff_pack_method_retirement": {
+    "coverage": "ci/automation-migration/canary-handoff-pack-retirement-coverage.json",
+    "path": "scripts/tests/test_llama_canary_handoff_contract.py",
+    "retired_method": "test_pack_restore_and_source_owned_workload_verification",
+    "legacy_source_sha256": "4dfe328aab46662ac1814cdf14625a458beb2f8d10a4793ff47650e8930becd3",
+    "current_source_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+    "retained_methods": [
+      "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
+      "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
+    ],
+    "proof": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-pack-restore-tests.log",
+        "sha256": "c303e924cd371d95f6cdfe3584d3c473085ef35959e8927a0b80ad3533580b70",
+        "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1399 filtered out; finished in 1.79s"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-selected-battery-tests.log",
+        "sha256": "80c314c9aee2c13e38d68ea4df34758e1d107da23ed5f480c48b45a495959433",
+        "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 503 filtered out; finished in 5.00s"
+      }
+    ],
+    "python_paths": 181,
+    "just_roster": 100,
+    "policy": "One method only after exact12file predecessor; no helper/module/roster/count deletion. Historical first retirement and failed-source receipts retained.",
+    "predecessor_test_tree_sha256": "27b7a961d97e8954d6c4e34755df207876649eed6ada86b709102876e42c63f2",
+    "current_test_tree_sha256": "ac0bdec2061793cf2104e2f2b3d4f73d04077f7dd8f855ae1a5ae6c49252333c"
+  },
+  "retained_os_import_correction": {
+    "reason": "Restored import os required by retained patch.dict(os.environ) test. No production or retirement-scope change.",
+    "previous_proposal_source_sha256": "85dd449a4e4ea61c5699611e57ba9a2971b239ce40a9ec17ab92d7aa7c476f74",
+    "current_source_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+    "previous_failed_receipt": {
+      "path": ".omo/evidence/resume-20261002/next-wave-retained-handoff-tests.log",
+      "sha256": "24f244fc893c006015f71e355202674d1b1fb58729cbb8b89c5df1205341caac"
+    },
+    "qualified_retained_tests": {
+      "path": ".omo/evidence/resume-20261002/next-wave-retained-handoff-corrected.log",
+      "sha256": "eceaf0b16c500a8e697831fa48a6455829593379d8cd46627b7a24e5fbf5a678",
+      "result": "2 passed, 0 failed; 0.851s"
+    },
+    "current_test_tree_sha256": "ac0bdec2061793cf2104e2f2b3d4f73d04077f7dd8f855ae1a5ae6c49252333c",
+    "counts": {
+      "python": 181,
+      "just_roster": 100
+    }
+  },
+  "just_layout_whitelist_source_refresh": {
+    "source": "scripts/tests/test_justfile_layout.py",
+    "previous_source_sha256": "4cebd783ecfa111da9d64dc9ed70793b0cf45f0d532dccc604f5466c51a5fc05",
+    "current_source_sha256": "af60c244a9022a8a5460cb229d106af12cdefe4d516f62f04c961e6906a168ce",
+    "previous_observed_test_tree_sha256": "ac0bdec2061793cf2104e2f2b3d4f73d04077f7dd8f855ae1a5ae6c49252333c",
+    "current_observed_test_tree_sha256": "f0875ce098be5965697349a92ea0f8b94a58dd68ca286a2dc0346af0bdb9b472",
+    "change": "Only adds ci-automation-contracts to retained just/ci.just recipe whitelist; source line count, method count3, candidate line/hash/occurrence identities and import/Just roster unchanged",
+    "qualified_parent_receipt": "Parent reports all3 retained layout tests PASS after exact whitelist addition; canonical Rust3319pass/0fail/2ignored across85targets. No worker execution. Full legacy rerun remains parent-owned.",
+    "count_or_roster_changes": false,
+    "held_payload_integration": false
   }
 }

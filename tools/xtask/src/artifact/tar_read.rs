@@ -1,9 +1,6 @@
-//! Python 3.13 `tarfile.open(mode="r:*")` + `getmembers()` over an in-memory
-//! archive: the gz/bz2/xz/tar probe order and its combined diagnostic, ustar,
-//! v7, pax (`x`/`g`) and GNU long-name headers, and the end-of-archive rules
-//! (a bad header after the first member ends the archive silently).
+//! Plain and gzip tar decoding, including ustar, v7, pax and GNU name records.
+//! Header and payload failures are archive errors, independent of interpreters.
 
-use crate::repository::text::repr;
 use std::io::Read;
 
 use super::tar_header::{BLOCK, HeaderError, Member, apply_pax, frombuf, nts, pax_records};
@@ -14,47 +11,45 @@ pub(super) struct Archive {
     pub(super) members: Vec<Member>,
 }
 
-/// `tarfile.open(bytes, "r:*")` followed by `getmembers()`. The error is
-/// `str(ReadError)`.
-pub(super) fn open(mut raw: Vec<u8>) -> Result<Archive, String> {
-    let mut failures = Vec::new();
-    for method in ["gz", "bz2", "xz", "tar"] {
-        let data = match method {
-            "gz" => gunzip(&raw),
-            "bz2" => Err("not a bzip2 file".to_owned()),
-            "xz" => Err("not an lzma file".to_owned()),
-            _ => Ok(std::mem::take(&mut raw)),
-        };
-        let mut reader = Reader::default();
-        match data.and_then(|data| reader.next(&data).map(|first| (data, first))) {
-            Ok((data, first)) => {
-                let mut members: Vec<Member> = first.into_iter().collect();
-                if !members.is_empty() {
-                    while let Some(member) = reader.next(&data)? {
-                        members.push(member);
-                    }
-                }
-                return Ok(Archive { data, members });
-            }
-            Err(message) => {
-                failures.push(format!("- method {method}: ReadError({})", repr(&message)))
-            }
+/// Decode an accepted tar container before extraction can write any members.
+pub(super) fn open(raw: Vec<u8>) -> Result<Archive, String> {
+    let mut gzip_reader = Reader::default();
+    let gzip_failure = match gunzip(&raw) {
+        Ok(data) => match gzip_reader.next(&data) {
+            Ok(first) => return collect_members(data, gzip_reader, first),
+            Err(message) => message,
+        },
+        Err(message) => message,
+    };
+    let mut reader = Reader::default();
+    match reader.next(&raw) {
+        Ok(first) => collect_members(raw, reader, first),
+        Err(_) if raw.starts_with(&[0x1f, 0x8b]) => {
+            Err(format!("corrupt gzip tar archive: {gzip_failure}"))
+        }
+        Err(message) => Err(format!("invalid or unsupported tar archive: {message}")),
+    }
+}
+
+fn collect_members(
+    data: Vec<u8>,
+    mut reader: Reader,
+    first: Option<Member>,
+) -> Result<Archive, String> {
+    let mut members: Vec<Member> = first.into_iter().collect();
+    if !members.is_empty() {
+        while let Some(member) = reader.next(&data)? {
+            members.push(member);
         }
     }
-    Err(format!(
-        "file could not be opened successfully:\n{}",
-        failures.join("\n")
-    ))
+    Ok(Archive { data, members })
 }
 
 fn gunzip(raw: &[u8]) -> Result<Vec<u8>, String> {
-    if raw.is_empty() {
-        return Ok(Vec::new());
-    }
     let mut data = Vec::new();
     flate2::read::MultiGzDecoder::new(raw)
         .read_to_end(&mut data)
-        .map_err(|_| "not a gzip file".to_owned())?;
+        .map_err(|error| format!("gzip decoding failed: {error}"))?;
     Ok(data)
 }
 

@@ -6,6 +6,7 @@ use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -160,6 +161,32 @@ pub(super) fn patch_digest(directory: &Path) -> DynResult<Digest> {
     Ok(Digest::try_from(hex::encode(hash.finalize()))?)
 }
 
+// Revision and digest metadata is tiny; regular-file admission also prevents
+// caller-supplied FIFOs/devices from blocking before bounded Git supervision.
+fn revision_metadata(path: &Path) -> DynResult<String> {
+    const MAXIMUM: u64 = 4096;
+    if !fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err("prepared-source metadata must be a regular file".into());
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err("opened prepared-source metadata must be a regular file".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAXIMUM + 1).read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len())? > MAXIMUM {
+        return Err("prepared-source revision metadata exceeds 4096 bytes".into());
+    }
+    Ok(String::from_utf8(bytes)?)
+}
+
 pub(super) fn validate_recipe(root: &Path, provenance: &Provenance) -> DynResult<()> {
     revision(&provenance.head)?;
     if provenance.markers.len() != MARKERS.len()
@@ -170,7 +197,7 @@ pub(super) fn validate_recipe(root: &Path, provenance: &Provenance) -> DynResult
         return Err("prepared source marker set mismatch".into());
     }
     let marker = |name: &str| provenance.markers[name].trim();
-    let upstream = fs::read_to_string(root.join("third_party/llama.cpp/upstream.txt"))?;
+    let upstream = revision_metadata(&root.join("third_party/llama.cpp/upstream.txt"))?;
     revision(upstream.trim())?;
     if marker(".mesh-llm-prepare-schema") != "5"
         || marker(".mesh-llm-upstream-sha") != upstream.trim()
@@ -187,7 +214,7 @@ pub(super) fn prepared(root: &Path) -> DynResult<Provenance> {
     let checkout = root.join(".deps/llama.cpp");
     let mut markers = BTreeMap::new();
     for name in MARKERS {
-        markers.insert(name.to_owned(), fs::read_to_string(checkout.join(name))?);
+        markers.insert(name.to_owned(), revision_metadata(&checkout.join(name))?);
     }
     let provenance = Provenance {
         head: process::text(&checkout, &["rev-parse", "HEAD"])?,

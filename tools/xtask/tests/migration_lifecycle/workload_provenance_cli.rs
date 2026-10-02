@@ -408,3 +408,421 @@ fn actual_freshness_rejects_older_missing_inputs_and_wrong_cpu_static_native_ide
         );
     }
 }
+
+fn legacy_repair_fixture() -> Fixture {
+    let mut fixture = Fixture::new();
+    let closure = fixture.temp.path().join("cpu native-workloads");
+    fs::rename(&fixture.closure, &closure).unwrap();
+    fixture.closure = closure;
+    fixture.test = fixture
+        .closure
+        .join("cargo/debug/deps/skippy_server-fixture");
+    fixture.snapshot = fixture.closure.join("source.json");
+    fs::write(
+        fixture.root.join("source.rs"),
+        "admitted dirty tracked source\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("new source.rs"),
+        "admitted untracked source\n",
+    )
+    .unwrap();
+    fixture.snapshot();
+    let output = fixture.produce();
+    assert!(output.success(), "{output:?}");
+    fixture
+}
+struct RepairCaller {
+    script: PathBuf,
+    bin: PathBuf,
+    trusted: PathBuf,
+    trace: PathBuf,
+    receipt: PathBuf,
+    just_trace: PathBuf,
+    controller_mutation: bool,
+    harness_mode: &'static str,
+}
+impl RepairCaller {
+    fn new(fixture: &Fixture) -> Self {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source =
+            fs::read_to_string(repository.join("scripts/llama-canary-agent-repair.sh")).unwrap();
+        let selector = source
+            .split("# Legacy workload automation selection begins.")
+            .nth(1)
+            .unwrap()
+            .split("# Legacy workload automation selection ends.")
+            .next()
+            .unwrap();
+        let function = source
+            .split("snapshot_candidate_tree() {")
+            .nth(1)
+            .unwrap()
+            .split("\nwrite_candidate_bundle() {")
+            .next()
+            .unwrap();
+        let trusted = fixture.temp.path().join("trusted controller");
+        let bin = fixture.temp.path().join("selector tools");
+        fs::create_dir(&trusted).unwrap();
+        fs::create_dir(&bin).unwrap();
+        fs::write(trusted.join("Justfile"), "# intercepted normal facade\n").unwrap();
+        let just = bin.join("just");
+        fs::write(&just, "#!/bin/bash\nset -euo pipefail\nprintf '%s\\n' \"$@\" >> \"$JUST_TRACE\"\n[[ \"$1\" == --justfile && \"$2\" == \"$TRUSTED_ROOT/Justfile\" && \"$3\" == automation-bootstrap && \"$#\" == 3 ]] || exit 94\nprintf 'binary_path=%s\\ntarget_directory=%s\\nhost=fixture\\n' \"$OWNER\" \"$TRUSTED_ROOT/target\"\n").unwrap();
+        fs::set_permissions(&just, fs::Permissions::from_mode(0o700)).unwrap();
+        let script = fixture.temp.path().join("production repair snapshot.sh");
+        fs::write(
+            &script,
+            format!(
+                r#"set -euo pipefail
+{selector}
+if [[ "$HARNESS_MODE" != repair ]]; then printf 'legacy-selector-not-applicable\n'; exit 0; fi
+if [[ "${{FREEZE_MUTATION:-}}" == yes ]]; then
+  MESH_LLM_AUTOMATION_BIN=relative-after-selection
+  OWNER="$TRUSTED_ROOT/would-be-rebuilt-owner"
+  printf '#!/bin/sh\nexit 96\n' > "$OWNER"
+  chmod +x "$OWNER"
+fi
+if [[ "${{CONTROLLER_MUTATION:-}}" == yes ]]; then printf '#!/bin/sh\nexit 97\n' > "$repair_workload_controller"; fi
+assert_agent_control_unchanged() {{ return 0; }}
+verify_repair_pin() {{ return 0; }}
+validate_agent_manifest_changes() {{ return 0; }}
+controller_producer_receipt() {{ printf controller > "$CONTROLLER_MARKER"; }}
+git() {{
+  printf '%s\n' "$@" >> "$REPAIR_FIXTURE_GIT_LOG"
+  if [[ "$1" == commit-tree ]]; then /bin/cat >/dev/null; printf '%s\n' "$FAKE_COMMIT"; return; fi
+  /usr/bin/git "$@"
+}}
+snapshot_candidate_tree() {{{function}
+cd "$ROOT"
+snapshot_candidate_tree || exit "$?"
+/usr/bin/printenv CANARY_VERIFIED_WORKLOAD_PRODUCER > "$RECEIPT"
+printf '%s\n' "$VERIFICATION_TREE" "$CERTIFIED_SHA" > "$TREE_RECEIPT"
+"#
+            ),
+        )
+        .unwrap();
+        Self {
+            script,
+            bin,
+            trusted,
+            trace: fixture.temp.path().join("git.trace"),
+            receipt: fixture.temp.path().join("admitted.sha"),
+            just_trace: fixture.temp.path().join("just.argv"),
+            controller_mutation: false,
+            harness_mode: "repair",
+        }
+    }
+    fn invoke(
+        &self,
+        fixture: &Fixture,
+        selected: Option<&str>,
+        freeze_mutation: bool,
+        cancellation: &Cancellation,
+    ) -> process::ProcessReport {
+        let native_base = fixture.temp.path().join("cpu native");
+        let mut environment: BTreeMap<_, _> = [
+            ("PATH", format!("{}:/usr/bin:/bin", self.bin.display())),
+            ("ROOT", fixture.root.display().to_string()),
+            ("TRUSTED_ROOT", self.trusted.display().to_string()),
+            ("OWNER", env!("CARGO_BIN_EXE_xtask").into()),
+            ("JUST_TRACE", self.just_trace.display().to_string()),
+            ("REPAIR_FIXTURE_GIT_LOG", self.trace.display().to_string()),
+            ("RECEIPT", self.receipt.display().to_string()),
+            (
+                "TREE_RECEIPT",
+                fixture
+                    .temp
+                    .path()
+                    .join("tree.receipt")
+                    .display()
+                    .to_string(),
+            ),
+            (
+                "CONTROLLER_MARKER",
+                fixture
+                    .temp
+                    .path()
+                    .join("controller.marker")
+                    .display()
+                    .to_string(),
+            ),
+            ("FAKE_COMMIT", "b".repeat(40)),
+            ("BASE_HEAD", git(&fixture.root, &["rev-parse", "HEAD"])),
+            ("UPSTREAM_SHA", "a".repeat(40)),
+            ("HARNESS_MODE", self.harness_mode.into()),
+            ("LLAMA_STAGE_BUILD_DIR", native_base.display().to_string()),
+            (
+                "FREEZE_MUTATION",
+                if freeze_mutation { "yes" } else { "no" }.into(),
+            ),
+            (
+                "CONTROLLER_MUTATION",
+                if self.controller_mutation {
+                    "yes"
+                } else {
+                    "no"
+                }
+                .into(),
+            ),
+            ("GIT_MASTER", "1".into()),
+            ("GIT_CONFIG_GLOBAL", "/dev/null".into()),
+            ("GIT_CONFIG_NOSYSTEM", "1".into()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), Value::Public(v.into())))
+        .collect();
+        if let Some(selected) = selected {
+            environment.insert(
+                "MESH_LLM_AUTOMATION_BIN".into(),
+                Value::Public(selected.into()),
+            );
+        }
+        let result = process::supervise(
+            &ProcessSpec {
+                executable: "/bin/bash".into(),
+                cwd: fixture.temp.path().into(),
+                arguments: vec![Value::Public(self.script.clone().into())],
+                environment,
+            },
+            &Limits {
+                execution: Duration::from_secs(8),
+                graceful_shutdown: Duration::from_secs(1),
+                forced_shutdown: Duration::from_secs(1),
+                retained_bytes_per_stream: 65536,
+                readiness: Readiness::None,
+                completion: Completion::Exit,
+            },
+            cancellation,
+            OutputFiles::default(),
+        )
+        .unwrap();
+        assert!(result.cleanup.complete, "{result:?}");
+        result
+    }
+}
+#[test]
+fn legacy_repair_snapshot_admits_exact_dirty_producer_before_staging_with_frozen_owner_or_just() {
+    for configured in [true, false] {
+        let fixture = legacy_repair_fixture();
+        let caller = RepairCaller::new(&fixture);
+        let manifest = fixture.closure.join("producer.json");
+        let bytes = fs::read(&manifest).unwrap();
+        let output = caller.invoke(
+            &fixture,
+            configured.then_some(env!("CARGO_BIN_EXE_xtask")),
+            true,
+            &Cancellation::default(),
+        );
+        assert!(output.success(), "{output:?}");
+        assert_eq!(
+            fs::read_to_string(&caller.receipt).unwrap(),
+            format!("{}\n", hex::encode(Sha256::digest(&bytes)))
+        );
+        assert_eq!(fs::read(&manifest).unwrap(), bytes);
+        let trace = fs::read_to_string(&caller.trace).unwrap();
+        assert!(
+            trace.starts_with("add\n-A\ndiff\n--cached\n--quiet\nwrite-tree\ncommit-tree\n"),
+            "{trace}"
+        );
+        assert!(!fixture.temp.path().join("controller.marker").exists());
+        assert_eq!(caller.just_trace.exists(), !configured);
+        if !configured {
+            let args = fs::read_to_string(&caller.just_trace).unwrap();
+            assert_eq!(
+                args,
+                format!(
+                    "--justfile\n{}\nautomation-bootstrap\n",
+                    caller.trusted.join("Justfile").display()
+                )
+            );
+        }
+        // Untracked source is now staged; the old source snapshot cannot be reused.
+        assert!(!fixture.verify().success());
+    }
+}
+#[test]
+fn legacy_repair_snapshot_rejects_mutated_source_closure_and_freshness_before_git_add_or_hash_export()
+ {
+    for mutation in [
+        "source",
+        "native-head",
+        "binary",
+        "test-mtime",
+        "missing-manifest",
+    ] {
+        let fixture = legacy_repair_fixture();
+        let caller = RepairCaller::new(&fixture);
+        match mutation {
+            "source" => fs::write(
+                fixture.root.join("new source.rs"),
+                "changed after producer\n",
+            )
+            .unwrap(),
+            "native-head" => {
+                let stamp = fixture.closure.join("native/.mesh-llm-build-stamp");
+                let bytes = fs::read_to_string(&stamp)
+                    .unwrap()
+                    .replace(&fixture.native, &"f".repeat(40));
+                fs::write(stamp, bytes).unwrap();
+            }
+            "binary" => fs::write(
+                fixture.closure.join("cargo/debug/skippy-server"),
+                "replacement executable\n",
+            )
+            .unwrap(),
+            "test-mtime" => {
+                File::options()
+                    .write(true)
+                    .open(&fixture.test)
+                    .unwrap()
+                    .set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(100)))
+                    .unwrap();
+            }
+            _ => fs::remove_file(fixture.closure.join("producer.json")).unwrap(),
+        }
+        let output = caller.invoke(
+            &fixture,
+            Some(env!("CARGO_BIN_EXE_xtask")),
+            false,
+            &Cancellation::default(),
+        );
+        assert!(!output.success(), "{mutation}: {output:?}");
+        assert!(
+            !caller.trace.exists(),
+            "failed admission reached Git staging"
+        );
+        assert!(!caller.receipt.exists());
+        assert!(!caller.just_trace.exists());
+        assert!(git(&fixture.root, &["diff", "--cached", "--name-only"]).is_empty());
+    }
+}
+#[test]
+fn legacy_repair_configured_invalid_controller_never_falls_back_or_reaches_snapshot() {
+    for kind in ["empty", "relative", "missing", "directory", "nonexec"] {
+        let fixture = legacy_repair_fixture();
+        let caller = RepairCaller::new(&fixture);
+        let path = fixture.temp.path().join("configured owner");
+        let selected = match kind {
+            "empty" => String::new(),
+            "relative" => "owner-relative".into(),
+            "directory" => {
+                fs::create_dir(&path).unwrap();
+                path.display().to_string()
+            }
+            "nonexec" => {
+                fs::write(&path, "not executable").unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+                path.display().to_string()
+            }
+            _ => path.display().to_string(),
+        };
+        let output = caller.invoke(&fixture, Some(&selected), false, &Cancellation::default());
+        assert!(!output.success(), "{kind}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr.bytes_retained).contains("absolute executable")
+        );
+        assert!(!caller.just_trace.exists());
+        assert!(!caller.trace.exists());
+        assert!(!caller.receipt.exists());
+    }
+}
+#[test]
+fn cancelled_legacy_repair_owner_does_not_stage_or_export_pass_and_cleans_owned_fixture_tree() {
+    let fixture = legacy_repair_fixture();
+    let caller = RepairCaller::new(&fixture);
+    let delayed = fixture.temp.path().join("delayed configured owner");
+    fs::write(&delayed, "#!/bin/bash\nset -euo pipefail\n/bin/sleep 30 & child=$!\ntrap 'kill \"$child\" 2>/dev/null; wait \"$child\" 2>/dev/null; exit 143' TERM INT\nprintf started > \"$JUST_TRACE\"\nwait \"$child\"\n").unwrap();
+    fs::set_permissions(&delayed, fs::Permissions::from_mode(0o700)).unwrap();
+    let cancellation = Cancellation::default();
+    let trigger = cancellation.clone();
+    let output = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(4);
+            while !caller.just_trace.exists() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            trigger.cancel();
+        });
+        caller.invoke(
+            &fixture,
+            Some(delayed.to_str().unwrap()),
+            false,
+            &cancellation,
+        )
+    });
+    assert_eq!(output.outcome, process::Outcome::Cancelled, "{output:?}");
+    assert!(!caller.trace.exists());
+    assert!(!caller.receipt.exists());
+    assert!(git(&fixture.root, &["diff", "--cached", "--name-only"]).is_empty());
+}
+
+#[test]
+fn legacy_repair_valid_controller_failure_under_conditional_call_stops_before_staging() {
+    let fixture = legacy_repair_fixture();
+    let caller = RepairCaller::new(&fixture);
+    let failed_owner = fixture.temp.path().join("failed configured owner");
+    fs::write(&failed_owner, "#!/bin/sh\nexit 7\n").unwrap();
+    fs::set_permissions(&failed_owner, fs::Permissions::from_mode(0o700)).unwrap();
+    let output = caller.invoke(
+        &fixture,
+        Some(failed_owner.to_str().unwrap()),
+        false,
+        &Cancellation::default(),
+    );
+    assert!(!output.success(), "{output:?}");
+    assert!(!caller.just_trace.exists());
+    assert!(
+        !caller.trace.exists(),
+        "failure under Bash conditional reached git add"
+    );
+    assert!(!caller.receipt.exists());
+    assert!(git(&fixture.root, &["diff", "--cached", "--name-only"]).is_empty());
+}
+
+#[test]
+fn legacy_repair_changed_frozen_controller_is_rejected_before_admission_and_staging() {
+    let fixture = legacy_repair_fixture();
+    let mut caller = RepairCaller::new(&fixture);
+    caller.controller_mutation = true;
+    let owner = fixture.temp.path().join("original admitted controller");
+    fs::write(&owner, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&owner, fs::Permissions::from_mode(0o700)).unwrap();
+    let output = caller.invoke(
+        &fixture,
+        Some(owner.to_str().unwrap()),
+        false,
+        &Cancellation::default(),
+    );
+    assert!(!output.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr.bytes_retained)
+            .contains("frozen workload automation controller changed after admission")
+    );
+    assert!(!caller.trace.exists());
+    assert!(!caller.receipt.exists());
+    assert!(!caller.just_trace.exists());
+    assert!(git(&fixture.root, &["diff", "--cached", "--name-only"]).is_empty());
+}
+
+#[test]
+fn legacy_repair_controller_initialization_does_not_bootstrap_or_admit_other_harness_modes() {
+    for mode in ["verify", "repair-build", "verify-build", "pinned-build"] {
+        let fixture = legacy_repair_fixture();
+        let mut caller = RepairCaller::new(&fixture);
+        caller.harness_mode = mode;
+        // An unused empty configured selector must not impose a new admission
+        // requirement on the protected-receipt or selected-source paths.
+        let output = caller.invoke(&fixture, Some(""), false, &Cancellation::default());
+        assert!(output.success(), "{mode}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout.bytes_retained)
+                .contains("legacy-selector-not-applicable")
+        );
+        assert!(!caller.just_trace.exists());
+        assert!(!caller.trace.exists());
+        assert!(!caller.receipt.exists());
+        assert!(!fixture.temp.path().join("controller.marker").exists());
+    }
+}

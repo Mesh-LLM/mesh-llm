@@ -4,12 +4,11 @@
 //! hashed, safely extracted below `<tmp-root>/archive-<index>`, and must
 //! hold exactly one `manifest.json` whose runtime carries every required
 //! field, matches the requested independent runtime release, and agrees with
-//! the other archives on runtime release and Skippy ABI. The sorted artifact list is written as
-//! `json.dump(..., indent=2, sort_keys=True)` plus a newline.
+//! the other archives on runtime release and Skippy ABI. The artifact list is
+//! written as sorted, indented JSON plus a newline.
 //!
-//! A `SystemExit` message prints as-is and an uncaught exception prints its
-//! traceback's last line; both exit 1. Nothing is ever rebuilt: a missing
-//! or unsafe archive fails.
+//! Domain validation failures exit 1. Nothing is rebuilt; missing or
+//! unsafe archives fail before publication.
 
 use super::digest::file_sha256;
 use super::json_object::{display, dumps, equal, is_dict, type_name};
@@ -60,11 +59,10 @@ struct Shared {
 
 fn generate(args: &[String]) -> Result<(), Failure> {
     let [out, repo, tag, requested_version, tmp_root, archives @ ..] = args else {
-        return Err(format!(
-            "ValueError: not enough values to unpack (expected at least 6, got {})",
-            args.len() + 1
-        )
-        .into());
+        return Err(
+            "usage: product runtime-release-manifest <out> <repo> <tag> <runtime-version> <tmp-root> <archive>..."
+                .to_owned().into(),
+        );
     };
     let release_version = requested_version
         .strip_prefix('v')
@@ -145,6 +143,13 @@ fn inspect(
         .into());
     };
     let manifest = load(Path::new(manifest_path), manifest_path)?;
+    if !is_dict(&manifest) {
+        return Err(format!(
+            "{archive} native runtime manifest must be a JSON object, found {}",
+            type_name(&manifest)
+        )
+        .into());
+    }
     if manifest.get("schema_version").and_then(Json::as_int) != Some(2) {
         return Err(format!(
             "{archive} requires native runtime schema_version 2; import legacy caches explicitly"
@@ -157,11 +162,11 @@ fn inspect(
     Ok(runtime)
 }
 
-/// `manifest.get("runtime")` must be a dict holding every required field.
+/// Admit an object manifest whose runtime object carries every required field.
 fn runtime_object(manifest: &Json, archive: &str) -> Result<Json, String> {
     if !is_dict(manifest) {
         return Err(format!(
-            "AttributeError: '{}' object has no attribute 'get'",
+            "{archive} native runtime manifest must be a JSON object, found {}",
             type_name(manifest)
         ));
     }
@@ -191,7 +196,7 @@ fn runtime_version(
     let value = runtime.get("release_version").unwrap_or(&Json::Null);
     let Json::String(version) = value else {
         return Err(format!(
-            "AttributeError: '{}' object has no attribute 'startswith'",
+            "{archive} native runtime release_version must be a string, found {}",
             type_name(value)
         ));
     };
@@ -260,5 +265,195 @@ mod tests {
         );
         let legacy = Json::parse(br#"{"mesh_version":"9.0.0"}"#).unwrap();
         assert!(runtime_version(&legacy, "producer.tar.gz", "v2.0.0", "9.0.0").is_err());
+    }
+    #[test]
+    fn release_manifest_bad_arguments_cannot_create_outputs_or_overwrite_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("release.json");
+        let scratch = directory.path().join("extraction");
+        let arguments = [
+            output.to_string_lossy().into_owned(),
+            "Fixture/runtime".into(),
+            "v0.68.0".into(),
+            "9.0.0".into(),
+            scratch.to_string_lossy().into_owned(),
+        ];
+        for count in 0..=arguments.len() {
+            let report = run(&arguments[..count]);
+            assert_ne!(report.code, 0);
+            assert!(report.stdout.is_empty());
+            assert!(!output.exists());
+            assert!(!scratch.exists());
+            if count < arguments.len() {
+                assert!(
+                    report
+                        .stderr
+                        .contains("usage: product runtime-release-manifest")
+                );
+            }
+            std::fs::write(&output, b"previous immutable release publication").unwrap();
+            let report = run(&arguments[..count]);
+            assert_ne!(report.code, 0);
+            assert!(report.stdout.is_empty());
+            assert_eq!(
+                std::fs::read(&output).unwrap(),
+                b"previous immutable release publication"
+            );
+            assert!(!scratch.exists());
+            std::fs::remove_file(&output).unwrap();
+        }
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+    fn archive_with_manifest(
+        directory: &Path,
+        index: usize,
+        manifest: &serde_json::Value,
+    ) -> std::path::PathBuf {
+        let source = directory.join(format!("source-{index}.json"));
+        std::fs::write(&source, serde_json::to_vec(manifest).unwrap()).unwrap();
+        let archive = directory.join(format!("native-{index}.tar.gz"));
+        super::super::archive_tar::write(
+            std::fs::File::create(&archive).unwrap(),
+            &[super::super::archive::Entry {
+                name: "runtime/manifest.json".into(),
+                path: source.clone(),
+                directory: false,
+                size: std::fs::metadata(&source).unwrap().len(),
+                mode: 0o644,
+                sha256: Some(
+                    file_sha256(&source)
+                        .map_err(|failure| failure.error)
+                        .unwrap(),
+                ),
+            }],
+        )
+        .unwrap();
+        archive
+    }
+    fn valid_manifest() -> serde_json::Value {
+        serde_json::json!({"schema_version":2,"runtime":{"backend":{},"files":[],"id":"native-fixture","libraries":[],"release_version":"v9.0.0","platform":{},"skippy_abi":7}})
+    }
+    fn schema_failure_preserves_publication(manifest: &serde_json::Value, diagnostic: &str) {
+        for existing in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let output = directory.path().join("publication/release.json");
+            if existing {
+                std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+                std::fs::write(&output, b"previous immutable release publication").unwrap();
+            }
+            // Admit a complete valid first archive before failing the second: no
+            // partially accumulated artifact list can publish or replace output.
+            let first = archive_with_manifest(directory.path(), 0, &valid_manifest());
+            let bad = archive_with_manifest(directory.path(), 1, manifest);
+            let arguments = [
+                output.to_string_lossy().into_owned(),
+                "Fixture/runtime".into(),
+                "v1.2.3".into(),
+                "9.0.0".into(),
+                directory
+                    .path()
+                    .join("extract")
+                    .to_string_lossy()
+                    .into_owned(),
+                first.to_string_lossy().into_owned(),
+                bad.to_string_lossy().into_owned(),
+            ];
+            let report = run(&arguments);
+            assert_ne!(report.code, 0);
+            assert!(report.stdout.is_empty());
+            assert!(report.stderr.contains(diagnostic), "{}", report.stderr);
+            assert!(
+                report.stderr.contains("native-1.tar.gz"),
+                "{}",
+                report.stderr
+            );
+            if existing {
+                assert_eq!(
+                    std::fs::read(&output).unwrap(),
+                    b"previous immutable release publication"
+                );
+            } else {
+                assert!(!output.exists());
+                assert!(!output.parent().unwrap().exists());
+            }
+        }
+    }
+    #[test]
+    fn independent_runtime_catalog_retains_publication_tag_and_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("release.json");
+        let archive = archive_with_manifest(directory.path(), 0, &valid_manifest());
+        let arguments = [
+            output.to_string_lossy().into_owned(),
+            "Fixture/runtime".into(),
+            "v1.2.3".into(),
+            "9.0.0".into(),
+            directory
+                .path()
+                .join("extract")
+                .to_string_lossy()
+                .into_owned(),
+            archive.to_string_lossy().into_owned(),
+        ];
+        let report = run(&arguments);
+        assert_eq!(report.code, 0, "{}", report.stderr);
+        let document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(document["schema_version"], 2);
+        assert_eq!(document["release_version"], "v9.0.0");
+        assert!(
+            document["artifacts"][0]["url"]
+                .as_str()
+                .unwrap()
+                .contains("/v1.2.3/native-0.tar.gz")
+        );
+    }
+    #[test]
+    fn legacy_and_noninteger_schemas_preserve_existing_publication() {
+        for schema in [
+            serde_json::json!(1),
+            serde_json::json!(true),
+            serde_json::json!(2.0),
+            serde_json::Value::Null,
+        ] {
+            let mut manifest = valid_manifest();
+            manifest["schema_version"] = schema;
+            schema_failure_preserves_publication(
+                &manifest,
+                "requires native runtime schema_version 2",
+            );
+        }
+    }
+    #[test]
+    fn malformed_native_runtime_manifest_root_rejects_before_release_publication() {
+        for manifest in [
+            serde_json::Value::Null,
+            serde_json::json!(false),
+            serde_json::json!(42),
+            serde_json::json!("not an object"),
+            serde_json::json!([]),
+        ] {
+            schema_failure_preserves_publication(
+                &manifest,
+                "native runtime manifest must be a JSON object",
+            );
+        }
+    }
+    #[test]
+    fn malformed_native_runtime_version_rejects_before_release_publication() {
+        for version in [
+            serde_json::Value::Null,
+            serde_json::json!(false),
+            serde_json::json!(42),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            let mut manifest = valid_manifest();
+            manifest["runtime"]["release_version"] = version;
+            schema_failure_preserves_publication(
+                &manifest,
+                "native runtime release_version must be a string",
+            );
+        }
     }
 }

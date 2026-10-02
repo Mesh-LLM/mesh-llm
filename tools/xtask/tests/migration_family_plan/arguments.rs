@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn exact_options_accept_inline_values() {
-    let output = run(&["--families=llama,qwen3-dense", "--shard-count=1"]);
+    let output = run_historical(&["--families=llama,qwen3-dense", "--shard-count=1"]);
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, fixture("real-reversed", "stdout"));
 }

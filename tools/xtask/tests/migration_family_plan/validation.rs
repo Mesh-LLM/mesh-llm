@@ -77,7 +77,7 @@ fn github_without_output_preserves_stdout_and_validates_manifest_first() {
         if existing {
             fs::write(&github, b"existing=kept\n").expect("seed output");
         }
-        let output = run(&[
+        let output = run_historical(&[
             "--families",
             "llama,qwen3-dense",
             "--github-output",
@@ -139,13 +139,13 @@ fn verification_rejects_extra_fields_and_missing_shards() {
     plan["unexpected"] = json!(true);
     let path = temp_path("tampered-plan.json");
     fs::write(&path, serde_json::to_vec(&plan).expect("JSON")).expect("write plan");
-    let extra = run(&["--verify-plan", path.to_str().expect("UTF-8")]);
+    let extra = run_historical(&["--verify-plan", path.to_str().expect("UTF-8")]);
     assert_eq!(extra.status.code(), Some(2));
     assert_eq!(extra.stderr, fixture("tampered-plan", "stderr"));
     assert!(extra.stdout.is_empty());
     plan["shards"] = json!([]);
     fs::write(&path, serde_json::to_vec(&plan).expect("JSON")).expect("write plan");
-    let missing = run(&["--verify-plan", path.to_str().expect("UTF-8")]);
+    let missing = run_historical(&["--verify-plan", path.to_str().expect("UTF-8")]);
     assert_eq!(missing.status.code(), Some(2));
     assert_eq!(
         missing.stderr,

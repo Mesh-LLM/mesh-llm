@@ -1,12 +1,10 @@
 use super::Error;
-#[cfg(test)]
 use crate::automation::codepoint_json::parser;
 use crate::automation::codepoint_json::value::Value;
 
 pub(super) struct PcmMetrics(Value);
 
 impl PcmMetrics {
-    #[cfg(test)]
     pub(super) fn parse(bytes: &[u8]) -> Result<Self, Error> {
         Self::from_value(parser::parse(bytes).map_err(Error::Json)?)
     }

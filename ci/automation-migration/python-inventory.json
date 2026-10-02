@@ -376,15 +376,6 @@
       "required": true
     },
     {
-      "classification": "workload oracle coordination",
-      "deletion_condition": "Port generic process/provenance behavior; preserve actual oracle contract and evidence.",
-      "exception": null,
-      "path": "scripts/ci-workload-monolithic-oracle.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa/process and oracle owner",
-      "required": false
-    },
-    {
       "classification": "trusted CI cleanup",
       "deletion_condition": "Port bounded identity/path checks and cleanup parity before workflow caller change.",
       "exception": null,
@@ -418,15 +409,6 @@
       "path": "scripts/generate-bench-corpus.py",
       "phase": 5,
       "replacement_owner": "tools/xtask benchmark or isolated eval",
-      "required": false
-    },
-    {
-      "classification": "workload oracle fixture generator",
-      "deletion_condition": "Determine actual family/workload required closure, then port or isolate domain-specific oracle behavior.",
-      "exception": null,
-      "path": "scripts/generate-ocr-oracle-fixture.py",
-      "phase": 5,
-      "replacement_owner": "Native fixture owner or tools/xtask evidence",
       "required": false
     },
     {
@@ -628,30 +610,12 @@
       "required": false
     },
     {
-      "classification": "specialized OCR/ASR oracle",
-      "deletion_condition": "Retain only if the actual domain implementation is isolated and generic supervision is removed.",
-      "exception": "Potential genuine model-oracle implementation; exact caller and requiredness remain unresolved.",
-      "path": "scripts/skippy-ocr-asr-oracle.py",
-      "phase": 5,
-      "replacement_owner": "Native/domain oracle owner plus tools/xtask evidence",
-      "required": false
-    },
-    {
       "classification": "optional System One smoke driver",
       "deletion_condition": "Port generic HTTP/evidence driver while preserving pinned contract and full-model read cases.",
       "exception": null,
       "path": "scripts/skippy-system-one-cases.py",
       "phase": 5,
       "replacement_owner": "tools/xtask qa and System One domain tests",
-      "required": false
-    },
-    {
-      "classification": "specialized TTS oracle",
-      "deletion_condition": "Retain only if the domain implementation is isolated; port generic process/evidence pieces.",
-      "exception": "Potential genuine model-oracle implementation; exact caller and requiredness remain unresolved.",
-      "path": "scripts/skippy-tts-oracle.py",
-      "phase": 5,
-      "replacement_owner": "Native/domain oracle owner plus tools/xtask evidence",
       "required": false
     },
     {
@@ -794,15 +758,6 @@
       "deletion_condition": "Rust tests prove protected Clippy/test batch filtering and legacy plan compatibility.",
       "exception": null,
       "path": "scripts/tests/test_ci_batch_crate_filter.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
-      "classification": "generic package extraction contract test",
-      "deletion_condition": "Rust tests retain extracted/legacy owner mapping, missing successor rejection and batch isolation.",
-      "exception": null,
-      "path": "scripts/tests/test_ci_cargo_packages.py",
       "phase": 2,
       "replacement_owner": "tools/xtask ci_validation",
       "required": true
@@ -1195,15 +1150,6 @@
       "required": true
     },
     {
-      "classification": "generic provenance test",
-      "deletion_condition": "Source/oracle identity parity tested in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_llama_oracle_source.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask artifact/evidence tests",
-      "required": true
-    },
-    {
       "classification": "generic llama source review test",
       "deletion_condition": "Reviewed native source contracts remain covered by typed checks.",
       "exception": null,
@@ -1357,15 +1303,6 @@
       "required": true
     },
     {
-      "classification": "generic release publisher test",
-      "deletion_condition": "Dry-run/publish contract tests migrated without external publish.",
-      "exception": null,
-      "path": "scripts/tests/test_publish_crates.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask release tests",
-      "required": true
-    },
-    {
       "classification": "generic optional QA test",
       "deletion_condition": "Test orchestration/report cases migrated.",
       "exception": null,
@@ -1465,30 +1402,12 @@
       "required": true
     },
     {
-      "classification": "generic artifact security test",
-      "deletion_condition": "All safe-extraction rejection cases pass in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_safe_extract_tar.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask artifact tests",
-      "required": true
-    },
-    {
       "classification": "generic cache evidence test",
       "deletion_condition": "Stats parsing and cache floor semantics migrated.",
       "exception": null,
       "path": "scripts/tests/test_sccache_evidence.py",
       "phase": 2,
       "replacement_owner": "tools/xtask automation evidence tests",
-      "required": true
-    },
-    {
-      "classification": "generic release notes test",
-      "deletion_condition": "Base-selection parity tested in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_select_release_notes_base.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask release tests",
       "required": true
     },
     {
@@ -1555,15 +1474,6 @@
       "required": true
     },
     {
-      "classification": "generic oracle test",
-      "deletion_condition": "Separate generic orchestration from domain oracle tests.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_ocr_asr_oracle.py",
-      "phase": 2,
-      "replacement_owner": "Domain oracle owner and tools/xtask evidence tests",
-      "required": true
-    },
-    {
       "classification": "generic benchmark test",
       "deletion_condition": "Benchmark orchestration cases migrated.",
       "exception": null,
@@ -1597,15 +1507,6 @@
       "path": "scripts/tests/test_skippy_system_one_smoke.py",
       "phase": 2,
       "replacement_owner": "tools/xtask ci_validation and domain smoke tests",
-      "required": true
-    },
-    {
-      "classification": "generic oracle test",
-      "deletion_condition": "Generic process/evidence tests migrate; domain behavior remains justified.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_tts_oracle.py",
-      "phase": 2,
-      "replacement_owner": "Domain oracle owner and tools/xtask evidence tests",
       "required": true
     },
     {
@@ -1645,24 +1546,6 @@
       "required": true
     },
     {
-      "classification": "generic oracle contract test",
-      "deletion_condition": "Oracle identity, timeouts and comparison outputs migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_workload_monolithic_oracle.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask qa/evidence tests",
-      "required": true
-    },
-    {
-      "classification": "domain metric library",
-      "deletion_condition": "Keep only when a real oracle workflow requires it and its call closure is explicitly isolated or is permitted as native-domain test code.",
-      "exception": "Potential domain-specific metric implementation, imported by oracle evidence tools; exact workflows and requiredness must be confirmed.",
-      "path": "scripts/tts_oracle_metrics.py",
-      "phase": 5,
-      "replacement_owner": "Domain TTS oracle owner",
-      "required": false
-    },
-    {
       "classification": "trusted canary agent policy",
       "deletion_condition": "Port generic validation and preserve trusted-source/candidate restrictions.",
       "exception": null,
@@ -1678,15 +1561,6 @@
       "path": "scripts/verify-checksum-sidecar.py",
       "phase": 3,
       "replacement_owner": "tools/xtask artifact",
-      "required": true
-    },
-    {
-      "classification": "required protocol fixture library",
-      "deletion_condition": "Protocol fixtures retained in Rust required tests; Python SDK clients may consume separate optional inputs.",
-      "exception": null,
-      "path": "scripts/workload_fixtures.py",
-      "phase": 4,
-      "replacement_owner": "Rust OpenAI protocol fixtures or compatibility owner",
       "required": true
     },
     {
@@ -1891,7 +1765,7 @@
   },
   "path_reconciliation": {
     "dynamic_import_targets_are_not_counted_as_new_paths": true,
-    "method": "Exact current path set after reviewed replay, local-port, Swift producer, workload-wrapper and oracle-producer test retirements: 198 ledger paths; parent checks tracked-path equality. Historical baseline_comparison remains unchanged. Runner/cache seven-method legacy module retired by exact last Just token cutover after parent17 owning tests/current workflow guards/corrected CI passed; current projected set197, parent checks tracked equality.",
+    "method": "Exact current path set after reviewed replay, local-port, Swift producer, workload-wrapper and oracle-producer test retirements: 198 ledger paths; parent checks tracked-path equality. Historical baseline_comparison remains unchanged. Runner/cache seven-method legacy module retired by exact last Just token cutover after parent17 owning tests/current workflow guards/corrected CI passed; current projected set197, parent checks tracked equality. Current exact twelve-file comparator/test retirement projects181 paths; parent verifies tracked set equality. Earlier census/counts are historical.",
     "scope_note": "This reconciles file paths only; it does not prove invocation reachability or call-contract completeness.",
     "tracked_paths_are_authoritative": true
   },
@@ -1899,7 +1773,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 195,
+  "tracked_file_count": 181,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -1985,5 +1859,63 @@
     "just_roster": 108,
     "helper_retained": "scripts/safe-extract-zip.py",
     "gates_unchanged": true
+  },
+  "tar_release_test_retirement": {
+    "coverage": "ci/automation-migration/tar-release-test-retirement-coverage.json",
+    "removed_test_paths": [
+      "scripts/tests/test_safe_extract_tar.py",
+      "scripts/tests/test_select_release_notes_base.py"
+    ],
+    "methods": 14,
+    "component_proof": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+        "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+        "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+        "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+        "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+      }
+    ],
+    "python_paths": 193,
+    "just_roster": 106,
+    "helpers_retained": [
+      "scripts/safe-extract-tar.py",
+      "scripts/verify-checksum-sidecar.py",
+      "scripts/select-release-notes-base.py"
+    ],
+    "limits": "Actual local current typed component targets only. No latest whole wave/platform/native/model/SDK/protected qualification. Preserve historical census/test rosters/hashes and all unrelated active gates."
+  },
+  "next_wave_comparator_and_test_retirement": {
+    "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/test_publish_crates.py",
+      "scripts/tests/test_llama_oracle_source.py",
+      "scripts/tests/test_ci_cargo_packages.py",
+      "scripts/tests/test_skippy_tts_oracle.py",
+      "scripts/skippy-tts-oracle.py",
+      "scripts/tts_oracle_metrics.py",
+      "scripts/tests/test_workload_monolithic_oracle.py",
+      "scripts/ci-workload-monolithic-oracle.py",
+      "scripts/workload_fixtures.py",
+      "scripts/tests/test_skippy_ocr_asr_oracle.py",
+      "scripts/skippy-ocr-asr-oracle.py",
+      "scripts/generate-ocr-oracle-fixture.py"
+    ],
+    "legacy_methods": 53,
+    "python_paths": 181,
+    "just_roster": 100,
+    "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+    "helpers_retained": [
+      "scripts/llama-oracle-source.py",
+      "scripts/ci-cargo-packages.py",
+      "scripts/check-skippy-workload-candidate.py",
+      "all actual required SDK clients"
+    ],
+    "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+    "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+    "projected_just_launch_hash": "88eb6efa25e33eb3"
   }
 }

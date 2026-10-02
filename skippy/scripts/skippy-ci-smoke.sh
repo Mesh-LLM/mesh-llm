@@ -2,10 +2,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-automation=(cargo run --quiet --manifest-path "$ROOT/tools/xtask/Cargo.toml" --)
-if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+# Frozen automation selection begins.
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+    exit 1
+  fi
   automation=("$MESH_LLM_AUTOMATION_BIN")
 fi
+# Frozen automation selection ends.
 
 resolve_llama_build_dir() {
   if [[ -n "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
@@ -83,38 +89,39 @@ require_cmd() {
 }
 
 run_with_timeout() {
-  local label="$1"
+  local label="$1" transaction_root input executable result
   shift
-  python3 - "$SMOKE_COMMAND_TIMEOUT_SECS" "$label" "$@" 3<&0 <<'PY'
-import os
-import signal
-import subprocess
-import sys
-
-timeout_secs = int(sys.argv[1])
-label = sys.argv[2]
-command = sys.argv[3:]
-
-process_stdin = os.fdopen(3, "rb", closefd=False)
-process = subprocess.Popen(command, stdin=process_stdin, start_new_session=True)
-try:
-    raise SystemExit(process.wait(timeout=timeout_secs))
-except subprocess.TimeoutExpired:
-    print(f"{label} timed out after {timeout_secs}s; terminating process group", file=sys.stderr)
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        raise SystemExit(124)
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-    raise SystemExit(124)
-PY
+  transaction_root="$(mktemp -d "$WORK_DIR/command-timeout.XXXXXXXX")" || return 125
+  input="$transaction_root/input.json"
+  executable="$(command -v "$1")" || {
+    rmdir "$transaction_root" || true
+    return 125
+  }
+  if [[ "$executable" != /* ]]; then
+    executable="$PWD/$executable"
+  fi
+  if [[ ! -f "$executable" || ! -x "$executable" ]]; then
+    echo "$label requires a regular executable" >&2
+    rmdir "$transaction_root" || true
+    return 125
+  fi
+  shift
+  if ! jq -n --arg label "$label" --argjson seconds "$SMOKE_COMMAND_TIMEOUT_SECS" \
+    --arg cwd "$PWD" --arg executable "$executable" --args \
+    '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
+    -- "$@" > "$input"; then
+    rm -f "$input"
+    rmdir "$transaction_root" || true
+    return 125
+  fi
+  if "${automation[@]}" automation canary-timeout --input "$input"; then
+    result=0
+  else
+    result=$?
+  fi
+  rm -f "$input" || return 125
+  rmdir "$transaction_root" || return 125
+  return "$result"
 }
 
 cleanup() {
@@ -204,36 +211,13 @@ model_layer_end() {
 }
 
 pick_port() {
-  python3 - <<'PY'
-import socket
-sock = socket.socket()
-sock.bind(("127.0.0.1", 0))
-print(sock.getsockname()[1])
-sock.close()
-PY
+  "${automation[@]}" automation local-ports 1
 }
 
 wait_for_tcp() {
-  local host="$1"
-  local port="$2"
-  local pid="$3"
-  for _ in $(seq 1 120); do
-    if python3 - "$host" "$port" <<'PY' >/dev/null 2>&1
-import socket
-import sys
-host, port = sys.argv[1], int(sys.argv[2])
-with socket.create_connection((host, port), timeout=1):
-    pass
-PY
-    then
-      return 0
-    fi
-    if ! kill -0 "$pid" >/dev/null 2>&1; then
-      return 1
-    fi
-    sleep 1
-  done
-  return 1
+  "${automation[@]}" automation binary-stage-readiness \
+    --host "$1" --port "$2" --server-pid "$3" --timeout-secs 120 \
+    >/dev/null 2>&1
 }
 
 assert_json() {
@@ -257,95 +241,18 @@ write_stage_config() {
   local n_batch="${8:-$SMOKE_N_BATCH}"
   local n_ubatch="${9:-$SMOKE_N_UBATCH}"
   local upstream_endpoint="${10:-}"
-  python3 - "$config_path" "$model_id" "$model_path" "$layer_end" "$ctx_size" "$bind_addr" "$payload" "$SMOKE_FLASH_ATTN" "$n_batch" "$n_ubatch" "$upstream_endpoint" <<'PY'
-import hashlib
-import json
-import sys
-
-(
-    config_path,
-    model_id,
-    model_path,
-    layer_end,
-    ctx_size,
-    bind_addr,
-    payload,
-    flash_attn,
-    n_batch,
-    n_ubatch,
-    upstream_endpoint,
-) = sys.argv[1:]
-
-model_digest = hashlib.sha256()
-with open(model_path, "rb") as model_file:
-    for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
-        model_digest.update(chunk)
-
-config = {
-    "run_id": "skippy-ci-smoke",
-    "topology_id": "skippy-ci-smoke-single-stage",
-    "model_id": model_id,
-    "model_path": model_path,
-    "source_model_sha256": model_digest.hexdigest(),
-    "stage_id": "stage-0",
-    "stage_index": 0,
-    "layer_start": 0,
-    "layer_end": int(layer_end),
-    "ctx_size": int(ctx_size),
-    "lane_count": 4,
-    "n_batch": int(n_batch),
-    "n_ubatch": int(n_ubatch),
-    "n_gpu_layers": 0,
-    "cache_type_k": "f16",
-    "cache_type_v": "f16",
-    "flash_attn_type": flash_attn,
-    "load_mode": "runtime-slice",
-    "execution_contract": "",
-    "bind_addr": bind_addr,
-    "upstream": None if not upstream_endpoint else {
-        "stage_id": "stage-0",
-        "stage_index": 0,
-        "endpoint": upstream_endpoint,
-    },
-    "downstream": None,
-    "kv_cache": {
-        "mode": "lookup-record",
-        "payload": payload,
-        "max_entries": 32,
-        "max_bytes": 0,
-        "min_tokens": 64,
-        "shared_prefix_stride_tokens": 128,
-        "shared_prefix_record_limit": 2,
-    },
-}
-with open(config_path, "w", encoding="utf-8") as handle:
-    json.dump(config, handle, indent=2)
-    handle.write("\n")
-PY
+  "${automation[@]}" automation openai-smoke-config cache \
+    --output "$config_path" --model-id "$model_id" --model-path "$model_path" \
+    --layer-end "$layer_end" --ctx-size "$ctx_size" --bind-addr "$bind_addr" \
+    --payload "$payload" --flash-attn "$SMOKE_FLASH_ATTN" \
+    --n-batch "$n_batch" --n-ubatch "$n_ubatch" --upstream-endpoint "$upstream_endpoint"
 }
 
 make_long_prompt_file() {
-  local path="$1"
-  python3 - "$path" <<'PY'
-import sys
-
-path = sys.argv[1]
-sentence = (
-    "We are validating exact prefix cache reuse in the staged serving path with "
-    "a deterministic long prompt, stable wording, and enough repeated context "
-    "to cross the restore threshold without depending on model creativity."
-)
-prompt = "Summarize this cache smoke paragraph in one short sentence. " + " ".join(
-    f"{i:03d}. {sentence}" for i in range(12)
-)
-with open(path, "w", encoding="utf-8") as handle:
-    handle.write(prompt)
-    handle.write("\n")
-PY
+  cp "$ROOT/ci/fixtures/skippy-cache-prompt-input.txt" "$1"
 }
 
 require_cmd jq
-require_cmd python3
 require_cmd hf
 require_cmd curl
 
@@ -458,8 +365,8 @@ if [[ "$RUN_DENSE_CHAIN_SMOKE" == "1" || "$RUN_DENSE_CHAIN_SMOKE" == "true" ]]; 
     exit 1
   fi
 
-  CHAIN_PORT_1="$(pick_port)"
-  CHAIN_PORT_2="$(pick_port)"
+  CHAIN_PORTS="$("${automation[@]}" automation local-ports 2)"
+  IFS=',' read -r CHAIN_PORT_1 CHAIN_PORT_2 <<<"$CHAIN_PORTS"
   echo "smoke: dense 3-stage split ${DENSE_SPLIT_1},${DENSE_SPLIT_2} over ${DENSE_LAYER_END} layers"
   LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     run_with_timeout "dense chain smoke" target/debug/skippy-correctness chain \
@@ -544,8 +451,8 @@ PROMPT_OPENAI_URL="http://127.0.0.1:${PROMPT_OPENAI_PORT}/v1"
 write_stage_config "$PROMPT_CONFIG" "$DENSE_MODEL_ID" "$DENSE_MODEL_PATH" "$DENSE_LAYER_END" "$PROMPT_CTX_SIZE" "$PROMPT_BIND" "resident-kv" "$PROMPT_N_BATCH" "$PROMPT_N_UBATCH"
 make_long_prompt_file "$PROMPT_IN"
 
-OPENAI_PORT="$(pick_port)"
-OPENAI_STAGE_PORT="$(pick_port)"
+OPENAI_PORTS="$("${automation[@]}" automation local-ports 2)"
+IFS=',' read -r OPENAI_PORT OPENAI_STAGE_PORT <<<"$OPENAI_PORTS"
 OPENAI_CONFIG="$WORK_DIR/openai-stage.json"
 OPENAI_LOG="$WORK_DIR/openai-server.log"
 OPENAI_BASE_URL="http://127.0.0.1:${OPENAI_PORT}/v1"
@@ -591,10 +498,7 @@ grep -q '"object":"chat.completion.chunk"' "$openai_stream_out"
 grep -q '"usage":{"prompt_tokens":' "$openai_stream_out"
 grep -q 'data: \[DONE\]' "$openai_stream_out"
 
-openai_shared_prefix="$(python3 - <<'PY'
-print("Cache smoke shared system prefix. " * 32)
-PY
-)"
+openai_shared_prefix="$(cat "$ROOT/ci/fixtures/skippy-cache-shared-system-prefix.txt")"
 openai_prefix_seed_request="$(jq -cn --arg model "$DENSE_MODEL_ID" --arg prefix "$openai_shared_prefix" '{
   model: $model,
   messages: [

@@ -6,9 +6,12 @@ mod cache_predicate;
 mod canary_build;
 mod canary_execution;
 mod canary_graph;
+mod claude_clients;
+mod compute_changes_budget;
 mod handoffs;
 mod laya;
 mod permissions;
+mod quality_contracts;
 mod replay;
 mod shell;
 
@@ -18,6 +21,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub(super) fn check(root: &Path) -> DynResult<()> {
+    compute_changes_budget::check(root)?;
     let mut workflows = BTreeMap::new();
     for entry in std::fs::read_dir(root.join(".github/workflows"))? {
         let path = entry?.path();
@@ -38,6 +42,8 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
         shell::check_containers(&document).map_err(|error| format!("{name}: {error}"))?;
         workflows.insert(name, document);
     }
+    quality_contracts::check(root, &workflows)?;
+    claude_clients::check(&workflows)?;
     replay::check(&workflows)?;
     canary_graph::check(&workflows)?;
     canary_build::check(&workflows)?;

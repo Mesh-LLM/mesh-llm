@@ -9,9 +9,9 @@
       "disposition": "bounded_selector",
       "evidence": [
         {
-          "line": 44,
+          "line": 45,
           "path": "just/ci.just",
-          "text": "exec \"$binary\" {{ ARGS }}"
+          "text": "exec \"$binary\" \"$@\""
         }
       ],
       "id": "boundary:l12:build-automation",
@@ -1388,6 +1388,567 @@
       "replacement_owner": "tools/xtask QA or SDK component owner",
       "selector": "literal Python SDK source/manifest filename used as data by shell validation/version propagation",
       "source_block": "\"sdk/python/pyproject.toml\""
+    },
+    {
+      "id": "boundary:quality-contracts:inert-fixture-build",
+      "caller": "just:with-lld",
+      "line": 0,
+      "source_block": "exec cargo build --locked -p xtask --bins --examples",
+      "occurrence": 1,
+      "candidate_id": null,
+      "bound_child": null,
+      "child": null,
+      "disposition": "platform_conditional",
+      "selector": "Explicit private Unix with-lld body at just/build.just:16-26; Windows body at28-31. Visibility is not process admission. Literal current ci-automation-contracts argv is bound in full.",
+      "rationale": "The graph walks the wrapper bodies and literal argv; unresolved status is platform selection, not an unknown interpreter or dynamic target. Both existing platform bodies remain explicitly source-bound; no scanner exemption or ecosystem exception.",
+      "reachable_bytes": "Unix sccache preflight and scripts/cargo-linker --mesh-probe (sources scripts/lib/lld.sh), then literal locked Cargo build selecting xtask bins/inert examples only; Windows PowerShell checks sccache and forwards the same literal Cargo command. These wrapper/linker sources contain no Python invocation. Product/native/UI dependency exclusion belongs to existing actual automation bootstrap dependency admission.",
+      "replacement_owner": "tools/xtask/src/automation_bootstrap.rs",
+      "deletion_condition": "Remove only when required graph walks both platform bodies without an unresolved platform selector; changing argv or wrapper evidence requires a new exact source-backed binding.",
+      "evidence": [
+        {
+          "path": "just/ci.just",
+          "line": 170,
+          "text": "just with-lld cargo build --locked -p xtask --bins --examples"
+        },
+        {
+          "path": "just/build.just",
+          "line": 16,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 17,
+          "text": "[unix]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 18,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 25,
+          "text": "scripts/cargo-linker --mesh-probe >/dev/null"
+        },
+        {
+          "path": "just/build.just",
+          "line": 26,
+          "text": "exec {{ COMMAND }}"
+        },
+        {
+          "path": "just/build.just",
+          "line": 28,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 29,
+          "text": "[windows]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 30,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 31,
+          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+        }
+      ]
+    },
+    {
+      "id": "boundary:quality-contracts:portable-contract-tests",
+      "caller": "just:with-lld",
+      "line": 0,
+      "source_block": "exec cargo test --locked -p xtask --bin xtask --test automation_selector --test canary_cache_configuration --test canary_controller_plan --test canary_result_gate --test ci_runner_cache_contract --test family_battery_environment --test family_battery_prepared_source --test lane_l12_build_llama --test lane_l2_authority --test lane_l3_abi_restore --test lane_l3_cache_metadata --test lane_l3_display_projection --test lane_l3_l2_dispatch --test lane_l7_logging_recovery --test lane_l7_plans --test local_ports --test migration_archives --test migration_bootstrap --test migration_canary_aggregate_cli --test migration_canary_receipts --test migration_canary_receipts_parity --test migration_cargo_metadata --test migration_cargo_packages_cli --test migration_ci_graph --test migration_ci_operations --test migration_ci_plan --test migration_cli --test migration_family_plan --test migration_hf_artifact_cli --test migration_hf_artifact_controls --test migration_hf_converted_artifact --test migration_lifecycle --test migration_models --test migration_native_fixtures --test migration_native_generator --test migration_native_policy --test migration_optional_isolation --test migration_package_source_version --test migration_patch_bytes --test migration_patch_shards --test migration_prepared_inputs --test migration_process --test migration_product --test migration_qualification_cli --test migration_release --test migration_report_contract --test migration_report_safety --test migration_repository --test migration_run_family --test migration_workload_oracle_cli --test migration_xcframework_cli --test openai_smoke_config --test prepared_source --test replay_acceptance_gates --test replay_arm_pass --test replay_build_arm --test replay_context_preflight --test replay_external_engines --test replay_external_run --test replay_history --test replay_history_hub --test replay_interruption --test replay_l3 --test replay_manifest_preflight --test replay_manual_profile --test replay_manual_resume_refs --test replay_model_preflight --test replay_pass_schedule --test replay_pooled_rows --test replay_progress --test replay_publication_prepare --test replay_report --test replay_retirement --test replay_run_execution --test replay_server_cell --test replay_session_evidence --test replay_trajectory_execution --test swift_api_checksum --test swift_privacy_adapter --test swift_producer_environment --test workload_certify_contract --test workload_oracle_producer_contract --test workload_smoke_config --test workload_start_retry -- --test-threads=1",
+      "occurrence": 1,
+      "candidate_id": null,
+      "bound_child": null,
+      "child": null,
+      "disposition": "platform_conditional",
+      "selector": "Explicit private Unix with-lld body at just/build.just:16-26; Windows body at28-31. Visibility is not process admission. Literal current ci-automation-contracts argv is bound in full.",
+      "rationale": "The graph walks the wrapper bodies and literal argv; unresolved status is platform selection, not an unknown interpreter or dynamic target. Both existing platform bodies remain explicitly source-bound; no scanner exemption or ecosystem exception.",
+      "reachable_bytes": "Same existing platform wrapper/probe, then exact literal locked Cargo test selecting owning xtask unit harness plus84 reviewed integration roots and serial unfiltered harness. Fixtures own temporary files/local Git/finite local HTTP and inert executable surrogates; source-selected real SDK/model/native qualification remains a separate gate. Global operator controller environment remains inherited.",
+      "replacement_owner": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts.rs",
+      "deletion_condition": "Remove only when required graph walks both platform bodies without an unresolved platform selector; changing argv or wrapper evidence requires a new exact source-backed binding.",
+      "evidence": [
+        {
+          "path": "just/ci.just",
+          "line": 185,
+          "text": "just with-lld cargo test --locked -p xtask --bin xtask \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 186,
+          "text": "--test automation_selector \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 187,
+          "text": "--test canary_cache_configuration \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 188,
+          "text": "--test canary_controller_plan \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 189,
+          "text": "--test canary_result_gate \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 190,
+          "text": "--test ci_runner_cache_contract \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 191,
+          "text": "--test family_battery_environment \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 192,
+          "text": "--test family_battery_prepared_source \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 193,
+          "text": "--test lane_l12_build_llama \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 194,
+          "text": "--test lane_l2_authority \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 195,
+          "text": "--test lane_l3_abi_restore \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 196,
+          "text": "--test lane_l3_cache_metadata \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 197,
+          "text": "--test lane_l3_display_projection \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 198,
+          "text": "--test lane_l3_l2_dispatch \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 199,
+          "text": "--test lane_l7_logging_recovery \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 200,
+          "text": "--test lane_l7_plans \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 201,
+          "text": "--test local_ports \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 202,
+          "text": "--test migration_archives \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 203,
+          "text": "--test migration_bootstrap \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 204,
+          "text": "--test migration_canary_aggregate_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 205,
+          "text": "--test migration_canary_receipts \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 206,
+          "text": "--test migration_canary_receipts_parity \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 207,
+          "text": "--test migration_cargo_metadata \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 208,
+          "text": "--test migration_cargo_packages_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 209,
+          "text": "--test migration_ci_graph \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 210,
+          "text": "--test migration_ci_operations \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 211,
+          "text": "--test migration_ci_plan \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 212,
+          "text": "--test migration_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 213,
+          "text": "--test migration_family_plan \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 214,
+          "text": "--test migration_hf_artifact_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 215,
+          "text": "--test migration_hf_artifact_controls \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 216,
+          "text": "--test migration_hf_converted_artifact \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 217,
+          "text": "--test migration_lifecycle \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 218,
+          "text": "--test migration_models \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 219,
+          "text": "--test migration_native_fixtures \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 220,
+          "text": "--test migration_native_generator \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 221,
+          "text": "--test migration_native_policy \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 222,
+          "text": "--test migration_optional_isolation \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 223,
+          "text": "--test migration_package_source_version \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 224,
+          "text": "--test migration_patch_bytes \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 225,
+          "text": "--test migration_patch_shards \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 226,
+          "text": "--test migration_prepared_inputs \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 227,
+          "text": "--test migration_process \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 228,
+          "text": "--test migration_product \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 229,
+          "text": "--test migration_qualification_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 230,
+          "text": "--test migration_release \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 231,
+          "text": "--test migration_report_contract \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 232,
+          "text": "--test migration_report_safety \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 233,
+          "text": "--test migration_repository \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 234,
+          "text": "--test migration_run_family \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 235,
+          "text": "--test migration_workload_oracle_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 236,
+          "text": "--test migration_xcframework_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 237,
+          "text": "--test openai_smoke_config \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 238,
+          "text": "--test prepared_source \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 239,
+          "text": "--test replay_acceptance_gates \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 240,
+          "text": "--test replay_arm_pass \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 241,
+          "text": "--test replay_build_arm \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 242,
+          "text": "--test replay_context_preflight \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 243,
+          "text": "--test replay_external_engines \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 244,
+          "text": "--test replay_external_run \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 245,
+          "text": "--test replay_history \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 246,
+          "text": "--test replay_history_hub \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 247,
+          "text": "--test replay_interruption \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 248,
+          "text": "--test replay_l3 \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 249,
+          "text": "--test replay_manifest_preflight \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 250,
+          "text": "--test replay_manual_profile \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 251,
+          "text": "--test replay_manual_resume_refs \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 252,
+          "text": "--test replay_model_preflight \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 253,
+          "text": "--test replay_pass_schedule \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 254,
+          "text": "--test replay_pooled_rows \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 255,
+          "text": "--test replay_progress \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 256,
+          "text": "--test replay_publication_prepare \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 257,
+          "text": "--test replay_report \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 258,
+          "text": "--test replay_retirement \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 259,
+          "text": "--test replay_run_execution \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 260,
+          "text": "--test replay_server_cell \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 261,
+          "text": "--test replay_session_evidence \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 262,
+          "text": "--test replay_trajectory_execution \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 263,
+          "text": "--test swift_api_checksum \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 264,
+          "text": "--test swift_privacy_adapter \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 265,
+          "text": "--test swift_producer_environment \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 266,
+          "text": "--test workload_certify_contract \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 267,
+          "text": "--test workload_oracle_producer_contract \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 268,
+          "text": "--test workload_smoke_config \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 269,
+          "text": "--test workload_start_retry \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 270,
+          "text": "-- --test-threads=1"
+        },
+        {
+          "path": "just/build.just",
+          "line": 16,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 17,
+          "text": "[unix]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 18,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 25,
+          "text": "scripts/cargo-linker --mesh-probe >/dev/null"
+        },
+        {
+          "path": "just/build.just",
+          "line": 26,
+          "text": "exec {{ COMMAND }}"
+        },
+        {
+          "path": "just/build.just",
+          "line": 28,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 29,
+          "text": "[windows]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 30,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 31,
+          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+        }
+      ]
     }
   ],
   "census": {
@@ -1958,14 +2519,14 @@
     },
     {
       "argv": "python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt after actions/setup-python 3.12",
-      "deletion_condition": "Remove when scripts/tests unittest discovery and SDK packages no longer run in required Quality.",
+      "deletion_condition": "Remove only when surviving generic Python contracts no longer need PyYAML; SDK clients are isolated separately, not discharged by this change.",
       "disposition": "execution",
       "id": ".github/workflows/ci-quality-slice.yml#candidate:78b39ffedbd6d228:1",
       "owner": "Quality Python test requirements install",
-      "reason": ".github/workflows/ci-quality-slice.yml:205: .github/workflows/ci-quality-slice.yml:179-180 is an unconditional step of quality_contracts before the unittest step at :186.",
+      "reason": "Quality line205 installs retained PyYAML requirements before canonical just ci-automation-contracts and surviving just ci-legacy-contracts at212-213; required SDK installation remains separate.",
       "replacement": "task 22 isolated SDK dependencies; task 28 removes the required pip edge",
       "source_block": "run: python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt",
-      "status_output_effects": "Installs PyYAML, huggingface_hub[cli], langchain-openai, litellm and openai into the setup-python environment; output inherited; nonzero fails the required quality_contracts job step.",
+      "status_output_effects": "Installs only PyYAML>=6.0 from ci/requirements-ci-python.txt into the setup-python3.12 environment; inherited streams; nonzero fails required quality_contracts. Actual required SDK clients use separate locked SDK environments.",
       "transitive_boundary": "ci/requirements-ci-python.txt; pip resolver and package index; no repository script child"
     },
     {
@@ -2355,7 +2916,7 @@
     },
     {
       "arguments": "explicit no-project mode, jinja2 3.1.6, architecture and build-llama flags from shell variables",
-      "caller": "scripts/llama-canary-agent-repair.sh:510-511",
+      "caller": "scripts/llama-canary-agent-repair.sh:536-537",
       "deletion_criteria": "Replace generic orchestration only after same build argv, output, failure and native artifact behavior are retained; do not remove upstream-required dependency without proving it unused",
       "failure_output": "nonzero build or uv status is recorded and returned by run_verification_logged",
       "interpreter_edge": "uv run --no-project --with jinja2==3.1.6 -- arch -arm64 bash scripts/build-llama.sh ...",
@@ -2580,13 +3141,273 @@
       "argv": "${automation[@]} --repo-root \"$ROOT\" ci family-plan --manifest \"$MANIFEST\" --output \"$POLICY_PLAN_COPY\" [--families \"$FAMILY_FILTER\"]; only without --plan",
       "replacement_owner": "tools/xtask/src/ci_plan/family; frozen controller typed family-plan and selected-root manifest/policy projection",
       "status_streams_effects": "Inherited stdout/stderr; nonzero aborts battery. Typed controller writes policy-plan.json for selected --repo-root/manifest, with optional exact family filter. Provided --plan copies existing immutable plan instead and does not launch this generation call. Separate typed family-battery-policy cache admission follows when HF_CACHE set; no Python planner execution."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 37,
+      "source_block": "DENSE_MODEL_FIXTURE=\"$(\"${automation[@]}\" models resolve \"$DENSE_MODEL_MANIFEST\" --artifact-id \"$DENSE_MODEL_ARTIFACT_ID\" --cadence manual)\"",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "DENSE_MODEL_FIXTURE=\"$(\"${automation[@]}\" models resolve \"$DENSE_MODEL_MANIFEST\" --artifact-id \"$DENSE_MODEL_ARTIFACT_ID\" --cadence manual)\"",
+      "replacement_owner": "tools/xtask/src/model_registry/mod.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 51,
+      "source_block": "RECURRENT_MODEL_FIXTURE=\"$(\"${automation[@]}\" models resolve \"$RECURRENT_MODEL_MANIFEST\" --artifact-id \"$RECURRENT_MODEL_ARTIFACT_ID\" --cadence manual)\"",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "RECURRENT_MODEL_FIXTURE=\"$(\"${automation[@]}\" models resolve \"$RECURRENT_MODEL_MANIFEST\" --artifact-id \"$RECURRENT_MODEL_ARTIFACT_ID\" --cadence manual)\"",
+      "replacement_owner": "tools/xtask/src/model_registry/mod.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 117,
+      "source_block": "if \"${automation[@]}\" automation canary-timeout --input \"$input\"; then",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "if \"${automation[@]}\" automation canary-timeout --input \"$input\"; then",
+      "replacement_owner": "tools/xtask/src/automation/canary_timeout.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 214,
+      "source_block": "\"${automation[@]}\" automation local-ports 1",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${automation[@]}\" automation local-ports 1",
+      "replacement_owner": "tools/xtask/src/automation/local_ports.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 218,
+      "source_block": "\"${automation[@]}\" automation binary-stage-readiness \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${automation[@]}\" automation binary-stage-readiness \\\n--host \"$1\" --port \"$2\" --server-pid \"$3\" --timeout-secs 120 \\\n>/dev/null 2>&1",
+      "replacement_owner": "tools/xtask/src/automation/binary_stage_readiness.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 244,
+      "source_block": "\"${automation[@]}\" automation openai-smoke-config cache \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${automation[@]}\" automation openai-smoke-config cache \\\n--output \"$config_path\" --model-id \"$model_id\" --model-path \"$model_path\" \\\n--layer-end \"$layer_end\" --ctx-size \"$ctx_size\" --bind-addr \"$bind_addr\" \\\n--payload \"$payload\" --flash-attn \"$SMOKE_FLASH_ATTN\" \\\n--n-batch \"$n_batch\" --n-ubatch \"$n_ubatch\" --upstream-endpoint \"$upstream_endpoint\"",
+      "replacement_owner": "tools/xtask/src/automation/openai_smoke_config.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 274,
+      "source_block": "\"${automation[@]}\" models resolve \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${automation[@]}\" models resolve \\\n\"$DENSE_MODEL_MANIFEST\" \\\n--artifact-id \"$DENSE_MODEL_ARTIFACT_ID\" \\\n--cadence manual \\\n--verify-root \"$(dirname \"$DENSE_MODEL_PATH\")\"",
+      "replacement_owner": "tools/xtask/src/model_registry/mod.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 281,
+      "source_block": "\"${automation[@]}\" models resolve \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${automation[@]}\" models resolve \\\n\"$RECURRENT_MODEL_MANIFEST\" \\\n--artifact-id \"$RECURRENT_MODEL_ARTIFACT_ID\" \\\n--cadence manual \\\n--verify-root \"$(dirname \"$RECURRENT_MODEL_PATH\")\"",
+      "replacement_owner": "tools/xtask/src/model_registry/mod.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 368,
+      "source_block": "CHAIN_PORTS=\"$(\"${automation[@]}\" automation local-ports 2)\"",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "CHAIN_PORTS=\"$(\"${automation[@]}\" automation local-ports 2)\"",
+      "replacement_owner": "tools/xtask/src/automation/local_ports.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-ci-smoke.sh",
+      "line": 452,
+      "source_block": "OPENAI_PORTS=\"$(\"${automation[@]}\" automation local-ports 2)\"",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "OPENAI_PORTS=\"$(\"${automation[@]}\" automation local-ports 2)\"",
+      "replacement_owner": "tools/xtask/src/automation/local_ports.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 111,
+      "source_block": "patched_sha=\"$(\"${workload_automation[@]}\" automation canary-receipts prepared-source --root \"$ROOT\")\" || return 1",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "patched_sha=\"$(\"${workload_automation[@]}\" automation canary-receipts prepared-source --root \"$ROOT\")\" || return 1",
+      "replacement_owner": "tools/xtask/src/automation/canary_receipts/package_closure/prepared_source.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 126,
+      "source_block": "patched_sha=\"$(\"${workload_automation[@]}\" automation canary-receipts prepared-source --root \"$ROOT\")\" || return 1",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "patched_sha=\"$(\"${workload_automation[@]}\" automation canary-receipts prepared-source --root \"$ROOT\")\" || return 1",
+      "replacement_owner": "tools/xtask/src/automation/canary_receipts/package_closure/prepared_source.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 176,
+      "source_block": "DIMENSIONS=\"$(\"${workload_automation[@]}\" automation family-battery-policy --inspect-gguf \"$MODEL_PATH\")\"",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "DIMENSIONS=\"$(\"${workload_automation[@]}\" automation family-battery-policy --inspect-gguf \"$MODEL_PATH\")\"",
+      "replacement_owner": "tools/xtask/src/automation/family_battery_policy.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 199,
+      "source_block": "\"${workload_automation[@]}\" automation canary-receipts workload-manifest verify \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${workload_automation[@]}\" automation canary-receipts workload-manifest verify \\\n\"$ROOT\" \"$CANDIDATE_BIN_DIR/skippy-server\" \"$CANDIDATE_BUILD_DIR\" \"$PRODUCER_MANIFEST\"",
+      "replacement_owner": "tools/xtask/src/automation/canary_receipts/package_closure/workload.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 212,
+      "source_block": "\"${workload_automation[@]}\" automation canary-receipts workload-manifest fresh \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${workload_automation[@]}\" automation canary-receipts workload-manifest fresh \\\n\"$ROOT\" \"$CANDIDATE_BIN_DIR/skippy-server\" \"$CANDIDATE_BUILD_DIR\"",
+      "replacement_owner": "tools/xtask/src/automation/canary_receipts/package_closure/workload.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 247,
+      "source_block": "\"${workload_automation[@]}\" automation workload-smoke-config \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${workload_automation[@]}\" automation workload-smoke-config \\\n--output \"$CONFIG_PATH\" --model-id \"$MODEL_ID\" --model-path \"$MODEL_PATH\" \\\n--model-sha256 \"$MODEL_SHA256\" --layer-end \"$LAYER_END\" \\\n--n-gpu-layers \"$N_GPU_LAYERS\" --projector-path \"$PROJECTOR_PATH\"",
+      "replacement_owner": "tools/xtask/src/automation/workload_smoke_config.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 300,
+      "source_block": "PORT=\"$(\"${workload_automation[@]}\" automation local-ports 1)\"",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "PORT=\"$(\"${workload_automation[@]}\" automation local-ports 1)\"",
+      "replacement_owner": "tools/xtask/src/automation/local_ports.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 332,
+      "source_block": "\"${workload_automation[@]}\" automation workload-smoke \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${workload_automation[@]}\" automation workload-smoke \\\n--base-url \"http://127.0.0.1:$PORT/v1\" \\\n--model \"$MODEL_ID\" \\\n--class \"$MODEL_CLASS\" \\\n--media-path \"$MEDIA_PATH\"",
+      "replacement_owner": "tools/xtask/src/automation/workload_smoke/mod.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 362,
+      "source_block": "ORACLE_PORT=\"$(\"${workload_automation[@]}\" automation local-ports 1)\"",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "ORACLE_PORT=\"$(\"${workload_automation[@]}\" automation local-ports 1)\"",
+      "replacement_owner": "tools/xtask/src/automation/local_ports.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 402,
+      "source_block": "\"${workload_automation[@]}\" automation workload-media-oracle \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${workload_automation[@]}\" automation workload-media-oracle \\\n--candidate-url \"http://127.0.0.1:$PORT/v1\" \\\n--oracle-url \"http://127.0.0.1:$ORACLE_PORT/v1\" \\\n--model \"$MODEL_ID\" \\\n--class \"$MODEL_CLASS\" \\\n--media-path \"$ORACLE_MEDIA_PATH\" | tee \"$COMPARISON_LOG\"",
+      "replacement_owner": "tools/xtask/src/automation/workload_smoke/media_comparison/mod.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 409,
+      "source_block": "\"${workload_automation[@]}\" automation workload-monolithic-oracle \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${workload_automation[@]}\" automation workload-monolithic-oracle \\\n--candidate-url \"http://127.0.0.1:$PORT/v1\" \\\n--oracle-url \"http://127.0.0.1:$ORACLE_PORT/v1\" \\\n--model \"$MODEL_ID\" \\\n--class \"$MODEL_CLASS\" | tee \"$COMPARISON_LOG\"",
+      "replacement_owner": "tools/xtask/src/automation/workload_smoke/comparison/mod.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 418,
+      "source_block": "\"${workload_automation[@]}\" automation workload-monolithic-oracle \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${workload_automation[@]}\" automation workload-monolithic-oracle \\\n--candidate-url \"http://127.0.0.1:$PORT/v1\" \\\n--oracle-completion \"$ORACLE_COMPLETION\" \\\n--model-path \"$MODEL_PATH\" \\\n--model \"$MODEL_ID\" \\\n--class \"$MODEL_CLASS\" | tee \"$COMPARISON_LOG\"",
+      "replacement_owner": "tools/xtask/src/automation/workload_smoke/comparison/mod.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 427,
+      "source_block": "\"${workload_automation[@]}\" automation workload-tts-oracle \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${workload_automation[@]}\" automation workload-tts-oracle \\\n--root \"$ROOT\" \\\n--oracle-cli \"$ORACLE_TTS\" \\\n--model-path \"$MODEL_PATH\" \\\n--projector-path \"$PROJECTOR_PATH\" \\\n--model \"$MODEL_ID\" \\\n--layer-end \"$LAYER_END\" \\\n--work-dir \"$WORK_DIR\" | tee \"$COMPARISON_LOG\"",
+      "replacement_owner": "tools/xtask/src/automation/workload_smoke/tts_oracle/mod.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 454,
+      "source_block": "--pinned-patch-sha \"$(\"${workload_automation[@]}\" automation canary-receipts prepared-source --root \"$ROOT\")\"",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "--pinned-patch-sha \"$(\"${workload_automation[@]}\" automation canary-receipts prepared-source --root \"$ROOT\")\"",
+      "replacement_owner": "tools/xtask/src/automation/canary_receipts/package_closure/prepared_source.rs",
+      "status_streams_effects": "Configured owner validates presence, absolute path, regularity and executable mode; absent override uses the existing Just automation-run policy. Exact continued flags remain source-bound; variable values and command-array expansion are dynamic. Actual required SDK/native/model checks and shell tee/pipefail remain unchanged."
+    },
+    {
+      "caller": "scripts/llama-canary-agent-repair.sh",
+      "line": 413,
+      "source_block": "\"${repair_workload_automation[@]}\" automation canary-receipts workload-manifest verify \\",
+      "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
+      "child_source_known": true,
+      "argv": "\"${repair_workload_automation[@]}\" automation canary-receipts workload-manifest verify \\\n\"$ROOT\" \"$closure/cargo/debug/skippy-server\" \"$closure/native\" \"$closure/producer.json\" || return 1",
+      "replacement_owner": "tools/xtask/src/automation/canary_receipts/package_closure/workload.rs",
+      "status_streams_effects": "Repair-only verifier uses the admitted frozen controller binary and rechecks its digest before this call; failure prevents producer digest export and git staging. Other Python repair/planner/parity calls remain retained."
+    },
+    {
+      "caller": "scripts/skippy-workload-certify.sh",
+      "line": 459,
+      "source_block": "\"${evidence_command[@]}\"",
+      "child": "tools/xtask frozen configured executable or trusted Just automation-run facade",
+      "child_source_known": true,
+      "argv": "evidence_command=(\"${workload_automation[@]}\" automation workload-oracle-evidence write\n--output \"$EVIDENCE_PATH\"\n--comparison-log \"$COMPARISON_LOG\"\n--class \"$MODEL_CLASS\"\n--smoke-lane \"$EXPECTED_LANE\"\n--model-id \"$MODEL_ID\"\n--model-sha256 \"$MODEL_SHA256\"\n--candidate-executable \"$CANDIDATE_BIN_DIR/skippy-server\"\n--oracle-executable \"$ORACLE_EXECUTABLE\"\n--pinned-patch-sha \"$(\"${workload_automation[@]}\" automation canary-receipts prepared-source --root \"$ROOT\")\"\n--work-dir \"$WORK_DIR\")\nif [[ -n \"$PROJECTOR_PATH\" ]]; then\nevidence_command+=(--projector-path \"$PROJECTOR_PATH\")\nfi",
+      "replacement_owner": "tools/xtask/src/automation/workload_oracle_evidence/mod.rs",
+      "status_streams_effects": "Actual launch of constructed evidence command after comparison. Declaration445 and optional projector append/condition are bound as argv source data, not distinct processes; inner prepared-source command substitution454 is separately owned. Dynamic variable expansion remains a bounded unresolved source boundary."
     }
   ],
   "source_verified_edges": [
     {
       "id": ".github/workflows/ci-quality-slice.yml#candidate:78b39ffedbd6d228:1",
       "owner": "Quality Python test setup",
-      "reason": "Installs pinned test requirements; nonzero fails the required Quality step",
+      "reason": "Quality line205 installs retained PyYAML requirements before canonical just ci-automation-contracts and surviving just ci-legacy-contracts at212-213; required SDK installation remains separate.",
       "replacement_task": 11,
       "target": "ci/requirements-ci-python.txt"
     },
@@ -2638,8 +3459,8 @@
     },
     {
       "path": "scripts/skippy-workload-certify.sh",
-      "sha256": "21d1f9858fb1415bbc91320c7009dbafb8dc4bb473c1a4c9fdac3df59c52e1de",
-      "line_count": 459
+      "sha256": "607705da433c993e9fc22c7761b3cd4ddf2f0812ea1db47d5ea645c55bb059e0",
+      "line_count": 460
     },
     {
       "path": ".github/actions/upload-automation/action.yml",
@@ -2653,8 +3474,8 @@
     },
     {
       "path": ".github/workflows/ci-quality-slice.yml",
-      "sha256": "0e4e430011f4ba3967908d9e017a0827a8173aee5af1cf3a12d7f887366a6a1c",
-      "line_count": 650
+      "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
+      "line_count": 649
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
@@ -2755,7 +3576,9 @@
     "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
     "python_paths": 196,
     "just_roster": 109,
-    "removed_edges": [],
+    "removed_edges": [
+
+    ],
     "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
   },
   "zip_extraction_test_retirement": {
@@ -2766,5 +3589,364 @@
     "just_roster": 108,
     "helper_retained": "scripts/safe-extract-zip.py",
     "gates_unchanged": true
+  },
+  "tar_release_test_retirement": {
+    "coverage": "ci/automation-migration/tar-release-test-retirement-coverage.json",
+    "removed_test_paths": [
+      "scripts/tests/test_safe_extract_tar.py",
+      "scripts/tests/test_select_release_notes_base.py"
+    ],
+    "methods": 14,
+    "component_proof": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+        "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+        "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+        "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+        "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+      }
+    ],
+    "python_paths": 193,
+    "just_roster": 106,
+    "helpers_retained": [
+      "scripts/safe-extract-tar.py",
+      "scripts/verify-checksum-sidecar.py",
+      "scripts/select-release-notes-base.py"
+    ],
+    "limits": "Actual local current typed component targets only. No latest whole wave/platform/native/model/SDK/protected qualification. Preserve historical census/test rosters/hashes and all unrelated active gates."
+  },
+  "next_wave_source_reconciliation": {
+    "python_paths": 193,
+    "just_roster": 106,
+    "source_snapshot": "Current maintained next-wave callers; parent owns pending aggregate validation.",
+    "source_bindings": [
+      {
+        "path": "scripts/skippy-ci-smoke.sh",
+        "sha256": "a5732e266792ee1ff34461e0101020cbeb40a6dddd0bc568cf122ea556efbb04",
+        "line_count": 675
+      },
+      {
+        "path": "scripts/skippy-workload-certify.sh",
+        "sha256": "607705da433c993e9fc22c7761b3cd4ddf2f0812ea1db47d5ea645c55bb059e0",
+        "line_count": 460
+      },
+      {
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "sha256": "4c0a8a8cde5c90b7c24ce71811452dba6134e0fbaad2ad743b3144d5f7495891",
+        "line_count": 889
+      },
+      {
+        "path": ".github/workflows/ci-quality-slice.yml",
+        "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
+        "line_count": 649
+      },
+      {
+        "path": "ci/requirements-ci-python.txt",
+        "sha256": "71749243f84428fee225bfaa796dca5ef6c1e83a98f6d2a407df615b0390d6fb",
+        "line_count": 1
+      },
+      {
+        "path": "ci/model-artifacts/registry.json",
+        "sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d",
+        "line_count": 5163
+      },
+      {
+        "path": "ci/llama-canary/family-certified.json",
+        "sha256": "bd4f1e44cda7c6012ffe21526011e57a3b1f485e4172e077b39d5a9339f0f948",
+        "line_count": 1009
+      },
+      {
+        "path": "ci/fixtures/ocr-mesh-42.png",
+        "sha256": "ff5f6c29aa9b06d1c577561c6cddcfce8b06f40a8c316542ec64fbc2fdd9c009",
+        "byte_count": 1171
+      },
+      {
+        "path": "ci/fixtures/skippy-cache-prompt-input.txt",
+        "sha256": "a3365eb075c947db63618e9794af77aaed7c1eac39c9be4f88e9d6c2a5e47055",
+        "line_count": 7
+      },
+      {
+        "path": "ci/model-artifacts/manifests/competitive-benchmark.json",
+        "sha256": "bc1ec8b8d29da9e410f52208b9d635fe63edeab61fe36c3cfc072f757a8a14ca",
+        "line_count": 166
+      },
+      {
+        "path": "ci/model-artifacts/manifests/hf-download-smoke.json",
+        "sha256": "9028f99b7ca01f74d0cc48b2e2f0183136d776808642adb5fb02781c3ea6058a",
+        "line_count": 90
+      },
+      {
+        "path": "ci/model-artifacts/manifests/openai-smoke.json",
+        "sha256": "94153eb1fe4053716a551a4bdf14e1ea293cd66bf9863872047f38ce0d59b4a6",
+        "line_count": 48
+      },
+      {
+        "path": "ci/model-artifacts/manifests/product-smoke.json",
+        "sha256": "8aecfe0173af47797c2775822f553bfc313282554a71b327147ee9682ccdaef1",
+        "line_count": 135
+      },
+      {
+        "path": "ci/model-artifacts/manifests/radix-cache.json",
+        "sha256": "3cb2a784bc5d3c26f4a01277a9e053b57bdf41641233fea8057584d38e7d500d",
+        "line_count": 166
+      },
+      {
+        "path": "ci/model-artifacts/manifests/safetensors-runtime-smoke.json",
+        "sha256": "2d3fb11c3abdec1d755a8f2a56f8784e05a83b4ebb206b32ef2d2b81aeee37c7",
+        "line_count": 98
+      },
+      {
+        "path": "ci/model-artifacts/manifests/scripted-binary-smoke.json",
+        "sha256": "60592d9c7cab96c5721d47055f9b80f56fced30e4d9eac70c07023654cd0bef5",
+        "line_count": 90
+      },
+      {
+        "path": "ci/model-artifacts/manifests/sdk-smoke.json",
+        "sha256": "6154b50c5ede26b701def7f7af126f05bf494ac55d05420cc9d0d25b6ed7ac45",
+        "line_count": 49
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+        "sha256": "6273529c817393c7685da8367eb01d8d993d978863bbed7d14c1bbbb0d8ef02e",
+        "line_count": 92
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-correctness.json",
+        "sha256": "69810320b57be99e90fb5fe4ab7c07840b6beac892f7f9ed130b8d38e397d75b",
+        "line_count": 47
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-parity.json",
+        "sha256": "5b40f91900bb0034087a0f6423257c2e0d3cfb92b34e260fabe7556c6f3079e6",
+        "line_count": 202
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
+        "sha256": "d115a51a0652038e6eb7d3f64125f02b30910f094ce7505c78636b83f0ae9c56",
+        "line_count": 135
+      }
+    ],
+    "generated_registry_bindings": [
+      {
+        "path": "ci/model-artifacts/manifests/competitive-benchmark.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/hf-download-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/openai-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/product-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/radix-cache.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/safetensors-runtime-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/scripted-binary-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/sdk-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-correctness.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-parity.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      }
+    ],
+    "limits": "Source-bound caller reconciliation only. Generic Python implementations and unqualified test methods retained; required SDK, native, model, platform and protected gates unchanged. Literal typed command selection and continued argv are reviewed, but runtime dynamic expansion is not parser-complete reachability proof.",
+    "removed_edges": [
+
+    ],
+    "rebound_rows": [
+
+    ]
+  },
+  "next_wave_comparator_and_test_retirement": {
+    "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/test_publish_crates.py",
+      "scripts/tests/test_llama_oracle_source.py",
+      "scripts/tests/test_ci_cargo_packages.py",
+      "scripts/tests/test_skippy_tts_oracle.py",
+      "scripts/skippy-tts-oracle.py",
+      "scripts/tts_oracle_metrics.py",
+      "scripts/tests/test_workload_monolithic_oracle.py",
+      "scripts/ci-workload-monolithic-oracle.py",
+      "scripts/workload_fixtures.py",
+      "scripts/tests/test_skippy_ocr_asr_oracle.py",
+      "scripts/skippy-ocr-asr-oracle.py",
+      "scripts/generate-ocr-oracle-fixture.py"
+    ],
+    "legacy_methods": 53,
+    "python_paths": 181,
+    "just_roster": 100,
+    "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+    "helpers_retained": [
+      "scripts/llama-oracle-source.py",
+      "scripts/ci-cargo-packages.py",
+      "scripts/check-skippy-workload-candidate.py",
+      "all actual required SDK clients"
+    ],
+    "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+    "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+    "projected_just_launch_hash": "88eb6efa25e33eb3",
+    "automation_forwarding": {
+      "source": "just/ci.just",
+      "source_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+      "exec_line": 45,
+      "exec_source": "exec \"$binary\" \"$@\"",
+      "recipe_attribute": "[positional-arguments]",
+      "proof_receipt": ".omo/evidence/resume-20261002/next-wave-just-argv-tests.log",
+      "qualification": "Parent actual Just fixture2PASS; positional byte/status forwarding only, not product/bootstrap native qualification"
+    }
+  },
+  "current_handoff_pack_method_retirement": {
+    "coverage": "ci/automation-migration/canary-handoff-pack-retirement-coverage.json",
+    "path": "scripts/tests/test_llama_canary_handoff_contract.py",
+    "retired_method": "test_pack_restore_and_source_owned_workload_verification",
+    "legacy_source_sha256": "4dfe328aab46662ac1814cdf14625a458beb2f8d10a4793ff47650e8930becd3",
+    "current_source_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+    "retained_methods": [
+      "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
+      "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
+    ],
+    "proof": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-pack-restore-tests.log",
+        "sha256": "c303e924cd371d95f6cdfe3584d3c473085ef35959e8927a0b80ad3533580b70",
+        "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1399 filtered out; finished in 1.79s"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-selected-battery-tests.log",
+        "sha256": "80c314c9aee2c13e38d68ea4df34758e1d107da23ed5f480c48b45a495959433",
+        "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 503 filtered out; finished in 5.00s"
+      }
+    ],
+    "python_paths": 181,
+    "just_roster": 100,
+    "policy": "One method only after exact12file predecessor; no helper/module/roster/count deletion. Historical first retirement and failed-source receipts retained.",
+    "predecessor_test_tree_sha256": "27b7a961d97e8954d6c4e34755df207876649eed6ada86b709102876e42c63f2",
+    "current_test_tree_sha256": "ac0bdec2061793cf2104e2f2b3d4f73d04077f7dd8f855ae1a5ae6c49252333c"
+  },
+  "retained_os_import_correction": {
+    "reason": "Restored import os required by retained patch.dict(os.environ) test. No production or retirement-scope change.",
+    "previous_proposal_source_sha256": "85dd449a4e4ea61c5699611e57ba9a2971b239ce40a9ec17ab92d7aa7c476f74",
+    "current_source_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+    "previous_failed_receipt": {
+      "path": ".omo/evidence/resume-20261002/next-wave-retained-handoff-tests.log",
+      "sha256": "24f244fc893c006015f71e355202674d1b1fb58729cbb8b89c5df1205341caac"
+    },
+    "qualified_retained_tests": {
+      "path": ".omo/evidence/resume-20261002/next-wave-retained-handoff-corrected.log",
+      "sha256": "eceaf0b16c500a8e697831fa48a6455829593379d8cd46627b7a24e5fbf5a678",
+      "result": "2 passed, 0 failed; 0.851s"
+    },
+    "current_test_tree_sha256": "ac0bdec2061793cf2104e2f2b3d4f73d04077f7dd8f855ae1a5ae6c49252333c",
+    "counts": {
+      "python": 181,
+      "just_roster": 100
+    }
+  },
+  "current_quality_rust_coverage": {
+    "recipe": "just ci-automation-contracts",
+    "target_registry": "ci/automation-migration/quality-rust-contract-targets.json",
+    "integration_targets": 84,
+    "unit_target": "xtask",
+    "sources": {
+      "just/ci.just": {
+        "sha256": "74ef6a128266450bb05f03fc83ec16078836677498c701946844ae22019faf9b",
+        "line_count": 270
+      },
+      ".github/workflows/ci-quality-slice.yml": {
+        "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
+        "line_count": 649
+      }
+    },
+    "status": "Authored wiring only; parent must integrate and qualify normal ci-validate. Legacy roster, PyYAML and all required SDK/native/model/protected gates retained.",
+    "scope": "No Python edges removed. All existing row identities/occurrences preserved; changed workflow line positions/source snapshots rebound.",
+    "current_admission_selection_extension": {
+      "added_targets": [
+        "automation_selector",
+        "canary_cache_configuration",
+        "canary_controller_plan",
+        "family_battery_environment",
+        "family_battery_prepared_source",
+        "openai_smoke_config"
+      ],
+      "previous_targets": 78,
+      "current_targets": 84,
+      "scope": "Six current mandatory caller/admission suites; no native/model/SDK/network execution. Existing78 selections preserved. Unix shell groups remain cfg-unix; no Windows qualification claim. Optional OpenCode/lane-only suites remain separate.",
+      "source_bindings": [
+        {
+          "path": "tools/xtask/tests/automation_selector.rs",
+          "sha256": "8d20ede45ec3e9657ff77a319457ee6e5d686ddb4625493e1cf03f400d41327c"
+        },
+        {
+          "path": "tools/xtask/tests/canary_cache_configuration.rs",
+          "sha256": "1d648c36f195cf3f6aa2858386fee8170816a5ea7cb55db3876e0430649cd155"
+        },
+        {
+          "path": "tools/xtask/tests/canary_controller_plan.rs",
+          "sha256": "f5891685f7c8fd026f2bf51815090e981982c2b60de172fd9d1a252c005bfa62"
+        },
+        {
+          "path": "tools/xtask/tests/family_battery_environment.rs",
+          "sha256": "bbc23fa6da3c9af1dbf5dd2a406a47f1a3a8470b5df84eb41eaa9fab64fcae14"
+        },
+        {
+          "path": "tools/xtask/tests/family_battery_prepared_source.rs",
+          "sha256": "0fab0ec7ae3a03b0de4fafa60293155f417ec94b6e437f2348a2d05b43e8dedd"
+        },
+        {
+          "path": "tools/xtask/tests/openai_smoke_config.rs",
+          "sha256": "d6bb4c5d9ae76421f04b3cf8e2154ba1189e712aa7372a2770fb460984f9df75"
+        }
+      ]
+    }
+  },
+  "current_quality_cargo_platform_boundaries": {
+    "graph_receipt": {
+      "path": ".omo/evidence/resume-20261002/next-wave-graph-canonical.json",
+      "sha256": "dd9813909caea40a89de9cda0023a3a3577ce7d6fcef6155c97ff977ea320361"
+    },
+    "new_records": 2,
+    "scope": "Only the two exact observed platform selectors. No interpreter edge removed, no optional downgrade, no assertion that runtime platform/native/SDK execution has qualified."
+  },
+  "just_layout_whitelist_source_refresh": {
+    "source": "scripts/tests/test_justfile_layout.py",
+    "previous_source_sha256": "4cebd783ecfa111da9d64dc9ed70793b0cf45f0d532dccc604f5466c51a5fc05",
+    "current_source_sha256": "af60c244a9022a8a5460cb229d106af12cdefe4d516f62f04c961e6906a168ce",
+    "previous_observed_test_tree_sha256": "ac0bdec2061793cf2104e2f2b3d4f73d04077f7dd8f855ae1a5ae6c49252333c",
+    "current_observed_test_tree_sha256": "f0875ce098be5965697349a92ea0f8b94a58dd68ca286a2dc0346af0bdb9b472",
+    "change": "Only adds ci-automation-contracts to retained just/ci.just recipe whitelist; source line count, method count3, candidate line/hash/occurrence identities and import/Just roster unchanged",
+    "qualified_parent_receipt": "Parent reports all3 retained layout tests PASS after exact whitelist addition; canonical Rust3319pass/0fail/2ignored across85targets. No worker execution. Full legacy rerun remains parent-owned.",
+    "count_or_roster_changes": false,
+    "held_payload_integration": false
   }
 }

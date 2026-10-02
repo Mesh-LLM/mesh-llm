@@ -1,4 +1,4 @@
-//! Deadline/tree ownership with truly inherited live stdout/stderr. No capture.
+//! Deadline/tree ownership with inherited stdin and live stdout/stderr. No capture.
 use super::{
     Cancellation, Cleanup, Completion, Failure, Limits, Outcome, ProcessSpec, Readiness, control,
     platform,
@@ -35,7 +35,10 @@ pub fn supervise_inherited(
         ));
     }
     let mut command = spec.command()?;
-    command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    command
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
     if cancel.is_cancelled() {
         return Err(Failure::InvalidSpec("cancelled before inherited spawn"));
     }

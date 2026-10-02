@@ -20,7 +20,7 @@ fn supplied_plan_rejects_numeric_type_substitution() {
             replace(&fixture("real-reversed", "stdout"), needle, replacement),
         )
         .expect("plan");
-        let output = run(&["--verify-plan", path.to_str().expect("path")]);
+        let output = run_historical(&["--verify-plan", path.to_str().expect("path")]);
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
         fs::remove_file(path).expect("cleanup");
