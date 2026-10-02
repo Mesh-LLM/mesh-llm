@@ -54,6 +54,19 @@ struct WorkloadInput {
     candidate: Option<String>,
 }
 
+pub(crate) fn prepared_native_head(root: &std::path::Path) -> DynResult<String> {
+    process::operation(|| Ok(source::prepared(root)?.head))
+}
+
+pub(crate) fn verified_workload_test(
+    root: &std::path::Path,
+    binary: &std::path::Path,
+    native: &std::path::Path,
+    manifest: &std::path::Path,
+) -> DynResult<PathBuf> {
+    process::operation(|| workload::production::verified_test(root, binary, native, manifest))
+}
+
 pub(crate) fn run(args: &[String], workload: bool) -> DynResult<()> {
     if workload && args.first().is_some_and(|arg| !arg.starts_with('-')) {
         return self::workload::production::run(args);

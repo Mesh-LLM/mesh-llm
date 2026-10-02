@@ -138,6 +138,40 @@ fn migration_archives_tar_rejects_nonempty_destination() -> TestResult {
 }
 
 #[test]
+fn migration_archives_tar_rejects_preexisting_nested_redirect_without_outside_writes() -> TestResult
+{
+    let outcome = extract_with(
+        tar_gz(&[TarMember::file(
+            "redirect/payload",
+            0o755,
+            b"escaped payload",
+        )]),
+        |root| {
+            std::fs::create_dir(root.join("output"))?;
+            write(root, "outside/sentinel", b"unrelated outside bytes")?;
+            std::os::unix::fs::symlink(root.join("outside"), root.join("output/redirect"))?;
+            Ok(())
+        },
+    )?;
+    outcome.assert(
+        1,
+        &rejected("extraction destination must be empty: <SCRATCH>/output"),
+    );
+    assert!(!outcome.path("outside/payload").exists());
+    assert_eq!(
+        std::fs::read(outcome.path("outside/sentinel"))?,
+        b"unrelated outside bytes"
+    );
+    assert_eq!(std::fs::read_dir(outcome.path("outside"))?.count(), 1);
+    assert_eq!(std::fs::read_dir(outcome.path("output"))?.count(), 1);
+    assert_eq!(
+        std::fs::read_link(outcome.path("output/redirect"))?,
+        outcome.path("outside")
+    );
+    Ok(())
+}
+
+#[test]
 fn migration_archives_tar_rejects_symlink_destination() -> TestResult {
     let outcome = extract_with(tar_gz(&[TarMember::file("a", 0o644, b"a")]), |root| {
         std::fs::create_dir(root.join("real"))?;

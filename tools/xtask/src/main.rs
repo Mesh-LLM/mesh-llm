@@ -64,6 +64,19 @@ fn run() -> DynResult<()> {
         cli::CliCommand::SmokeObservation(rest) => automation::smoke_observation::run(rest),
         cli::CliCommand::HfXetSmoke(rest) => automation::hf_xet_smoke::run(rest),
         cli::CliCommand::WorkloadSmoke(rest) => automation::workload_smoke::run(rest),
+        cli::CliCommand::BinaryStageReadiness(rest) => {
+            automation::binary_stage_readiness::run(rest)
+        }
+        cli::CliCommand::WorkloadMonolithicOracle(rest) => {
+            automation::workload_smoke::comparison::run(rest)
+        }
+        cli::CliCommand::WorkloadMediaOracle(rest) => {
+            automation::workload_smoke::media_comparison::run(rest)
+        }
+        cli::CliCommand::WorkloadTtsOracle(rest) => {
+            automation::workload_smoke::tts_oracle::run(rest)
+        }
+
         cli::CliCommand::SmokeInputs(rest) => automation::smoke_inputs::run(rest),
         cli::CliCommand::ControlPlaneQa(rest) => {
             let root = repository::RepositoryRoot::resolve(None)?;

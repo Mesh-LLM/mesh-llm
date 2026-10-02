@@ -1,7 +1,10 @@
+pub(crate) mod comparison;
 mod embedding;
 mod encoding;
 mod http;
+pub(crate) mod media_comparison;
 mod responses;
+pub(crate) mod tts_oracle;
 use crate::command::DynResult;
 use serde_json::json;
 use std::{fs, io::Write, path::Path};
@@ -11,6 +14,13 @@ const INPUTS: [&str; 3] = [
     "search_document: GPUs share one language model over a mesh",
     "search_document: A recipe for tomato soup",
 ];
+
+const RERANK_QUERY: &str = "distributed GPU inference";
+const RERANK_DOCUMENTS: [&str; 2] = [
+    "GPUs share one language model over a mesh",
+    "A recipe for tomato soup",
+];
+const ENCODER_DECODER_PROMPT: &str = "translate English to German: The house is wonderful.";
 
 #[derive(Clone, Copy)]
 enum Workload {
@@ -66,12 +76,12 @@ fn execute(base: &str, model: &str, workload: Workload, media: Option<&Path>) ->
         Workload::Rerank => responses::rerank(&request(
             base,
             "/rerank",
-            &json!({"model":model,"query":"distributed GPU inference","documents":["GPUs share one language model over a mesh","A recipe for tomato soup"],"return_documents":true}),
+            &json!({"model":model,"query":RERANK_QUERY,"documents":RERANK_DOCUMENTS,"return_documents":true}),
         )?),
         Workload::EncoderDecoder => responses::completion(&request(
             base,
             "/completions",
-            &json!({"model":model,"prompt":"translate English to German: The house is wonderful.","max_tokens":32,"temperature":0}),
+            &json!({"model":model,"prompt":ENCODER_DECODER_PROMPT,"max_tokens":32,"temperature":0}),
         )?),
         Workload::Ocr => {
             let media = media.ok_or("OCR requires --media-path")?;

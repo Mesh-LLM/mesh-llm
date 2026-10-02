@@ -1,5 +1,8 @@
 #![cfg(unix)]
 
+#[path = "migration_lifecycle/just_automation_argv.rs"]
+mod just_automation_argv;
+
 #[path = "../src/automation/command_interrupt/mod.rs"]
 pub(crate) mod command_interrupt;
 
@@ -68,3 +71,24 @@ mod frozen_selector_integration;
 mod required_sdk_environment_admission;
 #[path = "migration_lifecycle/workload_provenance_cli.rs"]
 mod workload_provenance_cli;
+
+#[path = "migration_lifecycle/binary_stage_readiness_cli.rs"]
+mod binary_stage_readiness_cli;
+#[path = "migration_lifecycle/runtime_release_manifest_wrapper.rs"]
+mod runtime_release_manifest_wrapper;
+#[path = "migration_lifecycle/skippy_cache_smoke_config_cli.rs"]
+mod skippy_cache_smoke_config_cli;
+#[path = "migration_lifecycle/skippy_ci_smoke_control_cli.rs"]
+mod skippy_ci_smoke_control_cli;
+#[path = "migration_lifecycle/workload_media_comparison_cli.rs"]
+mod workload_media_comparison_cli;
+#[path = "migration_lifecycle/workload_monolithic_cli.rs"]
+mod workload_monolithic_cli;
+#[path = "migration_lifecycle/workload_tts_cli.rs"]
+mod workload_tts_cli;
+
+#[path = "migration_lifecycle/safetensors_workflow.rs"]
+mod safetensors_workflow;
+
+#[path = "migration_lifecycle/publish_dry_run.rs"]
+mod publish_dry_run;

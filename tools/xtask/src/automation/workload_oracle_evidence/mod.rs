@@ -18,7 +18,6 @@ pub(crate) fn run(args: &[String]) -> crate::command::DynResult<()> {
     command::run(args)
 }
 
-#[cfg(test)]
 pub(crate) fn validate_tts_metrics(bytes: &[u8]) -> Result<(), Error> {
     with_worker(|| metrics::PcmMetrics::parse(bytes).map(|_| ()))
 }

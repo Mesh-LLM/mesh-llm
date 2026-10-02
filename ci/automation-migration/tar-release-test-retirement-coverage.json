@@ -1,0 +1,309 @@
+{
+  "schema_version": 1,
+  "status": "Qualified exact local owning archive52/0 and release38/0 terminal; parent actual deletion/roster/inventory required",
+  "legacy_method_count": 14,
+  "modules": [
+    {
+      "path": "scripts/tests/test_safe_extract_tar.py",
+      "sha256": "088d9b50774ddef18dd574d80b502712a737b010c935d9b04868f2b2ad8e0122",
+      "disposition": "Semantic intents owned; preserve tar diagnostic cleanup acceptance blocker separately",
+      "methods": [
+        {
+          "method": "test_extracts_regular_files_with_executable_mode",
+          "line": 43,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_archives/tar_extract.rs",
+              "symbol": "tar_extract::migration_archives_tar_extracts_executable_members",
+              "line": 39,
+              "sha256": "b80c0fa0d602562aec88712824ac8541e86cfd0956e648ec0b5f27551eba222a",
+              "target": "migration_archives"
+            }
+          ]
+        },
+        {
+          "method": "test_accepts_the_root_directory_member_emitted_by_tar_dot",
+          "line": 67,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_archives/tar_extract.rs",
+              "symbol": "tar_extract::migration_archives_tar_accepts_root_member_from_tar_dot",
+              "line": 59,
+              "sha256": "b80c0fa0d602562aec88712824ac8541e86cfd0956e648ec0b5f27551eba222a",
+              "target": "migration_archives"
+            }
+          ]
+        },
+        {
+          "method": "test_rejects_traversal_absolute_and_device_members",
+          "line": 90,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_archives/tar_reject.rs",
+              "symbol": "tar_reject::migration_archives_tar_rejects_traversal",
+              "line": 19,
+              "sha256": "b6b0ca1e1424d168caf5535d3e5d561afdefea8cb9c3ba816033828bedecb51e",
+              "target": "migration_archives"
+            },
+            {
+              "path": "tools/xtask/tests/migration_archives/tar_reject.rs",
+              "symbol": "tar_reject::migration_archives_tar_rejects_absolute_and_drive_paths",
+              "line": 27,
+              "sha256": "b6b0ca1e1424d168caf5535d3e5d561afdefea8cb9c3ba816033828bedecb51e",
+              "target": "migration_archives"
+            },
+            {
+              "path": "tools/xtask/tests/migration_archives/tar_reject.rs",
+              "symbol": "tar_reject::migration_archives_tar_rejects_device_and_fifo_members",
+              "line": 66,
+              "sha256": "b6b0ca1e1424d168caf5535d3e5d561afdefea8cb9c3ba816033828bedecb51e",
+              "target": "migration_archives"
+            }
+          ]
+        },
+        {
+          "method": "test_rejects_escaping_link_target",
+          "line": 114,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_archives/tar_reject.rs",
+              "symbol": "tar_reject::migration_archives_tar_rejects_escaping_links",
+              "line": 78,
+              "sha256": "b6b0ca1e1424d168caf5535d3e5d561afdefea8cb9c3ba816033828bedecb51e",
+              "target": "migration_archives"
+            }
+          ]
+        },
+        {
+          "method": "test_rejects_nonempty_destination_with_preexisting_symlink",
+          "line": 128,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_archives/tar_reject.rs",
+              "symbol": "tar_reject::migration_archives_tar_rejects_preexisting_nested_redirect_without_outside_writes",
+              "line": 141,
+              "sha256": "b6b0ca1e1424d168caf5535d3e5d561afdefea8cb9c3ba816033828bedecb51e",
+              "target": "migration_archives"
+            }
+          ]
+        },
+        {
+          "method": "test_requires_exact_canonical_sidecar",
+          "line": 162,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_archives/checksum.rs",
+              "symbol": "checksum::migration_archives_checksum_accepts_canonical_sidecar",
+              "line": 32,
+              "sha256": "7b3b5b2e35c484f343c42efaef862f21adcb288cf984a9530c8af58e4e01eb1d",
+              "target": "migration_archives"
+            },
+            {
+              "path": "tools/xtask/tests/migration_archives/checksum.rs",
+              "symbol": "checksum::migration_archives_checksum_rejects_missing_or_empty_sidecar",
+              "line": 68,
+              "sha256": "7b3b5b2e35c484f343c42efaef862f21adcb288cf984a9530c8af58e4e01eb1d",
+              "target": "migration_archives"
+            },
+            {
+              "path": "tools/xtask/tests/migration_archives/checksum.rs",
+              "symbol": "checksum::migration_archives_checksum_rejects_wrong_name_and_extra_lines",
+              "line": 76,
+              "sha256": "7b3b5b2e35c484f343c42efaef862f21adcb288cf984a9530c8af58e4e01eb1d",
+              "target": "migration_archives"
+            },
+            {
+              "path": "tools/xtask/tests/migration_archives/checksum.rs",
+              "symbol": "checksum::migration_archives_checksum_rejects_mismatch",
+              "line": 118,
+              "sha256": "7b3b5b2e35c484f343c42efaef862f21adcb288cf984a9530c8af58e4e01eb1d",
+              "target": "migration_archives"
+            }
+          ]
+        },
+        {
+          "method": "test_rejects_noncanonical_checksum_separators",
+          "line": 196,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_archives/checksum.rs",
+              "symbol": "checksum::migration_archives_checksum_rejects_noncanonical_lines",
+              "line": 101,
+              "sha256": "7b3b5b2e35c484f343c42efaef862f21adcb288cf984a9530c8af58e4e01eb1d",
+              "target": "migration_archives"
+            }
+          ]
+        },
+        {
+          "method": "test_rejects_surrounding_whitespace_and_blank_lines",
+          "line": 216,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_archives/checksum.rs",
+              "symbol": "checksum::migration_archives_checksum_rejects_noncanonical_lines",
+              "line": 101,
+              "sha256": "7b3b5b2e35c484f343c42efaef862f21adcb288cf984a9530c8af58e4e01eb1d",
+              "target": "migration_archives"
+            },
+            {
+              "path": "tools/xtask/tests/migration_archives/checksum.rs",
+              "symbol": "checksum::migration_archives_checksum_rejects_wrong_name_and_extra_lines",
+              "line": 76,
+              "sha256": "7b3b5b2e35c484f343c42efaef862f21adcb288cf984a9530c8af58e4e01eb1d",
+              "target": "migration_archives"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/tests/test_select_release_notes_base.py",
+      "sha256": "aba2a566d4f4d8cce784cb9d24375c335c7be10836e6a09a59246ffe8f1c2233",
+      "disposition": "Whole module semantic coverage already qualified; narrow retirement candidate",
+      "methods": [
+        {
+          "method": "test_release_candidate_uses_previous_stable_release",
+          "line": 26,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_release/notes_base.rs",
+              "symbol": "notes_base::migration_release_notes_base_selects_previous_stable_tag",
+              "line": 15,
+              "sha256": "621d337b5ec01f49b51ab162c41345c9e66b43ebad7e96c2fc20e1210505a98d",
+              "target": "migration_release"
+            },
+            {
+              "path": "tools/xtask/src/release/notes_base.rs",
+              "symbol": "release::notes_base::tests::migration_release_notes_base_selects_previous_stable",
+              "line": 136,
+              "sha256": "87bd29165300d181387ed6a50802e84cb4f243c7b513e8174d117db66e6428de",
+              "target": "xtask binary unit"
+            }
+          ]
+        },
+        {
+          "method": "test_stable_release_ignores_release_candidates_for_same_version",
+          "line": 35,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_release/notes_base.rs",
+              "symbol": "notes_base::migration_release_notes_base_selects_previous_stable_tag",
+              "line": 15,
+              "sha256": "621d337b5ec01f49b51ab162c41345c9e66b43ebad7e96c2fc20e1210505a98d",
+              "target": "migration_release"
+            },
+            {
+              "path": "tools/xtask/src/release/notes_base.rs",
+              "symbol": "release::notes_base::tests::migration_release_notes_base_selects_previous_stable",
+              "line": 136,
+              "sha256": "87bd29165300d181387ed6a50802e84cb4f243c7b513e8174d117db66e6428de",
+              "target": "xtask binary unit"
+            }
+          ]
+        },
+        {
+          "method": "test_next_patch_candidate_uses_current_stable_release",
+          "line": 46,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_release/notes_base.rs",
+              "symbol": "notes_base::migration_release_notes_base_selects_previous_stable_tag",
+              "line": 15,
+              "sha256": "621d337b5ec01f49b51ab162c41345c9e66b43ebad7e96c2fc20e1210505a98d",
+              "target": "migration_release"
+            },
+            {
+              "path": "tools/xtask/src/release/notes_base.rs",
+              "symbol": "release::notes_base::tests::migration_release_notes_base_selects_previous_stable",
+              "line": 136,
+              "sha256": "87bd29165300d181387ed6a50802e84cb4f243c7b513e8174d117db66e6428de",
+              "target": "xtask binary unit"
+            }
+          ]
+        },
+        {
+          "method": "test_selection_is_semantic_and_ignores_nonstable_tags",
+          "line": 55,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_release/notes_base.rs",
+              "symbol": "notes_base::migration_release_notes_base_selects_previous_stable_tag",
+              "line": 15,
+              "sha256": "621d337b5ec01f49b51ab162c41345c9e66b43ebad7e96c2fc20e1210505a98d",
+              "target": "migration_release"
+            },
+            {
+              "path": "tools/xtask/src/release/notes_base.rs",
+              "symbol": "release::notes_base::tests::migration_release_notes_base_selects_previous_stable",
+              "line": 136,
+              "sha256": "87bd29165300d181387ed6a50802e84cb4f243c7b513e8174d117db66e6428de",
+              "target": "xtask binary unit"
+            }
+          ]
+        },
+        {
+          "method": "test_first_release_has_no_comparison_base",
+          "line": 64,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_release/notes_base.rs",
+              "symbol": "notes_base::migration_release_notes_base_prints_nothing_without_a_candidate",
+              "line": 22,
+              "sha256": "621d337b5ec01f49b51ab162c41345c9e66b43ebad7e96c2fc20e1210505a98d",
+              "target": "migration_release"
+            }
+          ]
+        },
+        {
+          "method": "test_invalid_target_is_rejected",
+          "line": 67,
+          "rust": [
+            {
+              "path": "tools/xtask/tests/migration_release/notes_base.rs",
+              "symbol": "notes_base::migration_release_notes_base_reports_usage_and_invalid_input",
+              "line": 33,
+              "sha256": "621d337b5ec01f49b51ab162c41345c9e66b43ebad7e96c2fc20e1210505a98d",
+              "target": "migration_release"
+            },
+            {
+              "path": "tools/xtask/src/release/notes_base.rs",
+              "symbol": "release::notes_base::tests::migration_release_notes_base_rejects_invalid_targets",
+              "line": 146,
+              "sha256": "87bd29165300d181387ed6a50802e84cb4f243c7b513e8174d117db66e6428de",
+              "target": "xtask binary unit"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "previous_component_proof": {
+    "log": ".omo/evidence/resume-20261002/next-full-xtask-corrected3.log",
+    "sha256": "cfa78b0f6de28b9f735b6ce392ba4bcb170aa86c855eb4cca15f85ad20b3f928",
+    "migration_archives": "51 passed;0 failed (before new nested redirect case)",
+    "migration_release": "38 passed;0 failed",
+    "whole_suite": "FAILED later workload_oracle_producer_contract; not acceptance"
+  },
+  "helpers_retained": [
+    "scripts/safe-extract-tar.py",
+    "scripts/verify-checksum-sidecar.py",
+    "scripts/select-release-notes-base.py"
+  ],
+  "bounds": "Finite current Rust domain CLI/fixture proof only; no native/model/platform/SDK/live/protected qualification; TarReadError diagnostic cleanup separate held scope",
+  "current_component_proof": [
+    {
+      "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+      "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+      "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+    },
+    {
+      "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+      "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+      "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+    }
+  ],
+  "projected_counts": {
+    "python": 193,
+    "just_roster": 106
+  }
+}

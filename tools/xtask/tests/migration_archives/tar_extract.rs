@@ -150,25 +150,35 @@ fn migration_archives_tar_stops_at_a_corrupt_later_header() -> TestResult {
 
 #[test]
 fn migration_archives_tar_reports_unreadable_containers() -> TestResult {
-    let listing = |gz: &str, tar: &str| {
-        rejected(&format!(
-            "file could not be opened successfully:\n\
-             - method gz: ReadError('{gz}')\n\
-             - method bz2: ReadError('not a bzip2 file')\n\
-             - method xz: ReadError('not an lzma file')\n\
-             - method tar: ReadError('{tar}')"
-        ))
-    };
-    let junk = extract(b"hello".to_vec())?;
-    junk.assert(1, &listing("not a gzip file", "truncated header"));
-    let empty = extract(Vec::new())?;
-    empty.assert(1, &listing("empty file", "empty file"));
     let mut bad_sum = tar(&[TarMember::file("x", 0o644, b"x")]);
     bad_sum[148] = b'7';
-    extract(bad_sum)?.assert(1, &listing("not a gzip file", "bad checksum"));
     let mut bad_number = tar(&[TarMember::file("x", 0o644, b"x")]);
     bad_number[100] = b'9';
-    extract(bad_number)?.assert(1, &listing("not a gzip file", "bad checksum"));
+    let mut bad_gzip = tar_gz(&[TarMember::file("x", 0o644, b"x")]);
+    bad_gzip.truncate(12);
+    for archive in [
+        b"hello".to_vec(),
+        Vec::new(),
+        bad_sum,
+        bad_number,
+        bad_gzip,
+        b"BZh9unsupported container".to_vec(),
+        b"\xfd7zXZ\0unsupported container".to_vec(),
+    ] {
+        let outcome = extract_with(archive, |root| {
+            write(root, "outside/sentinel", b"independent existing bytes")
+        })?;
+        assert_eq!(outcome.code, Some(1));
+        assert!(outcome.stdout.is_empty());
+        assert!(outcome.stderr.starts_with(PREFIX));
+        assert!(outcome.path("output").is_dir());
+        assert_eq!(std::fs::read_dir(outcome.path("output"))?.count(), 0);
+        assert_eq!(
+            std::fs::read(outcome.path("outside/sentinel"))?,
+            b"independent existing bytes"
+        );
+        assert_eq!(std::fs::read_dir(outcome.path("outside"))?.count(), 1);
+    }
     Ok(())
 }
 

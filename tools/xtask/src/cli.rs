@@ -6,6 +6,11 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
 
 pub(crate) fn print_usage() {
     println!("  cargo xtool automation local-ports COUNT");
+    println!("  cargo xtool automation binary-stage-readiness --help");
+    println!("  cargo xtool automation workload-monolithic-oracle --help");
+    println!("  cargo xtool automation workload-media-oracle --help");
+    println!("  cargo xtool automation workload-tts-oracle --help");
+    println!("  cargo xtool automation openai-smoke-config cache --help");
     println!(
         "  cargo xtool automation agent-fixture-inputs {{sha256 FILE | soak MODEL TARGET_CHARS OUTPUT | surface MODEL OUTPUT}}"
     );
@@ -98,6 +103,10 @@ pub(crate) enum CliCommand<'a> {
     WorkloadSmokeConfig(&'a [String]),
     SmokeInputs(&'a [String]),
     WorkloadSmoke(&'a [String]),
+    BinaryStageReadiness(&'a [String]),
+    WorkloadMonolithicOracle(&'a [String]),
+    WorkloadMediaOracle(&'a [String]),
+    WorkloadTtsOracle(&'a [String]),
     HfXetSmoke(&'a [String]),
     SmokeObservation(&'a [String]),
     SplitProbe(&'a [String]),
@@ -236,6 +245,26 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "hf-xet-smoke" => {
                 CliCommand::HfXetSmoke(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "binary-stage-readiness" =>
+            {
+                CliCommand::BinaryStageReadiness(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "workload-monolithic-oracle" =>
+            {
+                CliCommand::WorkloadMonolithicOracle(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "workload-media-oracle" =>
+            {
+                CliCommand::WorkloadMediaOracle(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "workload-tts-oracle" =>
+            {
+                CliCommand::WorkloadTtsOracle(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "workload-smoke" => {
                 CliCommand::WorkloadSmoke(rest)

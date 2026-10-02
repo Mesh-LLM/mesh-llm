@@ -104,6 +104,33 @@ if [[ -n "$(git status --porcelain)" ]]; then
   echo "changed-pin canary requires a clean trusted-main checkout" >&2
   exit 1
 fi
+# Legacy workload automation selection begins.
+if [[ "$HARNESS_MODE" == repair ]]; then
+  if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+    repair_workload_controller="$MESH_LLM_AUTOMATION_BIN"
+  else
+    repair_workload_bootstrap="$(just --justfile "$TRUSTED_ROOT/Justfile" automation-bootstrap)" || exit 1
+    repair_workload_controller="$(printf '%s\n' "$repair_workload_bootstrap" | awk -F= '
+      $1 == "binary_path" { count++; value=substr($0, index($0, "=") + 1) }
+      END { if (count != 1 || value == "") exit 1; print value }
+    ')" || { echo 'automation bootstrap must return one nonempty binary_path' >&2; exit 1; }
+  fi
+  if [[ "$repair_workload_controller" != /* || ! -f "$repair_workload_controller" || ! -x "$repair_workload_controller" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN or bootstrap binary_path must be an absolute executable' >&2
+    exit 1
+  fi
+  repair_workload_controller_sha="$(shasum -a 256 "$repair_workload_controller" | awk '{print $1}')" || exit 1
+  repair_workload_automation=("$repair_workload_controller")
+  repair_workload_controller_unchanged() {
+    local current
+    current="$(shasum -a 256 "$repair_workload_controller" | awk '{print $1}')" || return 1
+    if [[ "$current" != "$repair_workload_controller_sha" ]]; then
+      echo 'frozen workload automation controller changed after admission' >&2
+      return 1
+    fi
+  }
+fi
+# Legacy workload automation selection ends.
 if [[ "$HARNESS_MODE" != pinned-build ]] && [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
   echo "git user.name and user.email must be configured before canary repair" >&2
   exit 1
@@ -428,12 +455,11 @@ snapshot_candidate_tree() {
   if [[ "$HARNESS_MODE" == "repair-build" ]]; then
     controller_producer_receipt || return 1
   else
-    # Local legacy repair remains on its existing caller until it has workflow context.
     local closure="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
-    python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
-      --candidate-binary "$closure/cargo/debug/skippy" \
-      --native-build-dir "$closure/native" --producer-manifest "$closure/producer.json"
-    CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')"
+    repair_workload_controller_unchanged || return 1
+    "${repair_workload_automation[@]}" automation canary-receipts workload-manifest verify \
+      "$ROOT" "$closure/cargo/debug/skippy" "$closure/native" "$closure/producer.json" || return 1
+    CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')" || return 1
     export CANARY_VERIFIED_WORKLOAD_PRODUCER
   fi
   git add -A

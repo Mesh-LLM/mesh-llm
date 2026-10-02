@@ -209,8 +209,7 @@ jobs:
         run: actionlint -config-file .github/actionlint.yaml
       - name: Test CI, packaging, and SDK contracts
         run: |
-          cargo test -p xtask --bin xtask workflow_guards
-          cargo test -p xtask --test lane_l12_build_llama
+          just ci-automation-contracts
           just ci-legacy-contracts
       - name: Check CI crate-list drift
         run: cargo run -p xtask -- repo-consistency ci-crate-lists

@@ -17,7 +17,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         [mode, root, output] if mode == "snapshot" => snapshot(Path::new(root), Path::new(output)),
         [mode, root, closure, test, snapshot] if mode == "produce" => produce(Path::new(root), Path::new(closure), Path::new(test), Path::new(snapshot)),
         [mode, root, binary, native] if mode == "fresh" => fresh(Path::new(root), Path::new(binary), Path::new(native)),
-        [mode, root, binary, native, manifest] if mode == "verify" => verify(Path::new(root), Path::new(binary), Path::new(native), Path::new(manifest)),
+        [mode, root, binary, native, manifest] if mode == "verify" => verified_test(Path::new(root), Path::new(binary), Path::new(native), Path::new(manifest)).map(|_| ()),
         _ => Err("usage: workload-manifest {snapshot ROOT OUTPUT | produce ROOT CLOSURE TEST_BINARY SNAPSHOT | fresh ROOT BINARY NATIVE_DIR | verify ROOT BINARY NATIVE_DIR MANIFEST}".into()),
     }
     })
@@ -170,7 +170,12 @@ fn produce(root: &Path, closure: &Path, test: &Path, snapshot: &Path) -> DynResu
     }
     publish(&closure.join("producer.json"), &bytes)
 }
-fn verify(root: &Path, binary: &Path, native: &Path, manifest: &Path) -> DynResult<()> {
+pub(crate) fn verified_test(
+    root: &Path,
+    binary: &Path,
+    native: &Path,
+    manifest: &Path,
+) -> DynResult<PathBuf> {
     let manifest = manifest.canonicalize()?;
     let closure = manifest
         .parent()
@@ -195,5 +200,5 @@ fn verify(root: &Path, binary: &Path, native: &Path, manifest: &Path) -> DynResu
     {
         return Err("workload source or producer changed during verification".into());
     }
-    Ok(())
+    contained(&closure, &producer.files["test_binary"].path)
 }

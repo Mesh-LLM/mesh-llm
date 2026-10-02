@@ -12,7 +12,7 @@ ci-sccache-seed-build:
 ci-validate:
     actionlint -config-file .github/actionlint.yaml
     git diff --check
-    cargo test -p xtask --test migration_ci_operations --test migration_prepared_inputs --test migration_models --test lane_l3_l2_dispatch --test lane_l3_display_projection --test lane_l3_abi_restore --test lane_l3_cache_metadata
+    just ci-automation-contracts
     just ci-legacy-contracts
     just ci-crate-lists
     just check-release
@@ -21,7 +21,7 @@ ci-validate:
 
 # Explicit surviving transitional coverage; retire modules only with intent owners.
 ci-legacy-contracts:
-    python3 -m unittest scripts.tests.test_cuda_toolkit scripts.tests.test_prepare_llama scripts.tests.test_publish_crates scripts.tests.test_llama_oracle_source scripts.tests.test_package_native_runtime scripts.tests.test_depot_authority_sentinel scripts.tests.test_generate_split_certified scripts.tests.test_skippy_llama_parity scripts.tests.test_ci_compute_changes_expression_limit scripts.tests.test_ci_windows_composition scripts.tests.test_skippy_scheduler_fixtures scripts.tests.test_ci_workflow_artifacts scripts.tests.test_llama_canary_handoff_contract scripts.tests.test_workload_monolithic_oracle scripts.tests.test_safe_extract_tar scripts.tests.test_reusable_workflow_runner_trust scripts.tests.test_pr_builds_summary scripts.tests.test_qa_agent_tool_call_reliability scripts.tests.test_static_abi_artifacts scripts.tests.test_promote_layer_package_snapshot scripts.tests.test_runtime_events_native_gate scripts.tests.test_performance_history scripts.tests.test_workload_lane_execution scripts.tests.test_depot_registry_canary_workflow scripts.tests.test_skippy_waiting_prefix_ab scripts.tests.test_claude_compatibility_workflow scripts.tests.test_build_accelerator_defaults scripts.tests.test_build_ui scripts.tests.test_build_windows scripts.tests.test_skippy_radix_cache_ab scripts.tests.test_kv_nightly_workflow_contract scripts.tests.test_sccache_evidence scripts.tests.test_compute_changes_justfiles scripts.tests.test_generate_native_runtime_release_manifest scripts.tests.test_ci_batch_crate_filter scripts.tests.test_download_skippy_parity_candidates scripts.tests.test_agentic_replay_nightly_workflow scripts.tests.test_ci_pr_canary_workflow scripts.tests.test_install_sh scripts.tests.test_ci_lane_workflows scripts.tests.test_build_linux scripts.tests.test_skippy_tts_oracle scripts.tests.test_ci_product_composer scripts.tests.test_justfile_shell_portability scripts.tests.test_skippy_native_evidence_contract scripts.tests.test_run_event_benchmark_matrix scripts.tests.test_ci_two_node_split_smoke scripts.tests.test_ci_sdk_json_consumer scripts.tests.test_ci_native_toolchain_routing scripts.tests.test_ci_prepare_native_runtime scripts.tests.test_justfile_source scripts.tests.test_skippy_competitive_benchmark scripts.tests.test_qa_kv_tool_loop_stability scripts.tests.test_llama_canary_agent_manifest_policy scripts.tests.test_native_artifact_verifiers scripts.tests.test_release_version_script scripts.tests.test_select_release_notes_base scripts.tests.test_model_artifact_registry scripts.tests.test_pr_workflow_artifacts scripts.tests.test_hf_skippy_mtp_certify_job scripts.tests.test_install_sccache scripts.tests.test_ci_source_layout scripts.tests.test_ci_openai_embeddings_smoke scripts.tests.test_logging_api_docs scripts.tests.test_check_skippy_workload_candidate scripts.tests.test_resume_crates_release_workflow scripts.tests.test_compare_event_benchmark_matrix scripts.tests.test_llama_canary_family_evidence scripts.tests.test_build_release scripts.tests.test_install_ps1 scripts.tests.test_hf_xet_portability_smoke scripts.tests.test_kv_restart_replay scripts.tests.test_llama_canary_agent_repair_contract scripts.tests.test_logging_module_boundaries scripts.tests.test_release_script scripts.tests.test_run_command_with_timeout scripts.tests.test_synthetic_graph_registry scripts.tests.test_affected_crates_layout scripts.tests.test_package_release scripts.tests.test_agentic_trajectory_manifest scripts.tests.test_justfile_layout scripts.tests.test_plan_family_battery scripts.tests.test_macos_deployment_target scripts.tests.test_llama_upstream_canary_contract scripts.tests.test_llama_review_regressions scripts.tests.test_skippy_adaptive_prefill_ab scripts.tests.test_canary_family_memory scripts.tests.test_skippy_agentic_prompt_manifest scripts.tests.test_skippy_mixed_prefill_decode_ab scripts.tests.test_ci_sdk_producers scripts.tests.test_cleanup_self_hosted scripts.tests.test_lld_lib scripts.tests.test_llama_canary_mesh_ref scripts.tests.test_llama_native_full_replay scripts.tests.test_build_development_product scripts.tests.test_ci_artifact_actions scripts.tests.test_depot_canary_workflow scripts.tests.test_ci_cargo_packages scripts.tests.test_skippy_system_one_smoke scripts.tests.test_qa_nightly_stability scripts.tests.test_pr_sibling_cancellation scripts.tests.test_skippy_ocr_asr_oracle scripts.tests.test_skippy_static_link scripts.tests.test_justfile_release_runtime scripts.tests.test_skippy_dynamic_link scripts.tests.test_cli_inventory_contract scripts.tests.test_release_workflow_artifacts scripts.tests.test_collect_ci_metrics
+    python3 -m unittest scripts.tests.test_cuda_toolkit scripts.tests.test_prepare_llama scripts.tests.test_package_native_runtime scripts.tests.test_depot_authority_sentinel scripts.tests.test_generate_split_certified scripts.tests.test_skippy_llama_parity scripts.tests.test_ci_compute_changes_expression_limit scripts.tests.test_ci_windows_composition scripts.tests.test_skippy_scheduler_fixtures scripts.tests.test_ci_workflow_artifacts scripts.tests.test_llama_canary_handoff_contract scripts.tests.test_reusable_workflow_runner_trust scripts.tests.test_pr_builds_summary scripts.tests.test_qa_agent_tool_call_reliability scripts.tests.test_static_abi_artifacts scripts.tests.test_promote_layer_package_snapshot scripts.tests.test_runtime_events_native_gate scripts.tests.test_performance_history scripts.tests.test_workload_lane_execution scripts.tests.test_depot_registry_canary_workflow scripts.tests.test_skippy_waiting_prefix_ab scripts.tests.test_claude_compatibility_workflow scripts.tests.test_build_accelerator_defaults scripts.tests.test_build_ui scripts.tests.test_build_windows scripts.tests.test_skippy_radix_cache_ab scripts.tests.test_kv_nightly_workflow_contract scripts.tests.test_sccache_evidence scripts.tests.test_compute_changes_justfiles scripts.tests.test_generate_native_runtime_release_manifest scripts.tests.test_ci_batch_crate_filter scripts.tests.test_download_skippy_parity_candidates scripts.tests.test_agentic_replay_nightly_workflow scripts.tests.test_ci_pr_canary_workflow scripts.tests.test_install_sh scripts.tests.test_ci_lane_workflows scripts.tests.test_build_linux scripts.tests.test_ci_product_composer scripts.tests.test_justfile_shell_portability scripts.tests.test_skippy_native_evidence_contract scripts.tests.test_run_event_benchmark_matrix scripts.tests.test_ci_two_node_split_smoke scripts.tests.test_ci_sdk_json_consumer scripts.tests.test_ci_native_toolchain_routing scripts.tests.test_ci_prepare_native_runtime scripts.tests.test_justfile_source scripts.tests.test_skippy_competitive_benchmark scripts.tests.test_qa_kv_tool_loop_stability scripts.tests.test_llama_canary_agent_manifest_policy scripts.tests.test_native_artifact_verifiers scripts.tests.test_release_version_script scripts.tests.test_model_artifact_registry scripts.tests.test_pr_workflow_artifacts scripts.tests.test_hf_skippy_mtp_certify_job scripts.tests.test_install_sccache scripts.tests.test_ci_source_layout scripts.tests.test_ci_openai_embeddings_smoke scripts.tests.test_logging_api_docs scripts.tests.test_check_skippy_workload_candidate scripts.tests.test_resume_crates_release_workflow scripts.tests.test_compare_event_benchmark_matrix scripts.tests.test_llama_canary_family_evidence scripts.tests.test_build_release scripts.tests.test_install_ps1 scripts.tests.test_hf_xet_portability_smoke scripts.tests.test_kv_restart_replay scripts.tests.test_llama_canary_agent_repair_contract scripts.tests.test_logging_module_boundaries scripts.tests.test_release_script scripts.tests.test_run_command_with_timeout scripts.tests.test_synthetic_graph_registry scripts.tests.test_affected_crates_layout scripts.tests.test_package_release scripts.tests.test_agentic_trajectory_manifest scripts.tests.test_justfile_layout scripts.tests.test_plan_family_battery scripts.tests.test_macos_deployment_target scripts.tests.test_llama_upstream_canary_contract scripts.tests.test_llama_review_regressions scripts.tests.test_skippy_adaptive_prefill_ab scripts.tests.test_canary_family_memory scripts.tests.test_skippy_agentic_prompt_manifest scripts.tests.test_skippy_mixed_prefill_decode_ab scripts.tests.test_ci_sdk_producers scripts.tests.test_cleanup_self_hosted scripts.tests.test_lld_lib scripts.tests.test_llama_canary_mesh_ref scripts.tests.test_llama_native_full_replay scripts.tests.test_build_development_product scripts.tests.test_ci_artifact_actions scripts.tests.test_depot_canary_workflow scripts.tests.test_skippy_system_one_smoke scripts.tests.test_qa_nightly_stability scripts.tests.test_pr_sibling_cancellation scripts.tests.test_skippy_static_link scripts.tests.test_justfile_release_runtime scripts.tests.test_skippy_dynamic_link scripts.tests.test_cli_inventory_contract scripts.tests.test_release_workflow_artifacts scripts.tests.test_collect_ci_metrics
 
 # Run CI/workspace crate-list consistency checks.
 ci-crate-lists:
@@ -35,13 +35,14 @@ automation-bootstrap:
 
 [private]
 [unix]
+[positional-arguments]
 automation-run *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     bootstrap="$(just automation-bootstrap)"
     binary="$(printf '%s\n' "$bootstrap" | awk -F= '$1 == "binary_path" { print substr($0, index($0, "=") + 1) }')"
     test -n "$binary"
-    exec "$binary" {{ ARGS }}
+    exec "$binary" "$@"
 
 # Run crates.io publish-chain consistency checks.
 publish-crates:
@@ -161,3 +162,116 @@ test-all:
     (cd "{{ ui_dir }}" && pnpm run test:e2e)
     echo ""
     echo "All checks passed."
+
+# Portable automation contracts replace accepted legacy test intentions.
+# Build only xtask and its inert fixture binaries/examples before serial tests.
+ci-automation-contracts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bootstrap="$(just automation-bootstrap)"
+    binary="$(printf '%s\n' "$bootstrap" | awk -F= '$1 == "binary_path" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
+    target_directory="$(printf '%s\n' "$bootstrap" | awk -F= '$1 == "target_directory" { count++; print substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1 }')"
+    test -n "$binary"
+    test -n "$target_directory"
+    export CARGO_TARGET_DIR="$target_directory"
+    just with-lld cargo build --locked -p xtask --bins --examples
+    fixture_suffix=""
+    case "$binary" in *.exe) fixture_suffix=".exe" ;; esac
+    export SPV_ADAPTER_FIXTURE="$target_directory/debug/examples/swift_privacy_lint_fixture$fixture_suffix"
+    git_path="${MIGRATION_TEST_GIT-$(command -v git)}"
+    if command -v cygpath >/dev/null 2>&1; then
+        git_path="$(cygpath -w "$git_path")"
+        test -f "$(cygpath -u "$SPV_ADAPTER_FIXTURE")"
+        test -x "$(cygpath -u "$SPV_ADAPTER_FIXTURE")"
+    else
+        test -f "$SPV_ADAPTER_FIXTURE"
+        test -x "$SPV_ADAPTER_FIXTURE"
+    fi
+    export MIGRATION_TEST_GIT="$git_path"
+    export GIT_MASTER=1 GIT_OPTIONAL_LOCKS=0
+    just with-lld cargo test --locked -p xtask --bin xtask \
+        --test automation_selector \
+        --test canary_cache_configuration \
+        --test canary_controller_plan \
+        --test canary_result_gate \
+        --test ci_runner_cache_contract \
+        --test family_battery_environment \
+        --test family_battery_prepared_source \
+        --test lane_l12_build_llama \
+        --test lane_l2_authority \
+        --test lane_l3_abi_restore \
+        --test lane_l3_cache_metadata \
+        --test lane_l3_display_projection \
+        --test lane_l3_l2_dispatch \
+        --test lane_l7_logging_recovery \
+        --test lane_l7_plans \
+        --test local_ports \
+        --test migration_archives \
+        --test migration_bootstrap \
+        --test migration_canary_aggregate_cli \
+        --test migration_canary_receipts \
+        --test migration_canary_receipts_parity \
+        --test migration_cargo_metadata \
+        --test migration_cargo_packages_cli \
+        --test migration_ci_graph \
+        --test migration_ci_operations \
+        --test migration_ci_plan \
+        --test migration_cli \
+        --test migration_family_plan \
+        --test migration_hf_artifact_cli \
+        --test migration_hf_artifact_controls \
+        --test migration_hf_converted_artifact \
+        --test migration_lifecycle \
+        --test migration_models \
+        --test migration_native_fixtures \
+        --test migration_native_generator \
+        --test migration_native_policy \
+        --test migration_optional_isolation \
+        --test migration_package_source_version \
+        --test migration_patch_bytes \
+        --test migration_patch_shards \
+        --test migration_prepared_inputs \
+        --test migration_process \
+        --test migration_product \
+        --test migration_qualification_cli \
+        --test migration_release \
+        --test migration_report_contract \
+        --test migration_report_safety \
+        --test migration_repository \
+        --test migration_run_family \
+        --test migration_workload_oracle_cli \
+        --test migration_xcframework_cli \
+        --test openai_smoke_config \
+        --test prepared_source \
+        --test replay_acceptance_gates \
+        --test replay_arm_pass \
+        --test replay_build_arm \
+        --test replay_context_preflight \
+        --test replay_external_engines \
+        --test replay_external_run \
+        --test replay_history \
+        --test replay_history_hub \
+        --test replay_interruption \
+        --test replay_l3 \
+        --test replay_manifest_preflight \
+        --test replay_manual_profile \
+        --test replay_manual_resume_refs \
+        --test replay_model_preflight \
+        --test replay_pass_schedule \
+        --test replay_pooled_rows \
+        --test replay_progress \
+        --test replay_publication_prepare \
+        --test replay_report \
+        --test replay_retirement \
+        --test replay_run_execution \
+        --test replay_server_cell \
+        --test replay_session_evidence \
+        --test replay_trajectory_execution \
+        --test swift_api_checksum \
+        --test swift_privacy_adapter \
+        --test swift_producer_environment \
+        --test workload_certify_contract \
+        --test workload_oracle_producer_contract \
+        --test workload_smoke_config \
+        --test workload_start_retry \
+        -- --test-threads=1

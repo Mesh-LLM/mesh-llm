@@ -116,7 +116,6 @@
         "id": "archive-and-integrity",
         "invariant": "Extract regular files with modes and safe in-tree links; reject traversal, special entries, escaping links, duplicate paths, nonempty destinations, noncanonical sidecars and mismatched target/import/dependency digests.",
         "modules": [
-          "scripts/tests/test_safe_extract_tar.py",
           "scripts/tests/test_safe_extract_zip.py",
           "scripts/tests/test_native_artifact_verifiers.py",
           "scripts/tests/test_linux_native_runtime_deps.py",
@@ -127,13 +126,28 @@
         ],
         "removal_condition": "Rust positive/negative filesystem outcomes and exact archive/member/mode/checksum comparisons pass on supported targets, not just YAML assertions",
         "source_tests": [
-          "test_safe_extract_tar.SafeExtractTarTests.test_extracts_regular_files_with_executable_mode",
-          "test_safe_extract_tar.SafeExtractTarTests.test_rejects_traversal_absolute_and_device_members",
-          "test_safe_extract_tar.ChecksumSidecarTests.test_requires_exact_canonical_sidecar",
           "test_safe_extract_zip.SafeExtractZipTests.test_extracts_files_and_safe_framework_symlinks",
           "test_safe_extract_zip.SafeExtractZipTests.test_rejects_escaping_or_ancestor_symlinks",
           "test_native_artifact_verifiers.*.test_runtime_rejects_every_unsafe_manifest_path"
-        ]
+        ],
+        "current_typed_retirement": {
+          "coverage": "ci/automation-migration/tar-release-test-retirement-coverage.json",
+          "retired_modules": [
+            "scripts/tests/test_safe_extract_tar.py"
+          ],
+          "qualifications": [
+            {
+              "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+              "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+              "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+            },
+            {
+              "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+              "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+              "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+            }
+          ]
+        }
       },
       {
         "executing_gate": "future cargo test -p xtask artifact plus platform product compose/readiness and SDK lanes",
@@ -221,13 +235,11 @@
         "invariant": "Release notes/versions do not drop entries or publish unapproved changes; install stages before mutation and rolls back failures; neutral host and selected runtime retain backend/target/toolchain boundaries; Just imports and recipe arguments remain canonical.",
         "modules": [
           "scripts/tests/test_release_notes.py",
-          "scripts/tests/test_select_release_notes_base.py",
           "scripts/tests/test_release_script.py",
           "scripts/tests/test_release_version_script.py",
           "scripts/tests/test_release_workflow_artifacts.py",
           "scripts/tests/test_resume_crates_release_workflow.py",
           "scripts/tests/test_rc_release_smoke.py",
-          "scripts/tests/test_publish_crates.py",
           "scripts/tests/test_install_sh.py",
           "scripts/tests/test_install_ps1.py",
           "scripts/tests/test_install_sccache.py",
@@ -258,7 +270,25 @@
           "test_build_release.*.test_release_host_never_enables_backend_gpu_features",
           "test_justfile_source.*.test_import_cycle_is_rejected",
           "test_build_llama.*.test_target_change_rejects_existing_native_build"
-        ]
+        ],
+        "current_typed_retirement": {
+          "coverage": "ci/automation-migration/tar-release-test-retirement-coverage.json",
+          "retired_modules": [
+            "scripts/tests/test_select_release_notes_base.py"
+          ],
+          "qualifications": [
+            {
+              "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+              "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+              "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+            },
+            {
+              "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+              "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+              "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+            }
+          ]
+        }
       },
       {
         "executing_gate": "future cargo test -p xtask, native rewriter CTest, skippy correctness and authorized family battery",
@@ -272,7 +302,6 @@
           "scripts/tests/test_skippy_scheduler_fixtures.py",
           "scripts/tests/test_skippy_static_link.py",
           "scripts/tests/test_skippy_dynamic_link.py",
-          "scripts/tests/test_llama_oracle_source.py",
           "scripts/tests/test_llama_native_full_replay.py",
           "scripts/tests/test_prepare_llama.py",
           "scripts/tests/test_llama_upstream_pin_guard.py",
@@ -288,16 +317,12 @@
           "scripts/tests/test_skippy_workload_certify.py",
           "scripts/tests/test_skippy_workload_oracles_build.py",
           "scripts/tests/test_workload_lane_execution.py",
-          "scripts/tests/test_workload_monolithic_oracle.py",
-          "scripts/tests/test_skippy_ocr_asr_oracle.py",
-          "scripts/tests/test_skippy_tts_oracle.py",
           "scripts/tests/test_verify_workload_oracle_evidence.py"
         ],
         "removal_condition": "Task 23 native rewriter and future certification owners replay positive/negative model/graph/evidence invariants; real workload remains model-backed",
         "source_tests": [
           "test_skippy_rewriter_harness.*.test_idempotence_flags_second_run_transformable",
           "test_workload_lane_execution.*.test_missing_oracle_records_both_failures_and_continues",
-          "test_workload_monolithic_oracle.*.test_embedding_oracle_rejects_boolean_or_float_indexes",
           "test_skippy_native_evidence_contract.*.test_check_executed_evidence_file_rejects_a_hand_crafted_bad_file"
         ]
       },
@@ -1695,7 +1720,9 @@
         "test_each_recipe_stays_in_its_owning_import",
         "test_only_with_lld_is_private_and_imports_create_no_modules",
         "test_root_keeps_prelude_default_and_ordered_flat_imports"
-      ]
+      ],
+      "current_source_sha256": "af60c244a9022a8a5460cb229d106af12cdefe4d516f62f04c961e6906a168ce",
+      "source_refresh_note": "Historical baseline sha256 preserved; current_source_sha256 binds exact maintained whitelist correction, all3 methods retained."
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -1962,10 +1989,9 @@
         "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
         "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
       ],
-      "current_source_sha256": "4dfe328aab46662ac1814cdf14625a458beb2f8d10a4793ff47650e8930becd3",
-      "current_test_method_count": 3,
+      "current_source_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+      "current_test_method_count": 2,
       "current_test_methods": [
-        "test_pack_restore_and_source_owned_workload_verification",
         "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
         "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
       ],
@@ -1987,6 +2013,32 @@
         },
         "superseded_attempt": "Initial standalone fixture failed unsupported --root argv positioning. It was removed and replaced by the registered bounded lifecycle fixture using selected cwd; the corrected fixture passed.",
         "qualification_bounds": "Local actual CLI/selected-battery admission and immutable-plan intent only; no native/model/SDK/platform/protected-live qualification."
+      },
+      "current_handoff_pack_method_retirement": {
+        "coverage": "ci/automation-migration/canary-handoff-pack-retirement-coverage.json",
+        "path": "scripts/tests/test_llama_canary_handoff_contract.py",
+        "retired_method": "test_pack_restore_and_source_owned_workload_verification",
+        "legacy_source_sha256": "4dfe328aab46662ac1814cdf14625a458beb2f8d10a4793ff47650e8930becd3",
+        "current_source_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+        "retained_methods": [
+          "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
+          "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
+        ],
+        "proof": [
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-pack-restore-tests.log",
+            "sha256": "c303e924cd371d95f6cdfe3584d3c473085ef35959e8927a0b80ad3533580b70",
+            "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1399 filtered out; finished in 1.79s"
+          },
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-selected-battery-tests.log",
+            "sha256": "80c314c9aee2c13e38d68ea4df34758e1d107da23ed5f480c48b45a495959433",
+            "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 503 filtered out; finished in 5.00s"
+          }
+        ],
+        "python_paths": 181,
+        "just_roster": 100,
+        "policy": "One method only after exact12file predecessor; no helper/module/roster/count deletion. Historical first retirement and failed-source receipts retained."
       }
     },
     {
@@ -2038,7 +2090,114 @@
         "test_model_support_series_rejects_incomplete_or_unsafe_inputs",
         "test_oracle_and_prepare_require_the_same_schema",
         "test_prepared_checkout_rejects_patch_queue_drift"
-      ]
+      ],
+      "retirement_proposal": {
+        "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+        "removed_paths": [
+          "scripts/tests/test_publish_crates.py",
+          "scripts/tests/test_llama_oracle_source.py",
+          "scripts/tests/test_ci_cargo_packages.py",
+          "scripts/tests/test_skippy_tts_oracle.py",
+          "scripts/skippy-tts-oracle.py",
+          "scripts/tts_oracle_metrics.py",
+          "scripts/tests/test_workload_monolithic_oracle.py",
+          "scripts/ci-workload-monolithic-oracle.py",
+          "scripts/workload_fixtures.py",
+          "scripts/tests/test_skippy_ocr_asr_oracle.py",
+          "scripts/skippy-ocr-asr-oracle.py",
+          "scripts/generate-ocr-oracle-fixture.py"
+        ],
+        "legacy_methods": 53,
+        "python_paths": 181,
+        "just_roster": 100,
+        "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+        "helpers_retained": [
+          "scripts/llama-oracle-source.py",
+          "scripts/ci-cargo-packages.py",
+          "scripts/check-skippy-workload-candidate.py",
+          "all actual required SDK clients"
+        ],
+        "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+        "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+        "projected_just_launch_hash": "88eb6efa25e33eb3",
+        "source_sha256": "a5c89c7bc1b0d85dd236773160aad4689218de25f8834156590bd715a7b3ca78",
+        "historical_source_sha256": "a5c89c7bc1b0d85dd236773160aad4689218de25f8834156590bd715a7b3ca78",
+        "method_count": 4,
+        "preserves_historical_sha_and_method_list": true,
+        "owning_coverage": [
+          {
+            "legacy_method": "test_oracle_and_prepare_require_the_same_schema",
+            "line": 20,
+            "intent": "Actual preparation schema producer and typed prepared source verifier must agree",
+            "owners": [
+              {
+                "path": "tools/xtask/tests/prepared_source.rs",
+                "symbol": "prepared_source_verifier_accepts_the_actual_producer_schema_marker_and_rejects_other_versions",
+                "line": 411,
+                "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_model_support_series_rejects_incomplete_or_unsafe_inputs",
+            "line": 27,
+            "intent": "Fail closed on missing/empty/unsafe/out-of-sequence/duplicate/orphan lane metadata",
+            "owners": [
+              {
+                "path": "tools/xtask/tests/prepared_source.rs",
+                "symbol": "prepared_source_cli_rejects_unsafe_or_incomplete_lane_and_symlinked_patch",
+                "line": 173,
+                "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_digest_includes_generated_series_in_prepare_order",
+            "line": 41,
+            "intent": "Independent three-lane digest in preparation order with CRLF series; reject unsafe renamed generated sequence",
+            "owners": [
+              {
+                "path": "tools/xtask/tests/prepared_source.rs",
+                "symbol": "prepared_source_cli_reuses_three_lane_recipe_and_prints_only_clean_head",
+                "line": 112,
+                "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd"
+              },
+              {
+                "path": "tools/xtask/tests/prepared_source.rs",
+                "symbol": "prepared_source_cli_rejects_unsafe_or_incomplete_lane_and_symlinked_patch",
+                "line": 173,
+                "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_prepared_checkout_rejects_patch_queue_drift",
+            "line": 68,
+            "intent": "Current marker/schema/pinned upstream/head/digest and dirty selected checkout fail closed",
+            "owners": [
+              {
+                "path": "tools/xtask/tests/prepared_source.rs",
+                "symbol": "prepared_source_cli_rejects_markers_upstream_head_and_dirty_checkout",
+                "line": 139,
+                "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd"
+              },
+              {
+                "path": "tools/xtask/tests/prepared_source.rs",
+                "symbol": "prepared_source_cli_reuses_three_lane_recipe_and_prints_only_clean_head",
+                "line": 112,
+                "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd"
+              }
+            ]
+          }
+        ],
+        "proof_receipts": [
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-prepared-corrected.log",
+            "sha256": "8ea9d6a348d4931a2b99c15fdf41fdc38fee6dd19b291baf662e97f3c82238b5",
+            "terminal": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 66 filtered out; finished in 2.21s"
+          }
+        ]
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -2645,7 +2804,206 @@
         "test_resume_rejects_dry_run",
         "test_resume_skips_confirmed_versions_and_publishes_missing_versions",
         "test_retries_cargo_publish_429_then_continues_chain"
-      ]
+      ],
+      "retirement_proposal": {
+        "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+        "removed_paths": [
+          "scripts/tests/test_publish_crates.py",
+          "scripts/tests/test_llama_oracle_source.py",
+          "scripts/tests/test_ci_cargo_packages.py",
+          "scripts/tests/test_skippy_tts_oracle.py",
+          "scripts/skippy-tts-oracle.py",
+          "scripts/tts_oracle_metrics.py",
+          "scripts/tests/test_workload_monolithic_oracle.py",
+          "scripts/ci-workload-monolithic-oracle.py",
+          "scripts/workload_fixtures.py",
+          "scripts/tests/test_skippy_ocr_asr_oracle.py",
+          "scripts/skippy-ocr-asr-oracle.py",
+          "scripts/generate-ocr-oracle-fixture.py"
+        ],
+        "legacy_methods": 53,
+        "python_paths": 181,
+        "just_roster": 100,
+        "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+        "helpers_retained": [
+          "scripts/llama-oracle-source.py",
+          "scripts/ci-cargo-packages.py",
+          "scripts/check-skippy-workload-candidate.py",
+          "all actual required SDK clients"
+        ],
+        "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+        "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+        "projected_just_launch_hash": "88eb6efa25e33eb3",
+        "source_sha256": "db39d4df4e5cd8bb1e3eebe64a8ad528fa46eefb26c86dc5866d7a9e8eab378c",
+        "historical_source_sha256": "ad9bbc13e76e489c7760c85c415231366a5edc64201192c1fc9edfcbcc45bbc7",
+        "method_count": 13,
+        "preserves_historical_sha_and_method_list": true,
+        "owning_coverage": [
+          {
+            "legacy_method": "test_publish_verification_uses_dynamic_llama_link_mode",
+            "line": 52,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_native_verification_is_dynamic_and_honors_explicit_directory",
+                "line": 349,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_publish_verification_honors_explicit_llama_build_dir",
+            "line": 70,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_native_verification_is_dynamic_and_honors_explicit_directory",
+                "line": 349,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_retries_cargo_publish_429_then_continues_chain",
+            "line": 89,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_rate_limit_retries_then_continues_in_declared_order",
+                "line": 368,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_exhausts_429_retries_and_fails_loudly_without_continuing",
+            "line": 119,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_exhausted_retry_stops_before_later_crates",
+                "line": 397,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_dry_run_skips_dependents_of_a_brand_new_workspace_crate",
+            "line": 146,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_dry_run_derives_new_workspace_dependency_and_skips_consumer",
+                "line": 222,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_dry_run_skips_crates_with_unpublished_registry_deps_without_sleeping",
+            "line": 176,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_dry_run_retains_provider_order_and_skips_missing_registry_dependency_without_sleep",
+                "line": 228,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_real_publish_requires_registry_token_before_any_cargo_call",
+            "line": 196,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_requires_token_and_rejects_conflicting_resume_before_cargo",
+                "line": 432,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_real_publish_uses_cargo_to_detect_already_uploaded_versions",
+            "line": 209,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_uses_cargo_without_speculative_registry_probe_or_duplicate_retry",
+                "line": 460,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_real_publish_does_not_probe_registry_before_cargo_publish",
+            "line": 234,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_uses_cargo_without_speculative_registry_probe_or_duplicate_retry",
+                "line": 460,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_resume_skips_confirmed_versions_and_publishes_missing_versions",
+            "line": 252,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_resume_skips_only_confirmed_versions_and_defers_unknown_to_cargo",
+                "line": 487,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_resume_falls_back_to_cargo_when_registry_status_is_unknown",
+            "line": 280,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_resume_skips_only_confirmed_versions_and_defers_unknown_to_cargo",
+                "line": 487,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_resume_rejects_dry_run",
+            "line": 298,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_requires_token_and_rejects_conflicting_resume_before_cargo",
+                "line": 432,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_cargo_failure_output_redacts_registry_token",
+            "line": 309,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/publish_dry_run.rs",
+                "symbol": "actual_publish_fatal_cargo_output_redacts_token_and_does_not_continue",
+                "line": 516,
+                "sha256": "6689979fd5695ab71f7e280e99dfad6b872effe4c25f0cc1a3ac192fd1116a3f"
+              }
+            ]
+          }
+        ],
+        "proof_receipts": [
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-publish-corrected2.log",
+            "sha256": "12f7fc3f367185c567de586ba218109673d2bb0f678ab405da39ca0c7ec52384",
+            "terminal": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 495 filtered out; finished in 2.76s"
+          }
+        ]
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3284,7 +3642,39 @@
         "test_rejects_surrounding_whitespace_and_blank_lines",
         "test_rejects_traversal_absolute_and_device_members",
         "test_requires_exact_canonical_sidecar"
-      ]
+      ],
+      "retirement_proposal": {
+        "coverage": "ci/automation-migration/tar-release-test-retirement-coverage.json",
+        "removed_test_paths": [
+          "scripts/tests/test_safe_extract_tar.py",
+          "scripts/tests/test_select_release_notes_base.py"
+        ],
+        "methods": 14,
+        "component_proof": [
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+            "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+            "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+          },
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+            "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+            "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+          }
+        ],
+        "python_paths": 193,
+        "just_roster": 106,
+        "helpers_retained": [
+          "scripts/safe-extract-tar.py",
+          "scripts/verify-checksum-sidecar.py",
+          "scripts/select-release-notes-base.py"
+        ],
+        "limits": "Actual local current typed component targets only. No latest whole wave/platform/native/model/SDK/protected qualification. Preserve historical census/test rosters/hashes and all unrelated active gates.",
+        "source_sha256": "088d9b50774ddef18dd574d80b502712a737b010c935d9b04868f2b2ad8e0122",
+        "method_count": 8,
+        "preserves_historical_sha_and_method_list": true,
+        "proof_status": "Accepted current local owning component target terminal; parent applies deletion/inventory"
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3362,7 +3752,39 @@
         "test_release_candidate_uses_previous_stable_release",
         "test_selection_is_semantic_and_ignores_nonstable_tags",
         "test_stable_release_ignores_release_candidates_for_same_version"
-      ]
+      ],
+      "retirement_proposal": {
+        "coverage": "ci/automation-migration/tar-release-test-retirement-coverage.json",
+        "removed_test_paths": [
+          "scripts/tests/test_safe_extract_tar.py",
+          "scripts/tests/test_select_release_notes_base.py"
+        ],
+        "methods": 14,
+        "component_proof": [
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+            "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+            "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+          },
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+            "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+            "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+          }
+        ],
+        "python_paths": 193,
+        "just_roster": 106,
+        "helpers_retained": [
+          "scripts/safe-extract-tar.py",
+          "scripts/verify-checksum-sidecar.py",
+          "scripts/select-release-notes-base.py"
+        ],
+        "limits": "Actual local current typed component targets only. No latest whole wave/platform/native/model/SDK/protected qualification. Preserve historical census/test rosters/hashes and all unrelated active gates.",
+        "source_sha256": "aba2a566d4f4d8cce784cb9d24375c335c7be10836e6a09a59246ffe8f1c2233",
+        "method_count": 6,
+        "preserves_historical_sha_and_method_list": true,
+        "proof_status": "Accepted current local owning component target terminal; parent applies deletion/inventory"
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3581,7 +4003,199 @@
         "test_ocr_requires_both_parity_and_known_text",
         "test_ocr_sends_same_request_to_both_servers",
         "test_png_is_deterministic_and_text_bearing"
-      ]
+      ],
+      "retirement_proposal": {
+        "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+        "removed_paths": [
+          "scripts/tests/test_publish_crates.py",
+          "scripts/tests/test_llama_oracle_source.py",
+          "scripts/tests/test_ci_cargo_packages.py",
+          "scripts/tests/test_skippy_tts_oracle.py",
+          "scripts/skippy-tts-oracle.py",
+          "scripts/tts_oracle_metrics.py",
+          "scripts/tests/test_workload_monolithic_oracle.py",
+          "scripts/ci-workload-monolithic-oracle.py",
+          "scripts/workload_fixtures.py",
+          "scripts/tests/test_skippy_ocr_asr_oracle.py",
+          "scripts/skippy-ocr-asr-oracle.py",
+          "scripts/generate-ocr-oracle-fixture.py"
+        ],
+        "legacy_methods": 53,
+        "python_paths": 181,
+        "just_roster": 100,
+        "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+        "helpers_retained": [
+          "scripts/llama-oracle-source.py",
+          "scripts/ci-cargo-packages.py",
+          "scripts/check-skippy-workload-candidate.py",
+          "all actual required SDK clients"
+        ],
+        "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+        "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+        "projected_just_launch_hash": "88eb6efa25e33eb3",
+        "source_sha256": "be186f2cc1a50ff54760f257b65d03a79e61a1cf513d5272906ea98ac4e2d588",
+        "historical_source_sha256": "be186f2cc1a50ff54760f257b65d03a79e61a1cf513d5272906ea98ac4e2d588",
+        "method_count": 10,
+        "preserves_historical_sha_and_method_list": true,
+        "owning_coverage": [
+          {
+            "legacy_method": "test_png_is_deterministic_and_text_bearing",
+            "line": 29,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "reviewed_static_ocr_asset_has_frozen_identity_and_rgb_dimensions",
+                "line": 460,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_ocr_requires_both_parity_and_known_text",
+            "line": 47,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "ocr_mismatch_and_matching_wrong_label_fail",
+                "line": 303,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              },
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "ocr_actual_requests_preserve_known_label_and_media",
+                "line": 224,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_matching_incorrect_text_cannot_pass_by_containing_the_label",
+            "line": 57,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "ocr_mismatch_and_matching_wrong_label_fail",
+                "line": 303,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_asr_unlabeled_fixture_does_not_claim_accuracy",
+            "line": 63,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "asr_actual_multipart_and_aligned_chat_are_parity_only_unlabeled",
+                "line": 252,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              },
+              {
+                "path": "tools/xtask/src/automation/workload_smoke/media_comparison/text.rs",
+                "symbol": "unicode_presentation_and_independent_labels",
+                "line": 73,
+                "sha256": "3461703ea84110f8e766df46dc6ccab5c88a65313644baa194c7c3880973773c"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_asr_normalizes_only_known_decorative_prefixes",
+            "line": 70,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "unknown_asr_prefix_and_repeated_content_are_not_silently_removed",
+                "line": 429,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              },
+              {
+                "path": "tools/xtask/src/automation/workload_smoke/media_comparison/text.rs",
+                "symbol": "unicode_presentation_and_independent_labels",
+                "line": 73,
+                "sha256": "3461703ea84110f8e766df46dc6ccab5c88a65313644baa194c7c3880973773c"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_asr_matching_refusals_do_not_pass_as_transcripts",
+            "line": 86,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "asr_refusal_empty_and_label_mismatch_fail_after_actual_requests",
+                "line": 334,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_asr_repeated_reference_content_is_not_normalized_away",
+            "line": 96,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "unknown_asr_prefix_and_repeated_content_are_not_silently_removed",
+                "line": 429,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_ocr_sends_same_request_to_both_servers",
+            "line": 102,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "ocr_actual_requests_preserve_known_label_and_media",
+                "line": 224,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_asr_aligns_reference_chat_prompt_with_candidate_audio_route",
+            "line": 112,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "asr_actual_multipart_and_aligned_chat_are_parity_only_unlabeled",
+                "line": 252,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_asr_multipart_contains_deterministic_fields_and_audio",
+            "line": 135,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "asr_actual_multipart_and_aligned_chat_are_parity_only_unlabeled",
+                "line": 252,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              },
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_media_comparison_cli.rs",
+                "symbol": "collision_empty_media_and_bad_http_fail_closed",
+                "line": 364,
+                "sha256": "2894632dec5058718062669ab1825e20148f48dc1eecd8c1c6649f907cb1927e"
+              }
+            ]
+          }
+        ],
+        "proof_receipts": [
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-media-post-style.log",
+            "sha256": "c80615057a4d9f509f06e679945b4aeaba6729fb6452b449cae678721dbe5edb",
+            "terminal": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 498 filtered out; finished in 0.74s"
+          },
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-workload-units.log",
+            "sha256": "09a68adbf6a54fbaf25e83b6572f9abc75f67b466273035ad3aa4d7f85a305bb",
+            "terminal": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 1368 filtered out; finished in 0.02s"
+          }
+        ]
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3695,7 +4309,193 @@
         "test_small_pcm_rounding_difference_is_tolerated",
         "test_standalone_candidate_retains_explicit_cargo_test",
         "test_wrong_gain_and_phase_are_rejected"
-      ]
+      ],
+      "retirement_proposal": {
+        "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+        "removed_paths": [
+          "scripts/tests/test_publish_crates.py",
+          "scripts/tests/test_llama_oracle_source.py",
+          "scripts/tests/test_ci_cargo_packages.py",
+          "scripts/tests/test_skippy_tts_oracle.py",
+          "scripts/skippy-tts-oracle.py",
+          "scripts/tts_oracle_metrics.py",
+          "scripts/tests/test_workload_monolithic_oracle.py",
+          "scripts/ci-workload-monolithic-oracle.py",
+          "scripts/workload_fixtures.py",
+          "scripts/tests/test_skippy_ocr_asr_oracle.py",
+          "scripts/skippy-ocr-asr-oracle.py",
+          "scripts/generate-ocr-oracle-fixture.py"
+        ],
+        "legacy_methods": 53,
+        "python_paths": 181,
+        "just_roster": 100,
+        "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+        "helpers_retained": [
+          "scripts/llama-oracle-source.py",
+          "scripts/ci-cargo-packages.py",
+          "scripts/check-skippy-workload-candidate.py",
+          "all actual required SDK clients"
+        ],
+        "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+        "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+        "projected_just_launch_hash": "88eb6efa25e33eb3",
+        "source_sha256": "30c40cb6977e7bab34c2071b76cbd820adc2765d9dc84a8aae572aaf4690576b",
+        "historical_source_sha256": "30c40cb6977e7bab34c2071b76cbd820adc2765d9dc84a8aae572aaf4690576b",
+        "method_count": 10,
+        "preserves_historical_sha_and_method_list": true,
+        "owning_coverage": [
+          {
+            "legacy_method": "test_prebuilt_candidate_requires_verified_producer_and_never_runs_cargo",
+            "line": 39,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_tts_cli.rs",
+                "symbol": "deterministic_tts_cli_uses_verified_prebuilt_or_normal_just_and_binds_full_pcm_receipt",
+                "line": 325,
+                "sha256": "142353cdabc70588f3b73ea6d0891a1b0b3edd2b5fe6aa3982d73b591c33d465"
+              },
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_tts_cli.rs",
+                "symbol": "source_and_producer_mutations_fail_before_candidate_or_oracle_execution",
+                "line": 417,
+                "sha256": "142353cdabc70588f3b73ea6d0891a1b0b3edd2b5fe6aa3982d73b591c33d465"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_incomplete_producer_paths_do_not_fall_back_to_cargo",
+            "line": 68,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_tts_cli.rs",
+                "symbol": "partial_or_empty_prebuilt_configuration_never_falls_back_to_just",
+                "line": 462,
+                "sha256": "142353cdabc70588f3b73ea6d0891a1b0b3edd2b5fe6aa3982d73b591c33d465"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_standalone_candidate_retains_explicit_cargo_test",
+            "line": 73,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_tts_cli.rs",
+                "symbol": "deterministic_tts_cli_uses_verified_prebuilt_or_normal_just_and_binds_full_pcm_receipt",
+                "line": 325,
+                "sha256": "142353cdabc70588f3b73ea6d0891a1b0b3edd2b5fe6aa3982d73b591c33d465"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_oracle_invocation_matches_candidate_no_repack_context",
+            "line": 79,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_tts_cli.rs",
+                "symbol": "deterministic_tts_cli_uses_verified_prebuilt_or_normal_just_and_binds_full_pcm_receipt",
+                "line": 325,
+                "sha256": "142353cdabc70588f3b73ea6d0891a1b0b3edd2b5fe6aa3982d73b591c33d465"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_identical_pcm_passes_with_zero_error",
+            "line": 116,
+            "owners": [
+              {
+                "path": "tools/xtask/src/automation/workload_smoke/tts_oracle/tests.rs",
+                "symbol": "pcm_compares_entire_interleaved_frames_and_accepts_only_bounded_rounding_noise",
+                "line": 23,
+                "sha256": "5ab8efd8c34aff7753f0b03e2c976da74fddffd9f819f8c45c53a0400b4015fe"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_small_pcm_rounding_difference_is_tolerated",
+            "line": 129,
+            "owners": [
+              {
+                "path": "tools/xtask/src/automation/workload_smoke/tts_oracle/tests.rs",
+                "symbol": "pcm_compares_entire_interleaved_frames_and_accepts_only_bounded_rounding_noise",
+                "line": 23,
+                "sha256": "5ab8efd8c34aff7753f0b03e2c976da74fddffd9f819f8c45c53a0400b4015fe"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_wrong_gain_and_phase_are_rejected",
+            "line": 139,
+            "owners": [
+              {
+                "path": "tools/xtask/src/automation/workload_smoke/tts_oracle/tests.rs",
+                "symbol": "pcm_compares_entire_interleaved_frames_and_accepts_only_bounded_rounding_noise",
+                "line": 23,
+                "sha256": "5ab8efd8c34aff7753f0b03e2c976da74fddffd9f819f8c45c53a0400b4015fe"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_silent_and_mismatched_wav_are_rejected",
+            "line": 151,
+            "owners": [
+              {
+                "path": "tools/xtask/src/automation/workload_smoke/tts_oracle/tests.rs",
+                "symbol": "pcm_compares_entire_interleaved_frames_and_accepts_only_bounded_rounding_noise",
+                "line": 23,
+                "sha256": "5ab8efd8c34aff7753f0b03e2c976da74fddffd9f819f8c45c53a0400b4015fe"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_oracle_requires_current_pinned_cpu_stamp",
+            "line": 167,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_tts_cli.rs",
+                "symbol": "source_and_producer_mutations_fail_before_candidate_or_oracle_execution",
+                "line": 417,
+                "sha256": "142353cdabc70588f3b73ea6d0891a1b0b3edd2b5fe6aa3982d73b591c33d465"
+              },
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_tts_cli.rs",
+                "symbol": "missing_stale_or_metal_native_stamp_rejects_before_tts_producers_or_receipt",
+                "line": 557,
+                "sha256": "142353cdabc70588f3b73ea6d0891a1b0b3edd2b5fe6aa3982d73b591c33d465"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_candidate_requires_same_pinned_cpu_static_build",
+            "line": 203,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_tts_cli.rs",
+                "symbol": "source_and_producer_mutations_fail_before_candidate_or_oracle_execution",
+                "line": 417,
+                "sha256": "142353cdabc70588f3b73ea6d0891a1b0b3edd2b5fe6aa3982d73b591c33d465"
+              },
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_tts_cli.rs",
+                "symbol": "missing_stale_or_metal_native_stamp_rejects_before_tts_producers_or_receipt",
+                "line": 557,
+                "sha256": "142353cdabc70588f3b73ea6d0891a1b0b3edd2b5fe6aa3982d73b591c33d465"
+              }
+            ]
+          }
+        ],
+        "proof_receipts": [
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-tts-corrected2.log",
+            "sha256": "5320e55df03a6078a4f161a2f535051e054e6fc129e83194b7c94d996523c444",
+            "terminal": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 2.77s"
+          },
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-workload-units.log",
+            "sha256": "09a68adbf6a54fbaf25e83b6572f9abc75f67b466273035ad3aa4d7f85a305bb",
+            "terminal": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 1368 filtered out; finished in 0.02s"
+          }
+        ]
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3994,7 +4794,328 @@
         "test_embedding_requires_dimension_and_numeric_parity",
         "test_encoder_decoder_compares_normalized_text",
         "test_rerank_requires_same_scores_and_order"
-      ]
+      ],
+      "retirement_proposal": {
+        "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+        "removed_paths": [
+          "scripts/tests/test_publish_crates.py",
+          "scripts/tests/test_llama_oracle_source.py",
+          "scripts/tests/test_ci_cargo_packages.py",
+          "scripts/tests/test_skippy_tts_oracle.py",
+          "scripts/skippy-tts-oracle.py",
+          "scripts/tts_oracle_metrics.py",
+          "scripts/tests/test_workload_monolithic_oracle.py",
+          "scripts/ci-workload-monolithic-oracle.py",
+          "scripts/workload_fixtures.py",
+          "scripts/tests/test_skippy_ocr_asr_oracle.py",
+          "scripts/skippy-ocr-asr-oracle.py",
+          "scripts/generate-ocr-oracle-fixture.py"
+        ],
+        "legacy_methods": 53,
+        "python_paths": 181,
+        "just_roster": 100,
+        "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+        "helpers_retained": [
+          "scripts/llama-oracle-source.py",
+          "scripts/ci-cargo-packages.py",
+          "scripts/check-skippy-workload-candidate.py",
+          "all actual required SDK clients"
+        ],
+        "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+        "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+        "projected_just_launch_hash": "88eb6efa25e33eb3",
+        "source_sha256": "1e111763bd55da7f7961450f46035d5c39d4a648e53d3c9b591b73ace3d702af",
+        "historical_source_sha256": "1e111763bd55da7f7961450f46035d5c39d4a648e53d3c9b591b73ace3d702af",
+        "method_count": 7,
+        "preserves_historical_sha_and_method_list": true,
+        "owning_coverage": [
+          {
+            "legacy_method": "test_embedding_oracle_rejects_boolean_or_float_indexes",
+            "line": 21,
+            "owners": [
+              {
+                "path": "tools/xtask/src/automation/workload_smoke/comparison/tests.rs",
+                "symbol": "embedding_comparison_requires_typed_indexes_dimensions_nonzero_and_both_numeric_gates",
+                "line": 10,
+                "sha256": "dd815e0f1b4eec067fdb2d430492179befcb110274a15652d1597a49d165dd64"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_embedding_requires_dimension_and_numeric_parity",
+            "line": 27,
+            "owners": [
+              {
+                "path": "tools/xtask/src/automation/workload_smoke/comparison/tests.rs",
+                "symbol": "embedding_comparison_requires_typed_indexes_dimensions_nonzero_and_both_numeric_gates",
+                "line": 10,
+                "sha256": "dd815e0f1b4eec067fdb2d430492179befcb110274a15652d1597a49d165dd64"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_embedding_oracle_checks_each_single_input_after_batch",
+            "line": 48,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_monolithic_cli.rs",
+                "symbol": "independent_http_embeddings_compare_batch_and_every_single_even_after_a_divergence",
+                "line": 202,
+                "sha256": "a6a9f887d89b90c319ea7ad9ee7def04c02651209ea3c0452fc887cd98995ef7"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_rerank_requires_same_scores_and_order",
+            "line": 63,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_monolithic_cli.rs",
+                "symbol": "independent_http_rerank_rejects_score_and_wire_order_disagreement",
+                "line": 257,
+                "sha256": "a6a9f887d89b90c319ea7ad9ee7def04c02651209ea3c0452fc887cd98995ef7"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_encoder_decoder_compares_normalized_text",
+            "line": 80,
+            "owners": [
+              {
+                "path": "tools/xtask/src/automation/workload_smoke/comparison/tests.rs",
+                "symbol": "translation_compares_only_whitespace_normalized_generated_text",
+                "line": 68,
+                "sha256": "dd815e0f1b4eec067fdb2d430492179befcb110274a15652d1597a49d165dd64"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_direct_monolithic_completion_strips_only_terminal_runner_marker",
+            "line": 89,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_monolithic_cli.rs",
+                "symbol": "independent_native_translation_preserves_deterministic_argv_and_terminal_marker_only",
+                "line": 283,
+                "sha256": "a6a9f887d89b90c319ea7ad9ee7def04c02651209ea3c0452fc887cd98995ef7"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_direct_monolithic_completion_rejects_empty_or_failed_output",
+            "line": 101,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/workload_monolithic_cli.rs",
+                "symbol": "independent_native_translation_preserves_deterministic_argv_and_terminal_marker_only",
+                "line": 283,
+                "sha256": "a6a9f887d89b90c319ea7ad9ee7def04c02651209ea3c0452fc887cd98995ef7"
+              }
+            ]
+          }
+        ],
+        "proof_receipts": [
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-monolithic-post-style.log",
+            "sha256": "29b650a46475bd03780dbb4d3d1a2262a4f8bd4a45f92714051d5f307beb01b3",
+            "terminal": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 501 filtered out; finished in 1.21s"
+          },
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-workload-units.log",
+            "sha256": "09a68adbf6a54fbaf25e83b6572f9abc75f67b466273035ad3aa4d7f85a305bb",
+            "terminal": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 1368 filtered out; finished in 0.02s"
+          }
+        ]
+      }
+    },
+    {
+      "module": "scripts/tests/test_ci_cargo_packages.py",
+      "sha256": "60990a0236b12a30d0c76452196b6088d70bf1ec1c240fe2d25d084c3eb3b1a2",
+      "test_method_count": 9,
+      "test_methods": [
+        "test_each_extracted_workspace_member_retains_exactly_one_legacy_batch",
+        "test_unchanged_old_and_new_plans_preserve_their_batches",
+        "test_reused_package_name_preserves_both_different_owners",
+        "test_partial_plan_with_reused_name_has_explicit_generation",
+        "test_missing_successor_is_an_error_not_a_skipped_test",
+        "test_unmapped_planned_package_defers_to_the_workspace_filter",
+        "test_batch_cannot_add_a_package_outside_its_plan",
+        "test_invalid_duplicate_or_shell_shaped_names_are_rejected",
+        "test_safetensors_step_compiles_selected_owner_once_and_requires_exact_test"
+      ],
+      "baseline_status": "Introduced after frozen historical census; current qualified retirement row, historical aggregate counts unchanged",
+      "retirement_proposal": {
+        "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+        "removed_paths": [
+          "scripts/tests/test_publish_crates.py",
+          "scripts/tests/test_llama_oracle_source.py",
+          "scripts/tests/test_ci_cargo_packages.py",
+          "scripts/tests/test_skippy_tts_oracle.py",
+          "scripts/skippy-tts-oracle.py",
+          "scripts/tts_oracle_metrics.py",
+          "scripts/tests/test_workload_monolithic_oracle.py",
+          "scripts/ci-workload-monolithic-oracle.py",
+          "scripts/workload_fixtures.py",
+          "scripts/tests/test_skippy_ocr_asr_oracle.py",
+          "scripts/skippy-ocr-asr-oracle.py",
+          "scripts/generate-ocr-oracle-fixture.py"
+        ],
+        "legacy_methods": 53,
+        "python_paths": 181,
+        "just_roster": 100,
+        "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+        "helpers_retained": [
+          "scripts/llama-oracle-source.py",
+          "scripts/ci-cargo-packages.py",
+          "scripts/check-skippy-workload-candidate.py",
+          "all actual required SDK clients"
+        ],
+        "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+        "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+        "projected_just_launch_hash": "88eb6efa25e33eb3",
+        "source_sha256": "60990a0236b12a30d0c76452196b6088d70bf1ec1c240fe2d25d084c3eb3b1a2",
+        "owning_coverage": [
+          {
+            "legacy_method": "test_each_extracted_workspace_member_retains_exactly_one_legacy_batch",
+            "line": 24,
+            "owners": [
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "extracted_members_have_one_owner_when_legacy_batches_are_separate",
+                "line": 22,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_unchanged_old_and_new_plans_preserve_their_batches",
+            "line": 32,
+            "owners": [
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "batches_are_preserved_when_source_and_plan_generation_match",
+                "line": 42,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_reused_package_name_preserves_both_different_owners",
+            "line": 37,
+            "owners": [
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "reused_names_resolve_by_declared_generation_when_plan_is_partial",
+                "line": 55,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_partial_plan_with_reused_name_has_explicit_generation",
+            "line": 42,
+            "owners": [
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "reused_names_resolve_by_declared_generation_when_plan_is_partial",
+                "line": 55,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              },
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "generation_fails_when_selector_is_not_explicitly_supported",
+                "line": 204,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_missing_successor_is_an_error_not_a_skipped_test",
+            "line": 47,
+            "owners": [
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "mapped_missing_owner_fails_when_extraction_is_incomplete",
+                "line": 79,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_unmapped_planned_package_defers_to_the_workspace_filter",
+            "line": 52,
+            "owners": [
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "unmapped_absent_names_pass_through_when_membership_filter_runs_later",
+                "line": 92,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              },
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "migration_stays_inactive_when_builder_is_absent",
+                "line": 102,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_batch_cannot_add_a_package_outside_its_plan",
+            "line": 71,
+            "owners": [
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "request_fails_when_name_is_outside_complete_plan",
+                "line": 131,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_invalid_duplicate_or_shell_shaped_names_are_rejected",
+            "line": 75,
+            "owners": [
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "package_boundary_rejects_invalid_names_shapes_and_duplicates",
+                "line": 160,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              },
+              {
+                "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+                "symbol": "complete_matrix_rejects_bad_rows_and_cross_batch_duplicates",
+                "line": 186,
+                "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a"
+              }
+            ]
+          },
+          {
+            "legacy_method": "test_safetensors_step_compiles_selected_owner_once_and_requires_exact_test",
+            "line": 81,
+            "owners": [
+              {
+                "path": "tools/xtask/tests/migration_lifecycle/safetensors_workflow.rs",
+                "symbol": "actual_safetensors_step_compiles_selected_owner_once_and_requires_exact_ignored_test",
+                "line": 186,
+                "sha256": "7169ca33e5d6f96bcc750b2b832787430b5805c2a5ae6be1b1d83ae9b23d9bef"
+              }
+            ]
+          }
+        ],
+        "proof_receipts": [
+          {
+            "path": ".omo/evidence/resume-20261002/next-wave-safetensors-tests.log",
+            "sha256": "38c8cade42de7d16414d5fe08205522604f4a25658fececa405c4bd19d0ff358",
+            "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 503 filtered out; finished in 0.64s"
+          },
+          {
+            "path": ".omo/evidence/resume-20261002/next-full-xtask-corrected4.log",
+            "sha256": "fff4143c5afaf1bea549dd49f3a1d776431019df4d03320a6723ce8d9026451a",
+            "terminal": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s",
+            "qualification": "Checkpoint e767ddc2a parent3231/0; use existing repository cargo unit and migration_cargo_metadata/CLI target summaries, not only final aggregate line."
+          }
+        ]
+      }
     }
   ],
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
@@ -4071,7 +5192,9 @@
         "test_method_count": 1
       }
     ],
-    "skill_local_generic_tests": [],
+    "skill_local_generic_tests": [
+
+    ],
     "skill_local_test_note": "No test_*.py modules were found under .agents/skills. Skill-local scripts and their caller classifications are tracked separately by the task-3 instructions/exception ledger.",
     "tracked_python_test_modules": 147
   },
@@ -4224,5 +5347,119 @@
     "just_roster": 108,
     "helper_retained": "scripts/safe-extract-zip.py",
     "gates_unchanged": true
+  },
+  "tar_release_test_retirement": {
+    "coverage": "ci/automation-migration/tar-release-test-retirement-coverage.json",
+    "removed_test_paths": [
+      "scripts/tests/test_safe_extract_tar.py",
+      "scripts/tests/test_select_release_notes_base.py"
+    ],
+    "methods": 14,
+    "component_proof": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+        "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+        "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+        "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+        "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+      }
+    ],
+    "python_paths": 193,
+    "just_roster": 106,
+    "helpers_retained": [
+      "scripts/safe-extract-tar.py",
+      "scripts/verify-checksum-sidecar.py",
+      "scripts/select-release-notes-base.py"
+    ],
+    "limits": "Actual local current typed component targets only. No latest whole wave/platform/native/model/SDK/protected qualification. Preserve historical census/test rosters/hashes and all unrelated active gates."
+  },
+  "next_wave_comparator_and_test_retirement": {
+    "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/test_publish_crates.py",
+      "scripts/tests/test_llama_oracle_source.py",
+      "scripts/tests/test_ci_cargo_packages.py",
+      "scripts/tests/test_skippy_tts_oracle.py",
+      "scripts/skippy-tts-oracle.py",
+      "scripts/tts_oracle_metrics.py",
+      "scripts/tests/test_workload_monolithic_oracle.py",
+      "scripts/ci-workload-monolithic-oracle.py",
+      "scripts/workload_fixtures.py",
+      "scripts/tests/test_skippy_ocr_asr_oracle.py",
+      "scripts/skippy-ocr-asr-oracle.py",
+      "scripts/generate-ocr-oracle-fixture.py"
+    ],
+    "legacy_methods": 53,
+    "python_paths": 181,
+    "just_roster": 100,
+    "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+    "helpers_retained": [
+      "scripts/llama-oracle-source.py",
+      "scripts/ci-cargo-packages.py",
+      "scripts/check-skippy-workload-candidate.py",
+      "all actual required SDK clients"
+    ],
+    "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+    "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+    "projected_just_launch_hash": "88eb6efa25e33eb3"
+  },
+  "current_handoff_pack_method_retirement": {
+    "coverage": "ci/automation-migration/canary-handoff-pack-retirement-coverage.json",
+    "path": "scripts/tests/test_llama_canary_handoff_contract.py",
+    "retired_method": "test_pack_restore_and_source_owned_workload_verification",
+    "legacy_source_sha256": "4dfe328aab46662ac1814cdf14625a458beb2f8d10a4793ff47650e8930becd3",
+    "current_source_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+    "retained_methods": [
+      "test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected",
+      "test_snapshot_rebinding_requires_sealed_manifest_exact_tree_and_files"
+    ],
+    "proof": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-pack-restore-tests.log",
+        "sha256": "c303e924cd371d95f6cdfe3584d3c473085ef35959e8927a0b80ad3533580b70",
+        "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1399 filtered out; finished in 1.79s"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-selected-battery-tests.log",
+        "sha256": "80c314c9aee2c13e38d68ea4df34758e1d107da23ed5f480c48b45a495959433",
+        "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 503 filtered out; finished in 5.00s"
+      }
+    ],
+    "python_paths": 181,
+    "just_roster": 100,
+    "policy": "One method only after exact12file predecessor; no helper/module/roster/count deletion. Historical first retirement and failed-source receipts retained."
+  },
+  "retained_os_import_correction": {
+    "reason": "Restored import os required by retained patch.dict(os.environ) test. No production or retirement-scope change.",
+    "previous_proposal_source_sha256": "85dd449a4e4ea61c5699611e57ba9a2971b239ce40a9ec17ab92d7aa7c476f74",
+    "current_source_sha256": "ed4ffbb80783fc8c692fd9eac90ff10289697ddc046690c162bf292cb82e9fc1",
+    "previous_failed_receipt": {
+      "path": ".omo/evidence/resume-20261002/next-wave-retained-handoff-tests.log",
+      "sha256": "24f244fc893c006015f71e355202674d1b1fb58729cbb8b89c5df1205341caac"
+    },
+    "qualified_retained_tests": {
+      "path": ".omo/evidence/resume-20261002/next-wave-retained-handoff-corrected.log",
+      "sha256": "eceaf0b16c500a8e697831fa48a6455829593379d8cd46627b7a24e5fbf5a678",
+      "result": "2 passed, 0 failed; 0.851s"
+    },
+    "current_test_tree_sha256": "ac0bdec2061793cf2104e2f2b3d4f73d04077f7dd8f855ae1a5ae6c49252333c",
+    "counts": {
+      "python": 181,
+      "just_roster": 100
+    }
+  },
+  "just_layout_whitelist_source_refresh": {
+    "source": "scripts/tests/test_justfile_layout.py",
+    "previous_source_sha256": "4cebd783ecfa111da9d64dc9ed70793b0cf45f0d532dccc604f5466c51a5fc05",
+    "current_source_sha256": "af60c244a9022a8a5460cb229d106af12cdefe4d516f62f04c961e6906a168ce",
+    "previous_observed_test_tree_sha256": "ac0bdec2061793cf2104e2f2b3d4f73d04077f7dd8f855ae1a5ae6c49252333c",
+    "current_observed_test_tree_sha256": "f0875ce098be5965697349a92ea0f8b94a58dd68ca286a2dc0346af0bdb9b472",
+    "change": "Only adds ci-automation-contracts to retained just/ci.just recipe whitelist; source line count, method count3, candidate line/hash/occurrence identities and import/Just roster unchanged",
+    "qualified_parent_receipt": "Parent reports all3 retained layout tests PASS after exact whitelist addition; canonical Rust3319pass/0fail/2ignored across85targets. No worker execution. Full legacy rerun remains parent-owned.",
+    "count_or_roster_changes": false,
+    "held_payload_integration": false
   }
 }

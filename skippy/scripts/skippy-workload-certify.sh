@@ -398,16 +398,16 @@ if [[ -n "$ORACLE_SERVER" ]]; then
     ORACLE_MEDIA_PATH="$MEDIA_PATH"
     if [[ "$MODEL_CLASS" == "ocr" ]]; then
       ORACLE_MEDIA_PATH="$WORK_DIR/ocr-oracle-mesh-42.png"
-      python3 "$ROOT/scripts/generate-ocr-oracle-fixture.py" --output "$ORACLE_MEDIA_PATH"
+      cp "$ROOT/ci/fixtures/ocr-mesh-42.png" "$ORACLE_MEDIA_PATH"
     fi
-    python3 "$ROOT/scripts/skippy-ocr-asr-oracle.py" \
+    "${workload_automation[@]}" automation workload-media-oracle \
       --candidate-url "http://127.0.0.1:$PORT/v1" \
       --oracle-url "http://127.0.0.1:$ORACLE_PORT/v1" \
       --model "$MODEL_ID" \
       --class "$MODEL_CLASS" \
       --media-path "$ORACLE_MEDIA_PATH" | tee "$COMPARISON_LOG"
   else
-    python3 "$ROOT/scripts/ci-workload-monolithic-oracle.py" \
+    "${workload_automation[@]}" automation workload-monolithic-oracle \
       --candidate-url "http://127.0.0.1:$PORT/v1" \
       --oracle-url "http://127.0.0.1:$ORACLE_PORT/v1" \
       --model "$MODEL_ID" \
@@ -416,7 +416,7 @@ if [[ -n "$ORACLE_SERVER" ]]; then
 fi
 
 if [[ -n "$ORACLE_COMPLETION" ]]; then
-  python3 "$ROOT/scripts/ci-workload-monolithic-oracle.py" \
+  "${workload_automation[@]}" automation workload-monolithic-oracle \
     --candidate-url "http://127.0.0.1:$PORT/v1" \
     --oracle-completion "$ORACLE_COMPLETION" \
     --model-path "$MODEL_PATH" \
@@ -425,7 +425,8 @@ if [[ -n "$ORACLE_COMPLETION" ]]; then
 fi
 
 if [[ -n "$ORACLE_TTS" ]]; then
-  python3 "$ROOT/scripts/skippy-tts-oracle.py" \
+  "${workload_automation[@]}" automation workload-tts-oracle \
+    --root "$ROOT" \
     --oracle-cli "$ORACLE_TTS" \
     --model-path "$MODEL_PATH" \
     --projector-path "$PROJECTOR_PATH" \

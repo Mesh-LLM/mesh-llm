@@ -11404,6 +11404,7 @@ dependencies = [
 name = "xtask"
 version = "0.78.0"
 dependencies = [
+ "caseless",
  "ed25519-dalek",
  "flate2",
  "getrandom 0.3.4",
@@ -11424,6 +11425,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
+ "unicode-normalization",
  "uuid",
  "windows-sys 0.61.2",
 ]

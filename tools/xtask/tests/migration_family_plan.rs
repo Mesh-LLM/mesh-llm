@@ -24,6 +24,10 @@ mod validation;
 #[path = "migration_family_plan/verification.rs"]
 mod verification;
 
+#[path = "migration_family_plan/history.rs"]
+mod history;
+use history::run_historical;
+
 static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 type ManifestChange = (&'static str, fn(&mut Value));
 
@@ -101,7 +105,11 @@ fn complete_plan_matches_frozen_legacy_stdout_when_generated_from_selected_root(
             ],
         ),
     ] {
-        let output = run(&args);
+        let output = if name.starts_with("real") {
+            run_historical(&args)
+        } else {
+            run(&args)
+        };
         assert_eq!(
             output.status.code(),
             Some(0),
@@ -127,7 +135,7 @@ fn complete_plan_matches_frozen_legacy_stdout_when_generated_from_selected_root(
         let manifest_path = if name.starts_with("synthetic") {
             root().join("tools/xtask/tests/fixtures/family_evidence/synthetic-manifest.json")
         } else {
-            root().join("ci/llama-canary/family-certified.json")
+            root().join("tools/xtask/tests/fixtures/family_evidence/historical-manifest.json")
         };
         assert_eq!(
             plan["manifest_sha256"],
@@ -166,7 +174,7 @@ fn frozen_errors_keep_status_and_streams() {
 
 #[test]
 fn verify_frozen_plan_succeeds_silently_even_with_other_generation_count() {
-    let output = run(&[
+    let output = run_historical(&[
         "--verify-plan",
         "tools/xtask/tests/fixtures/family_evidence/real-4.stdout",
         "--shard-count",
@@ -197,7 +205,9 @@ fn output_and_github_output_use_exact_written_plan_and_compact_matrix() {
     );
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
     let bytes = fs::read(&plan_path).expect("plan written");
-    assert_eq!(bytes, fixture("real-reversed", "stdout"));
+    let direct = run(&["--families", "llama,qwen3-dense"]);
+    assert_eq!(direct.status.code(), Some(0));
+    assert_eq!(bytes, direct.stdout);
     let plan: Value = serde_json::from_slice(&bytes).expect("plan JSON");
     let github = fs::read_to_string(&github_path).expect("github output");
     let appended = github

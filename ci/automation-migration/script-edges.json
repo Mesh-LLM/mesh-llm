@@ -358,7 +358,7 @@
       "file": "scripts/llama-canary-agent-repair.sh",
       "members": [
         [
-          169,
+          196,
           "7f0ae9a73f4448bd",
           1,
           "script",
@@ -366,7 +366,7 @@
           "run_for: --seconds timeout --label label optional --cleanup-on-exit -- remaining command array; combined output tee log, nonzero/124 budget failure propagated"
         ],
         [
-          365,
+          392,
           "1d0915cce3e94cb3",
           1,
           "script",
@@ -374,15 +374,7 @@
           "--base-ref BASE_HEAD --llama-src selected prepared tree; output tee policy log, failure rejects agent candidate"
         ],
         [
-          386,
-          "90fc69b829bfcaf2",
-          1,
-          "script",
-          "scripts/check-skippy-workload-candidate.py",
-          "--candidate-binary selected skippy-server --native-build-dir selected build --producer-manifest selected manifest; source and executable gate, failure rejects candidate"
-        ],
-        [
-          510,
+          536,
           "5af7e4058f86f917",
           1,
           "environment",
@@ -390,7 +382,7 @@
           "LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- arch -arm64 bash scripts/build-llama.sh with CMake flags; environment installs dependency and runs native build, failures abort"
         ],
         [
-          571,
+          597,
           "61060159e19b736b",
           1,
           "script",
@@ -398,7 +390,7 @@
           "--llama-src .deps/llama.cpp validate with continued options; stdout/stderr inherited; nonzero fails canary gate"
         ],
         [
-          201,
+          228,
           "8faf38bee64ae451",
           1,
           "script",
@@ -406,7 +398,7 @@
           "--manifest ci/llama-canary/family-certified.json --shard-count 1 --check-cache --cache-root selected cache --output selected plan; writes plan JSON; failure rejects canary"
         ],
         [
-          644,
+          670,
           "2cb072e565e9e041",
           1,
           "script",
@@ -414,7 +406,7 @@
           "no args; writes split certification roster; output/status inherited, failure rejects canary"
         ],
         [
-          652,
+          678,
           "180a08a4e49894c0",
           1,
           "script",
@@ -422,7 +414,7 @@
           "--check validates generated roster without writing; inherited diagnostics, nonzero rejects canary"
         ],
         [
-          207,
+          234,
           "b4ca5a08609ed376",
           1,
           "script",
@@ -430,7 +422,7 @@
           "Main bd5514dd8 retained source: python3 scripts/plan-family-battery.py --verify-plan \"$PLAN_PATH\"; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          574,
+          600,
           "8faf38bee64ae451",
           2,
           "script",
@@ -483,67 +475,6 @@
           "inline",
           "parity candidate selector and downloader",
           "python3 - argv MANIFEST MODEL_MANIFEST STATUSES PRIORITIES DRY_RUN; filters pinned models and prints hf download command in dry-run; normal run executes hf download subprocess into HF cache and verifies file size/SHA; child failures recorded/skipped, output inherited"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/skippy-ci-smoke.sh",
-      "members": [
-        [
-          88,
-          "0414767ad76dd931",
-          1,
-          "inline",
-          "bounded child command runner",
-          "python3 - argv SMOKE_COMMAND_TIMEOUT_SECS label remaining command args with fd3 inherited stdin; launches child, passes stdout/stderr, exits child status or 124 after process-group TERM/KILL; no direct file write"
-        ],
-        [
-          207,
-          "f8fb9fe483d3ac0c",
-          1,
-          "inline",
-          "ephemeral smoke port",
-          "python3 - binds loopback port 0, prints selected port and closes socket; error aborts, no write"
-        ],
-        [
-          221,
-          "879d5562d50bd7f9",
-          1,
-          "inline",
-          "TCP readiness probe",
-          "python3 - argv host port; attempts one-second TCP connection; streams suppressed, status controls retry; no write"
-        ],
-        [
-          260,
-          "3cf5f0645e066c05",
-          1,
-          "inline",
-          "stage config writer",
-          "python3 - argv config_path model_id model_path layer_end ctx_size bind_addr payload SMOKE_FLASH_ATTN n_batch n_ubatch upstream_endpoint; hashes model and writes stage JSON config, failure aborts"
-        ],
-        [
-          329,
-          "35aa990aa74d4510",
-          1,
-          "inline",
-          "long prompt writer",
-          "python3 - argv path; writes deterministic long prompt fixture, failure aborts"
-        ],
-        [
-          354,
-          "ba28975e02098c5d",
-          1,
-          "selection",
-          "python3 availability",
-          "require_cmd command -v only; missing interpreter fails smoke preflight"
-        ],
-        [
-          598,
-          "8da138b7e0762ccd",
-          1,
-          "inline",
-          "shared prompt prefix generator",
-          "python3 - prints Cache smoke shared system prefix repeated 32 times; stdout captured in openai_shared_prefix; no file write"
         ]
       ]
     },
@@ -602,11 +533,11 @@
       "members": [
         [
           24,
-          "22666b23391948f7",
+          "88eb6efa25e33eb3",
           1,
           "environment",
-          "explicit surviving scripts.tests modules",
-          "Transitional legacy coverage retained individually; modules remain pending their intent ports, not approved exceptions"
+          "explicit surviving100 scripts.tests modules",
+          "Exact remaining legacy module roster; six current qualified modules retire with durable53-intent coverage. Surviving modules remain mandatory until their own intent ports, not approved exceptions."
         ]
       ]
     },
@@ -805,47 +736,7 @@
           "echo stderr only, no interpreter"
         ],
         [
-          400,
-          "18a85526e4120fa8",
-          1,
-          "script",
-          "scripts/generate-ocr-oracle-fixture.py",
-          "OCR-only --output ORACLE_MEDIA_PATH; writes media fixture, inherited output/status; nonzero aborts"
-        ],
-        [
-          402,
-          "b5dac3de9a0e64bf",
-          1,
-          "script",
-          "scripts/skippy-ocr-asr-oracle.py",
-          "OCR/ASR --candidate-url http://127.0.0.1:PORT/v1 --oracle-url http://127.0.0.1:ORACLE_PORT/v1 --model MODEL_ID --class MODEL_CLASS --media-path ORACLE_MEDIA_PATH; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
-        ],
-        [
-          409,
-          "8bb1eaaf0c78dccc",
-          1,
-          "script",
-          "scripts/ci-workload-monolithic-oracle.py",
-          "server oracle --candidate-url http://127.0.0.1:PORT/v1 --oracle-url http://127.0.0.1:ORACLE_PORT/v1 --model MODEL_ID --class MODEL_CLASS; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
-        ],
-        [
-          418,
-          "8bb1eaaf0c78dccc",
-          2,
-          "script",
-          "scripts/ci-workload-monolithic-oracle.py",
-          "encoder-decoder --candidate-url http://127.0.0.1:PORT/v1 --oracle-completion ORACLE_COMPLETION --model-path MODEL_PATH --model MODEL_ID --class MODEL_CLASS; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
-        ],
-        [
-          427,
-          "17d63f5f0fac2843",
-          1,
-          "script",
-          "scripts/skippy-tts-oracle.py",
-          "TTS --oracle-cli ORACLE_TTS --model-path MODEL_PATH --projector-path PROJECTOR_PATH --model MODEL_ID --layer-end LAYER_END --work-dir WORK_DIR; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
-        ],
-        [
-          437,
+          438,
           "d15bff10ec3d569b",
           1,
           "script",
@@ -1035,22 +926,6 @@
         ]
       ],
       "root": "optional canary candidate source verification"
-    },
-    {
-      "boundary": "model path and oracle-cli selected by caller; embedding/rerank paths use HTTP only",
-      "file": "scripts/ci-workload-monolithic-oracle.py",
-      "members": [
-        [
-          197,
-          "4fd07de0196497c2",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "conditional: <oracle_cli> -m <model> -p <encoder-decoder prompt> -n 32 -c 0 -b 2048 -ub 2048 -ngl 0 -s 1 --temp 0 --no-repack --no-display-prompt --simple-io",
-          "monolithic_completion captures stdout/stderr text with 240s timeout/check=False; timeout/nonzero/empty output fail; strips end marker and compares candidate HTTP response; no local output file"
-        ]
-      ],
-      "root": "optional workload oracle encoder-decoder verification"
     },
     {
       "boundary": "paths bounded by selected job/upload flags; destructive cleanup never general workspace sweep",
@@ -1583,40 +1458,6 @@
       "root": "optional family parity and source inventory"
     },
     {
-      "boundary": "candidate/manifest path, oracle CLI, model/projector and output selected by caller",
-      "file": "scripts/skippy-tts-oracle.py",
-      "members": [
-        [
-          88,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "conditional: cargo test or prebuilt candidate test binary, or pinned llama-tts with model/projector/prompt/audio options",
-          "run_logged cwd ROOT env caller, combines stdout/stderr in log, check=False timeout=900; timeout/nonzero raises with log tail; writes candidate/reference WAV and comparison JSON"
-        ],
-        [
-          186,
-          "227b092c1f2b3e39",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "scripts/check-skippy-workload-candidate.py",
-          "candidate_test_command with producer manifest: sys.executable verifier --candidate-binary <binary_dir/skippy-server> --native-build-dir <native_dir> --producer-manifest <manifest>; check=True inherited streams, nonzero raises before candidate test"
-        ],
-        [
-          187,
-          "88885afada173b60",
-          1,
-          "subprocess-or-interpreter",
-          "indirect",
-          "scripts/check-skippy-workload-candidate.py",
-          "argv continuation of subprocess.run at line 186; not a second launch; supplies selected candidate/native/producer paths"
-        ]
-      ],
-      "root": "optional workload TTS oracle verification"
-    },
-    {
       "boundary": "base ref and selected root supplied by CLI; local policy module imported separately",
       "file": "scripts/validate-llama-canary-agent-manifests.py",
       "members": [
@@ -1643,11 +1484,6 @@
       "scripts/ci-cargo-packages.py",
       "9f15bd3e32bd9263dfec4d1b6f7f5744680a196e79c0f387ade538341f1ecb36",
       111
-    ],
-    [
-      "scripts/ci-workload-monolithic-oracle.py",
-      "e4f4707d5ddb36c27aabcae77b0403db8ddc16aa535dbe9c88986f38d7ec9f51",
-      259
     ],
     [
       "scripts/cleanup-self-hosted.py",
@@ -1725,11 +1561,6 @@
       1200
     ],
     [
-      "scripts/skippy-tts-oracle.py",
-      "b7e0f93124a8e3ce356cf5e66bbfa7e6d897fa5ab5e340c15d57771616e4171a",
-      300
-    ],
-    [
       "scripts/validate-llama-canary-agent-manifests.py",
       "895aeec1df98d99f124db9fcdd26f658f051997cf0666bb50227866b20c381d8",
       235
@@ -1782,8 +1613,8 @@
     },
     {
       "path": "scripts/skippy-workload-certify.sh",
-      "sha256": "21d1f9858fb1415bbc91320c7009dbafb8dc4bb473c1a4c9fdac3df59c52e1de",
-      "line_count": 459
+      "sha256": "607705da433c993e9fc22c7761b3cd4ddf2f0812ea1db47d5ea645c55bb059e0",
+      "line_count": 460
     },
     {
       "path": ".github/actions/upload-automation/action.yml",
@@ -1797,8 +1628,8 @@
     },
     {
       "path": ".github/workflows/ci-quality-slice.yml",
-      "sha256": "0e4e430011f4ba3967908d9e017a0827a8173aee5af1cf3a12d7f887366a6a1c",
-      "line_count": 650
+      "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
+      "line_count": 649
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
@@ -1909,5 +1740,461 @@
     "just_roster": 108,
     "helper_retained": "scripts/safe-extract-zip.py",
     "gates_unchanged": true
+  },
+  "tar_release_test_retirement": {
+    "coverage": "ci/automation-migration/tar-release-test-retirement-coverage.json",
+    "removed_test_paths": [
+      "scripts/tests/test_safe_extract_tar.py",
+      "scripts/tests/test_select_release_notes_base.py"
+    ],
+    "methods": 14,
+    "component_proof": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+        "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+        "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+        "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+        "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s"
+      }
+    ],
+    "python_paths": 193,
+    "just_roster": 106,
+    "helpers_retained": [
+      "scripts/safe-extract-tar.py",
+      "scripts/verify-checksum-sidecar.py",
+      "scripts/select-release-notes-base.py"
+    ],
+    "limits": "Actual local current typed component targets only. No latest whole wave/platform/native/model/SDK/protected qualification. Preserve historical census/test rosters/hashes and all unrelated active gates."
+  },
+  "next_wave_source_reconciliation": {
+    "python_paths": 193,
+    "just_roster": 106,
+    "source_snapshot": "Current maintained next-wave callers; parent owns pending aggregate validation.",
+    "source_bindings": [
+      {
+        "path": "scripts/skippy-ci-smoke.sh",
+        "sha256": "a5732e266792ee1ff34461e0101020cbeb40a6dddd0bc568cf122ea556efbb04",
+        "line_count": 675
+      },
+      {
+        "path": "scripts/skippy-workload-certify.sh",
+        "sha256": "607705da433c993e9fc22c7761b3cd4ddf2f0812ea1db47d5ea645c55bb059e0",
+        "line_count": 460
+      },
+      {
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "sha256": "4c0a8a8cde5c90b7c24ce71811452dba6134e0fbaad2ad743b3144d5f7495891",
+        "line_count": 889
+      },
+      {
+        "path": ".github/workflows/ci-quality-slice.yml",
+        "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
+        "line_count": 649
+      },
+      {
+        "path": "ci/requirements-ci-python.txt",
+        "sha256": "71749243f84428fee225bfaa796dca5ef6c1e83a98f6d2a407df615b0390d6fb",
+        "line_count": 1
+      },
+      {
+        "path": "ci/model-artifacts/registry.json",
+        "sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d",
+        "line_count": 5163
+      },
+      {
+        "path": "ci/llama-canary/family-certified.json",
+        "sha256": "bd4f1e44cda7c6012ffe21526011e57a3b1f485e4172e077b39d5a9339f0f948",
+        "line_count": 1009
+      },
+      {
+        "path": "ci/fixtures/ocr-mesh-42.png",
+        "sha256": "ff5f6c29aa9b06d1c577561c6cddcfce8b06f40a8c316542ec64fbc2fdd9c009",
+        "byte_count": 1171
+      },
+      {
+        "path": "ci/fixtures/skippy-cache-prompt-input.txt",
+        "sha256": "a3365eb075c947db63618e9794af77aaed7c1eac39c9be4f88e9d6c2a5e47055",
+        "line_count": 7
+      },
+      {
+        "path": "ci/model-artifacts/manifests/competitive-benchmark.json",
+        "sha256": "bc1ec8b8d29da9e410f52208b9d635fe63edeab61fe36c3cfc072f757a8a14ca",
+        "line_count": 166
+      },
+      {
+        "path": "ci/model-artifacts/manifests/hf-download-smoke.json",
+        "sha256": "9028f99b7ca01f74d0cc48b2e2f0183136d776808642adb5fb02781c3ea6058a",
+        "line_count": 90
+      },
+      {
+        "path": "ci/model-artifacts/manifests/openai-smoke.json",
+        "sha256": "94153eb1fe4053716a551a4bdf14e1ea293cd66bf9863872047f38ce0d59b4a6",
+        "line_count": 48
+      },
+      {
+        "path": "ci/model-artifacts/manifests/product-smoke.json",
+        "sha256": "8aecfe0173af47797c2775822f553bfc313282554a71b327147ee9682ccdaef1",
+        "line_count": 135
+      },
+      {
+        "path": "ci/model-artifacts/manifests/radix-cache.json",
+        "sha256": "3cb2a784bc5d3c26f4a01277a9e053b57bdf41641233fea8057584d38e7d500d",
+        "line_count": 166
+      },
+      {
+        "path": "ci/model-artifacts/manifests/safetensors-runtime-smoke.json",
+        "sha256": "2d3fb11c3abdec1d755a8f2a56f8784e05a83b4ebb206b32ef2d2b81aeee37c7",
+        "line_count": 98
+      },
+      {
+        "path": "ci/model-artifacts/manifests/scripted-binary-smoke.json",
+        "sha256": "60592d9c7cab96c5721d47055f9b80f56fced30e4d9eac70c07023654cd0bef5",
+        "line_count": 90
+      },
+      {
+        "path": "ci/model-artifacts/manifests/sdk-smoke.json",
+        "sha256": "6154b50c5ede26b701def7f7af126f05bf494ac55d05420cc9d0d25b6ed7ac45",
+        "line_count": 49
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+        "sha256": "6273529c817393c7685da8367eb01d8d993d978863bbed7d14c1bbbb0d8ef02e",
+        "line_count": 92
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-correctness.json",
+        "sha256": "69810320b57be99e90fb5fe4ab7c07840b6beac892f7f9ed130b8d38e397d75b",
+        "line_count": 47
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-parity.json",
+        "sha256": "5b40f91900bb0034087a0f6423257c2e0d3cfb92b34e260fabe7556c6f3079e6",
+        "line_count": 202
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
+        "sha256": "d115a51a0652038e6eb7d3f64125f02b30910f094ce7505c78636b83f0ae9c56",
+        "line_count": 135
+      }
+    ],
+    "generated_registry_bindings": [
+      {
+        "path": "ci/model-artifacts/manifests/competitive-benchmark.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/hf-download-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/openai-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/product-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/radix-cache.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/safetensors-runtime-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/scripted-binary-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/sdk-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-correctness.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-parity.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      },
+      {
+        "path": "ci/model-artifacts/manifests/skippy-system-one-smoke.json",
+        "registry_sha256": "68fd45eb701e8688c3fd9659e5264781f9bd2a66e0886ac24b287a55cab8176d"
+      }
+    ],
+    "limits": "Source-bound caller reconciliation only. Generic Python implementations and unqualified test methods retained; required SDK, native, model, platform and protected gates unchanged. Literal typed command selection and continued argv are reviewed, but runtime dynamic expansion is not parser-complete reachability proof.",
+    "removed_edges": [
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "line": 386,
+        "identity": "90fc69b829bfcaf2:1",
+        "disposition": "script",
+        "target": "scripts/check-skippy-workload-candidate.py"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-ci-smoke.sh",
+        "line": 88,
+        "identity": "0414767ad76dd931:1",
+        "disposition": "inline",
+        "target": "bounded child command runner"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-ci-smoke.sh",
+        "line": 207,
+        "identity": "f8fb9fe483d3ac0c:1",
+        "disposition": "inline",
+        "target": "ephemeral smoke port"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-ci-smoke.sh",
+        "line": 221,
+        "identity": "879d5562d50bd7f9:1",
+        "disposition": "inline",
+        "target": "TCP readiness probe"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-ci-smoke.sh",
+        "line": 260,
+        "identity": "3cf5f0645e066c05:1",
+        "disposition": "inline",
+        "target": "stage config writer"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-ci-smoke.sh",
+        "line": 329,
+        "identity": "35aa990aa74d4510:1",
+        "disposition": "inline",
+        "target": "long prompt writer"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-ci-smoke.sh",
+        "line": 354,
+        "identity": "ba28975e02098c5d:1",
+        "disposition": "selection",
+        "target": "python3 availability"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-ci-smoke.sh",
+        "line": 598,
+        "identity": "8da138b7e0762ccd:1",
+        "disposition": "inline",
+        "target": "shared prompt prefix generator"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-workload-certify.sh",
+        "line": 400,
+        "identity": "18a85526e4120fa8:1",
+        "disposition": "script",
+        "target": "scripts/generate-ocr-oracle-fixture.py"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-workload-certify.sh",
+        "line": 402,
+        "identity": "b5dac3de9a0e64bf:1",
+        "disposition": "script",
+        "target": "scripts/skippy-ocr-asr-oracle.py"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-workload-certify.sh",
+        "line": 409,
+        "identity": "8bb1eaaf0c78dccc:1",
+        "disposition": "script",
+        "target": "scripts/ci-workload-monolithic-oracle.py"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-workload-certify.sh",
+        "line": 418,
+        "identity": "8bb1eaaf0c78dccc:2",
+        "disposition": "script",
+        "target": "scripts/ci-workload-monolithic-oracle.py"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-workload-certify.sh",
+        "line": 427,
+        "identity": "17d63f5f0fac2843:1",
+        "disposition": "script",
+        "target": "scripts/skippy-tts-oracle.py"
+      }
+    ],
+    "rebound_rows": [
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "from": 169,
+        "to": 196,
+        "identity": "7f0ae9a73f4448bd:1"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "from": 365,
+        "to": 392,
+        "identity": "1d0915cce3e94cb3:1"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "from": 510,
+        "to": 536,
+        "identity": "5af7e4058f86f917:1"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "from": 571,
+        "to": 597,
+        "identity": "61060159e19b736b:1"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "from": 201,
+        "to": 228,
+        "identity": "8faf38bee64ae451:1"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "from": 644,
+        "to": 670,
+        "identity": "2cb072e565e9e041:1"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "from": 652,
+        "to": 678,
+        "identity": "180a08a4e49894c0:1"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "from": 207,
+        "to": 234,
+        "identity": "b4ca5a08609ed376:1"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "from": 574,
+        "to": 600,
+        "identity": "8faf38bee64ae451:2"
+      },
+      {
+        "ledger": "script-edges",
+        "path": "scripts/skippy-workload-certify.sh",
+        "from": 437,
+        "to": 438,
+        "identity": "d15bff10ec3d569b:1"
+      }
+    ]
+  },
+  "next_wave_comparator_and_test_retirement": {
+    "coverage": "ci/automation-migration/next-wave-test-tts-retirement-coverage.json",
+    "removed_paths": [
+      "scripts/tests/test_publish_crates.py",
+      "scripts/tests/test_llama_oracle_source.py",
+      "scripts/tests/test_ci_cargo_packages.py",
+      "scripts/tests/test_skippy_tts_oracle.py",
+      "scripts/skippy-tts-oracle.py",
+      "scripts/tts_oracle_metrics.py",
+      "scripts/tests/test_workload_monolithic_oracle.py",
+      "scripts/ci-workload-monolithic-oracle.py",
+      "scripts/workload_fixtures.py",
+      "scripts/tests/test_skippy_ocr_asr_oracle.py",
+      "scripts/skippy-ocr-asr-oracle.py",
+      "scripts/generate-ocr-oracle-fixture.py"
+    ],
+    "legacy_methods": 53,
+    "python_paths": 181,
+    "just_roster": 100,
+    "proof_status": "Parent accepted current owning component targets; actual deletion/staging/full inventory and whole-wave validation belong to parent",
+    "helpers_retained": [
+      "scripts/llama-oracle-source.py",
+      "scripts/ci-cargo-packages.py",
+      "scripts/check-skippy-workload-candidate.py",
+      "all actual required SDK clients"
+    ],
+    "limits": "Finite local synthetic/native producer subprocess fixtures and typed owner unit/CLI proofs only. No live publication, native/model, required SDK runtime, platform or protected historical qualification. Preserve frozen history and every unrelated active gate.",
+    "projected_just_sha256": "da1d0bb5e107dda45a7b52f4f7153c83a34e4f2f56dd8f1907eaa208416af644",
+    "projected_just_launch_hash": "88eb6efa25e33eb3"
+  },
+  "current_quality_rust_coverage": {
+    "recipe": "just ci-automation-contracts",
+    "target_registry": "ci/automation-migration/quality-rust-contract-targets.json",
+    "integration_targets": 84,
+    "unit_target": "xtask",
+    "sources": {
+      "just/ci.just": {
+        "sha256": "74ef6a128266450bb05f03fc83ec16078836677498c701946844ae22019faf9b",
+        "line_count": 270
+      },
+      ".github/workflows/ci-quality-slice.yml": {
+        "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
+        "line_count": 649
+      }
+    },
+    "status": "Authored wiring only; parent must integrate and qualify normal ci-validate. Legacy roster, PyYAML and all required SDK/native/model/protected gates retained.",
+    "scope": "No Python edges removed. All existing row identities/occurrences preserved; changed workflow line positions/source snapshots rebound.",
+    "current_admission_selection_extension": {
+      "added_targets": [
+        "automation_selector",
+        "canary_cache_configuration",
+        "canary_controller_plan",
+        "family_battery_environment",
+        "family_battery_prepared_source",
+        "openai_smoke_config"
+      ],
+      "previous_targets": 78,
+      "current_targets": 84,
+      "scope": "Six current mandatory caller/admission suites; no native/model/SDK/network execution. Existing78 selections preserved. Unix shell groups remain cfg-unix; no Windows qualification claim. Optional OpenCode/lane-only suites remain separate.",
+      "source_bindings": [
+        {
+          "path": "tools/xtask/tests/automation_selector.rs",
+          "sha256": "8d20ede45ec3e9657ff77a319457ee6e5d686ddb4625493e1cf03f400d41327c"
+        },
+        {
+          "path": "tools/xtask/tests/canary_cache_configuration.rs",
+          "sha256": "1d648c36f195cf3f6aa2858386fee8170816a5ea7cb55db3876e0430649cd155"
+        },
+        {
+          "path": "tools/xtask/tests/canary_controller_plan.rs",
+          "sha256": "f5891685f7c8fd026f2bf51815090e981982c2b60de172fd9d1a252c005bfa62"
+        },
+        {
+          "path": "tools/xtask/tests/family_battery_environment.rs",
+          "sha256": "bbc23fa6da3c9af1dbf5dd2a406a47f1a3a8470b5df84eb41eaa9fab64fcae14"
+        },
+        {
+          "path": "tools/xtask/tests/family_battery_prepared_source.rs",
+          "sha256": "0fab0ec7ae3a03b0de4fafa60293155f417ec94b6e437f2348a2d05b43e8dedd"
+        },
+        {
+          "path": "tools/xtask/tests/openai_smoke_config.rs",
+          "sha256": "d6bb4c5d9ae76421f04b3cf8e2154ba1189e712aa7372a2770fb460984f9df75"
+        }
+      ]
+    }
   }
 }
