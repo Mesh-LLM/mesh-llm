@@ -4,6 +4,13 @@
 # Usage: scripts/ci-compat-smoke.sh <mesh-llm-binary> <bin-dir> <model-path>
 
 set -euo pipefail
+# Required SDK environment admission begins.
+SDK_PYTHON="${MESH_REQUIRED_SDK_PYTHON:-}"
+if [[ "$SDK_PYTHON" != /* || ! -f "$SDK_PYTHON" || ! -x "$SDK_PYTHON" ]]; then
+    echo "required compatibility SDK smoke needs an absolute executable MESH_REQUIRED_SDK_PYTHON from the locked environment" >&2
+    exit 1
+fi
+# Required SDK environment admission ends.
 automation=(cargo xtool)
 if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
     automation=("$MESH_LLM_AUTOMATION_BIN")
@@ -149,9 +156,9 @@ if [[ -n "$ATTESTATION_PUBLIC_KEY_FILE" && "$RUNTIME_ATTESTATION_STATUS" != "$AT
     exit 1
 fi
 
-python3 scripts/ci-openai-python-smoke.py --base-url "$BASE_URL"
-python3 scripts/ci-litellm-smoke.py --base-url "$BASE_URL" --model "$MODEL_ID"
-python3 scripts/ci-langchain-openai-smoke.py --base-url "$BASE_URL" --model "$MODEL_ID"
+"$SDK_PYTHON" -I scripts/ci-openai-python-smoke.py --base-url "$BASE_URL"
+"$SDK_PYTHON" -I scripts/ci-litellm-smoke.py --base-url "$BASE_URL" --model "$MODEL_ID"
+"$SDK_PYTHON" -I scripts/ci-langchain-openai-smoke.py --base-url "$BASE_URL" --model "$MODEL_ID"
 NODE_PATH="${NODE_PATH:-$(npm root -g 2>/dev/null || true)}" node scripts/ci-openai-node-smoke.cjs --base-url "$BASE_URL"
 
 echo "OpenAI compatibility smoke passed"

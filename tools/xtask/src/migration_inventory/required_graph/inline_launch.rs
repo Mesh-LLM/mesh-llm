@@ -64,8 +64,12 @@ fn selected_interpreter_program(block: &str) -> bool {
 pub(super) fn variable_script_target(block: &str) -> bool {
     ["python3 \"$", "python \"$"].iter().any(|launch| {
         block.match_indices(launch).any(|(index, _)| {
+            let command_boundary = index == 0
+                || block[..index].chars().next_back().is_some_and(|character| {
+                    character.is_ascii_whitespace() || ";|&()<>/".contains(character)
+                });
             let rest = &block[index + launch.len()..];
-            variable_name(rest).is_some()
+            command_boundary && variable_name(rest).is_some()
         })
     })
 }

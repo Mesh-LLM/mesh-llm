@@ -35,67 +35,6 @@
       ]
     },
     {
-      "file": "scripts/skippy-family-battery.sh",
-      "members": [
-        [
-          19,
-          "2176ac99c5f8adcb",
-          1,
-          "data",
-          "comment names plan-family-battery.py",
-          "comment not execution"
-        ],
-        [
-          57,
-          "972053af3fffe48c",
-          1,
-          "selection",
-          "scripts/plan-family-battery.py",
-          "PLANNER path assignment, later calls via $PLANNER are outside scanner's token detection"
-        ],
-        [
-          123,
-          "ba28975e02098c5d",
-          1,
-          "selection",
-          "require_cmd python3",
-          "availability guard before family battery commands; no launch"
-        ],
-        [
-          513,
-          "d6de059f3a65588d",
-          1,
-          "indirect",
-          "scripts/run-command-with-timeout.py",
-          "argument in command-array construction; Python interpreter/array consumer requires continuation review"
-        ],
-        [
-          822,
-          "d6de059f3a65588d",
-          2,
-          "indirect",
-          "scripts/run-command-with-timeout.py",
-          "second distinct family command-array member; not an invocation on path line"
-        ],
-        [
-          915,
-          "d6de059f3a65588d",
-          3,
-          "indirect",
-          "scripts/run-command-with-timeout.py",
-          "third distinct family command-array member; not an invocation on path line"
-        ],
-        [
-          927,
-          "e23dfaac39b67402",
-          1,
-          "script",
-          "scripts/llama-oracle-source.py",
-          "command substitution --pinned-patch-sha prints patch SHA; failure can affect verification command; executed while constructing arguments"
-        ]
-      ]
-    },
-    {
       "file": "scripts/ci-agent-live-fixture-lib.sh",
       "members": [
         [
@@ -205,144 +144,6 @@
       ]
     },
     {
-      "file": "scripts/ci-opencode-smoke.sh",
-      "members": [
-        [
-          273,
-          "2c5028771a4b8c75",
-          1,
-          "data",
-          "generated src/smoke_calc.py",
-          "cat writes fixture, not interpreter execution"
-        ],
-        [
-          296,
-          "c9093bfb5d28f5f0",
-          1,
-          "data",
-          "generated tests/test_smoke_calc.py",
-          "cat writes tests, execution belongs to line 522"
-        ],
-        [
-          325,
-          "603c47c8b5e235ba",
-          1,
-          "data",
-          "generated prompt path src/smoke_calc.py",
-          "here-document data only"
-        ],
-        [
-          326,
-          "4f0a2aeb5304979f",
-          1,
-          "data",
-          "generated prompt path tests/test_smoke_calc.py",
-          "here-document data only"
-        ],
-        [
-          330,
-          "086be451f621e27f",
-          1,
-          "data",
-          "agent prompt mentions Python fixture",
-          "single quoted prompt assignment, no interpreter"
-        ],
-        [
-          332,
-          "37e9ec4052b0eae7",
-          1,
-          "data",
-          "agent prompt mentions Python tests",
-          "single quoted prompt assignment, no interpreter"
-        ],
-        [
-          522,
-          "1034563d4db0c21a",
-          1,
-          "environment",
-          "generated tests/test_smoke_calc.py via unittest",
-          "runs generated test suite; failure branch prints source to stderr, not a tracked script call"
-        ],
-        [
-          524,
-          "be3f0e5e46006fa5",
-          1,
-          "data",
-          "diagnostic echo",
-          "stderr text, not interpreter"
-        ],
-        [
-          525,
-          "9db64d74072a0cf1",
-          1,
-          "data",
-          "sed prints generated Python fixture",
-          "stderr text only; no interpreter"
-        ],
-        [
-          538,
-          "6d71c27a055dd3fc",
-          1,
-          "data",
-          "Python body of line 529 heredoc",
-          "not another invocation"
-        ],
-        [
-          543,
-          "c6a37ff6fb668f65",
-          1,
-          "data",
-          "Python body diagnostic of line 529 heredoc",
-          "not another invocation"
-        ],
-        [
-          548,
-          "aa426647b49488af",
-          1,
-          "data",
-          "Python body diagnostic of line 529 heredoc",
-          "not another invocation"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/skippy-workload-certify.sh",
-      "members": [
-        [
-          158,
-          "403c1cd715e1e2ec",
-          1,
-          "selection",
-          "SKIPPY_WORKLOAD_SDK_PYTHON or python3",
-          "selected SDK Python used for OpenAI embedding smoke at 453"
-        ],
-        [
-          160,
-          "5b212ffa3ddb2f45",
-          1,
-          "data",
-          "missing official SDK diagnostic",
-          "echo stderr only, no interpreter"
-        ],
-        [
-          168,
-          "8660ee2003319b0f",
-          1,
-          "script",
-          "scripts/plan-family-battery.py via executable shebang",
-          "--inspect-gguf model path; DIMENSIONS stdout captured; dynamic shebang reaches interpreter even without python token"
-        ],
-        [
-          431,
-          "ff797dffbb12bac3",
-          1,
-          "script",
-          "scripts/ci-openai-embeddings-smoke.py",
-          "selected SDK_PYTHON; official OpenAI SDK embedding check, opt-in family certification; dependency env selected externally"
-        ]
-      ]
-    },
-    {
       "file": "scripts/materialize-competitive-inputs.sh",
       "members": [
         [
@@ -368,96 +169,6 @@
           "data",
           "hf CLI availability error",
           "command -v hf tests availability; the quoted pip install text is diagnostic only, stderr then exit 1"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/skippy-family-battery.sh",
-      "members": [
-        [
-          206,
-          "bebef3844e3d2ce1",
-          1,
-          "inline",
-          "policy plan integrity check",
-          "prepare_policy_plan: python3 - argv MANIFEST POLICY_PLAN_COPY SHARD_INDEX; reads JSON and validates digest/schema/required lanes/shard; no stdout/write, stderr and failure abort battery"
-        ],
-        [
-          256,
-          "8682be12f674bdc8",
-          1,
-          "inline",
-          "HF snapshot revision extraction",
-          "snapshot_revision_from_path: python3 - argv path; prints 40-64 hex revision or exits 1; resolve_pinned_model captures stdout and returns failure on missing pin; no write"
-        ],
-        [
-          443,
-          "84aa5b22cd41ce89",
-          1,
-          "inline",
-          "family environment preflight",
-          "python3 - argv ARTIFACT_DIR model_root MIN_FREE_GIB PREFLIGHT_DIR/environment.json; checks disk headroom only, writes environment.json and fails on insufficient space"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/skippy-workload-certify.sh",
-      "members": [
-        [
-          191,
-          "90fc69b829bfcaf2",
-          1,
-          "script",
-          "scripts/check-skippy-workload-candidate.py",
-          "producer branch argv --candidate-binary CANDIDATE_BIN_DIR/skippy-server --native-build-dir CANDIDATE_BUILD_DIR --producer-manifest PRODUCER_MANIFEST; stdout/stderr inherited, nonzero aborts"
-        ],
-        [
-          205,
-          "90fc69b829bfcaf2",
-          2,
-          "script",
-          "scripts/check-skippy-workload-candidate.py",
-          "oracle branch argv --candidate-binary CANDIDATE_BIN_DIR/skippy-server --native-build-dir CANDIDATE_BUILD_DIR; stdout/stderr inherited, nonzero aborts"
-        ],
-        [
-          394,
-          "18a85526e4120fa8",
-          1,
-          "script",
-          "scripts/generate-ocr-oracle-fixture.py",
-          "OCR-only --output ORACLE_MEDIA_PATH; writes media fixture, inherited output/status; nonzero aborts"
-        ],
-        [
-          396,
-          "b5dac3de9a0e64bf",
-          1,
-          "script",
-          "scripts/skippy-ocr-asr-oracle.py",
-          "OCR/ASR --candidate-url http://127.0.0.1:PORT/v1 --oracle-url http://127.0.0.1:ORACLE_PORT/v1 --model MODEL_ID --class MODEL_CLASS --media-path ORACLE_MEDIA_PATH; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
-        ],
-        [
-          403,
-          "8bb1eaaf0c78dccc",
-          1,
-          "script",
-          "scripts/ci-workload-monolithic-oracle.py",
-          "server oracle --candidate-url http://127.0.0.1:PORT/v1 --oracle-url http://127.0.0.1:ORACLE_PORT/v1 --model MODEL_ID --class MODEL_CLASS; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
-        ],
-        [
-          412,
-          "8bb1eaaf0c78dccc",
-          2,
-          "script",
-          "scripts/ci-workload-monolithic-oracle.py",
-          "encoder-decoder --candidate-url http://127.0.0.1:PORT/v1 --oracle-completion ORACLE_COMPLETION --model-path MODEL_PATH --model MODEL_ID --class MODEL_CLASS; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
-        ],
-        [
-          421,
-          "17d63f5f0fac2843",
-          1,
-          "script",
-          "scripts/skippy-tts-oracle.py",
-          "TTS --oracle-cli ORACLE_TTS --model-path MODEL_PATH --projector-path PROJECTOR_PATH --model MODEL_ID --layer-end LAYER_END --work-dir WORK_DIR; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
         ]
       ]
     },
@@ -667,136 +378,6 @@
           "inline",
           "fixture implementation validation",
           "python3 - argv work_dir initial_sha; loads generated implementation and runs hidden inputs, nonzero fails harness; test output inherited"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/ci-opencode-smoke.sh",
-      "members": [
-        [
-          41,
-          "5ac68805fdd06857",
-          1,
-          "inline",
-          "selected model reader",
-          "MODELS_JSON piped to python3 -c; prints model ID; failure/empty output controls endpoint skip or chosen model"
-        ],
-        [
-          74,
-          "ac337b0230cc385a",
-          1,
-          "inline",
-          "background OpenAI recording proxy",
-          "python3 -u - argv MESH_BASE_URL SURFACE_LOG SURFACE_READY; stdout/stderr redirected to SURFACE_PROXY_LOG, background PID cleaned on EXIT; writes capture log/readiness marker"
-        ],
-        [
-          187,
-          "707a7f83dd4b0b24",
-          1,
-          "inline",
-          "OpenCode config writer",
-          "python3 - argv CONFIG_BASE_URL MESH_MODEL; writes isolated provider config, errors abort"
-        ],
-        [
-          287,
-          "23cdda810dc613e9",
-          1,
-          "inline",
-          "coding fixture implementation",
-          "python3 - argv WORK_DIR/src/smoke_calc.py; writes starter source file, no stdout"
-        ],
-        [
-          354,
-          "d09982e54a181d08",
-          1,
-          "inline",
-          "surface probe payload",
-          "python3 - argv MESH_MODEL SURFACE_PROBE_PAYLOAD; writes request JSON, failure aborts"
-        ],
-        [
-          396,
-          "022ee6884fc78720",
-          1,
-          "inline",
-          "surface response assertion",
-          "python3 - argv SURFACE_PROBE_RESPONSE; validates probe, failure aborts"
-        ],
-        [
-          411,
-          "5831547fc3914a7d",
-          1,
-          "inline",
-          "long prompt payload writer",
-          "python3 - argv MESH_MODEL LONG_PROMPT_CHARS LONG_PROMPT_PAYLOAD; writes JSON prompt request"
-        ],
-        [
-          452,
-          "eab44ed67f3cc695",
-          1,
-          "inline",
-          "long prompt response validator",
-          "python3 - argv LONG_PROMPT_RESPONSE; validates response, nonzero fails harness"
-        ],
-        [
-          488,
-          "a7941296e7ee6733",
-          1,
-          "inline",
-          "first turn session extractor",
-          "python3 - argv TURN1_JSONL; prints session ID to shell; empty/error fails multi-turn probe"
-        ],
-        [
-          529,
-          "07fd9dbce61dbe6c",
-          1,
-          "inline",
-          "agent implementation check",
-          "python3 - argv WORK_DIR INITIAL_IMPL_SHA; imports generated fixture and tests hidden inputs; failure rejects"
-        ],
-        [
-          577,
-          "27c9a9bcdf80f434",
-          1,
-          "inline",
-          "agent output facts and tool calls",
-          "python3 - argv OUTPUT_JSONL; validates answer and recognized tool event count; failure rejects"
-        ],
-        [
-          654,
-          "03d0423ce3a1405e",
-          1,
-          "inline",
-          "captured API surface verifier",
-          "python3 - argv SURFACE_LOG; validates required request fields, failure rejects captured flow"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/ci-compat-smoke.sh",
-      "members": [
-        [
-          152,
-          "69671337c1b9a81a",
-          1,
-          "script",
-          "scripts/ci-openai-python-smoke.py",
-          "--base-url BASE_URL; inherited output/status, nonzero aborts optional OpenAI compatibility smoke"
-        ],
-        [
-          153,
-          "ec1d143410d0b4c6",
-          1,
-          "script",
-          "scripts/ci-litellm-smoke.py",
-          "--base-url BASE_URL --model MODEL_ID; inherited output/status, failure aborts compatibility smoke"
-        ],
-        [
-          154,
-          "aa2c9ab594972d57",
-          1,
-          "script",
-          "scripts/ci-langchain-openai-smoke.py",
-          "--base-url BASE_URL --model MODEL_ID; inherited output/status, failure aborts"
         ]
       ]
     },
@@ -1060,11 +641,335 @@
       "members": [
         [
           24,
-          "3275584e0b1396e6",
+          "8fd137394254a561",
           1,
           "environment",
           "explicit surviving scripts.tests modules",
           "Transitional legacy coverage retained individually; modules remain pending their intent ports, not approved exceptions"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/skippy-family-battery.sh",
+      "members": [
+        [
+          19,
+          "2176ac99c5f8adcb",
+          1,
+          "data",
+          "comment names plan-family-battery.py",
+          "comment not execution"
+        ],
+        [
+          69,
+          "972053af3fffe48c",
+          1,
+          "selection",
+          "scripts/plan-family-battery.py",
+          "PLANNER path assignment, later calls via $PLANNER are outside scanner's token detection"
+        ],
+        [
+          135,
+          "ba28975e02098c5d",
+          1,
+          "selection",
+          "require_cmd python3",
+          "availability guard before family battery commands; no launch"
+        ],
+        [
+          437,
+          "d6de059f3a65588d",
+          1,
+          "indirect",
+          "scripts/run-command-with-timeout.py",
+          "argument in command-array construction; Python interpreter/array consumer requires continuation review"
+        ],
+        [
+          746,
+          "d6de059f3a65588d",
+          2,
+          "indirect",
+          "scripts/run-command-with-timeout.py",
+          "second distinct family command-array member; not an invocation on path line"
+        ],
+        [
+          855,
+          "d6de059f3a65588d",
+          3,
+          "indirect",
+          "scripts/run-command-with-timeout.py",
+          "third distinct family command-array member; not an invocation on path line"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/ci-opencode-smoke.sh",
+      "members": [
+        [
+          54,
+          "5ac68805fdd06857",
+          1,
+          "inline",
+          "selected model reader",
+          "MODELS_JSON piped to python3 -c; prints model ID; failure/empty output controls endpoint skip or chosen model"
+        ],
+        [
+          104,
+          "ac337b0230cc385a",
+          1,
+          "inline",
+          "background OpenAI recording proxy",
+          "python3 -u - argv MESH_BASE_URL SURFACE_LOG SURFACE_READY; stdout/stderr redirected to SURFACE_PROXY_LOG, background PID cleaned on EXIT; writes capture log/readiness marker"
+        ],
+        [
+          255,
+          "2c5028771a4b8c75",
+          1,
+          "data",
+          "generated src/smoke_calc.py",
+          "cat writes fixture, not interpreter execution"
+        ],
+        [
+          268,
+          "e77b2dfd630b6d2e",
+          1,
+          "data",
+          "Rust agent-fixture-inputs SHA256 over generated component",
+          "Current source boundary preserved: INITIAL_IMPL_SHA=\"$(\"${opencode_automation[@]}\" automation agent-fixture-inputs sha256 \"${WORK_DIR}/src/smoke_calc.py\")\""
+        ],
+        [
+          270,
+          "c9093bfb5d28f5f0",
+          1,
+          "data",
+          "generated tests/test_smoke_calc.py",
+          "cat writes tests, execution belongs to line 522"
+        ],
+        [
+          299,
+          "603c47c8b5e235ba",
+          1,
+          "data",
+          "generated prompt path src/smoke_calc.py",
+          "here-document data only"
+        ],
+        [
+          300,
+          "4f0a2aeb5304979f",
+          1,
+          "data",
+          "generated prompt path tests/test_smoke_calc.py",
+          "here-document data only"
+        ],
+        [
+          304,
+          "086be451f621e27f",
+          1,
+          "data",
+          "agent prompt mentions Python fixture",
+          "single quoted prompt assignment, no interpreter"
+        ],
+        [
+          306,
+          "37e9ec4052b0eae7",
+          1,
+          "data",
+          "agent prompt mentions Python tests",
+          "single quoted prompt assignment, no interpreter"
+        ],
+        [
+          370,
+          "a7941296e7ee6733",
+          1,
+          "inline",
+          "first turn session extractor",
+          "python3 - argv TURN1_JSONL; prints session ID to shell; empty/error fails multi-turn probe"
+        ],
+        [
+          404,
+          "1034563d4db0c21a",
+          1,
+          "environment",
+          "generated tests/test_smoke_calc.py via unittest",
+          "runs generated test suite; failure branch prints source to stderr, not a tracked script call"
+        ],
+        [
+          406,
+          "be3f0e5e46006fa5",
+          1,
+          "data",
+          "diagnostic echo",
+          "stderr text, not interpreter"
+        ],
+        [
+          407,
+          "9db64d74072a0cf1",
+          1,
+          "data",
+          "sed prints generated Python fixture",
+          "stderr text only; no interpreter"
+        ],
+        [
+          411,
+          "07fd9dbce61dbe6c",
+          1,
+          "inline",
+          "agent implementation check",
+          "python3 - argv WORK_DIR INITIAL_IMPL_SHA; imports generated fixture and tests hidden inputs; failure rejects"
+        ],
+        [
+          420,
+          "6d71c27a055dd3fc",
+          1,
+          "data",
+          "Python body of line 529 heredoc",
+          "not another invocation"
+        ],
+        [
+          425,
+          "c6a37ff6fb668f65",
+          1,
+          "data",
+          "Python body diagnostic of line 529 heredoc",
+          "not another invocation"
+        ],
+        [
+          430,
+          "aa426647b49488af",
+          1,
+          "data",
+          "Python body diagnostic of line 529 heredoc",
+          "not another invocation"
+        ],
+        [
+          459,
+          "27c9a9bcdf80f434",
+          1,
+          "inline",
+          "agent output facts and tool calls",
+          "python3 - argv OUTPUT_JSONL; validates answer and recognized tool event count; failure rejects"
+        ],
+        [
+          536,
+          "03d0423ce3a1405e",
+          1,
+          "inline",
+          "captured API surface verifier",
+          "python3 - argv SURFACE_LOG; validates required request fields, failure rejects captured flow"
+        ]
+      ]
+    },
+    {
+      "file": "scripts/ci-compat-smoke.sh",
+      "members": [
+        [
+          159,
+          "6cb9c752b127578e",
+          1,
+          "script",
+          "scripts/ci-openai-python-smoke.py",
+          "Required official SDK compatibility client uses validated explicit MESH_REQUIRED_SDK_PYTHON with isolated -I; inherited streams and nonzero fail the required gate. \"$SDK_PYTHON\" -I scripts/ci-openai-python-smoke.py --base-url \"$BASE_URL\""
+        ],
+        [
+          160,
+          "8bf8c6b021f9a1bd",
+          1,
+          "script",
+          "scripts/ci-litellm-smoke.py",
+          "Required official SDK compatibility client uses validated explicit MESH_REQUIRED_SDK_PYTHON with isolated -I; inherited streams and nonzero fail the required gate. \"$SDK_PYTHON\" -I scripts/ci-litellm-smoke.py --base-url \"$BASE_URL\" --model \"$MODEL_ID\""
+        ],
+        [
+          161,
+          "70fb8c04d672e4ad",
+          1,
+          "script",
+          "scripts/ci-langchain-openai-smoke.py",
+          "Required official SDK compatibility client uses validated explicit MESH_REQUIRED_SDK_PYTHON with isolated -I; inherited streams and nonzero fail the required gate. \"$SDK_PYTHON\" -I scripts/ci-langchain-openai-smoke.py --base-url \"$BASE_URL\" --model \"$MODEL_ID\""
+        ]
+      ]
+    },
+    {
+      "file": "scripts/skippy-workload-certify.sh",
+      "members": [
+        [
+          166,
+          "5b212ffa3ddb2f45",
+          1,
+          "data",
+          "missing official SDK diagnostic",
+          "echo stderr only, no interpreter"
+        ],
+        [
+          176,
+          "8660ee2003319b0f",
+          1,
+          "script",
+          "scripts/plan-family-battery.py via executable shebang",
+          "--inspect-gguf model path; DIMENSIONS stdout captured; dynamic shebang reaches interpreter even without python token"
+        ],
+        [
+          199,
+          "90fc69b829bfcaf2",
+          1,
+          "script",
+          "scripts/check-skippy-workload-candidate.py",
+          "producer branch argv --candidate-binary CANDIDATE_BIN_DIR/skippy-server --native-build-dir CANDIDATE_BUILD_DIR --producer-manifest PRODUCER_MANIFEST; stdout/stderr inherited, nonzero aborts"
+        ],
+        [
+          213,
+          "90fc69b829bfcaf2",
+          2,
+          "script",
+          "scripts/check-skippy-workload-candidate.py",
+          "oracle branch argv --candidate-binary CANDIDATE_BIN_DIR/skippy-server --native-build-dir CANDIDATE_BUILD_DIR; stdout/stderr inherited, nonzero aborts"
+        ],
+        [
+          402,
+          "18a85526e4120fa8",
+          1,
+          "script",
+          "scripts/generate-ocr-oracle-fixture.py",
+          "OCR-only --output ORACLE_MEDIA_PATH; writes media fixture, inherited output/status; nonzero aborts"
+        ],
+        [
+          404,
+          "b5dac3de9a0e64bf",
+          1,
+          "script",
+          "scripts/skippy-ocr-asr-oracle.py",
+          "OCR/ASR --candidate-url http://127.0.0.1:PORT/v1 --oracle-url http://127.0.0.1:ORACLE_PORT/v1 --model MODEL_ID --class MODEL_CLASS --media-path ORACLE_MEDIA_PATH; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
+        ],
+        [
+          411,
+          "8bb1eaaf0c78dccc",
+          1,
+          "script",
+          "scripts/ci-workload-monolithic-oracle.py",
+          "server oracle --candidate-url http://127.0.0.1:PORT/v1 --oracle-url http://127.0.0.1:ORACLE_PORT/v1 --model MODEL_ID --class MODEL_CLASS; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
+        ],
+        [
+          420,
+          "8bb1eaaf0c78dccc",
+          2,
+          "script",
+          "scripts/ci-workload-monolithic-oracle.py",
+          "encoder-decoder --candidate-url http://127.0.0.1:PORT/v1 --oracle-completion ORACLE_COMPLETION --model-path MODEL_PATH --model MODEL_ID --class MODEL_CLASS; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
+        ],
+        [
+          429,
+          "17d63f5f0fac2843",
+          1,
+          "script",
+          "scripts/skippy-tts-oracle.py",
+          "TTS --oracle-cli ORACLE_TTS --model-path MODEL_PATH --projector-path PROJECTOR_PATH --model MODEL_ID --layer-end LAYER_END --work-dir WORK_DIR; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
+        ],
+        [
+          439,
+          "d15bff10ec3d569b",
+          1,
+          "script",
+          "scripts/ci-openai-embeddings-smoke.py",
+          "Embedding-only actual OpenAI SDK gate uses validated explicit locked SKIPPY_WORKLOAD_SDK_PYTHON with isolated -I; other classes need no SDK interpreter. \"$SDK_PYTHON\" -I \"$ROOT/scripts/ci-openai-embeddings-smoke.py\" \\"
         ]
       ]
     }
@@ -1971,19 +1876,10 @@
       "target": "evals/skippy-agentic-prompt-manifest.py via $PROMPT_GENERATOR"
     },
     {
-      "boundary": "$PLANNER is assigned from $ROOT/scripts/plan-family-battery.py at line 57; source root is selected by caller (canary may use a separately checked-out revision); planner verifies policy-plan copy; failure terminates battery",
-      "context": "selected shell interpreter or script invocation",
-      "deletion_condition": "plan verification parity on selected source",
-      "id": "scripts/skippy-family-battery.sh:205:ec413dc4334b60ef",
-      "owner": "optional family certification planner",
-      "replacement": "tools/xtask family certification planning owner",
-      "target": "scripts/plan-family-battery.py --manifest $MANIFEST --verify-plan $POLICY_PLAN_COPY"
-    },
-    {
-      "boundary": "$PLANNER assigned at line 57 under caller-selected $ROOT; command substitution captures dimensions, nonzero branches to failure without fixed model path; no independent output file",
+      "boundary": "$PLANNER assigned at line 69 under caller-selected $ROOT; command substitution captures dimensions, nonzero branches to failure without fixed model path; no independent output file",
       "context": "selected shell interpreter or script invocation",
       "deletion_condition": "selected-source GGUF dimension and failure parity",
-      "id": "scripts/skippy-family-battery.sh:408:3a192056636e0599",
+      "id": "scripts/skippy-family-battery.sh:362:3a192056636e0599",
       "owner": "optional family certification model scan",
       "replacement": "tools/xtask family certification inspection owner",
       "target": "scripts/plan-family-battery.py --inspect-gguf $target"
@@ -1995,5 +1891,74 @@
     "Scanner calls printf ... | python3 -c a message-or-output, misses $(python_bin) interpreter calls as mention-or-path, and calls Python heredoc body lines and generated fixture text separate executable candidates. Full shell parsing and remainder line review are required.",
     "Source-selected Python dynamic imports, subprocesses, external binaries and runtime-generated fixture modules need separate script-implementation closure. Immediate tracked targets here are not transitive completion evidence.",
     "Required roots include just ci-validate and platform packaging/smoke; optional roots include manual QA, canary family certification, benchmarks and native rewriter CTest. A script may be reached by both roots; requiredness is per caller, not inferred from file path."
-  ]
+  ],
+  "current_wave_source_bindings": [
+    {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "871cfcfa39e1b5d3cda74f15cec6c942696b6348a7b850937eacda1f2c2d12d3",
+      "line_count": 994
+    },
+    {
+      "path": "scripts/ci-opencode-smoke.sh",
+      "sha256": "5ad9d164a8fd83c0a009e3078bc8ff59d2a4a5e2dc118ea4e2faa244dc0674ce",
+      "line_count": 613
+    },
+    {
+      "path": "scripts/ci-compat-smoke.sh",
+      "sha256": "80f9a48e8d6f5f98946623ae6cdc11ccbe653aa8d882faedf80b173f091b82de",
+      "line_count": 164
+    },
+    {
+      "path": "scripts/skippy-workload-certify.sh",
+      "sha256": "c28021c11b1465c0b2042997607e805a67bf1495fa1651505761d7145aa1dbe9",
+      "line_count": 461
+    },
+    {
+      "path": ".github/actions/upload-automation/action.yml",
+      "sha256": "fcd8cbeb697b636551cd7183b9bc25507dbc2f5b62a4b6f045b489f70772cbd1",
+      "line_count": 116
+    },
+    {
+      "path": ".github/actions/restore-automation/action.yml",
+      "sha256": "8f189c95535696cce7164866f0e6d0412f13648dce84f2e4035bc7fb40c49309",
+      "line_count": 96
+    },
+    {
+      "path": ".github/workflows/ci-quality-slice.yml",
+      "sha256": "0e4e430011f4ba3967908d9e017a0827a8173aee5af1cf3a12d7f887366a6a1c",
+      "line_count": 650
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "sha256": "0d3a61d66e5590c54e62c1ea6241b12015b9cc564387898d291aa0b1591aa71e",
+      "line_count": 51
+    },
+    {
+      "path": ".github/workflows/smoke.yml",
+      "sha256": "9752ca1e1f0408d6fd8dc52aa46652aeaa5c44c4a195250c1302ffc92f7558fc",
+      "line_count": 454
+    },
+    {
+      "path": "ci/required-sdk-python/pyproject.toml",
+      "sha256": "50191adcecfd5e387d42d21b577cae76fa82d25c2627864021f8ada9c7de7cd7",
+      "line_count": 5
+    },
+    {
+      "path": "ci/required-sdk-python/uv.lock",
+      "sha256": "c83abb8b07ea1ab8f84267c87fd136182596c1bbb626321e1aff90783eeb00e6",
+      "line_count": 1236
+    },
+    {
+      "path": "ci/required-sdk-python/requirements.lock",
+      "sha256": "e60a887ad0e8f353d0df5fc764dd00b663c8f766a246b33282e041ebf3d31ec6",
+      "line_count": 720
+    }
+  ],
+  "current_wave_intent_proofs": {
+    "battery": "family_battery_policy_cli; family_model_identity_cli; family_battery_environment; family_battery_prepared_source; source_plan/battery_tests",
+    "opencode": "opencode_config_adapter; agent_client_config_cli; agent_fixture_inputs_cli; agent_fixture_evidence_cli",
+    "protected": "automation_restore_admission; automation_producer_admission",
+    "sdk": "required_sdk_environment_admission; actual required clients remain required; SDK dependency receipt is not runtime/model qualification",
+    "validation": "Parent validation pending; no retirement or aggregate counts changed"
+  }
 }

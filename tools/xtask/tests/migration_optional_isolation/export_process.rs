@@ -15,10 +15,7 @@ pub struct Observation {
     pub files: BTreeMap<String, Option<Vec<u8>>>,
 }
 
-pub fn observe(
-    case: &ExportCase,
-    _legacy: Option<&Path>,
-) -> Result<Observation, Box<dyn std::error::Error>> {
+pub fn observe(case: &ExportCase) -> Result<Observation, Box<dyn std::error::Error>> {
     let stage = Stage::new()?;
     let captures = Stage::new()?;
     for directory in &case.directories {
@@ -41,7 +38,6 @@ pub fn observe(
             .current_dir(stage.cwd())
             .env("PATH", "")
             .env("GITHUB_ENV", "ambient.env")
-            .env("PYTHONDONTWRITEBYTECODE", "1")
             .stdin(Stdio::null())
             .stdout(File::create_new(&stdout)?)
             .stderr(File::create_new(&stderr)?)

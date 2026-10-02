@@ -3,6 +3,19 @@
 
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OPENCODE_AUTOMATION_HOME="${HOME:-}"
+# Frozen automation selection begins.
+opencode_automation=(env "HOME=$OPENCODE_AUTOMATION_HOME" just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+    if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+        echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+        exit 1
+    fi
+    opencode_automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+# Frozen automation selection ends.
+
 if [[ -n "${MESH_OPENCODE_BASE_URL:-}" ]]; then
     MESH_BASE_URL="$MESH_OPENCODE_BASE_URL"
 elif [[ -n "${MESH_CLIENT_API_BASE:-}" ]]; then
@@ -58,6 +71,23 @@ print(ids[0] if ids else "")' 2>/dev/null || echo ""
 
     MODEL="mesh/${MESH_MODEL}"
 fi
+
+resolve_opencode_model_identity() {
+    if [[ -n "$MESH_MODEL" ]]; then
+        return 0
+    fi
+    if [[ "${OPENCODE_SMOKE_MODEL:-}" == mesh/* ]]; then
+        MESH_MODEL="${OPENCODE_SMOKE_MODEL#mesh/}"
+        if [[ -n "$MESH_MODEL" ]]; then
+            return 0
+        fi
+        echo 'OPENCODE_SMOKE_MODEL=mesh/ requires a nonempty model identity' >&2
+        return 1
+    fi
+    echo 'OpenCode compatibility smoke requires MESH_OPENCODE_MODEL or MESH_SDK_MODEL_ID for a non-mesh provider' >&2
+    return 1
+}
+resolve_opencode_model_identity
 
 CONFIG_BASE_URL="$MESH_BASE_URL"
 SURFACE_PROXY_PID=""
@@ -180,67 +210,19 @@ PY
     fi
 fi
 
-if [[ -z "${OPENCODE_CONFIG_CONTENT:-}" ]]; then
+prepare_opencode_config() {
+    if [[ -n "${OPENCODE_CONFIG_CONTENT:-}" ]]; then
+        return 0
+    fi
     if [[ "$MODEL" == mesh/* ]]; then
         export OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}"
-        OPENCODE_CONFIG_CONTENT="$(
-            python3 - "$CONFIG_BASE_URL" "$MESH_MODEL" <<'PY'
-import json
-import sys
-
-base_url, model = sys.argv[1:3]
-print(json.dumps({
-    "$schema": "https://opencode.ai/config.json",
-    "provider": {
-        "mesh": {
-            "npm": "@ai-sdk/openai-compatible",
-            "name": "mesh-llm",
-            "options": {
-                "baseURL": base_url.rstrip("/"),
-            },
-            "models": {
-                model: {
-                    "name": model,
-                    "limit": {
-                        "context": 32768,
-                        "output": 4096,
-                    },
-                },
-            },
-        },
-    },
-    "permission": {
-        "bash": "allow",
-        "read": "allow",
-        "grep": "allow",
-        "glob": "allow",
-        "edit": "allow",
-        "webfetch": "deny",
-        "websearch": "deny",
-        "question": "deny",
-        "todowrite": "deny",
-    },
-}))
-PY
-        )"
-        export OPENCODE_CONFIG_CONTENT
+        OPENCODE_CONFIG_CONTENT="$("${opencode_automation[@]}" automation agent-client-config opencode "$CONFIG_BASE_URL" "$MESH_MODEL")"
     else
-        export OPENCODE_CONFIG_CONTENT='{
-          "$schema": "https://opencode.ai/config.json",
-          "permission": {
-            "bash": "allow",
-            "read": "allow",
-            "grep": "allow",
-            "glob": "allow",
-            "edit": "allow",
-            "webfetch": "deny",
-            "websearch": "deny",
-            "question": "deny",
-            "todowrite": "deny"
-          }
-        }'
+        OPENCODE_CONFIG_CONTENT="$("${opencode_automation[@]}" automation agent-client-config opencode)"
     fi
-fi
+    export OPENCODE_CONFIG_CONTENT
+}
+prepare_opencode_config
 
 export OPENCODE_DISABLE_AUTOUPDATE="${OPENCODE_DISABLE_AUTOUPDATE:-true}"
 export OPENCODE_DISABLE_PRUNE="${OPENCODE_DISABLE_PRUNE:-true}"
@@ -283,15 +265,7 @@ def prime_sum_from_matrix(path: str) -> int:
     """Return the sum of prime numbers from the numbers line in matrix.txt."""
     raise NotImplementedError("ci smoke fixture")
 EOF
-INITIAL_IMPL_SHA="$(
-    python3 - "${WORK_DIR}/src/smoke_calc.py" <<'PY'
-import hashlib
-import sys
-
-with open(sys.argv[1], "rb") as fh:
-    print(hashlib.sha256(fh.read()).hexdigest())
-PY
-)"
+INITIAL_IMPL_SHA="$("${opencode_automation[@]}" automation agent-fixture-inputs sha256 "${WORK_DIR}/src/smoke_calc.py")"
 
 cat >"${WORK_DIR}/tests/test_smoke_calc.py" <<'EOF'
 from pathlib import Path
@@ -351,116 +325,24 @@ if [[ "$SURFACE_CAPTURE" == "true" && "$MODEL" == mesh/* ]]; then
     curl -sf "${CONFIG_BASE_URL%/}/models" >/dev/null
     SURFACE_PROBE_PAYLOAD="${WORK_DIR}/openai-surface-probe.json"
     SURFACE_PROBE_RESPONSE="${WORK_DIR}/openai-surface-probe-response.json"
-    python3 - "$MESH_MODEL" "$SURFACE_PROBE_PAYLOAD" <<'PY'
-import json
-import sys
-
-model, path = sys.argv[1:3]
-payload = {
-    "model": model,
-    "messages": [
-        {"role": "system", "content": "You are a brief CI compatibility probe."},
-        {"role": "user", "content": "Reply with ok, or call the tool if needed."},
-    ],
-    "tools": [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_fixture_fact",
-                "description": "Return one known fact from the smoke fixture.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "key": {"type": "string", "enum": ["codeword", "checksum"]},
-                    },
-                    "required": ["key"],
-                    "additionalProperties": False,
-                },
-            },
-        }
-    ],
-    "tool_choice": "auto",
-    "parallel_tool_calls": True,
-    "stream": False,
-    "max_tokens": 8,
-    "temperature": 0,
-}
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(payload, fh)
-PY
+    "${opencode_automation[@]}" automation agent-fixture-inputs surface "$MESH_MODEL" "$SURFACE_PROBE_PAYLOAD"
     curl -fsS --max-time 120 \
         "${CONFIG_BASE_URL%/}/chat/completions" \
         -H 'content-type: application/json' \
         -d @"$SURFACE_PROBE_PAYLOAD" \
         -o "$SURFACE_PROBE_RESPONSE"
-    python3 - "$SURFACE_PROBE_RESPONSE" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    body = json.load(fh)
-if body.get("object") != "chat.completion":
-    raise SystemExit(f"unexpected probe response object: {body.get('object')!r}")
-if not body.get("choices"):
-    raise SystemExit("probe response had no choices")
-PY
+    "${opencode_automation[@]}" automation agent-fixture-evidence probe "$SURFACE_PROBE_RESPONSE" OpenCode
 
     if [[ "$LONG_PROMPT_CHARS" -gt 0 ]]; then
         LONG_PROMPT_PAYLOAD="${WORK_DIR}/openai-long-prompt-probe.json"
         LONG_PROMPT_RESPONSE="${WORK_DIR}/openai-long-prompt-probe-response.json"
-        python3 - "$MESH_MODEL" "$LONG_PROMPT_CHARS" "$LONG_PROMPT_PAYLOAD" <<'PY'
-import json
-import sys
-
-model, target_chars, path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-start = "ALPHA-719"
-middle = "MID-482"
-end = "OMEGA-503"
-header = (
-    "This is a long-context CI soak document. Extract the three sentinel values. "
-    "Return exactly LONG_SOAK=ALPHA-719|MID-482|OMEGA-503 and no extra text.\n\n"
-)
-chunk = (
-    "FILLER: mesh long prompt soak line with predictable neutral text. "
-    "Do not use this filler as the answer.\n"
-)
-prefix = f"SENTINEL_START={start}\n"
-mid = f"\nSENTINEL_MIDDLE={middle}\n"
-suffix = f"\nSENTINEL_END={end}\n"
-remaining = max(target_chars - len(header) - len(prefix) - len(mid) - len(suffix), 0)
-left = chunk * max((remaining // 2) // len(chunk), 1)
-right = chunk * max((remaining - len(left)) // len(chunk), 1)
-document = header + prefix + left + mid + right + suffix
-payload = {
-    "model": model,
-    "messages": [
-        {"role": "system", "content": "You are a precise long-context extraction probe."},
-        {"role": "user", "content": document},
-    ],
-    "stream": False,
-    "max_tokens": 64,
-    "temperature": 0,
-}
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(payload, fh)
-PY
+        "${opencode_automation[@]}" automation agent-fixture-inputs soak "$MESH_MODEL" "$LONG_PROMPT_CHARS" "$LONG_PROMPT_PAYLOAD"
         curl -fsS --max-time 180 \
             "${CONFIG_BASE_URL%/}/chat/completions" \
             -H 'content-type: application/json' \
             -d @"$LONG_PROMPT_PAYLOAD" \
             -o "$LONG_PROMPT_RESPONSE"
-        python3 - "$LONG_PROMPT_RESPONSE" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    body = json.load(fh)
-content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
-expected = "LONG_SOAK=ALPHA-719|MID-482|OMEGA-503"
-if expected not in content:
-    raise SystemExit(f"long prompt sentinel validation failed: {content!r}")
-print("Long prompt soak passed")
-PY
+        "${opencode_automation[@]}" automation agent-fixture-evidence soak "$LONG_PROMPT_RESPONSE" OpenCode
     fi
 fi
 

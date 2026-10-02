@@ -22,53 +22,60 @@
     {
       "path": "scripts/ci-openai-python-smoke.py",
       "callers": [
-        "scripts/ci-compat-smoke.sh:152, invoked by .github/workflows/smoke.yml:233,247,407,421 and .github/workflows/release.yml:426"
+        "scripts/ci-compat-smoke.sh:159; unchanged actual SDK client and required workflow/runtime gates"
       ],
       "local_dependency_files": [
-        "ci/requirements-ci-python.txt"
+        "ci/required-sdk-python/pyproject.toml",
+        "ci/required-sdk-python/uv.lock",
+        "ci/required-sdk-python/requirements.lock"
       ],
       "cadence": "Existing required smoke and release compatibility rows, retained by the newer L8 maintainer decision",
       "purpose": "Exercise the actual third-party OpenAI Python SDK request and response behavior against the mesh OpenAI-compatible endpoint.",
-      "isolation_test": "Retention is approved by .omo/evidence/lane-L8-multinode-smoke.md; dependency isolation remains unqualified. The actual smoke environment installs shared unpinned requirements. ci/canary-python/uv.lock covers OpenAI only and is not the environment used by these callers. No SDK-only lock or actual SDK execution receipt is present; do not remove the required gate or create an advisory substitute.",
+      "isolation_test": "SDK-only declared environment is now wired: existing CPython3.12 stdlib venv, isolated hash-locked binary pip installation/check/import and explicit MESH_REQUIRED_SDK_PYTHON; all three required clients invoked with -I. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved.",
       "status": "conditional_unqualified"
     },
     {
       "path": "scripts/ci-langchain-openai-smoke.py",
       "callers": [
-        "scripts/ci-compat-smoke.sh:154, invoked by .github/workflows/smoke.yml:233,247,407,421 and .github/workflows/release.yml:426"
+        "scripts/ci-compat-smoke.sh:161; unchanged actual SDK client and required workflow/runtime gates"
       ],
       "local_dependency_files": [
-        "ci/requirements-ci-python.txt"
+        "ci/required-sdk-python/pyproject.toml",
+        "ci/required-sdk-python/uv.lock",
+        "ci/required-sdk-python/requirements.lock"
       ],
       "cadence": "Existing required smoke and release compatibility rows, retained by the newer L8 maintainer decision",
       "purpose": "Exercise actual LangChain adapter integration with the external OpenAI client protocol.",
-      "isolation_test": "Retention is approved by .omo/evidence/lane-L8-multinode-smoke.md; the real client imports langchain_openai.ChatOpenAI. No existing lock covers that package and its dependency closure; current smoke installs shared unpinned requirements. SDK-only dependency isolation and actual SDK qualification remain blocked, not advisory or removed.",
+      "isolation_test": "SDK-only declared environment is now wired: existing CPython3.12 stdlib venv, isolated hash-locked binary pip installation/check/import and explicit MESH_REQUIRED_SDK_PYTHON; all three required clients invoked with -I. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved.",
       "status": "conditional_unqualified"
     },
     {
       "path": "scripts/ci-litellm-smoke.py",
       "callers": [
-        "scripts/ci-compat-smoke.sh:153, invoked by .github/workflows/smoke.yml:233,247,407,421 and .github/workflows/release.yml:426"
+        "scripts/ci-compat-smoke.sh:160; unchanged actual SDK client and required workflow/runtime gates"
       ],
       "local_dependency_files": [
-        "ci/requirements-ci-python.txt"
+        "ci/required-sdk-python/pyproject.toml",
+        "ci/required-sdk-python/uv.lock",
+        "ci/required-sdk-python/requirements.lock"
       ],
       "cadence": "Existing required smoke and release compatibility rows, retained by the newer L8 maintainer decision",
       "purpose": "Exercise actual LiteLLM's client compatibility against the mesh OpenAI-compatible endpoint.",
-      "isolation_test": "Retention is approved by .omo/evidence/lane-L8-multinode-smoke.md; this is actual LiteLLM client coverage. No existing lock covers LiteLLM; current smoke installs shared unpinned requirements. SDK-only dependency isolation and actual SDK qualification remain blocked, not advisory or removed.",
+      "isolation_test": "SDK-only declared environment is now wired: existing CPython3.12 stdlib venv, isolated hash-locked binary pip installation/check/import and explicit MESH_REQUIRED_SDK_PYTHON; all three required clients invoked with -I. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved.",
       "status": "conditional_unqualified"
     },
     {
       "path": "scripts/ci-openai-embeddings-smoke.py",
       "callers": [
-        "scripts/skippy-workload-certify.sh:457, embedding MODEL_CLASS only; scripts/tests/test_ci_openai_embeddings_smoke.py through just ci-legacy-contracts tests the validator using SDK-shaped fixtures"
+        "scripts/skippy-workload-certify.sh:439; unchanged actual SDK client and required workflow/runtime gates"
       ],
       "local_dependency_files": [
-        "ci/requirements-ci-python.txt"
+        "ci/canary-python/pyproject.toml",
+        "ci/canary-python/uv.lock"
       ],
       "cadence": "Explicit embedding workload certification; validator fixtures remain in required CI. This client is not called by smoke.yml.",
       "purpose": "Exercise third-party OpenAI Python SDK embeddings behavior against the mesh endpoint.",
-      "isolation_test": "L8 retained this actual OpenAI SDK client and its validator fixtures. The client owns the unchanged deterministic embedding inputs locally and does not import generic workload_fixtures. The caller accepts SKIPPY_WORKLOAD_SDK_PYTHON, default python3; an isolated locked SDK environment and actual SDK qualification are not yet established. ci/canary-python/uv.lock is an existing OpenAI-only lock, not proven to bind this caller.",
+      "isolation_test": "SDK-only declared environment is now wired: existing canary OpenAI-only uv lock, explicit SKIPPY_WORKLOAD_SDK_PYTHON, isolated -I embedding invocation. Dependency installation receipts and finite admission fixtures do not establish actual endpoint/model/platform qualification. Required gate/cadence and current unqualified status are preserved.",
       "status": "conditional_unqualified"
     }
   ],
@@ -246,5 +253,74 @@
     }
   ],
   "unresolved_qualification_count": 4,
-  "unresolved_note": "The newer L8 maintainer decision retains required real OpenAI, LangChain and LiteLLM client coverage and actual embeddings SDK validation; it supersedes the plan's advisory-only proposal. Four clients remain conditional_unqualified for dependency isolation and execution evidence, not for permission to keep their actual SDK behavior. Recorded dependency files now exist: the current requirements are shared and unpinned. No SDK-only lock covers all retained clients. Do not invent a lock, remove required gates or create an advisory substitute. Embeddings owns its unchanged inputs locally; generic workload automation remains separate migration debt. Full parser-backed interpreter reachability remains incomplete."
+  "unresolved_note": "The newer L8 maintainer decision retains required real OpenAI, LangChain and LiteLLM client coverage and actual embeddings SDK validation; it supersedes the plan's advisory-only proposal. Four clients remain conditional_unqualified for dependency isolation and execution evidence, not for permission to keep their actual SDK behavior. Recorded dependency files now exist: the current requirements are shared and unpinned. No SDK-only lock covers all retained clients. Do not invent a lock, remove required gates or create an advisory substitute. Embeddings owns its unchanged inputs locally; generic workload automation remains separate migration debt. Full parser-backed interpreter reachability remains incomplete.",
+  "current_wave_source_bindings": [
+    {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "871cfcfa39e1b5d3cda74f15cec6c942696b6348a7b850937eacda1f2c2d12d3",
+      "line_count": 994
+    },
+    {
+      "path": "scripts/ci-opencode-smoke.sh",
+      "sha256": "5ad9d164a8fd83c0a009e3078bc8ff59d2a4a5e2dc118ea4e2faa244dc0674ce",
+      "line_count": 613
+    },
+    {
+      "path": "scripts/ci-compat-smoke.sh",
+      "sha256": "80f9a48e8d6f5f98946623ae6cdc11ccbe653aa8d882faedf80b173f091b82de",
+      "line_count": 164
+    },
+    {
+      "path": "scripts/skippy-workload-certify.sh",
+      "sha256": "c28021c11b1465c0b2042997607e805a67bf1495fa1651505761d7145aa1dbe9",
+      "line_count": 461
+    },
+    {
+      "path": ".github/actions/upload-automation/action.yml",
+      "sha256": "fcd8cbeb697b636551cd7183b9bc25507dbc2f5b62a4b6f045b489f70772cbd1",
+      "line_count": 116
+    },
+    {
+      "path": ".github/actions/restore-automation/action.yml",
+      "sha256": "8f189c95535696cce7164866f0e6d0412f13648dce84f2e4035bc7fb40c49309",
+      "line_count": 96
+    },
+    {
+      "path": ".github/workflows/ci-quality-slice.yml",
+      "sha256": "0e4e430011f4ba3967908d9e017a0827a8173aee5af1cf3a12d7f887366a6a1c",
+      "line_count": 650
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "sha256": "0d3a61d66e5590c54e62c1ea6241b12015b9cc564387898d291aa0b1591aa71e",
+      "line_count": 51
+    },
+    {
+      "path": ".github/workflows/smoke.yml",
+      "sha256": "9752ca1e1f0408d6fd8dc52aa46652aeaa5c44c4a195250c1302ffc92f7558fc",
+      "line_count": 454
+    },
+    {
+      "path": "ci/required-sdk-python/pyproject.toml",
+      "sha256": "50191adcecfd5e387d42d21b577cae76fa82d25c2627864021f8ada9c7de7cd7",
+      "line_count": 5
+    },
+    {
+      "path": "ci/required-sdk-python/uv.lock",
+      "sha256": "c83abb8b07ea1ab8f84267c87fd136182596c1bbb626321e1aff90783eeb00e6",
+      "line_count": 1236
+    },
+    {
+      "path": "ci/required-sdk-python/requirements.lock",
+      "sha256": "e60a887ad0e8f353d0df5fc764dd00b663c8f766a246b33282e041ebf3d31ec6",
+      "line_count": 720
+    }
+  ],
+  "current_wave_intent_proofs": {
+    "battery": "family_battery_policy_cli; family_model_identity_cli; family_battery_environment; family_battery_prepared_source; source_plan/battery_tests",
+    "opencode": "opencode_config_adapter; agent_client_config_cli; agent_fixture_inputs_cli; agent_fixture_evidence_cli",
+    "protected": "automation_restore_admission; automation_producer_admission",
+    "sdk": "required_sdk_environment_admission; actual required clients remain required; SDK dependency receipt is not runtime/model qualification",
+    "validation": "Parent validation pending; no retirement or aggregate counts changed"
+  }
 }

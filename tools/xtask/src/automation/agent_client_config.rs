@@ -112,11 +112,105 @@ fn goose(base: &str, model: &str, provider: &Path, config: &Path) -> DynResult<(
     Ok(())
 }
 
+#[derive(Serialize)]
+struct OpenCodeConfig<'a> {
+    #[serde(rename = "$schema")]
+    schema: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<BTreeMap<&'static str, OpenCodeProvider<'a>>>,
+    permission: BTreeMap<&'static str, &'static str>,
+}
+
+#[derive(Serialize)]
+struct OpenCodeProvider<'a> {
+    npm: &'static str,
+    name: &'static str,
+    options: OpenCodeOptions<'a>,
+    models: BTreeMap<&'a str, OpenCodeModel<'a>>,
+}
+
+#[derive(Serialize)]
+struct OpenCodeOptions<'a> {
+    #[serde(rename = "baseURL")]
+    base_url: &'a str,
+}
+
+#[derive(Serialize)]
+struct OpenCodeModel<'a> {
+    name: &'a str,
+    limit: OpenCodeLimit,
+}
+
+#[derive(Serialize)]
+struct OpenCodeLimit {
+    context: u32,
+    output: u32,
+}
+
+fn opencode(provider: Option<(&str, &str)>) -> DynResult<()> {
+    let provider = provider
+        .map(|(base, model)| -> DynResult<_> {
+            let normalized_base = base.trim_end_matches('/');
+            if normalized_base.is_empty()
+                || model.is_empty()
+                || base.len() > 65536
+                || model.len() > 65536
+            {
+                return Err(
+                    "OpenCode base URL and model must be nonempty and at most 64 KiB".into(),
+                );
+            }
+            Ok(BTreeMap::from([(
+                "mesh",
+                OpenCodeProvider {
+                    npm: "@ai-sdk/openai-compatible",
+                    name: "mesh-llm",
+                    options: OpenCodeOptions {
+                        base_url: normalized_base,
+                    },
+                    models: BTreeMap::from([(
+                        model,
+                        OpenCodeModel {
+                            name: model,
+                            limit: OpenCodeLimit {
+                                context: 32768,
+                                output: 4096,
+                            },
+                        },
+                    )]),
+                },
+            )]))
+        })
+        .transpose()?;
+    let config = OpenCodeConfig {
+        schema: "https://opencode.ai/config.json",
+        provider,
+        permission: BTreeMap::from([
+            ("bash", "allow"),
+            ("read", "allow"),
+            ("grep", "allow"),
+            ("glob", "allow"),
+            ("edit", "allow"),
+            ("webfetch", "deny"),
+            ("websearch", "deny"),
+            ("question", "deny"),
+            ("todowrite", "deny"),
+        ]),
+    };
+    crate::repository::check_report::CheckReport::success(format!(
+        "{}\n",
+        serde_json::to_string(&config)?
+    ))
+    .emit()
+}
+
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     match args {
+        [client] if client == "opencode" => opencode(None),
+        [client, base, model] if client == "opencode" => opencode(Some((base, model))),
         [client, base, model, path] if client == "pi" => pi(base, model, Path::new(path)),
         [client, base, model, provider, config] if client == "goose" =>
             goose(base, model, Path::new(provider), Path::new(config)),
-        _ => Err("usage: automation agent-client-config {pi BASE MODEL JSON | goose BASE MODEL PROVIDER_JSON CONFIG_YAML}".into()),
+        _ => Err("usage: automation agent-client-config {pi BASE MODEL JSON | goose BASE MODEL PROVIDER_JSON CONFIG_YAML | opencode [BASE MODEL]}".into()),
     }
 }

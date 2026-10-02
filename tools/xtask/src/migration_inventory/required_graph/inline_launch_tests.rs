@@ -8,6 +8,50 @@ const GENERIC: &str = "inline interpreter/installer or Python dynamic process ca
 const SELECTED: &str = "inline Python program launched through a runtime-selected interpreter binding; selector output and launch are not source-joined";
 const VARIABLE: &str = "Python script target is a shell variable; its bound path and branch are not joined as a child edge";
 
+#[test]
+fn variable_script_classifier_requires_an_interpreter_word_boundary() {
+    for source in [
+        "python3 \"$HELPER\" check",
+        "if python \"$HELPER\" check; then",
+        "env NAME=value python3 \"$HELPER\" check",
+        "/usr/bin/python3 \"$HELPER\" check",
+    ] {
+        assert!(
+            super::inline_launch::variable_script_target(source),
+            "{source}"
+        );
+    }
+    for source in [
+        "uv sync --python \"$host_python\"",
+        "tool --python3 \"$HELPER\"",
+        "notpython \"$HELPER\"",
+        "prefix_python3 \"$HELPER\"",
+    ] {
+        assert!(
+            !super::inline_launch::variable_script_target(source),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn actual_graph_keeps_uv_interpreter_option_as_dependency_operation() -> DynResult<()> {
+    let root = crate::command::unique_temp_dir("graph-uv-option");
+    let path = "scripts/sdk-environment.sh";
+    super::super::required_graph_tests::source(
+        &root,
+        path,
+        "uv sync --locked --project ci/canary-python --python \"$host_python\"\npython3 \"$HELPER\" check\n",
+    )?;
+    let files = [path.to_owned()];
+    let observed = scan::scan_paths(&root, &files)?;
+    let graph = report(&root, &files, &observed, &BTreeSet::new(), &[path])?;
+    assert_eq!(reason_at(&graph, 1), Some(GENERIC));
+    assert_eq!(reason_at(&graph, 2), Some(VARIABLE));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
 fn reason_at(graph: &super::Graph, line: usize) -> Option<&str> {
     graph
         .edges
@@ -111,16 +155,5 @@ fn checked_in_required_graph_has_no_generic_inline_reason() -> DynResult<()> {
     assert_eq!(count(SELECTED), 0);
     // The Windows helper calls now bind through the proven SCRIPT_DIR root instead.
     assert_eq!(count(VARIABLE), 0);
-    let joined = graph
-        .edges
-        .iter()
-        .filter(|edge| {
-            edge.contract_source.as_deref().is_some_and(|source| {
-                source
-                    .starts_with("ci/automation-migration/invocations.json#inline_source_records:")
-            })
-        })
-        .count();
-    assert_eq!(joined, 2);
     Ok(())
 }

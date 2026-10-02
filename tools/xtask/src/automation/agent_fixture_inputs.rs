@@ -70,8 +70,29 @@ fn write_soak(model: &str, target: &str, path: &Path) -> DynResult<()> {
     Ok(())
 }
 
+fn write_surface(model: &str, path: &Path) -> DynResult<()> {
+    if model.is_empty() || model.len() > 65536 {
+        return Err("agent surface model must be nonempty and at most 64 KiB".into());
+    }
+    let request = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role":"system", "content":"You are a brief CI compatibility probe."},
+            {"role":"user", "content":"Reply with ok, or call the tool if needed."}
+        ],
+        "tools": [{"type":"function", "function": {
+            "name":"get_fixture_fact", "description":"Return one known fact from the smoke fixture.",
+            "parameters": {"type":"object", "properties":{"key":{"type":"string", "enum":["codeword", "checksum"]}}, "required":["key"], "additionalProperties":false}
+        }}],
+        "tool_choice":"auto", "parallel_tool_calls":true, "stream":false, "max_tokens":8, "temperature":0
+    });
+    fs::write(path, serde_json::to_vec(&request)?)?;
+    Ok(())
+}
+
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     match args {
+        [verb, model, path] if verb == "surface" => write_surface(model, Path::new(path)),
         [verb, path] if verb == "sha256" => {
             let path = Path::new(path);
             if !fs::metadata(path)?.is_file() {
@@ -83,7 +104,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         }
         [verb, model, target, path] if verb == "soak" => write_soak(model, target, Path::new(path)),
         _ => Err(
-            "usage: automation agent-fixture-inputs {sha256 FILE | soak MODEL TARGET_CHARS OUTPUT}"
+            "usage: automation agent-fixture-inputs {sha256 FILE | soak MODEL TARGET_CHARS OUTPUT | surface MODEL OUTPUT}"
                 .into(),
         ),
     }

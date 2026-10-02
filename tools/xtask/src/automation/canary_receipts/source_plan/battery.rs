@@ -52,7 +52,15 @@ pub(super) fn preflight_with_cancellation(
     if !battery.starts_with(&resolved.source) {
         return Err("selected battery escapes selected source".into());
     }
+    let controller = std::env::current_exe()?;
+    if !controller.is_absolute() || !controller.is_file() {
+        return Err("current controller must be an absolute regular executable".into());
+    }
     let mut environment = environment();
+    environment.insert(
+        "MESH_LLM_AUTOMATION_BIN".into(),
+        Value::Public(controller.into_os_string()),
+    );
     environment.insert(
         "FAMILY_BATTERY_ARTIFACT_ROOT".into(),
         Value::Public(resolved.output.join("battery-evidence").into()),
@@ -120,3 +128,7 @@ fn execute(
     }
     Ok(report)
 }
+
+#[cfg(test)]
+#[path = "battery_tests.rs"]
+mod tests;

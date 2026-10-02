@@ -169,39 +169,6 @@
       ]
     },
     {
-      "file": ".github/actions/setup-canary-python/action.yml",
-      "members": [
-        [
-          12,
-          "e03ffaf780b52d07",
-          1,
-          "installer",
-          "uv sync --locked --project ci/canary-python with UV_PYTHON_DOWNLOADS=never; writes project .venv from uv.lock"
-        ],
-        [
-          13,
-          "2dbbbaf8dfb0846a",
-          1,
-          "selector",
-          "sdk_python=$PWD/ci/canary-python/.venv/bin/python"
-        ],
-        [
-          14,
-          "ea5b1b3e079a2066",
-          1,
-          "inline",
-          "$sdk_python -c from openai import OpenAI; import preflight, normally silent, nonzero fails action"
-        ],
-        [
-          15,
-          "d0054e0fb6889d47",
-          1,
-          "selector",
-          "GITHUB_ENV exports SKIPPY_WORKLOAD_SDK_PYTHON for family worker"
-        ]
-      ]
-    },
-    {
       "file": ".github/workflows/agentic-replay-nightly.yml",
       "members": [
         [
@@ -217,46 +184,6 @@
           1,
           "inline",
           "$REPLAY_PYTHON_BIN/python3 -c imports duckdb, prints version; nonzero fails preflight"
-        ]
-      ]
-    },
-    {
-      "file": ".github/workflows/ci-quality-slice.yml",
-      "members": [
-        [
-          179,
-          "d7149b0913e92921",
-          1,
-          "provision",
-          "quality_contracts Python 3.12 for required contracts and unittest"
-        ],
-        [
-          181,
-          "8c1dfd95e0d605d6",
-          1,
-          "metadata",
-          "quality_contracts setup-python version 3.12"
-        ],
-        [
-          183,
-          "78b39ffedbd6d228",
-          1,
-          "installer",
-          "python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt; installs required test deps"
-        ],
-        [
-          465,
-          "5280fbba5ae3cdc6",
-          1,
-          "probe",
-          "command -v python3 for optional no-checkout authority sentinel"
-        ],
-        [
-          471,
-          "ed80ea8633907110",
-          1,
-          "inline",
-          "printf host | python3 -c ipaddress IPv6 classifier lines 464-476; exit 0 loopback, 3 nonloopback, 2 invalid/version; caller interprets status; output discarded"
         ]
       ]
     },
@@ -344,130 +271,6 @@
       ]
     },
     {
-      "file": ".github/workflows/smoke.yml",
-      "members": [
-        [
-          76,
-          "b676b2323c5a9aaf",
-          1,
-          "comment",
-          "pip cache comment"
-        ],
-        [
-          80,
-          "abd047e1ae3db2d6",
-          1,
-          "comment",
-          "setup-python cache comment"
-        ],
-        [
-          81,
-          "43fed2e420b526ec",
-          1,
-          "comment",
-          "pip cache comment"
-        ],
-        [
-          83,
-          "37a41b822d1c77ca",
-          1,
-          "metadata",
-          "PIP_CACHE_DIR YAML env /tmp/pip-cache; no process"
-        ],
-        [
-          104,
-          "d7149b0913e92921",
-          1,
-          "provision",
-          "Linux/CUDA bare-metal gpu-nvidia only; job.container.id empty"
-        ],
-        [
-          105,
-          "0570e8f2d5b86b40",
-          1,
-          "comment",
-          "baked venv comment"
-        ],
-        [
-          107,
-          "2354b8636f1cd024",
-          1,
-          "comment",
-          "pip cache comment"
-        ],
-        [
-          112,
-          "8c1dfd95e0d605d6",
-          1,
-          "metadata",
-          "Linux/CUDA python-version 3.12"
-        ],
-        [
-          113,
-          "c2a86f3632e47d36",
-          1,
-          "metadata",
-          "setup-python cache pip"
-        ],
-        [
-          116,
-          "e88a4d094ac6519b",
-          1,
-          "metadata",
-          "setup-python cache-dependency-path ci/requirements-ci-python.txt"
-        ],
-        [
-          138,
-          "0c31fa04ed6b31fc",
-          1,
-          "installer",
-          "python -m pip install --upgrade pip -r ci/requirements-ci-python.txt; both Linux CPU container and bare-metal GPU"
-        ],
-        [
-          322,
-          "d7149b0913e92921",
-          2,
-          "provision",
-          "macOS Metal smoke; bare-metal macos-15"
-        ],
-        [
-          328,
-          "8c1dfd95e0d605d6",
-          2,
-          "metadata",
-          "macOS smoke python-version 3.12"
-        ],
-        [
-          329,
-          "c2a86f3632e47d36",
-          2,
-          "metadata",
-          "macOS setup-python cache pip"
-        ],
-        [
-          332,
-          "e88a4d094ac6519b",
-          2,
-          "metadata",
-          "macOS cache-dependency-path ci/requirements-ci-python.txt"
-        ],
-        [
-          341,
-          "0c31fa04ed6b31fc",
-          2,
-          "installer",
-          "python -m pip install --upgrade pip -r ci/requirements-ci-python.txt; macOS Metal"
-        ],
-        [
-          344,
-          "151a2c256ea0a568",
-          1,
-          "comment",
-          "setup-python/setup-node gate explanation only"
-        ]
-      ]
-    },
-    {
       "file": ".github/workflows/windows-warm-caches.yml",
       "members": [
         [
@@ -546,6 +349,231 @@
           "Main bd5514dd8 retained source: for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ]
       ]
+    },
+    {
+      "file": ".github/workflows/ci-quality-slice.yml",
+      "members": [
+        [
+          201,
+          "d7149b0913e92921",
+          1,
+          "provision",
+          "quality_contracts Python 3.12 for required contracts and unittest"
+        ],
+        [
+          203,
+          "8c1dfd95e0d605d6",
+          1,
+          "metadata",
+          "quality_contracts setup-python version 3.12"
+        ],
+        [
+          205,
+          "78b39ffedbd6d228",
+          1,
+          "installer",
+          "python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt; installs required test deps"
+        ]
+      ]
+    },
+    {
+      "file": ".github/actions/setup-canary-python/action.yml",
+      "members": [
+        [
+          19,
+          "85ee7c23ce9c6ba9",
+          1,
+          "metadata",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. host_python=\"$(command -v python3)\""
+        ],
+        [
+          23,
+          "e46f037504b514eb",
+          1,
+          "metadata",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. command -v uv >/dev/null 2>&1 || { echo \"preinstalled canonical canary uv is required\" >&2; exit 1; }"
+        ],
+        [
+          25,
+          "83f68861fdc8455e",
+          1,
+          "inline",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. export UV_CACHE_DIR=\"$RUNNER_TEMP/required-sdk-uv-cache\""
+        ],
+        [
+          27,
+          "c412ef5d7ebffcd5",
+          1,
+          "inline",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. uv sync --locked --project \"$PWD/ci/canary-python\" --python \"$host_python\""
+        ],
+        [
+          28,
+          "081e45bab23bc08d",
+          1,
+          "metadata",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. sdk_python=\"$UV_PROJECT_ENVIRONMENT/bin/python\""
+        ],
+        [
+          29,
+          "f59ebd44fa35e321",
+          1,
+          "inline",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. \"$sdk_python\" -I -c 'from openai import OpenAI'"
+        ],
+        [
+          36,
+          "960175896abf2d7d",
+          1,
+          "inline",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. \"$host_python\" -I -m venv \"$sdk_environment\""
+        ],
+        [
+          37,
+          "35c3260631577123",
+          1,
+          "metadata",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. sdk_python=\"$sdk_environment/bin/python\""
+        ],
+        [
+          40,
+          "0cafae9ff6076c0f",
+          1,
+          "installer",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. \"$sdk_python\" -I -m pip --isolated install --disable-pip-version-check --no-input \\"
+        ],
+        [
+          43,
+          "5bc8d0011e2ac016",
+          1,
+          "inline",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. -r \"$PWD/ci/required-sdk-python/requirements.lock\""
+        ],
+        [
+          44,
+          "6950a29076627fdf",
+          1,
+          "installer",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. \"$sdk_python\" -I -m pip --isolated check"
+        ],
+        [
+          45,
+          "cba20a6a331f018d",
+          1,
+          "inline",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. \"$sdk_python\" -I -c 'from openai import OpenAI; from langchain_openai import ChatOpenAI; from litellm import completion'"
+        ],
+        [
+          50,
+          "fbc1dc180de2a42a",
+          1,
+          "inline",
+          "SDK path absolute/regular/executable shell guard with explicit || exit1 before export; no interpreter invocation; required class gates remain."
+        ],
+        [
+          51,
+          "0b832c6f5a073f73",
+          1,
+          "metadata",
+          "Closed SDK class action: embedding retains canary OpenAI-only uv lock; compatibility uses SDK-only CPython3.12 stdlib venv plus isolated hash-locked binary pip install/check and actual SDK import gates; interpreter export follows success. printf '%s=%s\\n' \"$sdk_variable\" \"$sdk_python\" >> \"$GITHUB_ENV\""
+        ]
+      ]
+    },
+    {
+      "file": ".github/workflows/smoke.yml",
+      "members": [
+        [
+          76,
+          "b676b2323c5a9aaf",
+          1,
+          "comment",
+          "pip cache comment"
+        ],
+        [
+          80,
+          "abd047e1ae3db2d6",
+          1,
+          "comment",
+          "setup-python cache comment"
+        ],
+        [
+          81,
+          "43fed2e420b526ec",
+          1,
+          "comment",
+          "pip cache comment"
+        ],
+        [
+          83,
+          "37a41b822d1c77ca",
+          1,
+          "metadata",
+          "PIP_CACHE_DIR YAML env /tmp/pip-cache; no process"
+        ],
+        [
+          104,
+          "d7149b0913e92921",
+          1,
+          "provision",
+          "Linux/CUDA bare-metal gpu-nvidia only; job.container.id empty"
+        ],
+        [
+          105,
+          "0570e8f2d5b86b40",
+          1,
+          "comment",
+          "baked venv comment"
+        ],
+        [
+          107,
+          "2354b8636f1cd024",
+          1,
+          "comment",
+          "pip cache comment"
+        ],
+        [
+          112,
+          "8c1dfd95e0d605d6",
+          1,
+          "metadata",
+          "Linux/CUDA python-version 3.12"
+        ],
+        [
+          132,
+          "7ea95acf811b145e",
+          1,
+          "metadata",
+          "Current source boundary preserved: uses: ./.github/actions/setup-canary-python"
+        ],
+        [
+          318,
+          "d7149b0913e92921",
+          2,
+          "provision",
+          "macOS Metal smoke; bare-metal macos-15"
+        ],
+        [
+          324,
+          "8c1dfd95e0d605d6",
+          2,
+          "metadata",
+          "macOS smoke python-version 3.12"
+        ],
+        [
+          334,
+          "7ea95acf811b145e",
+          2,
+          "metadata",
+          "Current source boundary preserved: uses: ./.github/actions/setup-canary-python"
+        ],
+        [
+          339,
+          "151a2c256ea0a568",
+          1,
+          "comment",
+          "setup-python/setup-node gate explanation only"
+        ]
+      ]
     }
   ],
   "member_format": [
@@ -566,5 +594,74 @@
     "shell/PowerShell entrypoints invoked without a Python token (native packaging, smoke, release and scripts/release-notes-generate.sh) can invoke Python transitively; this is a GitHub candidate-line shard, not a complete transitive shell audit",
     "PowerShell bare native python commands in windows-warm-caches.yml do not explicitly check LASTEXITCODE after verifier; effective failure propagation needs Windows execution evidence before changing callers"
   ],
-  "verification": "cargo xtool automation inventory --check"
+  "verification": "cargo xtool automation inventory --check",
+  "current_wave_source_bindings": [
+    {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "871cfcfa39e1b5d3cda74f15cec6c942696b6348a7b850937eacda1f2c2d12d3",
+      "line_count": 994
+    },
+    {
+      "path": "scripts/ci-opencode-smoke.sh",
+      "sha256": "5ad9d164a8fd83c0a009e3078bc8ff59d2a4a5e2dc118ea4e2faa244dc0674ce",
+      "line_count": 613
+    },
+    {
+      "path": "scripts/ci-compat-smoke.sh",
+      "sha256": "80f9a48e8d6f5f98946623ae6cdc11ccbe653aa8d882faedf80b173f091b82de",
+      "line_count": 164
+    },
+    {
+      "path": "scripts/skippy-workload-certify.sh",
+      "sha256": "c28021c11b1465c0b2042997607e805a67bf1495fa1651505761d7145aa1dbe9",
+      "line_count": 461
+    },
+    {
+      "path": ".github/actions/upload-automation/action.yml",
+      "sha256": "fcd8cbeb697b636551cd7183b9bc25507dbc2f5b62a4b6f045b489f70772cbd1",
+      "line_count": 116
+    },
+    {
+      "path": ".github/actions/restore-automation/action.yml",
+      "sha256": "8f189c95535696cce7164866f0e6d0412f13648dce84f2e4035bc7fb40c49309",
+      "line_count": 96
+    },
+    {
+      "path": ".github/workflows/ci-quality-slice.yml",
+      "sha256": "0e4e430011f4ba3967908d9e017a0827a8173aee5af1cf3a12d7f887366a6a1c",
+      "line_count": 650
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "sha256": "0d3a61d66e5590c54e62c1ea6241b12015b9cc564387898d291aa0b1591aa71e",
+      "line_count": 51
+    },
+    {
+      "path": ".github/workflows/smoke.yml",
+      "sha256": "9752ca1e1f0408d6fd8dc52aa46652aeaa5c44c4a195250c1302ffc92f7558fc",
+      "line_count": 454
+    },
+    {
+      "path": "ci/required-sdk-python/pyproject.toml",
+      "sha256": "50191adcecfd5e387d42d21b577cae76fa82d25c2627864021f8ada9c7de7cd7",
+      "line_count": 5
+    },
+    {
+      "path": "ci/required-sdk-python/uv.lock",
+      "sha256": "c83abb8b07ea1ab8f84267c87fd136182596c1bbb626321e1aff90783eeb00e6",
+      "line_count": 1236
+    },
+    {
+      "path": "ci/required-sdk-python/requirements.lock",
+      "sha256": "e60a887ad0e8f353d0df5fc764dd00b663c8f766a246b33282e041ebf3d31ec6",
+      "line_count": 720
+    }
+  ],
+  "current_wave_intent_proofs": {
+    "battery": "family_battery_policy_cli; family_model_identity_cli; family_battery_environment; family_battery_prepared_source; source_plan/battery_tests",
+    "opencode": "opencode_config_adapter; agent_client_config_cli; agent_fixture_inputs_cli; agent_fixture_evidence_cli",
+    "protected": "automation_restore_admission; automation_producer_admission",
+    "sdk": "required_sdk_environment_admission; actual required clients remain required; SDK dependency receipt is not runtime/model qualification",
+    "validation": "Parent validation pending; no retirement or aggregate counts changed"
+  }
 }

@@ -7,17 +7,21 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
 pub(crate) fn print_usage() {
     println!("  cargo xtool automation local-ports COUNT");
     println!(
-        "  cargo xtool automation agent-fixture-inputs {{sha256 FILE | soak MODEL TARGET_CHARS OUTPUT}}"
+        "  cargo xtool automation agent-fixture-inputs {{sha256 FILE | soak MODEL TARGET_CHARS OUTPUT | surface MODEL OUTPUT}}"
     );
     println!(
-        "  cargo xtool automation agent-client-config {{pi BASE MODEL JSON | goose BASE MODEL PROVIDER_JSON CONFIG_YAML}}"
+        "  cargo xtool automation agent-client-config {{pi BASE MODEL JSON | goose BASE MODEL PROVIDER_JSON CONFIG_YAML | opencode [BASE MODEL]}}"
     );
     println!(
-        "  cargo xtool automation agent-fixture-evidence {{soak RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS}}"
+        "  cargo xtool automation agent-fixture-evidence {{soak RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS | probe RESPONSE LABEL}}"
     );
     println!("  cargo xtool automation family-model-identity MODEL_ID MODEL_PATH");
+    println!("  cargo xtool automation family-model-identity --snapshot-revision PATH");
     println!(
         "  cargo xtool automation family-battery-policy ROOT MANIFEST PLAN SHARD_INDEX_OR_EMPTY"
+    );
+    println!(
+        "  cargo xtool automation family-battery-policy --environment ARTIFACT_ROOT MODEL_ROOT MINIMUM_GIB OUTPUT"
     );
     println!(
         "  cargo xtool automation openai-smoke-config --output PATH --model-id ID --model-path PATH --layer-end N --ctx-size N"

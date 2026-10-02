@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "legacy_path": "scripts/tests/test_skippy_workload_oracles_build.py",
+  "legacy_sha256": "2d32954847c13ace282dd87b95678998a26b67154c757f4c537ed4597a95ef06",
+  "method_count": 4,
+  "new_target": "tools/xtask/tests/workload_oracle_producer_contract.rs",
+  "disposition": "Owning six tests passed; parent authorized four-method retirement. Native/model qualification remains open.",
+  "methods": [
+    {
+      "legacy_method": "test_environment_is_deterministic_and_does_not_override_metal_outputs",
+      "new_methods": [
+        "print_env_has_exact_export_bytes_and_preserves_spaced_paths",
+        "cpu_graph_is_isolated_and_exports_all_producer_artifact_paths"
+      ],
+      "intent": "Exact six newline-terminated exports; paths with spaces preserved; no export-mode writes; inherited Metal directories unchanged through CPU orchestration."
+    },
+    {
+      "legacy_method": "test_rejects_relative_or_environment_injection_paths",
+      "new_methods": [
+        "export_rejects_relative_and_line_injection_paths_before_writes"
+      ],
+      "intent": "Actual shell rejects relative and CR/LF paths before output or boundary calls."
+    },
+    {
+      "legacy_method": "test_both_canary_paths_build_then_export_the_same_cpu_producers",
+      "new_methods": [
+        "cpu_graph_is_isolated_and_exports_all_producer_artifact_paths",
+        "failed_preparation_build_or_stamp_cannot_emit_successful_manifest",
+        "shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_on_failure"
+      ],
+      "intent": "Actual producer graph verifies CPU/static/workload-ON environment, isolated native and Cargo destinations, locked package roster, library-test artifact selection, snapshot/prepared/native/build/test/stamp ordering and exact stamp path handoff. Actual shared run_full_build invocation and failure propagation preserved in three build modes. Typed current workflow guards own reusable candidate/verification and immutable restore bindings; existing package mutation tests own artifact requirements and digest identity; owning consumer fixture owns manifest-relative stamp consumption."
+    },
+    {
+      "legacy_method": "test_full_roster_and_cpu_producer_include_non_chat_on_every_trigger",
+      "new_methods": [
+        "default_rust_family_plan_contains_all_six_non_chat_oracle_classes",
+        "shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_on_failure"
+      ],
+      "intent": "Actual Rust default family-plan output has exactly six non-chat classes with workload-oracle profile. Shared build function invokes CPU producer for every supported build mode. Typed workflow guard owner retains trigger and candidate/verification routing."
+    }
+  ],
+  "existing_owners": [
+    {
+      "path": "tools/xtask/src/ci_validation/workflow_guards/canary_graph.rs",
+      "methods": [
+        "current_admission_graph_is_bound",
+        "schedule_and_credential_free_controller_are_required",
+        "omitted_preflight_gate_and_unverified_identity_are_rejected"
+      ],
+      "intent": "Semantic YAML trigger/admission and shared candidate/verification reusable workflow routing; no source count assertion."
+    },
+    {
+      "path": "tools/xtask/src/ci_validation/workflow_guards/canary_build.rs",
+      "methods": [
+        "current_controller_worker_handoffs_are_bound",
+        "selected_source_cannot_supply_controller_or_replace_artifact_identity",
+        "restore_requires_bootstrap_and_actual_command_not_comment"
+      ],
+      "intent": "Controller/source separation and immutable download/restore before certification."
+    },
+    {
+      "path": "tools/xtask/tests/migration_canary_receipts_parity/package_admission.rs",
+      "methods": [
+        "canary_package_admission_rejects_artifact_when_bytes_change",
+        "canary_package_admission_rejects_artifact_when_required_file_is_missing"
+      ],
+      "intent": "Actual required workload-oracles.tar and digest-bound package admission."
+    },
+    {
+      "path": "tools/xtask/tests/workload_certify_contract.rs",
+      "methods": [
+        "cpu_stamp_admission_follows_build_and_never_weakens_prebuilt_consumption",
+        "provenance_and_candidate_verifier_errors_cannot_admit_cpu_outputs"
+      ],
+      "intent": "Actual consumer producer-manifest resolution and failed provenance admission."
+    }
+  ],
+  "bounds": [
+    "Native/model/SDK execution is intentionally not performed by finite adapter tests.",
+    "Finite provenance boundary records file paths; owning prepared-source/candidate checker tests remain authoritative for validation itself.",
+    "Python test source-string call-count/error-wording observations are not interpreted as runtime intent."
+  ],
+  "new_target_sha256": "3b5c22b1a17c01298d7821f8f152b7c4de55996dd02617c49ed424292ee1c78f",
+  "qualified_receipt": {
+    "path": ".omo/evidence/resume-20261002/workload-oracle-producer-contract-corrected2.log",
+    "passed": 6,
+    "failed": 0,
+    "seconds": 3.61,
+    "executor": "parent serial validation",
+    "sha256": "a08d243d654fbdfedd1b0b628a04909c3d8bf0e743e1bdce67c99e546cd126d9"
+  },
+  "durable_path": "ci/automation-migration/workload-oracle-producer-retirement-coverage.json"
+}

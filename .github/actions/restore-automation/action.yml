@@ -4,31 +4,90 @@ inputs:
   source_sha:
     description: Immutable automation source commit supplied by the declared producer dependency.
     required: true
+  artifact_id:
+    description: Optional immutable same-run producer artifact ID; must be paired with binary_sha256.
+    required: false
+    default: ''
+  binary_sha256:
+    description: Optional producer output executable digest; must be paired with artifact_id.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
+    - name: Admit automation download identity
+      shell: bash
+      env:
+        AUTOMATION_SOURCE_SHA: ${{ inputs.source_sha }}
+        AUTOMATION_ARTIFACT_ID: ${{ inputs.artifact_id }}
+        AUTOMATION_BINARY_SHA256: ${{ inputs.binary_sha256 }}
+      run: |
+        set -euo pipefail
+        [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+        if [[ -n "$AUTOMATION_ARTIFACT_ID" || -n "$AUTOMATION_BINARY_SHA256" ]]; then
+          [[ "$AUTOMATION_ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
+          [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+        fi
+        mkdir "$RUNNER_TEMP/immutable-automation-restored"
     - name: Download automation bytes
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
-        name: automation-${{ runner.os }}-${{ runner.arch }}-${{ inputs.source_sha }}
-        path: ${{ runner.temp }}/immutable-automation
+        artifact-ids: ${{ inputs.artifact_id }}
+        merge-multiple: true
+        name: ${{ inputs.artifact_id == '' && format('automation-{0}-{1}-{2}', runner.os, runner.arch, inputs.source_sha) || '' }}
+        path: ${{ runner.temp }}/immutable-automation-restored
     - name: Verify and export automation
       shell: bash
       env:
         AUTOMATION_SOURCE_SHA: ${{ inputs.source_sha }}
+        AUTOMATION_ARTIFACT_ID: ${{ inputs.artifact_id }}
+        AUTOMATION_BINARY_SHA256: ${{ inputs.binary_sha256 }}
       run: |
         set -euo pipefail
-        cd "$RUNNER_TEMP/immutable-automation"
+        [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+        if [[ -n "${AUTOMATION_ARTIFACT_ID:-}" || -n "${AUTOMATION_BINARY_SHA256:-}" ]]; then
+          [[ "$AUTOMATION_ARTIFACT_ID" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
+          [[ "$AUTOMATION_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+        fi
+        cd "$RUNNER_TEMP/immutable-automation-restored"
         binary=xtask
         if [[ "$RUNNER_OS" == Windows ]]; then binary=xtask.exe; fi
-        test "$(wc -l < SHA256SUMS | tr -d ' ')" = 2
+        shopt -s nullglob dotglob
+        members=(*)
+        [[ ${#members[@]} == 3 ]] || exit 1
+        for member in "$binary" source.txt SHA256SUMS; do
+          [[ -f "$member" && ! -L "$member" ]] || exit 1
+        done
+        [[ "$(wc -c < source.txt | tr -d '[:space:]')" == 41 ]] || exit 1
+        IFS= read -r source_line < source.txt || exit 1
+        [[ "$source_line" == "$AUTOMATION_SOURCE_SHA" ]] || exit 1
+        checksum_pattern='^([0-9a-f]{64}) ([ *])([a-zA-Z0-9.]+)$'
+        [[ "$(wc -c < SHA256SUMS | tr -d '[:space:]')" -le 256 ]] || exit 1
+        seen_binary=0
+        seen_source=0
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          [[ "$line" =~ $checksum_pattern ]] || exit 1
+          digest="${BASH_REMATCH[1]}"
+          name="${BASH_REMATCH[3]}"
+          case "$name" in
+            "$binary")
+              [[ "$seen_binary" == 0 ]] || exit 1
+              seen_binary=1
+              if [[ -n "${AUTOMATION_BINARY_SHA256:-}" ]]; then
+                [[ "$digest" == "$AUTOMATION_BINARY_SHA256" ]] || exit 1
+              fi
+              ;;
+            source.txt) [[ "$seen_source" == 0 ]] || exit 1; seen_source=1 ;;
+            *) exit 1 ;;
+          esac
+        done < SHA256SUMS
+        [[ "$seen_binary" == 1 && "$seen_source" == 1 ]] || exit 1
         if command -v sha256sum >/dev/null 2>&1; then
           sha256sum --strict -c SHA256SUMS
         else
           shasum -a 256 -c SHA256SUMS
         fi
-        test "$(cat source.txt)" = "$AUTOMATION_SOURCE_SHA"
-        test -s "$binary"
+        test -s "$binary" || exit 1
         chmod +x "$binary"
         binary_path="$PWD/$binary"
         if command -v cygpath >/dev/null 2>&1; then

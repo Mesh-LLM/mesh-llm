@@ -1,3 +1,8 @@
+mod cache_authority;
+mod cache_boundaries;
+mod cache_callers;
+mod cache_consumers;
+mod cache_predicate;
 mod canary_build;
 mod canary_execution;
 mod canary_graph;
@@ -37,6 +42,28 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     canary_graph::check(&workflows)?;
     canary_build::check(&workflows)?;
     laya::check(root, &workflows)?;
+    let quality_jobs = workflows
+        .get("ci-quality-slice.yml")
+        .and_then(|workflow| workflow.get("jobs"))
+        .ok_or("required cache authority workflow missing")?;
+    cache_authority::producer(
+        quality_jobs
+            .get("runner_policy")
+            .ok_or("required cache authority producer missing")?,
+    )?;
+    cache_authority::sentinel(
+        quality_jobs
+            .get("authority_sentinel")
+            .ok_or("required cache authority sentinel missing")?,
+    )?;
+    cache_consumers::check(&workflows)?;
+    cache_callers::check(&workflows)?;
+    cache_boundaries::check(&workflows)?;
+    for name in ["restore-windows-abi-cache", "setup-windows-rocm-sdk"] {
+        let source =
+            std::fs::read_to_string(root.join(format!(".github/actions/{name}/action.yml")))?;
+        cache_callers::nested_windows(&workflow_yaml::parse(&source)?)?;
+    }
     permissions::check(&workflows)
 }
 
