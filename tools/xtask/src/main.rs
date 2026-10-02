@@ -64,6 +64,7 @@ fn run() -> DynResult<()> {
         cli::CliCommand::SmokeObservation(rest) => automation::smoke_observation::run(rest),
         cli::CliCommand::HfXetSmoke(rest) => automation::hf_xet_smoke::run(rest),
         cli::CliCommand::WorkloadSmoke(rest) => automation::workload_smoke::run(rest),
+        cli::CliCommand::SystemOneCases(rest) => automation::system_one_cases::run(rest),
         cli::CliCommand::BinaryStageReadiness(rest) => {
             automation::binary_stage_readiness::run(rest)
         }

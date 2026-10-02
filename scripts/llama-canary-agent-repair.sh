@@ -169,26 +169,38 @@ rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || t
 run_for() {
   local label="$1" seconds="$2"
   shift 2
-  if [[ "$HARNESS_MODE" == *-build ]]; then
-    local transaction_root input executable result
-    transaction_root="$(mktemp -d "${RUNNER_TEMP:?}/canary-timeout.XXXXXXXX")" || return 125
-    input="$transaction_root/input.json"
+  if [[ "$HARNESS_MODE" == *-build || "$HARNESS_MODE" == repair ]]; then
+    local transaction_root input executable result timeout_parent
+    local automation=()
+    if [[ "$HARNESS_MODE" == repair ]]; then
+      repair_workload_controller_unchanged || return 125
+      automation=("${repair_workload_automation[@]}")
+      timeout_parent="${RUNNER_TEMP:-/tmp}"
+    else
+      automation=("${MESH_LLM_AUTOMATION_BIN:?}")
+      timeout_parent="${RUNNER_TEMP:?}"
+    fi
     executable="$(command -v "$1")" || return 125
+    if [[ "$HARNESS_MODE" == repair && "$executable" != /* && "$executable" == */* ]]; then
+      executable="$PWD/$executable"
+    fi
     if [[ "$executable" != /* ]]; then
       echo "$label requires an absolute executable" >&2
       return 125
     fi
+    transaction_root="$(mktemp -d "$timeout_parent/canary-timeout.XXXXXXXX")" || return 125
+    input="$transaction_root/input.json"
     shift
     jq -n --arg label "$label" --argjson seconds "$seconds" --arg cwd "$PWD" \
       --arg executable "$executable" --args \
       '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
-      -- "$@" > "$input" || return 125
-    if "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-timeout --input "$input"; then
+      -- "$@" > "$input" || { rm -rf "$transaction_root"; return 125; }
+    if "${automation[@]}" automation canary-timeout --input "$input"; then
       result=0
     else
       result=$?
     fi
-    rm -rf "$transaction_root"
+    rm -rf "$transaction_root" || return 125
     return "$result"
   fi
   local cleanup=()
@@ -210,6 +222,28 @@ record_failure_class() {
   fi
 }
 
+repair_family_plan_step() {
+  local log="$1"
+  shift
+  repair_workload_controller_unchanged || return 1
+  if [[ -n "$log" ]]; then
+    run_verification_logged "full family certification plan" "$log" "$@"
+  else
+    "$@"
+  fi
+}
+
+repair_family_plan() {
+  local shards="$1" log="${2:-}" manifest="$ROOT/ci/llama-canary/family-certified.json"
+  mkdir -p "$(dirname "$PLAN_PATH")" || return 1
+  repair_family_plan_step "$log" "${repair_workload_automation[@]}" --repo-root "$ROOT" ci family-plan \
+    --manifest "$manifest" --shard-count "$shards" --output "$PLAN_PATH" || return 1
+  repair_family_plan_step "$log" "${repair_workload_automation[@]}" --repo-root "$ROOT" ci family-plan \
+    --manifest "$manifest" --verify-plan "$PLAN_PATH" || return 1
+  repair_family_plan_step "$log" "${repair_workload_automation[@]}" automation family-battery-policy --cache \
+    "$ROOT" "$manifest" "$PLAN_PATH" "${HF_CACHE:?}" || return 1
+}
+
 check_family_cache() {
   if [[ "$HARNESS_MODE" == *-build ]]; then
     local transaction_root input source_revision
@@ -224,6 +258,10 @@ check_family_cache() {
     "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts preflight --input "$input" || return 1
     mkdir -p "$(dirname "$PLAN_PATH")" || return 1
     cp "$transaction_root/admitted/plan.json" "$PLAN_PATH"
+    return
+  fi
+  if [[ "$HARNESS_MODE" == repair ]]; then
+    repair_family_plan 256
     return
   fi
   mkdir -p "$(dirname "$PLAN_PATH")"
@@ -422,6 +460,36 @@ assert_agent_control_unchanged() {
   fi
 }
 
+repair_source_inspection() {
+  local verb="$1" check="${2:-}" log="${3:-}" transaction_root input status
+  repair_workload_controller_unchanged || return 1
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/local-repair-inspection.XXXXXXXX")" || return 1
+  input="$transaction_root/input.json"
+  if ! jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "$BASE_HEAD" \
+    --arg controller_sha "$repair_workload_controller_sha" --arg root "$ROOT" \
+    --arg base "$CANDIDATE_BASE_HEAD" --arg check "$check" \
+    '{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},root:$root,base:$base}}
+      + (if $check == "true" then {check:true} elif $check == "false" then {check:false} else {} end)' \
+    > "$input"; then
+    rm -rf "$transaction_root"
+    return 1
+  fi
+  if [[ -n "$log" ]]; then
+    if run_verification_logged "parity manifest validation" "$log" \
+      "${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+      status=0
+    else
+      status=$?
+    fi
+  elif "${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -rf "$transaction_root" || return 1
+  return "$status"
+}
+
 validate_agent_manifest_changes() {
   if [[ "$HARNESS_MODE" == *-build ]]; then
     local transaction_root input context
@@ -436,6 +504,10 @@ validate_agent_manifest_changes() {
     return
   fi
   : > "$MANIFEST_POLICY_LOG"
+  if [[ "$HARNESS_MODE" == repair ]]; then
+    repair_source_inspection local-manifest-policy > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+    return
+  fi
   python3 scripts/validate-llama-canary-agent-manifests.py \
     --base-ref "$CANDIDATE_BASE_HEAD" \
     --llama-src "$ROOT/.deps/llama.cpp" \
@@ -645,9 +717,16 @@ run_certification() {
   done <<< "$workload_settings"
   : > "$CERTIFY_LOG"
   echo "trusted candidate gate: certify" | tee -a "$CERTIFY_LOG"
+  if [[ "$HARNESS_MODE" == repair ]]; then
+    repair_source_inspection local-parity-inventory "" "$CERTIFY_LOG" || return 1
+  else
   run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
     python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate \
     || return 1
+  fi
+  if [[ "$HARNESS_MODE" == repair ]]; then
+    repair_family_plan 1 "$CERTIFY_LOG" || return 1
+  else
   run_verification_logged "full family certification plan" "$CERTIFY_LOG" \
     python3 scripts/plan-family-battery.py \
       --manifest ci/llama-canary/family-certified.json \
@@ -656,6 +735,7 @@ run_certification() {
       --cache-root "$HF_CACHE" \
       --output "$PLAN_PATH" \
     || return 1
+  fi
   run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
     "${workload_env[@]}" \
@@ -754,6 +834,8 @@ controller_split_roster() {
 write_split_certification_roster() {
   if [[ "$HARNESS_MODE" == *-build ]]; then
     controller_split_roster false
+  elif [[ "$HARNESS_MODE" == repair ]]; then
+    repair_source_inspection local-split-roster false
   else
     python3 scripts/generate-split-certified.py
   fi
@@ -762,6 +844,8 @@ write_split_certification_roster() {
 check_split_certification_roster() {
   if [[ "$HARNESS_MODE" == *-build ]]; then
     controller_split_roster true
+  elif [[ "$HARNESS_MODE" == repair ]]; then
+    repair_source_inspection local-split-roster true
   else
     python3 scripts/generate-split-certified.py --check
   fi

@@ -1,9 +1,12 @@
 //! Narrow mutable model-size and append-only source classification policy.
-use super::{model_boundaries, process, producer_receipt::Context, source};
+use super::{model_boundaries, policy_document, process, producer_receipt::Context, source};
 use crate::command::DynResult;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 const FAMILY: &str = "ci/llama-canary/family-certified.json";
 const PARITY: &str = "docs/skippy/llama-parity-candidates.json";
 const RUNNABLE: [&str; 3] = ["candidate", "candidate_stateful", "candidate_multimodal"];
@@ -27,28 +30,34 @@ pub(super) struct Input {
 
 pub(super) fn execute(input: &Input) -> DynResult<Value> {
     input.context.validate()?;
-    source::revision(&input.base)?;
-    if !input.root.is_absolute() {
+    let result = admit(&input.root, &input.base)?;
+    input.context.validate()?;
+    process::check()?;
+    Ok(result)
+}
+
+pub(super) fn admit(root: &Path, base: &str) -> DynResult<Value> {
+    source::revision(base)?;
+    if !root.is_absolute() {
         return Err("manifest policy source must be absolute".into());
     }
-    let root = input.root.canonicalize()?;
+    let root = root.canonicalize()?;
     let before = |path: &str| -> DynResult<Value> {
         let bytes = process::git(
             &root,
-            &["show".into(), format!("{}:{path}", input.base).into()],
+            &["show".into(), format!("{base}:{path}").into()],
             None,
         )?;
         Ok(serde_json::from_slice(&bytes)?)
     };
     let family_before = before(FAMILY)?;
     let parity_before = before(PARITY)?;
-    let family_after: Value = serde_json::from_slice(&fs::read(root.join(FAMILY))?)?;
-    let parity_after: Value = serde_json::from_slice(&fs::read(root.join(PARITY))?)?;
+    let family_after: Value = policy_document::json(&root, FAMILY)?;
+    let parity_after: Value = policy_document::json(&root, PARITY)?;
     source::prepared(&root)?;
     let (sources, boundaries) = model_boundaries::inventory(&root.join(".deps/llama.cpp"))?;
     family(&family_before, &family_after)?;
     parity(&parity_before, &parity_after, &sources, &boundaries)?;
-    input.context.validate()?;
     process::check()?;
     Ok(json!({"status":"agent_manifest_policy_admitted"}))
 }
@@ -186,3 +195,6 @@ fn classification(row: &Value, boundaries: &BTreeSet<String>) -> DynResult<()> {
 #[cfg(test)]
 #[path = "manifest_policy_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+use std::fs;

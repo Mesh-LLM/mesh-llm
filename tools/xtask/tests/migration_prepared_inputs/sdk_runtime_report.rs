@@ -1,5 +1,5 @@
 //! The SDK/product consumer of `mesh-llm runtime list --available --json`
-//! (`test_ci_sdk_json_consumer.py`): select exactly one prepared adjacent
+//! (`migration_lifecycle::sdk_json_consumer`): select exactly one prepared adjacent
 //! runtime or fail without building one.
 
 use crate::support::{Case, Legacy, Scratch, TestResult, assert_output, snapshot};

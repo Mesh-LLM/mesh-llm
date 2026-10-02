@@ -11,8 +11,14 @@ mod compute_changes_budget;
 mod handoffs;
 mod laya;
 mod permissions;
+mod pr_canary;
 mod quality_contracts;
 mod replay;
+mod replay_admission;
+mod replay_environment;
+mod runner_finalization;
+mod runtime_events;
+mod selected_ref;
 mod shell;
 
 use super::lane_results::workflow_yaml::{self, Node};
@@ -43,8 +49,14 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
         workflows.insert(name, document);
     }
     quality_contracts::check(root, &workflows)?;
+    selected_ref::check(&workflows)?;
     claude_clients::check(&workflows)?;
+    pr_canary::check(&workflows)?;
+    runner_finalization::check(&workflows)?;
+    runtime_events::check(&workflows)?;
     replay::check(&workflows)?;
+    replay_admission::check(root, &workflows)?;
+    replay_environment::check(&workflows)?;
     canary_graph::check(&workflows)?;
     canary_build::check(&workflows)?;
     laya::check(root, &workflows)?;

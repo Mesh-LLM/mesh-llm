@@ -285,3 +285,59 @@ fn current_battery_plan_record_preserves_original_scope_with_other_typed_calls_p
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn system_one_actual_mixed_launch_requires_both_default_and_explicit_override_binding()
+-> DynResult<()> {
+    let root = crate::command::unique_temp_dir("selected-system-one-mixed");
+    fs::create_dir_all(root.join("scripts"))?;
+    let caller = "scripts/skippy-system-one-smoke.sh";
+    let source = concat!(
+        "local case_command=(\"${automation[@]}\" automation system-one-cases)\n",
+        "if [[ \"${SYSTEMONE_SMOKE_DRIVER+set}\" == set ]]; then\n",
+        "case_command=(python3 \"$CASES_DRIVER\")\n",
+        "fi\n",
+        "\"${case_command[@]}\" \\\n",
+        "--mode \"$mode\" --json-out \"$REPORT\" || rc=$?\n"
+    );
+    fs::write(root.join(caller), source)?;
+    let record = super::ledger::SelectedProcessCall {
+        caller: caller.to_owned(),
+        line: 5,
+        source_block: source.lines().nth(4).unwrap().trim().to_owned(),
+        child: "tools/xtask default; explicit Python $CASES_DRIVER override".to_owned(),
+        child_source_known: false,
+        argv: source.trim_end().to_owned(),
+        replacement_owner: "tools/xtask/src/automation/system_one_cases/mod.rs; retained explicit SYSTEMONE_SMOKE_DRIVER Python override".to_owned(),
+        status_streams_effects: "Typed default and explicitly retained Python override; same report/status consumer".to_owned(),
+    };
+    check_selected_processes(&root, std::slice::from_ref(&record))?;
+    assert!(
+        check_selected_processes(&root, &[])
+            .unwrap_err()
+            .to_string()
+            .contains("unowned required execution")
+    );
+    let mut pure_typed = record.clone();
+    pure_typed.replacement_owner = "tools/xtask/src/automation/system_one_cases/mod.rs".to_owned();
+    assert!(
+        check_selected_processes(&root, &[pure_typed])
+            .unwrap_err()
+            .to_string()
+            .contains("mixed launch binding")
+    );
+    for (old, new) in [
+        ("automation system-one-cases", "automation workload-smoke"),
+        ("${SYSTEMONE_SMOKE_DRIVER+set}", "${OTHER_DRIVER+set}"),
+        ("$CASES_DRIVER", "$OTHER_DRIVER"),
+        ("--json-out \"$REPORT\"", "--json-out \"$OTHER_REPORT\""),
+    ] {
+        fs::write(root.join(caller), source.replace(old, new))?;
+        assert!(
+            check_selected_processes(&root, std::slice::from_ref(&record)).is_err(),
+            "unbound mutation: {old}"
+        );
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

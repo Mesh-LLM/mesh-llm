@@ -6,6 +6,7 @@ pub(crate) mod check_report;
 mod conventional_commit;
 mod env_census;
 mod publish_order;
+mod selected_ref;
 pub(crate) mod text;
 mod upstream_pin;
 
@@ -41,6 +42,7 @@ pub(crate) fn run_check(
         RepositoryCheck::ConventionalCommits => conventional_commit::run(&cwd, args),
         RepositoryCheck::EnvMutationCensus => env_census::run(args, default_root),
         RepositoryCheck::LlamaUpstreamPin => upstream_pin::run(args, default_root),
+        RepositoryCheck::SelectedRef => selected_ref::run(args, default_root),
     }
 }
 

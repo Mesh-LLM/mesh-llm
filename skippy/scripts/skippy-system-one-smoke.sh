@@ -28,8 +28,12 @@ set -euo pipefail
 # Exit: 0 pass | unqualified, 1 fail (including an unusable environment).
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-automation=(cargo run --quiet --manifest-path "$ROOT/tools/xtask/Cargo.toml" --)
-if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo "MESH_LLM_AUTOMATION_BIN must be an absolute regular executable" >&2
+    exit 2
+  fi
   automation=("$MESH_LLM_AUTOMATION_BIN")
 fi
 
@@ -319,7 +323,11 @@ run_cases_against_stage() {
     "$layer_end" "127.0.0.1:${port}" 1 "$CTX_SIZE" "$n_batch" "$gpu_layers"
   start_stage_server "$label" "$config" "$port" "$log" || return 1
   rc=0
-  python3 "$CASES_DRIVER" \
+  local case_command=("${automation[@]}" automation system-one-cases)
+  if [[ "${SYSTEMONE_SMOKE_DRIVER+set}" == set ]]; then
+    case_command=(python3 "$CASES_DRIVER")
+  fi
+  "${case_command[@]}" \
     --base-url "http://127.0.0.1:${port}" \
     --model "$model_id" \
     --alias "$ALIAS" \
@@ -431,7 +439,7 @@ main() {
     echo "regenerate it with cargo xtool models generate" >&2
     exit 2
   fi
-  if [[ ! -f "$CASES_DRIVER" ]]; then
+  if [[ "${SYSTEMONE_SMOKE_DRIVER+set}" == set && ! -f "$CASES_DRIVER" ]]; then
     echo "System One case driver not found: $CASES_DRIVER" >&2
     exit 2
   fi

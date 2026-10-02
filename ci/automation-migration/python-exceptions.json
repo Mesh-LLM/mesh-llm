@@ -359,8 +359,9 @@
       },
       {
         "path": "scripts/llama-canary-agent-repair.sh",
-        "sha256": "4c0a8a8cde5c90b7c24ce71811452dba6134e0fbaad2ad743b3144d5f7495891",
-        "line_count": 889
+        "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
+        "line_count": 973,
+        "previous_projected_source_sha256": "e5b5a7edf0bbaaa5ad418e60a2a0d96d94aad08a727bd743a3340d82971eb9ac"
       },
       {
         "path": ".github/workflows/ci-quality-slice.yml",
@@ -603,5 +604,53 @@
         }
       ]
     }
+  },
+  "repair_timeout_integration": {
+    "source": {
+      "path": "scripts/llama-canary-agent-repair.sh",
+      "preimage_sha256": "4c0a8a8cde5c90b7c24ce71811452dba6134e0fbaad2ad743b3144d5f7495891",
+      "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
+      "line_count": 973,
+      "previous_projected_source_sha256": "e5b5a7edf0bbaaa5ad418e60a2a0d96d94aad08a727bd743a3340d82971eb9ac"
+    },
+    "qualification": "Authored, unrun; parent must qualify the transaction before any legacy retirement",
+    "retained": "All Python helpers and legacy tests remain. Normal verify timeout helper remains reachable; no inventory/roster reductions.",
+    "rebound_rows": []
+  },
+  "projected_final_repair_caller_binding": {
+    "source": "scripts/llama-canary-agent-repair.sh",
+    "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
+    "line_count": 973,
+    "inputs": {
+      ".omo/evidence/resume-20261002/just-layout-whitelist-ledger-refresh/manifest.json": "f77250464ed20b532d0a6674d974fedae622c53e28097acc49537f3f89050b7e",
+      ".omo/evidence/resume-20261002/next-wave-post-whitelist-rebase/combined/manifest.json": "7110ce7d6cd11a7fa99ad68d9b5437645e88656ac7f2888c483367fe038e2e08",
+      ".omo/evidence/resume-20261002/repair-family-plan-cache-candidate/manifest.json": "37a437bd5b856eda3e2856a4a34b1bb13af3851e9ab91342389dd5beaf9dd3cf",
+      ".omo/evidence/resume-20261002/local-repair-inspection-candidate/manifest.json": "46b5d4cd5484966a05e57e8a15b6fd85d7d6f3f718c49ed317e0f211d0d15910",
+      ".omo/evidence/resume-20261002/local-repair-inspection-candidate/layer-1/manifest.json": "e67cdcc84d92268c46d7570010d90fa6d3fe32bfad26382d65e1ac368c434339",
+      ".omo/evidence/resume-20261002/system-one-cases-candidate/manifest.json": "18d9bb1660613ab33cd7ab3eb8c34ab8ea7538b70c5310114a1b385936788626",
+      ".omo/evidence/resume-20261002/system-one-cases-candidate/layer-1/manifest.json": "11bff1ed60981379791c58fa84801428c3beec628a8efaa8923ba1519d9c6c97",
+      ".omo/evidence/resume-20261002/system-one-cases-candidate/layer-2/manifest.json": "0bc116416a93c402a81f588d6f335c34b0fec3c5d12aad0963a559658a837ca5",
+      ".omo/evidence/resume-20261002/next-wave-post-whitelist-rebase/system-one/manifest.json": "a1e00edc5234bf6fa0a2d62b9fcf4022bf963afd7731b8e2004114539b0153b4"
+    },
+    "qualification": "Authored/source-only; required scanner correction and parent tests/inventory pending",
+    "retained_python_fallback_lines": [
+      208,
+      266,
+      272,
+      464,
+      672,
+      679,
+      752,
+      762
+    ],
+    "retained_component_environment_line": 608,
+    "local_inspection_calls": [
+      461,
+      669,
+      750,
+      760
+    ],
+    "no_counts_or_roster_changes": true,
+    "workflow_trust_boundaries": "All workflow payloads/permissions/pins/platform records unchanged by this ledger transaction; normal repair local authority never becomes immutable workflow receipt."
   }
 }

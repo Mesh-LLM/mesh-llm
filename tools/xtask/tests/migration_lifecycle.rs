@@ -1,5 +1,20 @@
 #![cfg(unix)]
 
+#[path = "migration_lifecycle/ci_batch_filter/mod.rs"]
+mod ci_batch_filter;
+#[path = "migration_lifecycle/macos_deployment_target.rs"]
+mod macos_deployment_target;
+#[path = "migration_lifecycle/package_release_adapter.rs"]
+mod package_release_adapter;
+#[path = "migration_lifecycle/pr_canary_catalog.rs"]
+mod pr_canary_catalog;
+#[path = "migration_lifecycle/replay_repair_step.rs"]
+mod replay_repair_step;
+#[path = "migration_lifecycle/replay_runner_guard.rs"]
+mod replay_runner_guard;
+#[path = "migration_lifecycle/runtime_events_gate/mod.rs"]
+mod runtime_events_gate;
+
 #[path = "migration_lifecycle/just_automation_argv.rs"]
 mod just_automation_argv;
 
@@ -38,6 +53,8 @@ mod protocol;
 mod pty;
 #[path = "migration_lifecycle/runner_cleanup.rs"]
 mod runner_cleanup;
+#[path = "migration_lifecycle/selected_ref.rs"]
+mod selected_ref;
 #[path = "migration_lifecycle/support.rs"]
 mod support;
 
@@ -92,3 +109,27 @@ mod safetensors_workflow;
 
 #[path = "migration_lifecycle/publish_dry_run.rs"]
 mod publish_dry_run;
+
+#[path = "migration_lifecycle/repair_timeout_adapter.rs"]
+mod repair_timeout_adapter;
+
+#[path = "migration_lifecycle/build_product/mod.rs"]
+mod build_product;
+
+#[path = "migration_lifecycle/sdk_json_consumer/mod.rs"]
+mod sdk_json_consumer;
+
+#[path = "migration_lifecycle/system_one_cases/mod.rs"]
+mod system_one_cases;
+
+#[path = "migration_lifecycle/repair_family_plan.rs"]
+mod repair_family_plan;
+
+#[path = "migration_lifecycle/local_repair_inspection.rs"]
+mod local_repair_inspection;
+
+#[path = "migration_lifecycle/package_input_admission.rs"]
+mod package_input_admission;
+
+#[path = "../src/ci_validation/lane_results/workflow_yaml.rs"]
+mod workflow_yaml;

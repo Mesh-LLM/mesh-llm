@@ -120,3 +120,5 @@ pub(crate) fn run_replay_matrix(args: &[String], root: Option<&std::path::Path>)
         .into()),
     }
 }
+
+pub(crate) mod system_one_cases;

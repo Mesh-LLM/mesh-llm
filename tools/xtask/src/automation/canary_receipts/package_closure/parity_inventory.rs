@@ -1,13 +1,13 @@
 //! Full prepared model-source classification, boundary and immutable pin admission.
 use super::{
-    candidate_view, model_boundaries, process, producer_receipt::Context, runtime_slice, source,
+    candidate_view, model_boundaries, policy_document, process, producer_receipt::Context,
+    runtime_slice, source,
 };
 use crate::command::DynResult;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
-    fs,
     path::{Path, PathBuf},
 };
 
@@ -36,16 +36,6 @@ pub(super) struct Input {
     source_revision: String,
 }
 
-fn document(root: &Path, relative: &str) -> DynResult<Value> {
-    let path = root.join(relative);
-    if !fs::symlink_metadata(&path)?.is_file() || !path.canonicalize()?.starts_with(root) {
-        return Err("parity manifest must be contained regular source".into());
-    }
-    if fs::metadata(&path)?.len() > 8 * 1024 * 1024 {
-        return Err("parity manifest exceeds 8 MiB".into());
-    }
-    Ok(serde_json::from_slice(&fs::read(path)?)?)
-}
 pub(super) fn execute(input: &Input) -> DynResult<Value> {
     input.context.validate()?;
     if !input.root.is_absolute() {
@@ -66,24 +56,30 @@ pub(super) fn execute(input: &Input) -> DynResult<Value> {
     if process::text(&root, &["rev-parse", "HEAD"])? != input.source_revision {
         return Err("parity source differs from frozen controller/selected revision".into());
     }
-    let before = source::prepared(&root)?;
+    let result = admit(&root, &input.source_revision)?;
+    input.context.validate()?;
+    process::check()?;
+    Ok(result)
+}
+
+pub(super) fn admit(root: &Path, source_revision: &str) -> DynResult<Value> {
+    let before = source::prepared(root)?;
     let native = root.join(".deps/llama.cpp");
     let (sources, boundaries) = model_boundaries::inventory(&native)?;
     runtime_slice::verify(&native)?;
-    let parity = document(&root, "docs/skippy/llama-parity-candidates.json")?;
-    let family = document(&root, "ci/llama-canary/family-certified.json")?;
+    let parity = policy_document::json(root, "docs/skippy/llama-parity-candidates.json")?;
+    let family = policy_document::json(root, "ci/llama-canary/family-certified.json")?;
     validate(&parity, &family, &sources, &boundaries)?;
-    let after = source::prepared(&root)?;
+    let after = source::prepared(root)?;
     if before.head != after.head || before.markers != after.markers {
         return Err("prepared native identity changed during parity validation".into());
     }
-    if document(&root, "docs/skippy/llama-parity-candidates.json")? != parity
-        || document(&root, "ci/llama-canary/family-certified.json")? != family
-        || process::text(&root, &["rev-parse", "HEAD"])? != input.source_revision
+    if policy_document::json(root, "docs/skippy/llama-parity-candidates.json")? != parity
+        || policy_document::json(root, "ci/llama-canary/family-certified.json")? != family
+        || process::text(root, &["rev-parse", "HEAD"])? != source_revision
     {
         return Err("parity source/manifest changed during validation".into());
     }
-    input.context.validate()?;
     process::check()?;
     Ok(
         json!({"status":"parity_inventory_admitted","model_sources":sources.len(),"paired_boundaries":boundaries.len()}),
@@ -195,3 +191,6 @@ fn validate_pin(pin: &Value, family: &Value) -> DynResult<()> {
 #[cfg(test)]
 #[path = "parity_inventory_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+use std::fs;

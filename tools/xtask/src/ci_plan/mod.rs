@@ -34,7 +34,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const GRAMMAR: Grammar = Grammar {
-    usage: "plan-ci.py [-h] [--manifest-root MANIFEST_ROOT]",
+    usage: "ci plan [--manifest-root MANIFEST_ROOT]",
     values: &["--manifest-root"],
     flags: &[],
 };
@@ -47,7 +47,7 @@ pub(crate) fn run(root: &Path, args: &[String]) -> DynResult<()> {
             let extra = parsed.positionals.join(" ");
             return usage_error(&format!("unrecognized arguments: {extra}"));
         }
-        Err(report) => return argparse_report(report).emit(),
+        Err(report) => return report.emit(),
     };
     let manifests = parsed.last("--manifest-root").map(PathBuf::from);
     let mut stdin = Vec::new();
@@ -87,18 +87,8 @@ fn report(stdin: &[u8], roots: &plan::Roots<'_>) -> CheckReport {
     }
 }
 
-/// argparse prints `usage: ...` then `<prog>: error: ...` with status 2.
-fn argparse_report(report: CheckReport) -> CheckReport {
-    CheckReport {
-        stderr: report
-            .stderr
-            .replacen("\nerror: ", "\nplan-ci.py: error: ", 1),
-        ..report
-    }
-}
-
 fn usage_error(message: &str) -> DynResult<()> {
-    argparse_report(GRAMMAR.error(message)).emit()
+    GRAMMAR.error(message).emit()
 }
 
 /// `_select_rows(slices, profile="main", domains=[], selected=set(),

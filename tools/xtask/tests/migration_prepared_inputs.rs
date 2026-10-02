@@ -3,7 +3,7 @@
 //! (`verify-static-abi-build-stamp.py`) and input manifest (the inline
 //! programs in `prepare-static-abi-input` / `restore-static-abi-input.sh`),
 //! the native SDK manifest consumers, and the SDK runtime-list JSON reader
-//! that `test_ci_sdk_json_consumer.py` exercises.
+//! that `migration_lifecycle::sdk_json_consumer` exercises.
 //!
 //! Every fixture is built at runtime in a scratch directory. Expected bytes
 //! include authored contract-derived literals, not necessarily captured output.

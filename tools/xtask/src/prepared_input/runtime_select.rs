@@ -1,7 +1,7 @@
 //! `sdk-runtime-select RUNTIME_ROOT BACKEND REPORT SKIPPY_ABI`: the consumer
 //! of `mesh-llm runtime list --available --json` in
 //! `scripts/ci-prepare-native-runtime.sh` (see
-//! `scripts/tests/test_ci_sdk_json_consumer.py`). It selects exactly one
+//! `tools/xtask/tests/migration_lifecycle/sdk_json_consumer/`). It selects exactly one
 //! prepared adjacent runtime, binds it to the expected Skippy ABI, and prints
 //! its directory. A malformed or ambiguous report is rejected; nothing is
 //! built as a fallback.

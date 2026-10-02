@@ -308,7 +308,16 @@ pub(crate) fn check(tool: Tool, group: &str) -> TestResult {
         let name = text(&case["name"]);
         let golden = expected(&case);
         let ported = execute(tool, &case)?;
-        if golden.code != Some(0) {
+        if matches!(tool, Tool::SelectRuntime) && name == "help" {
+            assert_eq!(ported.code, Some(0));
+            assert!(ported.stderr.is_empty());
+            assert!(ported.stdout.starts_with("usage: native select-runtime "));
+            for option in ["--root", "--os", "--arch", "--backend", "--cuda-major"] {
+                assert!(ported.stdout.contains(option));
+            }
+            assert_eq!(ported.report, golden.report);
+            assert_eq!(ported.calls, golden.calls);
+        } else if golden.code != Some(0) {
             assert_eq!(ported.code, golden.code, "{name}");
             assert_eq!(ported.stdout, golden.stdout, "{name}");
             assert_eq!(ported.report, golden.report, "{name}");

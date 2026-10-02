@@ -40,6 +40,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Prepare protected controller for trusted source resolution
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Freeze trusted source and requested upstream
         id: resolve
         env:
@@ -50,7 +56,10 @@ jobs:
           set -euo pipefail
           echo "source=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if [[ -n "$MESH_REF" ]]; then
-            python3 scripts/llama-canary-resolve-mesh-ref.py
+            "$MESH_LLM_AUTOMATION_BIN" repository selected-ref \
+              --ref "$MESH_REF" --event "$GITHUB_EVENT_NAME" --upstream "$UPSTREAM" \
+              --expected-origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           pins=()

@@ -1,5 +1,5 @@
 //! Exact v2 native recipe and source-owned split-certified architecture projection.
-use super::{process, producer_receipt::Context, source};
+use super::{policy_document, process, producer_receipt::Context, source};
 use crate::{automation::canary_receipts::Digest, command::DynResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -7,6 +7,7 @@ use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -32,37 +33,37 @@ struct Recipe {
 
 pub(super) fn execute(input: &Input) -> DynResult<Value> {
     input.context.validate()?;
-    if !input.root.is_absolute() {
+    let result = admit(&input.root, input.check)?;
+    input.context.validate()?;
+    process::check()?;
+    Ok(result)
+}
+
+pub(super) fn admit(root: &Path, check: bool) -> DynResult<Value> {
+    if !root.is_absolute() {
         return Err("split roster source must be absolute".into());
     }
-    let root = input.root.canonicalize()?;
+    let root = root.canonicalize()?;
     let bytes = render(
         &root,
-        &fs::read(root.join("ci/llama-canary/family-certified.json"))?,
+        &policy_document::read(&root, "ci/llama-canary/family-certified.json")?,
     )?;
-    let output =
+    let output_path =
         root.join("crates/mesh-llm-host-runtime/src/inference/skippy/split-certified.json");
-    let parent = output
+    let parent = output_path
         .parent()
         .ok_or("roster output has no parent")?
         .canonicalize()?;
     if !parent.starts_with(&root)
-        || fs::symlink_metadata(&output).is_ok_and(|metadata| metadata.file_type().is_symlink())
+        || fs::symlink_metadata(&output_path)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
     {
         return Err("split roster output escapes selected source".into());
     }
-    process::check()?;
-    if input.check {
-        if fs::read(&output)? != bytes {
-            return Err("split-certified roster is stale for current native recipe".into());
-        }
-    } else {
-        fs::write(&output, &bytes)?;
-    }
-    input.context.validate()?;
+    output(&root, &output_path, &bytes, check)?;
     process::check()?;
     Ok(
-        serde_json::json!({"status":"split_roster_admitted","check":input.check,"sha256":Digest::of_bytes(&bytes)}),
+        serde_json::json!({"status":"split_roster_admitted","check":check,"sha256":Digest::of_bytes(&bytes)}),
     )
 }
 
@@ -192,3 +193,93 @@ fn render(root: &Path, manifest: &[u8]) -> DynResult<Vec<u8>> {
 #[cfg(test)]
 #[path = "split_roster_tests.rs"]
 mod tests;
+
+fn output(root: &Path, path: &Path, bytes: &[u8], check: bool) -> DynResult<()> {
+    const MAXIMUM: usize = 8 * 1024 * 1024;
+    if bytes.len() > MAXIMUM {
+        return Err("split roster exceeds 8 MiB".into());
+    }
+    let before = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !check => None,
+        _ => {
+            return Err(
+                "split roster output must be regular; missing allowed only for write".into(),
+            );
+        }
+    };
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(check)
+        .write(!check)
+        .create_new(before.is_none());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || !path.canonicalize()?.starts_with(root)
+        || before
+            .as_ref()
+            .is_some_and(|before| !policy_document::same_file(before, &metadata))
+        || !policy_document::same_file(&metadata, &fs::symlink_metadata(path)?)
+    {
+        return Err("split roster opened output is not contained regular source".into());
+    }
+    process::check()?;
+    if check {
+        check_output(root, path, &mut file, &metadata, bytes)?;
+    } else {
+        file.set_len(0)?;
+        for chunk in bytes.chunks(65536) {
+            process::check()?;
+            file.write_all(chunk)?;
+        }
+    }
+    if !path.canonicalize()?.starts_with(root)
+        || !policy_document::same_file(&file.metadata()?, &fs::symlink_metadata(path)?)
+    {
+        return Err("split roster pathname changed during operation".into());
+    }
+    process::check()?;
+    Ok(())
+}
+
+fn check_output(
+    root: &Path,
+    path: &Path,
+    file: &mut fs::File,
+    metadata: &fs::Metadata,
+    bytes: &[u8],
+) -> DynResult<()> {
+    const MAXIMUM: usize = 8 * 1024 * 1024;
+    if metadata.len() > MAXIMUM as u64 {
+        return Err("split roster exceeds 8 MiB".into());
+    }
+    let mut actual = Vec::new();
+    let mut chunk = [0u8; 65536];
+    loop {
+        process::check()?;
+        let count = file.read(&mut chunk)?;
+        if count == 0 {
+            break;
+        }
+        if count > MAXIMUM.saturating_sub(actual.len()) {
+            return Err("split roster exceeds 8 MiB".into());
+        }
+        actual.extend_from_slice(&chunk[..count]);
+    }
+    if !policy_document::same_file(metadata, &file.metadata()?)
+        || !policy_document::same_file(metadata, &fs::symlink_metadata(path)?)
+        || !path.canonicalize()?.starts_with(root)
+    {
+        return Err("split roster changed during bounded check".into());
+    }
+    if actual != bytes {
+        return Err("split-certified roster is stale for current native recipe".into());
+    }
+    Ok(())
+}

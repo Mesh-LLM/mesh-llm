@@ -1,14 +1,12 @@
-//! argparse emulation for `scripts/compose-product-bundle.py`: five required
-//! value options, the `--check` switch and `-h/--help`, with unique-prefix
-//! abbreviations, `--name=value`, bundled `-h`, `--` handling and Python
-//! 3.13's error order (required options before unrecognized arguments).
+//! Product composition arguments: exact named inputs, optional byte verification,
+//! and help. Usage failures exit with status 2.
 
 use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
 use crate::repository::check_report::CheckReport;
 
-const PROG: &str = "compose-product-bundle.py";
+const PROG: &str = "product compose";
 const USAGE: &str = "\
-usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST
+usage: product compose [-h] --bundle BUNDLE --host HOST
                                  --runtime RUNTIME --version VERSION
                                  --backend BACKEND [--check]
 ";
@@ -53,7 +51,7 @@ fn fail(message: &str) -> CheckReport {
     }
 }
 
-/// Parses `args`, or returns the help/usage report argparse would produce.
+/// Parses the composition inputs or returns a help/usage report.
 pub(super) fn parse(args: &[String]) -> Result<Args, CheckReport> {
     let mut values: [Option<String>; 5] = Default::default();
     let mut check = false;
