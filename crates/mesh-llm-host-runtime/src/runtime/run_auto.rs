@@ -16,9 +16,9 @@ use super::{
     configure_skippy_native_logging, configure_startup_lifecycle_log_parser,
     emit_configuration_ui_read_only_hint, initialize_embedded_runtime_entrypoint,
     initialize_runtime_entrypoint, kv_disk_config::configure_node_kv_disk_cache,
-    maybe_discover_join_candidates, next_runtime_instance_id, nostr_rediscovery, nostr_relays,
-    openai_guardrail_policy_handle, owner_runtime_config, prepare_runtime_startup,
-    publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
+    maybe_discover_join_candidates, maybe_select_small_auto_contribution, next_runtime_instance_id,
+    nostr_rediscovery, nostr_relays, openai_guardrail_policy_handle, owner_runtime_config,
+    prepare_runtime_startup, publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
     record_runtime_operational_event, resolve_runtime_owner_key_path,
     resolve_startup_mesh_creation_state, run_auto_join_mesh_phase,
     run_auto_runtime_loop_and_shutdown, run_local_model_only, runtime_data_producer_for_console,
@@ -384,13 +384,20 @@ pub(super) async fn run_runtime_cli(
     handle_public_identity_transition(&options)?;
 
     let mut auto_join_candidates: Vec<(String, Option<String>)> = Vec::new();
-    maybe_discover_join_candidates(
+    let auto_local_fit_gb = maybe_discover_join_candidates(
         &mut options,
         has_startup_models,
         &mut auto_join_candidates,
         config.gpu.host_ram_offload.unwrap_or(false),
     )
     .await?;
+    maybe_select_small_auto_contribution(
+        &mut options,
+        effective_mode,
+        has_startup_models,
+        &auto_join_candidates,
+        auto_local_fit_gb,
+    );
     let Some(PreparedRuntimeStartup {
         startup_specs,
         requested_model_names,

@@ -10,7 +10,8 @@ fn parse_size_gb(s: &str) -> f64 {
 
 /// Build model tiers from the catalog, sorted largest first.
 /// Each entry is (model_ref, min_vram_gb) where min_vram = file_size * 1.1.
-/// Excludes draft models (< 1GB).
+/// Excludes draft models (< 1GB). Laya's decision-only tier is selected
+/// separately because its published GGUF is smaller than that cutoff.
 fn model_tiers() -> Vec<(String, f64)> {
     let _ = crate::models::remote_catalog::ensure_catalog();
     let mut tiers: Vec<_> = crate::models::remote_catalog::loaded_models()
@@ -38,6 +39,17 @@ fn catalog_ref(name: &str) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
+const LAYA_AUTO_MODEL_REF: &str = "meshllm/laya-multilingual-F16-GGUF";
+
+/// Small nodes contribute System One decisions instead of a chat model.
+/// The published F16 GGUF plus its largest-read reserve needs about 0.91 GB
+/// after Mesh's fit headroom, so require at least 1 GB of local fit budget.
+pub(crate) fn small_node_auto_model(capacity_gb: f64) -> Option<&'static str> {
+    (1.0..=8.0)
+        .contains(&capacity_gb)
+        .then_some(LAYA_AUTO_MODEL_REF)
+}
+
 fn auto_model_pack_with<F>(
     vram_gb: f64,
     local_models: &[String],
@@ -47,6 +59,10 @@ fn auto_model_pack_with<F>(
 where
     F: Fn(&str) -> String,
 {
+    if let Some(model) = small_node_auto_model(vram_gb) {
+        return vec![model.to_string()];
+    }
+
     // Helper: check if a model is on disk
     let on_disk = |name: &str| local_models.contains(&name.to_string());
     // Helper: model size from tiers
@@ -199,15 +215,33 @@ mod auto_pack_tests {
     }
 
     #[test]
-    fn pack_4gb_starter() {
+    fn pack_4gb_serves_laya_decisions() {
         let pack = test_auto_model_pack(4.0);
-        assert_single_pack_model(&pack, "Qwen3-4B-Q4_K_M");
+        assert_single_pack_model(&pack, LAYA_AUTO_MODEL_REF);
     }
 
     #[test]
-    fn pack_8gb_single_model() {
+    fn pack_8gb_serves_laya_decisions() {
         let pack = test_auto_model_pack(8.0);
-        assert_single_pack_model(&pack, "Gemma-4-E4B-it-Q4_K_M");
+        assert_single_pack_model(&pack, LAYA_AUTO_MODEL_REF);
+    }
+
+    #[test]
+    fn laya_tier_respects_fit_floor_and_upper_boundary() {
+        assert_eq!(small_node_auto_model(0.99), None);
+        assert_eq!(small_node_auto_model(1.0), Some(LAYA_AUTO_MODEL_REF));
+        assert_eq!(small_node_auto_model(8.0), Some(LAYA_AUTO_MODEL_REF));
+        assert_eq!(small_node_auto_model(8.01), None);
+    }
+
+    #[test]
+    fn new_small_mesh_starts_with_laya_before_demand_seeds() {
+        let models = default_models_for_vram_with(4.0, &[], &test_tiers(), &identity_ref);
+        assert_eq!(
+            models.first().map(String::as_str),
+            Some(LAYA_AUTO_MODEL_REF)
+        );
+        assert_contains_catalog_alias(&models, "Qwen3-4B-Q4_K_M");
     }
 
     #[test]

@@ -17,13 +17,13 @@ pub(super) async fn maybe_discover_join_candidates(
     has_startup_models: bool,
     auto_join_candidates: &mut Vec<(String, Option<String>)>,
     host_ram_offload: bool,
-) -> Result<()> {
+) -> Result<Option<f64>> {
     // Ask the resolver rather than `options.join`: a token that lives only in
     // a file is still a configured token, and discovery must not run over it.
     let effective_join_tokens = options.effective_join_tokens();
     let discover_active = options.auto || options.discover.is_some();
     if !discover_active || !effective_join_tokens.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     if let Some(name) = options.discover.as_ref().filter(|name| !name.is_empty())
@@ -107,7 +107,34 @@ pub(super) async fn maybe_discover_join_candidates(
         }
     }
 
-    Ok(())
+    Ok(Some(my_vram_gb))
+}
+
+/// Let a small, otherwise unconfigured `serve --auto` node contribute Laya
+/// after discovery selects an existing mesh. Explicit models and on-demand
+/// mode retain their startup behavior.
+pub(super) fn maybe_select_small_auto_contribution(
+    options: &mut RuntimeOptions,
+    effective_mode: mesh_llm_config::RuntimeMode,
+    has_startup_models: bool,
+    auto_join_candidates: &[(String, Option<String>)],
+    local_fit_gb: Option<f64>,
+) {
+    if effective_mode != mesh_llm_config::RuntimeMode::Serve
+        || !options.auto
+        || has_startup_models
+        || auto_join_candidates.is_empty()
+    {
+        return;
+    }
+    let Some(model) = local_fit_gb.and_then(nostr::small_node_auto_model) else {
+        return;
+    };
+    options.model.push(PathBuf::from(model));
+    let _ = emit_event(OutputEvent::Info {
+        message: format!("Small-node auto contribution: serving {model} for System One decisions"),
+        context: None,
+    });
 }
 
 pub(super) async fn discover_nostr_join_candidates(

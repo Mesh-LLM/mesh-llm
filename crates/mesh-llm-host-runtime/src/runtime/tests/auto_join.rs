@@ -73,6 +73,65 @@ fn make_runtime_cli(args: &[&str]) -> RuntimeOptions {
 }
 
 #[test]
+fn small_auto_join_selects_laya_as_startup_model() {
+    let mut options = make_runtime_cli(&["mesh-llm", "serve", "--auto"]);
+    let candidates = vec![("invite".to_string(), None)];
+
+    maybe_select_small_auto_contribution(
+        &mut options,
+        mesh_llm_config::RuntimeMode::Serve,
+        false,
+        &candidates,
+        Some(6.0),
+    );
+
+    let model = "meshllm/laya-multilingual-F16-GGUF";
+    assert_eq!(options.model, vec![std::path::PathBuf::from(model)]);
+    let specs = build_startup_model_specs(&options, &plugin::MeshConfig::default()).unwrap();
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].model_ref, std::path::PathBuf::from(model));
+}
+
+#[test]
+fn small_auto_join_respects_mode_model_and_capacity() {
+    let candidates = vec![("invite".to_string(), None)];
+
+    let mut configured =
+        make_runtime_cli(&["mesh-llm", "serve", "--auto", "--model", "Qwen3-4B-Q4_K_M"]);
+    maybe_select_small_auto_contribution(
+        &mut configured,
+        mesh_llm_config::RuntimeMode::Serve,
+        true,
+        &candidates,
+        Some(6.0),
+    );
+    assert_eq!(configured.model.len(), 1);
+
+    for (mode, candidates, capacity) in [
+        (
+            mesh_llm_config::RuntimeMode::OnDemand,
+            candidates.as_slice(),
+            Some(6.0),
+        ),
+        (mesh_llm_config::RuntimeMode::Serve, &[][..], Some(6.0)),
+        (
+            mesh_llm_config::RuntimeMode::Serve,
+            candidates.as_slice(),
+            Some(9.0),
+        ),
+        (
+            mesh_llm_config::RuntimeMode::Serve,
+            candidates.as_slice(),
+            None,
+        ),
+    ] {
+        let mut options = make_runtime_cli(&["mesh-llm", "serve", "--auto"]);
+        maybe_select_small_auto_contribution(&mut options, mode, false, candidates, capacity);
+        assert!(options.model.is_empty());
+    }
+}
+
+#[test]
 fn swarm_capture_client_registers_runtime_owner() {
     let options = make_runtime_cli(&[
         "mesh-llm",
