@@ -80,6 +80,13 @@ function PluginContributionMount({
 
   useEffect(() => {
     if (!visibleConfigReady) return
+    const root = mountRef.current
+    if (!root) return
+    // Each mount gets its own element, so a handler that is still pending
+    // when the subject changes never writes to or clears its successor's.
+    const element = document.createElement('div')
+    element.className = 'min-w-0'
+    root.appendChild(element)
     let cancelled = false
     let cleanup: (() => void) | undefined
 
@@ -87,9 +94,9 @@ function PluginContributionMount({
       const current = itemRef.current
       const { contribution } = current
       const visibleConfig = visibleConfigRef.current
-      const element = mountRef.current
-      if (!visibleConfig || !element) return
+      if (!visibleConfig) return
       const module = await importPluginUiBundle(sameOriginAssetUrl(current))
+      if (cancelled) return
       const host = createMeshPluginUiHost({
         pluginName,
         page: contributionPage(contribution),
@@ -101,27 +108,32 @@ function PluginContributionMount({
         requestConfigMutation: (request) => mutateConfigRef.current(request)
       })
       const registration = await module.registerMeshPluginUi(host)
+      if (cancelled) return
       assertPluginUiRegistration(registration)
       const mount = registration.contributions?.[contribution.id]
-      if (!mount || cancelled) return
+      if (!mount) return
       const handle = await mount({ element, host, contribution, subject: subjectRef.current })
       assertPluginUiMountHandle(handle)
-      let mounted = true
-      cleanup = () => {
-        if (!mounted) return
-        mounted = false
+      // A mount that resolves after its effect ended unmounts at once; its
+      // element is already detached.
+      if (cancelled) {
         handle.unmount()
+        return
       }
-      if (cancelled) cleanup()
+      cleanup = () => handle.unmount()
     }
 
-    // A contribution that fails to load leaves its slot empty; the host's own
-    // row stays as it was.
-    void mountContribution().catch(() => undefined)
+    // A contribution that fails to load or mount leaves its slot empty,
+    // without any partial output; the host's own row stays as it was.
+    void mountContribution().catch(() => element.remove())
 
     return () => {
       cancelled = true
-      cleanup?.()
+      try {
+        cleanup?.()
+      } finally {
+        element.remove()
+      }
     }
   }, [itemKey, pluginName, subjectKey, visibleConfigReady])
 

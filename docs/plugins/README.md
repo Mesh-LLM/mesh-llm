@@ -278,7 +278,9 @@ handlers for pages and config sections.
   section or contribution exists
 - a contribution handler receives `{ element, host, contribution, subject }`;
   the host unmounts it and mounts it again when any id in `subject` changes,
-  and it may mount once per chat message, so keep it small
+  and it may mount once per chat message, so keep it small; every mount gets
+  a fresh `element` that the host removes after `unmount()` or a failed mount,
+  and a handler that resolves after its subject changed is unmounted at once
 - ship browser-importable JavaScript; the host does not transpile TypeScript,
   JSX, CommonJS, or unresolved bare npm imports
 - use the exemplar's self-contained `bundle/host-contract.d.ts` for author

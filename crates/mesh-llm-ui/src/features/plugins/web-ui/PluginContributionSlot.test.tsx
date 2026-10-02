@@ -115,6 +115,83 @@ describe('PluginContributionSlot', () => {
     const { container } = renderSlot([summary(readyWebUi())])
 
     await waitFor(() => expect(bundle.importBundle).toHaveBeenCalled())
-    expect(container.querySelector('[data-plugin-contribution="notes:logs-link"]')).toBeEmptyDOMElement()
+    await waitFor(() =>
+      expect(container.querySelector('[data-plugin-contribution="notes:logs-link"]')).toBeEmptyDOMElement()
+    )
+  })
+
+  it('removes partial output when a mount rejects', async () => {
+    bundle.mount.mockImplementation(async ({ element }: MeshPluginUiContributionMountContext) => {
+      element.textContent = 'partial'
+      throw new Error('mount failed')
+    })
+    bundle.importBundle.mockResolvedValue({
+      registerMeshPluginUi: () => ({ pages: {}, contributions: { 'logs-link': bundle.mount } })
+    })
+
+    const { container } = renderSlot([summary(readyWebUi())])
+
+    await waitFor(() => expect(bundle.mount).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(container.querySelector('[data-plugin-contribution="notes:logs-link"]')).toBeEmptyDOMElement()
+    )
+  })
+
+  it.each([
+    ['resolves', (settle: Deferred) => settle.resolve({ unmount: bundle.unmount }), 1],
+    ['rejects', (settle: Deferred) => settle.reject(new Error('mount failed')), 0]
+  ])('keeps the replacement intact when a pending mount %s late', async (_label, settleFirst, staleUnmounts) => {
+    const first = deferred()
+    const unmountSecond = vi.fn()
+    bundle.mount
+      .mockImplementationOnce(({ element }: MeshPluginUiContributionMountContext) => {
+        element.textContent = 'stale req-1'
+        bundle.unmount.mockImplementation(() => {
+          element.textContent = ''
+        })
+        return first.promise
+      })
+      .mockImplementationOnce(({ element }: MeshPluginUiContributionMountContext) => {
+        element.textContent = 'req-2'
+        return { unmount: unmountSecond }
+      })
+    bundle.importBundle.mockResolvedValue({
+      registerMeshPluginUi: () => ({ pages: {}, contributions: { 'logs-link': bundle.mount } })
+    })
+
+    const { container, rerenderWith } = renderSlot([summary(readyWebUi())])
+    const slot = () => container.querySelector('[data-plugin-contribution="notes:logs-link"]')
+
+    await waitFor(() => expect(bundle.mount).toHaveBeenCalledTimes(1))
+    rerenderWith('req-2')
+    await waitFor(() => expect(bundle.mount).toHaveBeenCalledTimes(2))
+    expect(slot()).toHaveTextContent(/^req-2$/)
+
+    settleFirst(first)
+    await first.promise.catch(() => undefined)
+    await Promise.resolve()
+
+    expect(slot()).toHaveTextContent(/^req-2$/)
+    expect(slot()?.childElementCount).toBe(1)
+    expect(unmountSecond).not.toHaveBeenCalled()
+    const firstElement = (bundle.mount.mock.calls[0][0] as MeshPluginUiContributionMountContext).element
+    expect(firstElement.isConnected).toBe(false)
+    await waitFor(() => expect(bundle.unmount).toHaveBeenCalledTimes(staleUnmounts))
   })
 })
+
+type Deferred = {
+  readonly promise: Promise<{ unmount: () => void }>
+  readonly resolve: (handle: { unmount: () => void }) => void
+  readonly reject: (error: Error) => void
+}
+
+function deferred(): Deferred {
+  let resolve!: Deferred['resolve']
+  let reject!: Deferred['reject']
+  const promise = new Promise<{ unmount: () => void }>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
