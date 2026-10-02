@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "legacy_path": "evals/skippy-cache-family-report.py",
+  "legacy_sha256": "46a99ce8ee3cf3c0a02f1ff0db990e47f5629603e67e3183675f1c86b9a6feae",
+  "status": "retired after typed report and actual caller tests passed; benchmark orchestration remains separate",
+  "intent": [
+    "paired import/decode median with equal-length admission",
+    "family/use-case ordering and last duplicate cell",
+    "measured storage zero and resident KV metadata",
+    "successful warm median/mean baseline, independent package recompute fallback with matching label",
+    "failed correctness never produces performance claims",
+    "malformed negative nonfinite/overflowed metrics fail before replacing existing output",
+    "actual frozen selector and two-input report caller preserve argv and reject invalid selectors"
+  ],
+  "qualified_receipt": {
+    "path": ".omo/evidence/resume-20261002/next-cache-report-cli-corrected.log",
+    "sha256": "f731edd3fa901a2a9ad9b84b51899942cdd19925aef93a2a00c41bd130989df1",
+    "passed": 5,
+    "failed": 0
+  },
+  "source_hashes": {
+    "evals/skippy-cache-family-bench.sh": "eceb58563edce5f8d3ecf868b21a93cb9c26b6dcfd5bb0ca31945ecea82e1273",
+    ".agents/skills/skippy-cache-family-bench/SKILL.md": "754def93983ed96e422e2e512226808b407a92d7d1d49e692a1e09b07c5a4f5a",
+    "tools/xtask/src/automation/cache_family_report.rs": "ddd2fd544ed4cc9f2d8e780cb06593243e6f39efe209cc1a01e915a014a36dab",
+    "tools/xtask/src/automation/cache_family_report/input.rs": "c355bdfa715f4081deb25f6723a914dcbb949d5dd31917f67f12b642aa7de657",
+    "tools/xtask/src/automation/cache_family_report/measurement.rs": "71083552b3df6ce4c39248115f5975c9c5b423f4da4e981d85cd1cc3f60dc639",
+    "tools/xtask/src/automation/cache_family_report/render.rs": "aa19e9edd602dc78374cf669e98b39e2aa60703f3bb7751083e8020a6f53c5cf",
+    "tools/xtask/tests/migration_lifecycle/cache_family_report_cli.rs": "e4031a724fa3ba0caf7cba84aca3b3935846802f1e984ce19d7e779eb4e64f9a"
+  },
+  "bounds": "Synthetic actual CLI and caller evidence; no native benchmark/model/performance/platform/publication qualification. No generic benchmark driver retirement or SDK exemption."
+}

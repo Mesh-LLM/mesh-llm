@@ -429,7 +429,8 @@
       "scripts/tests/test_agentic_replay.py",
       "scripts/tests/test_agentic_replay_engines.py",
       "scripts/tests/test_agentic_replay_evidence.py",
-      "evals/test_agentic_replay_l3.py"
+      "evals/test_agentic_replay_l3.py",
+      "scripts/tests/test_ci_runner_selection_and_cache_policy.py"
     ],
     "moved_cases": {
       "scripts/tests/test_agentic_replay_nightly_workflow.py::test_input_verification_uses_cli_paths_without_python_package": "lane_l11_optional_tooling pin projection and corrupt-byte rejection; live HF acquisition remains unexecuted",
@@ -444,7 +445,8 @@
       "migration_workload_oracle_cli",
       "migration_hf_artifact_cli",
       "migration_hf_converted_artifact",
-      "migration_hf_artifact_controls"
+      "migration_hf_artifact_controls",
+      "ci_runner_cache_contract"
     ]
   },
   "lane_L12_current_coverage": {
@@ -977,7 +979,7 @@
       "gate": "Legacy just ci-validate and relevant workflow/platform lane",
       "module": "scripts/tests/test_ci_runner_selection_and_cache_policy.py",
       "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "rust_or_ctest_gate": "ci_runner_cache_contract actual finite action adapters plus registered workflow guard checks; parent17/0 passed; separate live/platform qualifications remain open",
       "sha256": "12a520fc3e18f8a863c39ea1915df23bc39eb7c5766ca5c143adff0e27ffb22a",
       "test_method_count": 7,
       "test_methods": [
@@ -988,7 +990,13 @@
         "test_dispatched_pr_cache_writes_remain_blocked_with_depot",
         "test_runner_selection_uses_event_repository_and_ref_policy",
         "test_sccache_prefers_depot_webdav_with_disk_fallback"
-      ]
+      ],
+      "status": "retired after parent owning/semantic gates passed",
+      "current_source_disposition": "Exact seven-method legacy module approved for deletion; historical sha256/test_methods/count retained",
+      "retired_source_sha256": "3cf46cdc4113040b40dc9d32fab1424aa1f912a215d345111ebccaa7fe7c9815",
+      "retired_method_count": 7,
+      "replacement_tests": "tools/xtask/tests/ci_runner_cache_contract.rs",
+      "replacement_evidence": "ci/automation-migration/runner-cache-retirement-coverage.json"
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -1376,7 +1384,7 @@
         "test_sentinel_identity_and_key_grammar_are_bounded"
       ],
       "baseline_inventory_preserved": "Original sha256/test_methods/count preserve Task2 historical baseline; current_* fields bind retained eight-method source after typed quality transition. No methods retired.",
-      "current_transition": "Manual seed_authority_marker/verify_pr_write parser matrices and equality remain; source protection permits only protected controller source identity, forbids actual PR/selected-source bindings. Typed quality consumer/producer wiring is independently checked by registered semantic Rust guards. Transitional Python execution pending parent qualification."
+      "current_transition": "Manual seed_authority_marker/verify_pr_write parser matrices and equality remain; source protection permits only protected controller source identity, forbids actual PR/selected-source bindings. Typed quality consumer/producer wiring is independently checked by registered semantic Rust guards. Parent retained all8 cases and qualified followup-authority-transitional.log:8passed/0failed2.722s; corrected full CI1329cases14skip passed. Manual protected bootstrap and live isolation remain open."
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -3292,7 +3300,15 @@
         "test_rejects_duplicate_entries_and_nonempty_destination",
         "test_rejects_entry_path_escapes",
         "test_rejects_escaping_or_ancestor_symlinks"
-      ]
+      ],
+      "retirement_proposal": {
+        "coverage": "ci/automation-migration/zip-extraction-test-retirement-coverage.json",
+        "source_sha256": "060a9e77929b879095115af7e0aeba1e2865905f67d27cf54472ce0985d4e0d5",
+        "method_count": 4,
+        "replacement_target": "migration_archives",
+        "proof_status": "Owning current target terminal pending; parent retires only after proof",
+        "preserves_historical_sha_and_method_list": true
+      }
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -4177,5 +4193,36 @@
     "python_inventory_count_unchanged": 198,
     "just_roster_count_unchanged": 110,
     "policy": "Current parsed gates and finite action adapters only; no retirement, native/model/SDK/platform/live-provider/protected-manual qualification claim."
+  },
+  "runner_cache_test_retirement": {
+    "coverage": "ci/automation-migration/runner-cache-retirement-coverage.json",
+    "retired_path": "scripts/tests/test_ci_runner_selection_and_cache_policy.py",
+    "retired_source_sha256": "3cf46cdc4113040b40dc9d32fab1424aa1f912a215d345111ebccaa7fe7c9815",
+    "retired_methods": [
+      "test_actionlint_installer_verifies_pinned_release_archives",
+      "test_sccache_prefers_depot_webdav_with_disk_fallback",
+      "test_runner_selection_uses_event_repository_and_ref_policy",
+      "test_dispatched_pr_cache_writes_remain_blocked_with_depot",
+      "test_depot_pr_native_cache_consumers_obey_central_policy",
+      "test_authority_sentinel_is_explicit_cache_gate_exemption",
+      "test_depot_sccache_consumers_receive_both_central_cache_outputs"
+    ],
+    "retired_method_count": 7,
+    "parent_owning_receipt": ".omo/evidence/resume-20261002/followup-runner-cache-contract-corrected.log",
+    "parent_owning_result": "17 passed;0 failed;67 filtered;3.33s",
+    "python_paths": 197,
+    "required_just_roster_modules": 109,
+    "retained_depot_module": "scripts/tests/test_depot_authority_sentinel.py",
+    "retained_depot_methods": 8,
+    "policy": "Only exact runner/cache legacy module and its last Just token retire. Historical census/hash/method rows retained; required native/model/SDK/platform/protected/live gates unchanged."
+  },
+  "zip_extraction_test_retirement": {
+    "coverage": "ci/automation-migration/zip-extraction-test-retirement-coverage.json",
+    "path": "scripts/tests/test_safe_extract_zip.py",
+    "status": "proposed pending parent covered target terminal; apply only with actual test deletion+Just token removal",
+    "python_paths": 195,
+    "just_roster": 108,
+    "helper_retained": "scripts/safe-extract-zip.py",
+    "gates_unchanged": true
   }
 }

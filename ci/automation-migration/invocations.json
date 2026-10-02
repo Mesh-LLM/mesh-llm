@@ -2572,24 +2572,14 @@
   ],
   "selected_process_calls": [
     {
-      "argv": "$ROOT/scripts/plan-family-battery.py --manifest $MANIFEST --output $POLICY_PLAN_COPY [--families $FAMILY_FILTER] [--check-cache --cache-root $HF_CACHE]; only without --plan",
       "caller": "scripts/skippy-family-battery.sh",
-      "child": "scripts/plan-family-battery.py",
-      "child_source_known": false,
-      "line": 202,
-      "replacement_owner": "tools/xtask family certification planner, task 24",
+      "line": 192,
       "source_block": "\"${plan_args[@]}\"",
-      "status_streams_effects": "Inherited stdout/stderr, nonzero aborts battery under set -e; writes policy-plan.json. With --plan, copies provided plan instead and does not launch this generation call. $ROOT is derived from the battery script location; checkout-selected bytes on canary workers are not known from local checkout."
-    },
-    {
-      "argv": "$ROOT/scripts/plan-family-battery.py --inspect-gguf $target",
-      "caller": "scripts/skippy-family-battery.sh",
-      "child": "scripts/plan-family-battery.py",
-      "child_source_known": false,
-      "line": 362,
-      "replacement_owner": "tools/xtask family certification model inspection, task 24",
-      "source_block": "if ! dimensions=\"$(\"$PLANNER\" --inspect-gguf \"$target\")\"; then",
-      "status_streams_effects": "Captures JSON dimensions stdout, inherits stderr; failure is caught by if ! and records model-metadata failure in results.jsonl, then returns 1. Reads GGUF, no direct write; actual model and checkout bytes are runtime inputs."
+      "child": "tools/xtask (configured frozen controller automation executable or existing Just automation-run facade)",
+      "child_source_known": true,
+      "argv": "${automation[@]} --repo-root \"$ROOT\" ci family-plan --manifest \"$MANIFEST\" --output \"$POLICY_PLAN_COPY\" [--families \"$FAMILY_FILTER\"]; only without --plan",
+      "replacement_owner": "tools/xtask/src/ci_plan/family; frozen controller typed family-plan and selected-root manifest/policy projection",
+      "status_streams_effects": "Inherited stdout/stderr; nonzero aborts battery. Typed controller writes policy-plan.json for selected --repo-root/manifest, with optional exact family filter. Provided --plan copies existing immutable plan instead and does not launch this generation call. Separate typed family-battery-policy cache admission follows when HF_CACHE set; no Python planner execution."
     }
   ],
   "source_verified_edges": [
@@ -2633,13 +2623,13 @@
   "current_wave_source_bindings": [
     {
       "path": "scripts/skippy-family-battery.sh",
-      "sha256": "871cfcfa39e1b5d3cda74f15cec6c942696b6348a7b850937eacda1f2c2d12d3",
-      "line_count": 994
+      "sha256": "bb92b9635fb12d345cd3c68cd3566901de46b9b3564b98a2c4f4fa7a67b3dcaf",
+      "line_count": 1015
     },
     {
       "path": "scripts/ci-opencode-smoke.sh",
-      "sha256": "5ad9d164a8fd83c0a009e3078bc8ff59d2a4a5e2dc118ea4e2faa244dc0674ce",
-      "line_count": 613
+      "sha256": "93e90cefb60a24f04e374319279a2013b9d8187e348b1d5061e733068e61b029",
+      "line_count": 525
     },
     {
       "path": "scripts/ci-compat-smoke.sh",
@@ -2648,8 +2638,8 @@
     },
     {
       "path": "scripts/skippy-workload-certify.sh",
-      "sha256": "c28021c11b1465c0b2042997607e805a67bf1495fa1651505761d7145aa1dbe9",
-      "line_count": 461
+      "sha256": "21d1f9858fb1415bbc91320c7009dbafb8dc4bb473c1a4c9fdac3df59c52e1de",
+      "line_count": 459
     },
     {
       "path": ".github/actions/upload-automation/action.yml",
@@ -2668,7 +2658,7 @@
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
-      "sha256": "0d3a61d66e5590c54e62c1ea6241b12015b9cc564387898d291aa0b1591aa71e",
+      "sha256": "18ad9326a50180dee8f80b5b064b79b55af7fdf2d874ff0fe93e4f7131160a6f",
       "line_count": 51
     },
     {
@@ -2736,5 +2726,45 @@
       50
     ],
     "policy": "Exact nine current source operations, including three non-interpreter shell/continuation lines; no blanket boundary, exception, SDK/platform/model qualification or test-count claim."
+  },
+  "current_runner_cache_test_retirement": {
+    "coverage": "ci/automation-migration/runner-cache-retirement-coverage.json",
+    "retired_path": "scripts/tests/test_ci_runner_selection_and_cache_policy.py",
+    "retired_source_sha256": "3cf46cdc4113040b40dc9d32fab1424aa1f912a215d345111ebccaa7fe7c9815",
+    "retired_methods": [
+      "test_actionlint_installer_verifies_pinned_release_archives",
+      "test_sccache_prefers_depot_webdav_with_disk_fallback",
+      "test_runner_selection_uses_event_repository_and_ref_policy",
+      "test_dispatched_pr_cache_writes_remain_blocked_with_depot",
+      "test_depot_pr_native_cache_consumers_obey_central_policy",
+      "test_authority_sentinel_is_explicit_cache_gate_exemption",
+      "test_depot_sccache_consumers_receive_both_central_cache_outputs"
+    ],
+    "retired_method_count": 7,
+    "parent_owning_receipt": ".omo/evidence/resume-20261002/followup-runner-cache-contract-corrected.log",
+    "parent_owning_result": "17 passed;0 failed;67 filtered;3.33s",
+    "python_paths": 197,
+    "required_just_roster_modules": 109,
+    "retained_depot_module": "scripts/tests/test_depot_authority_sentinel.py",
+    "retained_depot_methods": 8,
+    "policy": "Only exact runner/cache legacy module and its last Just token retire. Historical census/hash/method rows retained; required native/model/SDK/platform/protected/live gates unchanged.",
+    "projected_just_source_sha256": "f053b6db22386dc2f7c75a2ea56e5eb3cca5549b2aa2225940b9e15a5ef77bbd",
+    "projected_just_launch_hash": "ca380fc6b9331268"
+  },
+  "latest_wave_reconciliation": {
+    "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
+    "python_paths": 196,
+    "just_roster": 109,
+    "removed_edges": [],
+    "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
+  },
+  "zip_extraction_test_retirement": {
+    "coverage": "ci/automation-migration/zip-extraction-test-retirement-coverage.json",
+    "path": "scripts/tests/test_safe_extract_zip.py",
+    "status": "proposed pending parent covered target terminal; apply only with actual test deletion+Just token removal",
+    "python_paths": 195,
+    "just_roster": 108,
+    "helper_retained": "scripts/safe-extract-zip.py",
+    "gates_unchanged": true
   }
 }

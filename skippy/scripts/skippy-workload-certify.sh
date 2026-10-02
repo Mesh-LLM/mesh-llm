@@ -173,7 +173,7 @@ mkdir -p "$WORK_DIR"
 EVIDENCE_PATH="$WORK_DIR/workload-oracle-evidence.json"
 COMPARISON_LOG="$WORK_DIR/workload-oracle-comparison.txt"
 rm -f "$EVIDENCE_PATH" "$COMPARISON_LOG"
-DIMENSIONS="$("$ROOT/scripts/plan-family-battery.py" --inspect-gguf "$MODEL_PATH")"
+DIMENSIONS="$("${workload_automation[@]}" automation family-battery-policy --inspect-gguf "$MODEL_PATH")"
 LAYER_END="$(jq -r '.layer_count' <<<"$DIMENSIONS")"
 MODEL_SHA256="$(shasum -a 256 "$MODEL_PATH" | awk '{print $1}')"
 N_GPU_LAYERS="${SKIPPY_WORKLOAD_N_GPU_LAYERS:-0}"
@@ -196,9 +196,8 @@ fi
 # from its Metal lane. Consume that immutable, source-bound closure without
 # rebuilding or changing the other family lanes' native/Rust outputs.
 if [[ -n "$PRODUCER_MANIFEST" ]]; then
-  python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
-    --candidate-binary "$CANDIDATE_BIN_DIR/skippy" \
-    --native-build-dir "$CANDIDATE_BUILD_DIR" --producer-manifest "$PRODUCER_MANIFEST"
+  "${workload_automation[@]}" automation canary-receipts workload-manifest verify \
+    "$ROOT" "$CANDIDATE_BIN_DIR/skippy" "$CANDIDATE_BUILD_DIR" "$PRODUCER_MANIFEST"
   # Producer manifest paths are relative to the manifest's own directory.
   TEST_COMMAND=("$(dirname "$PRODUCER_MANIFEST")/$(jq -er '.files.test_binary.path' "$PRODUCER_MANIFEST")")
 elif (( SKIP_BUILD == 0 )); then
@@ -210,9 +209,8 @@ elif [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; t
 fi
 if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; then
   require_pinned_cpu_candidate
-  python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
-    --candidate-binary "$CANDIDATE_BIN_DIR/skippy" \
-    --native-build-dir "$CANDIDATE_BUILD_DIR"
+  "${workload_automation[@]}" automation canary-receipts workload-manifest fresh \
+    "$ROOT" "$CANDIDATE_BIN_DIR/skippy" "$CANDIDATE_BUILD_DIR"
 fi
 
 MEDIA_PATH=""

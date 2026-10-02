@@ -28,7 +28,7 @@ set -euo pipefail
 # their normal user cache.
 #
 # Policy is owned by the versioned JSON manifest and resolved by
-# scripts/plan-family-battery.py. The planner enforces the three-lane minimum,
+# the current typed controller. The planner enforces the three-lane minimum,
 # exact artifact revisions, and deterministic shards before this script loads
 # any model.
 #
@@ -78,7 +78,7 @@ NATIVE_MTP_MODELS_TSV="$ARTIFACT_DIR/native-mtp-models.tsv"
 RESOLVED_MANIFEST="$ARTIFACT_DIR/resolved-models.tsv"
 SUMMARY_TSV="$ARTIFACT_DIR/summary.tsv"
 SUMMARY_MD="$ARTIFACT_DIR/summary.md"
-PLANNER="$ROOT/scripts/plan-family-battery.py"
+
 POLICY_PLAN_COPY="$ARTIFACT_DIR/policy-plan.json"
 
 usage() {
@@ -148,10 +148,7 @@ require_cmd python3
 if (( DRY_RUN == 0 )); then
   require_cmd hf
 fi
-if [[ ! -x "$PLANNER" ]]; then
-  echo "family battery planner is not executable: $PLANNER" >&2
-  exit 1
-fi
+
 
 for value in \
   "$STARTUP_TIMEOUT_MIN_SECS" \
@@ -189,7 +186,7 @@ printf 'family|class|repo|source_revision|file|selector|two_stage_split|three_st
 
 prepare_policy_plan() {
   local plan_args=(
-    "$PLANNER"
+    "${automation[@]}" --repo-root "$ROOT" ci family-plan
     --manifest "$MANIFEST"
     --output "$POLICY_PLAN_COPY"
   )
@@ -205,11 +202,11 @@ prepare_policy_plan() {
     if [[ -n "$FAMILY_FILTER" ]]; then
       plan_args+=(--families "$FAMILY_FILTER")
     fi
-    # The persistent family runner is offline and read-only. Validate every
-    # exact snapshot/file before native compilation when the battery is run
-    # directly; the workflow performs the same gate and passes its plan in.
+    # Plan authority is the frozen controller; policy/source paths stay selected.
+
     if [[ -n "${HF_CACHE:-}" ]]; then
-      plan_args+=(--check-cache --cache-root "$HF_CACHE")
+      "${automation[@]}" automation family-battery-policy --cache \
+        "$ROOT" "$MANIFEST" "$POLICY_PLAN_COPY" "$HF_CACHE"
     fi
     "${plan_args[@]}"
   fi
@@ -371,7 +368,7 @@ scan_model() {
 
   MODEL_SIZE_BYTES="$(jq '[.tensors[].byte_size] | add // 0' "$scan_json")"
   local dimensions
-  if ! dimensions="$("$PLANNER" --inspect-gguf "$target")"; then
+  if ! dimensions="$("${automation[@]}" automation family-battery-policy --inspect-gguf "$target")"; then
     jq -c -n \
       --arg family "$family" \
       --arg model_id "$model_id" \
@@ -410,6 +407,40 @@ preflight_environment() {
     "$ARTIFACT_DIR" "$model_root" "$MIN_FREE_GIB" "$PREFLIGHT_DIR/environment.json"
 }
 
+# Build only the typed deadline input; process ownership belongs to Rust.
+run_battery_timeout() {
+  local label="$1" seconds="$2" transaction_root input executable result
+  shift 2
+  transaction_root="$(mktemp -d "$ARTIFACT_DIR/command-timeout.XXXXXXXX")" || return 125
+  input="$transaction_root/input.json"
+  executable="$(command -v "$1")" || {
+    rmdir "$transaction_root" || true
+    return 125
+  }
+  if [[ "$executable" != /* ]]; then
+    echo "$label requires an absolute executable" >&2
+    rmdir "$transaction_root" || true
+    return 125
+  fi
+  shift
+  if ! jq -n --arg label "$label" --argjson seconds "$seconds" --arg cwd "$PWD" \
+    --arg executable "$executable" --args \
+    '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
+    -- "$@" > "$input"; then
+    rm -f "$input"
+    rmdir "$transaction_root" || true
+    return 125
+  fi
+  if "${automation[@]}" automation canary-timeout --input "$input"; then
+    result=0
+  else
+    result=$?
+  fi
+  rm -f "$input" || return 125
+  rmdir "$transaction_root" || return 125
+  return "$result"
+}
+
 run_certify() {
   local family="$1" target="$2" model_id="$3" source_revision="$4" split_layer="$5" chain_splits="$6" layer_end="$7" native_mtp="$8"
   local startup_timeout="$9" model_size_bytes="${10}" activation_width="${11}"
@@ -446,10 +477,8 @@ run_certify() {
   fi
   exit_code=0
   started_at="$(date +%s)"
-  "$ROOT/scripts/run-command-with-timeout.py" \
-    --seconds "$cert_timeout" \
-    --label "family certification $family split $split_layer" \
-    -- "${command[@]}" || exit_code=$?
+  run_battery_timeout "family certification $family split $split_layer" "$cert_timeout" \
+    "${command[@]}" || exit_code=$?
   elapsed_seconds=$(( $(date +%s) - started_at ))
   manifest_path=""
   if [[ -d "$cert_run_dir" ]]; then
@@ -755,10 +784,7 @@ run_mmproj_smoke() {
     smoke_command=(cargo test --manifest-path "$ROOT/Cargo.toml" -p skippy-serving --lib frontend::tests::multimodal -- --nocapture --test-threads=1)
   fi
   exit_code=0
-  "$ROOT/scripts/run-command-with-timeout.py" \
-    --seconds "$smoke_timeout" \
-    --label "mmproj smoke $family" \
-    -- env \
+  run_battery_timeout "mmproj smoke $family" "$smoke_timeout" env \
       SKIPPY_MM_MODEL="$target" \
       SKIPPY_MM_PROJECTOR="$mmproj" \
       SKIPPY_MM_IMAGE="$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png" \
@@ -864,10 +890,8 @@ run_workload_certify() {
     echo "certified workload $family ($model_class) requires a class-appropriate local-monolithic oracle executable" | tee "$log_path" >&2
     exit_code=1
   else
-    "$ROOT/scripts/run-command-with-timeout.py" \
-      --seconds "$cert_timeout" \
-      --label "workload certification $family ($model_class)" \
-      -- "${command[@]}" >"$log_path" 2>&1 || exit_code=$?
+    run_battery_timeout "workload certification $family ($model_class)" "$cert_timeout" \
+      "${command[@]}" >"$log_path" 2>&1 || exit_code=$?
   fi
   if (( certified == 1 && exit_code == 0 )); then
     verify_workload_oracle \

@@ -169,42 +169,55 @@ impl Fixture {
     }
 
     fn install_tools(&self) {
-        self.executable(
-            "bin/automation",
-            r#"
-[[ "$*" == "automation canary-receipts prepared-source --root $FIXTURE_ROOT" ]]
-printf 'prepared\n' >> "$FIXTURE_ROOT/events"
-if [[ "${FIXTURE_FAIL_STAGE:-}" == prepared ]]; then exit 41; fi
-"#,
-        );
-        self.executable("bin/python3", r#"
-# Finite provenance boundary, not a Python interpreter or validation oracle.
-[[ "$1" == scripts/check-skippy-workload-candidate.py ]]
-shift
-if [[ "$1" == --write-source-snapshot && $# == 2 ]]; then
-  printf 'snapshot\n' >> "$FIXTURE_ROOT/events"
-  printf '{"fixture":"captured source"}\n' > "$2"
-else
-  [[ $# == 10 && "$1" == --candidate-binary && "$3" == --native-build-dir && "$5" == --test-binary && "$7" == --write-producer && "$9" == --source-snapshot ]]
-  [[ -f "$2" && -d "$4" && -f "$6" && -f "${10}" ]]
-  printf 'manifest\n' >> "$FIXTURE_ROOT/events"
-  if [[ "${FIXTURE_FAIL_STAGE:-}" == manifest ]]; then exit 43; fi
-  printf '%s\n' "$2" "$4" "$6" "${10}" > "$8"
-fi
+        self.executable("bin/automation", r#"
+[[ "$1" == automation && "$2" == canary-receipts ]] || exit 97
+shift 2
+case "$1" in
+prepared-source)
+  [[ $# == 3 && "$2" == --root && "$3" == "$FIXTURE_ROOT" ]] || exit 97
+  [[ -f "$FIXTURE_ROOT/cpu closure/source.json" ]] || exit 97
+  printf 'prepared\n' >> "$FIXTURE_ROOT/events"
+  if [[ "${FIXTURE_FAIL_STAGE:-}" == prepared ]]; then exit 41; fi
+  ;;
+workload-manifest)
+  shift
+  case "$1" in
+  snapshot)
+    [[ $# == 3 && "$2" == "$FIXTURE_ROOT" && "$3" == "$FIXTURE_ROOT/cpu closure/source.json" ]] || exit 97
+    [[ ! -e "$FIXTURE_ROOT/cpu closure/native" && ! -e "$FIXTURE_ROOT/cpu closure/cargo" ]] || exit 97
+    printf 'snapshot\n' >> "$FIXTURE_ROOT/events"
+    if [[ "${FIXTURE_FAIL_STAGE:-}" == snapshot ]]; then exit 40; fi
+    printf '{"fixture":"captured source"}\n' > "$3"
+    ;;
+  produce)
+    [[ $# == 5 && "$2" == "$FIXTURE_ROOT" && "$3" == "$FIXTURE_ROOT/cpu closure" && "$4" == "$3/cargo/debug/skippy-test" && "$5" == "$3/source.json" ]] || exit 97
+    [[ -f "$3/cargo/debug/skippy-server" && -d "$3/native" && -f "$4" && -f "$5" ]] || exit 97
+    for tool in skippy-server skippy-model-package skippy-correctness skippy-topology; do [[ -f "$3/cargo/debug/$tool" ]] || exit 97; done
+    for tool in llama-server llama-completion llama-tts; do [[ -f "$3/native/bin/$tool" ]] || exit 97; done
+    printf 'manifest\n' >> "$FIXTURE_ROOT/events"
+    if [[ "${FIXTURE_FAIL_STAGE:-}" == manifest ]]; then exit 43; fi
+    printf '%s\n' "$3/cargo/debug/skippy-server" "$3/native" "$4" "$5" > "$3/producer.json"
+    ;;
+  *) exit 97 ;;
+  esac
+  ;;
+*) exit 97 ;;
+esac
 "#);
+        self.executable("bin/python3", "exit 98");
         let cpu_env = r#"
-[[ "$LLAMA_STAGE_BACKEND" == cpu && "$LLAMA_STAGE_LINK_MODE" == static ]]
-[[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == ON && "$LLAMA_STAGE_UPSTREAM_TESTS" == OFF ]]
-[[ "$LLAMA_STAGE_FULL_REPLAY" == OFF && "$LLAMA_STAGE_BUILD_TESTS" == OFF ]]
-[[ "$LLAMA_BUILD_DIR" == "$FIXTURE_ROOT/cpu closure/native" ]]
-[[ "$LLAMA_STAGE_BUILD_DIR" == "$LLAMA_BUILD_DIR" ]]
-[[ "$CARGO_TARGET_DIR" == "$FIXTURE_ROOT/cpu closure/cargo" ]]
+[[ "$LLAMA_STAGE_BACKEND" == cpu && "$LLAMA_STAGE_LINK_MODE" == static ]] || exit 97
+[[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == ON && "$LLAMA_STAGE_UPSTREAM_TESTS" == OFF ]] || exit 97
+[[ "$LLAMA_STAGE_FULL_REPLAY" == OFF && "$LLAMA_STAGE_BUILD_TESTS" == OFF ]] || exit 97
+[[ "$LLAMA_BUILD_DIR" == "$FIXTURE_ROOT/cpu closure/native" ]] || exit 97
+[[ "$LLAMA_STAGE_BUILD_DIR" == "$LLAMA_BUILD_DIR" ]] || exit 97
+[[ "$CARGO_TARGET_DIR" == "$FIXTURE_ROOT/cpu closure/cargo" ]] || exit 97
 "#;
         self.executable("scripts/build-llama.sh", &format!(r#"{cpu_env}
 if [[ "$(uname -s)" == Darwin ]]; then
-  [[ $# == 1 && "$1" == -DCMAKE_OSX_ARCHITECTURES=arm64 ]]
+  [[ $# == 1 && "$1" == -DCMAKE_OSX_ARCHITECTURES=arm64 ]] || exit 97
 else
-  [[ $# == 0 ]]
+  [[ $# == 0 ]] || exit 97
 fi
 printf 'native\n' >> "$FIXTURE_ROOT/events"
 if [[ "${{FIXTURE_FAIL_STAGE:-}}" == native ]]; then exit 42; fi
@@ -212,18 +225,20 @@ mkdir -p "$LLAMA_BUILD_DIR/bin"
 for tool in llama-server llama-completion llama-tts; do printf 'CPU oracle\n' > "$LLAMA_BUILD_DIR/bin/$tool"; done
 "#));
         self.executable("bin/just", &format!(r#"{cpu_env}
-[[ "$1" == with-lld && "$2" == cargo ]]
+[[ "$1" == with-lld && "$2" == cargo ]] || exit 97
 shift 2
 case "$1" in
 build)
-  [[ "$*" == 'build --locked -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins' ]]
+  [[ "$*" == 'build --locked -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins' ]] || exit 97
   printf 'build\n' >> "$FIXTURE_ROOT/events"
+  if [[ "${{FIXTURE_FAIL_STAGE:-}}" == build ]]; then exit 44; fi
   mkdir -p "$CARGO_TARGET_DIR/debug"
   for tool in skippy-server skippy-model-package skippy-correctness skippy-topology; do printf 'CPU candidate\n' > "$CARGO_TARGET_DIR/debug/$tool"; done
   ;;
 test)
-  [[ "$*" == 'test --locked -p skippy-server --lib --no-run --message-format=json' ]]
+  [[ "$*" == 'test --locked -p skippy-server --lib --no-run --message-format=json' ]] || exit 97
   printf 'test\n' >> "$FIXTURE_ROOT/events"
+  if [[ "${{FIXTURE_FAIL_STAGE:-}}" == test ]]; then exit 45; fi
   printf 'CPU library tests\n' > "$CARGO_TARGET_DIR/debug/skippy-test"
   printf '{{"reason":"compiler-artifact","profile":{{"test":true}},"target":{{"name":"skippy_server"}},"executable":"%s"}}\n' "$CARGO_TARGET_DIR/debug/skippy-test"
   ;;
@@ -380,8 +395,11 @@ fn cpu_graph_is_isolated_and_exports_all_producer_artifact_paths() {
 #[test]
 fn failed_preparation_build_or_stamp_cannot_emit_successful_manifest() {
     for (failure, events) in [
+        ("snapshot", "snapshot\n"),
         ("prepared", "snapshot\nprepared\n"),
         ("native", "snapshot\nprepared\nnative\n"),
+        ("build", "snapshot\nprepared\nnative\nbuild\n"),
+        ("test", "snapshot\nprepared\nnative\nbuild\ntest\n"),
         (
             "manifest",
             "snapshot\nprepared\nnative\nbuild\ntest\nmanifest\n",
@@ -417,7 +435,10 @@ fn shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_o
     for mode in ["repair-build", "verify-build", "pinned-build"] {
         for fail_cpu in [false, true] {
             let fixture = Fixture::new();
-            fixture.executable("bin/lipo", "[[ $1 == -archs ]]; printf 'arm64\\n'");
+            fixture.executable(
+                "bin/lipo",
+                "[[ $1 == -archs ]] || exit 97; printf 'arm64\\n'",
+            );
             let harness = format!(
                 r#"
 set -euo pipefail
@@ -433,7 +454,7 @@ run_verification_logged() {{
   shift 2
   printf '%s\n' "$label" >> "$FIXTURE_ROOT/gates"
   if [[ "$label" == 'pinned CPU workload oracles and candidate' ]]; then
-    [[ $# == 3 && "$1" == just && "$2" == skippy-workload-oracles-build && "$3" == "$LLAMA_STAGE_BUILD_DIR-workloads" ]]
+    [[ $# == 3 && "$1" == just && "$2" == skippy-workload-oracles-build && "$3" == "$LLAMA_STAGE_BUILD_DIR-workloads" ]] || exit 97
     [[ "$FAIL_CPU" == 0 ]] || return 41
   fi
 }}

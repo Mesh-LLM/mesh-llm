@@ -38,7 +38,7 @@ if (( PRINT_ENV == 1 )); then
 fi
 cd "$ROOT"
 mkdir -p "$BUILD_ROOT"
-python3 scripts/check-skippy-workload-candidate.py --write-source-snapshot "$BUILD_ROOT/source.json"
+"${workload_automation[@]}" automation canary-receipts workload-manifest snapshot "$ROOT" "$BUILD_ROOT/source.json"
 "${workload_automation[@]}" automation canary-receipts prepared-source --root "$ROOT"
 export LLAMA_STAGE_BACKEND=cpu LLAMA_STAGE_LINK_MODE=static
 export LLAMA_BUILD_DIR="$NATIVE_DIR" LLAMA_STAGE_BUILD_DIR="$NATIVE_DIR"
@@ -53,7 +53,5 @@ scripts/build-llama.sh "${native_args[@]}"
 just with-lld cargo build --locked -p skippy-cli -p skippy-package-builder -p skippy-correctness -p skippy-topology --bins
 just with-lld cargo test --locked -p skippy-serving --lib --no-run --message-format=json > "$BUILD_ROOT/test-artifacts.jsonl"
 test_binary="$(jq -rs '[.[] | select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "skippy_serving" and .executable != null) | .executable] | unique | if length == 1 then .[0] else error("expected one skippy-serving library test binary") end' "$BUILD_ROOT/test-artifacts.jsonl")"
-python3 scripts/check-skippy-workload-candidate.py \
-  --candidate-binary "$CARGO_DIR/debug/skippy" \
-  --native-build-dir "$NATIVE_DIR" \
-  --test-binary "$test_binary" --write-producer "$MANIFEST" --source-snapshot "$BUILD_ROOT/source.json"
+"${workload_automation[@]}" automation canary-receipts workload-manifest produce \
+  "$ROOT" "$BUILD_ROOT" "$test_binary" "$BUILD_ROOT/source.json"

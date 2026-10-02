@@ -20,6 +20,9 @@ mod placement_tests;
 #[path = "source_plan/preflight_receipt.rs"]
 mod preflight_receipt;
 
+#[path = "source_plan/battery_cache.rs"]
+pub(crate) mod battery_cache;
+
 use super::canary_receipts::{Digest, SourceFamilyPlan};
 use crate::command::DynResult;
 use crate::repository::{check_args::Grammar, check_report::CheckReport};

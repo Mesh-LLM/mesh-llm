@@ -5,6 +5,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+#[path = "sampling.rs"]
+mod sampling;
+
 pub(super) enum Failure {
     Input(InputFailure),
     Policy(PolicyFailure),
@@ -99,6 +102,11 @@ pub(super) fn load_matrix(path: &Path) -> Result<Value, Failure> {
         parser::parse(&raw).map_err(|message| Failure::Input(InputFailure::Decode(message)))?;
     if !matches!(matrix, Value::Object(_)) {
         return Err(Failure::Input(InputFailure::RootShape));
+    }
+    if !sampling::admit(&raw)
+        .map_err(|error| Failure::Input(InputFailure::Decode(error.to_string())))?
+    {
+        return Err(PolicyFailure::Sampling.into());
     }
     Ok(matrix)
 }
@@ -204,12 +212,12 @@ fn check_relations(parameters: &Parameters) -> Result<(), PolicyFailure> {
 
 fn temperature(value: Option<&Value>) -> bool {
     match value {
-        Some(Value::Bool(false) | Value::Int(0)) => true,
+        Some(Value::Int(0)) => true,
         Some(Value::Float(number)) => *number == 0.0,
         None
         | Some(
             Value::Null
-            | Value::Bool(true)
+            | Value::Bool(_)
             | Value::Int(_)
             | Value::BigInt(_)
             | Value::Str(_)

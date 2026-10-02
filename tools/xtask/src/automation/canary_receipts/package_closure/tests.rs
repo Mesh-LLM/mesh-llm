@@ -220,9 +220,9 @@ pub(super) fn workload_tar(
         .into_bytes();
     let mut producer = json!({"schema_version":1,"source":{"head":candidate,"worktree_sha256":Digest::of_bytes(b"")},"files":{}});
     let records = [
-        ("candidate", "cargo/debug/skippy-server"),
-        ("test_binary", "cargo/debug/deps/skippy_server-fixture"),
-        ("model_package", "cargo/debug/skippy-model-package"),
+        ("candidate", "cargo/debug/skippy"),
+        ("test_binary", "cargo/debug/deps/skippy_serving-fixture"),
+        ("model_package", "cargo/debug/skippy-package-builder"),
         ("correctness", "cargo/debug/skippy-correctness"),
         ("topology_plan", "cargo/debug/skippy-topology-plan"),
         ("native_stamp", "native/.mesh-llm-build-stamp"),
@@ -292,7 +292,7 @@ fn workload_archive_binds_candidate_native_stamp_full_closure_and_strict_freshne
                         .unwrap()
                         .remove("llama-tts");
                 }
-                _ => producer["files"]["test_binary"]["path"] = json!("cargo/debug/skippy-server"),
+                _ => producer["files"]["test_binary"]["path"] = json!("cargo/debug/skippy"),
             }),
         );
         assert!(workload::archive(&path, &candidate, &native).is_err());

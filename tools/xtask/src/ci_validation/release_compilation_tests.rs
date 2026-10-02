@@ -108,10 +108,11 @@ fn immutable_restore_exports_verified_bytes_and_rejects_tampering() {
     let document = workflow_yaml::parse(&action).unwrap();
     let run = steps(document.get("runs").unwrap())
         .iter()
-        .find_map(|step| field(step, "run"))
+        .find(|step| field(step, "name") == Some("Verify and export automation"))
+        .and_then(|step| field(step, "run"))
         .unwrap();
     let temporary = tempfile::tempdir().unwrap();
-    let artifact = temporary.path().join("immutable-automation");
+    let artifact = temporary.path().join("immutable-automation-restored");
     std::fs::create_dir(&artifact).unwrap();
     let bytes = b"#!/bin/sh\nexit 0\n";
     let source = b"bd5514dd8de8db64d42975d04de0b0ad0583c7ba\n";
@@ -132,6 +133,8 @@ fn immutable_restore_exports_verified_bytes_and_rejects_tampering() {
             .args(["-c", run])
             .env("RUNNER_TEMP", temporary.path())
             .env("RUNNER_OS", "Linux")
+            .env("AUTOMATION_ARTIFACT_ID", "")
+            .env("AUTOMATION_BINARY_SHA256", "")
             .env(
                 "AUTOMATION_SOURCE_SHA",
                 "bd5514dd8de8db64d42975d04de0b0ad0583c7ba",

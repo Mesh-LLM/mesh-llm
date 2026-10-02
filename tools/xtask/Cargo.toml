@@ -18,7 +18,7 @@ num-bigint = "=0.4.8"
 plist = "=1.10.0"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
 syn = { version = "2", features = ["full", "visit"] }
 thiserror = "2"

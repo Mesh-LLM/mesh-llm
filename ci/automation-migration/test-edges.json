@@ -208,19 +208,6 @@
       ]
     ],
     [
-      "scripts/tests/test_ci_runner_selection_and_cache_policy.py",
-      [
-        [
-          "fixture",
-          ".github/actions/select-ci-runners/action.yml run block",
-          "executes extracted Bash selector with malformed PR canary ref and fixture GITHUB_OUTPUT; rejects non-merge ref",
-          [
-            575
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_ci_sdk_producers.py",
       [
         [
@@ -1062,19 +1049,6 @@
       ]
     ],
     [
-      "scripts/tests/test_safe_extract_zip.py",
-      [
-        [
-          "launch",
-          "scripts/safe-extract-zip.py",
-          "extractor helper runs script on fixture archive and destination; existing argv assembly row is same subprocess",
-          [
-            30
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_select_release_notes_base.py",
       [
         [
@@ -1643,20 +1617,6 @@
           "import",
           "scripts/compare-event-benchmark-matrix.py",
           "load_comparator_module uses fixed COMPARATOR_SCRIPT"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_safe_extract_zip.py",
-      "members": [
-        [
-          31,
-          "6379217e6df1f904",
-          1,
-          "subprocess-or-interpreter",
-          "assembly",
-          "sys.executable str(SCRIPT) archive destination",
-          "argv continuation for subprocess.run at line 30, not second launch"
         ]
       ]
     },
@@ -2485,8 +2445,17 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "81658f726f842122e6df0f344e75322d40bcaf095571fe8c2130255e62db2671",
+  "observed_source_sha256": "c711979f658cdfad82cb18fdf40b10097dbb131a6567101a4bde6c2fbe52fc63",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
-  "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency."
+  "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
+  "zip_extraction_test_retirement": {
+    "coverage": "ci/automation-migration/zip-extraction-test-retirement-coverage.json",
+    "path": "scripts/tests/test_safe_extract_zip.py",
+    "status": "proposed pending parent covered target terminal; apply only with actual test deletion+Just token removal",
+    "python_paths": 195,
+    "just_roster": 108,
+    "helper_retained": "scripts/safe-extract-zip.py",
+    "gates_unchanged": true
+  }
 }

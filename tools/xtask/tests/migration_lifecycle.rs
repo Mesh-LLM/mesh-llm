@@ -48,6 +48,12 @@ mod agent_fixture_inputs_cli;
 mod automation_producer_admission;
 #[path = "migration_lifecycle/automation_restore_admission.rs"]
 mod automation_restore_admission;
+#[path = "migration_lifecycle/battery_cache_cli.rs"]
+mod battery_cache_cli;
+#[path = "migration_lifecycle/battery_timeout_cli.rs"]
+mod battery_timeout_cli;
+#[path = "migration_lifecycle/cache_family_report_cli.rs"]
+mod cache_family_report_cli;
 #[path = "migration_lifecycle/canary_controller_battery.rs"]
 mod canary_controller_battery;
 #[path = "migration_lifecycle/canary_timeout_cli.rs"]
@@ -60,3 +66,5 @@ mod family_model_identity_cli;
 mod frozen_selector_integration;
 #[path = "migration_lifecycle/required_sdk_environment_admission.rs"]
 mod required_sdk_environment_admission;
+#[path = "migration_lifecycle/workload_provenance_cli.rs"]
+mod workload_provenance_cli;

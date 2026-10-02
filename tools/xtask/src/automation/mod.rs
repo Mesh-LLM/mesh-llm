@@ -2,6 +2,7 @@ pub(crate) mod agent_client_config;
 pub(crate) mod agent_fixture_evidence;
 pub(crate) mod agent_fixture_inputs;
 pub(crate) mod agent_model;
+pub(crate) mod cache_family_report;
 #[path = "canary_receipts/command.rs"]
 pub(crate) mod canary_aggregate_command;
 #[path = "canary_receipts/build.rs"]

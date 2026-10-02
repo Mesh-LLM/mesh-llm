@@ -1,4 +1,5 @@
 //! Shared agent fixture evidence. Hidden implementation execution stays separate.
+mod opencode;
 mod result;
 use crate::{command::DynResult, repository::check_report::CheckReport};
 use serde::Deserialize;
@@ -68,6 +69,8 @@ fn probe(bytes: &[u8], label: &str) -> DynResult<String> {
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let output = match args {
+        [verb, path] if verb == "opencode-session" => opencode::session(&read(Path::new(path))?)?,
+        [verb, path] if verb == "opencode-result" => opencode::result(&read(Path::new(path))?)?,
         [verb, path, label] if verb == "probe" => probe(&read(Path::new(path))?, label)?,
         [verb, path, label] if verb == "soak" => soak(&read(Path::new(path))?, label)?,
         [verb, path, label, required] if verb == "result" => {
@@ -77,7 +80,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
             };
             result::validate(&read(Path::new(path))?, label, required)?
         }
-        _ => return Err("usage: automation agent-fixture-evidence {soak RESPONSE LABEL | probe RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS}".into()),
+        _ => return Err("usage: automation agent-fixture-evidence {soak RESPONSE LABEL | probe RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS | opencode-session JSONL | opencode-result JSONL}".into()),
     };
     CheckReport::success(output).emit()
 }

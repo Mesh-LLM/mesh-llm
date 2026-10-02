@@ -173,27 +173,6 @@
       ]
     },
     {
-      "file": "scripts/skippy-workload-oracles-build.sh",
-      "members": [
-        [
-          41,
-          "833abe6ad5166054",
-          1,
-          "script",
-          "scripts/check-skippy-workload-candidate.py",
-          "--write-source-snapshot BUILD_ROOT/source.json; writes source snapshot; stdout/stderr inherited, nonzero aborts producer"
-        ],
-        [
-          56,
-          "0607b29f82628404",
-          1,
-          "script",
-          "scripts/check-skippy-workload-candidate.py",
-          "--candidate-binary CARGO_DIR/debug/skippy-server --native-build-dir NATIVE_DIR --test-binary test_binary --write-producer MANIFEST --source-snapshot BUILD_ROOT/source.json; writes producer manifest, inherited output/status; nonzero aborts"
-        ]
-      ]
-    },
-    {
       "file": "scripts/skippy-wan-calibrate.sh",
       "members": [
         [
@@ -212,12 +191,6 @@
           "iperf bitrate estimate",
           "IPERF_JSON env passed to python3 -; prints rounded minimum-one Mbit/s if sender bitrate exists, empty otherwise; captured by shell, failure aborts; later shell writes calibration env file"
         ]
-      ]
-    },
-    {
-      "file": "scripts/family-certify.sh",
-      "members": [
-
       ]
     },
     {
@@ -379,18 +352,6 @@
           "fixture implementation validation",
           "python3 - argv work_dir initial_sha; loads generated implementation and runs hidden inputs, nonzero fails harness; test output inherited"
         ]
-      ]
-    },
-    {
-      "file": "scripts/ci-goose-smoke.sh",
-      "members": [
-
-      ]
-    },
-    {
-      "file": "scripts/ci-pi-smoke.sh",
-      "members": [
-
       ]
     },
     {
@@ -641,7 +602,7 @@
       "members": [
         [
           24,
-          "8fd137394254a561",
+          "22666b23391948f7",
           1,
           "environment",
           "explicit surviving scripts.tests modules",
@@ -653,52 +614,12 @@
       "file": "scripts/skippy-family-battery.sh",
       "members": [
         [
-          19,
-          "2176ac99c5f8adcb",
-          1,
-          "data",
-          "comment names plan-family-battery.py",
-          "comment not execution"
-        ],
-        [
-          69,
-          "972053af3fffe48c",
-          1,
-          "selection",
-          "scripts/plan-family-battery.py",
-          "PLANNER path assignment, later calls via $PLANNER are outside scanner's token detection"
-        ],
-        [
-          135,
+          134,
           "ba28975e02098c5d",
           1,
           "selection",
           "require_cmd python3",
           "availability guard before family battery commands; no launch"
-        ],
-        [
-          437,
-          "d6de059f3a65588d",
-          1,
-          "indirect",
-          "scripts/run-command-with-timeout.py",
-          "argument in command-array construction; Python interpreter/array consumer requires continuation review"
-        ],
-        [
-          746,
-          "d6de059f3a65588d",
-          2,
-          "indirect",
-          "scripts/run-command-with-timeout.py",
-          "second distinct family command-array member; not an invocation on path line"
-        ],
-        [
-          855,
-          "d6de059f3a65588d",
-          3,
-          "indirect",
-          "scripts/run-command-with-timeout.py",
-          "third distinct family command-array member; not an invocation on path line"
         ]
       ]
     },
@@ -778,15 +699,7 @@
           "single quoted prompt assignment, no interpreter"
         ],
         [
-          370,
-          "a7941296e7ee6733",
-          1,
-          "inline",
-          "first turn session extractor",
-          "python3 - argv TURN1_JSONL; prints session ID to shell; empty/error fails multi-turn probe"
-        ],
-        [
-          404,
+          386,
           "1034563d4db0c21a",
           1,
           "environment",
@@ -794,7 +707,7 @@
           "runs generated test suite; failure branch prints source to stderr, not a tracked script call"
         ],
         [
-          406,
+          388,
           "be3f0e5e46006fa5",
           1,
           "data",
@@ -802,7 +715,7 @@
           "stderr text, not interpreter"
         ],
         [
-          407,
+          389,
           "9db64d74072a0cf1",
           1,
           "data",
@@ -810,7 +723,7 @@
           "stderr text only; no interpreter"
         ],
         [
-          411,
+          393,
           "07fd9dbce61dbe6c",
           1,
           "inline",
@@ -818,7 +731,7 @@
           "python3 - argv WORK_DIR INITIAL_IMPL_SHA; imports generated fixture and tests hidden inputs; failure rejects"
         ],
         [
-          420,
+          402,
           "6d71c27a055dd3fc",
           1,
           "data",
@@ -826,7 +739,7 @@
           "not another invocation"
         ],
         [
-          425,
+          407,
           "c6a37ff6fb668f65",
           1,
           "data",
@@ -834,7 +747,7 @@
           "not another invocation"
         ],
         [
-          430,
+          412,
           "aa426647b49488af",
           1,
           "data",
@@ -842,15 +755,7 @@
           "not another invocation"
         ],
         [
-          459,
-          "27c9a9bcdf80f434",
-          1,
-          "inline",
-          "agent output facts and tool calls",
-          "python3 - argv OUTPUT_JSONL; validates answer and recognized tool event count; failure rejects"
-        ],
-        [
-          536,
+          448,
           "03d0423ce3a1405e",
           1,
           "inline",
@@ -900,31 +805,7 @@
           "echo stderr only, no interpreter"
         ],
         [
-          176,
-          "8660ee2003319b0f",
-          1,
-          "script",
-          "scripts/plan-family-battery.py via executable shebang",
-          "--inspect-gguf model path; DIMENSIONS stdout captured; dynamic shebang reaches interpreter even without python token"
-        ],
-        [
-          199,
-          "90fc69b829bfcaf2",
-          1,
-          "script",
-          "scripts/check-skippy-workload-candidate.py",
-          "producer branch argv --candidate-binary CANDIDATE_BIN_DIR/skippy-server --native-build-dir CANDIDATE_BUILD_DIR --producer-manifest PRODUCER_MANIFEST; stdout/stderr inherited, nonzero aborts"
-        ],
-        [
-          213,
-          "90fc69b829bfcaf2",
-          2,
-          "script",
-          "scripts/check-skippy-workload-candidate.py",
-          "oracle branch argv --candidate-binary CANDIDATE_BIN_DIR/skippy-server --native-build-dir CANDIDATE_BUILD_DIR; stdout/stderr inherited, nonzero aborts"
-        ],
-        [
-          402,
+          400,
           "18a85526e4120fa8",
           1,
           "script",
@@ -932,7 +813,7 @@
           "OCR-only --output ORACLE_MEDIA_PATH; writes media fixture, inherited output/status; nonzero aborts"
         ],
         [
-          404,
+          402,
           "b5dac3de9a0e64bf",
           1,
           "script",
@@ -940,7 +821,7 @@
           "OCR/ASR --candidate-url http://127.0.0.1:PORT/v1 --oracle-url http://127.0.0.1:ORACLE_PORT/v1 --model MODEL_ID --class MODEL_CLASS --media-path ORACLE_MEDIA_PATH; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
         ],
         [
-          411,
+          409,
           "8bb1eaaf0c78dccc",
           1,
           "script",
@@ -948,7 +829,7 @@
           "server oracle --candidate-url http://127.0.0.1:PORT/v1 --oracle-url http://127.0.0.1:ORACLE_PORT/v1 --model MODEL_ID --class MODEL_CLASS; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
         ],
         [
-          420,
+          418,
           "8bb1eaaf0c78dccc",
           2,
           "script",
@@ -956,7 +837,7 @@
           "encoder-decoder --candidate-url http://127.0.0.1:PORT/v1 --oracle-completion ORACLE_COMPLETION --model-path MODEL_PATH --model MODEL_ID --class MODEL_CLASS; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
         ],
         [
-          429,
+          427,
           "17d63f5f0fac2843",
           1,
           "script",
@@ -964,7 +845,7 @@
           "TTS --oracle-cli ORACLE_TTS --model-path MODEL_PATH --projector-path PROJECTOR_PATH --model MODEL_ID --layer-end LAYER_END --work-dir WORK_DIR; stdout tee COMPARISON_LOG, stderr inherited, pipefail aborts"
         ],
         [
-          439,
+          437,
           "d15bff10ec3d569b",
           1,
           "script",
@@ -1874,15 +1755,6 @@
       "owner": "competitive benchmark prompt input generation",
       "replacement": "optional benchmark manifest generator owner",
       "target": "evals/skippy-agentic-prompt-manifest.py via $PROMPT_GENERATOR"
-    },
-    {
-      "boundary": "$PLANNER assigned at line 69 under caller-selected $ROOT; command substitution captures dimensions, nonzero branches to failure without fixed model path; no independent output file",
-      "context": "selected shell interpreter or script invocation",
-      "deletion_condition": "selected-source GGUF dimension and failure parity",
-      "id": "scripts/skippy-family-battery.sh:362:3a192056636e0599",
-      "owner": "optional family certification model scan",
-      "replacement": "tools/xtask family certification inspection owner",
-      "target": "scripts/plan-family-battery.py --inspect-gguf $target"
     }
   ],
   "unresolved_boundaries": [
@@ -1895,13 +1767,13 @@
   "current_wave_source_bindings": [
     {
       "path": "scripts/skippy-family-battery.sh",
-      "sha256": "871cfcfa39e1b5d3cda74f15cec6c942696b6348a7b850937eacda1f2c2d12d3",
-      "line_count": 994
+      "sha256": "bb92b9635fb12d345cd3c68cd3566901de46b9b3564b98a2c4f4fa7a67b3dcaf",
+      "line_count": 1015
     },
     {
       "path": "scripts/ci-opencode-smoke.sh",
-      "sha256": "5ad9d164a8fd83c0a009e3078bc8ff59d2a4a5e2dc118ea4e2faa244dc0674ce",
-      "line_count": 613
+      "sha256": "93e90cefb60a24f04e374319279a2013b9d8187e348b1d5061e733068e61b029",
+      "line_count": 525
     },
     {
       "path": "scripts/ci-compat-smoke.sh",
@@ -1910,8 +1782,8 @@
     },
     {
       "path": "scripts/skippy-workload-certify.sh",
-      "sha256": "c28021c11b1465c0b2042997607e805a67bf1495fa1651505761d7145aa1dbe9",
-      "line_count": 461
+      "sha256": "21d1f9858fb1415bbc91320c7009dbafb8dc4bb473c1a4c9fdac3df59c52e1de",
+      "line_count": 459
     },
     {
       "path": ".github/actions/upload-automation/action.yml",
@@ -1930,7 +1802,7 @@
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
-      "sha256": "0d3a61d66e5590c54e62c1ea6241b12015b9cc564387898d291aa0b1591aa71e",
+      "sha256": "18ad9326a50180dee8f80b5b064b79b55af7fdf2d874ff0fe93e4f7131160a6f",
       "line_count": 51
     },
     {
@@ -1960,5 +1832,82 @@
     "protected": "automation_restore_admission; automation_producer_admission",
     "sdk": "required_sdk_environment_admission; actual required clients remain required; SDK dependency receipt is not runtime/model qualification",
     "validation": "Parent validation pending; no retirement or aggregate counts changed"
+  },
+  "latest_wave_reconciliation": {
+    "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
+    "python_paths": 196,
+    "just_roster": 109,
+    "removed_edges": [
+      {
+        "path": "scripts/skippy-workload-oracles-build.sh",
+        "line": 41,
+        "identity": "833abe6ad5166054:1"
+      },
+      {
+        "path": "scripts/skippy-workload-oracles-build.sh",
+        "line": 56,
+        "identity": "0607b29f82628404:1"
+      },
+      {
+        "path": "scripts/skippy-family-battery.sh",
+        "line": 19,
+        "identity": "2176ac99c5f8adcb:1"
+      },
+      {
+        "path": "scripts/skippy-family-battery.sh",
+        "line": 69,
+        "identity": "972053af3fffe48c:1"
+      },
+      {
+        "path": "scripts/skippy-family-battery.sh",
+        "line": 437,
+        "identity": "d6de059f3a65588d:1"
+      },
+      {
+        "path": "scripts/skippy-family-battery.sh",
+        "line": 746,
+        "identity": "d6de059f3a65588d:2"
+      },
+      {
+        "path": "scripts/skippy-family-battery.sh",
+        "line": 855,
+        "identity": "d6de059f3a65588d:3"
+      },
+      {
+        "path": "scripts/ci-opencode-smoke.sh",
+        "line": 370,
+        "identity": "a7941296e7ee6733:1"
+      },
+      {
+        "path": "scripts/ci-opencode-smoke.sh",
+        "line": 459,
+        "identity": "27c9a9bcdf80f434:1"
+      },
+      {
+        "path": "scripts/skippy-workload-certify.sh",
+        "line": 176,
+        "identity": "8660ee2003319b0f:1"
+      },
+      {
+        "path": "scripts/skippy-workload-certify.sh",
+        "line": 199,
+        "identity": "90fc69b829bfcaf2:1"
+      },
+      {
+        "path": "scripts/skippy-workload-certify.sh",
+        "line": 213,
+        "identity": "90fc69b829bfcaf2:2"
+      }
+    ],
+    "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
+  },
+  "zip_extraction_test_retirement": {
+    "coverage": "ci/automation-migration/zip-extraction-test-retirement-coverage.json",
+    "path": "scripts/tests/test_safe_extract_zip.py",
+    "status": "proposed pending parent covered target terminal; apply only with actual test deletion+Just token removal",
+    "python_paths": 195,
+    "just_roster": 108,
+    "helper_retained": "scripts/safe-extract-zip.py",
+    "gates_unchanged": true
   }
 }

@@ -50,6 +50,7 @@ fn run() -> DynResult<()> {
         .transpose()?;
     match parsed.command {
         cli::CliCommand::AgentClientConfig(rest) => automation::agent_client_config::run(rest),
+        cli::CliCommand::CacheFamilyReport(rest) => automation::cache_family_report::run(rest),
         cli::CliCommand::AgentFixtureEvidence(rest) => {
             automation::agent_fixture_evidence::run(rest)
         }

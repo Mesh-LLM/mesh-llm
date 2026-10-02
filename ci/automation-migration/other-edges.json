@@ -373,7 +373,7 @@
       "file": "evals/skippy-cache-family-bench.sh",
       "members": [
         [
-          37,
+          45,
           "7cb16c057dc35a94",
           1,
           "execution",
@@ -381,20 +381,12 @@
           "Optional full-GGUF benchmark in repo root; writes benchmark JSON under selected output dir; nonzero aborts shell"
         ],
         [
-          41,
+          49,
           "7cb16c057dc35a94",
           2,
           "execution",
           "evals/skippy-cache-production-bench.py",
           "Second use-case benchmark invocation with distinct options/output"
-        ],
-        [
-          46,
-          "1138777676e2c329",
-          1,
-          "execution",
-          "evals/skippy-cache-family-report.py",
-          "Consumes both result sets and writes family report; optional benchmark evidence, not required CI"
         ]
       ]
     },
@@ -416,40 +408,6 @@
           "instruction",
           "scripts/qa-nightly-stability.py",
           "Broader manual harness named in prose with --print-plan preview; also reached by named nightly workflow separately; describing a command is actionable guidance, not an execution on this line"
-        ]
-      ]
-    },
-    {
-      "file": ".agents/skills/deploy-linux-gpu/SKILL.md",
-      "members": [
-        [
-          150,
-          "82f76f4f8987ae8c",
-          1,
-          "instruction",
-          "python3 -m json.tool",
-          "Operator curl /v1/models stdout pipe to stdlib JSON display; no repository module or file write; optional host deployment"
-        ]
-      ]
-    },
-    {
-      "file": ".agents/skills/deploy-macos/SKILL.md",
-      "members": [
-        [
-          171,
-          "82f76f4f8987ae8c",
-          1,
-          "instruction",
-          "python3 -m json.tool",
-          "Operator curl /v1/models JSON display; no repository script; optional deployment"
-        ],
-        [
-          174,
-          "b9455a248f5ccf24",
-          1,
-          "instruction",
-          "python3 -m json.tool",
-          "Operator curl /api/status JSON display; optional deployment"
         ]
       ]
     },
@@ -570,27 +528,6 @@
       ]
     },
     {
-      "file": ".agents/skills/mesh-join/SKILL.md",
-      "members": [
-        [
-          108,
-          "b9455a248f5ccf24",
-          1,
-          "instruction",
-          "python3 -m json.tool",
-          "Optional operator /api/status curl JSON display"
-        ],
-        [
-          111,
-          "82f76f4f8987ae8c",
-          1,
-          "instruction",
-          "python3 -m json.tool",
-          "Optional operator /v1/models curl JSON display"
-        ]
-      ]
-    },
-    {
       "file": ".agents/skills/release-validation/SKILL.md",
       "members": [
         [
@@ -666,14 +603,6 @@
           "instruction",
           "evals/skippy-cache-production-bench.py",
           "Manual same benchmark --output-dir /tmp/skippy-cache-family-bench/use-cases --use-case all; distinct invocation and output"
-        ],
-        [
-          64,
-          "dba2f1484b219e40",
-          1,
-          "instruction",
-          "evals/skippy-cache-family-report.py",
-          "Manual --input full-gguf/production-cache-bench.json --input use-cases/production-cache-bench.json --output readme-tables.md; writes report"
         ]
       ]
     },
@@ -2044,5 +1973,48 @@
     "Remote HF Jobs examples pass operator-supplied scripts outside the tracked tree; no concrete script bytes or local dependency declaration can be inferred from the placeholder path.",
     "The source candidate scanner misses runnable instruction command blocks and direct executable shebangs lacking Python tokens. Independent full instruction and test/production caller graph is not proved by a zero omitted candidate count."
   ],
-  "validation": "cargo xtool automation inventory --check validates source identities and manually reviewed calls in Rust; see .omo/evidence/task-1-other-shard.json for original read-only checks and limits"
+  "validation": "cargo xtool automation inventory --check validates source identities and manually reviewed calls in Rust; see .omo/evidence/task-1-other-shard.json for original read-only checks and limits",
+  "latest_wave_reconciliation": {
+    "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
+    "python_paths": 196,
+    "just_roster": 109,
+    "removed_edges": [
+      {
+        "path": "evals/skippy-cache-family-bench.sh",
+        "line": 46,
+        "identity": "1138777676e2c329:1"
+      },
+      {
+        "path": ".agents/skills/deploy-linux-gpu/SKILL.md",
+        "line": 150,
+        "identity": "82f76f4f8987ae8c:1"
+      },
+      {
+        "path": ".agents/skills/deploy-macos/SKILL.md",
+        "line": 171,
+        "identity": "82f76f4f8987ae8c:1"
+      },
+      {
+        "path": ".agents/skills/deploy-macos/SKILL.md",
+        "line": 174,
+        "identity": "b9455a248f5ccf24:1"
+      },
+      {
+        "path": ".agents/skills/mesh-join/SKILL.md",
+        "line": 108,
+        "identity": "b9455a248f5ccf24:1"
+      },
+      {
+        "path": ".agents/skills/mesh-join/SKILL.md",
+        "line": 111,
+        "identity": "82f76f4f8987ae8c:1"
+      },
+      {
+        "path": ".agents/skills/skippy-cache-family-bench/SKILL.md",
+        "line": 64,
+        "identity": "dba2f1484b219e40:1"
+      }
+    ],
+    "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
+  }
 }

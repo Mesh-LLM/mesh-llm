@@ -73,7 +73,9 @@ fn selected_process_rejects_new_tokenless_call() -> DynResult<()> {
     fs::create_dir_all(file.parent().ok_or("missing script directory")?)?;
     fs::write(
         &file,
-        format!("{source}\n\"$PLANNER\" --verify-plan extra.json\n"),
+        format!(
+            "{source}\nPLANNER=\"$ROOT/scripts/plan-family-battery.py\"\n\"$PLANNER\" --verify-plan extra.json\n"
+        ),
     )?;
     fs::copy(
         repo.join("scripts/plan-family-battery.py"),
@@ -103,9 +105,8 @@ fn selected_process_rejects_changed_planner_target() -> DynResult<()> {
     fs::create_dir_all(file.parent().ok_or("missing script directory")?)?;
     fs::write(
         &file,
-        text.replace(
-            "PLANNER=\"$ROOT/scripts/plan-family-battery.py\"",
-            "PLANNER=\"$ROOT/scripts/other.py\"",
+        format!(
+            "{text}\nPLANNER=\"$ROOT/scripts/other.py\"\n\"$PLANNER\" --verify-plan extra.json\n"
         ),
     )?;
     fs::copy(

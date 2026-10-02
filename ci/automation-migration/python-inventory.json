@@ -205,15 +205,6 @@
       "required": false
     },
     {
-      "classification": "evaluation report",
-      "deletion_condition": "Port generic report logic or prove isolated evaluation-only use.",
-      "exception": null,
-      "path": "evals/skippy-cache-family-report.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask automation evidence",
-      "required": false
-    },
-    {
       "classification": "benchmark implementation",
       "deletion_condition": "Keep only as isolated opt-in benchmark code with dependencies declared.",
       "exception": "Potential domain benchmark implementation; opt-in boundary must be documented.",
@@ -880,15 +871,6 @@
       "required": true
     },
     {
-      "classification": "generic runner/cache policy test",
-      "deletion_condition": "Provider/cache policy cases move to Rust and remain required.",
-      "exception": null,
-      "path": "scripts/tests/test_ci_runner_selection_and_cache_policy.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
       "classification": "generic SDK consumer contract test",
       "deletion_condition": "SDK JSON reader contract parity passes in Rust.",
       "exception": null,
@@ -1492,15 +1474,6 @@
       "required": true
     },
     {
-      "classification": "generic artifact security test",
-      "deletion_condition": "All safe-extraction rejection cases pass in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_safe_extract_zip.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask artifact tests",
-      "required": true
-    },
-    {
       "classification": "generic cache evidence test",
       "deletion_condition": "Stats parsing and cache floor semantics migrated.",
       "exception": null,
@@ -1918,7 +1891,7 @@
   },
   "path_reconciliation": {
     "dynamic_import_targets_are_not_counted_as_new_paths": true,
-    "method": "Exact current path set after reviewed replay, local-port, Swift producer, workload-wrapper and oracle-producer test retirements: 198 ledger paths; parent checks tracked-path equality. Historical baseline_comparison remains unchanged.",
+    "method": "Exact current path set after reviewed replay, local-port, Swift producer, workload-wrapper and oracle-producer test retirements: 198 ledger paths; parent checks tracked-path equality. Historical baseline_comparison remains unchanged. Runner/cache seven-method legacy module retired by exact last Just token cutover after parent17 owning tests/current workflow guards/corrected CI passed; current projected set197, parent checks tracked equality.",
     "scope_note": "This reconciles file paths only; it does not prove invocation reachability or call-contract completeness.",
     "tracked_paths_are_authoritative": true
   },
@@ -1926,7 +1899,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 198,
+  "tracked_file_count": 195,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -1966,5 +1939,51 @@
     "required_just_roster_modules": 110,
     "policy": "Four legacy method intentions retired after six actual bounded Rust producer adapters passed. Preserve historical source method roster/hash, all historical baselines, real native CPU producer/SDK/model gates and independent platform qualification.",
     "coverage_sha256": "9fb0646ca365cb199cf1b091867c62659feb4ab44baf8d293db1e752355c10de"
+  },
+  "runner_cache_test_retirement": {
+    "coverage": "ci/automation-migration/runner-cache-retirement-coverage.json",
+    "retired_path": "scripts/tests/test_ci_runner_selection_and_cache_policy.py",
+    "retired_source_sha256": "3cf46cdc4113040b40dc9d32fab1424aa1f912a215d345111ebccaa7fe7c9815",
+    "retired_methods": [
+      "test_actionlint_installer_verifies_pinned_release_archives",
+      "test_sccache_prefers_depot_webdav_with_disk_fallback",
+      "test_runner_selection_uses_event_repository_and_ref_policy",
+      "test_dispatched_pr_cache_writes_remain_blocked_with_depot",
+      "test_depot_pr_native_cache_consumers_obey_central_policy",
+      "test_authority_sentinel_is_explicit_cache_gate_exemption",
+      "test_depot_sccache_consumers_receive_both_central_cache_outputs"
+    ],
+    "retired_method_count": 7,
+    "parent_owning_receipt": ".omo/evidence/resume-20261002/followup-runner-cache-contract-corrected.log",
+    "parent_owning_result": "17 passed;0 failed;67 filtered;3.33s",
+    "python_paths": 197,
+    "required_just_roster_modules": 109,
+    "retained_depot_module": "scripts/tests/test_depot_authority_sentinel.py",
+    "retained_depot_methods": 8,
+    "policy": "Only exact runner/cache legacy module and its last Just token retire. Historical census/hash/method rows retained; required native/model/SDK/platform/protected/live gates unchanged."
+  },
+  "current_cache_family_report_retirement": {
+    "path": "evals/skippy-cache-family-report.py",
+    "coverage": "ci/automation-migration/cache-family-report-retirement-coverage.json",
+    "proof": "next-cache-report-cli-corrected.log:5 passed",
+    "remaining_python": 196,
+    "just_roster": 109,
+    "limits": "Local synthetic report CLI intent only; native benchmark and model qualification separate"
+  },
+  "latest_wave_reconciliation": {
+    "source_snapshot": "Frozen source after provenance/package local qualification; pending full latest validation union",
+    "python_paths": 196,
+    "just_roster": 109,
+    "removed_edges": [],
+    "limits": "Surviving generic quality roster, native smoke/oracle/manual protected and real required SDK/model/platform qualifications remain open; no exception or gate demotion."
+  },
+  "zip_extraction_test_retirement": {
+    "coverage": "ci/automation-migration/zip-extraction-test-retirement-coverage.json",
+    "path": "scripts/tests/test_safe_extract_zip.py",
+    "status": "proposed pending parent covered target terminal; apply only with actual test deletion+Just token removal",
+    "python_paths": 195,
+    "just_roster": 108,
+    "helper_retained": "scripts/safe-extract-zip.py",
+    "gates_unchanged": true
   }
 }

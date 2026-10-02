@@ -1,3 +1,6 @@
+#[path = "workload_production.rs"]
+pub(super) mod production;
+
 use super::{archive, executable, process, source};
 use crate::{automation::canary_receipts::Digest, command::DynResult};
 use serde::{Deserialize, Serialize};
@@ -42,8 +45,8 @@ impl VerifiedProducer {
 }
 
 const FIXED: [(&str, &str); 8] = [
-    ("candidate", "cargo/debug/skippy-server"),
-    ("model_package", "cargo/debug/skippy-model-package"),
+    ("candidate", "cargo/debug/skippy"),
+    ("model_package", "cargo/debug/skippy-package-builder"),
     ("correctness", "cargo/debug/skippy-correctness"),
     ("topology_plan", "cargo/debug/skippy-topology-plan"),
     ("native_stamp", "native/.mesh-llm-build-stamp"),
@@ -83,7 +86,7 @@ fn producer(bytes: &[u8]) -> DynResult<Producer> {
         || !relative
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("skippy_server-"))
+            .is_some_and(|name| name.starts_with("skippy_serving-"))
     {
         return Err("workload test artifact is outside its candidate target".into());
     }
@@ -163,6 +166,15 @@ fn contained(root: &Path, relative: &str) -> DynResult<PathBuf> {
 }
 
 fn files(root: &Path, producer: &Producer, native_head: &str) -> DynResult<()> {
+    verify_files(root, producer, native_head, true)
+}
+
+fn verify_files(
+    root: &Path,
+    producer: &Producer,
+    native_head: &str,
+    package: bool,
+) -> DynResult<()> {
     let root = root.canonicalize()?;
     for (key, record) in &producer.files {
         let path = contained(&root, &record.path)?;
@@ -177,9 +189,11 @@ fn files(root: &Path, producer: &Producer, native_head: &str) -> DynResult<()> {
                     return Err("workload artifact is not executable".into());
                 }
             }
-            let mut reader = File::open(&path)?;
-            let length = reader.metadata()?.len();
-            executable::inspect(&mut reader, 0, length)?;
+            if package {
+                let mut reader = File::open(&path)?;
+                let length = reader.metadata()?.len();
+                executable::inspect(&mut reader, 0, length)?;
+            }
         }
     }
     let native_stamp = contained(&root, &producer.files["native_stamp"].path)?;
@@ -375,7 +389,7 @@ mod tests {
         }
         let producer = producer(&fs::read(root.join("producer.json")).unwrap()).unwrap();
         assert!(files(&root, &producer, &native).is_ok());
-        let candidate = root.join("cargo/debug/skippy-server");
+        let candidate = root.join("cargo/debug/skippy");
         File::options()
             .write(true)
             .open(&candidate)
