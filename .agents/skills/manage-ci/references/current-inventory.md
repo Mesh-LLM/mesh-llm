@@ -15,8 +15,10 @@ it lists selects `platform-checks` and its existing `windows-unit` row, and
 nothing else. The list holds `mesh-llm-plugin`, the crates verified green on
 Windows since, and `mesh-llm-host-runtime` — the shared Windows/macOS owner the
 row already runs, listed so that a change to it selects the row instead of
-leaving Windows unvalidated. It does not select host/native product builds by
-itself. `mesh-llm-commands` and `mesh-llm-system` run in their own step with
+leaving Windows unvalidated. The row also resolves `mesh-llm-commands`,
+`mesh-llm-system`, and `skippy-cache`, which are now in that catalog. It does
+not select host/native product builds by itself. `mesh-llm-commands` and
+`mesh-llm-system` run in their own step with
 `mesh-llm-system/dynamic-native-runtime`, because they reach `skippy-ffi`
 without its dynamic loader and the row prepares no static llama archives.
 `scripts/tests/test_ci_windows_composition.py` keeps the list, the crates the
@@ -1057,7 +1059,7 @@ both domains until the later catalog cleanup; existing main routing is unchanged
 
 The protected executor workflows pin `resolve-source-layout` to commit
 `38d63b2f6e27998034fdf0452150c7cc081fe921` and `resolve-cargo-packages` to
-`196eba4c21f9b445d0bf11f7938f87e799dd7c8c` (which passes planned packages
+`5c8fb4d472bc57058c8153761c561daa77dd5b94` (which passes planned packages
 absent from the candidate through to the checked-out-workspace filter, so a PR
 that deletes a crate is not rejected), so older PR source checkouts do not need
 the new helper files. The package resolver loads its Python implementation

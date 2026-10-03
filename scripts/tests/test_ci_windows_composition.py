@@ -645,7 +645,14 @@ class CiWindowsCompositionTests(unittest.TestCase):
             "steps.windows_dynamic_packages.outputs.crates",
             run["env"]["WINDOWS_DYNAMIC_TEST_CRATES"],
         )
-        self.assertIn("--features mesh-llm-system/dynamic-native-runtime", run["run"])
+        dynamic_loop = run["run"].split(
+            "foreach ($crate in @($env:WINDOWS_DYNAMIC_TEST_CRATES | ConvertFrom-Json)) {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn(
+            "cargo test --locked -p $crate --lib --features mesh-llm-system/dynamic-native-runtime",
+            dynamic_loop,
+        )
 
         packages = _workspace_crates(ROOT)
         system = tomllib.loads(

@@ -254,6 +254,38 @@ fn typed_sampling_penalties_are_enabled() {
 }
 
 #[test]
+fn penalty_windows_resolve_legacy_whole_context_to_the_default() {
+    let default_window = skippy_runtime::DEFAULT_PENALTY_LAST_N;
+    for (controls, expected) in [
+        (json!({}), default_window),
+        (
+            json!({"repeat_last_n": -1, "dry": {"penalty_last_n": -1}}),
+            default_window,
+        ),
+        (json!({"repeat_last_n": 0, "dry": {"penalty_last_n": 0}}), 0),
+        (
+            json!({"repeat_last_n": 256, "dry": {"penalty_last_n": 256}}),
+            256,
+        ),
+    ] {
+        let mut body = json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "presence_penalty": 1.0
+        });
+        body.as_object_mut()
+            .expect("request body object")
+            .extend(controls.as_object().expect("controls object").clone());
+        let request: ChatCompletionRequest = serde_json::from_value(body).unwrap();
+
+        let sampling =
+            chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
+        assert_eq!(sampling.penalty_last_n, expected, "controls={controls}");
+        assert_eq!(sampling.dry.penalty_last_n, expected, "controls={controls}");
+    }
+}
+
+#[test]
 fn extra_sampling_fields_are_enabled() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
@@ -1019,6 +1051,7 @@ fn extended_sampling_boundaries_are_rejected_with_openai_errors() {
         json!({"dynatemp_range": -0.1}),
         json!({"dynatemp_exponent": -0.1}),
         json!({"top_nsigma": -2.0}),
+        json!({"repeat_last_n": -2}),
         json!({"dry": {"multiplier": -0.1}}),
         json!({"dry": {"base": 0.0}}),
         json!({"dry": {"allowed_length": -1}}),

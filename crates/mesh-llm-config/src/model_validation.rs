@@ -20,7 +20,9 @@ use crate::validation_support::{
     validation_diagnostic,
 };
 
+mod penalty_windows;
 mod topology;
+pub(crate) use penalty_windows::collect_legacy_penalty_window_warnings;
 pub(crate) use topology::model_topology_diagnostics;
 
 pub(crate) fn validate_duplicate_model_entries(
