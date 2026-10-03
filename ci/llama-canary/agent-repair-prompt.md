@@ -33,6 +33,11 @@ Own the repair end to end:
 5. Run prepare, the complete patched llama.cpp build with upstream tests, the
    generated-family check, affected Rust package checks, and focused smoke or
    real-model reproductions for your repairs. Inspect failures and fix them.
+   Keep build and test commands in the foreground. If you start any background
+   command, record its PID, wait for it to exit, and check its exit status before
+   returning. Do not leave `nohup`, detached, or still-running build and test
+   processes behind: the harness must stop remaining process-group members
+   before it can safely verify your working tree.
    Once those checks pass, return control to the trusted harness. Do not run
    an additional full family battery inside the coding session: the wrapper
    runs every canonical gate, including the complete roster, after you return.

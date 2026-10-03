@@ -746,10 +746,18 @@ payer exchange: `terms_accepted`, `input_invoice_issued`,
 Events contain `exchange_id`, stable `event_ref`, `terms_digest`, `role` (`payer`
 or `provider`), `phase`, `source`, nullable `segment` (0=input, 1=output),
 nullable `payment_hash`, nullable `settlement` (`terminal` for wallet success),
-`amount_msat`, and nullable `tokens`.
+`amount_msat`, and nullable `tokens`. A settlement event also carries the
+wallet's own numbers when it reported them: `fee_msat` (payer: the fee the
+wallet paid on top of `amount_msat`; provider: the fee the receiving wallet
+deducted) and, on the provider side, `credited_msat` (what the receiving wallet
+reports it credited; Lexe reports it net of the fee). Both are omitted when the
+wallet or the `payments.v1` provider did not report them, and both are covered
+by `event_ref`. Every payer settlement event now carries `fee_msat`, so its
+`event_ref` differs from builds before these members existed.
 Terms acceptance is `payer_asserted` (amount is the approved cap); invoice issuance
 is `provider_asserted` as observed by the payer, not independently verified
-issuance. Settlement is `wallet_reported`, amount excluding fees. Final accounting
+issuance. Settlement is `wallet_reported`, amount excluding fees (the fee is in
+`fee_msat`). Final accounting
 is `payer_asserted`, summing successful debits including fees. The provider's
 own observations are described below; neither side's stream is evidence of the
 other's.
@@ -769,7 +777,8 @@ correlation, disconnects, queue drops, process exits and restart recovery can
 leave incomplete evidence; there is no replay or complete audit-log guarantee.
 The persisted correlation remains available to recovery tooling, but recovery
 currently emits no events. No raw invoice, preimage, wallet transaction ID,
-prompt or response text is published. Payment hashes are linkable metadata.
+prompt or response text is published. Payment hashes are linkable metadata, and
+fee amounts can hint at which wallet a node uses.
 
 ## Provider-side evidence hooks
 
@@ -793,8 +802,10 @@ A request that fails before that point — including a backend failure before
 authorization (`Frame::Error`, no invoice, nothing billed) — emits no phases;
 treat that as never priced, not lapsed. `delivered` is emitted once, when the
 serving close succeeds, whatever happened to the transport. Settlement is the
-receiving wallet's report that `settle_received` recorded; the amount is the
-invoice amount. Since the payments engine is a plugin, nothing here claims that
+receiving wallet's report that `settle_received` recorded; `amount_msat` is the
+invoice amount, and `credited_msat` / `fee_msat` are what the receiving wallet
+reported (`settle_received` answers them; a provider that answers `{}` leaves
+them out). Since the payments engine is a plugin, nothing here claims that
 payment preceded wallet access: `source` says who asserted, which is all it can
 say.
 

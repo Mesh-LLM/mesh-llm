@@ -90,11 +90,11 @@ pub use skippy_ffi::{KV_PAGE_FLAG_HAS_K_IDX, KV_PAGE_FLAG_V_TRANSPOSED};
 pub use types::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ActivationBoundaryDesc, ActivationDesc, ActivationFrame,
     ActivationPartDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
-    ChatTemplateMessage, ChatTemplateOptions, DecodeFrameBatchOutput, DrySamplingConfig,
-    GenerationSignalWindow, IterationBatchOutput, IterationSample, LoadedModelCapability,
-    LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill, MediaPrefillChunkFrame, MediaPrefillFrame,
-    ModelStateKind, ReasoningBudget, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig, TensorInfo,
-    TokenSignal, XtcSamplingConfig,
+    ChatTemplateMessage, ChatTemplateOptions, DEFAULT_PENALTY_LAST_N, DecodeFrameBatchOutput,
+    DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput, IterationSample,
+    LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
+    MediaPrefillChunkFrame, MediaPrefillFrame, ModelStateKind, ReasoningBudget, RuntimeKvPage,
+    RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenSignal, XtcSamplingConfig, penalty_window,
 };
 
 #[cfg(feature = "dynamic-native-runtime")]

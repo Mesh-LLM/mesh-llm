@@ -136,6 +136,11 @@ and verify that source against the selected pin and patch queue before lanes
 start; they cannot accidentally depend on a previous runner checkout.
 The agent supervisor terminates remaining process-group members after normal
 completion and waits for live members to stop before handing the workspace back.
+If the repair agent or trusted gates fail, the build evidence retains an
+unverified `recovery/` source snapshot (`tracked.patch`, `untracked.tar.gz`,
+and `manifest.json`), including the prepared `.deps/llama.cpp` checkout when
+present. A reviewer can reapply it at the recorded base commits;
+it is never accepted as a certified candidate or sent to family workers.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.
@@ -351,7 +356,8 @@ main.
 If crates.io accepts only a prefix of the stable package chain,
 `resume-crates-release.yml` resumes publication from the existing immutable
 release tag. The operator supplies both the stable tag and its exact peeled
-commit SHA. The workflow runs only from the default branch, verifies those two
+commit SHA. The workflow has `packages: read` to pull its pinned GHCR runner
+image. It runs only from the default branch, verifies those two
 identities against the remote tag and checkout, and uses the trusted
 default-branch `publish-crates.sh` controller against the tagged source. Resume
 mode skips versions that crates.io confirms are already published and falls
@@ -577,8 +583,9 @@ runtime producers are not duplicated.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.
 - `ci-rust-tests-slice.yml` — deterministic affected or all-workspace Cargo
-  test batches consuming the static ABI artifact and its producer-owned
-  toolchain epoch. Batches that exercise Skippy correctness tests restore an
+  test batches that prepare patched llama before consuming the static ABI
+  artifact and verifying its patched revision and producer-owned toolchain
+  epoch. Batches that exercise Skippy correctness tests restore an
   exact revision- and SHA-256-pinned model cache, verify the file before use,
   and leave publication to one trusted-main batch. Related Skippy crate changes
   on pull requests also compile one fully qualified runtime test, fail if that
@@ -965,7 +972,7 @@ The implemented policy uses that isolation selectively:
 | Linux Cargo `target` directories | Disabled for Clippy, Rust tests, host, and runtime | Avoids sharded multi-GiB generations and their restore/upload latency |
 | Skippy correctness model | Restore-only for PRs; one exhaustive trusted-main Rust-test batch publishes an exact file-SHA/cache-version key | Every consuming batch verifies the pinned Qwen file SHA-256; denied-cache runners download the immutable revision without publishing |
 | Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged |
-| macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
+| macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; macOS keys include the prepared patched llama SHA and validate hits before use; no restore prefixes cross an ABI boundary |
 | Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |
 | Website npm store | None -- the `website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
 | SDK Rust Cargo registry/target | `Swatinem/rust-cache` restores the exact `mesh-llm-sdk-rust-cargo-v1` identity (OS/arch, target, pinned image and toolchain epochs, debug/LLD recipe, Cargo/manifest/script inputs, and cache-version) and only saves on `main` | PRs restore the trusted main seed without publishing; a miss still rebuilds the SDK test graph |
@@ -1266,7 +1273,7 @@ both domains until the later catalog cleanup; existing main routing is unchanged
 
 The protected executor workflows pin `resolve-source-layout` to commit
 `38d63b2f6e27998034fdf0452150c7cc081fe921` and `resolve-cargo-packages` to
-`196eba4c21f9b445d0bf11f7938f87e799dd7c8c` (which passes planned packages
+`5c8fb4d472bc57058c8153761c561daa77dd5b94` (which passes planned packages
 absent from the candidate through to the checked-out-workspace filter, so a PR
 that deletes a crate is not rejected), so older PR source checkouts do not need
 the new helper files. The package resolver loads its Python implementation

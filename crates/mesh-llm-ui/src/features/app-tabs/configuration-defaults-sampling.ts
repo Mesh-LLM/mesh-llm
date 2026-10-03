@@ -180,7 +180,7 @@ export const CONFIGURATION_DEFAULT_SAMPLING_SETTINGS = [
     tomlKey: 'repeat_last_n',
     icon: 'layers',
     label: 'Repeat last-n window',
-    description: 'Set how much recent token history the repeat penalty checks.',
+    description: 'Set how many recent tokens the repeat penalty checks (default 64, 0 disables).',
     inheritedLabel: 'Inherited by placements with default sampling',
     control: { kind: 'range', name: 'repeat_last_n', value: '256', min: 0, max: 1024, step: 32, unit: 'tok' }
   },

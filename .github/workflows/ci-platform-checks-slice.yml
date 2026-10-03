@@ -158,6 +158,18 @@ jobs:
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
           include_tool_versions: "true"
+      - name: Prepare patched llama.cpp ABI checkout
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
+        run: scripts/prepare-llama.sh pinned
+      - name: Identify patched llama.cpp for cache reuse
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
+        id: patched_llama
+        shell: bash
+        run: |
+          set -euo pipefail
+          patched_sha="$(tr -d '[:space:]' < .deps/llama.cpp/.mesh-llm-patched-sha)"
+          [[ "$patched_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$patched_sha" >> "$GITHUB_OUTPUT"
       - name: Ensure static Metal ABI cache directory
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
@@ -167,10 +179,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-abi-static-metal-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', 'third_party/llama.cpp/upstream.txt', 'skippy/third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'skippy/third_party/llama.cpp/patches/**', 'Justfile', 'just/**', '.github/cache-version.txt') }}
-      - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
-        run: scripts/prepare-llama.sh pinned
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-abi-static-metal-${{ steps.native_toolchain.outputs.epoch }}-${{ steps.patched_llama.outputs.sha }}-${{ hashFiles('scripts/build-mac.sh', 'mesh/scripts/build-mac.sh', 'scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', 'third_party/llama.cpp/upstream.txt', 'skippy/third_party/llama.cpp/upstream.txt', 'skippy/llama_cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'skippy/third_party/llama.cpp/patches/**', 'skippy/llama_cpp/patches/**', 'Justfile', 'just/**', '.github/cache-version.txt') }}
       - name: Verify cached patched llama.cpp ABI libraries
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' && steps.llama_cache.outputs.cache-hit == 'true' }}
         run: scripts/build-llama.sh --require-existing
@@ -186,14 +195,14 @@ jobs:
       - name: Resolve platform unit-test owners
         if: ${{ matrix.check.kind == 'unit' }}
         id: packages
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@196eba4c21f9b445d0bf11f7938f87e799dd7c8c # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
         with:
           generation: legacy
           crates: '["model-artifact","mesh-llm-host-runtime","mesh-llm"]'
       - name: Resolve Windows unit-test owners
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         id: windows_packages
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@196eba4c21f9b445d0bf11f7938f87e799dd7c8c # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
         with:
           generation: legacy
           # The `platform-windows-cfg` catalog routes these crates to the
@@ -203,7 +212,7 @@ jobs:
           # there is to *select* this row when that crate changes; it is a
           # shared owner already resolved by the step above, so it is
           # deliberately absent here rather than run twice.
-          crates: '["mesh-llm-analytics","mesh-llm-config","mesh-llm-events","mesh-llm-identity","mesh-llm-payments","mesh-llm-plugin","mesh-llm-plugin-manager","mesh-llm-tui","mesh-llm-ui","mesh-llm-wallet"]'
+          crates: '["mesh-llm-analytics","mesh-llm-config","mesh-llm-events","mesh-llm-identity","mesh-llm-payments","mesh-llm-plugin","mesh-llm-plugin-manager","mesh-llm-tui","mesh-llm-ui","mesh-llm-wallet","skippy-cache"]'
       - name: Run macOS unit tests
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         env:
@@ -213,6 +222,18 @@ jobs:
           while IFS= read -r crate; do
             cargo test --locked -p "$crate" --lib
           done < <(jq -r '.[]' <<<"$TEST_CRATES")
+      - name: Resolve Windows dynamic-runtime unit-test owners
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        id: windows_dynamic_packages
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
+        with:
+          generation: legacy
+          # Also routed by `platform-windows-cfg`, but these reach `skippy-ffi`
+          # through `mesh-llm-system/skippy-devices`, which builds it without its
+          # dynamic loader. A crate-scoped test build then stops on the static
+          # llama archives this row does not prepare, so the run step below
+          # turns on `mesh-llm-system/dynamic-native-runtime` for them.
+          crates: '["mesh-llm-commands","mesh-llm-system"]'
       - name: Run Windows unit tests
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         shell: pwsh
@@ -225,6 +246,7 @@ jobs:
           RUST_MIN_STACK: "8388608"
           TEST_CRATES: ${{ steps.packages.outputs.crates }}
           WINDOWS_TEST_CRATES: ${{ steps.windows_packages.outputs.crates }}
+          WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_dynamic_packages.outputs.crates }}
         run: |
           # The macOS unit row's shared source-owner suites, resolved through
           # the same package resolver, plus the crates the
@@ -234,6 +256,20 @@ jobs:
           # hence the explicit exit check after each one.
           $crates = @($env:TEST_CRATES | ConvertFrom-Json) + @($env:WINDOWS_TEST_CRATES | ConvertFrom-Json)
           foreach ($crate in $crates) {
-            cargo test --locked -p $crate --lib
+            if ($crate -eq 'mesh-llm-skippy-adapter') {
+              # The adapter reaches skippy-ffi without the dynamic loader by
+              # default. Windows unit tests do not prepare static llama ABI.
+              cargo test --locked -p $crate --lib --features mesh-llm-skippy-adapter/dynamic-native-runtime
+            } else {
+              cargo test --locked -p $crate --lib
+            }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          # Feature unification turns on `skippy-ffi`'s `dynamic-runtime`, whose
+          # build script returns early (CONTRIBUTING, "Testing crates on native
+          # Windows"). Each of these crates is `mesh-llm-system` or depends on
+          # it directly, so the feature name resolves for every one.
+          foreach ($crate in @($env:WINDOWS_DYNAMIC_TEST_CRATES | ConvertFrom-Json)) {
+            cargo test --locked -p $crate --lib --features mesh-llm-system/dynamic-native-runtime
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
