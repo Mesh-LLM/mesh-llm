@@ -134,6 +134,11 @@ and verify that source against the selected pin and patch queue before lanes
 start; they cannot accidentally depend on a previous runner checkout.
 The agent supervisor terminates remaining process-group members after normal
 completion and waits for live members to stop before handing the workspace back.
+If the repair agent or trusted gates fail, the build evidence retains an
+unverified `recovery/` source snapshot (`tracked.patch`, `untracked.tar.gz`,
+and `manifest.json`), including the prepared `.deps/llama.cpp` checkout when
+present. A reviewer can reapply it at the recorded base commits;
+it is never accepted as a certified candidate or sent to family workers.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.
