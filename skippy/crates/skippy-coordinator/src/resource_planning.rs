@@ -10,15 +10,10 @@ const MIN_AUTO_CONTEXT_LENGTH: u32 = 512;
 /// (see `tools/server/server.cpp`,
 /// `"n_parallel is set to auto, using n_parallel = 4 and kv_unified = true"`).
 ///
-/// Skippy's stage runtime always sets `kv_unified = true`, even with one
-/// lane. In unified mode llama allocates exactly `n_ctx` cells total, shared
-/// across all `n_seq_max` sequences. The previous ceiling of 16 was
-/// inherited from a VRAM-based slot calculation that pretended each
-/// lane carved off its own `n_ctx × bytes_per_token` allocation —
-/// which is the `kv_unified = false` semantics, not what skippy
-/// actually does. On any node with comfortable VRAM that math
-/// happily picked 16 lanes even though all 16 raced for the *same*
-/// pool of `n_ctx` cells.
+/// Skippy's stage runtime always sets `kv_unified = true`. It allocates one
+/// pool of `context_length × lane_count` cells so every lane can reach its
+/// requested context concurrently. The ceiling of four limits the default
+/// concurrency independently of the pool's memory cost.
 ///
 /// Concrete failure mode that prompted this change: Qwen3-8B on a
 /// 32k `n_ctx` got `slots = 16`. Three concurrent agent-shape
@@ -67,31 +62,9 @@ pub enum RuntimeResourcePlanningProfile {
     /// A shared mesh-serving launch (`--auto` / `--publish` / `--discover` /
     /// `--join`).
     ///
-    /// Both profiles currently plan the same context (`min(native, 128k)` held
-    /// at single-lane depth, followed by the capped lane count over the shared
-    /// pool). The distinction is retained for the bandwidth-aware planner
-    /// follow-up, where a shared mesh host and a dedicated local host will want
-    /// different tok/s floors.
+    /// Both profiles currently reserve the same per-lane context in one shared
+    /// pool. The distinction is retained for the bandwidth-aware planner.
     SharedMesh,
-}
-
-impl RuntimeResourcePlanningProfile {
-    /// Number of concurrent lanes to *plan context depth* around.
-    ///
-    /// Both profiles plan context at single-lane (deepest) depth — `min(native,
-    /// 128k)` sized to fit one shared `n_ctx` pool in the KV budget — and then
-    /// run [`planned_parallel_slots`] lanes over that shared pool. Because
-    /// `kv_unified = true` makes those lanes share the one pool, the lane count
-    /// is the capped concurrency target and does not shrink with the residual
-    /// budget. The profile axis is kept because it is threaded through the
-    /// serving surfaces and will regain distinct behavior in the bandwidth-aware
-    /// planner follow-up (where a shared mesh host and a dedicated local host
-    /// want different tok/s floors).
-    fn context_slot_target(self) -> u64 {
-        match self {
-            Self::DedicatedLocal | Self::SharedMesh => 1,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,7 +110,7 @@ pub struct RuntimeResourcePlanBreakdown {
     /// 85% utilization tax; measured planning applies its utilization target
     /// and then subtracts the lane-scaled measured compute charge.
     pub kv_budget_bytes: u64,
-    /// Planned KV allocation: context_length x kv_bytes_per_token.
+    /// Planned unified KV allocation: context_length x slots x kv_bytes_per_token.
     pub planned_kv_bytes: u64,
     /// Per-token KV cost used by the plan (layer-fraction scaled).
     pub kv_bytes_per_token: u64,
@@ -213,7 +186,7 @@ pub struct MeasuredBufferFootprint {
 ///
 /// Strategy: maximise context up to `min(native, MAX_AUTO_CONTEXT_LENGTH)` (the
 /// 128k agent-serving default ceiling) using the provided KV quant (default
-/// F16), then selecting four lanes over the shared KV pool. No negotiation —
+/// F16) and resolved lane count. No negotiation —
 /// the quant is decided upstream, and an explicit `--ctx-size` override
 /// bypasses context planning entirely.
 pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeResourcePlan {
@@ -264,7 +237,7 @@ pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeRes
         )
     } else {
         (
-            planned_context_length(&input),
+            planned_context_length(&input, slots),
             estimated_kv_budget,
             estimated_kv_bytes_per_token,
             estimated_compute_charge,
@@ -272,7 +245,9 @@ pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeRes
             None,
         )
     };
-    let planned_kv_bytes = kv_bytes_per_token.saturating_mul(u64::from(context_length));
+    let planned_kv_bytes = kv_bytes_per_token
+        .saturating_mul(u64::from(context_length))
+        .saturating_mul(slots as u64);
 
     RuntimeResourcePlan {
         context_length,
@@ -295,7 +270,7 @@ pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeRes
     }
 }
 
-fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
+fn planned_context_length(input: &RuntimeResourcePlanInput<'_>, slots: usize) -> u32 {
     let fallback_context = fallback_context_length(input);
     let Some(metadata) = input.metadata else {
         return fallback_context;
@@ -323,8 +298,7 @@ fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
     if kv_bytes_per_token == 0 {
         return native_context;
     }
-    let slot_target = context_slot_target(input);
-    let Some(kv_bytes_for_target_slots) = kv_bytes_per_token.checked_mul(slot_target) else {
+    let Some(kv_bytes_for_target_slots) = kv_bytes_per_token.checked_mul(slots as u64) else {
         return MIN_AUTO_CONTEXT_LENGTH.min(native_context);
     };
     let max_affordable_context = kv_budget / kv_bytes_for_target_slots;
@@ -343,46 +317,10 @@ fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
     }
 }
 
-/// How many lanes' worth of context to size the shared pool for.
-///
-/// Always the profile's single-lane target, never the lane override. Under
-/// `kv_unified = true` the pool is one allocation that every lane shares, so
-/// the context that fits the budget is the same whether 1 or 128 lanes run
-/// over it — and an operator who asks for more lanes needs a *bigger* share of
-/// that pool per request in flight, not a smaller pool. Dividing the budget by
-/// the override was the per-lane accounting the lane planner already dropped;
-/// it survived here and produced an 8,192-cell pool for `parallel = 128` on a
-/// 122 GB node whose auto plan holds 131,072, which admission then filled with
-/// ~26 requests while the other 100 lanes sat idle.
-fn context_slot_target(input: &RuntimeResourcePlanInput<'_>) -> u64 {
-    input.planning_profile.context_slot_target()
-}
-
 /// Plan the number of concurrent lanes to run at the chosen context depth.
 ///
-/// Under Skippy's mandatory `kv_unified = true` (also selected by
-/// llama-server's `--parallel auto`), every lane shares a single
-/// `n_ctx` cell pool. The attention KV cache is one allocation of
-/// `context_length × kv_bytes_per_token`, **not** one allocation per lane, so
-/// adding a lane over that shared pool costs no additional KV memory.
-/// [`planned_context_length`] already sized that pool to fit the node's KV
-/// budget, so the lane count is a concurrency choice bounded only by the
-/// [`MAX_AUTO_PARALLEL_SLOTS`] safety ceiling — not a division of residual
-/// budget by a per-lane `n_ctx` allocation.
-///
-/// The previous `usable_kv_cache_budget / (context_length × kv_bytes)` math was
-/// the `kv_unified = false` accounting. It matched neither the runtime nor the
-/// split topology planner (`skippy-coordinator/src/topology.rs`
-/// `candidate_bytes_per_layer`, which deliberately does *not* multiply KV by
-/// lanes), and it produced two wrong results:
-///   * On a tight node a deep context consumed most of the budget, so the
-///     residual implied 1–2 lanes — even though the pool is the *same* size a
-///     fat node would hold and the extra lanes are free. That capped concurrency
-///     for no benefit: the shared pool (and thus runtime find-slot contention)
-///     is identical at any lane count.
-///   * It made the lane count depend on the KV quant (q4 vs q8) at a fixed
-///     context, even though quant changes bytes-per-cell, not the *cell* count
-///     that governs how many lanes safely share the pool.
+/// Auto uses four lanes; context depth is subsequently sized against the
+/// resulting unified pool. Operators can override the lane count.
 ///
 /// Recurrent/SSM layers do keep per-lane state; that per-lane cost is accounted
 /// for by the split topology planner and is bounded here by the 4-lane cap. A
@@ -390,7 +328,7 @@ fn context_slot_target(input: &RuntimeResourcePlanInput<'_>) -> u64 {
 /// planner follow-up.
 fn planned_parallel_slots() -> usize {
     // llama-server's conservative unified-KV auto default, never above our
-    // safety cap. Independent of KV allocation size by construction.
+    // safety cap. Context planning accounts for the resulting pool size.
     DEFAULT_PARALLEL_SLOTS.min(MAX_AUTO_PARALLEL_SLOTS)
 }
 
@@ -460,10 +398,10 @@ const DEFAULT_UTILIZATION_TARGET_DENOMINATOR: u64 = 100;
 ///
 /// Model: `budget = (vram - model) × utilization - measured_compute`, then
 /// solve for the deepest context whose *scaled* KV cost fits the budget. KV
-/// scales linearly with context (unified pool of `n_ctx` cells), so the
+/// scales linearly with per-lane context (unified pool of `n_ctx` cells), so the
 /// measured KV bytes at `measured_ctx` give `kv_bytes_per_token_measured =
 /// kv_bytes / measured_ctx`, and the deepest affordable context is
-/// `budget / kv_bytes_per_token_measured`.
+/// `budget / (kv_bytes_per_token_measured × resolved_lanes)`.
 ///
 /// Returns `None` only when the measurement is structurally unusable (zero
 /// context, KV, or lanes), letting the static tax ladder answer instead. A
@@ -502,7 +440,8 @@ fn measured_context_plan(
     // Scale the measured compute charge by the lane ratio when the plan's
     // resolved lane count differs from the one the footprint was measured at:
     // compute buffers scale ~linearly with lanes (CUDA_Host + device graphs),
-    // while the unified KV pool is lane-invariant. Linear-through-origin
+    // and the unified KV pool scales with its reserved lane capacity.
+    // Linear-through-origin
     // slightly overestimates when scaling up (~2-3% at 4→8 on measured data),
     // which is the conservative direction; scaling down is symmetric.
     let lane_ratio_num = u128::from(resolved_lanes.max(1) as u64);
@@ -514,7 +453,8 @@ fn measured_context_plan(
     if kv_per_token == 0 {
         return None;
     }
-    let max_affordable = (budget / kv_per_token).min(u128::from(u32::MAX)) as u32;
+    let max_affordable = (budget / kv_per_token / u128::from(resolved_lanes.max(1) as u64))
+        .min(u128::from(u32::MAX)) as u32;
     let minimum = MIN_AUTO_CONTEXT_LENGTH.min(native_context);
     let fits = max_affordable >= minimum;
     let context_length = if fits {

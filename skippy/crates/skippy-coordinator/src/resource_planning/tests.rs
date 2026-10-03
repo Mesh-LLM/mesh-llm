@@ -30,6 +30,11 @@ fn explicit_overrides_are_preserved() {
 
     assert_eq!(plan.context_length, 16_384);
     assert_eq!(plan.slots, 7);
+    let breakdown = plan.breakdown.unwrap();
+    assert_eq!(
+        breakdown.planned_kv_bytes,
+        breakdown.kv_bytes_per_token * 16_384 * 7
+    );
 }
 
 #[test]
@@ -95,7 +100,7 @@ fn q8_cache_reaches_larger_context_than_f16() {
 }
 
 #[test]
-fn llama_31_8b_on_m2_sizes_one_f16_pool_for_four_lanes() {
+fn llama_31_8b_on_m2_reserves_four_lanes_in_one_f16_pool() {
     let metadata = gqa_metadata(131_072);
     let plan = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: None,
@@ -110,7 +115,7 @@ fn llama_31_8b_on_m2_sizes_one_f16_pool_for_four_lanes() {
         measured_buffers: None,
     });
 
-    assert_eq!(plan.context_length, 65_536);
+    assert_eq!(plan.context_length, 16_384);
     assert_eq!(plan.slots, 4);
     assert_eq!(
         plan.breakdown.unwrap().planned_kv_bytes,
@@ -198,15 +203,8 @@ fn auto_context_capped_at_128k_for_million_token_native() {
 }
 
 #[test]
-fn tight_budget_holds_128k_floor_and_keeps_full_lanes() {
-    // A >128k native on a node whose budget affords 128k at only ~1 lane
-    // under the old per-lane allocation math. Under `kv_unified = true` all
-    // lanes share the single 128k pool, so the tight node runs the same
-    // 4-lane target a fat node would: reducing lanes here buys neither memory
-    // (unified pool) nor contention headroom (the pool — hence runtime
-    // find-slot contention — is identical at any lane count). Regression for
-    // the unified-KV lane-accounting fix; the pre-fix planner returned 1 lane
-    // here because a deep context ate the residual budget.
+fn tight_budget_reduces_per_lane_depth_for_four_lanes() {
+    // Four lanes share one pool, but each reserves its requested depth.
     let metadata = gqa_metadata(262_144);
     let plan = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: None,
@@ -222,13 +220,12 @@ fn tight_budget_holds_128k_floor_and_keeps_full_lanes() {
     });
 
     assert_eq!(
-        plan.context_length, 131_072,
-        "context is held at the 128k floor"
+        plan.context_length, 32_768,
+        "context must fit four lane reservations"
     );
     assert_eq!(
         plan.slots, 4,
-        "a tight node shares the same n_ctx pool and keeps the full 4-lane \
-             target; got {} lanes",
+        "auto still selects the 4-lane target; got {} lanes",
         plan.slots
     );
 }
@@ -291,14 +288,10 @@ fn auto_slots_capped_at_llama_server_default() {
     );
 }
 
-/// The shared pool is sized by the budget, not divided by the lane override.
-/// Regression for the DGX Spark measurement: `parallel = 128` planned an
-/// 8,192-cell pool where the auto plan held 131,072, so admission capped at
-/// ~26 in-flight requests and throughput stalled at the same ceiling as 32
-/// lanes. Under unified KV the lanes share one allocation; asking for more
-/// of them must not shrink it.
+/// More lanes reserve more cells in the same unified pool, reducing the
+/// affordable per-lane context at a fixed memory budget.
 #[test]
-fn explicit_parallel_does_not_shrink_the_shared_pool() {
+fn explicit_parallel_reserves_capacity_for_every_lane() {
     let metadata = gqa_metadata(131_072);
     let input = |parallel_override| RuntimeResourcePlanInput {
         ctx_size_override: None,
@@ -314,13 +307,9 @@ fn explicit_parallel_does_not_shrink_the_shared_pool() {
     };
     let auto = plan_runtime_resources(input(None));
     let wide = plan_runtime_resources(input(Some(128)));
-    assert_eq!(
-        wide.context_length,
-        auto.context_length,
-        "128 lanes planned a {}K pool where auto holds {}K",
-        wide.context_length / 1024,
-        auto.context_length / 1024
-    );
+    assert_eq!(wide.context_length, 8192);
+    assert_eq!(auto.context_length, 131_072);
+    assert!(wide.breakdown.unwrap().planned_kv_bytes <= wide.breakdown.unwrap().kv_budget_bytes);
     assert_eq!(wide.slots, 128);
 }
 
@@ -396,20 +385,16 @@ fn split_model_uses_local_layer_fraction() {
         no_split.context_length / 1024
     );
     assert!(
-        split.context_length >= 65_536,
-        "480B split on 206+103 GB with q8_0 should get at least 64K, got {}K",
+        split.context_length >= 32_768,
+        "480B split on 206+103 GB with q8_0 should get at least 32K per lane, got {}K",
         split.context_length / 1024
     );
 }
 
 #[test]
 fn lane_count_is_independent_of_kv_quant() {
-    // Under `kv_unified = true` the lanes share one `n_ctx` cell pool. The KV
-    // quant changes bytes-per-cell, not the cell count that governs safe
-    // concurrency, so at the same context depth q4_0 and q8_0 must plan the
-    // *same* number of lanes. (The pre-fix `budget / (context × kv_bytes)`
-    // math gave q4 more lanes than q8 purely because q4 cells are smaller —
-    // the accounting bug this follow-up removes.)
+    // KV quant changes bytes per cell, but the default lane target remains
+    // four. Context depth absorbs the memory difference when necessary.
     let metadata = gqa_metadata(131_072);
     let plan_with = |quant| {
         plan_runtime_resources(RuntimeResourcePlanInput {
@@ -440,14 +425,8 @@ fn lane_count_is_independent_of_kv_quant() {
 fn budget_driven_context_uses_measured_kv_and_compute() {
     // Roomy node: 16 GiB VRAM, 3 GiB weights. Here the measured KV
     // per-token cost (2 GiB / 16_384 = 131_072 B) is twice the q8
-    // estimate (~69_632 B) the ladder assumes, so the budget-driven plan
-    // correctly lands at 65_536 while the estimate-based ladder would
-    // clamp at native 131_072. Measured reality cuts both ways: when the
-    // real KV cost is higher than estimated, the correct plan is
-    // shallower, not deeper. (Conversely, charging measured compute under
-    // an 88% utilization target only buys depth over the 85% tax when
-    // compute is under ~3% of free memory — the estimate is what binds
-    // on roomy nodes, not the tax.)
+    // estimate (~69_632 B) the ladder assumes. Four lane reservations
+    // bring the measured plan to 16_384 per lane.
     let metadata = gqa_metadata(131_072);
     let plan = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: None,
@@ -466,7 +445,7 @@ fn budget_driven_context_uses_measured_kv_and_compute() {
             lane_count: 4,
         }),
     });
-    assert_eq!(plan.context_length, 65_536);
+    assert_eq!(plan.context_length, 16_384);
     let measured_breakdown = plan.breakdown.expect("measured planner breakdown");
     assert_eq!(
         measured_breakdown.planning_source,
@@ -475,13 +454,12 @@ fn budget_driven_context_uses_measured_kv_and_compute() {
     assert_eq!(measured_breakdown.kv_bytes_per_token, 131_072);
     assert_eq!(measured_breakdown.compute_charge_bytes, 512 * 1024 * 1024);
     assert_eq!(measured_breakdown.measured_fit, Some(true));
-    assert_eq!(measured_breakdown.planned_kv_bytes, 65_536 * 131_072);
+    assert_eq!(measured_breakdown.planned_kv_bytes, 16_384 * 131_072 * 4);
 
     // Tight node where the ladder's estimate binds: 5 GiB free, the q8
-    // estimate (65,536 B/tok for these dims) caps the ladder at 65_536,
-    // while a measured KV cost half the estimate (32,768 B/tok measured
-    // at 16_384) lets the budget-driven plan reach the full native
-    // window.
+    // estimate (65,536 B/tok for these dims) caps the ladder at 16_384
+    // per lane, while a measured KV cost half the estimate (32,768 B/tok)
+    // lets the measured plan reach 32_768 per lane.
     let tight = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: None,
         parallel_override: None,
@@ -499,7 +477,7 @@ fn budget_driven_context_uses_measured_kv_and_compute() {
             lane_count: 4,
         }),
     });
-    assert_eq!(tight.context_length, 131_072);
+    assert_eq!(tight.context_length, 32_768);
 
     let tight_ladder = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: None,
@@ -513,7 +491,7 @@ fn budget_driven_context_uses_measured_kv_and_compute() {
         planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         measured_buffers: None,
     });
-    assert_eq!(tight_ladder.context_length, 65_536);
+    assert_eq!(tight_ladder.context_length, 16_384);
 }
 
 #[test]
@@ -632,7 +610,7 @@ fn budget_driven_compute_charge_scales_with_lane_count() {
     // At the measured lane count the charge is exactly the measured value,
     // so this matches the roomy-node case of
     // budget_driven_context_uses_measured_kv_and_compute.
-    assert_eq!(at4, 65_536);
+    assert_eq!(at4, 16_384);
 }
 
 fn projector_input(vram_bytes: u64, projector_bytes: u64) -> RuntimeResourcePlanInput<'static> {

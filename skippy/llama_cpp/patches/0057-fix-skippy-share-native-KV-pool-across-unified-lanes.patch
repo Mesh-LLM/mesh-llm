@@ -4,11 +4,6 @@ Date: Fri, 2 Oct 2026 14:53:19 +1000
 Subject: [PATCH] fix(skippy): share native KV pool across unified lanes
 
 ---
- include/skippy/runtime.h                      |  4 +-
- src/skippy/model_loading.cpp                  | 74 +++++--------------
- .../tests/hardware_application_probe.cpp      |  4 +-
- 3 files changed, 21 insertions(+), 61 deletions(-)
-
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 index 781572706..371353a7b 100644
 --- a/include/skippy/runtime.h
@@ -27,41 +22,10 @@ index 781572706..371353a7b 100644
      /** @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`). */
      int32_t swa_full;
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index d47a8c071..7297fe0e5 100644
+index d47a8c071..9b2e245fe 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -34,7 +34,6 @@
- #include <exception>
- #include <fstream>
- #include <cstdio>
--#include <limits>
- #include <regex>
- #include <set>
- #include <string>
-@@ -583,22 +582,6 @@ static bool skippy_resolve_tristate(int32_t tristate, bool derived_default) {
-     return derived_default;
- }
- 
--static bool skippy_context_capacity(
--        const skippy_runtime_config * config,
--                         uint32_t   lane_count,
--                         uint32_t & context_size_per_lane,
--                         uint32_t & context_size_total) {
--    context_size_per_lane = config != nullptr && config->ctx_size > 0
--        ? static_cast<uint32_t>(config->ctx_size)
--        : 512;
--    lane_count = std::max<uint32_t>(lane_count, 1);
--    if (context_size_per_lane > std::numeric_limits<uint32_t>::max() / lane_count) {
--        return false;
--    }
--    context_size_total = context_size_per_lane * lane_count;
--    return true;
--}
--
- extern "C" {
- 
- struct skippy_runtime_config skippy_runtime_config_default(void) {
-@@ -606,7 +589,7 @@ struct skippy_runtime_config skippy_runtime_config_default(void) {
+@@ -606,7 +606,7 @@ struct skippy_runtime_config skippy_runtime_config_default(void) {
      config.cache_type_k = GGML_TYPE_F16;
      config.cache_type_v = GGML_TYPE_F16;
      config.kv_offload = SKIPPY_TRISTATE_AUTO;
@@ -70,40 +34,31 @@ index d47a8c071..7297fe0e5 100644
      config.swa_full = SKIPPY_TRISTATE_AUTO;
      config.op_offload = SKIPPY_TRISTATE_AUTO;
      config.split_mode = SKIPPY_TRISTATE_AUTO;
-@@ -663,17 +646,18 @@ enum skippy_status skippy_finish_model_open(
+@@ -663,6 +663,15 @@ enum skippy_status skippy_finish_model_open(
      // Encoder output is context-global in llama.cpp. Until that state can be
      // isolated per sequence, serialize encoder-decoder work on one lane.
      const uint32_t lane_count = encoder_decoder ? 1 : configured_lane_count;
--    uint32_t context_size_per_lane = 0;
--    uint32_t context_size_total = 0;
--    if (!skippy_context_capacity(config, lane_count, context_size_per_lane, context_size_total)) {
 +    if (config != nullptr && config->kv_unified == SKIPPY_TRISTATE_FALSE) {
-         llama_model_free(model);
--        const char * message = "ctx_size multiplied by lane_count exceeds the native context range";
++        llama_model_free(model);
 +        const char * message = "non-unified KV is not supported by Skippy";
-         if (event_scope != nullptr) {
-             event_scope->emit_failure(SKIPPY_STATUS_INVALID_ARGUMENT, message);
-         }
-         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message);
-         return SKIPPY_STATUS_INVALID_ARGUMENT;
-     }
-+    const uint32_t context_size = config != nullptr && config->ctx_size > 0
-+        ? static_cast<uint32_t>(config->ctx_size)
-+        : 512;
- 
-     skippy_model * stage_model = new skippy_model{};
-     stage_model->model = model;
-@@ -708,17 +692,15 @@ enum skippy_status skippy_finish_model_open(
++        if (event_scope != nullptr) {
++            event_scope->emit_failure(SKIPPY_STATUS_INVALID_ARGUMENT, message);
++        }
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message);
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
+     uint32_t context_size_per_lane = 0;
+     uint32_t context_size_total = 0;
+     if (!skippy_context_capacity(config, lane_count, context_size_per_lane, context_size_total)) {
+@@ -708,17 +717,15 @@ enum skippy_status skippy_finish_model_open(
      stage_model->lane_count = lane_count;
  
      llama_context_params params = llama_context_default_params();
 -    // ctx_size is the per-lane request limit. llama.cpp's n_ctx is the total
 -    // cell pool, so every simultaneously admitted lane needs that capacity.
--    params.n_ctx = context_size_total;
--    params.n_batch = config != nullptr && config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size_per_lane;
-+    // Every lane shares one KV pool sized by the requested context.
-+    params.n_ctx = context_size;
-+    params.n_batch = config != nullptr && config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size;
++    // One unified pool reserves the requested context for every lane.
+     params.n_ctx = context_size_total;
+     params.n_batch = config != nullptr && config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size_per_lane;
      params.n_ubatch = config != nullptr && config->n_ubatch > 0 ? static_cast<uint32_t>(config->n_ubatch) : 0u;
      params.n_threads = config != nullptr && config->n_threads > 0 ? config->n_threads : skippy_default_thread_count();
      params.n_threads_batch = config != nullptr && config->n_threads_batch > 0 ? config->n_threads_batch : params.n_threads;
@@ -115,7 +70,7 @@ index d47a8c071..7297fe0e5 100644
          params.offload_kqv = skippy_resolve_tristate(config->kv_offload, params.offload_kqv);
          params.swa_full = skippy_resolve_tristate(config->swa_full, params.swa_full);
          skippy_apply_context_hardware_config(config, params);
-@@ -758,22 +740,6 @@ enum skippy_status skippy_finish_model_open(
+@@ -758,22 +765,6 @@ enum skippy_status skippy_finish_model_open(
      if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
          params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
          params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
@@ -138,39 +93,26 @@ index d47a8c071..7297fe0e5 100644
      }
  
      const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(config);
-@@ -1150,19 +1116,16 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+@@ -1150,6 +1141,13 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
          return SKIPPY_STATUS_INVALID_ARGUMENT;
      }
  
--    uint32_t context_size_per_lane = 0;
--    uint32_t context_size_total = 0;
--    if (!skippy_context_capacity(
--            config,
--            target_model->lane_count,
--            context_size_per_lane,
--            context_size_total)) {
 +    if (config->kv_unified == SKIPPY_TRISTATE_FALSE) {
-         skippy_set_error(
-                 out_error,
-                 SKIPPY_STATUS_INVALID_ARGUMENT,
--                "ctx_size multiplied by lane_count exceeds the native context range");
++        skippy_set_error(
++                out_error,
++                SKIPPY_STATUS_INVALID_ARGUMENT,
 +                "non-unified KV is not supported by Skippy");
-         return SKIPPY_STATUS_INVALID_ARGUMENT;
-     }
-+    const uint32_t context_size = config->ctx_size > 0
-+        ? static_cast<uint32_t>(config->ctx_size)
-+        : 512;
- 
-     llama_model_params model_params = llama_model_default_params();
-     // The guard above already established an external MTP source, so this model
-@@ -1194,15 +1157,14 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
-     llama_context_params ctx_params = llama_context_default_params();
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
+     uint32_t context_size_per_lane = 0;
+     uint32_t context_size_total = 0;
+     if (!skippy_context_capacity(
+@@ -1195,14 +1193,13 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
      ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
      ctx_params.ctx_other = target_model->ctx;
--    ctx_params.n_ctx = context_size_total;
+     ctx_params.n_ctx = context_size_total;
 -    ctx_params.n_batch = config != nullptr && config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size_per_lane;
-+    ctx_params.n_ctx = context_size;
-+    ctx_params.n_batch = config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size;
++    ctx_params.n_batch = config->n_batch > 0 ? static_cast<uint32_t>(config->n_batch) : context_size_per_lane;
      ctx_params.n_ubatch = config != nullptr && config->n_ubatch > 0 ? static_cast<uint32_t>(config->n_ubatch) : 0u;
      ctx_params.n_threads = config != nullptr && config->n_threads > 0 ? config->n_threads : skippy_default_thread_count();
      ctx_params.n_threads_batch = config != nullptr && config->n_threads_batch > 0 ? config->n_threads_batch : ctx_params.n_threads;
@@ -197,6 +139,3 @@ index 471968158..43c4e97df 100644
      passed &= require(config.swa_full == SKIPPY_TRISTATE_AUTO,
              "default swa_full must preserve the derived default");
      passed &= require(config.op_offload == SKIPPY_TRISTATE_AUTO,
--- 
-2.54.0 (Apple Git-157)
-
