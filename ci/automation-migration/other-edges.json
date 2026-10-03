@@ -3129,5 +3129,116 @@
       "full_log_sha256": "cae5759b5d7ebe2a3dcff62fe4dfee2f605ec280e09a21e496f272dfea0bbfa6",
       "normal_log_sha256": "f540ad4ef0ffffdb702b732f4487689995e7f40cff42e9134dd2c3d65fd89a3b"
     }
+  },
+  "performance_history_six_native22_combined_retirement": {
+    "status": "LOCAL_QUALIFIED_RETIRED_REQUIRED_INDEPENDENT_GATES_RETAINED",
+    "durable_coverages": [
+      {
+        "path": "ci/automation-migration/performance-history-retirement-coverage.json",
+        "sha256": "89fe7477f1b0ce2b5df964d10fcaa28228050e20387d9c3d39d06bdf15700c94"
+      },
+      {
+        "path": "ci/automation-migration/native-artifact-verifiers-retirement-coverage.json",
+        "sha256": "c49c81c7ffaebf1d0b608b9892321701d575b42af15d48841af52fa2cfcfd086"
+      }
+    ],
+    "removed_paths": [
+      {
+        "path": "scripts/performance-history.py",
+        "sha256": "b4f518ca7e9769fdb801aead87bdd7a2466afd649a3c820150f00a896763aaf2",
+        "mode": "0o755",
+        "preserved_preimage": "deletion-preimages/scripts/performance-history.py"
+      },
+      {
+        "path": "scripts/tests/test_performance_history.py",
+        "sha256": "03d3ccce503428f1813129a44062ce5aee232e707e8d8dca26afbf5f3f8277d5",
+        "mode": "0o644",
+        "preserved_preimage": "deletion-preimages/scripts/tests/test_performance_history.py"
+      },
+      {
+        "path": "scripts/tests/test_native_artifact_verifiers.py",
+        "sha256": "c9e2d24d2e7772a4795253f854cc2c5acaf79a9c3cfc0586bb6ef99941c4ec59",
+        "mode": "0o644",
+        "preserved_preimage": "deletion-preimages/scripts/tests/test_native_artifact_verifiers.py"
+      }
+    ],
+    "python_paths_before": 159,
+    "python_paths_after": 156,
+    "core_python_modules_before": 85,
+    "core_python_modules_after": 83,
+    "canonical_historical_rust_contract_registry": 84,
+    "active_quality_targets_unchanged": 87,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "cdbbbf6f4e7ef93f3011ecb234040f87f29b30b9b1b84863da1058734d262d1a",
+      "line_count": 274,
+      "roster_line": 24,
+      "normalized_fingerprint": "9ffe949705706948",
+      "count": 83
+    },
+    "current_test_tree": {
+      "sha256": "aa8ea10d9f7e9ef9424a29fab7381ead88dca7d9673bb6099d7a0c427a763fd7",
+      "candidate_source_paths": 72
+    },
+    "frozen_scoped_receipt_paths": [
+      ".omo/evidence/resume-20261002/nextwave43-owning-06.log",
+      ".omo/evidence/resume-20261002/nextwave43-owning-07.log",
+      ".omo/evidence/resume-20261002/nextwave43-owning-08.log",
+      ".omo/evidence/resume-20261002/nextwave43-owning-09.log",
+      ".omo/evidence/resume-20261002/nextwave43-owning-10.log",
+      ".omo/evidence/resume-20261002/nextwave43-owning-11.log",
+      ".omo/evidence/resume-20261002/nextwave43-owning-25.log",
+      ".omo/evidence/resume-20261002/nextwave43-owning-26.log"
+    ],
+    "retained_helpers": [
+      "scripts/verify-native-runtime-package.sh",
+      "scripts/verify-native-sdk-package.sh",
+      "scripts/restore-native-sdk-input.sh",
+      ".agents/skills/release-validation/scripts/collect-release-inventory.py"
+    ],
+    "history_preservation": "Complete release_inventory_public_cutover/current87, historical current_quality_rust_coverage/current_selected_ref_cutover and every earlier source/census/catalog object retained byte semantics. New record owns prospective changed Just/tree; no blanket history rebinding.",
+    "activation_hold": "Local module-only retirement qualified; required independent native/model/SDK/platform/provider acceptance remains unverified.",
+    "root_preparation": "Preserves current release checkpoint aggregate metadata; recomputes test tree after corrected recipe assertion. No source activation or current postimage qualification.",
+    "previous_proposal_status": "ROOT_REBASED_PREPARED_NOT_APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_aggregate_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "full": {
+        "receipt": ".omo/evidence/resume-20261002/installer-release-performance-native-aggregate-full-receipt.json",
+        "log_sha256": "4d3ababf76ec55e6490c7a338df86165840d3109ad95d27e3380af5c811aa9a7",
+        "targets": 109,
+        "passed": 4107,
+        "failed": 0,
+        "ignored": 2
+      },
+      "normal": {
+        "receipt": ".omo/evidence/resume-20261002/installer-release-performance-native-aggregate-normal-receipt.json",
+        "log_sha256": "745f478d2091c9b75644b7d1142cbaaa3dcd56850dff1c1875b377cfc3a58d0c",
+        "targets": 88,
+        "passed": 4021,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 1114,
+        "passed": 1100,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 380.23
+      },
+      "focused_receipts": ".omo/evidence/resume-20261002/installer-release-performance-native-focused-receipts.json",
+      "new_fixture_receipts": ".omo/evidence/resume-20261002/installer-release-proof-focused-receipts.json",
+      "limits": "Finite local saved-evidence, copied-script and artifact contract qualification only. Required native helpers retained; actual platform/native/model/SDK/provider acceptance remains independent and unverified."
+    },
+    "previous_activation_hold": "Root final exact caller/source/deletion guards, checkpoint, current owning nonzero filters, deletion-postimage inventory/policy/remaining core roster/full/normal terminal checks. No native/platform acceptance implied.",
+    "previous_durable_coverages": [
+      {
+        "path": "ci/automation-migration/performance-history-retirement-coverage.json",
+        "sha256": "3526e506c03b636cb6a1d4afe6b0866eebe1bd39150c63e1c249ce88590314c9"
+      },
+      {
+        "path": "ci/automation-migration/native-artifact-verifiers-retirement-coverage.json",
+        "sha256": "7ab94da215854c04b680978a452a789c10d6c77d23bafc66b239d8a35df8ece4"
+      }
+    ]
   }
 }
