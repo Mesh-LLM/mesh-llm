@@ -199,7 +199,7 @@ describe('TopNav', () => {
     renderTopNav({
       apiUrl: 'http://mesh.local:3131/v1',
       apiAccessLinks: [
-        { href: 'https://meshllm.cloud/', label: 'Docs' },
+        { href: 'https://meshllm.cloud/docs/', label: 'Docs' },
         { href: 'https://meshllm.cloud/#install', label: 'Install' }
       ],
       joinCommands: [
