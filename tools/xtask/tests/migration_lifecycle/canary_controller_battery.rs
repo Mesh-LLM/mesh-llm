@@ -15,6 +15,7 @@ fn bounded(
     cwd: &Path,
     arguments: Vec<OsString>,
     extra: BTreeMap<OsString, Value>,
+    execution: Duration,
 ) -> ProcessReport {
     let mut environment = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"]
         .into_iter()
@@ -27,9 +28,8 @@ fn bounded(
         arguments: arguments.into_iter().map(Value::Public).collect(),
         environment,
     };
-    // Eight execution seconds plus two cleanup seconds keep a ten-second budget.
     let limits = Limits {
-        execution: Duration::from_secs(8),
+        execution,
         graceful_shutdown: Duration::from_secs(1),
         forced_shutdown: Duration::from_secs(1),
         retained_bytes_per_stream: 1024 * 1024,
@@ -43,12 +43,28 @@ fn bounded(
         OutputFiles::default(),
     )
     .unwrap();
-    assert!(report.cleanup.complete, "{report:?}");
+    assert!(report.cleanup.complete, "{}", report_summary(&report));
     assert!(
         !report.stdout.truncated && !report.stderr.truncated,
-        "{report:?}"
+        "{}",
+        report_summary(&report)
     );
     report
+}
+
+fn report_summary(report: &ProcessReport) -> String {
+    let tail = |bytes: &[u8]| {
+        String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(2048)..]).into_owned()
+    };
+    format!(
+        "outcome={:?} status={:?} elapsed={:?} cleanup={:?}\nstdout tail:\n{}\nstderr tail:\n{}",
+        report.outcome,
+        report.status,
+        report.elapsed,
+        report.cleanup,
+        tail(&report.stdout.bytes_retained),
+        tail(&report.stderr.bytes_retained)
+    )
 }
 
 fn planner(source: &Path, plan: &Path) -> ProcessReport {
@@ -66,6 +82,7 @@ fn planner(source: &Path, plan: &Path) -> ProcessReport {
             plan.into(),
         ],
         BTreeMap::new(),
+        Duration::from_secs(8),
     )
 }
 
@@ -96,7 +113,13 @@ fn selected_source(root: &Path, source: &Path) {
     fs::set_permissions(historical, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-fn battery(source: &Path, plan: &Path, evidence: &Path, run: &str) -> ProcessReport {
+fn battery(
+    source: &Path,
+    plan: &Path,
+    evidence: &Path,
+    run: &str,
+    execution: Duration,
+) -> ProcessReport {
     bounded(
         Path::new("/bin/bash"),
         source,
@@ -118,6 +141,7 @@ fn battery(source: &Path, plan: &Path, evidence: &Path, run: &str) -> ProcessRep
             ),
             ("FAMILY_BATTERY_RUN_ID".into(), Value::Public(run.into())),
         ]),
+        execution,
     )
 }
 
@@ -126,8 +150,14 @@ fn rejected_omission(source: &Path, plan: Json, directory: &Path, evidence: &Pat
     tampered["selected_models"].as_array_mut().unwrap().pop();
     let invalid = directory.join("omitted family.json");
     fs::write(&invalid, serde_json::to_vec(&tampered).unwrap()).unwrap();
-    let rejected = battery(source, &invalid, evidence, "invalid");
-    assert!(!rejected.success(), "{rejected:?}");
+    let rejected = battery(
+        source,
+        &invalid,
+        evidence,
+        "invalid",
+        Duration::from_secs(8),
+    );
+    assert!(!rejected.success(), "{}", report_summary(&rejected));
     assert!(
         String::from_utf8_lossy(&rejected.stderr.bytes_retained)
             .contains("differs from the canonical manifest and selection")
@@ -159,14 +189,18 @@ fn nested_selected_battery_uses_frozen_controller_plan_and_ignores_historical_pl
     selected_source(&root, &source);
     let plan = directory.path().join("admitted plan.json");
     let generated = planner(&source, &plan);
-    assert!(generated.success(), "{generated:?}");
+    assert!(generated.success(), "{}", report_summary(&generated));
     let before = fs::read(&plan).unwrap();
     let parsed: Json = serde_json::from_slice(&before).unwrap();
     assert_eq!(parsed["manifest"], "ci/llama-canary/family-certified.json");
-    assert!(!parsed["selected_models"].as_array().unwrap().is_empty());
+    let models = parsed["selected_models"].as_array().unwrap();
+    assert!(!models.is_empty() && models.len() <= 256);
+    // Allow eight seconds for shared setup plus one per planned family.
+    // Dry-run still launches multiple native planner/jq commands for every row.
+    let execution = Duration::from_secs(8 + u64::try_from(models.len()).unwrap());
     let evidence = directory.path().join("battery evidence");
-    let admitted = battery(&source, &plan, &evidence, "valid");
-    assert!(admitted.success(), "{admitted:?}");
+    let admitted = battery(&source, &plan, &evidence, "valid", execution);
+    assert!(admitted.success(), "{}", report_summary(&admitted));
     assert_eq!(fs::read(&plan).unwrap(), before);
     assert_eq!(
         fs::read(evidence.join("valid/policy-plan.json")).unwrap(),
@@ -177,12 +211,19 @@ fn nested_selected_battery_uses_frozen_controller_plan_and_ignores_historical_pl
         !String::from_utf8_lossy(&admitted.stderr.bytes_retained)
             .contains("forbidden-historical-planner")
     );
-    assert!(
-        fs::read_to_string(evidence.join("valid/resolved-models.tsv"))
-            .unwrap()
-            .lines()
-            .count()
-            > 1
+    let resolved = fs::read_to_string(evidence.join("valid/resolved-models.tsv")).unwrap();
+    let actual = resolved
+        .lines()
+        .skip(1)
+        .map(|line| line.split('|').next().unwrap())
+        .collect::<Vec<_>>();
+    let expected = models
+        .iter()
+        .map(|model| model["family"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual, expected,
+        "every planned family must complete resolution"
     );
     rejected_omission(&source, parsed, directory.path(), &evidence);
 }
