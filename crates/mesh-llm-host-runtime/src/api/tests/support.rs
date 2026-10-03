@@ -620,6 +620,7 @@ fn make_test_peer(
         models: Vec::new(),
         vram_bytes: 24_000_000_000,
         rtt_ms: None,
+        rtt_observation_window: None,
         model_source: None,
         admitted: true,
         serving_models: serving_models.into_iter().map(str::to_string).collect(),
@@ -659,6 +660,7 @@ fn make_test_peer(
 
         display_rtt: None,
         selected_path: None,
+        observed_large_frame: None,
         propagated_latency: None,
         inference_admission_state: None,
     }

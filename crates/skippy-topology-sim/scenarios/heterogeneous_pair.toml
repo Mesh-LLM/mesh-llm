@@ -1,0 +1,31 @@
+# Scenario 2 from the design doc's corpus: the M4 Max + Mac mini Wi-Fi pair
+# behind docs/BENCHMARKS.md's 68 -> 21 tok/s 2-way anchor (calibration target).
+# Values are spec-class priors until gpu-bench measurements replace them.
+[nodes.alpha]
+vram_bytes = 68719476736              # 64 GiB unified
+sustained_mem_bandwidth_mib_per_s = 546000
+sustained_compute_gflop_per_s = 34000
+
+[nodes.beta]
+vram_bytes = 34359738368              # 32 GiB unified
+sustained_mem_bandwidth_mib_per_s = 204000
+sustained_compute_gflop_per_s = 10200
+
+[links."alpha -> beta"]
+rtt_ms = 3
+large_frame_mib_per_s = 30            # Wi-Fi 6 large-frame prior
+
+[links."beta -> alpha"]
+rtt_ms = 3
+large_frame_mib_per_s = 30
+
+[model]
+layer_count = 40
+weight_bytes_per_layer = 1610612736   # 1.5 GiB (60 GiB model)
+kv_bytes_per_token = 4096
+native_context_length = 65536
+activation_frame_bytes = 8192         # 4096-wide f16 frame
+
+[workload]
+minimum_nodes = 2
+target_decode_tpot_ms = 33

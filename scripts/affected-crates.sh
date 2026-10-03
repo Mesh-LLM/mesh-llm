@@ -58,6 +58,7 @@ WORKSPACE_MEMBERS=(
   "skippy-tokenizer"
   "skippy-coordinator"
   "skippy-topology"
+  "skippy-topology-sim"
   "skippy-cache"
   "skippy-metrics"
   "openai-frontend"
