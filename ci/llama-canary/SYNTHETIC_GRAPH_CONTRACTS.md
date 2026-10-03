@@ -6,8 +6,8 @@ and graph planning require no downloaded weights. These tests do not run numeric
 inference or replace real-model, projector, audio, OCR or encoder-decoder certification.
 
 The native CTest table in `src/skippy/tests/graph_contract_cases.cmake` is carried
-by core patch `0024-test-skippy-complete-canary-graph-contracts.patch`.
-`scripts/tests/test_synthetic_graph_registry.py`, discovered by `just ci-validate`,
+by core patch `0024-test-skippy-cover-the-complete-canary-graph-registry.patch`.
+`tools/xtask/src/repo_consistency/synthetic_graph_contracts.rs`, run by `just ci-validate`,
 compares every family, architecture, trunk depth, activation width, MTP count and
 test mode against `family-certified.json`. Missing, duplicate or stale rows fail.
 Adding an architecture requires an executable fixture; rejection modes are explicit.

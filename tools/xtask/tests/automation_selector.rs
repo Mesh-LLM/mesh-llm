@@ -54,6 +54,10 @@ exit 91
     }
 
     fn invoke(&self, configured: Option<&str>) -> Output {
+        self.invoke_platform(configured, None)
+    }
+
+    fn invoke_platform(&self, configured: Option<&str>, platform: Option<&str>) -> Output {
         let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/lib/automation.sh");
         let mut command = Command::new("/bin/bash");
         command
@@ -62,6 +66,7 @@ exit 91
                 r#"
 set -euo pipefail
 source "$1"
+if [[ "${FIXTURE_PLATFORM+set}" == set ]]; then OSTYPE="$FIXTURE_PLATFORM"; fi
 HOME='/isolated/client/home'; export HOME
 set +e
 mesh_automation automation agent-client-config 'argument with spaces' '' $'line1\nline2'
@@ -84,6 +89,9 @@ exit "$status"
             .env("FIXTURE_DIRECTORY", self.directory());
         if let Some(configured) = configured {
             command.env("MESH_LLM_AUTOMATION_BIN", configured);
+        }
+        if let Some(platform) = platform {
+            command.env("FIXTURE_PLATFORM", platform);
         }
         command.output().unwrap()
     }
@@ -172,4 +180,72 @@ fn absent_configuration_uses_normal_just_and_source_time_home_without_mutating_c
     assert!(output.stderr.is_empty());
     assert!(fixture.directory().join("just-called").is_file());
     assert!(!fixture.directory().join("cargo-called").exists());
+}
+
+#[test]
+fn windows_absolute_owner_conversion_preserves_arguments_status_and_admission() {
+    let fixture = Fixture::new();
+    fixture.executable(
+        "normalized owner with spaces",
+        r#"#!/bin/bash
+printf '%s\0' "$HOME" "$@"
+exit 17
+"#,
+    );
+    fixture.executable(
+        "cygpath",
+        r#"#!/bin/bash
+printf '%s\0' "$@" >> "$FIXTURE_DIRECTORY/conversion-arguments"
+printf '%s\n' "$FIXTURE_DIRECTORY/normalized owner with spaces"
+"#,
+    );
+    for platform in ["msys", "cygwin"] {
+        for configured in [
+            r"C:\tools\owner with spaces.exe",
+            "C:/tools/owner.exe",
+            r"\\server\share\owner.exe",
+        ] {
+            let trace = fixture.directory().join("conversion-arguments");
+            if trace.exists() {
+                fs::remove_file(&trace).unwrap();
+            }
+            let output = fixture.invoke_platform(Some(configured), Some(platform));
+            assert_eq!(output.status.code(), Some(17), "{output:?}");
+            assert_eq!(output.stdout, b"/isolated/client/home\0automation\0agent-client-config\0argument with spaces\0\0line1\nline2\0");
+            assert!(output.stderr.is_empty());
+            assert_eq!(
+                fs::read(trace).unwrap(),
+                format!("-u\0--\0{configured}\0").as_bytes()
+            );
+            fixture.no_bootstrap();
+        }
+    }
+}
+
+#[test]
+fn native_path_conversion_failure_and_wrong_platform_never_fall_back() {
+    let fixture = Fixture::new();
+    fixture.executable(
+        "cygpath",
+        r#"#!/bin/bash
+printf called > "$FIXTURE_DIRECTORY/conversion-called"
+exit 23
+"#,
+    );
+    for (configured, platform, converted) in [
+        (r"C:\tools\owner.exe", "linux-gnu", false),
+        (r"C:\tools\owner.exe", "msys", true),
+        ("C:relative", "msys", false),
+    ] {
+        let trace = fixture.directory().join("conversion-called");
+        if trace.exists() {
+            fs::remove_file(&trace).unwrap();
+        }
+        let output = fixture.invoke_platform(Some(configured), Some(platform));
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("must be an absolute executable"));
+        assert_eq!(trace.exists(), converted);
+        fixture.no_bootstrap();
+    }
 }

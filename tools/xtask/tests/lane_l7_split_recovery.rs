@@ -28,7 +28,8 @@ fn run(stale: bool) -> (tempfile::TempDir, std::process::Output) {
     let fixture = Path::new(env!("CARGO_BIN_EXE_xtask"))
         .parent()
         .unwrap()
-        .join("examples/l7_split_fixture");
+        .join("examples")
+        .join(format!("l7_split_fixture{}", std::env::consts::EXE_SUFFIX));
     let (api, api_reservations) = range();
     let (console, console_reservations) = range();
     drop(api_reservations);

@@ -32,6 +32,13 @@ required normal Rust roster in `ci/automation-migration/quality-rust-contract-ta
 and `just ci-automation-contracts`; the full Rust suite alone does not satisfy
 this normal-path replacement obligation.
 
+The normal Rust contract roster selects all maintained xtask integration targets,
+including producer, release, QA-adapter, SDK-fixture, replay and agent-client
+fixtures. A source-owner census rejects an integration target absent from the
+roster, and the Just guard requires that exact roster without a test filter.
+Platform conditions remain in their owning tests. These finite fixtures do not
+replace live native, SDK, model, browser or hosted-runner acceptance.
+
 Runtime reuse now honors the prepared automation executable through the shared
 adapter, including when the consumer is copied outside Cargo alias discovery.
 Local SDK fixtures execute that same adapter and reject incompatible runtime
@@ -1583,7 +1590,7 @@ self-hosted job, including custom `mesh-llm-*` runner matrix labels.
 
 
 The native Skippy suite includes sparse synthetic graph-contract tests for every
-canary registry family. `scripts/tests/test_synthetic_graph_registry.py` makes
+canary registry family. `tools/xtask/src/repo_consistency/synthetic_graph_contracts.rs` makes
 missing fixtures and registry dimension/MTP drift fail CI validation. The matrix
 checks admitted stage chains and explicit unsupported contracts without model
 weights; it does not confer real-model certification. See

@@ -961,24 +961,6 @@
       "required": true
     },
     {
-      "classification": "generic build contract test",
-      "deletion_condition": "Target resolution contract tested on supported platforms.",
-      "exception": null,
-      "path": "scripts/tests/test_macos_deployment_target.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask native policy tests",
-      "required": true
-    },
-    {
-      "classification": "generic model manifest test",
-      "deletion_condition": "Registry and generated projections tested in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_model_artifact_registry.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask artifact/model tests",
-      "required": true
-    },
-    {
       "classification": "generic native package test",
       "deletion_condition": "Packaging checks pass in Rust across platform owners.",
       "exception": null,
@@ -1231,15 +1213,6 @@
       "required": true
     },
     {
-      "classification": "generic model registry graph test",
-      "deletion_condition": "Synthetic registry and family graph invariants pass in typed owner tests.",
-      "exception": null,
-      "path": "scripts/tests/test_synthetic_graph_registry.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask model registry tests",
-      "required": true
-    },
-    {
       "classification": "generic workload test",
       "deletion_condition": "Lane execution and diagnostics covered in Rust.",
       "exception": null,
@@ -1467,7 +1440,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 147,
+  "tracked_file_count": 144,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -2616,6 +2589,362 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/logging-cli-contracts-retirement-coverage.json",
       "sha256": "cd4290864cc78653f5ecebbdc2142c0b7d83f7006842f91e5e3e53486bcef5f0"
+    }
+  },
+  "normal_ci_complete_integration_owner_binding": {
+    "status": "COMPLETE_NORMAL_OWNER_BINDING_LOCAL_POSTIMAGE_QUALIFIED",
+    "head": "09546506eb6f84dc00ac20a146a9ff9a08b8bcf2",
+    "required_targets_before": 88,
+    "required_targets_after": 108,
+    "new_unit_tests": 1,
+    "new_integration_tests": 2,
+    "python_paths_unchanged": 147,
+    "core_modules_unchanged": 74,
+    "added_targets": [
+      "l4_producers",
+      "lane_l11_optional_tooling",
+      "lane_l1_ui_delivery",
+      "lane_l2_hosted_bootstrap",
+      "lane_l2_registry_pulls",
+      "lane_l2_runtime_lifecycle",
+      "lane_l2_runtime_seed",
+      "lane_l5_adapter_contracts",
+      "lane_l5_release_product",
+      "lane_l6_sdk_swift",
+      "lane_l7_control_plane",
+      "lane_l7_daemon_lifecycle",
+      "lane_l7_logging_console",
+      "lane_l7_sdk_fixture",
+      "lane_l7_split_recovery",
+      "lane_l7_standalone",
+      "lane_l8_smoke",
+      "laya_cli_fixture",
+      "opencode_config_adapter",
+      "opencode_fixture_evidence"
+    ],
+    "source_owners": [
+      {
+        "path": "ci/automation-migration/quality-rust-contract-targets.json",
+        "sha256": "41cce34b5444c6a4c6ed449132c68e262c04ec123e4aaa60edb97421c47be8f5",
+        "mode": 420
+      },
+      {
+        "path": "just/ci.just",
+        "sha256": "6ef7b98107a6a4b558d143b3e0224a2afe6d2f4c23b5b00e33396a17904406a4",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts.rs",
+        "sha256": "6b37cfda0f0d50471ba99ec47b1f37c67d1a00b960a25898a72e44ea224199c9",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts_tests.rs",
+        "sha256": "5e6ce02033c9b8490975cfb7329765b34c5765ac6d6f35dd3f8c164255d72679",
+        "mode": 420
+      },
+      {
+        "path": ".agents/skills/manage-ci/SKILL.md",
+        "sha256": "b0b45ea6b20826a5e68df07eedb13ee740c4d1a46acf515cbcaf22963c46f24d",
+        "mode": 420
+      },
+      {
+        "path": "ci/ci.md",
+        "sha256": "9e7b69c376e9b00610a383911ddbd4f24b4585ce52b59e6dfb31691f5f0db293",
+        "mode": 420
+      },
+      {
+        "path": ".agents/skills/manage-ci/references/current-inventory.md",
+        "sha256": "fdda854bb0a47ea18a12e45ea5e5f6d5921fd40d07c3573d89189ccfc7c4356f",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_control_plane.rs",
+        "sha256": "52145fcbf59e999675d54996723cd353baf3e4e4a7716a00ecdf63b7c9b3477d",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_daemon_lifecycle.rs",
+        "sha256": "286c83c06ef51b7f36374d9b152fb2e509b693b88150b27326e7f2582c868a5e",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_logging_console.rs",
+        "sha256": "3c0344791a5da6a4145d478047dfc7ff82ff0dfdccb2ba0ff715125fa046ccd0",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_split_recovery.rs",
+        "sha256": "d7896afb4df8ffc4dae1842920ca041a64b3e4d827b2810d1cf780f5bed7e768",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_sdk_fixture.rs",
+        "sha256": "c6d4317c29b18af5c434d9b3e8549446211831ad9a4522609fb0e4323d3f895d",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_standalone.rs",
+        "sha256": "e06a75cf48bcaabbef9c8311d01d118cfa37d7442081dd72f88d1c0b9419f197",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l2_hosted_bootstrap.rs",
+        "sha256": "66e190303a4fbf5fdff00d88453aa6fa8b5fdea6de2c848b8e352bf13ab595c9",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l5_release_product.rs",
+        "sha256": "01b1af2a41d227ee68b201dcd634046521c4460ba55a7472b6289616b717d512",
+        "mode": 420
+      },
+      {
+        "path": "scripts/lib/automation.sh",
+        "sha256": "eb8af100a238e1f66f0f2e182ac97aa2990f57b7c40573ea17c1f5e93049d578",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/automation_selector.rs",
+        "sha256": "fcba438a9159eff679a02f7530f70f9e5091a71042e4596d745062ada1a73246",
+        "mode": 420
+      }
+    ],
+    "proposals": [
+      {
+        "path": ".omo/evidence/resume-20261002/root-normal-ci-complete-owner-roster/manifest.json",
+        "sha256": "592161e3cd8f42bee06a8be5a09f91b2a75599f10712b33c38a27849293577d1"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/root-normal-ci-fixture-paths/manifest.json",
+        "sha256": "15c0680867f1217c26e91892a71881e5afd206dde5eaa1c08d9a6f0269909b1c"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/root-normal-ci-hosted-profile-guard/manifest.json",
+        "sha256": "0ab9831148b2b924587e9947fa0bf93ef3bcb4a5ece48c4be271573ef98d0a30"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/root-normal-ci-release-unix-fixture/manifest.json",
+        "sha256": "cbe588f7382811f47e6d28619a0e73c4890a48d415606af32c5998bf44d0fdd8"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/root-normal-ci-bash-owner-path/manifest.json",
+        "sha256": "d5dd2539b908b634232a3cf79ce77a9497dc7a0e439b0086f7f943a9e2ac482a"
+      }
+    ],
+    "limits": "Finite current-source fixtures and normal owner selection only. No actual Windows, native model, SDK integration, cloud, cache adoption, paid path or hosted-runner qualification. Current qualification remains pending.",
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "6ef7b98107a6a4b558d143b3e0224a2afe6d2f4c23b5b00e33396a17904406a4"
+    },
+    "durable_coverage": {
+      "path": "ci/automation-migration/normal-ci-owner-coverage.json",
+      "sha256": "c633242b1f678278a5f6699f86951f17da216b1b02aeb7bfc125885a9aafc06a"
+    },
+    "previous_source_owners": [
+      {
+        "path": "ci/automation-migration/quality-rust-contract-targets.json",
+        "sha256": "41cce34b5444c6a4c6ed449132c68e262c04ec123e4aaa60edb97421c47be8f5",
+        "mode": 420
+      },
+      {
+        "path": "just/ci.just",
+        "sha256": "70994cbf87df003e7029ea325a1a03bdcca35bf4c21528ee154df061d34024c3",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts.rs",
+        "sha256": "6b37cfda0f0d50471ba99ec47b1f37c67d1a00b960a25898a72e44ea224199c9",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts_tests.rs",
+        "sha256": "5e6ce02033c9b8490975cfb7329765b34c5765ac6d6f35dd3f8c164255d72679",
+        "mode": 420
+      },
+      {
+        "path": ".agents/skills/manage-ci/SKILL.md",
+        "sha256": "b0b45ea6b20826a5e68df07eedb13ee740c4d1a46acf515cbcaf22963c46f24d",
+        "mode": 420
+      },
+      {
+        "path": "ci/ci.md",
+        "sha256": "6dcfeb86b56fd5ce16027b749738a081829de9d45a5b436ec60f7cc3458b68ff",
+        "mode": 420
+      },
+      {
+        "path": ".agents/skills/manage-ci/references/current-inventory.md",
+        "sha256": "916bcfb7cd991f3e15e6b08b72f17d1c117bfc76c633054c971eeb44abd887ca",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_control_plane.rs",
+        "sha256": "52145fcbf59e999675d54996723cd353baf3e4e4a7716a00ecdf63b7c9b3477d",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_daemon_lifecycle.rs",
+        "sha256": "286c83c06ef51b7f36374d9b152fb2e509b693b88150b27326e7f2582c868a5e",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_logging_console.rs",
+        "sha256": "3c0344791a5da6a4145d478047dfc7ff82ff0dfdccb2ba0ff715125fa046ccd0",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_split_recovery.rs",
+        "sha256": "d7896afb4df8ffc4dae1842920ca041a64b3e4d827b2810d1cf780f5bed7e768",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_sdk_fixture.rs",
+        "sha256": "c6d4317c29b18af5c434d9b3e8549446211831ad9a4522609fb0e4323d3f895d",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l7_standalone.rs",
+        "sha256": "e06a75cf48bcaabbef9c8311d01d118cfa37d7442081dd72f88d1c0b9419f197",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l2_hosted_bootstrap.rs",
+        "sha256": "66e190303a4fbf5fdff00d88453aa6fa8b5fdea6de2c848b8e352bf13ab595c9",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l5_release_product.rs",
+        "sha256": "01b1af2a41d227ee68b201dcd634046521c4460ba55a7472b6289616b717d512",
+        "mode": 420
+      },
+      {
+        "path": "scripts/lib/automation.sh",
+        "sha256": "eb8af100a238e1f66f0f2e182ac97aa2990f57b7c40573ea17c1f5e93049d578",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/automation_selector.rs",
+        "sha256": "fcba438a9159eff679a02f7530f70f9e5091a71042e4596d745062ada1a73246",
+        "mode": 420
+      }
+    ],
+    "previous_current_just": {
+      "path": "just/ci.just",
+      "sha256": "70994cbf87df003e7029ea325a1a03bdcca35bf4c21528ee154df061d34024c3"
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/normal-ci-owner-coverage.json",
+      "sha256": "770671ae0e1c3023f39193332e1cfa2e9e0da6157f2a49714fb7f992f2327a6b"
+    },
+    "composed_retirement": {
+      "status": "LOCAL_POSTIMAGE_QUALIFIED",
+      "original_methods_retired": 31,
+      "python_paths": 144,
+      "core_modules": 71,
+      "required_targets": 108,
+      "normal_focused": ".omo/evidence/resume-20261002/complete-normal-ci-owners-corrected-focused-receipts.json",
+      "model_focused": ".omo/evidence/resume-20261002/model-graph-contracts-focused-receipts.json",
+      "source_freeze": ".omo/evidence/resume-20261002/composed-normal-model-graph-source-freeze.json",
+      "previous_status": "COMPOSED_POSTIMAGE_UNQUALIFIED"
+    },
+    "previous_activation_status": "SOURCE_BINDING_APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "full": {
+        "receipt": ".omo/evidence/resume-20261002/composed-normal-model-graph-corrected-postimage-full-receipt.json",
+        "log_sha256": "e6743af46c983f076d7d240d45c06f6a8231656ad845d2881901cffd3106b6db",
+        "targets": 109,
+        "passed": 4157,
+        "failed": 0,
+        "ignored": 2
+      },
+      "normal": {
+        "receipt": ".omo/evidence/resume-20261002/composed-normal-model-graph-corrected-postimage-normal-receipt.json",
+        "log_sha256": "d4e3d9abba2b34b660b4bb851c13729611d5db707093192bc7240c860fa21d04",
+        "targets": 109,
+        "passed": 4157,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 1022,
+        "passed": 1008,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 394.421
+      },
+      "focused_receipts": ".omo/evidence/resume-20261002/model-graph-contracts-focused-receipts.json",
+      "limits": "Every maintained xtask integration target selected in normal CI, with finite local command/path and rejection fixtures. Actual Windows/MSYS execution and hosted/platform/native/SDK acceptance remain unverified.",
+      "normal_focused_receipts": ".omo/evidence/resume-20261002/complete-normal-ci-owners-corrected-focused-receipts.json"
+    }
+  },
+  "model_graph_macos_thirty_one_intent_retirement": {
+    "status": "MODULE_ONLY_RETIRED_AND_LOCAL_POSTIMAGE_QUALIFIED",
+    "original_methods": 31,
+    "rust_tests": 20,
+    "deletions": [
+      {
+        "path": "scripts/tests/test_synthetic_graph_registry.py",
+        "sha256": "19faff894a4bbc471427461147ce30676f8aef3ff376e85e8d0165bb1d7a622c",
+        "mode": 420
+      },
+      {
+        "path": "scripts/tests/test_model_artifact_registry.py",
+        "sha256": "3b51a7f4217079e6f5eff47363c791e681ee5de52df053bb51ab5645508c13ce",
+        "mode": 420
+      },
+      {
+        "path": "scripts/tests/test_macos_deployment_target.py",
+        "sha256": "5eb30d82bef671d6d4de11bbb21b1e2ef496eb1d449f7e5b0b8433afc3ea9f9e",
+        "mode": 420
+      }
+    ],
+    "durable_coverage": {
+      "path": "ci/automation-migration/model-graph-contracts-retirement-coverage.json",
+      "sha256": "ea65fb090e3e2a8836804c67656131bf4b0dd9c1cea17a92e09f78aad723da20"
+    },
+    "python_paths_after": 144,
+    "core_modules_after": 71,
+    "current_quality_targets": 108,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "6ef7b98107a6a4b558d143b3e0224a2afe6d2f4c23b5b00e33396a17904406a4",
+      "roster_line": 24,
+      "normalized_fingerprint": "cb4e18b22bf45592",
+      "count": 71
+    },
+    "qualification_hold": "Owning Rust source/documentation tests and Clippy passed; final source postimage full/normal integration validation required.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "full": {
+        "receipt": ".omo/evidence/resume-20261002/composed-normal-model-graph-corrected-postimage-full-receipt.json",
+        "log_sha256": "e6743af46c983f076d7d240d45c06f6a8231656ad845d2881901cffd3106b6db",
+        "targets": 109,
+        "passed": 4157,
+        "failed": 0,
+        "ignored": 2
+      },
+      "normal": {
+        "receipt": ".omo/evidence/resume-20261002/composed-normal-model-graph-corrected-postimage-normal-receipt.json",
+        "log_sha256": "d4e3d9abba2b34b660b4bb851c13729611d5db707093192bc7240c860fa21d04",
+        "targets": 109,
+        "passed": 4157,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 1022,
+        "passed": 1008,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 394.421
+      },
+      "focused_receipts": ".omo/evidence/resume-20261002/model-graph-contracts-focused-receipts.json",
+      "limits": "Typed current model identity, schema, suite membership, cadence and consumer contracts, complete synthetic graph source coverage, and macOS deployment propagation/consumer compiler refusal. Native CTest and actual hosted/platform/model/SDK acceptance remain unverified."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/model-graph-contracts-retirement-coverage.json",
+      "sha256": "800e74c66a0bdb2040297de44b11bf7bfe9900953cfdd8896b8993c5f686a14b"
     }
   }
 }

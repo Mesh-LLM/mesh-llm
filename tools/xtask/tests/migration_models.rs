@@ -18,3 +18,9 @@ mod resolver;
 mod resolver_matrix;
 #[path = "migration_models/restore_inputs.rs"]
 mod restore_inputs;
+
+#[path = "migration_models/current_contracts.rs"]
+mod current_contracts;
+
+#[path = "migration_models/repository_contracts.rs"]
+mod repository_contracts;

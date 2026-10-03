@@ -1,11 +1,16 @@
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[cfg(unix)]
 struct Scratch(PathBuf);
+#[cfg(unix)]
 impl Scratch {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let stamp = std::time::SystemTime::now()
@@ -16,6 +21,7 @@ impl Scratch {
         Ok(Self(path))
     }
 }
+#[cfg(unix)]
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _cleanup = fs::remove_dir_all(&self.0);

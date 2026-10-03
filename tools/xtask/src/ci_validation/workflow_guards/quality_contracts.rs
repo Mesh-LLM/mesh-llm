@@ -23,6 +23,7 @@ pub(super) fn check(root: &Path, workflows: &BTreeMap<String, Node>) -> DynResul
             return Err(format!("Quality target has no integration owner: {target}").into());
         }
     }
+    integration_owners(root, &targets)?;
     let just = std::fs::read_to_string(root.join("just/ci.just"))?;
     recipe(&just, &targets)?;
     local(&just)?;
@@ -31,6 +32,32 @@ pub(super) fn check(root: &Path, workflows: &BTreeMap<String, Node>) -> DynResul
             .get("ci-quality-slice.yml")
             .ok_or("missing Quality slice")?,
     )
+}
+fn integration_owners(root: &Path, targets: &[String]) -> DynResult<()> {
+    let selected: BTreeSet<_> = targets.iter().map(String::as_str).collect();
+    let mut omitted = BTreeSet::new();
+    for entry in std::fs::read_dir(root.join("tools/xtask/tests"))? {
+        let path = entry?.path();
+        if path.extension() != Some(std::ffi::OsStr::new("rs")) || !path.is_file() {
+            continue;
+        }
+        let target = path
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .ok_or("Quality integration owner has an invalid target name")?;
+        if !selected.contains(target) {
+            omitted.insert(target.to_owned());
+        }
+    }
+    if omitted.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Quality integration owners omitted from normal CI: {}",
+            omitted.into_iter().collect::<Vec<_>>().join(", ")
+        )
+        .into())
+    }
 }
 fn body<'a>(source: &'a str, name: &str) -> DynResult<Vec<&'a str>> {
     let header = format!("{name}:");

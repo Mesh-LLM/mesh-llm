@@ -192,8 +192,12 @@ fn propagation(action: &Node, workflow: &Node) -> Result<(), String> {
     }
     for step in steps(jobs.get("family").ok_or("family missing")?) {
         if text(step, "run")
-            .lines()
-            .any(|line| line.trim_start().starts_with("cargo "))
+            .split([';', '|', '&', '(', ')', '`', '\'', '"'])
+            .flat_map(str::split_whitespace)
+            .any(|token| {
+                token.trim_matches(['\'', '"']) == "cargo"
+                    || token.trim_matches(['\'', '"']).ends_with("/cargo")
+            })
         {
             return Err("family consumer compiles instead of consuming producer bytes".into());
         }
@@ -251,14 +255,26 @@ fn actual_canary_setup_exports_target_before_cache_and_build_and_consumer_does_n
         .unwrap();
     build.swap(setup, compile);
     assert!(propagation(&action, &wrong_build).is_err());
-    let mut compiling_consumer = workflow.clone();
-    steps_mut(field_mut(
-        field_mut(&mut compiling_consumer, "jobs"),
-        "family",
-    ))
-    .push(Node::Map(vec![(
-        "run".into(),
-        Node::Scalar("cargo build --locked".into()),
-    )]));
-    assert!(propagation(&action, &compiling_consumer).is_err());
+    for command in [
+        "cargo build --locked",
+        "just with-lld cargo build --locked",
+        "env CARGO_BUILD_JOBS=2 cargo build --locked",
+        "/usr/bin/cargo build --locked",
+        "true;cargo build --locked",
+        r#"echo "$(cargo build --locked)""#,
+    ] {
+        let mut compiling_consumer = workflow.clone();
+        steps_mut(field_mut(
+            field_mut(&mut compiling_consumer, "jobs"),
+            "family",
+        ))
+        .push(Node::Map(vec![(
+            "run".into(),
+            Node::Scalar(command.into()),
+        )]));
+        assert!(
+            propagation(&action, &compiling_consumer).is_err(),
+            "{command}"
+        );
+    }
 }
