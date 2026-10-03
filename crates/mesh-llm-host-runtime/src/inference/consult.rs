@@ -27,7 +27,8 @@ use serde_json::Value;
 /// Find a peer that can handle vision (images).
 /// Returns None if no vision-capable peer exists in the mesh.
 pub async fn find_vision_peer(node: &mesh::Node, exclude_model: &str) -> Option<EndpointId> {
-    let peers = node.peers().await;
+    // Consulting a peer sends it the user's content: never a blocked one.
+    let peers = node.routable_peers().await;
     // rtt_ms is the best-seen (minimum) RTT, stable for routing decisions.
     peers
         .iter()
@@ -43,7 +44,8 @@ pub async fn find_vision_peer(node: &mesh::Node, exclude_model: &str) -> Option<
 /// Find a peer that can handle audio.
 /// Returns None if no audio-capable peer exists in the mesh.
 pub async fn find_audio_peer(node: &mesh::Node, exclude_model: &str) -> Option<EndpointId> {
-    let peers = node.peers().await;
+    // Consulting a peer sends it the user's content: never a blocked one.
+    let peers = node.routable_peers().await;
     // rtt_ms is the best-seen (minimum) RTT, stable for routing decisions.
     peers
         .iter()
@@ -69,7 +71,8 @@ pub async fn find_different_model_peers(
 ) -> Vec<(EndpointId, String)> {
     use crate::models::CapabilityLevel;
 
-    let peers = node.peers().await;
+    // Consulting a peer sends it the user's content: never a blocked one.
+    let peers = node.routable_peers().await;
 
     let mut candidates: Vec<_> = peers
         .iter()

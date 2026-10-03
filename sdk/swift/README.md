@@ -83,21 +83,29 @@ let serving = try await node.serving.status()
 try await node.start()
 
 let models = try await node.inference.listModels()
-let request = ChatRequest(model: models[0].id, messages: [
-    ChatMessage(role: "user", content: "Hello!")
-])
+let request: [String: Any] = [
+    "model": models[0].id,
+    "messages": [["role": "user", "content": "What is the weather?"]],
+    "tools": [["type": "function", "function": ["name": "get_weather"]]],
+]
 
-for try await event in node.inference.chatStream(request) {
+for try await event in node.inference.streamChatCompletions(request) {
     switch event {
-    case .tokenDelta(_, let delta):
-        print(delta, terminator: "")
-    case .completed:
-        print()
-    default:
+    case .sse(let frame) where !frame.isDone:
+        // Text, reasoning, and incremental tool-call arguments are preserved.
+        print(try frame.jsonObject() as Any)
+    case .started(_, let statusCode, _):
+        print("HTTP \(statusCode)")
+    case .sse:
         break
     }
 }
 ```
+
+`chatCompletions(_:)` and `responses(_:)` return complete OpenAI-shaped
+JSON. Their streaming counterparts preserve named and raw SSE frames without
+projecting away tool-call or future protocol fields. Ending iteration early
+cancels the native request.
 
 Local serving follows the same lifecycle:
 

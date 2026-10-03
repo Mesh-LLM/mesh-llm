@@ -65,6 +65,30 @@ try {
 
 For public mesh discovery, use `Client.connectPublic(ownerKeypair, PublicMeshQuery(...))`. Keep the owner keypair in app storage so reconnects retain the same identity.
 
+## Stream agent turns
+
+```kotlin
+import ai.meshllm.OpenAIStreamEvent
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+
+val body = Json.parseToJsonElement("""{
+  "model":"Qwen3-8B",
+  "messages":[{"role":"user","content":"What is the weather?"}],
+  "tools":[{"type":"function","function":{"name":"get_weather"}}]
+}""".trimIndent()).jsonObject
+
+client.inference.streamChatCompletions(body).collect { event ->
+    if (event is OpenAIStreamEvent.Sse && !event.isDone) {
+        println("${event.event}: ${event.data}")
+    }
+}
+```
+
+The flow preserves named and raw SSE frames without narrowing tool calls,
+reasoning, multimodal content, structured outputs, usage, or future fields.
+Cancelling collection cancels the native request.
+
 ## JVM local serving
 
 Local serving is currently supported for validated JVM targets with a matching native runtime. Resolve a bundled or downloadable runtime first:

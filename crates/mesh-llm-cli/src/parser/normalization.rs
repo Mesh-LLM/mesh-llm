@@ -39,6 +39,22 @@ const VALUE_TAKING_FLAGS: &[&str] = &[
     "--draft-max",
     "--ctx-size",
     "--parallel",
+    // The speculative family, less its two boolean members
+    // (`--speculative-native-mtp-{suppress,allow}-cooldown-drafts`), which must
+    // stay absent so they do not swallow the pseudo-subcommand behind them.
+    "--speculative-strategy",
+    "--speculative-ngram-min",
+    "--speculative-ngram-max",
+    "--speculative-ngram-max-proposal-tokens",
+    "--speculative-ngram-proposer",
+    "--speculative-ngram-fallback",
+    "--speculative-extension-max-tokens",
+    "--speculative-native-mtp-reject-cooldown-tokens",
+    "--speculative-native-mtp-suppress-cooldown-draft-limit",
+    "--speculative-verify-window-min-tokens",
+    "--speculative-verify-window-max-tokens",
+    "--speculative-verify-window-pipeline-depth",
+    "--speculative-verify-window-runahead-tokens",
     "--model",
     "--gguf",
     "--mmproj",
@@ -52,6 +68,7 @@ const VALUE_TAKING_FLAGS: &[&str] = &[
     "--region",
     "--name",
     "--plugin",
+    "--plugin-arg",
     "--draft",
     "--bin-dir",
     "--relay",
@@ -276,6 +293,75 @@ mod tests {
                 OsString::from("x.gguf"),
             ]
         );
+    }
+
+    /// Every value-taking speculative flag was missing from
+    /// [`VALUE_TAKING_FLAGS`], so its value was mistaken for the pseudo-
+    /// subcommand and `serve` was never stripped.
+    #[test]
+    fn normalize_runtime_surface_args_skips_speculative_values_before_serve() {
+        for (flag, value) in [
+            ("--speculative-strategy", "ngram-suffix"),
+            ("--speculative-ngram-proposer", "suffix"),
+            ("--speculative-ngram-fallback", "draft"),
+            ("--speculative-ngram-min", "5"),
+            ("--speculative-ngram-max", "32"),
+            ("--speculative-ngram-max-proposal-tokens", "48"),
+            ("--speculative-extension-max-tokens", "8"),
+            ("--speculative-native-mtp-reject-cooldown-tokens", "16"),
+            (
+                "--speculative-native-mtp-suppress-cooldown-draft-limit",
+                "2",
+            ),
+            ("--speculative-verify-window-min-tokens", "4"),
+            ("--speculative-verify-window-max-tokens", "32"),
+            ("--speculative-verify-window-pipeline-depth", "3"),
+            ("--speculative-verify-window-runahead-tokens", "96"),
+        ] {
+            let argv = ["mesh-llm", flag, value, "serve", "--auto"];
+            let args = normalize_runtime_surface_args(argv);
+            assert_eq!(
+                args.explicit_surface,
+                Some(RuntimeSurface::Serve),
+                "{flag} should not be read as the subcommand position"
+            );
+            assert_eq!(
+                args.normalized,
+                vec![
+                    OsString::from("mesh-llm"),
+                    OsString::from(flag),
+                    OsString::from(value),
+                    OsString::from("--auto"),
+                ],
+                "{flag} value should survive and serve should be stripped"
+            );
+        }
+    }
+
+    /// The two boolean members of the family must stay out of
+    /// [`VALUE_TAKING_FLAGS`], or they consume the `serve` behind them.
+    #[test]
+    fn normalize_runtime_surface_args_keeps_boolean_speculative_flags_valueless() {
+        for flag in [
+            "--speculative-native-mtp-suppress-cooldown-drafts",
+            "--speculative-native-mtp-allow-cooldown-drafts",
+        ] {
+            let argv = ["mesh-llm", flag, "serve", "--auto"];
+            let args = normalize_runtime_surface_args(argv);
+            assert_eq!(
+                args.explicit_surface,
+                Some(RuntimeSurface::Serve),
+                "{flag} takes no value, so serve is the subcommand position"
+            );
+            assert_eq!(
+                args.normalized,
+                vec![
+                    OsString::from("mesh-llm"),
+                    OsString::from(flag),
+                    OsString::from("--auto")
+                ]
+            );
+        }
     }
 
     #[test]

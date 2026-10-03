@@ -1,5 +1,9 @@
 # Lightning payments PoC
 
+> [!WARNING]
+> Wallet implementations, including the Lexe wallet, are currently for example
+> purposes only and are still being explored.
+
 This branch implements two-payment inference over authenticated mesh QUIC
 connections, a provider-neutral wallet API, durable settlement, CLI controls, and
 an initial Lexe mainnet adapter. Mainnet settlement was exercised on September
@@ -73,28 +77,89 @@ payment hash, and asynchronous `wait_for_payment(payment_hash)` completion.
 `mesh-llm-payments` re-exports it under `mesh_llm_payments::wallet` and drives
 it from the ledger; neither crate links a wallet SDK.
 
-Concrete wallets are plugin processes that advertise the `wallet.v1`
-capability (`mesh-llm-wallet::contract`). The host resolves the provider by
-capability, never by plugin name. `mesh-wallet-lexe` is the shipped
-implementation: Lexe 0.1.23 on mainnet, built into the `mesh-llm` executable
-behind the `wallet-lexe` cargo feature and served blobstore-style as
-`mesh-llm --plugin wallet-lexe`, auto-registered as the optional built-in
-plugin `wallet-lexe`. No second binary ships. The process starts with the host
-but is idle until the first wallet operation; starting it never provisions or
-contacts a wallet. `[[plugin]] name = "wallet-lexe" enabled = false` turns it
-off at runtime (only `enabled` may be set on a built-in); a different
-`wallet.v1` implementation is configured as an ordinary external plugin under
-its own name, with the built-in disabled. A build without the `wallet-lexe`
-feature (SDK consumers) accepts the same stanza and registers nothing.
-NWC, BOLT12 and multi-provider selection are deferred.
+### Build defaults are not spending policy
 
-Feature layering, so embedding applications never link a wallet SDK:
-`payments` (host-runtime, `mesh-llm`, `mesh-llm-embedded-runtime`,
-`mesh-llm-sdk`) is the ledger, gates and the `wallet.v1` adapter; `wallet-lexe`
-(host-runtime, `mesh-llm`) is the built-in Lexe implementation and the only
-feature that links Lexe. The shipped CLI enables both. `mesh-llm-sdk` with
-`serving` compiles neither; with `serving,payments` it compiles the ledger and
-adapter and expects an external `wallet.v1` plugin.
+Default CLI builds, including releases, include **payment infrastructure**
+(`payments`): the ledger, budgets, payment gates, recovery and the generic
+`wallet.v1` adapter. No wallet implementation or wallet SDK is compiled into
+mesh-llm; wallets are external plugins. Compiling the infrastructure does not enable spending or supply
+an operational wallet.
+
+Without an available `wallet.v1` provider, wallet-dependent operations cannot
+create invoices or settle payments. Free inference does not require a wallet.
+A fresh profile uses `free_only` spending policy; installing or funding a wallet
+does not enable automatic paid inference. Paying requires a usable wallet and
+explicit spending authorization/budget. Charging for serving is configured
+separately through model pricing. Existing policy, pricing, ledger and wallet
+files are not reset by changing build features; pending settlement still needs
+the original wallet to become available again.
+
+Concrete wallets are plugin processes that advertise `wallet.v1`
+(`mesh-llm-wallet::contract`). The host finds wallet plugins by that capability
+and chooses among them as described below. An installed external wallet uses
+the ordinary plugin loader; no Lexe-specific client API is required. Existing wallet pins bind both
+plugin name and wallet identity: replacing a provider with a differently named
+plugin is not an automatic migration, even when it uses the same seed. Switch
+providers with `mesh-llm wallet unpin` (below), which refuses while anything
+outstanding depends on the pinned wallet; do not delete the pin by hand.
+
+### Using the Lexe wallet
+
+Lexe is distributed as the external `lexe-wallet` plugin
+([Mesh-LLM/lexe-wallet](https://github.com/Mesh-LLM/lexe-wallet)), Lexe 0.1.24
+on mainnet. Build or install its binary, then register it like any external
+plugin in `config.toml`:
+
+```toml
+[[plugin]]
+name = "lexe-wallet"
+command = "/path/to/lexe-wallet"
+
+[payments]
+wallet = "lexe-wallet"   # optional when it is the only wallet plugin
+```
+
+The host hands it `payments/wallets/lexe-wallet/` as its data directory. The
+process stays idle until the first wallet operation; startup alone never
+provisions or contacts a wallet. NWC and BOLT12 are deferred.
+
+The former built-in `wallet-lexe` is no longer compiled into mesh-llm; a
+`[[plugin]] name = "wallet-lexe"` stanza is ignored with a warning.
+
+When more than one `wallet.v1` plugin runs, the host picks one in this order:
+
+1. The plugin named in the ledger's pin (below). A pin is never silently
+   replaced; a pinned plugin that is not running is an error.
+2. `[payments] wallet = "<plugin>"` in `config.toml`. It must be running.
+3. The only running wallet plugin. Two or more need an explicit choice. This
+   automatic choice is refused while any enabled plugin that might be a wallet
+   is not running, because the choice is pinned: a plugin that crashed has lost
+   its capability list, and choosing among the running plugins could pin the
+   ledger to the wrong wallet for good. Start the plugin or set `[payments] wallet`.
+
+`wallet_open` also returns the wallet's `features`: whether it can create
+amount-less invoices. The host refuses amount-less `fund-wallet` invoices on a
+wallet that cannot make them. Plugins written before the field existed get the
+original contract's behavior: amount-less invoices.
+
+Every `wallet_pay` carries the fee headroom the host authorized
+(`max_total_msat`). A wallet that can bound routing fees must refuse a payment
+that would exceed it; one that cannot still pays. Either way the fee the wallet
+reports is recorded as spend. With a wallet that cannot bound fees, that fee can
+exceed the headroom, and the overrun is recorded after the fact, not prevented:
+
+- The day's spend can go past the daily budget. Later payments are refused
+  until the budget recovers.
+- The request's spend can go past its cap. If the input payment overran, the
+  output payment may no longer fit under the cap and is refused, so the seller
+  records the output invoice as unpaid debt.
+
+Feature layering: `payments` (host-runtime, `mesh-llm`,
+`mesh-llm-embedded-runtime`, `mesh-llm-sdk`) supplies the ledger, gates and
+`wallet.v1` adapter. `mesh-llm-sdk` with `serving` compiles none of it; with
+`serving,payments` it compiles payment infrastructure and expects an external
+wallet provider. Apps can keep using the generic
+wallet operator API while distributing/installing a wallet plugin separately.
 
 Ownership: the host keeps token metering, output gating (host atomics on the
 decode thread) and response bytes, and talks to the payments engine only
@@ -149,7 +214,20 @@ The host pins the wallet identity. After the first successful open it writes
 and refuses to open a plugin or wallet that does not match, because outstanding
 reservations and receivables are only meaningful against the wallet that created
 them. `has_persisted_wallet` reads this pin; it is side-effect-free and never
-starts the plugin. Embedders can still inject their own `WalletFactory` through
+starts the plugin. `mesh-llm wallet unpin` removes the pin so the next wallet
+operation opens and pins another wallet. It only runs while the node is stopped,
+because a running node may be opening its wallet against the pin; through the
+running node's API it is refused. It is also refused while any outgoing payment
+is prepared or pending, or while the ledger records any issued invoice as unpaid,
+expired or not: the old wallet may still settle those, or may already have
+received a payment the ledger has not recorded. Run the node on the old wallet
+to let recovery resolve them, or forgive a peer's unpaid invoices with
+`mesh-llm wallet unblock`. Unpin neither moves funds nor cancels invoices: the
+old wallet keeps its balance, and a forgiven invoice that has not expired can
+still be paid into it after the switch, where the ledger will not see it. The
+old wallet's data directory is left in place, so switching back re-adopts the
+same identity. Embedders can still inject their own
+`WalletFactory` through
 `PaymentService::with_factory`; without a plugin manager the service is
 ledger-only and every wallet operation fails with a clear error.
 
@@ -183,13 +261,14 @@ seeing a paid provider does not provision one. The directory contains:
   approvals, reservations, invoices, payment outcomes, receivables and output
   delivery counts. SQLite uses WAL and synchronous FULL.
 - `wallet-provider.json`: the host-owned wallet pin described above.
-- `lexe/`: handed to the wallet plugin as its data directory. For
-  `mesh-wallet-lexe` it holds `seedphrase.txt`, recovery material persisted
-  before wallet provisioning with the SDK's exclusive creation and private file
-  permissions; the plugin re-asserts mode 0600 on the seed at every open. Unix
-  payment and wallet directories are mode 0700. Protect and back up this
-  directory; no seed export UI or encrypted-at-rest application keystore is
-  added by this PoC.
+- `wallets/<plugin>/`: handed to each wallet plugin as its data directory, so
+  switching wallets never exposes one backend's credentials to another. For
+  the `lexe-wallet` plugin (`wallets/lexe-wallet/`) it holds `seedphrase.txt`,
+  recovery material persisted before wallet provisioning with the SDK's
+  exclusive creation and private file permissions; the plugin re-asserts mode
+  0600 on the seed at every open. Unix payment and wallet directories are mode
+  0700. Protect and back up this directory; no seed export UI or
+  encrypted-at-rest application keystore is added by this PoC.
 - Process locks: one service per directory in the host, one wallet writer per
   directory in the plugin. CLI commands use the running node's API. When the
   node is not running, ledger-only commands (policy, pricing, pending) fall back
@@ -289,9 +368,10 @@ The payer reserves a routing-fee allowance for each inference payment of
 `max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`), so a
 request's cap is both inference charges plus both allowances. Seller and payer
 compute the cap from the same function and the payer rejects terms that
-disagree. The wallet is told the resulting cap per payment and must not submit
-a payment whose amount plus fees exceeds it; Lexe preflights a route and
-submits that same route only when its total debit fits. Route minimums can
+disagree. The wallet is told the resulting cap per payment. A wallet that can
+bound fees must not submit a payment whose amount plus fees exceeds it; Lexe
+preflights a route and submits that same route only when its total debit fits.
+A wallet that cannot bound fees may exceed it (see the wallet contract above). Route minimums can
 increase the sent amount; that increase also counts against the cap. Actual
 outgoing amount and fees are recorded. Operators can choose a different cap for
 an explicit `wallet send`.
@@ -400,6 +480,7 @@ mesh-llm wallet send lnbc... --amount-msat 10000 --max-fee-msat 1000
 mesh-llm wallet pending
 mesh-llm wallet blocked
 mesh-llm wallet unblock PEER_ID
+mesh-llm wallet unpin
 mesh-llm wallet policy --mode automatic --daily-budget-sats 100
 mesh-llm wallet policy --mode free-only
 mesh-llm wallet pricing MODEL --input-msat-per-million 500 --output-msat-per-million 1500
@@ -419,7 +500,8 @@ Applications POST JSON to `/api/wallet` on the local management port:
 
 Commands are `balance`, `transactions` (`limit`), `fund`, `inspect_invoice`
 (`invoice`), `send` (`invoice`, optional `amount_msat`, `max_fee_msat`), `pending`,
-`policy` (optional `value`), `pricing`, and `set_pricing`
+`blocked`, `unblock` (`peer`), `unpin`, `policy` (optional `value`), `pricing`, and
+`set_pricing`
 (`model`, nullable `value`). `expected_pid` and `expected_directory` are optional
 local destination checks. The balance response exposes `spendable_msat` and
 `available_for_inference_msat` after policy and reservations. `pending` returns
@@ -654,21 +736,23 @@ pricing is not inferred from these offers. Invoice terms remain authoritative.
 `RequestTerms.exchange_id` optionally retains the host's existing OpenAI evidence
 exchange ID in the payer's existing JSON terms record. It is not the private
 payment recovery ID. Older records omit it; there is no SQL schema migration.
-The provider protocol and provider evidence emission are unchanged.
+The provider protocol is unchanged.
 
 A trusted local plugin declaring `payment.lifecycle.v1` can observe the active
 payer exchange: `terms_accepted`, `input_invoice_issued`,
 `input_settlement_observed`, `output_invoice_issued`,
 `output_settlement_observed`, and `final_accounted`. Subscribe to
 `openai.exchange.v1` as well to obtain the host exchange and join on `exchange_id`.
-Events contain `exchange_id`, stable `event_ref`, `terms_digest`, `phase`, `source`,
-nullable `segment` (0=input, 1=output), nullable `payment_hash`, nullable
-`settlement` (`terminal` for wallet success), and `amount_msat`.
+Events contain `exchange_id`, stable `event_ref`, `terms_digest`, `role` (`payer`
+or `provider`), `phase`, `source`, nullable `segment` (0=input, 1=output),
+nullable `payment_hash`, nullable `settlement` (`terminal` for wallet success),
+`amount_msat`, and nullable `tokens`.
 Terms acceptance is `payer_asserted` (amount is the approved cap); invoice issuance
 is `provider_asserted` as observed by the payer, not independently verified
 issuance. Settlement is `wallet_reported`, amount excluding fees. Final accounting
-is `payer_asserted`, summing successful debits including fees. No provider-side
-claiming observation is implied by this payer-only stream.
+is `payer_asserted`, summing successful debits including fees. The provider's
+own observations are described below; neither side's stream is evidence of the
+other's.
 
 The terms digest is lowercase SHA-256 over checked JCS JSON using the existing
 host `request_body_digest` helper, applied to the object containing exactly
@@ -686,6 +770,71 @@ leave incomplete evidence; there is no replay or complete audit-log guarantee.
 The persisted correlation remains available to recovery tooling, but recovery
 currently emits no events. No raw invoice, preimage, wallet transaction ID,
 prompt or response text is published. Payment hashes are linkable metadata.
+
+## Provider-side evidence hooks
+
+The serving host emits the same `payment.lifecycle.v1` events, with `role:
+provider`, at the `payments.v1` seller operations it already calls. Emission is
+in the host's serving path, not in the payments engine, so any `payments.v1`
+provider gets it unchanged.
+
+| seller operation | phase | source |
+|---|---|---|
+| `serve_begin` | `terms_accepted` (amount is the terms' cap) | `provider_asserted` |
+| `serve_input_invoice` | `input_invoice_issued` | `provider_asserted` |
+| `settle_received`, input | `input_settlement_observed` | `wallet_reported` |
+| `serve_finish` | `delivered` (`tokens` is the closing watermark, `amount_msat` 0) | `provider_asserted` |
+| `output_receivable` | `output_invoice_issued` | `provider_asserted` |
+| `settle_received`, output | `output_settlement_observed` | `wallet_reported` |
+
+Observation starts when `serve_input_invoice` returns priced terms, and the
+acceptance `serve_begin` made is reported then, just before the input invoice.
+A request that fails before that point — including a backend failure before
+authorization (`Frame::Error`, no invoice, nothing billed) — emits no phases;
+treat that as never priced, not lapsed. `delivered` is emitted once, when the
+serving close succeeds, whatever happened to the transport. Settlement is the
+receiving wallet's report that `settle_received` recorded; the amount is the
+invoice amount. Since the payments engine is a plugin, nothing here claims that
+payment preceded wallet access: `source` says who asserted, which is all it can
+say.
+
+The request ID is the private recovery ID, so the serving host names each paid
+serving request with a fresh `exchange_id` of its own, minted once when a plugin
+subscribes to either channel. Its `payment.lifecycle.v1` events and the paid
+serving path's `openai.exchange.v1` events both carry it, so a plugin subscribed
+to both joins the provider's two channels on `exchange_id`, as on the payer side.
+`terms_digest` uses the payer's construction over the provider's terms with that
+ID; the other seven fields are the ones the payer approves, but the two sides'
+digests differ because each covers its own `exchange_id`. Join the payer's and
+the provider's streams on `payment_hash`, which both sides report for each
+invoice and settlement.
+
+The payer section's bounds apply unchanged: an eight-event queue per request,
+a one-second publication timeout, nothing awaited by serving or settlement, no
+per-token events, and no ID or hashing without a subscriber. Evidence is
+best-effort and can be incomplete. Lapsed input invoices, recorded debt,
+operator unblocking and serving recovery emit no events.
+
+
+### Evidence interpretation and acceptance expectations
+
+Neither payment nor matching payer/provider records prove correct inference,
+honest token counts, or proof of prefill. Wallet settlement is an observation
+reported by the configured wallet, not independent verification of inference.
+
+Use synthetic identities and payment hashes in committed fixtures. These are
+acceptance expectations, not a claim that every fixture is implemented:
+
+| Scenario | What the evidence should distinguish |
+| --- | --- |
+| Paid request | Payer and provider observations correlate by payment hash; invoice claims remain distinct from wallet settlement reports. |
+| Exhausted automatic budget | Paid request is rejected with HTTP 402, not represented as a successful paid exchange. |
+| Free-only policy against a paid-only route | HTTP 402 policy refusal, not a wallet outage or settlement failure. |
+| Restart with a pending payment | Reconcile the existing payment without a second debit; successful terminal reconciliation releases its reservation. |
+| Harness or observation failure | Preserve the failed attempt and its limitation separately from any corrected rerun; do not silently turn it into a pass. |
+
+Uncertain payments must remain distinguishable from terminal outcomes. Do not
+discard unresolved debt merely to report zero outstanding reservations.
 
 
 ### Failure and recovery boundaries

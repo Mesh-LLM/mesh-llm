@@ -558,6 +558,7 @@
       "domain": "platform-windows-cfg",
       "crates": [
         "mesh-llm-analytics",
+        "mesh-llm-commands",
         "mesh-llm-config",
         "mesh-llm-events",
         "mesh-llm-host-runtime",
@@ -565,10 +566,11 @@
         "mesh-llm-payments",
         "mesh-llm-plugin",
         "mesh-llm-plugin-manager",
+        "mesh-llm-system",
         "mesh-llm-tui",
         "mesh-llm-ui",
         "mesh-llm-wallet",
-        "mesh-wallet-lexe"
+        "skippy-cache"
       ]
     },
     {

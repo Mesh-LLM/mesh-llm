@@ -5,6 +5,9 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import uniffi.mesh_ffi.ChatMessageNative
 import uniffi.mesh_ffi.ChatRequestNative
 import uniffi.mesh_ffi.ClientEvent
@@ -14,6 +17,9 @@ import uniffi.mesh_ffi.EventListener as FfiEventListener
 import uniffi.mesh_ffi.MeshClientHandleInterface
 import uniffi.mesh_ffi.MeshNodeHandleInterface
 import uniffi.mesh_ffi.ModelNative
+import uniffi.mesh_ffi.OpenAiResponseNative
+import uniffi.mesh_ffi.OpenAiStreamEventNative
+import uniffi.mesh_ffi.OpenAiStreamListener as FfiOpenAiStreamListener
 import uniffi.mesh_ffi.ResponsesRequestNative
 import uniffi.mesh_ffi.createAutoClient as ffiCreateAutoClient
 import uniffi.mesh_ffi.createAutoNode as ffiCreateAutoNode
@@ -22,6 +28,8 @@ import uniffi.mesh_ffi.createNode as ffiCreateNode
 import uniffi.mesh_ffi.discoverPublicMeshes as ffiDiscoverPublicMeshes
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 typealias CapabilityLevel = uniffi.mesh_ffi.CapabilityLevel
 typealias ConsoleHandle = uniffi.mesh_ffi.ConsoleHandleInterface
@@ -63,6 +71,39 @@ data class ChatRequest(val model: String, val messages: List<ChatMessage>)
 data class ResponsesRequest(val model: String, val input: String)
 
 data class Status(val connected: Boolean, val peerCount: ULong)
+
+data class OpenAIResponse(
+    val statusCode: UShort,
+    val contentType: String?,
+    val body: String,
+) {
+    fun json(): JsonElement = Json.parseToJsonElement(body)
+}
+
+sealed class OpenAIStreamEvent {
+    data class Started(
+        val requestId: RequestId,
+        val statusCode: UShort,
+        val contentType: String?,
+    ) : OpenAIStreamEvent()
+
+    data class Sse(
+        val requestId: RequestId,
+        val event: String?,
+        val data: String,
+        val raw: String,
+    ) : OpenAIStreamEvent() {
+        val isDone: Boolean get() = data == "[DONE]"
+        fun json(): JsonElement? = if (isDone) null else Json.parseToJsonElement(data)
+    }
+}
+
+class OpenAIStreamException(
+    val requestId: RequestId,
+    val statusCode: UShort?,
+    val responseBody: String?,
+    message: String,
+) : RuntimeException(message)
 
 @JvmInline
 value class RequestId(val value: String)
@@ -166,6 +207,59 @@ class Client(private val handle: MeshClientHandleInterface) {
     class Inference(private val handle: MeshClientHandleInterface) {
         suspend fun listModels(): List<Model> =
             withContext(Dispatchers.IO) { handle.inferenceListModels().map { it.toModel() } }
+
+        suspend fun request(path: String, body: JsonObject): OpenAIResponse =
+            requestJson(path, body.toString())
+
+        suspend fun requestJson(path: String, bodyJson: String): OpenAIResponse =
+            withContext(Dispatchers.IO) { handle.openaiRequest(path, bodyJson).toOpenAIResponse() }
+
+        suspend fun chatCompletions(body: JsonObject): OpenAIResponse =
+            request("/v1/chat/completions", body)
+
+        suspend fun responses(body: JsonObject): OpenAIResponse =
+            request("/v1/responses", body)
+
+        fun stream(path: String, body: JsonObject): Flow<OpenAIStreamEvent> =
+            streamJson(path, body.toString())
+
+        fun streamJson(path: String, bodyJson: String): Flow<OpenAIStreamEvent> = callbackFlow {
+            val requestId = AtomicReference<RequestId?>()
+            val terminal = AtomicBoolean(false)
+            fun emitOrClose(event: OpenAIStreamEvent) {
+                if (trySend(event).isFailure && !terminal.get()) {
+                    close(IllegalStateException("OpenAI stream consumer buffer is full"))
+                }
+            }
+            val bridge = object : FfiOpenAiStreamListener {
+                override fun onEvent(event: OpenAiStreamEventNative) {
+                    when (event) {
+                        is OpenAiStreamEventNative.Started -> emitOrClose(event.toOpenAIStreamEvent())
+                        is OpenAiStreamEventNative.Sse -> emitOrClose(event.toOpenAIStreamEvent())
+                        is OpenAiStreamEventNative.Completed -> {
+                            terminal.set(true)
+                            close()
+                        }
+                        is OpenAiStreamEventNative.Failed -> {
+                            terminal.set(true)
+                            close(event.toException())
+                        }
+                    }
+                }
+            }
+            requestId.set(RequestId(handle.openaiStream(path, bodyJson, bridge)))
+            awaitClose {
+                if (!terminal.get()) {
+                    requestId.get()?.let(::cancel)
+                }
+            }
+        }
+
+        fun streamChatCompletions(body: JsonObject): Flow<OpenAIStreamEvent> =
+            stream("/v1/chat/completions", body)
+
+        fun streamResponses(body: JsonObject): Flow<OpenAIStreamEvent> =
+            stream("/v1/responses", body)
 
         fun chat(request: ChatRequest, listener: EventListener): RequestId {
             val bridge = object : FfiEventListener {
@@ -282,6 +376,59 @@ class Node(private val handle: MeshNodeHandleInterface) {
     class Inference(private val handle: MeshNodeHandleInterface) {
         suspend fun listModels(): List<Model> =
             withContext(Dispatchers.IO) { handle.inferenceListModels().map { it.toModel() } }
+
+        suspend fun request(path: String, body: JsonObject): OpenAIResponse =
+            requestJson(path, body.toString())
+
+        suspend fun requestJson(path: String, bodyJson: String): OpenAIResponse =
+            withContext(Dispatchers.IO) { handle.openaiRequest(path, bodyJson).toOpenAIResponse() }
+
+        suspend fun chatCompletions(body: JsonObject): OpenAIResponse =
+            request("/v1/chat/completions", body)
+
+        suspend fun responses(body: JsonObject): OpenAIResponse =
+            request("/v1/responses", body)
+
+        fun stream(path: String, body: JsonObject): Flow<OpenAIStreamEvent> =
+            streamJson(path, body.toString())
+
+        fun streamJson(path: String, bodyJson: String): Flow<OpenAIStreamEvent> = callbackFlow {
+            val requestId = AtomicReference<RequestId?>()
+            val terminal = AtomicBoolean(false)
+            fun emitOrClose(event: OpenAIStreamEvent) {
+                if (trySend(event).isFailure && !terminal.get()) {
+                    close(IllegalStateException("OpenAI stream consumer buffer is full"))
+                }
+            }
+            val bridge = object : FfiOpenAiStreamListener {
+                override fun onEvent(event: OpenAiStreamEventNative) {
+                    when (event) {
+                        is OpenAiStreamEventNative.Started -> emitOrClose(event.toOpenAIStreamEvent())
+                        is OpenAiStreamEventNative.Sse -> emitOrClose(event.toOpenAIStreamEvent())
+                        is OpenAiStreamEventNative.Completed -> {
+                            terminal.set(true)
+                            close()
+                        }
+                        is OpenAiStreamEventNative.Failed -> {
+                            terminal.set(true)
+                            close(event.toException())
+                        }
+                    }
+                }
+            }
+            requestId.set(RequestId(handle.openaiStream(path, bodyJson, bridge)))
+            awaitClose {
+                if (!terminal.get()) {
+                    requestId.get()?.let(::cancel)
+                }
+            }
+        }
+
+        fun streamChatCompletions(body: JsonObject): Flow<OpenAIStreamEvent> =
+            stream("/v1/chat/completions", body)
+
+        fun streamResponses(body: JsonObject): Flow<OpenAIStreamEvent> =
+            stream("/v1/responses", body)
 
         fun chat(request: ChatRequest, listener: EventListener): RequestId {
             val bridge = object : FfiEventListener {
@@ -431,6 +578,32 @@ class Node(private val handle: MeshNodeHandleInterface) {
 private fun ModelNative.toModel() = Model(id = id, name = name)
 
 private fun ClientStatus.toStatus() = Status(connected = connected, peerCount = peerCount)
+
+private fun OpenAiResponseNative.toOpenAIResponse() =
+    OpenAIResponse(statusCode = statusCode, contentType = contentType, body = body)
+
+private fun OpenAiStreamEventNative.Started.toOpenAIStreamEvent() =
+    OpenAIStreamEvent.Started(
+        requestId = RequestId(requestId),
+        statusCode = statusCode,
+        contentType = contentType,
+    )
+
+private fun OpenAiStreamEventNative.Sse.toOpenAIStreamEvent() =
+    OpenAIStreamEvent.Sse(
+        requestId = RequestId(requestId),
+        event = eventType,
+        data = data,
+        raw = raw,
+    )
+
+private fun OpenAiStreamEventNative.Failed.toException() =
+    OpenAIStreamException(
+        requestId = RequestId(requestId),
+        statusCode = statusCode,
+        responseBody = body,
+        message = error,
+    )
 
 private fun ChatMessage.toNative() = ChatMessageNative(role = role, content = content)
 

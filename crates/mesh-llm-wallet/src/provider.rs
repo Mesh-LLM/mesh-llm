@@ -89,8 +89,12 @@ pub trait WalletProvider: Send + Sync {
     /// than land unexpectedly.
     async fn create_invoice(&self, amount_msat: Option<u64>, expiry_secs: u32) -> Result<Invoice>;
 
-    /// Start or recover payment of this invoice. The implementation must not
-    /// initiate a payment whose amount plus fees exceeds `max_total_msat`.
+    /// Start or recover payment of this invoice. An implementation that can
+    /// bound routing fees must not initiate a payment whose amount plus fees
+    /// exceeds `max_total_msat`, and refuses it as `NotSubmitted`. One that
+    /// cannot must pass the headroom to its wallet where it can and report
+    /// the fee actually paid: the host records that fee against the daily
+    /// budget either way.
     /// `NotSubmitted` guarantees this call did not submit a payment. All other
     /// errors are uncertain and callers must reconcile by hash. The service
     /// may call `pay` again for the same invoice after an uncertain outcome;

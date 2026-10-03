@@ -32,6 +32,7 @@ enum PluginApiRoute<'a> {
     ToolCall(&'a str),
     WebUiMetadata(&'a str),
     WebUiEnabled(&'a str),
+    WebUiPrimaryTab(&'a str),
     WebUiAsset(&'a str),
     WebUiConfig(&'a str),
     StapledHttp,
@@ -42,6 +43,7 @@ enum PluginApiRoute<'a> {
 pub(super) enum PluginWebUiSubroute<'a> {
     Metadata,
     Enabled,
+    PrimaryTab,
     Config,
     Asset(&'a str),
 }
@@ -69,6 +71,9 @@ pub(super) async fn handle(
         PluginApiRoute::WebUiEnabled(route_path) => {
             web_ui::handle_enabled(stream, state, route_path, body).await
         }
+        PluginApiRoute::WebUiPrimaryTab(route_path) => {
+            web_ui::handle_primary_tab(stream, state, route_path, body).await
+        }
         PluginApiRoute::WebUiAsset(route_path) => {
             web_ui::handle_asset(stream, state, route_path).await
         }
@@ -87,6 +92,9 @@ fn classify_plugin_route<'a>(method: &str, path: &'a str) -> PluginApiRoute<'a> 
         "GET" => classify_plugin_get_route(path),
         "POST" if is_plugin_tool_call_route(path) => PluginApiRoute::ToolCall(path),
         "PATCH" if is_plugin_web_ui_enabled_route(path) => PluginApiRoute::WebUiEnabled(path),
+        "PATCH" if is_plugin_web_ui_primary_tab_route(path) => {
+            PluginApiRoute::WebUiPrimaryTab(path)
+        }
         "PATCH" if is_plugin_web_ui_config_route(path) => PluginApiRoute::WebUiConfig(path),
         _ if is_plugin_web_ui_namespace(path) => PluginApiRoute::Unmatched,
         "POST" | "PUT" | "PATCH" | "DELETE" if is_plugin_route(path) => PluginApiRoute::StapledHttp,
@@ -151,6 +159,7 @@ pub(super) fn parse_plugin_web_ui_route(path: &str) -> Option<(&str, PluginWebUi
     match suffix {
         "web-ui" => Some((plugin_name, PluginWebUiSubroute::Metadata)),
         "web-ui/enabled" => Some((plugin_name, PluginWebUiSubroute::Enabled)),
+        "web-ui/primary-tab" => Some((plugin_name, PluginWebUiSubroute::PrimaryTab)),
         "web-ui/config" => Some((plugin_name, PluginWebUiSubroute::Config)),
         _ => suffix
             .strip_prefix("web-ui/assets/")
@@ -170,6 +179,13 @@ fn is_plugin_web_ui_enabled_route(path: &str) -> bool {
     matches!(
         parse_plugin_web_ui_route(path),
         Some((_, PluginWebUiSubroute::Enabled))
+    )
+}
+
+fn is_plugin_web_ui_primary_tab_route(path: &str) -> bool {
+    matches!(
+        parse_plugin_web_ui_route(path),
+        Some((_, PluginWebUiSubroute::PrimaryTab))
     )
 }
 
@@ -660,7 +676,8 @@ mod tests {
     use mesh_llm_plugin_manager::store::{
         InstalledPluginWebUiBundleMetadata, InstalledPluginWebUiConfigSectionMetadata,
         InstalledPluginWebUiMetadata, InstalledPluginWebUiPageMetadata,
-        InstalledPluginWebUiValidation, InstalledPluginWebUiValidationStatus,
+        InstalledPluginWebUiPagePlacement, InstalledPluginWebUiValidation,
+        InstalledPluginWebUiValidationStatus,
     };
     use mesh_llm_plugin_manager::{
         InstalledPluginApplyMode, InstalledPluginConfigSchema, InstalledPluginManifestMetadata,
@@ -690,6 +707,10 @@ mod tests {
         assert_eq!(
             classify_plugin_route("PATCH", "/api/plugins/demo/web-ui/enabled"),
             PluginApiRoute::WebUiEnabled("/api/plugins/demo/web-ui/enabled")
+        );
+        assert_eq!(
+            classify_plugin_route("PATCH", "/api/plugins/demo/web-ui/primary-tab"),
+            PluginApiRoute::WebUiPrimaryTab("/api/plugins/demo/web-ui/primary-tab")
         );
         assert_eq!(
             classify_plugin_route("GET", "/api/plugins/demo/web-ui/config"),
@@ -911,6 +932,8 @@ mod tests {
                         route: "home".to_string(),
                         bundle_id: "main".to_string(),
                         entry_script: "assets/app.js".to_string(),
+                        placement: InstalledPluginWebUiPagePlacement::Auxiliary,
+                        host_header: None,
                     }],
                     config_sections: vec![InstalledPluginWebUiConfigSectionMetadata {
                         id: "settings".to_string(),
@@ -919,6 +942,7 @@ mod tests {
                         parent_tab: Some("integrations".to_string()),
                         bundle_id: "main".to_string(),
                     }],
+                    contributions: Vec::new(),
                     bundles: vec![InstalledPluginWebUiBundleMetadata {
                         id: "main".to_string(),
                         root_path: "web".to_string(),
@@ -959,6 +983,7 @@ mod tests {
                 live_manifest: None,
                 installed_metadata: Some(metadata),
                 web_ui_enabled,
+                web_ui_primary_tab: false,
                 runtime_available: status == "running",
                 runtime_unavailable_reason: error.as_deref(),
             }),
@@ -1174,6 +1199,45 @@ mod tests {
         let enable_body = json_body(&enable_response);
         assert!(enable_response.starts_with("HTTP/1.1 200 OK"));
         assert_eq!(enable_body["state"], "ready");
+
+        let primary_tab_response = call_plugins_route(
+            &state,
+            "PATCH",
+            "/api/plugins/demo/web-ui/primary-tab",
+            r#"{"enabled":true}"#,
+        )
+        .await;
+        let primary_tab_body = json_body(&primary_tab_response);
+        assert!(primary_tab_response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(primary_tab_body["primary_tab_enabled"], true);
+        let persisted = std::fs::read_to_string(&config_path).unwrap();
+        assert!(persisted.contains("web_ui_primary_tab = true"));
+        let persisted_config: crate::plugin::MeshConfig = toml::from_str(&persisted).unwrap();
+        assert_eq!(persisted_config.plugins[0].web_ui_primary_tab, Some(true));
+
+        let primary_tab_summary_response =
+            call_plugins_route(&state, "GET", "/api/plugins", "").await;
+        let primary_tab_summary_body = json_body(&primary_tab_summary_response);
+        assert_eq!(
+            primary_tab_summary_body[0]["web_ui"]["primary_tab_enabled"],
+            true
+        );
+
+        let deny_primary_tab_response = call_plugins_route(
+            &state,
+            "PATCH",
+            "/api/plugins/demo/web-ui/primary-tab",
+            r#"{"enabled":false}"#,
+        )
+        .await;
+        assert!(deny_primary_tab_response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(
+            json_body(&deny_primary_tab_response)["primary_tab_enabled"],
+            false
+        );
+        let persisted = std::fs::read_to_string(&config_path).unwrap();
+        let persisted_config: crate::plugin::MeshConfig = toml::from_str(&persisted).unwrap();
+        assert_eq!(persisted_config.plugins[0].web_ui_primary_tab, Some(false));
     }
 
     struct WebUiFailureFixture {
@@ -1370,6 +1434,26 @@ mod tests {
             json_body(&nondeclaring_toggle)["error"],
             "Plugin does not declare a web UI"
         );
+        assert!(!fixture.config_path.exists());
+
+        let nondeclaring_primary_tab = call_plugins_route(
+            state,
+            "PATCH",
+            "/api/plugins/plain/web-ui/primary-tab",
+            r#"{"enabled":true}"#,
+        )
+        .await;
+        assert!(nondeclaring_primary_tab.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(!fixture.config_path.exists());
+
+        let invalid_primary_tab = call_plugins_route(
+            state,
+            "PATCH",
+            "/api/plugins/ready/web-ui/primary-tab",
+            r#"{"enabled":"yes"}"#,
+        )
+        .await;
+        assert!(invalid_primary_tab.starts_with("HTTP/1.1 400 Bad Request"));
         assert!(!fixture.config_path.exists());
 
         let stapled_asset_path = call_plugins_route(

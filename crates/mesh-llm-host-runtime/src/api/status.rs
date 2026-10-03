@@ -429,10 +429,27 @@ pub(crate) struct StatusPayload {
     pub(crate) mesh_requirements: Option<MeshRequirementPolicySummary>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) recent_mesh_rejections: Vec<MeshRequirementRejectionEvent>,
+    /// Local-only plugin-mesh frame counters; see [`PluginFrameTelemetryPayload`].
+    /// Present even while the per-peer warning is throttled, so the volume is
+    /// not limited to what the log line reports.
+    pub(crate) plugin_frame_telemetry: PluginFrameTelemetryPayload,
     /// Local-only logging capability and worker health. Omitted until logging
     /// state has been initialized so older consumers retain their prior shape.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) logging: Option<LoggingStatusPayload>,
+}
+
+/// Local-only plugin-mesh frame telemetry.
+///
+/// A frame whose claimed `source_peer_id` is not the sending peer is recorded
+/// locally, and the per-peer warning for it is throttled, so these counters —
+/// not the log line — are the volume an operator can read. Local-only, like the
+/// routing metrics beside it; nothing here is mesh-aggregated or advertised.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub(crate) struct PluginFrameTelemetryPayload {
+    /// Received plugin-mesh frames whose non-empty claimed `source_peer_id` was
+    /// not the peer that sent them.
+    pub(crate) source_mismatch_total: u64,
 }
 
 /// Path-free local logging health. This is deliberately absent from mesh
@@ -1230,6 +1247,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
         };
 
@@ -1303,6 +1321,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
         };
 
@@ -1376,6 +1395,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
         };
 
@@ -1444,6 +1464,7 @@ mod tests {
             first_joined_mesh_ts: None,
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
+            plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
         };
 

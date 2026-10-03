@@ -10,6 +10,7 @@ Plugin-specific documentation:
 
 - [Wallet engineering notes](wallet/README.md) - wallet boundaries, evidence provenance, and fixture expectations
 
+- [DwarfStar (ds4)](dwarfstar.md) - run ds4 models (DeepSeek V4 Flash and others) on Apple Silicon with a bundled alternative engine
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
@@ -95,6 +96,7 @@ Use the typed builders from `mesh_llm_plugin::manifest`:
 - `web_ui`
 - `web_ui_page`
 - `web_ui_config_section`
+- `web_ui_contribution`
 - `web_ui_bundle`
 
 Rules for the declared bundle paths:
@@ -102,8 +104,9 @@ Rules for the declared bundle paths:
 - keep paths package-relative and below the package root; do not use an empty
   path or `.` as a bundle root
 - declare exactly one non-empty bundle id and one bundle root for v1 whenever
-  the block declares pages or config sections
-- set every page and config-section `bundle_id` to that declared bundle id
+  the block declares pages, config sections or contributions
+- set every page, config-section and contribution `bundle_id` to that declared
+  bundle id
 - give every page and config section a non-empty id and display label/title
 - keep page `route` values as slugs, not paths or URLs; do not include `/`,
   `\`, protocol syntax, or traversal-style dot prefixes
@@ -112,6 +115,31 @@ Rules for the declared bundle paths:
 - reject remote URL schemes, absolute paths, and traversal segments
 - treat `parent_tab = "integrations"` as the only supported parent-tab value for
   config sections, or omit `parent_tab`
+- a page may set `placement = "primary"` to request promotion to a primary
+  console tab (default, if omitted, is `"auxiliary"`); this is only a request —
+  see "Primary Tab Placement" below for what else must be true before the host
+  honors it
+- set a contribution's `slot` to `chat_message` or `logs_request`
+
+### Primary Tab Placement
+
+A page's `placement` hint never forces anything on its own. The host projects a
+page as a primary tab, next to `Network`/`Logs`/`Chat`/etc., only when BOTH of
+these are true:
+
+- the page's manifest declares `placement = "primary"`
+- the operator has turned on the plugin's persisted `web_ui_primary_tab`
+  preference (default off), alongside the existing `web_ui_enabled` preference,
+  in Configuration › Plugins
+
+If either is missing, the page renders as the existing auxiliary navigation
+item instead — a plugin cannot promote its own page unilaterally, and an
+operator preference alone does nothing until a page actually asks for it. At
+most one page per plugin promotes; a manifest that hints `primary` on more than
+one page only sees its first ready page promoted. The host also caps how many
+plugin pages the primary header row will hold at once; once that cap is
+reached, later-loaded plugins fall back to auxiliary placement even if both
+conditions are met, to protect header space for the console's own tabs.
 
 The manifest proto keeps the bundle field repeated as a forward-compatible wire
 shape. V1 validation intentionally permits only one bundle root so the host has
@@ -136,12 +164,21 @@ The web UI API uses the existing plugin namespace and these exact routes:
 
 - `GET /api/plugins/:plugin/web-ui`
 - `PATCH /api/plugins/:plugin/web-ui/enabled`
+- `PATCH /api/plugins/:plugin/web-ui/primary-tab`
 - `GET /api/plugins/:plugin/web-ui/config`
 - `PATCH /api/plugins/:plugin/web-ui/config`
 - `GET /api/plugins/:plugin/web-ui/assets/*asset`
 
 The toggle route changes only the persisted `web_ui_enabled` projection
 preference. It does not start, stop, or disable the plugin process.
+
+The primary-tab route changes only the persisted `web_ui_primary_tab`
+preference (`{ "enabled": bool }` in, the updated web UI state back). It is a
+separate route from `web-ui/enabled` because the two preferences are
+independent and separately host-owned: turning the web UI off should not
+silently clear a saved primary-tab preference, and setting the preference does
+nothing on its own unless the plugin's manifest also hints `placement =
+"primary"` on a page (see "Primary Tab Placement" above).
 
 Asset delivery is host-owned and same-origin. It serves only validated installed
 bundle assets and only when the projection is `ready`. Console mounts use the
@@ -172,7 +209,8 @@ The config route is also host-owned and plugin-scoped. `GET` returns:
 
 The `plugin` field must match the mounted plugin when present. Mutations may
 only touch plugin-owned `settings` keys; host-owned fields such as `enabled`,
-`web_ui_enabled`, `command`, `args`, `url`, and `startup` are rejected.
+`web_ui_enabled`, `web_ui_primary_tab`, `allow_peer_blocks`, `command`, `args`,
+`url`, and `startup` are rejected.
 Malformed requests return `400`; schema-invalid setting values return `422`;
 successful mutations return the newly visible plugin config.
 
@@ -180,13 +218,40 @@ The console route is static TanStack routing, not dynamic route injection:
 
 - `/plugins/$pluginName/$pageId`
 
-Plugin routes do not become a new primary `AppTab`. A ready plugin with one
-declared page receives a direct auxiliary navigation item labeled from its page
-manifest. When more than one plugin page is ready, the console groups those
-entries under the auxiliary `Plugins` menu to protect header space. Disabled,
-invalid, or stopped projections contribute no navigation item. The existing
-Configuration `Plugins` tab owns config-section projection, and only ready
-config sections in the `integrations` projection mount there.
+Plugin routes do not become a new primary `AppTab` — the fixed `AppTab` union
+(`network`, `reserves`, `logs`, `chat`, `configuration`) is unchanged. A ready
+plugin with one declared page receives a direct auxiliary navigation item
+labeled from its page manifest. When more than one plugin page is ready, the
+console groups those entries under the auxiliary `Plugins` menu to protect
+header space. A page whose manifest requests `placement = "primary"` and whose
+plugin has the `web_ui_primary_tab` preference on instead renders alongside the
+fixed tabs rather than joining the `AppTab` union (see "Primary Tab Placement"
+above), using its manifest label (hidden below the `md` breakpoint, same as
+the fixed tabs) and the same generic plugin icon as auxiliary placement — the
+page manifest's own `icon` is not rendered in either placement; everything
+else about it — the static route, the eligibility rules below — is unchanged.
+Disabled, invalid, or stopped projections contribute no navigation item, in
+either placement. The existing Configuration `Plugins` tab owns config-section
+projection, and only ready config sections in the `integrations` projection
+mount there.
+
+The host draws a page header ("Plugin page", the page label and where it is
+mounted from) above each plugin page. A page with its own title bar can set
+`host_header = false` (`web_ui_page(...).host_header(false)`); the host then
+draws no visible header, keeps the page label as its accessible heading, and
+still names the plugin in the navigation.
+
+A plugin can also put a small element next to the host's own data, outside its
+pages. There are exactly two contribution slots:
+
+| Slot | Where the host mounts it | What the host passes (`subject`) |
+| --- | --- | --- |
+| `chat_message` | under each finished assistant chat message | `messageId`, and when known `clientNonce`, `model`, `servedBy` |
+| `logs_request` | in the Logs request inspector header | `requestId`, and when known `exchangeId` |
+
+The host passes ids only, mounts nothing plugin-specific, and leaves the slot
+empty when the projection is not ready or the bundle fails to load. What the
+element shows (a note, a link to the plugin's own page) is the plugin's.
 
 Plugin-owned settings declared in `config_schema` continue to render through
 the console's standard schema controls. A custom config-section bundle should
@@ -211,12 +276,17 @@ handlers for pages and config sections.
   fragments, backslashes, and `.`/`..` path segments are rejected
 - `host.network.json(...)` rejects non-2xx responses; use `fetchPlugin(...)`
   when the bundle needs to inspect a non-success status itself
-- registrations must return a `pages` object, optional `configSections` object,
-  and `{ unmount() }` from every mounted handler; malformed results surface as
+- registrations must return a `pages` object, optional `configSections` and
+  `contributions` objects, and `{ unmount() }` from every mounted handler; malformed results surface as
   host contract errors rather than failing later during cleanup
 - the host imports bundle code only after the projection is ready, enabled,
-  available, has a same-origin `asset_base_url`, and the requested page or
-  section exists
+  available, has a same-origin `asset_base_url`, and the requested page,
+  section or contribution exists
+- a contribution handler receives `{ element, host, contribution, subject }`;
+  the host unmounts it and mounts it again when any id in `subject` changes,
+  and it may mount once per chat message, so keep it small; every mount gets
+  a fresh `element` that the host removes after `unmount()` or a failed mount,
+  and a handler that resolves after its subject changed is unmounted at once
 - ship browser-importable JavaScript; the host does not transpile TypeScript,
   JSX, CommonJS, or unresolved bare npm imports
 - use the exemplar's self-contained `bundle/host-contract.d.ts` for author
@@ -1126,6 +1196,64 @@ Plugins may declare mesh channels for plugin-specific peer-to-peer coordination.
 These should use the generic plugin mesh transport rather than dedicated core stream types for individual plugins.
 
 Core should not embed plugin-specific wire protocols in the main mesh transport when the behavior can live behind the generic plugin channel mechanism.
+
+## Peer Routing Blocks
+
+An operator can tell their own node to stop routing to a peer: `POST
+/api/peer-blocks` with `{ "peer": "<64-hex id>", "length": "seven_days" |
+"until_undone" }`, undone with `POST /api/peer-blocks/unblock`, listed with `GET
+/api/peer-blocks`. The routes are loopback-only. A block is local to this node:
+it is never gossiped or shared. While it holds, the router, the any-host
+fallback, consult-peer selection and split-serving stage selection skip that
+peer, so a block also keeps a peer from being picked as a split stage that
+would receive the user's content; local targets are never affected. The split
+readiness report lists such a peer as a `blocked` exclusion rather than a
+candidate.
+
+A plugin may request the same change with a `PeerBlockRequest`
+(`PluginContext::request_peer_block`), but only if the operator has opted that
+plugin in:
+
+```toml
+[[plugin]]
+name = "example"
+allow_peer_blocks = true
+```
+
+Without it (the default) the host refuses the request and nothing changes. The
+setting is read on every request, so turning it off takes effect at once;
+blocks the plugin already holds stay until they lapse or the operator lifts
+them. The host records the plugin as the requester (by the name the host knows
+the plugin connection by) and stores the plugin's optional `reason_json`
+without reading it. A plugin can re-block or undo only a block it requested,
+so it can never take over or lift the operator's block or another plugin's;
+the operator can change or undo any block. An opted-in plugin can block any
+peer, including all of them; blocks stay local to this node and the operator
+can lift them.
+
+The host advertises the `peer_blocks.v1` host capability in its
+`InitializeRequest`. Against a host without it, `request_peer_block` fails at
+once with an "unsupported by host" error instead of waiting; every request is
+also bounded by its own timeout.
+
+Blocks are saved to `peer_blocks.json` in the identity state directory. Each
+save writes a temporary file, syncs it, renames it over the old one, and syncs
+the directory, so a crash leaves the old store or the new one. A missing file
+is an empty store. If the file cannot be read, or cannot be decoded and then
+cannot be set aside as `peer_blocks.json.corrupt-<ms>`, the node starts with no
+blocks and saves nothing for the rest of the run, so the file is never
+overwritten; `GET /api/peer-blocks` reports why as `not_saved`.
+
+Every change is published once, as JSON, on the local channel
+`routing.choice.v1` to the plugins that declare it:
+
+```json
+{ "change": "block", "peer": "<64-hex id>", "at_ms": 0, "until_ms": 0,
+  "requested_by": "operator | plugin:<id>", "reason": {} }
+```
+
+`until_ms` and `reason` are omitted when absent. The host keeps no ranking, no
+history of changes, and no shared lists.
 
 ## What The Host Owns
 

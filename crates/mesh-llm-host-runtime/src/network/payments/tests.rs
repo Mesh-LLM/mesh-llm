@@ -26,6 +26,7 @@ mod admission;
 mod expiry;
 mod forwarding;
 mod handoff;
+mod lifecycle;
 mod pre_authorization;
 mod review_regressions;
 
@@ -41,6 +42,66 @@ struct Network {
     decoded_before_payment: AtomicBool,
     backend_output_before_payment: AtomicBool,
     invoice_delay_ms: AtomicUsize,
+    /// When set, each node also loads a plugin that records every
+    /// `payment.lifecycle.v1` message it is sent.
+    record_lifecycle: AtomicBool,
+    provider_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
+    payer_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// The `exchange_id` of each `openai.exchange.v1` event the provider
+    /// published, so a test can join them to its lifecycle events.
+    provider_exchange_ids: Mutex<Vec<String>>,
+}
+
+/// A trusted local plugin that declares `payment.lifecycle.v1` and keeps
+/// every event body it receives.
+fn lifecycle_recorder(
+    name: &'static str,
+    events: Arc<Mutex<Vec<serde_json::Value>>>,
+) -> (String, crate::plugin::InProcessPluginRunner) {
+    let runner: crate::plugin::InProcessPluginRunner = Arc::new(move |stream| {
+        let events = events.clone();
+        let plugin = mesh_llm_plugin::SimplePlugin::new(mesh_llm_plugin::PluginMetadata::new(
+            name,
+            "0.0.0",
+            mesh_llm_plugin::plugin_server_info(
+                name,
+                "0.0.0",
+                "Lifecycle recorder",
+                "Records payment lifecycle events",
+                None::<String>,
+            ),
+        ))
+        .with_manifest(mesh_llm_plugin::plugin_manifest![
+            mesh_llm_plugin::mesh_channel("payment.lifecycle.v1")
+        ])
+        .on_channel_message(move |message, _context| {
+            let events = events.clone();
+            Box::pin(async move {
+                if let Ok(event) = serde_json::from_slice(&message.body) {
+                    events.lock().unwrap().push(event);
+                }
+                Ok(())
+            })
+        });
+        Box::pin(mesh_llm_plugin::PluginRuntime::run_with_stream(
+            plugin, stream,
+        ))
+    });
+    (name.to_owned(), runner)
+}
+
+impl Network {
+    fn recorder(
+        &self,
+        name: &'static str,
+        events: &Arc<Mutex<Vec<serde_json::Value>>>,
+    ) -> Vec<(String, crate::plugin::InProcessPluginRunner)> {
+        if self.record_lifecycle.load(Ordering::SeqCst) {
+            vec![lifecycle_recorder(name, events.clone())]
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 struct TestWallet {
@@ -344,10 +405,18 @@ async fn paid_exchange_on(
         .payments
         .set(provider_service.clone())
         .map_err(|_| anyhow::anyhow!("service already initialized"))?;
-    crate::network::payments::node_ext::attach_payments_plugin(&provider).await?;
+    crate::network::payments::node_ext::attach_payments_plugin_with(
+        &provider,
+        network.recorder("provider-lifecycle-recorder", &network.provider_lifecycle),
+    )
+    .await?;
     let payer = Node::new_for_tests(NodeRole::Client).await?;
-    let payer_payments =
-        super::client::Payments::attach_for_tests(&payer, payer_service.clone()).await?;
+    let payer_payments = super::client::Payments::attach_for_tests_with(
+        &payer,
+        payer_service.clone(),
+        network.recorder("payer-lifecycle-recorder", &network.payer_lifecycle),
+    )
+    .await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
     let backend = tokio::spawn(simulated_backend(
@@ -377,6 +446,11 @@ async fn paid_exchange_on(
     let (mut send, recv) = connection.open_bi().await?;
     let id = uuid::Uuid::new_v4().to_string();
     let request = paid_request(requested)?;
+    // Before the request is sent, so the seller's events are recorded.
+    let provider_events =
+        crate::network::openai::paid_exchange::record_paid_exchanges_for_test(&provider);
+    let expected_request_digest =
+        crate::plugin::openai_exchange::request_body_digest(&request.body, None);
     wire::write(
         &mut send,
         &Frame::Request {
@@ -418,7 +492,23 @@ async fn paid_exchange_on(
     let (_server_connection, result) = serving.await??;
     result?;
     backend.await??;
+    network.provider_exchange_ids.lock().unwrap().extend(
+        provider_events
+            .events()
+            .iter()
+            .map(|event| event.exchange_id.clone()),
+    );
     let output_tokens = if output_allowance > 4096 { 5000 } else { 3 };
+    if !cancel_after_output {
+        assert_seller_published_the_exchange(
+            &provider_events.events(),
+            expected_request_digest.as_deref(),
+            &provider.id().to_string(),
+            output_tokens,
+        );
+    } else {
+        assert_seller_did_not_claim_a_served_exchange(&provider_events.events());
+    }
     assert_settlement(&network, &payer_service, &provider_service, output_tokens)?;
     assert_eq!(
         payer_service.ledger.requests()?[0].terms.max_output_tokens,
@@ -427,6 +517,81 @@ async fn paid_exchange_on(
     payer.endpoint.close().await;
     provider.endpoint.close().await;
     Ok(())
+}
+
+/// A payer-cancelled exchange still ends with a terminal event, but never
+/// one claiming a served response: no status, usage or output digests.
+fn assert_seller_did_not_claim_a_served_exchange(
+    events: &[crate::plugin::openai_exchange::OpenAiExchangeEnvelope],
+) {
+    assert_eq!(events.len(), 2, "effective + terminal: {events:?}");
+    let terminal = &events[1];
+    assert_eq!(events[0].exchange_id, terminal.exchange_id);
+    let json = serde_json::to_value(terminal).unwrap();
+    assert_eq!(json["phase"], "terminal");
+    assert_eq!(terminal.status, None, "cancelled, not served: {json}");
+    for field in [
+        "usage",
+        "serving_provenance",
+        "response_digest",
+        "tool_calls_digest",
+    ] {
+        assert!(
+            json.get(field).is_none(),
+            "cancelled exchange carries {field}: {json}"
+        );
+    }
+}
+
+/// The seller's paid serving path publishes the same exchange events as the
+/// free path -- an effective and a terminal event under one exchange id, with
+/// this node's serving provenance, the payer's request digest, and the digests
+/// of the response it delivered -- so a subscribed plugin sees the paid
+/// exchange just as it sees a free one.
+fn assert_seller_published_the_exchange(
+    events: &[crate::plugin::openai_exchange::OpenAiExchangeEnvelope],
+    expected_request_digest: Option<&str>,
+    provider_node_id: &str,
+    output_tokens: u64,
+) {
+    use crate::plugin::openai_exchange::{
+        ExchangeOutputDigests, OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope,
+    };
+    assert_eq!(
+        events.len(),
+        2,
+        "one effective + one terminal event: {events:?}"
+    );
+    let (effective, terminal) = (&events[0], &events[1]);
+    assert_eq!(effective.exchange_id, terminal.exchange_id);
+    let terminal_json = serde_json::to_value(terminal).unwrap();
+    assert_eq!(terminal_json["phase"], "terminal");
+    assert_eq!(terminal.status, Some(200));
+    assert!(expected_request_digest.is_some());
+    assert_eq!(terminal.request_digest.as_deref(), expected_request_digest);
+    // The same construction the free relay uses on the body it delivered.
+    let body = serde_json::json!({
+        "choices": [{"text": "test output"}],
+        "usage": {"prompt_tokens": 40, "completion_tokens": output_tokens, "total_tokens": 40 + output_tokens}
+    });
+    let expected = OpenAiExchangeEnvelope::terminal(
+        String::new(),
+        OpenAiExchangeDispatchPath::RawProxy,
+        "test",
+        Some(200),
+        None,
+        None,
+    )
+    .with_output_digests(ExchangeOutputDigests::from_response_body(
+        &serde_json::to_vec(&body).unwrap(),
+    ));
+    assert!(expected.response_digest.is_some());
+    assert_eq!(terminal.response_digest, expected.response_digest);
+    let provenance = terminal
+        .serving_provenance
+        .as_ref()
+        .expect("served here, so this node's serving provenance is attached");
+    assert_eq!(provenance.served_by_node_id, provider_node_id);
 }
 
 fn paid_request(max_tokens: Option<u32>) -> Result<super::request::PaidRequest> {

@@ -78,6 +78,7 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
+| `payments.wallet` | string | unset: the only running `wallet.v1` plugin | node-level | process restart | wired | none |
 | `telemetry.enabled` | boolean | `false` | node-level | process restart | wired | none |
 | `telemetry.service_name` | string | `mesh-llm` | node-level | process restart | wired | none |
 | `telemetry.endpoint` | URL | unset | node-level | process restart | wired | none |
@@ -250,6 +251,7 @@ per-tensor device overrides. None of these has a schema key yet.
 |---|---|---|---|---|---|---|
 | `throughput.parallel` | integer | `1` | both | model reload | wired | `--parallel` |
 | `throughput.continuous_batching` | bool-or-`auto` | `auto` | both | model reload | wired (disabled mode limits scheduler iterations to one active request; enabled/auto uses all configured lanes) | none |
+| `throughput.pipeline_decode_groups` | integer | `1` (no grouping); a count of at least 1 | both | model reload | wired (splits each coalesced decode wave into this many groups so a pipelined split keeps more than one batch in flight; `SKIPPY_PIPELINE_DECODE_GROUPS` still overrides it for benchmarking) | none |
 | `throughput.threads` | integer | `0` = auto from host CPU count | both | model reload | wired | `--threads` |
 | `throughput.threads_batch` | integer | `0` = defaults to `threads` | both | model reload | wired | none |
 | `throughput.priority` | integer-or-string | unsupported | both | not applicable | rejected (no model-scoped scheduling or OS-priority consumer) | none |
@@ -304,11 +306,11 @@ configuration should use typed per-model `topology`; explicit `--model` and
 | `speculative.ngram_min`<br>`speculative.ngram_max` | integer | required for a direct N-gram plan; `0 < min <= max` | both | model reload | wired | none |
 | `speculative.ngram_proposer` | enum | `cache` (default), `suffix` | both | model reload | wired | none |
 | `speculative.ngram_max_proposal_tokens` | integer | N-gram maximum | both | model reload | wired | none |
-| `speculative.ngram_fallback` | string | `none` (default), `draft`; `draft` requires an N-gram proposer, a configured draft model, and pipeline depth greater than one | both | model reload | wired | none |
+| `speculative.ngram_fallback` | string | `none` (default), `draft`; `draft` requires an N-gram proposer, a configured draft model, and pipeline depth greater than one | both | model reload | wired | `--speculative-ngram-fallback` |
 | `speculative.extension_max_tokens` | integer | N-gram output budget | both | model reload | wired (requires native MTP plus an N-gram proposer) | none |
 | `speculative.native_mtp_reject_cooldown_tokens`<br>`speculative.native_mtp_suppress_cooldown_drafts`<br>`speculative.native_mtp_suppress_cooldown_draft_limit` | integer / boolean | runtime defaults | both | model reload | wired | none |
 | `speculative.verify_window_min_tokens`<br>`speculative.verify_window_max_tokens`<br>`speculative.verify_window_pipeline_depth` | integer | package policy or runtime defaults; `min <= max` | both | model reload | wired | none |
-| `speculative.verify_window_runahead_tokens` | integer | `0` (fixed-depth admission); `0..=4096`, where a positive budget admits verify windows by speculative-token budget instead of a fixed window count | both | model reload | wired (capped by the native checkpoint-retention bound of 64 windows) | none |
+| `speculative.verify_window_runahead_tokens` | integer | `0` (fixed-depth admission); `0..=4096`, where a positive budget admits verify windows by speculative-token budget instead of a fixed window count | both | model reload | wired (capped by the native checkpoint-retention bound of 64 windows) | `--speculative-verify-window-runahead-tokens` |
 | `speculative.spec_default` | bool-or-`auto` | `auto` | both | model reload | wired (`false` disables automatic speculation; `true`, `auto`, and omission enable supported automatic defaults) | none |
 
 ## Group 8: sampling, chat templates, reasoning, and request defaults
@@ -330,7 +332,7 @@ are applied by the embedded OpenAI frontend before prompt rendering.
 | `request_defaults.top_nsigma` | float | backend range | both | request-time | wired | none |
 | `request_defaults.dynatemp_range`<br>`request_defaults.dynatemp_exponent` | float | `>= 0.0` | both | request-time | wired | none |
 | `request_defaults.repeat_penalty` | float | `>= 0.0` | both | request-time | wired | none |
-| `request_defaults.repeat_last_n` | integer | `>= -1` | both | request-time | wired | none |
+| `request_defaults.repeat_last_n` | integer | `>= 0`, default `64`; legacy `-1` uses the default | both | request-time | wired | none |
 | `request_defaults.presence_penalty`<br>`request_defaults.frequency_penalty` | float | backend range | both | request-time | wired | none |
 | `request_defaults.dry` | object | typed multiplier, base, length, window, and sequence breakers | both | request-time | wired | none |
 | `request_defaults.xtc` | object | probability and threshold | both | request-time | wired | none |
@@ -375,6 +377,8 @@ sampling at the backend when it selects mode `1` or `2`.
 | `plugin.<name>.name` | string | required | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.enabled` | boolean | `true` | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.web_ui_enabled` | boolean | unset (follows the plugin's declared default) | plugin entry | plugin process restart | wired | none |
+| `plugin.<name>.web_ui_primary_tab` | boolean | unset (`false`; primary placement stays off until explicitly enabled) | plugin entry | plugin process restart | wired | none |
+| `plugin.<name>.allow_peer_blocks` | boolean | unset (`false`; the plugin's peer block requests are refused until explicitly enabled) | plugin entry | applies dynamically | wired | none |
 | `plugin.<name>.command` | string | required unless `url` is set | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.args` | array of string | `[]` | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.url` | URL | unset | plugin entry | plugin process restart | wired for HTTP(S) adapter URLs; `tcp://` control is rejected because no authenticated capability handshake exists | none |

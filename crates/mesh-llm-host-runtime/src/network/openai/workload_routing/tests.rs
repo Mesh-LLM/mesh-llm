@@ -173,8 +173,13 @@ fn decision_models_are_excluded_from_every_classed_endpoint() {
         );
     }
     assert_eq!(request_workload_class("/systemone"), None);
+    assert_eq!(request_workload_class("/v1/decisions"), None);
     assert_eq!(
         required_request_workload("/systemone?trace=1"),
+        Some(mesh::ModelWorkloadClass::Decision)
+    );
+    assert_eq!(
+        required_request_workload("/v1/decisions?trace=1"),
         Some(mesh::ModelWorkloadClass::Decision)
     );
     assert_eq!(
@@ -197,7 +202,12 @@ fn system_one_requires_its_own_advertised_capability() {
         assert!(model_satisfies_request(
             "system-one",
             "/systemone?trace=1",
-            &[capable]
+            std::slice::from_ref(&capable)
+        ));
+        assert!(model_satisfies_request(
+            "system-one",
+            "/v1/decisions?trace=1",
+            std::slice::from_ref(&capable)
         ));
     }
 
@@ -206,6 +216,11 @@ fn system_one_requires_its_own_advertised_capability() {
     assert!(!model_satisfies_request(
         "plain-decision-model",
         "/systemone",
-        &[unsupported]
+        std::slice::from_ref(&unsupported)
+    ));
+    assert!(!model_satisfies_request(
+        "plain-decision-model",
+        "/v1/decisions",
+        std::slice::from_ref(&unsupported)
     ));
 }

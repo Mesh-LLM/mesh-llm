@@ -4,7 +4,7 @@ use super::plugin_host_role;
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
 use super::status::mesh_guardrail_mode_to_openai;
 use super::{
-    AutoRuntimeNodeSetup, BootstrapProxyStopTx, DashboardContextUsage, ManagedModelController,
+    AutoRuntimeNodeSetup, DashboardContextUsage, ManagedModelController,
     ModelTargetReconciliationPolicy, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
     PreparedRuntimeStartup, RunAutoAdditionalModelsContext, RunAutoConsoleStateContext,
     RunAutoRuntimeLifecycleContext, RunAutoServingSurface, RunAutoServingSurfaceContext,
@@ -16,17 +16,16 @@ use super::{
     configure_skippy_native_logging, configure_startup_lifecycle_log_parser,
     emit_configuration_ui_read_only_hint, initialize_embedded_runtime_entrypoint,
     initialize_runtime_entrypoint, kv_disk_config::configure_node_kv_disk_cache,
-    maybe_discover_join_candidates, next_runtime_instance_id, nostr_rediscovery, nostr_relays,
-    openai_guardrail_policy_handle, owner_runtime_config, prepare_runtime_startup,
-    publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
+    maybe_discover_join_candidates, maybe_select_small_auto_contribution, next_runtime_instance_id,
+    nostr_rediscovery, nostr_relays, openai_guardrail_policy_handle, owner_runtime_config,
+    prepare_runtime_startup, publish_initial_openai_guardrails_status, record_first_joined_mesh_ts,
     record_runtime_operational_event, resolve_runtime_owner_key_path,
-    resolve_startup_mesh_creation_state, run_auto_join_mesh_phase, run_auto_model_identity,
-    run_auto_model_path_or_shutdown, run_auto_runtime_loop_and_shutdown, run_local_model_only,
-    runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
-    setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
-    spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
-    swarm_capture_observer_requested,
+    resolve_startup_mesh_creation_state, run_auto_join_mesh_phase,
+    run_auto_runtime_loop_and_shutdown, run_local_model_only, runtime_data_producer_for_console,
+    runtime_startup_requirements, setup_run_auto_console_state, setup_run_auto_serving_surface,
+    spawn_embedded_runtime_control_forwarder, spawn_run_auto_additional_model_tasks,
+    spawn_run_auto_discovery_publisher, start_run_auto_bootstrap_proxy, startup_device_override,
+    startup_local_model_loop, swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -55,15 +54,6 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU16},
 };
-
-#[expect(
-    dead_code,
-    reason = "the legacy advertised-model selection lane remains available to compatibility helpers and focused tests"
-)]
-pub(super) enum RunAutoModelSelection {
-    Model(PathBuf),
-    Shutdown,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeUnloadOwner {
@@ -250,9 +240,9 @@ pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) ->
 /// SIGTERM. The plugin lifecycle is otherwise driven by the host connection
 /// closing, so a branch that did not observe the shared delivery would consume
 /// the signal and leave the plugin running indefinitely (#1969 review).
-async fn run_plugin_until_shutdown(name: String) -> Result<()> {
+async fn run_plugin_until_shutdown(name: String, args: Vec<String>) -> Result<()> {
     let shutdown = super::shutdown_signal::wait_for_shutdown_signal();
-    run_plugin_until(plugin::run_plugin_process(name), shutdown).await
+    run_plugin_until(plugin::run_plugin_process(name, args), shutdown).await
 }
 
 /// Run `plugin` until it completes, or until `shutdown` observes a
@@ -307,7 +297,7 @@ pub(super) async fn run_runtime_cli(
     if let Some(name) = options.plugin.clone() {
         super::shutdown_signal::wait_for_shutdown_signal_installation().await?;
         initialize_early_topology_audit_logging(&mut options)?;
-        return run_plugin_until_shutdown(name).await;
+        return run_plugin_until_shutdown(name, options.plugin_args.clone()).await;
     }
 
     let checked_updates = autoupdate::maybe_auto_update(autoupdate::AutoUpdateOptions {
@@ -394,13 +384,20 @@ pub(super) async fn run_runtime_cli(
     handle_public_identity_transition(&options)?;
 
     let mut auto_join_candidates: Vec<(String, Option<String>)> = Vec::new();
-    maybe_discover_join_candidates(
+    let auto_local_fit_gb = maybe_discover_join_candidates(
         &mut options,
         has_startup_models,
         &mut auto_join_candidates,
         config.gpu.host_ram_offload.unwrap_or(false),
     )
     .await?;
+    maybe_select_small_auto_contribution(
+        &mut options,
+        effective_mode,
+        has_startup_models,
+        &auto_join_candidates,
+        auto_local_fit_gb,
+    );
     let Some(PreparedRuntimeStartup {
         startup_specs,
         requested_model_names,
@@ -1537,39 +1534,6 @@ pub(super) fn configure_swarm_capture(
     Ok(recorder)
 }
 
-#[expect(
-    dead_code,
-    reason = "the legacy advertised-model selection context is retained for compatibility helpers and focused tests"
-)]
-pub(super) struct RunAutoModelSelectionContext<'a> {
-    pub(super) options: &'a RuntimeOptions,
-    pub(super) node: &'a mesh::Node,
-    pub(super) startup_models: &'a [StartupModelPlan],
-    pub(super) local_models: &'a [String],
-    pub(super) is_client: bool,
-    pub(super) plugin_manager: &'a plugin::PluginManager,
-    pub(super) bootstrap_listener_tx: &'a mut Option<BootstrapProxyStopTx>,
-    pub(super) primary_startup_model: Option<&'a StartupModelPlan>,
-    pub(super) embedded_control_rx:
-        &'a mut Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
-}
-
-#[expect(
-    dead_code,
-    reason = "the daemon startup path supersedes advertised-model selection while compatibility tests still exercise it"
-)]
-pub(super) async fn select_advertised_run_auto_model(
-    mut ctx: RunAutoModelSelectionContext<'_>,
-) -> Result<Option<(PathBuf, String)>> {
-    let Some(model) = run_auto_model_path_or_shutdown(&mut ctx).await? else {
-        return Ok(None);
-    };
-
-    let (model_name, model_source) = run_auto_model_identity(ctx.primary_startup_model, &model);
-    advertise_run_auto_models(ctx.node, ctx.startup_models, &model_name, model_source).await;
-    Ok(Some((model, model_name)))
-}
-
 /// Serve mode: join the mesh and serve local models through the embedded runtime.
 pub(super) struct RunAutoContext {
     pub(super) options: RuntimeOptions,
@@ -2104,6 +2068,8 @@ mod tests {
                 name: BLOBSTORE_PLUGIN_ID.to_owned(),
                 enabled: Some(true),
                 web_ui_enabled: None,
+                web_ui_primary_tab: None,
+                allow_peer_blocks: None,
                 command: Some("invalid-blobstore-command".to_owned()),
                 args: Vec::new(),
                 url: None,

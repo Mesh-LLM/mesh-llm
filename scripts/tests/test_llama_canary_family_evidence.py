@@ -357,6 +357,22 @@ class FamilyEvidenceTests(unittest.TestCase):
         self.assertIn('green=true', output.read_text())
         self.assertIn('state=green', output.read_text())
 
+    def test_failed_retry_job_graph_cannot_certify_green_receipts(self):
+        (self.evidence / 'hybrid/receipt.json').unlink()
+        previous = self.root / 'previous-feedback'
+        with self.assertRaises(ValueError):
+            self.aggregate(feedback=previous, family_result='failure')
+        retry = self.root / 'retry'
+        shutil.copytree(self.evidence / 'hybrid', retry / 'hybrid')
+        self.make_receipt_at(retry / 'hybrid', 'hybrid')
+        output = self.root / 'reconcile-output'
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            with self.assertRaisesRegex(ValueError, 'did not produce complete'):
+                self.reconcile(previous, retry, feedback=self.root / 'unused', family_result='failure')
+        self.assertIn('state=infrastructure_exhausted', output.read_text())
+        self.assertIn('green=false', output.read_text())
+        self.assertFalse((self.root / 'unused').exists())
+
     def test_recheck_can_reclassify_an_infrastructure_family_as_candidate(self):
         (self.evidence / 'hybrid/receipt.json').unlink()
         previous = self.root / 'previous-feedback'

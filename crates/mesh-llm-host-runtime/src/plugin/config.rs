@@ -5,7 +5,7 @@ use super::installed::{
 use super::schema_validation::strict_plugin_schema_availability;
 use super::{
     BLOBSTORE_PLUGIN_ID, PAYMENTS_PLUGIN_ID, PluginStartupOptions, PluginSummary,
-    WALLET_LEXE_PLUGIN_ID,
+    RETIRED_WALLET_LEXE_PLUGIN_ID,
 };
 use crate::{
     MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
@@ -280,6 +280,7 @@ pub struct ExternalPluginSpec {
     pub env: BTreeMap<String, String>,
     pub startup: PluginStartupOptions,
     pub web_ui_enabled: Option<bool>,
+    pub web_ui_primary_tab: Option<bool>,
     pub installed_metadata: Option<mesh_llm_plugin_manager::InstalledPluginMetadata>,
 }
 
@@ -293,7 +294,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
-    let mut wallet_lexe_enabled = true;
     let mut payments_enabled = true;
     for entry in &config.plugins {
         if names.insert(entry.name.clone(), ()).is_some() {
@@ -305,9 +305,22 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
             blobstore_enabled = enabled;
             continue;
         }
-        if entry.name == WALLET_LEXE_PLUGIN_ID {
-            ensure_builtin_entry_only_toggles_enabled(entry)?;
-            wallet_lexe_enabled = enabled;
+        if entry.name == RETIRED_WALLET_LEXE_PLUGIN_ID {
+            // The built-in Lexe wallet was removed; keep old configs loading.
+            // An output event, not `tracing::warn!`: the runtime's default
+            // log filter drops host-runtime warnings, so users never saw it.
+            // Plugins are resolved more than once at startup; warn once.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+                    message: format!(
+                        "Ignoring [[plugin]] '{RETIRED_WALLET_LEXE_PLUGIN_ID}': the built-in \
+                         Lexe wallet was removed; install the external `lexe-wallet` plugin \
+                         instead"
+                    ),
+                    context: None,
+                });
+            });
             continue;
         }
         if entry.name == PAYMENTS_PLUGIN_ID {
@@ -330,10 +343,7 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     append_installed_plugins(&mut externals, &mut inactive, &mut names);
 
     if blobstore_enabled {
-        externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID)?);
-    }
-    if wallet_lexe_enabled && wallet_lexe_compiled_in() {
-        externals.push(builtin_plugin_spec(WALLET_LEXE_PLUGIN_ID)?);
+        externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID, &[])?);
     }
     if payments_enabled && payments_compiled_in() {
         externals.push(in_process_builtin_spec(PAYMENTS_PLUGIN_ID));
@@ -361,26 +371,9 @@ fn ensure_builtin_entry_only_toggles_enabled(entry: &PluginConfigEntry) -> Resul
     Ok(())
 }
 
-/// Whether this build carries the built-in Lexe wallet. A `[[plugin]]
-/// name = "wallet-lexe"` stanza stays valid in a build without it (the
-/// documented off switch must not break a wallet-free SDK host); the plugin is
-/// simply not registered.
-///
-/// Under test the answer is forced per thread and defaults to "absent", so the
-/// many resolver tests that count plugins are independent of the cargo
-/// features the test binary happened to be built with.
-#[cfg(not(test))]
-fn wallet_lexe_compiled_in() -> bool {
-    cfg!(feature = "wallet-lexe")
-}
-
-#[cfg(test)]
-fn wallet_lexe_compiled_in() -> bool {
-    TEST_WALLET_LEXE_COMPILED_IN.with(|slot| slot.borrow().unwrap_or(false))
-}
-
 /// Whether this build carries the payments engine. Forced per thread under
-/// test for the same reason as [`wallet_lexe_compiled_in`].
+/// test and defaults to "absent", so the many resolver tests that count plugins
+/// are independent of the cargo features the test binary was built with.
 #[cfg(not(test))]
 fn payments_compiled_in() -> bool {
     cfg!(feature = "payments")
@@ -411,33 +404,32 @@ pub fn in_process_builtin_spec(name: &str) -> ExternalPluginSpec {
             ..PluginStartupOptions::default()
         },
         web_ui_enabled: None,
+        web_ui_primary_tab: None,
         installed_metadata: None,
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    pub(super) static TEST_WALLET_LEXE_COMPILED_IN: std::cell::RefCell<Option<bool>> =
-        const { std::cell::RefCell::new(None) };
-}
-
 /// Launch spec for a plugin served by this executable: the host re-executes
-/// itself with `--plugin <name>`. Built-ins are optional so a failure to start
-/// one degrades that capability instead of blocking node startup.
-pub fn builtin_plugin_spec(name: &str) -> Result<ExternalPluginSpec> {
+/// itself with `--plugin <name>`, passing each of `plugin_args` as a
+/// `--plugin-arg=<arg>`. Built-ins are optional so a failure to start one
+/// degrades that capability instead of blocking node startup.
+pub fn builtin_plugin_spec(name: &str, plugin_args: &[String]) -> Result<ExternalPluginSpec> {
     let command = std::env::current_exe()
         .context("Cannot determine mesh-llm executable path")?
         .display()
         .to_string();
+    let mut args: Vec<String> = vec![
+        "--log-format".into(),
+        "json".into(),
+        "--plugin".into(),
+        name.into(),
+    ];
+    // `=` keeps an argument that starts with `-` bound to its flag.
+    args.extend(plugin_args.iter().map(|arg| format!("--plugin-arg={arg}")));
     Ok(ExternalPluginSpec {
         name: name.to_string(),
         command,
-        args: vec![
-            "--log-format".into(),
-            "json".into(),
-            "--plugin".into(),
-            name.into(),
-        ],
+        args,
         url: None,
         env: BTreeMap::new(),
         startup: PluginStartupOptions {
@@ -445,6 +437,7 @@ pub fn builtin_plugin_spec(name: &str) -> Result<ExternalPluginSpec> {
             ..PluginStartupOptions::default()
         },
         web_ui_enabled: None,
+        web_ui_primary_tab: None,
         installed_metadata: None,
     })
 }

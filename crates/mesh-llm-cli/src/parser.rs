@@ -21,6 +21,9 @@ pub use validation::validate_discovery_mode_args;
 mod setup_tests;
 
 #[cfg(test)]
+mod speculative_tests;
+
+#[cfg(test)]
 mod uninstall_tests;
 
 #[cfg(test)]
@@ -121,6 +124,27 @@ mod tests {
     #[test]
     fn mesh_requirements_docs_examples_parse() {
         super::assert_mesh_requirements_docs_examples_parse();
+    }
+
+    #[test]
+    fn plugin_args_keep_their_order_and_leading_dashes() {
+        let cli = Cli::try_parse_from([
+            "mesh-llm",
+            "--log-format",
+            "json",
+            "--plugin",
+            "blobstore",
+            "--plugin-arg=--root",
+            "--plugin-arg=/srv/blobs",
+        ])
+        .expect("built-in plugin arguments should parse");
+
+        assert_eq!(cli.plugin.as_deref(), Some("blobstore"));
+        assert_eq!(cli.plugin_args, ["--root", "/srv/blobs"]);
+        assert!(
+            Cli::try_parse_from(["mesh-llm", "--plugin-arg=--root"]).is_err(),
+            "plugin arguments only mean something in plugin mode"
+        );
     }
 
     #[test]

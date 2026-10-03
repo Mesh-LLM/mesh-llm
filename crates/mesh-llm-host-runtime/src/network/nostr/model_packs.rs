@@ -10,7 +10,8 @@ fn parse_size_gb(s: &str) -> f64 {
 
 /// Build model tiers from the catalog, sorted largest first.
 /// Each entry is (model_ref, min_vram_gb) where min_vram = file_size * 1.1.
-/// Excludes draft models (< 1GB).
+/// Excludes draft models (< 1GB). The small-node default is a separate policy
+/// choice and may be smaller than the catalog cutoff.
 fn model_tiers() -> Vec<(String, f64)> {
     let _ = crate::models::remote_catalog::ensure_catalog();
     let mut tiers: Vec<_> = crate::models::remote_catalog::loaded_models()
@@ -32,32 +33,30 @@ fn model_tiers() -> Vec<(String, f64)> {
     tiers
 }
 
-/// Pick the model to SERVE for `--auto` based on VRAM.
-/// Returns a single-element vec (the model this node should load).
-///
-/// One model per node. Biggest model that fits with 15% KV cache headroom.
-///
-/// Tiers:
-///   <8GB:    Qwen3-4B (2.5G)
-///   8-24GB:  Gemma-4-E4B-it (4.6G)
-///   24-50GB: Qwen3.5-27B (17G) — vision + text
-///   50-63GB: GLM-4.7-Flash (18G) — fast, tool calling
-///   63-179GB: Qwen3-Coder-Next (48G) — frontier coder ~85B
-///   179GB+:  MiniMax-M2.5 (138G) — flagship
-#[expect(
-    dead_code,
-    reason = "compatibility helper remains covered by model-pack tests"
-)]
-pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
-    let local_models = crate::models::scan_local_models();
-    let tiers = model_tiers();
-    auto_model_pack_with(vram_gb, &local_models, &tiers, &catalog_ref)
-}
-
 fn catalog_ref(name: &str) -> String {
     crate::models::find_remote_catalog_model_exact(name)
         .map(|model| crate::models::remote_catalog_model_ref(&model))
         .unwrap_or_else(|| name.to_string())
+}
+
+struct SmallNodeAutoTier {
+    model_ref: &'static str,
+    min_fit_gb: f64,
+    max_fit_gb: f64,
+}
+
+/// The current model needs about 0.91 GB including its largest-read reserve
+/// and fit headroom. Keep the fit bounds with the model when updating this tier.
+const SMALL_NODE_AUTO_TIER: SmallNodeAutoTier = SmallNodeAutoTier {
+    model_ref: "meshllm/laya-multilingual-F16-GGUF",
+    min_fit_gb: 1.0,
+    max_fit_gb: 8.0,
+};
+
+pub(crate) fn small_node_default_model(capacity_gb: f64) -> Option<&'static str> {
+    (SMALL_NODE_AUTO_TIER.min_fit_gb..=SMALL_NODE_AUTO_TIER.max_fit_gb)
+        .contains(&capacity_gb)
+        .then_some(SMALL_NODE_AUTO_TIER.model_ref)
 }
 
 fn auto_model_pack_with<F>(
@@ -69,6 +68,10 @@ fn auto_model_pack_with<F>(
 where
     F: Fn(&str) -> String,
 {
+    if let Some(model) = small_node_default_model(vram_gb) {
+        return vec![model.to_string()];
+    }
+
     // Helper: check if a model is on disk
     let on_disk = |name: &str| local_models.contains(&name.to_string());
     // Helper: model size from tiers
@@ -221,15 +224,39 @@ mod auto_pack_tests {
     }
 
     #[test]
-    fn pack_4gb_starter() {
+    fn pack_4gb_uses_small_node_default() {
         let pack = test_auto_model_pack(4.0);
-        assert_single_pack_model(&pack, "Qwen3-4B-Q4_K_M");
+        assert_single_pack_model(&pack, SMALL_NODE_AUTO_TIER.model_ref);
     }
 
     #[test]
-    fn pack_8gb_single_model() {
+    fn pack_8gb_uses_small_node_default() {
         let pack = test_auto_model_pack(8.0);
-        assert_single_pack_model(&pack, "Gemma-4-E4B-it-Q4_K_M");
+        assert_single_pack_model(&pack, SMALL_NODE_AUTO_TIER.model_ref);
+    }
+
+    #[test]
+    fn small_node_tier_respects_fit_floor_and_upper_boundary() {
+        assert_eq!(small_node_default_model(0.99), None);
+        assert_eq!(
+            small_node_default_model(1.0),
+            Some(SMALL_NODE_AUTO_TIER.model_ref)
+        );
+        assert_eq!(
+            small_node_default_model(8.0),
+            Some(SMALL_NODE_AUTO_TIER.model_ref)
+        );
+        assert_eq!(small_node_default_model(8.01), None);
+    }
+
+    #[test]
+    fn new_small_mesh_starts_with_default_before_demand_seeds() {
+        let models = default_models_for_vram_with(4.0, &[], &test_tiers(), &identity_ref);
+        assert_eq!(
+            models.first().map(String::as_str),
+            Some(SMALL_NODE_AUTO_TIER.model_ref)
+        );
+        assert_contains_catalog_alias(&models, "Qwen3-4B-Q4_K_M");
     }
 
     #[test]

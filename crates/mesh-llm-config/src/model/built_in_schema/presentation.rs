@@ -47,6 +47,12 @@ const ANALYTICS_CATEGORY: CategoryPresentation = CategoryPresentation {
     summary: "Anonymous usage reporting to the mesh-llm maintainers",
     order: 50,
 };
+const PAYMENTS_CATEGORY: CategoryPresentation = CategoryPresentation {
+    id: "payments",
+    label: "Payments",
+    summary: "Wallet backend used for paid inference",
+    order: 60,
+};
 const RUNTIME_POLICY_CATEGORY: CategoryPresentation = CategoryPresentation {
     id: "runtime-policy",
     label: "Runtime Policy",
@@ -121,6 +127,7 @@ fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> 
         .or_else(|| kv_disk_presentation(rendered))
         .or_else(|| gpu_setting_presentation(rendered))
         .or_else(|| process_setting_presentation(rendered))
+        .or_else(|| payments_presentation(rendered))
         .or_else(|| native_runtime_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
         .or_else(|| generation_defaults_presentation(rendered))
@@ -404,6 +411,22 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
     }
 }
 
+fn payments_presentation(rendered: &str) -> Option<SettingPresentation> {
+    match rendered {
+        "payments.wallet" => Some(
+            sp(
+                "Wallet plugin",
+                "Plugin name of the wallet that backs paid inference. When unset, the only running wallet plugin is used.",
+                PAYMENTS_CATEGORY,
+                10,
+            )
+            .placeholder("lexe-wallet")
+            .hint("text"),
+        ),
+        _ => None,
+    }
+}
+
 fn native_runtime_presentation(rendered: &str) -> Option<SettingPresentation> {
     match rendered {
         "runtime.native_runtime.selection" => Some(
@@ -468,6 +491,15 @@ fn runtime_defaults_presentation(rendered: &str) -> Option<SettingPresentation> 
             30,
         )
         .hint("segmented")),
+        "defaults.throughput.pipeline_decode_groups" => Some(sp(
+            "Pipeline decode groups",
+            "Split each decode wave into this many groups so a pipelined split keeps more \
+             than one batch in flight. 1 disables grouping.",
+            RUNTIME_CATEGORY,
+            32,
+        )
+        .unit("groups")
+        .hint("range")),
         "defaults.hardware.gpu_layers" => Some(sp(
             "GPU layers",
             "Set the GPU layer count, or use auto. The backend also accepts -1 to mean all layers.",
@@ -655,7 +687,7 @@ fn generation_defaults_presentation(rendered: &str) -> Option<SettingPresentatio
         "defaults.request_defaults.repeat_last_n" => Some(
             sp(
                 "Repeat last-n window",
-                "Set how much recent token history the repeat penalty checks.",
+                "Set how many recent tokens the repeat penalty checks (default 64, 0 disables).",
                 REQUEST_DEFAULTS_CATEGORY,
                 60,
             )
@@ -884,6 +916,24 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
             )
             .hint("toggle"),
         ),
+        "plugin.<plugin-name>.web_ui_primary_tab" => Some(
+            sp(
+                "Primary tab placement",
+                "Promote the plugin's web UI page to a primary top-level tab when its manifest requests it.",
+                PLUGIN_HOST_CATEGORY,
+                16,
+            )
+            .hint("toggle"),
+        ),
+        "plugin.<plugin-name>.allow_peer_blocks" => Some(
+            sp(
+                "Peer block requests",
+                "Let the plugin ask this node to stop (or resume) routing to a peer. Off unless turned on.",
+                PLUGIN_HOST_CATEGORY,
+                17,
+            )
+            .hint("toggle"),
+        ),
         "plugin.<plugin-name>.url" => Some(
             sp(
                 "Base URL",
@@ -1091,6 +1141,9 @@ fn fallback_category_for_path(rendered: &str) -> Option<CategoryPresentation> {
     }
     if rendered.starts_with("owner_control.") {
         return Some(NETWORK_CATEGORY);
+    }
+    if rendered.starts_with("payments.") {
+        return Some(PAYMENTS_CATEGORY);
     }
     if rendered.starts_with("mesh_requirements.") {
         return Some(ATTESTATION_CATEGORY);

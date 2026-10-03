@@ -8,6 +8,7 @@ import { Footer } from '@/features/shell/components/Footer'
 import { TopNav } from '@/features/shell/components/TopNav'
 import type { TopNavPluginPageItem } from '@/features/shell/components/TopNavPluginPages'
 import { PreferencesPanel } from '@/features/shell/components/PreferencesPanel'
+import { PluginContributionsProvider } from '@/features/plugins/web-ui/PluginContributionSlot'
 import {
   getEnabledConfigurationTabIds,
   isConfigurationTabId,
@@ -17,7 +18,7 @@ import { DEFAULT_DEVELOPER_PLAYGROUND_TAB } from '@/features/developer/playgroun
 import { useStatusQuery } from '@/features/network/api/use-status-query'
 import {
   adaptPluginSummariesToWebUiEntries,
-  buildPluginWebUiNavItems,
+  partitionPluginWebUiNavItems,
   usePluginSummariesQuery
 } from '@/features/plugins/api/plugin-web-ui'
 import { useUIPreferences } from '@/features/shell/hooks/useUiPreferences'
@@ -26,6 +27,9 @@ import { env, hrefWithBasePath, stripBasePath } from '@/lib/env'
 import { useDataMode } from '@/lib/data-mode'
 import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import type { ShellHarnessData, AppTab } from '@/features/app-tabs/types'
+import type { PluginSummaryRaw } from '@/lib/api/plugin-types'
+
+const NO_PLUGINS: readonly PluginSummaryRaw[] = []
 
 function pathToTab(pathname: string): AppTab | null {
   if (pathname.startsWith('/chat')) return 'chat'
@@ -164,16 +168,35 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
     [newConfigurationPageEnabled, newReservesPageEnabled, logsPageEnabled, clientOnlyNode]
   )
 
-  const pluginNavItems = useMemo<readonly TopNavPluginPageItem[]>(() => {
-    if (!liveMode || !Array.isArray(pluginSummariesQuery.data)) return []
-    return buildPluginWebUiNavItems(adaptPluginSummariesToWebUiEntries(pluginSummariesQuery.data)).map((item) => ({
+  const partitionedPluginNavItems = useMemo(() => {
+    if (!liveMode || !Array.isArray(pluginSummariesQuery.data)) {
+      return { primary: [], auxiliary: [] }
+    }
+    return partitionPluginWebUiNavItems(adaptPluginSummariesToWebUiEntries(pluginSummariesQuery.data))
+  }, [liveMode, pluginSummariesQuery.data])
+
+  const toTopNavPluginPageItem = useCallback(
+    (item: { pluginName: string; pageId: string; label: string }): TopNavPluginPageItem => ({
       pluginName: item.pluginName,
       pageId: item.pageId,
       label: item.label,
       href: hrefWithBasePath(`/plugins/${encodeURIComponent(item.pluginName)}/${encodeURIComponent(item.pageId)}`),
       active: pathname === `/plugins/${item.pluginName}/${item.pageId}`
-    }))
-  }, [liveMode, pathname, pluginSummariesQuery.data])
+    }),
+    [pathname]
+  )
+
+  const primaryPluginTabs = useMemo<readonly TopNavPluginPageItem[]>(
+    () => partitionedPluginNavItems.primary.map(toTopNavPluginPageItem),
+    [partitionedPluginNavItems.primary, toTopNavPluginPageItem]
+  )
+
+  const pluginNavItems = useMemo<readonly TopNavPluginPageItem[]>(
+    () => partitionedPluginNavItems.auxiliary.map(toTopNavPluginPageItem),
+    [partitionedPluginNavItems.auxiliary, toTopNavPluginPageItem]
+  )
+
+  const pluginSummaries = liveMode && Array.isArray(pluginSummariesQuery.data) ? pluginSummariesQuery.data : NO_PLUGINS
 
   const onPluginPageChange = useCallback(
     (item: TopNavPluginPageItem) => {
@@ -206,6 +229,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
           joinCommands={topNavData.topNavJoinCommands}
           joinLinks={topNavData.topNavJoinLinks}
           pluginNavItems={pluginNavItems}
+          primaryPluginTabs={primaryPluginTabs}
           onPluginPageChange={onPluginPageChange}
           showDeveloperPlayground={showDevelopmentNavControls}
           onOpenDeveloperPlayground={showDevelopmentNavControls ? onOpenDeveloperPlayground : undefined}
@@ -226,11 +250,13 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
           />
         ) : null}
         <ChatSessionProvider>
-          <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-            <div className="density-shell mx-auto flex min-h-full flex-col px-[var(--shell-pad-x)] pb-[var(--shell-pad-bottom)] pt-[var(--shell-pad-top)]">
-              <Outlet />
-            </div>
-          </main>
+          <PluginContributionsProvider summaries={pluginSummaries}>
+            <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+              <div className="density-shell mx-auto flex min-h-full flex-col px-[var(--shell-pad-x)] pb-[var(--shell-pad-bottom)] pt-[var(--shell-pad-top)]">
+                <Outlet />
+              </div>
+            </main>
+          </PluginContributionsProvider>
         </ChatSessionProvider>
         <Footer
           version={displayVersion}

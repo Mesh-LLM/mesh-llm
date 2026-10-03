@@ -271,11 +271,17 @@ owning source, and update the inventory and topology in the same change.
   GitHub-hosted fallback. Tags, feature refs, external callers, credentialed
   smokes, macOS, Windows, and hardware-qualified GPU work stay on their
   explicitly approved provider until separately migrated.
-- Product-integration inference maps CUDA and Vulkan to the approved ephemeral
-  `gpu-nvidia` runner because that host provides both backends. ROCm maps only
+- Product-integration inference maps CUDA to the approved ephemeral
+  `gpu-nvidia` runner. Vulkan uses that runner only after its live pod passes
+  `verify-vulkan-device` and `MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly
+  `true`; an unset or different value skips the Vulkan Laya smoke. ROCm maps only
   to the repository-scoped `gpu-amd` role and must remain skipped unless
   `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; an unset or different
   value means no approved ROCm inference runner is available.
+  Both variables are matched case-sensitively in a shell validation step,
+  because a GitHub Actions `==` expression ignores case: `TRUE`/`True` would
+  otherwise enable a row whose runner is not certified for that backend. The
+  GPU rows gate on the normalized result, never on the variable directly.
 - Never route untrusted code to a persistent self-hosted runner. Public-repo
   self-hosted execution requires ephemeral runners, restricted credentials and
   network access, and a runner group limited to the repository and exact

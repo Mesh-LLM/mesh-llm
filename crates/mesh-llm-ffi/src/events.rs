@@ -1,6 +1,9 @@
-use mesh_llm_sdk::events::{Event, EventListener as CoreEventListener};
+use mesh_llm_sdk::events::{
+    Event, EventListener as CoreEventListener, OpenAiStreamEvent as CoreOpenAiStreamEvent,
+    OpenAiStreamListener as CoreOpenAiStreamListener,
+};
 
-use crate::native_runtime_types::EventListener;
+use crate::native_runtime_types::{EventListener, OpenAiStreamListener};
 use crate::request_types::ModelNative;
 
 #[derive(uniffi::Enum)]
@@ -14,8 +17,77 @@ pub enum ClientEvent {
     Disconnected { reason: String },
 }
 
+#[derive(uniffi::Enum)]
+pub enum OpenAiStreamEventNative {
+    Started {
+        request_id: String,
+        status_code: u16,
+        content_type: Option<String>,
+    },
+    Sse {
+        request_id: String,
+        event_type: Option<String>,
+        data: String,
+        raw: String,
+    },
+    Completed {
+        request_id: String,
+    },
+    Failed {
+        request_id: String,
+        status_code: Option<u16>,
+        error: String,
+        body: Option<String>,
+    },
+}
+
 pub(super) struct EventListenerBridge {
     pub(super) inner: Box<dyn EventListener>,
+}
+
+pub(super) struct OpenAiStreamListenerBridge {
+    pub(super) inner: Box<dyn OpenAiStreamListener>,
+}
+
+impl CoreOpenAiStreamListener for OpenAiStreamListenerBridge {
+    fn on_event(&self, event: CoreOpenAiStreamEvent) {
+        self.inner.on_event(match event {
+            CoreOpenAiStreamEvent::Started {
+                request_id,
+                status_code,
+                content_type,
+            } => OpenAiStreamEventNative::Started {
+                request_id,
+                status_code,
+                content_type,
+            },
+            CoreOpenAiStreamEvent::Sse {
+                request_id,
+                event_type,
+                data,
+                raw,
+            } => OpenAiStreamEventNative::Sse {
+                request_id,
+                event_type,
+                data,
+                raw,
+            },
+            CoreOpenAiStreamEvent::Completed { request_id } => {
+                OpenAiStreamEventNative::Completed { request_id }
+            }
+            CoreOpenAiStreamEvent::Failed {
+                request_id,
+                status_code,
+                error,
+                body,
+            } => OpenAiStreamEventNative::Failed {
+                request_id,
+                status_code,
+                error,
+                body,
+            },
+        });
+    }
 }
 
 impl CoreEventListener for EventListenerBridge {
@@ -29,6 +101,7 @@ impl CoreEventListener for EventListenerBridge {
                     .map(|m| ModelNative {
                         id: m.id,
                         name: m.name,
+                        context_length: m.context_length,
                     })
                     .collect(),
             },

@@ -470,14 +470,6 @@ impl InstanceLifecycleRecord {
         self.last_error.as_deref()
     }
 
-    /// Recent transition history (most recent first).
-    #[expect(dead_code, reason = "reserved bounded history status surface")]
-    pub(crate) fn recent_history(&self, limit: usize) -> Vec<TransitionEntry> {
-        let mut entries: Vec<_> = self.history.iter().cloned().rev().take(limit).collect();
-        entries.reverse();
-        entries
-    }
-
     /// Full transition history as a vector clone (VecDeque doesn't coerce to slice refs stably).
     #[cfg_attr(
         not(test),
@@ -485,12 +477,6 @@ impl InstanceLifecycleRecord {
     )]
     pub(crate) fn full_history(&self) -> Vec<TransitionEntry> {
         self.history.iter().cloned().collect()
-    }
-
-    /// Time since the instance was created.
-    #[expect(dead_code, reason = "reserved instance age status surface")]
-    pub(crate) fn age(&self) -> Duration {
-        self.created_at.elapsed()
     }
 
     /// Whether this instance is in a terminal state.

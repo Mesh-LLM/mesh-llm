@@ -44,8 +44,10 @@ unload the model.
 curl -s http://localhost:9337/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL","messages":[{"role":"user","content":"Say hello in one sentence."}]}'
 ```
 
-System One models use a separate [System One API](/docs/pages/system-one-api/)
-at `POST /systemone`, not the OpenAI chat endpoints.
+System One models answer typed questions through
+[the Decisions API](/docs/pages/decisions-api/) at `POST /v1/decisions` or the
+[native System One API](/docs/pages/system-one-api/) at `POST /systemone`.
+Chat completion methods do not call either route.
 
 ## Streaming
 

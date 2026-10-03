@@ -13,6 +13,8 @@ mod response;
 pub(crate) use response::send_503;
 #[cfg(feature = "payments")]
 pub(crate) use response::send_error;
+#[cfg(feature = "payments")]
+pub(crate) use response::served_outcome_of_raw_response;
 pub(crate) mod response_adapter;
 mod response_quality;
 mod routing_rank;
@@ -20,6 +22,8 @@ pub(crate) mod runtime_events;
 mod tool_call_ids;
 pub(crate) mod transport;
 
+#[cfg(feature = "payments")]
+pub(crate) mod paid_exchange;
 mod payment_routing;
 
 #[cfg(feature = "payments")]

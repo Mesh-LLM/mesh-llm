@@ -186,14 +186,14 @@ jobs:
       - name: Resolve platform unit-test owners
         if: ${{ matrix.check.kind == 'unit' }}
         id: packages
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
         with:
           generation: legacy
           crates: '["model-artifact","mesh-llm-host-runtime","mesh-llm"]'
       - name: Resolve Windows unit-test owners
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         id: windows_packages
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
         with:
           generation: legacy
           # The `platform-windows-cfg` catalog routes these crates to the
@@ -203,7 +203,7 @@ jobs:
           # there is to *select* this row when that crate changes; it is a
           # shared owner already resolved by the step above, so it is
           # deliberately absent here rather than run twice.
-          crates: '["mesh-llm-analytics","mesh-llm-config","mesh-llm-events","mesh-llm-identity","mesh-llm-payments","mesh-llm-plugin","mesh-llm-plugin-manager","mesh-llm-tui","mesh-llm-ui","mesh-llm-wallet","mesh-wallet-lexe"]'
+          crates: '["mesh-llm-analytics","mesh-llm-config","mesh-llm-events","mesh-llm-identity","mesh-llm-payments","mesh-llm-plugin","mesh-llm-plugin-manager","mesh-llm-tui","mesh-llm-ui","mesh-llm-wallet","skippy-cache"]'
       - name: Run macOS unit tests
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         env:
@@ -213,6 +213,18 @@ jobs:
           while IFS= read -r crate; do
             cargo test --locked -p "$crate" --lib
           done < <(jq -r '.[]' <<<"$TEST_CRATES")
+      - name: Resolve Windows dynamic-runtime unit-test owners
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        id: windows_dynamic_packages
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
+        with:
+          generation: legacy
+          # Also routed by `platform-windows-cfg`, but these reach `skippy-ffi`
+          # through `mesh-llm-system/skippy-devices`, which builds it without its
+          # dynamic loader. A crate-scoped test build then stops on the static
+          # llama archives this row does not prepare, so the run step below
+          # turns on `mesh-llm-system/dynamic-native-runtime` for them.
+          crates: '["mesh-llm-commands","mesh-llm-system"]'
       - name: Run Windows unit tests
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         shell: pwsh
@@ -225,6 +237,7 @@ jobs:
           RUST_MIN_STACK: "8388608"
           TEST_CRATES: ${{ steps.packages.outputs.crates }}
           WINDOWS_TEST_CRATES: ${{ steps.windows_packages.outputs.crates }}
+          WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_dynamic_packages.outputs.crates }}
         run: |
           # The macOS unit row's shared source-owner suites, resolved through
           # the same package resolver, plus the crates the
@@ -234,6 +247,20 @@ jobs:
           # hence the explicit exit check after each one.
           $crates = @($env:TEST_CRATES | ConvertFrom-Json) + @($env:WINDOWS_TEST_CRATES | ConvertFrom-Json)
           foreach ($crate in $crates) {
-            cargo test --locked -p $crate --lib
+            if ($crate -eq 'mesh-llm-skippy-adapter') {
+              # The adapter reaches skippy-ffi without the dynamic loader by
+              # default. Windows unit tests do not prepare static llama ABI.
+              cargo test --locked -p $crate --lib --features mesh-llm-skippy-adapter/dynamic-native-runtime
+            } else {
+              cargo test --locked -p $crate --lib
+            }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          # Feature unification turns on `skippy-ffi`'s `dynamic-runtime`, whose
+          # build script returns early (CONTRIBUTING, "Testing crates on native
+          # Windows"). Each of these crates is `mesh-llm-system` or depends on
+          # it directly, so the feature name resolves for every one.
+          foreach ($crate in @($env:WINDOWS_DYNAMIC_TEST_CRATES | ConvertFrom-Json)) {
+            cargo test --locked -p $crate --lib --features mesh-llm-system/dynamic-native-runtime
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }

@@ -56,6 +56,31 @@ try await printChat(
 await client.stop()
 ```
 
+## Agent streaming
+
+```swift
+try await client.start()
+do {
+    let publicModels = try await client.inference.listModels()
+    for try await event in client.inference.streamChatCompletions([
+        "model": publicModels[0].id,
+        "messages": [["role": "user", "content": "What is the weather?"]],
+        "tools": [["type": "function", "function": ["name": "get_weather"]]],
+    ]) {
+        if case .sse(let frame) = event, !frame.isDone {
+            print(frame.event as Any, try frame.jsonObject() as Any)
+        }
+    }
+} catch {
+    await client.stop()
+    throw error
+}
+await client.stop()
+```
+
+The stream retains named and raw SSE frames, incremental tool-call arguments,
+and future JSON fields. Ending iteration early cancels the native request.
+
 ## Client: Private Mesh
 
 ```swift

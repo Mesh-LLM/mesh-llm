@@ -37,6 +37,7 @@ import {
   logInspectorFromSearch,
   openLogInspector,
   resetLogsSearch,
+  resolveFocusExchangeRequestId,
   toLogsRequestQuery,
   updateLogCategories,
   updateLogsTimeRange,
@@ -154,6 +155,7 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
   const [eventQuery, setEventQuery] = useState('')
   const tableRegionRef = useRef<HTMLElement>(null)
   const restoredFocusIdRef = useRef<string | undefined>(undefined)
+  const resolvedFocusExchangeIdRef = useRef<string | undefined>(undefined)
   const trimmedQuery = useMemo(() => eventQuery.trim().toLowerCase(), [eventQuery])
   const visibleRows = useMemo(
     () => (trimmedQuery ? categoryRows.filter((row) => logEventSearchText(row).includes(trimmedQuery)) : categoryRows),
@@ -204,6 +206,24 @@ export function LogsLedger({ search, onSearchChange, onMaintenanceMutationSuccee
     restoredFocusIdRef.current = search.focusRequestId
     row.focus()
   }, [inspector, search.focusRequestId, visibleRows.length])
+
+  // a deep link keyed on the exchange id lands here with
+  // `focusExchangeId` set. Open that request's inspector as soon as it shows
+  // up among the requests already loaded -- never fabricate a match, and
+  // never re-open once resolved (the ref guards against re-triggering after
+  // the operator closes the inspector).
+  useEffect(() => {
+    if (inspector) return
+    if (!search.focusExchangeId) {
+      resolvedFocusExchangeIdRef.current = undefined
+      return
+    }
+    if (resolvedFocusExchangeIdRef.current === search.focusExchangeId) return
+    const requestId = resolveFocusExchangeRequestId(mergedRows, search.focusExchangeId)
+    if (!requestId) return
+    resolvedFocusExchangeIdRef.current = search.focusExchangeId
+    onSearchChange(openLogInspector(search, { type: 'request', id: requestId }))
+  }, [inspector, mergedRows, onSearchChange, search])
 
   return (
     <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-[calc(var(--shell-normal)*2)]">

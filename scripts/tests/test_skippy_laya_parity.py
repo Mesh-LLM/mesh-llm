@@ -5,6 +5,7 @@ import json
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("laya_parity", ROOT / "scripts" / "skippy-laya-parity.py")
@@ -15,10 +16,17 @@ FIXTURES = ROOT / "ci" / "llama-canary" / "fixtures" / "laya-golden"
 
 
 def golden(name):
-    return json.loads((FIXTURES / f"{name}.json").read_text())
+    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
 
 
 class LayaParityTest(unittest.TestCase):
+    def test_fixture_io_uses_utf8(self):
+        path = mock.Mock()
+        path.read_text.return_value = '{"label": "\u4e2d\u6587"}'
+
+        self.assertEqual({"label": "\u4e2d\u6587"}, parity.read_fixture(path))
+        path.read_text.assert_called_once_with(encoding="utf-8")
+
     def test_every_vendored_fixture_has_an_upstream_error_budget(self):
         names = {path.stem for path in FIXTURES.glob("*.json") if path.stem != "manifest"}
         self.assertEqual(names, set(parity.UPSTREAM_CPU_ERROR))

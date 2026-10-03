@@ -38,6 +38,7 @@ disables reporting regardless of all of them.
 | `consent.rs` | Resolving whether this machine reports, and why |
 | `event.rs` | The closed event and property vocabulary, and the label grammar |
 | `install_id.rs` | The anonymous install identifier |
+| `version_state.rs` | The last version this install ran, so upgrades are reportable |
 | `properties.rs` | Base properties attached to every event |
 | `client.rs` | PostHog batch payload construction and delivery |
 | `notice.rs` | The first-run disclosure |

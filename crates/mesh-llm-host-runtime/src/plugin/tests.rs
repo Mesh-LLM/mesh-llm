@@ -16,6 +16,8 @@ fn web_ui_manifest() -> proto::PluginWebUiManifest {
             route: "index.html".into(),
             bundle_id: "main".into(),
             entry_script: "assets/app.js".into(),
+            placement: proto::PluginWebUiPagePlacement::Auxiliary as i32,
+            host_header: None,
         }],
         config_sections: vec![proto::PluginWebUiConfigSectionManifest {
             id: "settings".into(),
@@ -23,6 +25,13 @@ fn web_ui_manifest() -> proto::PluginWebUiManifest {
             entry_script: "assets/settings.js".into(),
             parent_tab: Some("integrations".into()),
             bundle_id: "main".into(),
+        }],
+        contributions: vec![proto::PluginWebUiContributionManifest {
+            id: "note".into(),
+            slot: "logs_request".into(),
+            label: "Note".into(),
+            bundle_id: "main".into(),
+            entry_script: "assets/note.js".into(),
         }],
         bundles: vec![proto::PluginWebUiBundleManifest {
             id: "main".into(),
@@ -43,6 +52,7 @@ fn plugin_manifest_overview_includes_web_ui_declaration() {
     let web_ui = overview.web_ui.expect("web UI overview should be present");
     assert_eq!(web_ui.pages[0].id, "home");
     assert_eq!(web_ui.config_sections[0].id, "settings");
+    assert_eq!(web_ui.contributions[0].slot, "logs_request");
 }
 
 #[test]
@@ -54,32 +64,14 @@ fn resolves_default_builtin_plugins() {
     assert!(resolved.inactive.is_empty());
 }
 
-/// Force whether the built-in wallet counts as compiled in; cleared on drop.
-struct WalletLexeBuild;
-
-impl WalletLexeBuild {
-    fn present() -> Self {
-        super::config::TEST_WALLET_LEXE_COMPILED_IN.with(|slot| *slot.borrow_mut() = Some(true));
-        Self
-    }
-
-    fn absent() -> Self {
-        super::config::TEST_WALLET_LEXE_COMPILED_IN.with(|slot| *slot.borrow_mut() = Some(false));
-        Self
-    }
-}
-
-impl Drop for WalletLexeBuild {
-    fn drop(&mut self) {
-        super::config::TEST_WALLET_LEXE_COMPILED_IN.with(|slot| *slot.borrow_mut() = None);
-    }
-}
-
+/// A stanza for the removed built-in Lexe wallet.
 fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
     PluginConfigEntry {
-        name: WALLET_LEXE_PLUGIN_ID.into(),
+        name: RETIRED_WALLET_LEXE_PLUGIN_ID.into(),
         enabled,
         web_ui_enabled: None,
+        web_ui_primary_tab: None,
+        allow_peer_blocks: None,
         command: None,
         args: Vec::new(),
         url: None,
@@ -120,67 +112,53 @@ fn builtin_payments_is_served_in_process_and_can_be_switched_off() {
 }
 
 #[test]
-fn builtin_wallet_is_served_by_this_executable_like_blobstore() {
-    let _build = WalletLexeBuild::present();
-    let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
-    let names: Vec<_> = resolved.externals.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, [BLOBSTORE_PLUGIN_ID, WALLET_LEXE_PLUGIN_ID]);
-    let blobstore = &resolved.externals[0];
-    let wallet = &resolved.externals[1];
+fn builtin_plugin_arguments_follow_the_plugin_flag() {
+    let spec = super::config::builtin_plugin_spec(
+        BLOBSTORE_PLUGIN_ID,
+        &["--root".into(), "/srv/blobs".into()],
+    )
+    .unwrap();
     assert_eq!(
-        wallet.command, blobstore.command,
-        "the wallet must launch from the same executable as blobstore"
+        spec.args,
+        [
+            "--log-format",
+            "json",
+            "--plugin",
+            BLOBSTORE_PLUGIN_ID,
+            "--plugin-arg=--root",
+            "--plugin-arg=/srv/blobs",
+        ]
     );
-    assert_eq!(
-        wallet.args,
-        ["--log-format", "json", "--plugin", WALLET_LEXE_PLUGIN_ID]
-    );
-    assert!(
-        wallet.startup.optional,
-        "a wallet failure must never block startup"
-    );
-    assert!(
-        !wallet.startup.lazy_start,
-        "capability resolution needs the manifest, so the process starts eagerly"
-    );
-    assert!(resolved.inactive.is_empty());
+}
+
+#[tokio::test]
+async fn builtin_plugin_without_arguments_refuses_them() {
+    let error = run_plugin_process(BLOBSTORE_PLUGIN_ID.into(), vec!["--verbose".into()])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("takes no arguments"), "{error}");
 }
 
 #[test]
-fn builtin_wallet_is_not_registered_in_a_build_without_it() {
-    let _build = WalletLexeBuild::absent();
-    let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
-    assert_eq!(resolved.externals.len(), 1);
-    assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
-}
-
-#[test]
-fn builtin_wallet_can_be_disabled_at_runtime() {
-    let _build = WalletLexeBuild::present();
-    let config = MeshConfig {
-        plugins: vec![wallet_entry(Some(false))],
-        defaults: None,
-        ..MeshConfig::default()
-    };
-    let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-    assert_eq!(resolved.externals.len(), 1);
-    assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
-    assert!(resolved.inactive.is_empty());
-}
-
-#[test]
-fn wallet_stanza_is_accepted_by_a_build_without_the_wallet() {
-    // The documented off switch must not turn a wallet-free SDK host into
-    // a startup failure, and `enabled = true` there registers nothing.
-    let _build = WalletLexeBuild::absent();
-    for enabled in [Some(true), Some(false), None] {
+fn retired_builtin_wallet_stanza_is_ignored() {
+    // The built-in Lexe wallet was removed; an old stanza must not break
+    // startup, whatever it sets, and registers nothing.
+    let mut with_command = wallet_entry(Some(true));
+    with_command.command = Some("/opt/wallets/my-wallet".into());
+    for entry in [
+        wallet_entry(Some(true)),
+        wallet_entry(Some(false)),
+        wallet_entry(None),
+        with_command,
+    ] {
         let config = MeshConfig {
-            plugins: vec![wallet_entry(enabled)],
+            plugins: vec![entry],
             defaults: None,
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode())
-            .expect("a documented stanza must not break a wallet-free build");
+            .expect("a retired stanza must not break startup");
         assert_eq!(resolved.externals.len(), 1);
         assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
@@ -188,57 +166,26 @@ fn wallet_stanza_is_accepted_by_a_build_without_the_wallet() {
 }
 
 #[test]
-fn builtin_wallet_rejects_command_url_args_and_startup_overrides() {
-    let _build = WalletLexeBuild::present();
-    let mut with_command = wallet_entry(Some(true));
-    with_command.command = Some("/opt/wallets/my-wallet".into());
-    let mut with_url = wallet_entry(Some(true));
-    with_url.url = Some("http://example.test".into());
-    let mut with_args = wallet_entry(Some(true));
-    with_args.args = vec!["--verbose".into()];
-    let mut with_startup = wallet_entry(Some(true));
-    with_startup.startup = PluginStartupConfig {
-        init_timeout_secs: Some(5),
-        ..PluginStartupConfig::default()
-    };
-    for entry in [with_command, with_url, with_args, with_startup] {
-        let config = MeshConfig {
-            plugins: vec![entry],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-        let error = resolve_plugins(&config, private_host_mode())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("served by mesh-llm itself"), "{error}");
-    }
-}
-
-#[test]
-fn external_wallet_plugin_replaces_the_builtin_by_capability_not_name() {
-    // Another `wallet.v1` implementation is an ordinary external plugin
-    // under its own name; the built-in is switched off alongside it.
-    let _build = WalletLexeBuild::present();
+fn external_wallet_plugin_is_an_ordinary_plugin() {
     let config = MeshConfig {
-        plugins: vec![
-            wallet_entry(Some(false)),
-            PluginConfigEntry {
-                name: "my-wallet".into(),
-                enabled: Some(true),
-                web_ui_enabled: None,
-                command: Some("/opt/wallets/my-wallet".into()),
-                args: Vec::new(),
-                url: None,
-                settings: Default::default(),
-                startup: Default::default(),
-            },
-        ],
+        plugins: vec![PluginConfigEntry {
+            name: "lexe-wallet".into(),
+            enabled: Some(true),
+            web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
+            command: Some("/opt/wallets/lexe-wallet".into()),
+            args: Vec::new(),
+            url: None,
+            settings: Default::default(),
+            startup: Default::default(),
+        }],
         defaults: None,
         ..MeshConfig::default()
     };
     let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
     let names: Vec<_> = resolved.externals.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["my-wallet", BLOBSTORE_PLUGIN_ID]);
+    assert_eq!(names, ["lexe-wallet", BLOBSTORE_PLUGIN_ID]);
     assert!(!resolved.externals[0].startup.optional);
 }
 
@@ -249,6 +196,8 @@ fn external_plugin_can_be_configured() {
             name: "demo".into(),
             enabled: Some(true),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
             command: Some("mesh-llm-plugin-demo".into()),
             args: vec!["--stdio".into()],
             url: None,
@@ -280,6 +229,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
             ..PluginStartupOptions::default()
         },
         web_ui_enabled: None,
+        web_ui_primary_tab: None,
         installed_metadata: None,
     };
     let error = anyhow::anyhow!(
@@ -301,6 +251,8 @@ fn blobstore_can_be_disabled() {
             name: BLOBSTORE_PLUGIN_ID.into(),
             enabled: Some(false),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
             command: None,
             args: Vec::new(),
             url: None,
@@ -322,6 +274,8 @@ fn external_plugin_can_be_enabled_with_url() {
             name: "endpoint-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
             url: Some("http://gpu-box:8000/v1".into()),
@@ -348,6 +302,8 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
             name: "endpoint-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
             url: Some("\u{2003}\t\n".into()),
@@ -370,6 +326,8 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
             name: "remote-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
             command: None,
             args: Vec::new(),
             url: Some(raw_url.into()),
@@ -397,6 +355,8 @@ fn external_plugin_can_be_enabled_with_command_args() {
             name: "endpoint-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
             command: Some("/opt/plugins/endpoint-plugin".into()),
             args: vec!["--verbose".into()],
             url: None,
@@ -422,6 +382,8 @@ fn external_plugin_ignores_disabled_entry_without_install() {
             name: "endpoint-plugin".into(),
             enabled: Some(false),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
             command: None,
             args: Vec::new(),
             url: Some("http://gpu-box:8000/v1".into()),
@@ -457,6 +419,8 @@ fn resolves_external_plugin() {
             name: "demo".into(),
             enabled: Some(true),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
             command: Some("/tmp/demo".into()),
             args: vec!["--flag".into()],
             url: None,
@@ -487,6 +451,7 @@ async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
                 ..PluginStartupOptions::default()
             },
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
             installed_metadata: Some(installed_metadata_with_web_ui(
                 InstalledPluginWebUiValidationStatus::Valid,
                 Some("web"),

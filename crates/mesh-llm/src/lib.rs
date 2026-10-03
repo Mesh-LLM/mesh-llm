@@ -501,6 +501,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         release_signer_key: cli.release_signer_key,
         name: cli.name,
         plugin: cli.plugin,
+        plugin_args: cli.plugin_args,
         auto_update: cli.auto_update,
         command_is_update: matches!(cli.command, Some(mesh_llm_cli::Command::Update { .. })),
         command_uses_machine_output: command_uses_machine_output(cli.command.as_ref()),
@@ -574,6 +575,10 @@ fn speculative_overrides_from_cli(
     overrides.verify_window_min_tokens = cli.speculative_verify_window_min_tokens;
     overrides.verify_window_max_tokens = cli.speculative_verify_window_max_tokens;
     overrides.verify_window_pipeline_depth = cli.speculative_verify_window_pipeline_depth;
+    overrides.verify_window_runahead_tokens = cli.speculative_verify_window_runahead_tokens;
+    overrides.ngram_fallback = cli
+        .speculative_ngram_fallback
+        .map(|fallback| fallback.as_str().to_string());
     (overrides != Default::default()).then_some(overrides)
 }
 

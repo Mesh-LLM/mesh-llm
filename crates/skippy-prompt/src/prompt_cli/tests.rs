@@ -3,34 +3,6 @@ mod speculative_tests {
     use super::*;
 
     #[test]
-    fn resolve_stage_ranges_supports_single_full_model_stage() {
-        let ranges = resolve_stage_ranges(true, None, 4, 40).unwrap();
-        assert_eq!(ranges, vec![(0, 40)]);
-    }
-
-    #[test]
-    fn empty_splits_also_describe_one_full_range() {
-        let ranges = resolve_stage_ranges(false, Some(""), 4, 40).unwrap();
-        assert_eq!(ranges, vec![(0, 40)]);
-    }
-
-    #[test]
-    fn even_stage_ranges_accepts_one_stage() {
-        let ranges = even_stage_ranges(1, 40).unwrap();
-        assert_eq!(ranges, vec![(0, 40)]);
-    }
-
-    #[test]
-    fn resolve_stage_ranges_rejects_empty_layer_range() {
-        let err = resolve_stage_ranges(true, None, 1, 0).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("layer_end must be greater than zero"),
-            "{err:#}"
-        );
-    }
-
-    #[test]
     fn thinking_override_respects_no_think_and_budget_zero() {
         assert_eq!(normalized_prompt_thinking(false, None), None);
         assert_eq!(normalized_prompt_thinking(true, None), Some(false));
@@ -244,21 +216,6 @@ mod speculative_tests {
     }
 }
 
-fn configure_process_log(command: &mut Command, log_path: &Path) -> Result<()> {
-    let stdout = fs::File::create(log_path)
-        .with_context(|| format!("create child log {}", log_path.display()))?;
-    let stderr = stdout
-        .try_clone()
-        .with_context(|| format!("clone child log {}", log_path.display()))?;
-    command.stdout(stdout).stderr(stderr);
-    Ok(())
-}
-
-fn path_str(path: &Path) -> Result<&str> {
-    path.to_str()
-        .with_context(|| format!("path is not valid UTF-8: {}", path.display()))
-}
-
 fn connect_ready(addr: &str, timeout_secs: u64) -> Result<TcpStream> {
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
     let mut last_error = None;
@@ -325,79 +282,4 @@ fn recv_ready_until_deadline(stream: &mut TcpStream, deadline: Instant) -> io::R
         ));
     }
     Ok(())
-}
-
-fn unix_millis() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before Unix epoch")
-        .as_millis()
-}
-
-#[cfg(test)]
-mod package_tests {
-    use super::*;
-
-    #[test]
-    fn package_artifact_checks_reads_manifest_artifacts() -> Result<()> {
-        let package_dir = std::env::temp_dir().join(format!(
-            "skippy-prompt-package-read-test-{}-{}",
-            std::process::id(),
-            unix_millis()
-        ));
-        fs::create_dir_all(&package_dir)?;
-        let manifest = serde_json::json!({
-            "shared": {
-                "metadata": {"path": "shared/metadata.gguf", "artifact_bytes": 11},
-                "embeddings": {"path": "shared/embeddings.gguf", "artifact_bytes": 22},
-                "output": {"path": "shared/output.gguf", "artifact_bytes": 33}
-            },
-            "layers": [
-                {"path": "layers/layer-000.gguf", "artifact_bytes": 44},
-                {"path": "layers/layer-001.gguf", "artifact_bytes": 55}
-            ]
-        });
-        fs::write(
-            package_dir.join("model-package.json"),
-            serde_json::to_vec(&manifest)?,
-        )?;
-
-        let checks = package_artifact_checks(&package_dir)?;
-        fs::remove_dir_all(&package_dir).ok();
-
-        assert_eq!(checks.len(), 5);
-        assert_eq!(checks[0].path, "shared/metadata.gguf");
-        assert_eq!(checks[0].artifact_bytes, 11);
-        assert_eq!(checks[4].path, "layers/layer-001.gguf");
-        assert_eq!(checks[4].artifact_bytes, 55);
-        Ok(())
-    }
-
-    #[test]
-    fn package_artifact_checks_rejects_unsafe_paths() -> Result<()> {
-        let package_dir = std::env::temp_dir().join(format!(
-            "skippy-prompt-package-unsafe-test-{}-{}",
-            std::process::id(),
-            unix_millis()
-        ));
-        fs::create_dir_all(&package_dir)?;
-        let manifest = serde_json::json!({
-            "shared": {
-                "metadata": {"path": "../metadata.gguf", "artifact_bytes": 11},
-                "embeddings": {"path": "shared/embeddings.gguf", "artifact_bytes": 22},
-                "output": {"path": "shared/output.gguf", "artifact_bytes": 33}
-            },
-            "layers": []
-        });
-        fs::write(
-            package_dir.join("model-package.json"),
-            serde_json::to_vec(&manifest)?,
-        )?;
-
-        let result = package_artifact_checks(&package_dir);
-        fs::remove_dir_all(&package_dir).ok();
-
-        assert!(result.is_err());
-        Ok(())
-    }
 }

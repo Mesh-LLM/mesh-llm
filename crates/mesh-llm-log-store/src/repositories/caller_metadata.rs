@@ -76,6 +76,7 @@ impl LogStore {
             None,
             None,
             None,
+            None,
             occurred_at,
         )
     }
@@ -94,6 +95,7 @@ impl LogStore {
         caller_endpoint_id: Option<&str>,
         caller_addr: Option<&str>,
         caller_path_type: Option<&str>,
+        exchange_id: Option<&str>,
         occurred_at: &str,
     ) -> Result<(), LogStoreError> {
         let occurred_at = canonical_persisted_timestamp(occurred_at)?;
@@ -101,13 +103,14 @@ impl LogStore {
         self.conn()
             .execute(
                 "INSERT INTO summaries \
-                 (request_id, created_at, model, route, provider, engine, caller_endpoint_id, caller_addr, caller_path_type) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 (request_id, created_at, model, route, provider, engine, caller_endpoint_id, caller_addr, caller_path_type, exchange_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                  ON CONFLICT(request_id) DO UPDATE SET \
                     model = COALESCE(summaries.model, excluded.model), \
                     route = COALESCE(summaries.route, excluded.route), \
                     provider = COALESCE(summaries.provider, excluded.provider), \
                     engine = COALESCE(summaries.engine, excluded.engine), \
+                    exchange_id = COALESCE(summaries.exchange_id, excluded.exchange_id), \
                     caller_endpoint_id = CASE \
                         WHEN summaries.caller_path_type IN ('remote_quic_http', 'relay') \
                              OR (summaries.caller_endpoint_id IS NOT NULL AND summaries.caller_addr IS NULL AND summaries.caller_path_type IS NULL) \
@@ -153,7 +156,8 @@ impl LogStore {
                     engine,
                     caller.endpoint_id,
                     caller.addr,
-                    caller.path_type
+                    caller.path_type,
+                    exchange_id
                 ],
             )
             .map(|_| ())

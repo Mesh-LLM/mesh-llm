@@ -83,6 +83,51 @@ async fn cached_prefix_tokens_reach_durable_usage_dto() {
 }
 
 #[tokio::test]
+async fn streamed_exchange_id_reaches_durable_request_detail() {
+    let (_temp, state) = runtime();
+    let request_id = RequestId::new();
+    let context = OpenAiLifecycleContext::new(
+        request_id,
+        OpenAiRequestMethod::Post,
+        OpenAiFrontendRoute::ChatCompletions,
+    );
+    let observer = state
+        .openai_lifecycle_observer()
+        .expect("OpenAI lifecycle observer");
+    observer.observe(&OpenAiLifecycleEvent::Admitted {
+        context: context.clone(),
+    });
+    observer.observe(&OpenAiLifecycleEvent::ExchangeIdentified {
+        context: context.clone(),
+        exchange_id: "exch-stream-durable".to_string(),
+    });
+    observer.observe(&OpenAiLifecycleEvent::StreamTerminal {
+        context,
+        result: OpenAiTerminalResult::Completed { status_code: 200 },
+    });
+    assert!(state.pump_persistence_for_test().await > 0);
+
+    let request_key = request_id.as_uuid().to_string();
+    let persisted = state
+        .store()
+        .expect("log store")
+        .query_request(&request_key)
+        .expect("query persisted request")
+        .expect("persisted request");
+    assert_eq!(
+        persisted.exchange_id.as_deref(),
+        Some("exch-stream-durable")
+    );
+    let detail = request_detail(&state, &request_key)
+        .await
+        .expect("durable request detail");
+    assert_eq!(
+        serde_json::to_value(detail).unwrap()["exchangeId"],
+        "exch-stream-durable"
+    );
+}
+
+#[tokio::test]
 async fn list_merges_active_and_durable_without_duplicate_ids() {
     let (_temp, state) = runtime();
     let durable_id = RequestId::new().as_uuid().to_string();

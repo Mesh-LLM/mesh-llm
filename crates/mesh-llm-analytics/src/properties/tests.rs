@@ -27,6 +27,7 @@ fn base_properties_describe_the_build_and_platform() {
         "build_channel",
         "os",
         "arch",
+        "exec_env",
         "$lib",
         "$lib_version",
     ] {
@@ -54,4 +55,18 @@ fn base_properties_carry_no_free_text() {
 fn platform_strings_are_from_the_fixed_set() {
     assert!(["macos", "linux", "windows", "other"].contains(&os_family()));
     assert!(["aarch64", "x86_64", "other"].contains(&architecture()));
+}
+
+/// `exec_env` is a closed set like every other base property, so a new
+/// detection branch cannot start emitting an unbounded value.
+#[test]
+fn exec_env_is_from_the_fixed_set() {
+    assert!(["plain", "container", "ci", "service"].contains(&exec_env()));
+}
+
+/// An empty variable is not a marker. `container=` in an inherited
+/// environment must not label a laptop as a container.
+#[test]
+fn an_empty_marker_variable_does_not_count() {
+    assert!(!env_is_set("MESH_LLM_DEFINITELY_UNSET_MARKER_FOR_TESTS"));
 }

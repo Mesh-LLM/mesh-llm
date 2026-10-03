@@ -10,7 +10,7 @@ Use this page to install a plugin. If you are writing one, start with [Developin
 
 ## Official plugins
 
-The Mesh-LLM organization currently publishes five first-party plugin repositories. They are separate from the main `mesh-llm` repository and release native archives for supported platforms.
+The Mesh-LLM organization currently publishes six first-party plugin repositories. They are separate from the main `mesh-llm` repository and release native archives for supported platforms.
 
 | Plugin | Use it for | Install |
 | --- | --- | --- |
@@ -19,6 +19,7 @@ The Mesh-LLM organization currently publishes five first-party plugin repositori
 | [`flash-moe`](https://github.com/Mesh-LLM/flash-moe) | Attach a Flash-MoE inference endpoint, or let the plugin supervise a local Flash-MoE process. | `mesh-llm plugins install flash-moe` |
 | [`metrics`](https://github.com/Mesh-LLM/metrics) | Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin. | `mesh-llm plugins install metrics` |
 | [`agents`](https://github.com/Mesh-LLM/agents) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install agents` |
+| [`ds4-plugin`](https://github.com/Mesh-LLM/ds4-plugin) | Run [DwarfStar (ds4)](https://github.com/antirez/ds4) models such as DeepSeek V4 Flash on Apple Silicon. Add `[[plugin]] name = "ds4-plugin"`, `args = ["serve", "--model", "ds4f-q2"]` to config; the model downloads on first start. [Setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/plugins/dwarfstar.md). | `mesh-llm plugins install Mesh-LLM/ds4-plugin` |
 
 The catalog can also contain community plugins. Search it before installing an unfamiliar integration:
 
@@ -124,6 +125,8 @@ For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-
 | `name` | Installed plugin identifier. Required. |
 | `enabled` | Start the plugin with mesh-llm. Defaults to `true`. |
 | `web_ui_enabled` | Show a declared plugin web UI in the console. Defaults to `true` when omitted; it does not start or stop the plugin process. |
+| `web_ui_primary_tab` | Place a declared plugin web UI in the primary tab when the operator enables it. Defaults to `false` when omitted. |
+| `allow_peer_blocks` | Let the plugin ask this node to stop (or resume) routing to a peer. Defaults to `false` when omitted, and requests are refused. |
 | `command` | Explicit executable path or command. Useful for locally built plugins. |
 | `args` | Arguments passed to the plugin process. |
 | `url` | Optional endpoint passed to the plugin as `MESH_LLM_PLUGIN_URL`. |

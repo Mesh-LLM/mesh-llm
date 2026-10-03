@@ -36,6 +36,25 @@ pub(super) fn pipeline_decode_groups_from_value(value: Option<&str>) -> usize {
         .unwrap_or(1)
 }
 
+/// Decode-wave group count, from the environment override or the planned value.
+///
+/// `throughput.pipeline_decode_groups` is the configured plan. The environment
+/// variable stays as a bench and incident-response override that does not need a
+/// replan, the same shape as `SKIPPY_KV_CACHE` — so an existing benchmark
+/// invocation keeps working now that the setting is configurable. An
+/// unparseable or zero environment value falls back to ungrouped rather than to
+/// the plan, matching what [`pipeline_decode_groups_from_value`] did when the
+/// variable was the only input.
+pub(super) fn resolve_pipeline_decode_groups(
+    env_value: Option<&str>,
+    planned: Option<usize>,
+) -> usize {
+    match env_value {
+        Some(value) => pipeline_decode_groups_from_value(Some(value)),
+        None => planned.filter(|groups| *groups > 0).unwrap_or(1),
+    }
+}
+
 /// Largest decode batch per pipeline group: the lane count divided across
 /// groups, rounded up so every lane still fits in one wave of groups.
 pub(super) fn pipeline_group_batch_size(max_direct_batch_size: usize, groups: usize) -> usize {
@@ -69,7 +88,10 @@ pub(super) fn take_direct_iteration_batch(
     mut token_budget: usize,
 ) -> Vec<DirectIteration> {
     let mut batch = Vec::new();
-    let mut batched_sessions = BTreeSet::new();
+    // Sessions that already have a request in this wave or deferred from it.
+    // A later request from such a session must wait so it cannot overtake
+    // the earlier one.
+    let mut claimed_sessions = BTreeSet::new();
     let mut deferred = VecDeque::new();
     let queued = queue.len();
     for _ in 0..queued {
@@ -79,16 +101,21 @@ pub(super) fn take_direct_iteration_batch(
         let Some(request) = queue.pop_front() else {
             break;
         };
-        if batched_sessions.contains(&request.session_id) {
+        if claimed_sessions.contains(&request.session_id) {
             deferred.push_back(request);
             continue;
         }
+        // Keep scanning past a chunk that does not fit so smaller decode rows
+        // queued behind a large prefill chunk still join this wave. The
+        // deferred chunk keeps its place ahead of later arrivals, and the
+        // queue head always fits a fresh budget, so it cannot starve.
         if request.token_ids.len() > token_budget {
+            claimed_sessions.insert(request.session_id.clone());
             deferred.push_back(request);
-            break;
+            continue;
         }
         token_budget = token_budget.saturating_sub(request.token_ids.len());
-        batched_sessions.insert(request.session_id.clone());
+        claimed_sessions.insert(request.session_id.clone());
         batch.push(request);
         if token_budget == 0 {
             break;
@@ -147,5 +174,52 @@ mod pipeline_group_tests {
     fn coalescing_stops_at_the_group_size() {
         let group = pipeline_group_batch_size(4, 2);
         assert_eq!(direct_coalesce_target(4, 1, group), 2);
+    }
+}
+
+#[cfg(test)]
+mod pipeline_decode_group_tests {
+    use super::{pipeline_group_batch_size, resolve_pipeline_decode_groups};
+
+    #[test]
+    fn the_planned_value_applies_when_the_environment_is_unset() {
+        assert_eq!(resolve_pipeline_decode_groups(None, Some(2)), 2);
+    }
+
+    #[test]
+    fn ungrouped_is_the_default_with_neither_source() {
+        assert_eq!(resolve_pipeline_decode_groups(None, None), 1);
+    }
+
+    /// The override exists so a bench can regroup a running configuration
+    /// without replanning a topology.
+    #[test]
+    fn the_environment_override_beats_the_planned_value() {
+        assert_eq!(resolve_pipeline_decode_groups(Some("3"), Some(2)), 3);
+    }
+
+    /// A set-but-unusable override means ungrouped, not "fall through to the
+    /// plan": that is what the variable did when it was the only input, and
+    /// silently honouring the plan would hide the operator's typo.
+    #[test]
+    fn an_unusable_environment_override_does_not_fall_back_to_the_plan() {
+        assert_eq!(resolve_pipeline_decode_groups(Some("nonsense"), Some(4)), 1);
+        assert_eq!(resolve_pipeline_decode_groups(Some("0"), Some(4)), 1);
+        assert_eq!(resolve_pipeline_decode_groups(Some(""), Some(4)), 1);
+    }
+
+    /// A zero reaching the resolver from a plan cannot divide a wave.
+    #[test]
+    fn a_zero_plan_is_treated_as_ungrouped() {
+        assert_eq!(resolve_pipeline_decode_groups(None, Some(0)), 1);
+    }
+
+    #[test]
+    fn grouping_divides_the_lane_count_and_never_reaches_zero() {
+        assert_eq!(pipeline_group_batch_size(4, 2), 2);
+        assert_eq!(pipeline_group_batch_size(4, 1), 4);
+        // Rounded up, so every lane still fits in one wave of groups.
+        assert_eq!(pipeline_group_batch_size(5, 2), 3);
+        assert_eq!(pipeline_group_batch_size(1, 4), 1);
     }
 }

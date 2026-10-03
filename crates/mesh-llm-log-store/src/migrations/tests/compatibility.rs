@@ -193,6 +193,7 @@ fn released_schema_marker_eleven_store_upgrades_without_losing_rows() {
             "caller_endpoint_id",
             "caller_addr",
             "caller_path_type",
+            "exchange_id",
         ]
     );
     super::released_schema_fixture::assert_seeded_history(&reopened.conn());

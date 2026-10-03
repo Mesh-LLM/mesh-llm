@@ -68,6 +68,10 @@ async fn serve_inner(
     uuid::Uuid::parse_str(&id).context("invalid request ID")?;
     let mut request = PaidRequest::parse(&http)?;
     ensure!(request.model == model, "model mismatch");
+    // The digest of the request as the payer sent it, before the model is
+    // renamed for the local backend, as the free path digests the request it
+    // received.
+    let request_digest = crate::plugin::openai_exchange::request_body_digest(&request.body, None);
     // Prices and offers use the public model ID; the local backend is
     // registered, and must be addressed, under its internal name.
     let backend_model =
@@ -97,7 +101,9 @@ async fn serve_inner(
             },
         )
         .await?;
+    let (lifecycle, exchange_id) = provider_observers(node).await;
     let _instance = node.begin_runtime_instance_request(port).await?;
+    let model_for_events = model.clone();
     let (events, mut receiver) = mpsc::unbounded_channel();
     let gate = Arc::new(InvoiceGate {
         payments: payments.clone(),
@@ -116,12 +122,47 @@ async fn serve_inner(
         flushed_tokens: AtomicU64::new(0),
         invoice_expires_at_ms: Arc::new(AtomicU64::new(0)),
         input_settlement: Arc::new(tokio::sync::Mutex::new(None)),
+        lifecycle,
+        observations: Arc::new(std::sync::OnceLock::new()),
     });
     let _serving_guard = ServingGuard { gate: gate.clone() };
-    let generated = generate(reader, writer, port, &request, &gate, &mut receiver).await;
+    // The same exchange events the free serving path publishes.
+    let exchange = crate::network::openai::paid_exchange::PaidServedExchange::begin(
+        node,
+        &model_for_events,
+        exchange_id.as_deref(),
+    )
+    .await;
+    let mut delivered = exchange.as_ref().map(|_| DeliveredCapture::default());
+    let generated = generate(
+        reader,
+        writer,
+        port,
+        &request,
+        &gate,
+        &mut receiver,
+        delivered.as_mut(),
+    )
+    .await;
     // Close serving on every path, before anything else can observe this
     // peer, so an interrupted request's delivered output counts as debt.
+    // Whether the response reached the payer in full is read before closing.
+    let completed = delivered_in_full(&generated, &gate);
     let closed = gate.close_serving().await;
+    let observations = gate.observations();
+    observe_delivered(&observations, &closed);
+    // A terminal event on every path, as on the free path: a failed
+    // generation or closure still ends the exchange the effective event
+    // opened, before the error is returned.
+    end_exchange(
+        node,
+        exchange.zip(delivered),
+        paid_response_adapter(&request),
+        completed && closed.is_ok(),
+        &model_for_events,
+        request_digest.as_deref(),
+    )
+    .await;
     let transport_alive = generated?;
     closed?;
     // Generation is over. Release the runtime's in-flight slot (the gate
@@ -144,6 +185,7 @@ async fn serve_inner(
         None
     };
     if let Some(receipt) = output {
+        observations.invoice(1, &receipt.invoice);
         if transport_alive {
             wire::write(
                 writer,
@@ -159,15 +201,119 @@ async fn serve_inner(
             .call(
                 ops::SETTLE_RECEIVED,
                 &InvoiceRequest {
-                    invoice: receipt.invoice,
+                    invoice: receipt.invoice.clone(),
                 },
             )
             .await?;
+        observations.received(1, &receipt.invoice);
     }
     if transport_alive {
         wire::write(writer, &Frame::Complete).await?;
     }
     Ok(())
+}
+
+/// The provider lifecycle for this paid serving request, and the one fresh
+/// ID naming the request on both of the provider's channels,
+/// `payment.lifecycle.v1` and `openai.exchange.v1`, so a plugin subscribed to
+/// both joins them exactly. The ID is minted only when a plugin subscribes to
+/// either, and is never the private request (recovery) ID.
+async fn provider_observers(node: &Node) -> (super::lifecycle::ProviderLifecycle, Option<String>) {
+    let lifecycle = super::lifecycle::ProviderLifecycle::for_node(node).await;
+    let subscribed = lifecycle.is_subscribed()
+        || crate::network::openai::paid_exchange::PaidServedExchange::is_subscribed(node).await;
+    let exchange_id = subscribed.then(|| uuid::Uuid::new_v4().to_string());
+    (lifecycle.named(exchange_id.clone()), exchange_id)
+}
+
+/// Served only when the backend's response reached the payer in full:
+/// `Ok(false)` is a payer disconnect and a payer cancellation frame returns
+/// `Ok(true)` with `cancelled` set.
+fn delivered_in_full(generated: &Result<bool>, gate: &InvoiceGate) -> bool {
+    matches!(generated, Ok(true)) && !gate.cancelled.load(Ordering::Acquire)
+}
+
+/// The delivered phase, once, with the watermark the close wrote, whatever
+/// the transport did.
+fn observe_delivered(observations: &super::lifecycle::Observations, closed: &Result<u64>) {
+    if let Ok(tokens) = closed {
+        observations.delivered(*tokens);
+    }
+}
+
+/// Publish the terminal exchange event, when an effective one was published.
+async fn end_exchange(
+    node: &Node,
+    exchange: Option<(
+        crate::network::openai::paid_exchange::PaidServedExchange,
+        DeliveredCapture,
+    )>,
+    adapter: crate::network::openai::transport::ResponseAdapter,
+    served: bool,
+    model: &str,
+    request_digest: Option<&str>,
+) {
+    if let Some((exchange, delivered)) = exchange {
+        let outcome = exchange_outcome(served, delivered, adapter).await;
+        exchange.finish(node, model, &outcome, request_digest).await;
+    }
+}
+
+/// The terminal exchange event's outcome: what was delivered when serving
+/// completed, `Failed` when generation or closing serving failed.
+async fn exchange_outcome(
+    served: bool,
+    delivered: DeliveredCapture,
+    adapter: crate::network::openai::transport::ResponseAdapter,
+) -> crate::network::openai::transport::RouteDispatchOutcome {
+    if served {
+        delivered_outcome(delivered, adapter).await
+    } else {
+        crate::network::openai::transport::RouteDispatchOutcome::Failed(
+            "paid serving failed before the response was delivered",
+        )
+    }
+}
+
+/// What was delivered, for the terminal exchange event: the relay's own
+/// usage and digests over the delivered bytes. Past the capture limit, only
+/// the response status, read off the kept head of the response.
+async fn delivered_outcome(
+    delivered: DeliveredCapture,
+    adapter: crate::network::openai::transport::ResponseAdapter,
+) -> crate::network::openai::transport::RouteDispatchOutcome {
+    use crate::network::openai::transport::RouteDispatchOutcome;
+    let status = delivered.status();
+    match delivered.into_bytes() {
+        Some(raw) => crate::network::openai::served_outcome_of_raw_response(&raw, adapter).await,
+        None => match status {
+            Some(status) => RouteDispatchOutcome::Responded(status),
+            None => RouteDispatchOutcome::Failed("the served response had no HTTP status line"),
+        },
+    }
+}
+
+/// The adapter the payer's relay applies to this response, so the seller's
+/// replay computes the same usage and digests. Mirrors the payer's default
+/// for a chat request (`request_parse.rs`): a paid request arrives already
+/// normalized to the backend's chat shape.
+fn paid_response_adapter(
+    request: &PaidRequest,
+) -> crate::network::openai::transport::ResponseAdapter {
+    use crate::network::openai::transport::ResponseAdapter;
+    if request.path.split('?').next() != Some("/v1/chat/completions") {
+        return ResponseAdapter::None;
+    }
+    if request
+        .body
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        ResponseAdapter::OpenAiChatCompletionsStream
+    } else {
+        ResponseAdapter::OpenAiChatCompletionsJson
+    }
 }
 
 /// Runs the backend under the registered payment gate until its output is
@@ -179,6 +325,7 @@ async fn generate(
     request: &PaidRequest,
     gate: &Arc<InvoiceGate>,
     receiver: &mut mpsc::UnboundedReceiver<GateEvent>,
+    delivered: Option<&mut DeliveredCapture>,
 ) -> Result<bool> {
     let backend_id = uuid::Uuid::new_v4();
     let _registration =
@@ -188,7 +335,48 @@ async fn generate(
     backend
         .write_all(&request.backend_http(&backend_id.to_string())?)
         .await?;
-    stream_output(reader, writer, &mut backend, gate, receiver).await
+    stream_output(reader, writer, &mut backend, gate, receiver, delivered).await
+}
+
+/// The bytes delivered to the payer, kept to replay through the relay for
+/// the exchange event's digests. Past [`MAX_CAPTURED_RESPONSE_BYTES`] the
+/// capture is dropped and the event carries no digests, never partial ones.
+#[derive(Default)]
+struct DeliveredCapture {
+    bytes: Vec<u8>,
+    overflowed: bool,
+    /// The first bytes delivered, kept past the capture limit so the
+    /// response status is still known.
+    head: Vec<u8>,
+}
+
+/// Enough of the response to hold its status line (`HTTP/1.1 200 `).
+const RESPONSE_HEAD_BYTES: usize = 64;
+
+const MAX_CAPTURED_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+impl DeliveredCapture {
+    fn push(&mut self, bytes: &[u8]) {
+        let room = RESPONSE_HEAD_BYTES.saturating_sub(self.head.len());
+        self.head.extend_from_slice(&bytes[..room.min(bytes.len())]);
+        if self.overflowed || self.bytes.len() + bytes.len() > MAX_CAPTURED_RESPONSE_BYTES {
+            self.overflowed = true;
+            self.bytes = Vec::new();
+            return;
+        }
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    fn into_bytes(self) -> Option<Vec<u8>> {
+        (!self.overflowed).then_some(self.bytes)
+    }
+
+    /// The HTTP status of the delivered response, from its status line.
+    fn status(&self) -> Option<u16> {
+        let line = self.head.strip_prefix(b"HTTP/1.")?;
+        let code = line.get(2..5)?;
+        std::str::from_utf8(code).ok()?.parse().ok()
+    }
 }
 
 async fn stream_output(
@@ -197,6 +385,7 @@ async fn stream_output(
     backend: &mut TcpStream,
     gate: &InvoiceGate,
     events: &mut mpsc::UnboundedReceiver<GateEvent>,
+    mut delivered: Option<&mut DeliveredCapture>,
 ) -> Result<bool> {
     // Decode runs as soon as prefill completes. Drain the backend into a
     // bounded buffer, but do not release even HTTP headers until the provider's
@@ -221,7 +410,9 @@ async fn stream_output(
         if gate_open {
             while let Some(bytes) = pending.pop_front() {
                 pending_bytes -= bytes.len();
-                if !deliver_output(writer, gate, &mut delivery, bytes).await? {
+                if !deliver_output(writer, gate, &mut delivery, bytes, delivered.as_deref_mut())
+                    .await?
+                {
                     return Ok(false);
                 }
             }
@@ -274,7 +465,7 @@ async fn stream_output(
                     );
                     backend_eof = true;
                 } else if gate_open {
-                    if !deliver_output(writer, gate, &mut delivery, buffer[..count].to_vec()).await? {
+                    if !deliver_output(writer, gate, &mut delivery, buffer[..count].to_vec(), delivered.as_deref_mut()).await? {
                         return Ok(false);
                     }
                 } else {
@@ -301,11 +492,15 @@ async fn deliver_output(
     gate: &InvoiceGate,
     delivery: &mut super::delivery::DeliveryUsage,
     bytes: Vec<u8>,
+    delivered: Option<&mut DeliveredCapture>,
 ) -> Result<bool> {
     let frame = Frame::Output { bytes };
     if wire::write(writer, &frame).await.is_err() {
         gate.cancelled.store(true, Ordering::Release);
         return Ok(false);
+    }
+    if let (Some(capture), Frame::Output { bytes }) = (delivered, &frame) {
+        capture.push(bytes);
     }
     let Frame::Output { bytes } = frame else {
         unreachable!("output frame changed before delivery accounting");
@@ -369,5 +564,81 @@ impl Drop for ServingGuard {
         self.gate.runtime.spawn(async move {
             let _ = gate.close_serving().await;
         });
+    }
+}
+
+#[cfg(test)]
+mod delivered_capture_tests {
+    use super::*;
+    use crate::network::openai::transport::RouteDispatchOutcome;
+
+    const OK: &[u8] =
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
+
+    #[test]
+    fn replay_uses_the_normalized_paid_request_adapter() {
+        use crate::network::openai::transport::ResponseAdapter;
+        for (path, stream, expected) in [
+            (
+                "/v1/chat/completions",
+                true,
+                ResponseAdapter::OpenAiChatCompletionsStream,
+            ),
+            (
+                "/v1/chat/completions",
+                false,
+                ResponseAdapter::OpenAiChatCompletionsJson,
+            ),
+            ("/v1/completions", true, ResponseAdapter::None),
+            ("/v1/completions", false, ResponseAdapter::None),
+        ] {
+            let raw =
+                format!("POST {path} HTTP/1.1\r\n\r\n{{\"model\":\"test\",\"stream\":{stream}}}");
+            let request = PaidRequest::parse(raw.as_bytes()).unwrap();
+            assert_eq!(paid_response_adapter(&request), expected);
+        }
+    }
+
+    #[test]
+    fn the_status_is_read_off_the_first_bytes() {
+        let mut capture = DeliveredCapture::default();
+        capture.push(&OK[..5]);
+        capture.push(&OK[5..]);
+        assert_eq!(capture.status(), Some(200));
+        assert_eq!(DeliveredCapture::default().status(), None);
+        let mut not_http = DeliveredCapture::default();
+        not_http.push(b"garbage");
+        assert_eq!(not_http.status(), None);
+    }
+
+    #[tokio::test]
+    async fn past_the_capture_limit_the_status_is_kept_and_only_the_digests_dropped() {
+        let mut capture = DeliveredCapture::default();
+        capture.push(OK);
+        capture.push(&vec![b'x'; MAX_CAPTURED_RESPONSE_BYTES]);
+        assert!(matches!(
+            exchange_outcome(
+                true,
+                capture,
+                crate::network::openai::transport::ResponseAdapter::None
+            )
+            .await,
+            RouteDispatchOutcome::Responded(200)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_failed_serving_still_ends_the_exchange_with_a_terminal_failure() {
+        let mut capture = DeliveredCapture::default();
+        capture.push(OK);
+        assert!(matches!(
+            exchange_outcome(
+                false,
+                capture,
+                crate::network::openai::transport::ResponseAdapter::None
+            )
+            .await,
+            RouteDispatchOutcome::Failed(_)
+        ));
     }
 }

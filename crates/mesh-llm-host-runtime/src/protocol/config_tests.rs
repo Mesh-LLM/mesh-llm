@@ -39,6 +39,8 @@ fn config_sync_full_config_roundtrip() {
             name: "demo".to_string(),
             enabled: Some(true),
             web_ui_enabled: Some(false),
+            web_ui_primary_tab: Some(true),
+            allow_peer_blocks: Some(true),
             command: Some("mesh-llm".to_string()),
             args: vec!["--plugin".to_string()],
             url: None,
@@ -46,10 +48,14 @@ fn config_sync_full_config_roundtrip() {
             startup: Default::default(),
         }],
         logging: Default::default(),
+        payments: mesh_llm_config::PaymentsConfig {
+            wallet: Some("my-wallet".to_string()),
+        },
         extra: Default::default(),
     };
     let snapshot = mesh_config_to_proto(&config);
     let restored = proto_config_to_mesh(&snapshot);
+    assert_eq!(restored.payments.wallet.as_deref(), Some("my-wallet"));
     assert_eq!(restored.version, config.version);
     assert_eq!(restored.models.len(), 1);
     assert_eq!(restored.models[0].model, "Qwen3-8B.gguf");
@@ -70,6 +76,8 @@ fn config_sync_full_config_roundtrip() {
     assert_eq!(restored.plugins[0].name, "demo");
     assert_eq!(restored.plugins[0].enabled, Some(true));
     assert_eq!(restored.plugins[0].web_ui_enabled, Some(false));
+    assert_eq!(restored.plugins[0].web_ui_primary_tab, Some(true));
+    assert_eq!(restored.plugins[0].allow_peer_blocks, Some(true));
     assert_eq!(restored.plugins[0].command.as_deref(), Some("mesh-llm"));
     assert_eq!(restored.plugins[0].args, vec!["--plugin"]);
 }

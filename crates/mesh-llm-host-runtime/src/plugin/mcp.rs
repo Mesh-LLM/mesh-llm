@@ -3,7 +3,7 @@
     reason = "bridge keeps legacy MCP sampling, roots, and logging methods for older peers"
 )]
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use rmcp::{
     ErrorData, RoleServer,
     model::{
@@ -22,8 +22,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::plugin::{self, PluginManager, PluginRpcBridge, RpcResult};
-
-use axum::Router;
 
 mod external_mcp;
 mod tool_dispatch;
@@ -367,37 +365,4 @@ mod proto_error {
             data_json: String::new(),
         }
     }
-}
-
-pub(crate) async fn run_mcp_server(plugin_manager: PluginManager) -> Result<()> {
-    use rmcp::transport::streamable_http_server::{
-        StreamableHttpService, session::local::LocalSessionManager,
-    };
-
-    let service = StreamableHttpService::new(
-        move || {
-            Ok(PluginMcpServer::new(
-                plugin_manager.clone(),
-                Default::default(),
-            ))
-        },
-        Arc::new(LocalSessionManager::default()),
-        Default::default(),
-    );
-    let router = Router::new().nest_service("/mcp", service);
-
-    let bind_addr = std::env::var("MESH_MCP_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(3040);
-
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{bind_addr}"))
-        .await
-        .context("failed to bind MCP server address")?;
-    let addr = listener.local_addr()?;
-    tracing::info!(%addr, "MCP plugin server listening");
-
-    axum::serve(listener, router)
-        .await
-        .context("MCP server exited")
 }

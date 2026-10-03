@@ -13,12 +13,14 @@ mod pipeline;
 mod pipeline_adapter;
 mod probe;
 mod relay;
+#[cfg(feature = "payments")]
+mod replay;
 mod routing;
 mod send;
 mod stream_translation;
 
 pub(super) use cache_cost::CacheCostObservation;
-pub(crate) use common::PeerCapsuleIdSink;
+pub(crate) use common::{PeerCapsuleIdSink, ServedByNodeIdSink};
 pub(super) use common::{
     ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
     attempt_outcome_for_result, completion_tokens_for_result, parse_token_usage_from_json_body,
@@ -28,6 +30,8 @@ pub(super) use common::{
 pub(super) use external_endpoint::route_http_endpoint_attempt;
 pub(crate) use models::send_models_list_with_descriptors;
 pub(crate) use pipeline::{PipelineCapsuleNonce, PipelineProxyResult, pipeline_proxy_local};
+#[cfg(feature = "payments")]
+pub(crate) use replay::served_outcome_of_raw_response;
 pub(super) use routing::{route_local_attempt, route_remote_attempt};
 #[cfg(feature = "payments")]
 pub(crate) use send::send_error;
@@ -39,8 +43,6 @@ pub(crate) use send::{
 
 #[cfg(feature = "payments")]
 pub(crate) mod paid;
-#[cfg(feature = "payments")]
-mod paid_events;
 
 #[cfg(feature = "payments")]
 pub(crate) mod payment_recovery;

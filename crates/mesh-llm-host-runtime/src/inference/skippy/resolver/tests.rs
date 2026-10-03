@@ -1719,6 +1719,59 @@ continuous_batching = false
     assert!(automatic_debug.contains("continuous_batching: true"));
 }
 
+/// The setting only pays off when it reaches the dispatcher, and the dispatcher
+/// is the embedded frontend — so the boundary the value has to cross is
+/// `to_embedded_openai_args`, exactly like `continuous_batching` above.
+#[test]
+fn pipeline_decode_groups_reaches_embedded_scheduler_boundary() {
+    let grouped = parse_config(
+        r#"
+[defaults.throughput]
+pipeline_decode_groups = 2
+"#,
+    );
+
+    let grouped_resolved = resolve_with_config(&grouped);
+    assert_eq!(grouped_resolved.throughput.pipeline_decode_groups, Some(2));
+
+    let grouped_args = grouped_resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("grouped OpenAI args");
+    let default_args = resolve_with_config(&parse_config(""))
+        .to_embedded_openai_args(4096, true)
+        .expect("default OpenAI args");
+
+    assert!(format!("{grouped_args:?}").contains("pipeline_decode_groups: Some(2)"));
+    // Unset must stay unset rather than materialising a 1, so the scheduler's
+    // own default remains the single source of the ungrouped shape.
+    assert!(format!("{default_args:?}").contains("pipeline_decode_groups: None"));
+}
+
+/// A model block overrides the global default, the same precedence every other
+/// throughput key follows.
+#[test]
+fn a_model_pipeline_decode_groups_beats_the_global_default() {
+    let config = parse_config(
+        r#"
+[defaults.throughput]
+pipeline_decode_groups = 2
+
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+
+[models.throughput]
+pipeline_decode_groups = 4
+"#,
+    );
+
+    assert_eq!(
+        resolve_with_config(&config)
+            .throughput
+            .pipeline_decode_groups,
+        Some(4)
+    );
+}
+
 #[test]
 fn request_overrides_change_request_time_defaults_without_mutating_load_time_stage_config() {
     let mesh_config = parse_config(

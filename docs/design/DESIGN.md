@@ -227,7 +227,7 @@ a new requirement-aware mesh; it does not mutate a running mesh.
 
 ## Passive Mode
 
-Two flavors, one code path (`run_passive()`):
+Two flavors:
 - **`--client`**: pure consumer, ephemeral key, no gossip, routing table only
 - **Standby GPU**: has VRAM + models on disk, watches for topology changes, promotes when needed
 

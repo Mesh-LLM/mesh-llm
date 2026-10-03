@@ -22,6 +22,7 @@ mod provisioning;
 mod recovery_boundaries;
 mod resubmission;
 mod review_regressions;
+mod unpin;
 
 fn invoice(number: u8, amount: u64) -> Invoice {
     invoice_with_expiry(number, amount, 3600)
@@ -92,6 +93,9 @@ struct MockWallet {
     invoice_unavailable: AtomicBool,
     /// Expiry the service asked for on each `create_invoice`.
     invoice_expiries: Mutex<Vec<u32>>,
+    /// Fee to report instead of the default, for wallets that cannot keep a
+    /// payment under the host's headroom.
+    fee_override_msat: Mutex<Option<u64>>,
 }
 
 #[async_trait]
@@ -190,7 +194,7 @@ impl WalletProvider for MockWallet {
             payment_hash: Some(invoice.payment_hash.clone()),
             inbound: false,
             amount_msat: amount,
-            fee_msat: 10,
+            fee_msat: self.fee_override_msat.lock().unwrap().unwrap_or(10),
             status: if self.terminal_failure.load(Ordering::SeqCst) {
                 PaymentStatus::Failed
             } else if pending {
@@ -244,6 +248,39 @@ async fn lost_payment_response_recovers_after_restart_without_double_spend() {
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     assert_eq!(service.ledger.requests().unwrap()[0].spent_msat, 110);
     assert!(service.ledger.pending_charges().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_fee_above_the_headroom_still_counts_against_the_daily_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    *wallet.fee_override_msat.lock().unwrap() = Some(500);
+    let service = PaymentService::with_provider(dir.path(), wallet.clone()).unwrap();
+    service
+        .ledger
+        .set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(10_000),
+        })
+        .unwrap();
+    service.ledger.propose(&terms("one", 1000)).unwrap();
+    service.approve("one").await.unwrap();
+    // 100 msat with 100 msat of fee headroom, but the wallet charged 500.
+    service
+        .pay_charge(&charge("one", 0, 1, 100, 200))
+        .await
+        .expect("an uncapped wallet's payment still succeeds");
+    service.ledger.finish("one").unwrap();
+
+    assert_eq!(service.ledger.requests().unwrap()[0].spent_msat, 600);
+    assert_eq!(
+        service
+            .ledger
+            .available_budget(100_000, crate::now_ms())
+            .unwrap(),
+        10_000 - 600,
+        "the real fee, not the authorized headroom, is what the budget loses"
+    );
 }
 
 #[tokio::test]

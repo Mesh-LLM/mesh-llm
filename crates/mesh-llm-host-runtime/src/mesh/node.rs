@@ -13,7 +13,7 @@ use startup::{
     advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime, startup_secret_key,
     wait_for_endpoint_online,
 };
-pub(crate) use startup::{default_plugin_event_source, startup_transport_config};
+pub(crate) use startup::{stamp_plugin_event_source, startup_transport_config};
 
 /// Upper bound on how long shutdown waits for one iroh endpoint to close.
 ///
@@ -127,6 +127,10 @@ pub struct Node {
         Arc<std::sync::Mutex<mesh_llm_routing::cache_inventory::CacheInventory>>,
     pub(crate) swarm_capture: Arc<std::sync::Mutex<Option<crate::capture::SwarmCaptureRecorder>>>,
     pub(crate) local_request_metrics: Arc<LocalRequestMetricsSampler>,
+    /// Local-only plugin-frame telemetry: the source-mismatch counter and the
+    /// per-peer warning throttle. It shares no lock with `state`, so a
+    /// plugin-frame decision never contends with the mesh-wide state mutex.
+    pub(crate) plugin_frame_telemetry: Arc<PluginFrameTelemetry>,
     pub(crate) runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
     pub(crate) tunnel_tx:
         tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
@@ -173,6 +177,8 @@ pub struct Node {
     pub gpu_compute_tflops_fp32: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
+    /// Peers this node's operator chose to stop routing to (local only).
+    pub(crate) peer_blocks: crate::network::peer_blocks::PeerBlocks,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
     #[cfg(feature = "payments")]
     pub(crate) payments: crate::network::payments::PaymentsSlot,
@@ -858,6 +864,7 @@ impl Node {
             )),
             swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
+            plugin_frame_telemetry: Arc::new(PluginFrameTelemetry::default()),
             runtime_data_producer,
             tunnel_tx,
             tunnel_http_tx,
@@ -889,6 +896,7 @@ impl Node {
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
             config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
+            peer_blocks: crate::network::peer_blocks::PeerBlocks::for_this_node(),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
@@ -1039,6 +1047,7 @@ impl Node {
             )),
             swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
+            plugin_frame_telemetry: Arc::new(PluginFrameTelemetry::default()),
             runtime_data_producer,
             tunnel_tx,
             tunnel_http_tx,
@@ -1071,6 +1080,7 @@ impl Node {
             config_state: Arc::new(tokio::sync::Mutex::new(
                 crate::runtime::config_state::ConfigState::default(),
             )),
+            peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)
@@ -1617,6 +1627,14 @@ impl Node {
     /// Set the operator-facing display name for this node.
     pub async fn set_display_name(&self, name: String) {
         *self.display_name.lock().await = Some(name);
+    }
+
+    /// Removes the plugin manager from this node. The in-process payments
+    /// runner holds a `Node` clone, so a manager left installed forms a
+    /// Node -> manager -> runner -> Node cycle that keeps the payments engine
+    /// (and its `service.lock`) alive after an embedded stop.
+    pub async fn take_plugin_manager(&self) -> Option<crate::plugin::PluginManager> {
+        self.plugin_manager.lock().await.take()
     }
 
     pub async fn set_plugin_manager(&self, plugin_manager: crate::plugin::PluginManager) {

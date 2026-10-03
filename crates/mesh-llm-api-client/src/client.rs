@@ -1,4 +1,4 @@
-use crate::events::{Event, EventListener};
+use crate::events::{Event, EventListener, OpenAiStreamEvent, OpenAiStreamListener};
 use crate::{InviteToken, OwnerKeypair};
 use mesh_client::ClientError;
 use std::sync::Arc;
@@ -116,6 +116,35 @@ impl MeshClient {
             .collect())
     }
 
+    /// Send a protocol-preserving OpenAI-compatible request.
+    ///
+    /// Prefer this path for agent payloads whose shape evolves faster than the
+    /// typed convenience API, including tool calling and structured outputs.
+    pub async fn openai_request(
+        &self,
+        path: &str,
+        body_json: String,
+    ) -> Result<OpenAiResponse, MeshApiError> {
+        Ok(OpenAiResponse::from(
+            self.inner.openai_request(path, body_json).await?,
+        ))
+    }
+
+    /// Start a protocol-preserving OpenAI-compatible SSE request.
+    pub fn openai_stream(
+        &self,
+        path: &str,
+        body_json: String,
+        listener: Arc<dyn OpenAiStreamListener>,
+    ) -> Result<RequestId, MeshApiError> {
+        let request_id = self.inner.openai_stream(
+            path,
+            body_json,
+            Arc::new(OpenAiStreamListenerAdapter { inner: listener }),
+        )?;
+        Ok(RequestId(request_id.0))
+    }
+
     pub fn chat(&self, request: ChatRequest, listener: Arc<dyn EventListener>) -> RequestId {
         let request_id = self.inner.chat(
             mesh_client::ChatRequest::from(request),
@@ -199,6 +228,23 @@ pub struct ResponsesRequest {
     pub input: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenAiResponse {
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+}
+
+impl From<mesh_client::OpenAiResponse> for OpenAiResponse {
+    fn from(value: mesh_client::OpenAiResponse) -> Self {
+        Self {
+            status_code: value.status_code,
+            content_type: value.content_type,
+            body: value.body,
+        }
+    }
+}
+
 impl From<ResponsesRequest> for mesh_client::ResponsesRequest {
     fn from(value: ResponsesRequest) -> Self {
         Self {
@@ -212,6 +258,7 @@ impl From<ResponsesRequest> for mesh_client::ResponsesRequest {
 pub struct Model {
     pub id: String,
     pub name: String,
+    pub context_length: Option<u32>,
 }
 
 impl From<mesh_client::Model> for Model {
@@ -219,6 +266,7 @@ impl From<mesh_client::Model> for Model {
         Self {
             id: value.id,
             name: value.name,
+            context_length: value.context_length,
         }
     }
 }
@@ -253,6 +301,51 @@ impl Default for RequestId {
 
 struct EventListenerAdapter {
     inner: Arc<dyn EventListener>,
+}
+
+struct OpenAiStreamListenerAdapter {
+    inner: Arc<dyn OpenAiStreamListener>,
+}
+
+impl mesh_client::events::OpenAiStreamListener for OpenAiStreamListenerAdapter {
+    fn on_event(&self, event: mesh_client::events::OpenAiStreamEvent) {
+        self.inner.on_event(match event {
+            mesh_client::events::OpenAiStreamEvent::Started {
+                request_id,
+                status_code,
+                content_type,
+            } => OpenAiStreamEvent::Started {
+                request_id,
+                status_code,
+                content_type,
+            },
+            mesh_client::events::OpenAiStreamEvent::Sse {
+                request_id,
+                event_type,
+                data,
+                raw,
+            } => OpenAiStreamEvent::Sse {
+                request_id,
+                event_type,
+                data,
+                raw,
+            },
+            mesh_client::events::OpenAiStreamEvent::Completed { request_id } => {
+                OpenAiStreamEvent::Completed { request_id }
+            }
+            mesh_client::events::OpenAiStreamEvent::Failed {
+                request_id,
+                status_code,
+                error,
+                body,
+            } => OpenAiStreamEvent::Failed {
+                request_id,
+                status_code,
+                error,
+                body,
+            },
+        });
+    }
 }
 
 impl mesh_client::events::EventListener for EventListenerAdapter {

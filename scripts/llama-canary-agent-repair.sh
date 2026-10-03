@@ -724,6 +724,12 @@ if [[ "$HARNESS_MODE" == repair* ]]; then
     :
   else
     status=$?
+    # Run the helper from the trusted base commit: a failed agent may have
+    # edited its checkout's scripts. The result is diagnostic evidence only.
+    if ! python3 - "$ROOT" "$STATE_DIR/recovery" "$BASE_HEAD" \
+        < <(git show "$BASE_HEAD:scripts/llama-canary-recover-source.py"); then
+      echo "could not capture the unverified repair source" >&2
+    fi
     echo "agent task failed or timed out; no canary branch or pull request was published" >&2
     exit "$status"
   fi

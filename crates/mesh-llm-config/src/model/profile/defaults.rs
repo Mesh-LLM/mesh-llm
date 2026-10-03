@@ -196,6 +196,9 @@ fn merge_throughput(effective: &mut ModelConfigEntry, defaults: &ModelConfigDefa
         .continuous_batching
         .clone()
         .or_else(|| default_throughput.continuous_batching.clone());
+    throughput.pipeline_decode_groups = throughput
+        .pipeline_decode_groups
+        .or(default_throughput.pipeline_decode_groups);
     throughput.threads = throughput.threads.or(default_throughput.threads);
     throughput.threads_batch = throughput
         .threads_batch

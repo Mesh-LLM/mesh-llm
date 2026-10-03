@@ -60,6 +60,25 @@ def live_group_members(pgid: int) -> int:
     return members
 
 
+def describe_live_group_members(pgid: int) -> str:
+    """Identify surviving members without logging command arguments or environment."""
+    try:
+        rows = subprocess.check_output(
+            ["ps", "-axo", "pid=,ppid=,pgid=,uid=,stat=,comm="], text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        return f"process details unavailable: {error}"
+    members = []
+    for row in rows.splitlines():
+        fields = row.split(maxsplit=5)
+        if len(fields) == 6 and fields[2] == str(pgid) and not fields[4].startswith("Z"):
+            members.append(
+                f"pid={fields[0]} ppid={fields[1]} uid={fields[3]} "
+                f"stat={fields[4]} executable={fields[5]}"
+            )
+    return "; ".join(members) if members else "no live members visible"
+
+
 def cleanup_completed_group(process: subprocess.Popen[bytes]) -> None:
     """Stop descendants before returning a completed agent's workspace to its caller."""
     term_error: PermissionError | None = None
@@ -97,7 +116,8 @@ def cleanup_completed_group(process: subprocess.Popen[bytes]) -> None:
             return
         prior = f" after SIGTERM was denied ({term_error})" if term_error else ""
         raise CleanupError(
-            f"permission denied stopping {members} live process-group member(s){prior}"
+            f"permission denied stopping {members} live process-group member(s){prior}; "
+            f"{describe_live_group_members(process.pid)}"
         ) from error
     if inspection_error is not None:
         # SIGKILL was accepted for the complete process group. Without process

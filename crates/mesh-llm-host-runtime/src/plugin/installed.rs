@@ -38,6 +38,7 @@ pub(crate) fn configured_disabled_installed_plugin_summary(
             live_manifest: None,
             installed_metadata: Some(&metadata),
             web_ui_enabled: entry.web_ui_enabled,
+            web_ui_primary_tab: entry.web_ui_primary_tab_preference(),
             runtime_available: false,
             runtime_unavailable_reason: Some("plugin process is disabled"),
         }),
@@ -87,6 +88,7 @@ pub(crate) fn configured_external_plugin_spec(
         env: BTreeMap::new(),
         startup,
         web_ui_enabled: entry.web_ui_enabled,
+        web_ui_primary_tab: entry.web_ui_primary_tab,
         installed_metadata: installed_plugin_metadata_for_name(&entry.name)
             .ok()
             .flatten(),
@@ -168,6 +170,7 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         env: BTreeMap::new(),
         startup: PluginStartupOptions::default(),
         web_ui_enabled: None,
+        web_ui_primary_tab: None,
         installed_metadata: Some(metadata.clone()),
     }
 }
@@ -194,6 +197,7 @@ fn optional_configured_plugin_summary(
             live_manifest: None,
             installed_metadata: None,
             web_ui_enabled: entry.web_ui_enabled,
+            web_ui_primary_tab: entry.web_ui_primary_tab_preference(),
             runtime_available: false,
             runtime_unavailable_reason: Some("optional plugin is not loaded"),
         }),
@@ -265,6 +269,7 @@ fn installed_plugin_summary(
             live_manifest: None,
             installed_metadata: Some(metadata),
             web_ui_enabled: None,
+            web_ui_primary_tab: false,
             runtime_available: false,
             runtime_unavailable_reason: Some("plugin process is not running"),
         }),

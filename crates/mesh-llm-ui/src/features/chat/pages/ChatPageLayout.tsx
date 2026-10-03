@@ -6,6 +6,7 @@ import { TextInputDialog } from '@/components/ui/TextInputDialog'
 import { ChatLiveLoadingGhost } from '@/features/chat/components/ChatLiveLoadingGhost'
 import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
 import { Composer } from '@/features/chat/components/Composer'
+import { ChatTargetNotice } from '@/features/chat/components/ChatTargetNotice'
 import { ModelSelect } from '@/features/chat/components/ModelSelect'
 import { TransparencyPane } from '@/features/chat/components/transparency/TransparencyPane'
 import type {
@@ -86,6 +87,8 @@ type ChatPageLayoutProps = {
   composerTextareaRef: RefObject<HTMLTextAreaElement | null>
   showSystemPromptButton: boolean
   canChat: boolean
+  chatTarget?: string
+  onClearChatTarget?: () => void
   activeConversation: Conversation | undefined
   latestTurnToken: number
   activeMessages: ChatConversationPanelProps['activeMessages']
@@ -169,6 +172,8 @@ export function ChatPageLayout({
   composerSendMode,
   composerTextareaRef,
   showSystemPromptButton,
+  chatTarget,
+  onClearChatTarget,
   canChat,
   activeConversation,
   latestTurnToken,
@@ -272,28 +277,31 @@ export function ChatPageLayout({
         subtitle={activeConversation?.title}
         actions={actions}
         composer={
-          <Composer
-            key={composerConversationId}
-            value={composerDraft.prompt}
-            onChange={onComposerPromptChange}
-            onAttach={onComposerAttachmentsChange}
-            attachmentCount={composerAttachmentCount}
-            disabled={composerDisabled}
-            isPreparingAttachments={composerIsPreparingAttachments}
-            preparingStage={attachmentProcessingStage}
-            preparingAttachmentCount={attachmentProcessingCount}
-            onSystemPrompt={onOpenSystemPrompt}
-            onSend={onSendPrompt}
-            onStop={onStopStreaming}
-            onRetry={onRetryLastResponse}
-            canRetry={canRetry}
-            isStreaming={composerIsStreaming}
-            sendMode={composerSendMode}
-            textareaRef={composerTextareaRef}
-            systemPromptButtonRef={systemPromptButtonRef}
-            showSystemPromptButton={showSystemPromptButton}
-            placeholder={canChat ? 'Ask me anything...' : 'Waiting for a warm model...'}
-          />
+          <>
+            {chatTarget ? <ChatTargetNotice target={chatTarget} onClear={onClearChatTarget} /> : null}
+            <Composer
+              key={composerConversationId}
+              value={composerDraft.prompt}
+              onChange={onComposerPromptChange}
+              onAttach={onComposerAttachmentsChange}
+              attachmentCount={composerAttachmentCount}
+              disabled={composerDisabled}
+              isPreparingAttachments={composerIsPreparingAttachments}
+              preparingStage={attachmentProcessingStage}
+              preparingAttachmentCount={attachmentProcessingCount}
+              onSystemPrompt={onOpenSystemPrompt}
+              onSend={onSendPrompt}
+              onStop={onStopStreaming}
+              onRetry={onRetryLastResponse}
+              canRetry={canRetry}
+              isStreaming={composerIsStreaming}
+              sendMode={composerSendMode}
+              textareaRef={composerTextareaRef}
+              systemPromptButtonRef={systemPromptButtonRef}
+              showSystemPromptButton={showSystemPromptButton}
+              placeholder={canChat ? 'Ask me anything...' : 'Waiting for a warm model...'}
+            />
+          </>
         }
         activeMessages={activeMessages}
         activeModelName={activeModelName}

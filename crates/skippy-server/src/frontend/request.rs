@@ -23,6 +23,7 @@ use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
 use skippy_protocol::binary::sampling_flags;
 use skippy_runtime::ChatReasoningFormat;
 use skippy_runtime::ChatTemplateOptions;
+use skippy_runtime::DEFAULT_PENALTY_LAST_N;
 use skippy_runtime::DrySamplingConfig;
 use skippy_runtime::LogitBias as RuntimeLogitBias;
 use skippy_runtime::MAX_DRY_SEQUENCE_BREAKER_BYTES;
@@ -31,6 +32,7 @@ use skippy_runtime::MediaInput;
 use skippy_runtime::ReasoningBudget;
 use skippy_runtime::SamplingConfig;
 use skippy_runtime::XtcSamplingConfig;
+use skippy_runtime::penalty_window;
 use std::collections::BTreeMap;
 
 const MAX_NATIVE_PARSER_INPUT_BYTES: usize = 1024 * 1024;
@@ -591,7 +593,7 @@ fn apply_package_profile(
             multiplier: dry.multiplier.unwrap_or(0.0) as f32,
             base: dry.base.unwrap_or(1.75) as f32,
             allowed_length: dry.allowed_length.unwrap_or(2),
-            penalty_last_n: dry.penalty_last_n.unwrap_or(64),
+            penalty_last_n: dry.penalty_last_n.unwrap_or(DEFAULT_PENALTY_LAST_N),
             sequence_breakers: dry
                 .sequence_breakers
                 .clone()
@@ -1389,7 +1391,8 @@ pub(super) fn sampling_config(
     let repeat_penalty = optional_f32_extra(extra, "repeat_penalty")?
         .or(optional_f32_extra(extra, "repetition_penalty")?)
         .unwrap_or(1.0);
-    let penalty_last_n = optional_i32_extra(extra, "repeat_last_n")?.unwrap_or(-1);
+    let penalty_last_n =
+        optional_i32_extra(extra, "repeat_last_n")?.unwrap_or(DEFAULT_PENALTY_LAST_N);
     let typical_p = optional_f32_extra(extra, "typical_p")?.unwrap_or(1.0);
     let top_nsigma = optional_f32_extra(extra, "top_nsigma")?.unwrap_or(-1.0);
     let dynatemp_range = optional_f32_extra(extra, "dynatemp_range")?.unwrap_or(0.0);
@@ -1425,6 +1428,11 @@ pub(super) fn sampling_config(
             "repeat_last_n must be greater than or equal to -1",
         ));
     }
+    let penalty_last_n = penalty_window(penalty_last_n);
+    let dry = DrySamplingConfig {
+        penalty_last_n: penalty_window(dry.penalty_last_n),
+        ..dry
+    };
     let seed = match seed {
         Some(seed) => u32::try_from(seed)
             .map_err(|_| OpenAiError::invalid_request("seed exceeds u32 range"))?,
@@ -1441,7 +1449,7 @@ pub(super) fn sampling_config(
         || presence_penalty.abs() > f32::EPSILON
         || frequency_penalty.abs() > f32::EPSILON
         || (repeat_penalty - 1.0).abs() > f32::EPSILON
-        || penalty_last_n != -1
+        || penalty_last_n != defaults.penalty_last_n
         || !logit_bias.is_empty()
         || (typical_p - defaults.typical_p).abs() > f32::EPSILON
         || (top_nsigma - defaults.top_nsigma).abs() > f32::EPSILON

@@ -13,6 +13,7 @@ use mesh_llm_payments_types::{
 };
 
 use super::client::Payments;
+use super::lifecycle::{Observations, ProviderLifecycle};
 use skippy_server::frontend::generation_gate::GenerationGate;
 use tokio::sync::mpsc;
 
@@ -46,6 +47,11 @@ pub(super) struct InvoiceGate {
     /// completed payment. Started when output delivery opens, awaited before
     /// the request completes.
     pub input_settlement: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
+    /// Lifecycle subscriber state resolved when serving opened, and the
+    /// observations started once the input invoice exists. Nothing is
+    /// observed for a request that fails before authorization.
+    pub lifecycle: ProviderLifecycle,
+    pub observations: Arc<std::sync::OnceLock<Observations>>,
 }
 
 /// `SERVE_FINISH` is a bookkeeping operation, so the `payments.v1` contract
@@ -83,13 +89,14 @@ impl InvoiceGate {
     /// successful close that freezes a lower count. Idempotent.
     /// Bounded so a stuck engine or wallet cannot hold the response open;
     /// on timeout the request fails and startup recovery reconciles it.
-    pub(super) async fn close_serving(&self) -> Result<()> {
+    /// Returns the watermark the close wrote.
+    pub(super) async fn close_serving(&self) -> Result<u64> {
         tokio::time::timeout(CLOSE_SERVING_TIMEOUT, self.close_serving_inner())
             .await
             .map_err(|_| anyhow::anyhow!("closing serving accounting timed out"))?
     }
 
-    async fn close_serving_inner(&self) -> Result<()> {
+    async fn close_serving_inner(&self) -> Result<u64> {
         let tokens = self.delivered_tokens.load(Ordering::Acquire);
         let _: Empty = self
             .payments
@@ -102,7 +109,13 @@ impl InvoiceGate {
             )
             .await?;
         self.flushed_tokens.fetch_max(tokens, Ordering::AcqRel);
-        Ok(())
+        Ok(tokens)
+    }
+
+    /// This request's lifecycle observations; a no-op before the input
+    /// invoice exists or without a subscriber.
+    pub(super) fn observations(&self) -> Observations {
+        self.observations.get().cloned().unwrap_or_default()
     }
 
     pub(super) async fn await_input_settlement(&self) -> Result<()> {
@@ -139,6 +152,8 @@ impl InvoiceGate {
             cancelled: self.cancelled.clone(),
             invoice_expires_at_ms: self.invoice_expires_at_ms.clone(),
             input_settlement: self.input_settlement.clone(),
+            lifecycle: self.lifecycle.clone(),
+            observations: self.observations.clone(),
             stalled: std::time::Instant::now(),
         })
     }
@@ -190,6 +205,8 @@ struct Authorization {
     cancelled: Arc<AtomicBool>,
     invoice_expires_at_ms: Arc<AtomicU64>,
     input_settlement: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
+    lifecycle: ProviderLifecycle,
+    observations: Arc<std::sync::OnceLock<Observations>>,
     stalled: std::time::Instant,
 }
 
@@ -211,6 +228,16 @@ impl Authorization {
             .await?;
         self.invoice_expires_at_ms
             .store(invoice.expires_at_ms, Ordering::Release);
+        // Observation starts here, not at `SERVE_BEGIN`: the event names the
+        // priced terms, which exist only now, and a request that fails before
+        // this point was never priced and emits nothing. The acceptance
+        // `SERVE_BEGIN` made is reported with them.
+        let observations = self
+            .observations
+            .get_or_init(|| self.lifecycle.observe(&terms))
+            .clone();
+        observations.accepted(terms.max_total_msat);
+        observations.invoice(0, &invoice);
         tracing::debug!(
             target: "mesh_llm::payments::timing",
             phase = "invoice_created",
@@ -243,8 +270,14 @@ impl Authorization {
         let payments = self.payments.clone();
         let settlement = tokio::spawn(async move {
             let _: Empty = payments
-                .call(ops::SETTLE_RECEIVED, &InvoiceRequest { invoice })
+                .call(
+                    ops::SETTLE_RECEIVED,
+                    &InvoiceRequest {
+                        invoice: invoice.clone(),
+                    },
+                )
                 .await?;
+            observations.received(0, &invoice);
             anyhow::Ok(())
         });
         *self.input_settlement.lock().await = Some(settlement);
@@ -367,6 +400,8 @@ mod tests {
             flushed_tokens: AtomicU64::new(0),
             invoice_expires_at_ms: Arc::new(AtomicU64::new(0)),
             input_settlement: Arc::new(tokio::sync::Mutex::new(None)),
+            lifecycle: ProviderLifecycle::default(),
+            observations: Arc::new(std::sync::OnceLock::new()),
         })
     }
 

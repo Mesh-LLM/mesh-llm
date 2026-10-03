@@ -322,6 +322,17 @@ pub struct ChatCompletionResponse {
     /// `x-request-id`.
     #[serde(skip)]
     pub capsule_marker: Option<CapsuleMarker>,
+    /// The host-minted per-exchange id ([`crate::hooks::ChatExchangeRoute::exchange_id`]),
+    /// the same value [`crate::hooks::OpenAiHookPolicy::on_chat_completion_terminal`]
+    /// received for this exchange. Never serialized into the OpenAI-shaped
+    /// JSON body — it rides as an `X-Exchange-Id` HTTP response header, set
+    /// from this field by the router's `frontend_lifecycle_middleware`,
+    /// mirroring `capsule_marker`/`X-Capsule-Id` above. `None` for a response
+    /// built by a caller that never dispatched through the exchange-tracked
+    /// path (e.g. `Self::new`/`Self::new_with_reason`/`Self::from_parts`
+    /// before a backend attaches it).
+    #[serde(skip)]
+    pub exchange_id: Option<String>,
 }
 
 /// A rung-ladder response-leg marker: the `capsule_id` written into the
@@ -378,6 +389,7 @@ impl ChatCompletionResponse {
             usage,
             timings: None,
             capsule_marker: None,
+            exchange_id: None,
         }
     }
 
@@ -406,6 +418,7 @@ impl ChatCompletionResponse {
             usage,
             timings,
             capsule_marker: None,
+            exchange_id: None,
         }
     }
 

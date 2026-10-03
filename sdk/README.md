@@ -5,13 +5,14 @@ the shared native node SDK.
 
 Current SDKs:
 
+- `python/` for Python services and agent runtimes
 - `swift/` for Apple platforms
 - `kotlin/` for Android and JVM consumers
 - `node/` for Node.js and Electron consumers
 
 These SDK packages should stay thin. `mesh-llm-sdk` is the source of truth for
 the public capability contract, and language packages bind that shape instead
-of inventing separate Node/Swift/Kotlin semantics.
+of inventing separate Python/Node/Swift/Kotlin semantics.
 
 - `crates/mesh-llm-sdk/` for the canonical Rust SDK facade. Its public feature
   model is `client`, `node`, `serving`, and `console`.
@@ -22,7 +23,7 @@ of inventing separate Node/Swift/Kotlin semantics.
 - `crates/mesh-llm-node/` for embeddable model management and serving
   orchestration. Serving SDK calls should bind to in-process node
   controllers, not the local REST management API.
-- `crates/mesh-llm-ffi/` for the UniFFI/native bridge used by Swift and Kotlin;
+- `crates/mesh-llm-ffi/` for the UniFFI/native bridge used by Python, Swift, and Kotlin;
   it wraps `mesh-llm-sdk`
 - `crates/mesh-llm-nodejs/` for the N-API native bridge used by Node.js; it wraps
   `mesh-llm-sdk`
@@ -34,7 +35,7 @@ existing mesh, while `Node` can also manage and serve local models. See
 `docs/design/EMBEDDED_CLIENT_ADR.md` for the current SDK direction.
 
 The customer-facing SDK usage guide lives in `docs/SDK.md`. SDK changes should
-keep Rust, Swift, Kotlin, and Node aligned around real examples, polished
+keep Python, Rust, Swift, Kotlin, and Node aligned around real examples, polished
 lifecycle, typed errors, and an honest platform support matrix.
 
 ## Optional Console Assets

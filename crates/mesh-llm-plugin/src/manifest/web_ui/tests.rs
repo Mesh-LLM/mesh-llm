@@ -355,6 +355,7 @@ fn web_ui_packaging_accepts_valid_slug_and_single_bundle_reference() {
             id: "main".into(),
             root_path: "dist".into(),
         }],
+        contributions: Vec::new(),
     };
 
     let packaged = PackagedPluginWebUi::try_from(&manifest).expect("valid web UI should pass");
@@ -362,4 +363,169 @@ fn web_ui_packaging_accepts_valid_slug_and_single_bundle_reference() {
     assert_eq!(packaged.pages[0].route, "home");
     assert_eq!(packaged.pages[0].bundle_id, "main");
     assert_eq!(packaged.config_sections[0].bundle_id, "main");
+}
+
+#[test]
+fn web_ui_packaging_defaults_unset_placement_to_auxiliary() {
+    let manifest = proto::PluginWebUiManifest {
+        pages: vec![proto::PluginWebUiPageManifest {
+            id: "home".into(),
+            label: "Home".into(),
+            route: "home".into(),
+            bundle_id: "main".into(),
+            entry_script: "app.js".into(),
+            ..Default::default()
+        }],
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: "dist".into(),
+        }],
+        ..Default::default()
+    };
+
+    let packaged = PackagedPluginWebUi::try_from(&manifest).expect("valid web UI should pass");
+
+    assert_eq!(
+        packaged.pages[0].placement,
+        PackagedPluginWebUiPagePlacement::Auxiliary
+    );
+}
+
+#[test]
+fn web_ui_packaging_carries_primary_placement_hint() {
+    let manifest = proto::PluginWebUiManifest {
+        pages: vec![proto::PluginWebUiPageManifest {
+            id: "home".into(),
+            label: "Home".into(),
+            route: "home".into(),
+            bundle_id: "main".into(),
+            entry_script: "app.js".into(),
+            placement: proto::PluginWebUiPagePlacement::Primary as i32,
+            ..Default::default()
+        }],
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: "dist".into(),
+        }],
+        ..Default::default()
+    };
+
+    let packaged = PackagedPluginWebUi::try_from(&manifest).expect("valid web UI should pass");
+
+    assert_eq!(
+        packaged.pages[0].placement,
+        PackagedPluginWebUiPagePlacement::Primary
+    );
+}
+
+#[test]
+fn web_ui_packaging_rejects_unknown_placement_value() {
+    let manifest = proto::PluginWebUiManifest {
+        pages: vec![proto::PluginWebUiPageManifest {
+            id: "home".into(),
+            label: "Home".into(),
+            route: "home".into(),
+            bundle_id: "main".into(),
+            entry_script: "app.js".into(),
+            placement: 99,
+            ..Default::default()
+        }],
+        bundles: vec![proto::PluginWebUiBundleManifest {
+            id: "main".into(),
+            root_path: "dist".into(),
+        }],
+        ..Default::default()
+    };
+
+    let error =
+        PackagedPluginWebUi::try_from(&manifest).expect_err("unknown placement should fail");
+
+    assert!(error.to_string().contains("placement"), "{error}");
+}
+
+#[test]
+fn web_ui_page_builder_primary_placement_sets_proto_field() {
+    let page = web_ui_page("home", "Home", "home", "app.js").primary_placement();
+
+    assert_eq!(
+        proto::PluginWebUiPageManifest::from(page).placement,
+        proto::PluginWebUiPagePlacement::Primary as i32
+    );
+}
+
+#[test]
+fn web_ui_packaging_carries_the_page_host_header_choice() {
+    let manifest: proto::PluginWebUiManifest = web_ui()
+        .bundle(web_ui_bundle("main", "dist"))
+        .page(
+            web_ui_page("home", "Home", "home", "app.js")
+                .bundle_id("main")
+                .host_header(false),
+        )
+        .page(web_ui_page("other", "Other", "other", "app.js").bundle_id("main"))
+        .into();
+
+    let packaged = PackagedPluginWebUi::try_from(&manifest).expect("valid web UI should pass");
+
+    assert_eq!(packaged.pages[0].host_header, Some(false));
+    assert_eq!(packaged.pages[1].host_header, None);
+    let json = serde_json::to_value(&packaged).unwrap();
+    assert!(
+        json["pages"][1].get("host_header").is_none(),
+        "absent stays absent"
+    );
+}
+
+fn manifest_with_contribution(slot: &str) -> proto::PluginWebUiManifest {
+    proto::PluginWebUiManifest {
+        contributions: vec![proto::PluginWebUiContributionManifest {
+            id: "note".into(),
+            slot: slot.into(),
+            label: "Note".into(),
+            bundle_id: "main".into(),
+            entry_script: "note.js".into(),
+        }],
+        ..manifest_with_bundle("dist")
+    }
+}
+
+#[test]
+fn web_ui_packaging_accepts_contributions_in_known_slots() {
+    for slot in WEB_UI_CONTRIBUTION_SLOTS {
+        let packaged = PackagedPluginWebUi::try_from(&manifest_with_contribution(slot))
+            .expect("known slot should package");
+
+        assert_eq!(packaged.contributions[0].slot, slot);
+        assert_eq!(packaged.contributions[0].entry_script, "note.js");
+    }
+}
+
+#[test]
+fn web_ui_packaging_rejects_unknown_contribution_slot() {
+    let error = PackagedPluginWebUi::try_from(&manifest_with_contribution("toolbar"))
+        .expect_err("unknown slot should fail");
+
+    assert!(error.to_string().contains("slot must be one of"), "{error}");
+}
+
+#[test]
+fn web_ui_packaging_requires_bundle_for_declared_contributions() {
+    let manifest = proto::PluginWebUiManifest {
+        bundles: Vec::new(),
+        ..manifest_with_contribution("chat_message")
+    };
+
+    let error = PackagedPluginWebUi::try_from(&manifest).expect_err("missing bundle should fail");
+
+    assert!(error.to_string().contains("exactly one bundle"), "{error}");
+}
+
+#[test]
+fn web_ui_packaging_rejects_contribution_entry_script_traversal() {
+    let mut manifest = manifest_with_contribution("logs_request");
+    manifest.contributions[0].entry_script = "../note.js".into();
+
+    let error = PackagedPluginWebUi::try_from(&manifest).expect_err("traversal should fail");
+
+    assert!(error.to_string().contains("traversal"), "{error}");
 }

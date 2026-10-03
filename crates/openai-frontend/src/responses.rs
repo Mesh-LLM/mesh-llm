@@ -1139,6 +1139,7 @@ mod tests {
                 usage: Usage::new(6, 3),
                 timings: None,
                 capsule_marker: None,
+                exchange_id: None,
             })
         }
 

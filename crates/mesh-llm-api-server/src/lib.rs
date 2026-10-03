@@ -9,8 +9,8 @@ pub use discover::{
 pub use mesh_llm_api_client::events;
 pub use mesh_llm_api_client::{
     ChatMessage, ChatRequest, ClientBuilder, ClientConfig, InviteToken, MAX_RECONNECT_ATTEMPTS,
-    MeshApiError, MeshClient, Model, OwnerKeypair, PublicMesh, PublicMeshQuery, RequestId,
-    ResponsesRequest, Status,
+    MeshApiError, MeshClient, Model, OpenAiResponse, OwnerKeypair, PublicMesh, PublicMeshQuery,
+    RequestId, ResponsesRequest, Status,
 };
 pub use mesh_llm_node::serving::ServingController;
 pub use node::{

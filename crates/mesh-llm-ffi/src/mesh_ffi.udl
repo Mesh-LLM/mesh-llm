@@ -69,6 +69,7 @@ enum FfiError {
     "ServingUnsupported",
     "ConsoleFailed",
     "NativeRuntimeFailed",
+    "OpenAiRequestFailed",
 };
 
 dictionary ConsoleOptionsNative {
@@ -99,6 +100,12 @@ interface MeshClientHandle {
     sequence<ModelNative> inference_list_models();
 
     [Throws=FfiError]
+    OpenAiResponseNative openai_request(string path, string body_json);
+
+    [Throws=FfiError]
+    string openai_stream(string path, string body_json, OpenAiStreamListener listener);
+
+    [Throws=FfiError]
     string chat(ChatRequestNative request, EventListener listener);
 
     [Throws=FfiError]
@@ -121,6 +128,12 @@ interface MeshNodeHandle {
 
     [Throws=FfiError]
     sequence<ModelNative> inference_list_models();
+
+    [Throws=FfiError]
+    OpenAiResponseNative openai_request(string path, string body_json);
+
+    [Throws=FfiError]
+    string openai_stream(string path, string body_json, OpenAiStreamListener listener);
 
     [Throws=FfiError]
     string chat(ChatRequestNative request, EventListener listener);
@@ -187,6 +200,10 @@ callback interface EventListener {
     void on_event(ClientEvent event);
 };
 
+callback interface OpenAiStreamListener {
+    void on_event(OpenAiStreamEventNative event);
+};
+
 callback interface NativeRuntimeProgressListener {
     void on_progress(NativeRuntimeDownloadProgressNative event);
 };
@@ -194,6 +211,7 @@ callback interface NativeRuntimeProgressListener {
 dictionary ModelNative {
     string id;
     string name;
+    u32? context_length;
 };
 
 dictionary ClientStatus {
@@ -239,6 +257,12 @@ dictionary ChatMessageNative {
 dictionary ResponsesRequestNative {
     string model;
     string input;
+};
+
+dictionary OpenAiResponseNative {
+    u16 status_code;
+    string? content_type;
+    string body;
 };
 
 [Enum]
@@ -405,6 +429,14 @@ interface ClientEvent {
     Completed(string request_id);
     Failed(string request_id, string error);
     Disconnected(string reason);
+};
+
+[Enum]
+interface OpenAiStreamEventNative {
+    Started(string request_id, u16 status_code, string? content_type);
+    Sse(string request_id, string? event_type, string data, string raw);
+    Completed(string request_id);
+    Failed(string request_id, u16? status_code, string error, string? body);
 };
 
 [Enum]

@@ -66,6 +66,8 @@ pub struct RuntimeOptions {
     pub release_signer_key: Vec<String>,
     pub name: Option<String>,
     pub plugin: Option<String>,
+    /// Arguments for the built-in plugin named by `plugin`.
+    pub plugin_args: Vec<String>,
     pub auto_update: bool,
     pub command_is_update: bool,
     pub command_uses_machine_output: bool,
@@ -152,6 +154,7 @@ impl Default for RuntimeOptions {
             release_signer_key: Vec::new(),
             name: None,
             plugin: None,
+            plugin_args: Vec::new(),
             auto_update: false,
             command_is_update: false,
             command_uses_machine_output: false,

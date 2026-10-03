@@ -44,7 +44,8 @@
         "label": "Exemplar Notes",
         "route": "overview",
         "bundle_id": "main",
-        "entry_script": "register-mesh-plugin-ui.js"
+        "entry_script": "register-mesh-plugin-ui.js",
+        "placement": "primary"
       }
     ],
     "config_sections": [

@@ -32,6 +32,7 @@ use crate::{
     chat::{CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest},
     common::{AgentSessionIdentity, AgentSessionSource, Usage},
     completions::CompletionRequest,
+    decisions::{DecisionsRequest, DecisionsResponse},
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
     errors::OpenAiError,
     lifecycle::{
@@ -283,6 +284,7 @@ pub fn router_for_with_config(
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
         .route("/v1/responses", post(responses))
+        .route("/v1/decisions", post(decisions))
         .route("/v1/messages", post(crate::anthropic::messages))
         .route(
             "/v1/messages/count_tokens",
@@ -364,6 +366,31 @@ async fn system_one(
         &Usage::new(response.usage.input_tokens, response.usage.output_tokens),
     );
     Ok(Json(response))
+}
+
+async fn decisions(
+    State(state): State<FrontendState>,
+    Extension(context): Extension<OpenAiLifecycleContext>,
+    payload: Result<Json<DecisionsRequest>, JsonRejection>,
+) -> Result<Json<DecisionsResponse>, OpenAiError> {
+    let Json(request) = json_payload(payload)?;
+    let response = call_backend(
+        state.config.lifecycle_observer.clone(),
+        &context,
+        OpenAiBackendOperation::SystemOne,
+        "decisions",
+        state.config.backend_timeout,
+        state.backend.system_one(request.to_system_one()?),
+    )
+    .await?;
+    let usage = response.usage;
+    let decisions_response = request.response(response)?;
+    state.response_completed(
+        &context,
+        OpenAiBackendOperation::SystemOne,
+        &Usage::new(usage.input_tokens, usage.output_tokens),
+    );
+    Ok(Json(decisions_response))
 }
 
 /// Validate embedding input and preserve cancellation, usage, and lifecycle identity.
@@ -564,6 +591,10 @@ async fn chat_completions(
         .await?;
         let lifecycle =
             state.stream_lifecycle(context, OpenAiBackendOperation::ChatCompletionStream);
+        let exchange_id = backend_context.exchange_id();
+        if let Some(exchange_id) = exchange_id.clone() {
+            lifecycle.record_exchange_id(exchange_id);
+        }
         let stream = observe_backend_stream(stream, lifecycle.clone());
         let prelude = stream::once(async move { json_event(&ChatCompletionChunk::role(model)) });
         let usage_lifecycle = lifecycle.clone();
@@ -591,7 +622,13 @@ async fn chat_completions(
                 completion_lifecycle.mark_protocol_complete();
                 done_event()
             }));
-        Ok(sse_response(events, cancellation, lifecycle))
+        let mut response = sse_response(events, cancellation, lifecycle);
+        if let Some(exchange_id) = exchange_id {
+            response
+                .extensions_mut()
+                .insert(ExchangeIdExtension(exchange_id));
+        }
+        Ok(response)
     } else {
         let backend_context = request_context(context.request_id, trusted_agent_session, false);
         let response = call_backend_with_context(
@@ -613,11 +650,17 @@ async fn chat_completions(
         );
         let usage = response.usage.clone();
         let capsule_marker = response.capsule_marker.clone();
+        let exchange_id = response.exchange_id.clone();
         let mut http_response = json_response_with_usage(response, &usage);
         if let Some(marker) = capsule_marker {
             http_response
                 .extensions_mut()
                 .insert(CapsuleMarkerExtension(marker));
+        }
+        if let Some(exchange_id) = exchange_id {
+            http_response
+                .extensions_mut()
+                .insert(ExchangeIdExtension(exchange_id));
         }
         Ok(http_response)
     }
@@ -674,6 +717,10 @@ async fn stream_responses(
     .await?;
     let lifecycle =
         state.stream_lifecycle(context.clone(), OpenAiBackendOperation::ResponsesStream);
+    let exchange_id = backend_context.exchange_id();
+    if let Some(exchange_id) = exchange_id.clone() {
+        lifecycle.record_exchange_id(exchange_id);
+    }
     let stream = observe_backend_stream(stream, lifecycle.clone());
     let body_state = state_machine.clone();
     let usage_lifecycle = lifecycle.clone();
@@ -691,7 +738,13 @@ async fn stream_responses(
             completion_lifecycle.mark_protocol_complete();
             done_event()
         }));
-    Ok(sse_response(events, cancellation, lifecycle))
+    let mut response = sse_response(events, cancellation, lifecycle);
+    if let Some(exchange_id) = exchange_id {
+        response
+            .extensions_mut()
+            .insert(ExchangeIdExtension(exchange_id));
+    }
+    Ok(response)
 }
 
 async fn non_streaming_responses(
@@ -716,12 +769,18 @@ async fn non_streaming_responses(
     state.response_completed(context, OpenAiBackendOperation::Responses, &response.usage);
     let usage = response.usage.clone();
     let capsule_marker = response.capsule_marker.clone();
+    let exchange_id = response.exchange_id.clone();
     let translated = translate_chat_completion_response_to_responses(&response)?;
     let mut http_response = json_response_with_usage(translated, &usage);
     if let Some(marker) = capsule_marker {
         http_response
             .extensions_mut()
             .insert(CapsuleMarkerExtension(marker));
+    }
+    if let Some(exchange_id) = exchange_id {
+        http_response
+            .extensions_mut()
+            .insert(ExchangeIdExtension(exchange_id));
     }
     Ok(http_response)
 }
@@ -1011,6 +1070,17 @@ pub(crate) struct CapsuleMarkerExtension(pub(crate) CapsuleMarker);
 /// `docs/plugins/openai-exchange-lifecycle-design-note.md`.
 static X_CAPSULE_ID_HEADER: HeaderName = HeaderName::from_static("x-capsule-id");
 
+/// Threads [`ChatCompletionResponse::exchange_id`] from the handler to
+/// `frontend_lifecycle_middleware`, mirroring [`CapsuleMarkerExtension`] —
+/// the same relay, for the exchange id rather than the response
+/// marker.
+#[derive(Clone)]
+struct ExchangeIdExtension(String);
+
+/// The per-exchange join-key header shared with other consumers of the exchange —
+/// see [`crate::hooks::ChatExchangeRoute::exchange_id`].
+static X_EXCHANGE_ID_HEADER: HeaderName = HeaderName::from_static("x-exchange-id");
+
 fn authoritative_usage(usage: &Usage) -> Option<TokenUsage> {
     TokenUsage::from_counts(
         Some(u64::from(usage.prompt_tokens)),
@@ -1173,6 +1243,17 @@ async fn frontend_lifecycle_middleware(
             .headers_mut()
             .insert(X_CAPSULE_ID_HEADER.clone(), value);
     }
+    let exchange_id = response
+        .extensions()
+        .get::<ExchangeIdExtension>()
+        .map(|extension| extension.0.clone());
+    if let Some(exchange_id) = &exchange_id
+        && let Ok(value) = HeaderValue::from_str(exchange_id)
+    {
+        response
+            .headers_mut()
+            .insert(X_EXCHANGE_ID_HEADER.clone(), value);
+    }
     if is_streaming_response(&response) {
         lifecycle.transfer_to_stream();
     } else {
@@ -1180,7 +1261,7 @@ async fn frontend_lifecycle_middleware(
             .extensions()
             .get::<TerminalUsage>()
             .map(|usage| usage.0);
-        lifecycle.finish_with_usage(response.status(), usage);
+        lifecycle.finish_with_usage(response.status(), usage, exchange_id);
     }
     tracing::info!(
         request_id = %request_id.as_ref(),
@@ -1215,6 +1296,7 @@ fn lifecycle_route(uri: &Uri) -> OpenAiFrontendRoute {
         "/v1/chat/completions" => OpenAiFrontendRoute::ChatCompletions,
         "/v1/completions" => OpenAiFrontendRoute::Completions,
         "/v1/responses" => OpenAiFrontendRoute::Responses,
+        "/v1/decisions" => OpenAiFrontendRoute::Decisions,
         "/v1/messages/count_tokens" => OpenAiFrontendRoute::MessagesCountTokens,
         "/v1/messages" => OpenAiFrontendRoute::Messages,
         "/systemone" => OpenAiFrontendRoute::SystemOne,

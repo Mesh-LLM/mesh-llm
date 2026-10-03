@@ -54,17 +54,18 @@ pub use manifest::{
     CompletionBuilder, EndpointBuilder, HttpBindingBuilder, ManifestEntry, OperationBuilder,
     PluginConfigObjectPropertyBuilder, PluginConfigSchemaBuilder, PluginConfigSettingBuilder,
     PluginManifestBuilder, PluginWebUiBuilder, PluginWebUiBundleBuilder,
-    PluginWebUiConfigSectionBuilder, PluginWebUiPageBuilder, PromptBuilder, ResourceBuilder,
-    ResourceTemplateBuilder, capability, completion, config_array, config_boolean, config_enum,
-    config_float, config_integer, config_object, config_object_property, config_path,
-    config_schema, config_setting, config_string, config_url, constraint_allowed_values,
-    constraint_non_empty, constraint_positive, constraint_range, constraint_requires, http_binding,
-    http_delete, http_get, http_patch, http_post, http_put, mcp_http_endpoint, mcp_stdio_endpoint,
+    PluginWebUiConfigSectionBuilder, PluginWebUiContributionBuilder, PluginWebUiPageBuilder,
+    PromptBuilder, ResourceBuilder, ResourceTemplateBuilder, WEB_UI_CONTRIBUTION_SLOTS, capability,
+    completion, config_array, config_boolean, config_enum, config_float, config_integer,
+    config_object, config_object_property, config_path, config_schema, config_setting,
+    config_string, config_url, constraint_allowed_values, constraint_non_empty,
+    constraint_positive, constraint_range, constraint_requires, http_binding, http_delete,
+    http_get, http_patch, http_post, http_put, mcp_http_endpoint, mcp_stdio_endpoint,
     mcp_tcp_endpoint, mcp_unix_socket_endpoint, mesh_channel, mesh_event_local_accepting,
     mesh_event_local_standby, mesh_event_mesh_id_updated, mesh_event_peer_down, mesh_event_peer_up,
     mesh_event_peer_updated, mesh_event_subscription, openai_http_inference_endpoint, operation,
     package_manifest_json, plugin_manifest, prompt_service, resource, resource_template_service,
-    web_ui, web_ui_bundle, web_ui_config_section, web_ui_page,
+    web_ui, web_ui_bundle, web_ui_config_section, web_ui_contribution, web_ui_page,
 };
 pub mod mcp {
     pub use crate::dsl::mcp::{
@@ -87,6 +88,14 @@ pub mod proto {
 // Keep strict host/plugin negotiation honest rather than letting an older plugin
 // initialize successfully and fail only when a task method is invoked.
 pub const PROTOCOL_VERSION: u32 = 3;
+
+/// Optional host features, as listed in `InitializeRequest.host_capabilities`.
+/// Additive protobuf messages alone do not tell a plugin whether its host
+/// handles them; these do.
+pub mod host_capabilities {
+    /// The host accepts `PeerBlockRequest`.
+    pub const PEER_BLOCKS: &str = "peer_blocks.v1";
+}
 
 #[macro_export]
 macro_rules! plugin_manifest {

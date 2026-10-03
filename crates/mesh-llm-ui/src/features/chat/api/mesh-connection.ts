@@ -8,7 +8,7 @@ import { getClientId } from '@/lib/api/client-id'
 import { generateRequestId } from '@/lib/api/request-id'
 import type { ChatSSEEvent } from '@/lib/api/types'
 import { buildResponsesInput, type AttachmentUploadCache } from '@/features/chat/api/build-input'
-import type { ChatResponseMetadata } from '@/features/chat/api/response-metadata'
+import { clientNonceFromHeaders, type ChatResponseMetadata } from '@/features/chat/api/response-metadata'
 import { isMeshVirtualModel, syntheticMoaProgressKey } from '@/features/chat/lib/moa-progress'
 
 function nowMs() {
@@ -23,11 +23,11 @@ function resolveModel(model: StringSource): string {
   return model.value
 }
 
-function resolveSystemPrompt(systemPrompt: StringSource | undefined): string {
-  if (!systemPrompt) return ''
-  if (typeof systemPrompt === 'function') return systemPrompt()
-  if (typeof systemPrompt === 'string') return systemPrompt
-  return systemPrompt.value
+function resolveOptionalString(value: StringSource | undefined): string {
+  if (!value) return ''
+  if (typeof value === 'function') return value()
+  if (typeof value === 'string') return value
+  return value.value
 }
 
 function parseChatSSEEvent(data: string) {
@@ -229,12 +229,21 @@ async function* parseSSEStream(
   }
 }
 
+/** Request headers for one chat request. A target sends it to that node only
+ *  (`x-mesh-target`); a node that doesn't serve the model refuses it. */
+export function chatRequestHeaders(target: string): Record<string, string> {
+  return target
+    ? { 'Content-Type': 'application/json', 'x-mesh-target': target }
+    : { 'Content-Type': 'application/json' }
+}
+
 async function* runConnect(
   model: string,
   messages: Array<UIMessage> | Array<ModelMessage>,
   abortSignal?: AbortSignal,
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
-  systemPrompt = ''
+  systemPrompt = '',
+  target = ''
 ): AsyncGenerator<StreamChunk> {
   const clientId = getClientId()
   const requestId = generateRequestId()
@@ -258,7 +267,7 @@ async function* runConnect(
     for (let attempt = 0; ; attempt += 1) {
       response = await fetch(`${env.managementApiUrl}/api/responses`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: chatRequestHeaders(target),
         body: JSON.stringify(requestBody),
         signal: abortSignal
       })
@@ -302,6 +311,9 @@ async function* runConnect(
   if (!response.body) {
     throw new Error('Response body is null')
   }
+
+  // Kept on the message so a consumer can join this turn to its exchange events.
+  const clientNonce = clientNonceFromHeaders(response.headers)
 
   let messageStarted = false
   let reasoningOpen = false
@@ -362,7 +374,8 @@ async function* runConnect(
           ttft_ms: event.response.timings?.ttft_ms ?? fallbackTimings.ttft_ms,
           total_time_ms: event.response.timings?.total_time_ms ?? fallbackTimings.total_time_ms
         },
-        servedBy: event.response.served_by
+        servedBy: event.response.served_by,
+        ...clientNonce
       })
     }
   }
@@ -380,13 +393,29 @@ async function* runConnect(
   yield { type: EventType.RUN_FINISHED, threadId: requestId, runId: requestId }
 }
 
+/** The target a submission carried (`sendMessage(content, { body: { target } })`), if any. It was
+ *  taken when the prompt was submitted, so it wins over the current target: changing or
+ *  clearing the target later never reroutes a prompt that was already submitted. */
+function submittedTarget(data: Record<string, unknown> | undefined): string | undefined {
+  const target = data?.target
+  return typeof target === 'string' ? target : undefined
+}
+
 export function createMeshConnectionAdapter(
   model: StringSource,
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
-  systemPrompt?: StringSource
+  systemPrompt?: StringSource,
+  target?: StringSource
 ): ConnectConnectionAdapter {
   return {
     connect: (_messages, _data, abortSignal) =>
-      runConnect(resolveModel(model), _messages, abortSignal, onResponseMetadata, resolveSystemPrompt(systemPrompt))
+      runConnect(
+        resolveModel(model),
+        _messages,
+        abortSignal,
+        onResponseMetadata,
+        resolveOptionalString(systemPrompt),
+        submittedTarget(_data) ?? resolveOptionalString(target)
+      )
   }
 }

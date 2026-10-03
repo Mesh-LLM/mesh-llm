@@ -328,6 +328,16 @@ run_candidate_gates() {
                     if expected_status:
                         self.assertIn("agent made no changes to the restored candidate", result.stderr)
 
+    def test_failed_repair_keeps_unverified_source_in_uploaded_evidence(self) -> None:
+        failure = self.wrapper[self.wrapper.index('if repair_candidate_until_green; then'):
+                               self.wrapper.index('snapshot_candidate_tree', self.wrapper.index('if repair_candidate_until_green; then'))]
+        self.assertIn('git show "$BASE_HEAD:scripts/llama-canary-recover-source.py"', failure)
+        self.assertIn('"$STATE_DIR/recovery"', failure)
+        self.assertIn('exit "$status"', failure)
+        workflow = (ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text()
+        self.assertIn('name: Upload build and repair evidence', workflow)
+        self.assertIn('if: ${{ success() || failure() || cancelled() }}', workflow)
+
     def test_agent_cannot_change_harness_or_commit(self) -> None:
         guard = self.wrapper[
             self.wrapper.index("assert_agent_control_unchanged() {") : self.wrapper.index("run_prepare() {")

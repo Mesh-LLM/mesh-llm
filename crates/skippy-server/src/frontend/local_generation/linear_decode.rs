@@ -410,9 +410,15 @@ mod tests {
         let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
         let speculative = SpeculativeDecodeConfig::default();
         let telemetry = Telemetry::new(None, 1, stage_config.clone(), TelemetryLevel::Off);
-        let iteration_scheduler =
-            IterationScheduler::new(runtime.clone(), &stage_config, 1, true, telemetry.clone())
-                .unwrap();
+        let iteration_scheduler = IterationScheduler::new(
+            runtime.clone(),
+            &stage_config,
+            1,
+            true,
+            None,
+            telemetry.clone(),
+        )
+        .unwrap();
         let backend = StageOpenAiBackend {
             runtime: runtime.clone(),
             workload: Default::default(),

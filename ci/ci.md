@@ -6,10 +6,10 @@ This is the checked-in implementation. Normative rules live in
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-wallet` and `mesh-wallet-lexe` alongside `mesh-llm-payments`;
+`mesh-llm-wallet` alongside `mesh-llm-payments`;
 `just ci-crate-lists` checks it against workspace membership. The publish
 chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
-`mesh-wallet-lexe` and `mesh-llm-payments`, including optional dependencies.
+`mesh-llm-payments`, including optional dependencies.
 
 ## Entry points
 
@@ -140,6 +140,11 @@ and verify that source against the selected pin and patch queue before lanes
 start; they cannot accidentally depend on a previous runner checkout.
 The agent supervisor terminates remaining process-group members after normal
 completion and waits for live members to stop before handing the workspace back.
+If the repair agent or trusted gates fail, the build evidence retains an
+unverified `recovery/` source snapshot (`tracked.patch`, `untracked.tar.gz`,
+and `manifest.json`), including the prepared `.deps/llama.cpp` checkout when
+present. A reviewer can reapply it at the recorded base commits;
+it is never accepted as a certified candidate or sent to family workers.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.
@@ -365,7 +370,8 @@ main.
 If crates.io accepts only a prefix of the stable package chain,
 `resume-crates-release.yml` resumes publication from the existing immutable
 release tag. The operator supplies both the stable tag and its exact peeled
-commit SHA. The workflow runs only from the default branch, verifies those two
+commit SHA. The workflow has `packages: read` to pull its pinned GHCR runner
+image. It runs only from the default branch, verifies those two
 identities against the remote tag and checkout, and uses the trusted
 default-branch `publish-crates.sh` controller against the tagged source. Resume
 mode skips versions that crates.io confirms are already published and falls
@@ -628,9 +634,27 @@ runtime producers are not duplicated.
   `ci-windows-product-smoke-slice.yml` — platform-local callers of the core,
   scripted, model-download, and Laya smokes. The registry-pinned Laya
   Multilingual F16 GGUF runs startup plus every upstream golden `/systemone`
-  read on Linux CPU/CUDA/Vulkan, conditional `gpu-amd` ROCm, macOS Metal, and
+  read on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm,
+  macOS Metal, and
   Windows CPU. Each row consumes its composed backend product and selects the
   exact native device name, so an unavailable backend fails at model load.
+  The Vulkan Laya row requires `MESH_VULKAN_INFERENCE_RUNNER_ENABLED` to be
+  exactly `true` (lowercase) after `verify-vulkan-device` passes in a live
+  runner pod; the ROCm row requires the same exact
+  `MESH_ROCM_INFERENCE_RUNNER_ENABLED` gate before it uses the
+  repository-scoped `gpu-amd` role. A GitHub Actions expression cannot compare
+  strings case-sensitively, so the slice validates both raw values in a shell
+  step and both rows depend on the normalized result instead of comparing the
+  variable directly. The Vulkan row enables the explicit Vulkan profile when
+  its runner lacks `vulkaninfo`; model startup and golden reads still exercise
+  the device. The source-checked Laya action repeats the gate from that same
+  normalized input so an older protected workflow cannot run the smoke on an
+  uncertified PR runner before the workflow gate reaches main.
+  Windows product restore passes LF-terminated manifest fields to Git Bash so
+  its runtime path does not retain Python's Windows carriage return. The Laya
+  parity driver decodes golden fixtures as UTF-8 on Windows, and the smoke
+  harness preserves its result if a child briefly holds its log open during
+  temporary-directory cleanup.
   Windows CUDA/ROCm/Vulkan remain build-only because CI has no matching Windows
   accelerator runners. The core smoke restores the
   registry-derived dense SmolLM2-135M Q8 and recurrent IBM Granite 4.0 H 350M
@@ -833,7 +857,8 @@ release row no longer disables sccache.
 Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
 use Depot while the repository-wide gate and time-bounded cache-risk exception
 in `ci/DEPOT_PR_RISK_EXCEPTION.md` are active. The
-other current exception is uncredentialed CUDA or Vulkan smoke on the approved
+other current exception is uncredentialed CUDA smoke, plus Vulkan smoke when
+`MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly `true`, on the approved
 ephemeral `gpu-nvidia` scale set described above. A future ROCm row uses the
 repository-scoped `gpu-amd` role only when
 `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`. PRs use the same protected reusable
@@ -1259,8 +1284,11 @@ both domains until the later catalog cleanup; existing main routing is unchanged
 
 ### Protected executor compatibility for the product extraction
 
-The protected executor workflows pin both resolver actions to commit
-`38d63b2f6e27998034fdf0452150c7cc081fe921`, so older PR source checkouts do not need
+The protected executor workflows pin `resolve-source-layout` to commit
+`38d63b2f6e27998034fdf0452150c7cc081fe921` and `resolve-cargo-packages` to
+`5c8fb4d472bc57058c8153761c561daa77dd5b94` (which passes planned packages
+absent from the candidate through to the checked-out-workspace filter, so a PR
+that deletes a crate is not rejected), so older PR source checkouts do not need
 the new helper files. The package resolver loads its Python implementation
 from that same pinned action checkout and inspects the candidate only through
 Cargo metadata in the existing executor trust context.

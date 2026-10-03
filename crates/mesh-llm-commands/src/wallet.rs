@@ -40,8 +40,8 @@ pub async fn run(command: &WalletCommand, port: u16, config: Option<&Path>) -> R
                 bail!(
                     "mesh-llm is not running on port {port}; wallet operations need the running \
                      node because only it owns the wallet plugin. Start `mesh-llm` and retry. \
-                     (ledger-only commands such as policy, pricing, pending, blocked and \
-                     unblock work offline)"
+                     (ledger-only commands such as policy, pricing, pending, blocked, \
+                     unblock and unpin work offline)"
                 );
             }
             let directory = if let Some(config) = config {
@@ -99,6 +99,7 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
         WalletCommand::Pending => ControlCommand::Pending,
         WalletCommand::Blocked => ControlCommand::Blocked,
         WalletCommand::Unblock { peer } => ControlCommand::Unblock { peer: peer.clone() },
+        WalletCommand::Unpin => ControlCommand::Unpin,
         WalletCommand::Policy {
             mode,
             daily_budget_sats,
@@ -173,6 +174,17 @@ mod tests {
                 daily_budget_sats: Some(u64::MAX),
             })
             .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unpin_is_a_ledger_only_command() -> Result<()> {
+        let command = control_command(&WalletCommand::Unpin)?;
+        assert!(!requires_wallet(&command));
+        assert_eq!(
+            serde_json::to_value(command)?,
+            serde_json::json!({"command": "unpin"})
         );
         Ok(())
     }

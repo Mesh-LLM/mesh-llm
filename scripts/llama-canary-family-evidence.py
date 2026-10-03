@@ -879,6 +879,9 @@ def reconcile(args) -> None:
         errors.append(f"retry family job graph result: {family_result}")
         if family_result in {"cancelled", "skipped"} and not missing:
             terminal_contract = True
+        elif not terminal_contract and not infrastructure_failures and not candidate_failures:
+            # Successful receipts cannot certify a failed retry job graph.
+            infrastructure_failures.update(retry_families)
     report = (f"Canary {identity['pass_id']} infrastructure recheck: "
               f"{len(passed)}/{len(retry_families)} retry families passed for {identity['candidate']}\n")
     if errors:

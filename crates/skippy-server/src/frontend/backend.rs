@@ -976,78 +976,88 @@ impl OpenAiBackend for StageOpenAiBackend {
             request.agent_session(),
             &context,
         );
-        self.chat_completion_stream_with_hooks(request, move |mut request| async move {
-            self.ensure_model(&request.model)?;
-            let (request_defaults, defaults_diagnostics) =
-                resolve_chat_request_defaults(&request, &self.request_defaults)?;
-            apply_chat_request_defaults(&mut request, &request_defaults)?;
-            ensure_chat_runtime_features_supported(&request)?;
-            let sampling = chat_sampling_config(&request, &request_defaults)?;
-            let include_usage = request.include_usage();
-            let template_options = chat_template_options(&request, &request_defaults)?;
-            let parse_chat_output = chat_output_parser_required(&request, &template_options);
-            let emit_reasoning = template_exposes_reasoning(&template_options);
-            let template_timer = PhaseTimer::start();
-            let prompt = self
-                .prepare_chat_prompt_offloaded(&request, template_options)
-                .await?;
-            let mut template_attrs = self.openai_attrs(&ids);
-            template_attrs.insert(
-                "llama_stage.openai_operation".to_string(),
-                json!("chat_completion_stream"),
-            );
-            template_attrs.insert(
-                "llama_stage.chat_message_count".to_string(),
-                json!(request.messages.len()),
-            );
-            template_attrs.insert(
-                "llama_stage.prompt_chars".to_string(),
-                json!(prompt.text.len()),
-            );
-            template_attrs.insert(
-                "llama_stage.media_item_count".to_string(),
-                json!(prompt.media.len()),
-            );
-            template_attrs.insert(
-                "llama_stage.generation_profile".to_string(),
-                json!(defaults_diagnostics.selected_package_profile),
-            );
-            template_attrs.insert(
-                "llama_stage.max_tokens_source".to_string(),
-                json!(defaults_diagnostics.max_tokens_source),
-            );
-            template_attrs.insert(
-                "llama_stage.reasoning_budget_source".to_string(),
-                json!(defaults_diagnostics.reasoning_budget_source),
-            );
-            template_attrs.insert(
-                "llama_stage.generation_default_sources".to_string(),
-                json!(defaults_diagnostics.field_sources),
-            );
-            self.emit_openai_phase("stage.openai_chat_template", template_timer, template_attrs);
-            let max_tokens = GenerationTokenLimit::from_request(
-                request.effective_max_tokens(),
-                self.default_max_tokens,
-            );
-            let model = request.model.clone();
-            let stream = self
-                .run_generation_stream(
-                    prompt,
-                    max_tokens,
-                    request.stop.clone(),
-                    sampling,
-                    include_usage,
-                    Some(request),
-                    parse_chat_output,
-                    emit_reasoning,
-                    context,
-                    ids,
-                )
-                .await?;
-            let stream: ChatCompletionStream =
-                Box::pin(stream.map(move |event| generation_event_to_chat_chunk(event, &model)));
-            Ok(stream)
-        })
+        let exchange_context = context.clone();
+        self.chat_completion_stream_with_hooks(
+            request,
+            &exchange_context,
+            move |mut request| async move {
+                self.ensure_model(&request.model)?;
+                let (request_defaults, defaults_diagnostics) =
+                    resolve_chat_request_defaults(&request, &self.request_defaults)?;
+                apply_chat_request_defaults(&mut request, &request_defaults)?;
+                ensure_chat_runtime_features_supported(&request)?;
+                let sampling = chat_sampling_config(&request, &request_defaults)?;
+                let include_usage = request.include_usage();
+                let template_options = chat_template_options(&request, &request_defaults)?;
+                let parse_chat_output = chat_output_parser_required(&request, &template_options);
+                let emit_reasoning = template_exposes_reasoning(&template_options);
+                let template_timer = PhaseTimer::start();
+                let prompt = self
+                    .prepare_chat_prompt_offloaded(&request, template_options)
+                    .await?;
+                let mut template_attrs = self.openai_attrs(&ids);
+                template_attrs.insert(
+                    "llama_stage.openai_operation".to_string(),
+                    json!("chat_completion_stream"),
+                );
+                template_attrs.insert(
+                    "llama_stage.chat_message_count".to_string(),
+                    json!(request.messages.len()),
+                );
+                template_attrs.insert(
+                    "llama_stage.prompt_chars".to_string(),
+                    json!(prompt.text.len()),
+                );
+                template_attrs.insert(
+                    "llama_stage.media_item_count".to_string(),
+                    json!(prompt.media.len()),
+                );
+                template_attrs.insert(
+                    "llama_stage.generation_profile".to_string(),
+                    json!(defaults_diagnostics.selected_package_profile),
+                );
+                template_attrs.insert(
+                    "llama_stage.max_tokens_source".to_string(),
+                    json!(defaults_diagnostics.max_tokens_source),
+                );
+                template_attrs.insert(
+                    "llama_stage.reasoning_budget_source".to_string(),
+                    json!(defaults_diagnostics.reasoning_budget_source),
+                );
+                template_attrs.insert(
+                    "llama_stage.generation_default_sources".to_string(),
+                    json!(defaults_diagnostics.field_sources),
+                );
+                self.emit_openai_phase(
+                    "stage.openai_chat_template",
+                    template_timer,
+                    template_attrs,
+                );
+                let max_tokens = GenerationTokenLimit::from_request(
+                    request.effective_max_tokens(),
+                    self.default_max_tokens,
+                );
+                let model = request.model.clone();
+                let stream = self
+                    .run_generation_stream(
+                        prompt,
+                        max_tokens,
+                        request.stop.clone(),
+                        sampling,
+                        include_usage,
+                        Some(request),
+                        parse_chat_output,
+                        emit_reasoning,
+                        context,
+                        ids,
+                    )
+                    .await?;
+                let stream: ChatCompletionStream = Box::pin(
+                    stream.map(move |event| generation_event_to_chat_chunk(event, &model)),
+                );
+                Ok(stream)
+            },
+        )
         .await
     }
 
@@ -1646,6 +1656,15 @@ impl StageOpenAiBackend {
 
         let mut result = dispatch(request).await;
 
+        // Carry the exchange id on the response only when this exchange is
+        // tracked (a `TerminalGuard` is armed); otherwise no terminal event
+        // fires for it and there is nothing to join to.
+        if guard.is_some()
+            && let Ok(response) = &mut result
+        {
+            response.exchange_id = Some(exchange_id.clone());
+        }
+
         if let (Some(hooks), Some(dispatched_request), Ok(response)) =
             (&hooks, &dispatched_request, &mut result)
             && let Some(marker) = hooks
@@ -1682,6 +1701,7 @@ impl StageOpenAiBackend {
     async fn chat_completion_stream_with_hooks<F, Fut>(
         &self,
         mut request: ChatCompletionRequest,
+        context: &OpenAiRequestContext,
         dispatch: F,
     ) -> OpenAiResult<ChatCompletionStream>
     where
@@ -1696,6 +1716,9 @@ impl StageOpenAiBackend {
         let mut guard = hooks
             .as_ref()
             .map(|hooks| TerminalGuard::new(hooks.clone(), request.clone(), exchange_id.clone()));
+        if guard.is_some() {
+            context.publish_exchange_id(exchange_id.clone());
+        }
 
         if let Some(hooks) = hooks.clone() {
             match hooks.before_chat_completion(&mut request).await {

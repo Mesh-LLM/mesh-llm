@@ -32,6 +32,10 @@ pub(crate) const MESH_TARGET_HEADER: &str = "x-mesh-target";
 /// Remove one or more peers from the remote-mesh candidate set before
 /// selection. Comma-separated within one header value.
 pub(crate) const MESH_EXCLUDE_HEADER: &str = "x-mesh-exclude";
+/// A client-chosen id marking requests it sent to different nodes as one
+/// pair; copied unread onto the routing node's exchange events, never
+/// forwarded to a peer.
+pub(crate) const MESH_TWIN_BRACKET_HEADER: &str = "x-mesh-twin-bracket";
 pub(super) const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_AUDIO_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
@@ -171,7 +175,11 @@ impl BufferedHttpRequest {
     /// A System One read renders `state` into every question's own bounded
     /// sequence, so its body size does not describe the context it needs.
     pub fn is_system_one_request(&self) -> bool {
-        self.method == "POST" && self.client_path.split('?').next() == Some("/systemone")
+        self.method == "POST"
+            && matches!(
+                self.client_path.split('?').next(),
+                Some("/systemone" | "/v1/decisions")
+            )
     }
 
     pub fn ensure_body_json(&mut self) {
@@ -214,6 +222,14 @@ impl BufferedHttpRequest {
         let exclude = header_values_from_raw(&self.raw, MESH_EXCLUDE_HEADER)
             .map_err(|()| format!("{MESH_EXCLUDE_HEADER} header contains invalid UTF-8"))?;
         Ok((target, exclude))
+    }
+
+    /// Raw `x-mesh-twin-bracket` header values, in order and untrimmed, so
+    /// the parser can trim HTTP whitespace (SP/HTAB) only and reject any other
+    /// whitespace as malformed.
+    pub fn twin_bracket_header_values(&self) -> Result<Vec<String>, String> {
+        untrimmed_header_values_from_raw(&self.raw, MESH_TWIN_BRACKET_HEADER)
+            .map_err(|()| format!("{MESH_TWIN_BRACKET_HEADER} header contains invalid UTF-8"))
     }
 
     /// The only semantic request media kind trusted by artifact capture.
@@ -954,6 +970,16 @@ fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>
 /// at least one occurrence of `name` had non-UTF-8 bytes -- the caller must
 /// reject the request rather than silently drop that occurrence.
 fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+    untrimmed_header_values_from_raw(raw, name).map(|values| {
+        values
+            .iter()
+            .map(|value| value.trim().to_string())
+            .collect()
+    })
+}
+
+/// Every value of header `name`, as UTF-8, exactly as httparse returned it.
+fn untrimmed_header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
     let header_end = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -971,7 +997,7 @@ fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
         .filter(|header| header.name.eq_ignore_ascii_case(name))
         .map(|header| {
             std::str::from_utf8(header.value)
-                .map(|value| value.trim().to_string())
+                .map(str::to_string)
                 .map_err(|_| ())
         })
         .collect()

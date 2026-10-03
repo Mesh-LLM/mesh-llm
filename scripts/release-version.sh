@@ -297,6 +297,7 @@ literal_version_files=(
     "crates/mesh-llm-ui/package.json"
     "crates/mesh-llm-ui/package-lock.json"
     "sdk/node/package.json"
+    "sdk/python/pyproject.toml"
     "docs/sdk/node.md"
     "docs/sdk/rust.md"
     "docs/sdk/swift.md"

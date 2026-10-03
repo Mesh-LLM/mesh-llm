@@ -2,6 +2,7 @@
 
 mod migrations;
 pub mod receivables;
+pub mod wallet_switch;
 
 #[cfg(test)]
 mod tests;

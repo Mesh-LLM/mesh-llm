@@ -3,6 +3,7 @@ import { MessageSquareMore } from 'lucide-react'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { MessageRow } from '@/features/chat/components/MessageRow'
 import { ChatLayout } from '@/features/chat/layouts/ChatLayout'
+import { PluginContributionSlot } from '@/features/plugins/web-ui/PluginContributionSlot'
 import type { Conversation, ThreadMessage, TransparencyMessage } from '@/features/app-tabs/types'
 import {
   AttachmentProcessingPanel,
@@ -130,6 +131,20 @@ export function ChatConversationPanel({
             }
             inspectLabel={message.inspectLabel}
             inspected={transparencyMessage != null && inspectedMessage?.id === transparencyMessage.id}
+            footer={
+              message.messageRole === 'assistant' && !messageIsStreamingResponse ? (
+                <PluginContributionSlot
+                  className="mt-2 flex min-w-0 flex-wrap items-center gap-2"
+                  subject={{
+                    slot: 'chat_message',
+                    messageId: message.id,
+                    clientNonce: message.clientNonce,
+                    model: message.model,
+                    servedBy: message.routeNode
+                  }}
+                />
+              ) : null
+            }
             onStopStreaming={onStopStreaming}
             attachments={messageAttachments.map((attachment) => ({
               id: attachment.id,

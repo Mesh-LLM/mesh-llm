@@ -1,5 +1,6 @@
 use std::{fs, path::PathBuf};
 
+use super::web_ui::PackagedPluginWebUiPagePlacement;
 use super::{PackagedPluginManifest, PackagedPluginValueKind};
 
 fn web_ui_exemplar_path(file_name: &str) -> PathBuf {
@@ -30,6 +31,10 @@ fn web_ui_exemplar_package_manifest_matches_packaged_contract() {
     assert_eq!(web_ui.pages[0].id, "overview");
     assert_eq!(web_ui.pages[0].label, "Exemplar Notes");
     assert_eq!(web_ui.pages[0].entry_script, "register-mesh-plugin-ui.js");
+    assert_eq!(
+        web_ui.pages[0].placement,
+        PackagedPluginWebUiPagePlacement::Primary
+    );
     assert_eq!(web_ui.config_sections[0].id, "page-actions");
     assert_eq!(
         web_ui.config_sections[0].parent_tab.as_deref(),

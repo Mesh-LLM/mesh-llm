@@ -302,7 +302,7 @@ impl Default for StageSamplingConfig {
             presence_penalty: 0.0,
             frequency_penalty: 0.0,
             repeat_penalty: 1.0,
-            penalty_last_n: -1,
+            penalty_last_n: 64,
             logit_bias: Vec::new(),
             typical_p: 1.0,
             top_nsigma: -1.0,

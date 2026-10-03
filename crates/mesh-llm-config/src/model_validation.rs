@@ -20,7 +20,9 @@ use crate::validation_support::{
     validation_diagnostic,
 };
 
+mod penalty_windows;
 mod topology;
+pub(crate) use penalty_windows::collect_legacy_penalty_window_warnings;
 pub(crate) use topology::model_topology_diagnostics;
 
 pub(crate) fn validate_duplicate_model_entries(
@@ -1235,6 +1237,25 @@ verify_window_pipeline_depth = 65
             text.contains("between 1 and 64"),
             "unexpected diagnostic: {text}"
         );
+    }
+
+    #[test]
+    fn zero_pipeline_decode_groups_is_rejected_not_clamped() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.throughput]
+pipeline_decode_groups = 0
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(
+            text.contains("pipeline_decode_groups") && text.contains("at least 1"),
+            "expected a typed rejection for zero groups, got: {text}"
+        );
+        validate_config(&config).expect_err("zero pipeline groups must not be accepted");
     }
 
     #[test]

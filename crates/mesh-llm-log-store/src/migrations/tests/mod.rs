@@ -7,6 +7,7 @@ mod released_schema_import;
 mod runner;
 mod schema_contract;
 mod sqlite_autoincrement;
+mod v2_exchange_id_migration;
 
 pub(super) const EXPECTED_INDEXES: &[&str] = &[
     "idx_artifact_pointers_occurred",
@@ -28,6 +29,7 @@ pub(super) const EXPECTED_INDEXES: &[&str] = &[
     "idx_proxy_records_status_occurred",
     "idx_summaries_created",
     "idx_summaries_engine_created",
+    "idx_summaries_exchange_id",
     "idx_summaries_model_created",
     "idx_summaries_provider_created",
     "idx_summaries_route_created",

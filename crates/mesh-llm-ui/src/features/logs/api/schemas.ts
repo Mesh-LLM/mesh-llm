@@ -161,7 +161,8 @@ const requestSchema = v.object({
   source: sourceSchema,
   callerEndpointId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
   callerAddr: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
-  callerPathType: v.optional(callerPathTypeSchema)
+  callerPathType: v.optional(callerPathTypeSchema),
+  exchangeId: v.optional(v.pipe(v.string(), v.minLength(1)))
 })
 
 const lifecycleEventSchema = v.object({

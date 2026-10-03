@@ -5,6 +5,7 @@ import {
   adaptPluginSummariesToWebUiEntries,
   usePluginSummariesQuery,
   useSetPluginWebUiEnabledMutation,
+  useSetPluginWebUiPrimaryTabMutation,
   type PluginWebUiEntry
 } from '@/features/plugins/api/plugin-web-ui'
 import { PluginConfigSectionMount } from '@/features/configuration/components/PluginConfigSectionMount'
@@ -104,6 +105,40 @@ function PluginWebUiToggle({ entry }: { readonly entry: PluginWebUiEntry }) {
   )
 }
 
+function pluginRequestsPrimaryPlacement(entry: PluginWebUiEntry): boolean {
+  return entry.pages.some((page) => page.placement === 'primary')
+}
+
+function PluginWebUiPrimaryTabToggle({ entry }: { readonly entry: PluginWebUiEntry }) {
+  const mutation = useSetPluginWebUiPrimaryTabMutation(entry.pluginName)
+  const checked = entry.primaryTabEnabled
+
+  return (
+    <button
+      aria-checked={checked}
+      aria-label={`${entry.pluginName} primary tab placement`}
+      className={cn(
+        'ui-control inline-flex h-[30px] items-center gap-2 rounded-[var(--radius)] border px-2.5 text-[length:var(--density-type-control)] font-semibold',
+        checked && 'border-accent bg-accent/10 text-accent'
+      )}
+      disabled={mutation.isPending}
+      onClick={() => mutation.mutate(!checked)}
+      role="switch"
+      type="button"
+    >
+      <span className="relative inline-flex h-3.5 w-6 rounded-full border border-current/40 bg-current/10">
+        <span
+          className={cn(
+            'absolute top-1/2 size-2 -translate-y-1/2 rounded-full bg-current transition-transform',
+            checked ? 'translate-x-[13px]' : 'translate-x-[3px]'
+          )}
+        />
+      </span>
+      {checked ? 'Primary tab on' : 'Primary tab off'}
+    </button>
+  )
+}
+
 function PluginIntegrationCard({
   entry,
   summary
@@ -130,7 +165,12 @@ function PluginIntegrationCard({
           </h3>
           {description ? <p className="type-caption mt-1 text-fg-dim">{description}</p> : null}
         </div>
-        {entry.declared ? <PluginWebUiToggle entry={entry} /> : null}
+        {entry.declared ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <PluginWebUiToggle entry={entry} />
+            {pluginRequestsPrimaryPlacement(entry) ? <PluginWebUiPrimaryTabToggle entry={entry} /> : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">

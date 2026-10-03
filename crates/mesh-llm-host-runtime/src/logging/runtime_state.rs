@@ -685,16 +685,6 @@ impl LoggingRuntimeState {
         )))
     }
 
-    /// Claim the metadata-only parent lifecycle for one raw mesh ingress
-    /// request. The matching embedded frontend observer consults the same
-    /// ownership registry and does not register a competing parent.
-    pub(crate) fn register_raw_mesh_request(
-        &self,
-        request_id: mesh_llm_events::logging::identifiers::RequestId,
-    ) -> Option<RawMeshRequestLifecycle> {
-        self.register_raw_mesh_request_with_metadata(request_id, RequestSummaryMetadata::default())
-    }
-
     fn register_raw_mesh_request_with_metadata(
         &self,
         request_id: mesh_llm_events::logging::identifiers::RequestId,

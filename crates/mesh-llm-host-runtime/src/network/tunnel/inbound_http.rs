@@ -80,6 +80,7 @@ pub(super) async fn handle_inbound_http_stream(
             stream,
             targets,
             ingress.affinity,
+            remote,
         )
         .await;
         return Ok(());

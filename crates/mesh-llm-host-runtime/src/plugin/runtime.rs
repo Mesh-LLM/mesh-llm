@@ -24,6 +24,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 pub(crate) struct ExternalPlugin {
     spec: ExternalPluginSpec,
     web_ui_enabled: Arc<Mutex<Option<bool>>>,
+    web_ui_primary_tab: Arc<Mutex<Option<bool>>>,
     instance_id: String,
     host_mode: PluginHostMode,
     summary: Arc<Mutex<PluginSummary>>,
@@ -73,6 +74,7 @@ impl ExternalPlugin {
         let plugin = Self {
             spec: spec.clone(),
             web_ui_enabled: Arc::new(Mutex::new(spec.web_ui_enabled)),
+            web_ui_primary_tab: Arc::new(Mutex::new(spec.web_ui_primary_tab)),
             instance_id,
             host_mode,
             summary: Arc::new(Mutex::new(PluginSummary {
@@ -128,6 +130,7 @@ impl ExternalPlugin {
             live_manifest: manifest.as_ref(),
             installed_metadata: self.spec.installed_metadata.as_ref(),
             web_ui_enabled: *self.web_ui_enabled.lock().await,
+            web_ui_primary_tab: self.web_ui_primary_tab.lock().await.unwrap_or(false),
             runtime_available: summary.status == "running",
             runtime_unavailable_reason: summary.error.as_deref(),
         });
@@ -136,6 +139,15 @@ impl ExternalPlugin {
 
     pub(crate) async fn set_web_ui_enabled(&self, enabled: bool) -> PluginWebUiState {
         *self.web_ui_enabled.lock().await = Some(enabled);
+        self.publish_summary().await;
+        self.summary().await.web_ui
+    }
+
+    pub(crate) async fn set_web_ui_primary_tab(
+        &self,
+        primary_tab_enabled: bool,
+    ) -> PluginWebUiState {
+        *self.web_ui_primary_tab.lock().await = Some(primary_tab_enabled);
         self.publish_summary().await;
         self.summary().await.web_ui
     }
@@ -271,6 +283,9 @@ impl ExternalPlugin {
                     host_version: crate::VERSION.to_string(),
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
+                    host_capabilities: vec![
+                        mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
+                    ],
                 }),
                 Some(self.spec.startup.init_timeout()),
             )
@@ -1029,7 +1044,8 @@ pub(crate) mod tests {
         InstalledPluginManifestMetadata, InstalledPluginMetadata,
         InstalledPluginWebUiBundleMetadata, InstalledPluginWebUiConfigSectionMetadata,
         InstalledPluginWebUiMetadata, InstalledPluginWebUiPageMetadata,
-        InstalledPluginWebUiValidation, InstalledPluginWebUiValidationStatus,
+        InstalledPluginWebUiPagePlacement, InstalledPluginWebUiValidation,
+        InstalledPluginWebUiValidationStatus,
     };
     use std::collections::BTreeMap;
     use std::ffi::OsStr;
@@ -1068,6 +1084,8 @@ pub(crate) mod tests {
                         route: "index.html".into(),
                         bundle_id: "main".into(),
                         entry_script: "assets/app.js".into(),
+                        placement: InstalledPluginWebUiPagePlacement::Auxiliary,
+                        host_header: None,
                     }],
                     config_sections: vec![InstalledPluginWebUiConfigSectionMetadata {
                         id: "settings".into(),
@@ -1076,6 +1094,7 @@ pub(crate) mod tests {
                         parent_tab: Some("integrations".into()),
                         bundle_id: "main".into(),
                     }],
+                    contributions: Vec::new(),
                     bundles: vec![InstalledPluginWebUiBundleMetadata {
                         id: "main".into(),
                         root_path: "web".into(),
@@ -1107,6 +1126,7 @@ pub(crate) mod tests {
             env: BTreeMap::new(),
             startup: Default::default(),
             web_ui_enabled,
+            web_ui_primary_tab: None,
             installed_metadata: Some(installed_metadata_with_web_ui(
                 temp_dir.path().to_path_buf(),
                 validation_status,
@@ -1128,6 +1148,7 @@ pub(crate) mod tests {
             env: BTreeMap::new(),
             startup: Default::default(),
             web_ui_enabled: None,
+            web_ui_primary_tab: None,
             installed_metadata: None,
         });
         plugin.in_process = Some(runner);
@@ -1162,6 +1183,7 @@ pub(crate) mod tests {
                 startup: Some(spec.startup.summary()),
                 error: None,
             })),
+            web_ui_primary_tab: Arc::new(Mutex::new(spec.web_ui_primary_tab)),
             spec,
             web_ui_enabled: Arc::new(Mutex::new(web_ui_enabled)),
             instance_id: "test-instance".into(),
@@ -1417,6 +1439,8 @@ pub(crate) mod tests {
                 name: "demo".into(),
                 enabled: Some(true),
                 web_ui_enabled: None,
+                web_ui_primary_tab: None,
+                allow_peer_blocks: None,
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: Vec::new(),
                 url: Some("\u{2003}https://plugin.example.test/v1\u{2003}".into()),

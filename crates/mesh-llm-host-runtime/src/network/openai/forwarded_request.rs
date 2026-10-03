@@ -180,6 +180,9 @@ pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
         "api-key",
         super::request_parse::MESH_TARGET_HEADER,
         super::request_parse::MESH_EXCLUDE_HEADER,
+        // The pairing is the client's and the routing node's business: a peer
+        // never learns that its answer is one half of a comparison.
+        super::request_parse::MESH_TWIN_BRACKET_HEADER,
     ];
     finalize_forwarded_request(raw, false, None, None, OMITTED_ON_PEER_FORWARD)
 }
@@ -216,7 +219,7 @@ mod tests {
     fn peer_forwarding_strips_mesh_routing_headers() {
         let body = b"{}";
         let raw = format!(
-            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-target: aabbcc\r\nx-mesh-exclude: ddeeff,001122\r\nX-Keep: yes\r\nContent-Length: {}\r\n\r\n",
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-target: aabbcc\r\nx-mesh-exclude: ddeeff,001122\r\nx-mesh-twin-bracket: pair-7\r\nX-Keep: yes\r\nContent-Length: {}\r\n\r\n",
             body.len()
         );
         let mut raw = raw.into_bytes();
@@ -232,6 +235,10 @@ mod tests {
         assert!(
             !text.to_ascii_lowercase().contains("x-mesh-exclude"),
             "x-mesh-exclude must not reach the peer: {text}"
+        );
+        assert!(
+            !text.to_ascii_lowercase().contains("x-mesh-twin-bracket"),
+            "a peer must not learn it is one half of a pair: {text}"
         );
         assert!(
             text.contains("X-Keep: yes"),

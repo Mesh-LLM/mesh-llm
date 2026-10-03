@@ -18,7 +18,7 @@ Start with one of these backends:
 
 | Backend | Model to try | Best for | Requirements |
 | --- | --- | --- | --- |
-| Laya | `convaiinnovations/laya-multilingual`, converted to `laya-multilingual-F16.gguf` | A small first test, multilingual classification, CPU or GPU | One converted GGUF; about 829 MB including the worst-case read reserve |
+| Laya | `meshllm/laya-multilingual-F16-GGUF` | A small first test, multilingual classification, CPU or GPU | One automatically downloaded GGUF; about 829 MB including the worst-case read reserve |
 | OpenJEV / DiffusionGemma | `unsloth/diffusiongemma-26B-A4B-it-GGUF:Q4_K_M` | Testing the DiffusionGemma System One implementation | CUDA, one complete-model worker, `parallel = 1`, and a micro-batch large enough for the model's answer canvas |
 
 Laya is the simplest functional test. DiffusionGemma exercises the OpenJEV
@@ -27,25 +27,61 @@ HTTP request and response contract.
 
 ## Run Laya
 
-Prepare the llama.cpp converter once with `just llama-prepare`, then convert
-the upstream checkpoint:
+With mesh-llm v0.77.0 or newer installed:
 
 ```sh
-hf download convaiinnovations/laya-multilingual --local-dir /tmp/laya-multilingual
-python3 .deps/llama.cpp/convert_hf_to_gguf.py /tmp/laya-multilingual \
-  --outtype f16 --outfile /tmp/laya-multilingual-F16.gguf
+mesh-llm serve --model meshllm/laya-multilingual-F16-GGUF
 ```
 
-Use that converted file. Other published Laya GGUFs may omit the decision head
-or use an incompatible layout.
-
-```sh
-mesh-llm serve --gguf /tmp/laya-multilingual-F16.gguf --headless
-```
+Mesh downloads the [compatible F16 GGUF](https://huggingface.co/meshllm/laya-multilingual-F16-GGUF)
+when it is not cached and reuses it on subsequent runs. No source checkout,
+Python installation, or manual conversion is required. Wait for the model to
+be ready, then use its discovered ID with `/systemone` as shown below.
 
 Without an explicit device, Laya runs on CPU. Use the node's normal `--device`
 or pinned-GPU configuration to place it on a GPU, or set
 `MESH_LLM_LAYA_ACCELERATOR=1` to opt into the first GPU.
+
+### Alongside a chat model
+
+Repeat `--model` to serve both on one node:
+
+```sh
+mesh-llm serve \
+  --model meshllm/laya-multilingual-F16-GGUF \
+  --model Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q8_0
+```
+
+Both models must fit in the node's memory budget. With no device override,
+Laya keeps its CPU default while the chat model uses normal device selection.
+A global `--device` applies to both; use [per-model configuration](/docs/pages/config-models/)
+when they need different explicit device assignments. Multiple `[[models]]`
+entries also work with `mesh-llm serve --config /path/to/config.toml`.
+Explicit `--model` or `--gguf` arguments replace the configured startup model list.
+
+Add `--join <invite>` to serve them on an existing mesh, or `--publish` to
+advertise your mesh for discovery; see [mesh setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/MESHES.md).
+Only call `/systemone` through a client after its own `/v1/models` response
+advertises `system_one` for the selected model; seeing a model name alone is
+not sufficient. The chat model uses `/v1/chat/completions`. Loading both does
+not automatically route chat through Laya.
+
+### Advanced: convert your own checkpoint
+
+The published model above is sufficient for normal use. For a custom conversion,
+use a Mesh source checkout with its patched converter, the Hugging Face CLI,
+and the converter's Python dependencies:
+
+```sh
+just llama-prepare
+hf download convaiinnovations/laya-multilingual --local-dir /tmp/laya-multilingual
+python3 .deps/llama.cpp/convert_hf_to_gguf.py /tmp/laya-multilingual \
+  --outtype f16 --outfile /tmp/laya-multilingual-F16.gguf
+mesh-llm serve --gguf /tmp/laya-multilingual-F16.gguf
+```
+
+Other published Laya GGUFs may omit the decision head or use an incompatible
+layout; a `.gguf` extension alone does not establish compatibility.
 
 ## Run OpenJEV / DiffusionGemma
 
@@ -91,7 +127,8 @@ models visible through the mesh:
 ```sh
 curl -s http://127.0.0.1:9337/v1/models \
   | jq '.data[]
-      | select(.capabilities | index("system_one"))
+      | select(.id != "mesh" and .id != "auto")
+      | select((.capabilities // []) | index("system_one"))
       | {id, display_name, system_one_status, metadata}'
 ```
 
@@ -100,7 +137,8 @@ Print only model IDs that are safe to send to `/systemone`:
 ```sh
 curl -s http://127.0.0.1:9337/v1/models \
   | jq -r '.data[]
-      | select(.capabilities | index("system_one"))
+      | select(.id != "mesh" and .id != "auto")
+      | select((.capabilities // []) | index("system_one"))
       | .id'
 ```
 
@@ -149,14 +187,16 @@ selection. The chat guardrail wrapper does not screen System One requests.
 `usage.output_tokens` is zero because no text is generated. This is not full
 compute accounting or a production OpenJEV compatibility guarantee.
 
-For Laya, change only the `model` value to the discovered ID, normally
-`laya-multilingual-F16`. Object-valued `state` is also accepted:
+For Laya, replace `YOUR_DISCOVERED_LAYA_ID` below with its exact ID from
+`/v1/models`. Do not assume the ID is the filename or download reference; it
+can be a canonical Hugging Face ID or a content-hash ID. Object-valued `state`
+is also accepted:
 
 ```sh
 curl http://127.0.0.1:9337/systemone \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "laya-multilingual-F16",
+    "model": "YOUR_DISCOVERED_LAYA_ID",
     "state": {
       "from": "user@example.com",
       "body": "I was charged twice this month."
@@ -173,6 +213,12 @@ curl http://127.0.0.1:9337/systemone \
     }
   }'
 ```
+
+## Decisions API
+
+The [Decisions API](/docs/pages/decisions-api/) provides `POST /v1/decisions`
+for the same System One models. Use its guide for model discovery, request and
+response examples, and adapter limits.
 
 ## Backend differences
 
