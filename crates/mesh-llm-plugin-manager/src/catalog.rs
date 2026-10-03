@@ -4,6 +4,8 @@ use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::{source_ref::PluginVersion, target::PluginTarget};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogEntry {
     pub name: String,
@@ -49,6 +51,14 @@ impl CatalogEntry {
     }
 
     fn validate_pins(&self) -> Result<()> {
+        if let Some(version) = &self.version {
+            PluginVersion::new(version.clone()).with_context(|| {
+                format!(
+                    "catalog entry '{}' has an invalid pinned version",
+                    self.name
+                )
+            })?;
+        }
         if !self.sha256.is_empty() && self.version.is_none() {
             bail!(
                 "catalog entry '{}' lists sha256 digests but no version",
@@ -56,6 +66,12 @@ impl CatalogEntry {
             );
         }
         for (target, digest) in &self.sha256 {
+            if !PluginTarget::is_supported_triple(target) {
+                bail!(
+                    "catalog entry '{}' has an unsupported target triple {target}",
+                    self.name
+                );
+            }
             if !is_sha256_hex(digest) {
                 bail!(
                     "catalog entry '{}' has an invalid sha256 for {target}",
@@ -233,6 +249,22 @@ mod tests {
         let no_version = PINNED.replace(r#""version":"v1.0.0","#, "");
         let error = PluginCatalog::parse_jsonl(&no_version).unwrap_err();
         assert!(format!("{error:#}").contains("but no version"), "{error:#}");
+
+        let unknown_target = PINNED.replace("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gun");
+        let error = PluginCatalog::parse_jsonl(&unknown_target).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("unsupported target triple"),
+            "{error:#}"
+        );
+
+        for invalid in ["", "v1/2", "v1 2", "v1\\\\2"] {
+            let bad_version = PINNED.replace("v1.0.0", invalid);
+            let error = PluginCatalog::parse_jsonl(&bad_version).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("invalid pinned version"),
+                "{error:#}"
+            );
+        }
     }
 
     #[test]

@@ -9,6 +9,18 @@ pub struct PluginTarget {
 }
 
 impl PluginTarget {
+    pub fn is_supported_triple(triple: &str) -> bool {
+        matches!(
+            triple,
+            "aarch64-apple-darwin"
+                | "x86_64-apple-darwin"
+                | "x86_64-unknown-linux-gnu"
+                | "aarch64-unknown-linux-gnu"
+                | "x86_64-pc-windows-msvc"
+                | "aarch64-pc-windows-msvc"
+        )
+    }
+
     pub fn current() -> Result<Self, UnsupportedTarget> {
         Self::from_os_arch(std::env::consts::OS, std::env::consts::ARCH)
     }
@@ -93,6 +105,21 @@ mod tests {
         let windows = PluginTarget::from_os_arch("windows", "aarch64").unwrap();
         assert_eq!(windows.triple(), "aarch64-pc-windows-msvc");
         assert_eq!(windows.archive_ext(), ArchiveExt::Zip);
+
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("windows", "x86_64"),
+            ("windows", "aarch64"),
+        ] {
+            let target = PluginTarget::from_os_arch(os, arch).unwrap();
+            assert!(PluginTarget::is_supported_triple(target.triple()));
+        }
+        assert!(!PluginTarget::is_supported_triple(
+            "x86_64-unknown-linux-gun"
+        ));
     }
 
     #[test]
