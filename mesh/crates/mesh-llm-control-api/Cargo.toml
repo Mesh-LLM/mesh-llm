@@ -1,0 +1,22 @@
+[package]
+name = "mesh-llm-control-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mesh management access policy and status views over explicit runtime snapshots"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.77.0" }
+serde = { version = "1", features = ["derive"] }
+httparse = "1"
+http = "1"
+url = "2"
+
+serde_json = "1"
+anyhow = "1"
+tokio = { version = "1", features = ["io-util", "net", "rt", "macros"] }

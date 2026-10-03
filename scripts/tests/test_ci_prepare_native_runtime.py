@@ -60,7 +60,7 @@ def make_executable(path: Path) -> None:
 
 def current_skippy_abi() -> str:
     values = {}
-    constants = ROOT / "crates/skippy-ffi/src/lib.rs"
+    constants = ROOT / "skippy/crates/skippy-ffi/src/lib.rs"
     for line in constants.read_text(encoding="utf-8").splitlines():
         for part in ("MAJOR", "MINOR", "PATCH"):
             prefix = f"pub const ABI_VERSION_{part}: u32 = "
@@ -83,9 +83,10 @@ class CiPrepareNativeRuntimeTests(unittest.TestCase):
         library.write_bytes(b"verified runtime fixture")
         digest = hashlib.sha256(library.read_bytes()).hexdigest()
         manifest = {
+            "schema_version": 2,
             "runtime": {
                 "id": runtime_id,
-                "mesh_version": "0.72.1",
+                "release_version": "0.72.1",
                 "skippy_abi": skippy_abi or current_skippy_abi(),
                 "platform": {
                     "os": host_os(),
@@ -120,7 +121,7 @@ class CiPrepareNativeRuntimeTests(unittest.TestCase):
         rows = [
             {
                 "id": runtime_id,
-                "mesh_version": "0.72.1",
+                "release_version": "0.72.1",
                 "skippy_abi": current_skippy_abi(),
                 "backend": backend,
                 "os": host_os(),

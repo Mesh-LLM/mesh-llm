@@ -29,7 +29,7 @@ Attempted (retained on this branch for reference): skip redundant SSM state copy
 cache identity matches. Insufficient — see re-run below. **Do not merge as-is; the diagnosis is
 incomplete.**
 
-- Changed: `crates/skippy-cache/src/recurrent.rs` (attempted)
+- Changed: `skippy/crates/skippy-cache/src/recurrent.rs` (attempted)
 - Rationale: partial mitigation only
 
 ## Re-run benchmark results (HF card format)

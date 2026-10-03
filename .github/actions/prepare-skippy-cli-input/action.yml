@@ -1,0 +1,57 @@
+name: Prepare standalone Skippy CLI input
+description: Build and checksum one backend-neutral Skippy CLI for a platform.
+
+inputs:
+  profile:
+    description: Build profile (debug, dev, or release).
+    required: false
+    default: release
+  output_dir:
+    description: Directory receiving the immutable Skippy CLI input.
+    required: false
+    default: skippy-cli-input
+
+runs:
+  using: composite
+  steps:
+    - name: Build and prepare Unix Skippy CLI
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
+      run: |
+        set -euo pipefail
+        case "$INPUT_PROFILE" in
+          debug|dev) recipe=skippy-cli-build; profile_dir=debug ;;
+          release) recipe=skippy-cli-release-build; profile_dir=release ;;
+          *) echo "unsupported Skippy profile: $INPUT_PROFILE" >&2; exit 1 ;;
+        esac
+        just "$recipe"
+        mkdir -p "$INPUT_OUTPUT_DIR"
+        cp "target/$profile_dir/skippy" "$INPUT_OUTPUT_DIR/skippy"
+        chmod +x "$INPUT_OUTPUT_DIR/skippy"
+        (cd "$INPUT_OUTPUT_DIR" && { command -v sha256sum >/dev/null && sha256sum skippy || shasum -a 256 skippy; }) > "$INPUT_OUTPUT_DIR/skippy.sha256"
+    - name: Build and prepare Windows Skippy CLI
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        switch ($env:INPUT_PROFILE) {
+          'debug' { $recipe = 'skippy-cli-build'; $profileDir = 'debug' }
+          'dev' { $recipe = 'skippy-cli-build'; $profileDir = 'debug' }
+          'release' { $recipe = 'skippy-cli-release-build'; $profileDir = 'release' }
+          default { throw "unsupported Skippy profile: $env:INPUT_PROFILE" }
+        }
+        & just $recipe
+        if ($LASTEXITCODE -ne 0) { throw 'Skippy CLI build failed' }
+        $source = Join-Path 'target' "$profileDir/skippy.exe"
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "missing Skippy CLI: $source" }
+        New-Item -ItemType Directory -Force -Path $env:INPUT_OUTPUT_DIR | Out-Null
+        $destination = Join-Path $env:INPUT_OUTPUT_DIR 'skippy.exe'
+        Copy-Item -LiteralPath $source -Destination $destination -Force
+        $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash.ToLowerInvariant()
+        "$checksum  skippy.exe" | Set-Content -Path (Join-Path $env:INPUT_OUTPUT_DIR 'skippy.exe.sha256') -NoNewline

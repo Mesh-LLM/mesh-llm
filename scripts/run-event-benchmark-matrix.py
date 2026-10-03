@@ -22,12 +22,12 @@ rather than assuming which binary produced it.
 `--mode event-disabled` forwards the hidden, TEST-ONLY selector
 `MESH_LLM_EVENT_SYSTEM_TRIAL_MODE=event-disabled` to the spawned process,
 which is accepted ONLY alongside `MESH_LLM_BENCHMARK_TUNE_TRIAL=1` (see
-`crates/mesh-llm-config/src/env_overrides.rs`). This script always sets both
+`mesh/crates/mesh-llm-config/src/env_overrides.rs`). This script always sets both
 gate and selector consistently -- it never asks the binary to run this trial
 mode without the trial gate.
 
 Trial unit (mirrors `benchmark_trial_unit_definition()` in
-`crates/mesh-llm-commands/src/gpus/tune/output_types.rs` VERBATIM -- see
+`mesh/crates/mesh-llm-commands/src/gpus/tune/output_types.rs` VERBATIM -- see
 `TRIAL_UNIT_DEFINITION` below and its cross-check test): one trial is one
 fresh process launch, one readiness wait, one warmup request excluded from
 metrics, one measured streaming request, and one shutdown. A pair is two
@@ -116,13 +116,13 @@ REDACTED_PRESENT = "<redacted:present>"
 
 # Frozen `decode_only_tok_s` epsilon -- MUST match
 # `streaming::DECODE_ONLY_TOK_S_EPSILON_SECS` in
-# `crates/mesh-llm-commands/src/gpus/tune/benchmark/streaming.rs`. Duplicated
+# `mesh/crates/mesh-llm-commands/src/gpus/tune/benchmark/streaming.rs`. Duplicated
 # (not imported -- this is a standalone Python tool) rather than redefined
 # differently; the cross-check test in the paired test file pins this.
 DECODE_ONLY_TOK_S_EPSILON_SECS = 1e-6
 
 # Verbatim mirror of `benchmark_trial_unit_definition()` in
-# `crates/mesh-llm-commands/src/gpus/tune/output_types.rs`. This is a REUSE
+# `mesh/crates/mesh-llm-commands/src/gpus/tune/output_types.rs`. This is a REUSE
 # of the frozen wording, not a redefinition -- the paired test file parses
 # the Rust source and asserts these strings match after whitespace
 # normalization, so the two can never silently drift apart.
@@ -420,7 +420,7 @@ def compute_decode_only_tok_s(
 ) -> float | None:
     """`completion_tokens / max(total_elapsed - ttft, epsilon)`, mirroring
     `streaming::decode_only_tok_s` in
-    `crates/mesh-llm-commands/src/gpus/tune/benchmark/streaming.rs`
+    `mesh/crates/mesh-llm-commands/src/gpus/tune/benchmark/streaming.rs`
     field-for-field: null (never zero) whenever `ttft_ms` is null or the
     decode interval is zero/negative."""
     if completion_tokens is None or total_elapsed_ms is None or ttft_ms is None:
@@ -480,7 +480,7 @@ def parse_sse_stream(
 ) -> StreamParseResult:
     """Parses an SSE chat-completion stream line-by-line, mirroring
     `streaming::parse_streaming_chat_response` in
-    `crates/mesh-llm-commands/src/gpus/tune/benchmark/streaming.rs`:
+    `mesh/crates/mesh-llm-commands/src/gpus/tune/benchmark/streaming.rs`:
     malformed individual chunks are skipped (not fatal), `[DONE]` or EOF
     ends the stream, TTFT is measured at the first non-empty content delta,
     and `completion_tokens` comes from the terminal `usage` object. A
@@ -629,7 +629,7 @@ def prompt_for_entry(entry: TrialPlanEntry) -> str:
 HEALTH_LOG_CONTEXT = "event_system_health"
 
 # Verbatim field names from `health_projection_event()` in
-# `crates/mesh-llm-host-runtime/src/runtime_events/presentation/projection.rs`
+# `mesh/crates/mesh-llm-host-runtime/src/runtime_events/presentation/projection.rs`
 # -- the space-separated `key=value` tokens inside the JSON log line's
 # `message` string (NOT nested JSON; the envelope is flat: `timestamp`,
 # `level`, `event`, `message`, `context`, with `context ==
@@ -782,7 +782,7 @@ def execute_trial(
     # `--local-model-only` REJECTS `--headless` at CLI validation
     # ("--local-model-only never starts a console; remove --headless" --
     # `validate_local_model_only_options` in
-    # `crates/mesh-llm-host-runtime/src/runtime/local_model_only.rs`) and
+    # `mesh/crates/mesh-llm-host-runtime/src/runtime/local_model_only.rs`) and
     # never starts a console/management API at all ("--local-model-only
     # does not start owner control or management APIs", same function) --
     # discovered running this path against a REAL binary for the first

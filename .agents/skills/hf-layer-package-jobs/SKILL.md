@@ -7,7 +7,7 @@ metadata:
 
 # HF Layer Package Jobs
 
-Use this skill for the `models package` CLI, the `model-package` crate, and the
+Use this skill for the `models package` CLI, the `skippy-model-package` crate, and the
 daily Unsloth queue workflow. This skill starts after a quantized GGUF artifact
 exists. It does not quantize models; use `hf-gguf-quant-jobs` first or
 `hf-quant-and-layer-package-jobs` when quantization and layer packaging should
@@ -53,7 +53,7 @@ mesh-llm models certify <layer-package-ref> --package-only --json
 ## Local Package Workflow
 
 When the quantized GGUF is already available on the local machine, build the
-package locally with `skippy-model-package`, then publish the package directory
+package locally with `skippy-package-builder`, then publish the package directory
 to a Hugging Face model repo:
 
 ```bash
@@ -118,12 +118,12 @@ Run Rust formatting and the focused package checks before committing:
 
 ```bash
 cargo fmt --all -- --check
-cargo test -p model-package
+cargo test -p skippy-model-package
 cargo check -p mesh-llm-host-runtime
 ```
 
 For behavior smoke tests, use a tiny dry run first:
 
 ```bash
-cargo run -p model-package --bin queue-unsloth-layer-packages -- --max-jobs 1 --recent-limit 3 --popular-limit 3 --dry-run
+cargo run -p skippy-model-package --bin queue-unsloth-layer-packages -- --max-jobs 1 --recent-limit 3 --popular-limit 3 --dry-run
 ```

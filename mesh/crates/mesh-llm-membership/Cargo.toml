@@ -1,0 +1,51 @@
+[package]
+name = "mesh-llm-membership"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Mesh peer membership: peer identity, admission state and discovery helpers for Mesh LLM"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[features]
+default = []
+# Host-side identity persistence (node key/keystore/ownership file I/O). The
+# pure peer/address/cache-affinity modules are available without it so the
+# embedded client can consume them without pulling keyring/dirs/rand.
+host-io = ["mesh-llm-identity/host-io", "dep:rand", "dep:dirs", "dep:tokio"]
+# Test-only override for the `MESH_LLM_TEST_HOME` home resolver. Enabled only
+# by the host crate's dev-dependency, so library consumers (the embedded
+# client) never observe the env-var override in production code. Implies
+# `host-io` because `identity_persistence` is feature-gated behind it.
+test-support = ["host-io"]
+payments = ["dep:mesh-llm-payments-types"]
+
+[dependencies]
+# Neutral Mesh identity/routing primitives — no Skippy, no host-runtime.
+# `host-io` (opt-in) exposes node-key/keystore/ownership helpers used by the
+# moved identity persistence module.
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.77.0", default-features = false }
+mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.77.0" }
+mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.77.0" }
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.77.0" }
+mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.77.0", optional = true }
+
+iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
+
+anyhow = { version = "1", features = [] }
+ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+rand = { version = "0.10", optional = true }
+hex = "0.4.3"
+dirs = { version = "6.0.0", optional = true }
+tracing = "0.1"
+sha2 = "0.11"
+serde_json = "1"
+tokio = { version = "1", features = ["sync"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+serial_test = "4"
+iroh = { version = "1.0.3", features = ["test-utils"] }

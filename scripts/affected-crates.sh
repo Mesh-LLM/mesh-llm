@@ -15,22 +15,26 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-commands"
   "mesh-llm-config"
   "mesh-llm-events"
-  "mesh-llm-gpu-bench"
+  "skippy-gpu-bench"
   "mesh-llm-host-runtime"
-  "mesh-llm-hardware-profile"
+  "mesh-llm-control-api"
+  "mesh-llm-skippy-adapter"
+  "skippy-hardware-profile"
   "mesh-llm-identity"
   "mesh-llm-log-store"
-  "mesh-llm-native-runtime"
+  "skippy-native-runtime"
   "mesh-llm-payments"
   "mesh-llm-payments-types"
   "mesh-llm-wallet"
   "mesh-llm-protocol"
+  "mesh-llm-transport"
+  "mesh-llm-membership"
   "mesh-llm-release-footer"
   "mesh-llm-routing"
   "mesh-llm-runtime-event-contracts"
-  "mesh-llm-runtime-install"
+  "skippy-runtime-install"
   "mesh-llm-sdk"
-  "mesh-llm-guardrails"
+  "skippy-guardrails"
   "mesh-llm-system"
   "mesh-llm-types"
   "mesh-llm-console-server"
@@ -50,32 +54,36 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-ffi"
   "mesh-llm-nodejs"
   "mesh-llm-test-harness"
-  "model-ref"
-  "model-artifact"
-  "model-hf"
-  "model-resolver"
+  "skippy-model-ref"
+  "skippy-model-artifact"
+  "skippy-model-hf"
+  "skippy-hf-hub"
+  "skippy-model-resolver"
   "skippy-protocol"
+  "skippy-events"
   "skippy-tokenizer"
   "skippy-coordinator"
   "skippy-topology"
   "skippy-cache"
   "skippy-metrics"
-  "openai-frontend"
+  "skippy-inference-api"
   "skippy-ffi"
   "skippy-model"
   "skippy-package-format"
   "skippy-runtime"
   "skippy-scheduler"
-  "skippy-server"
+  "skippy-api"
+  "skippy-serving"
+  "skippy-cli"
+  "skippy-commands"
+  "skippy-config"
   "metrics-server"
-  "skippy-model-package"
+  "skippy-package-builder"
   "skippy-quantize"
-  "model-package"
+  "skippy-model-package"
   "skippy-correctness"
-  "llama-quant-ffi"
   "llama-spec-bench"
   "skippy-bench"
-  "skippy-prompt"
   "xtask"
 )
 
@@ -164,7 +172,7 @@ main() {
     fi
 
     # UI changed detection
-    if [[ "$file" =~ ^(mesh/)?crates/mesh-llm-ui/ ]]; then
+    if [[ "$file" =~ ^mesh/crates/mesh-llm-ui/ ]]; then
       ui_changed=true
       FAIL_OPEN_UI_CHANGED=true
     fi
@@ -179,11 +187,11 @@ main() {
     # .github/actions/compute-changes as backend builds, not as all-Rust crate
     # test fanout. The upstream pin and the patch queue are the exception: they
     # can change which archives the native build emits, and the static link
-    # line in crates/skippy-ffi/build.rs is hand-maintained, so only the Rust
+    # line in skippy/crates/skippy-ffi/build.rs is hand-maintained, so only the Rust
     # test batches can prove the link still closes. Advancing the pin without
     # this escalation is how an undefined hash_sha256_hex reached main.
-    if [[ "$file" =~ ^(skippy/)?third_party/llama\.cpp/upstream\.txt$ ]] || \
-       [[ "$file" =~ ^(skippy/)?third_party/llama\.cpp/patches/ ]] || \
+    if [[ "$file" =~ ^(third_party/llama\.cpp/|skippy/llama_cpp/)upstream\.txt$ ]] || \
+       [[ "$file" =~ ^(third_party/llama\.cpp/|skippy/llama_cpp/)patches/ ]] || \
        [[ "$file" =~ ^Cargo\.lock$ ]] || \
        [[ "$file" =~ ^Cargo\.toml$ ]] || \
             [[ "$file" =~ ^(mesh/|skippy/)?scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|skippy-ci-smoke|ci-install-native-runtime|ci-prepare-native-runtime|ci-smoke-test|ci-compat-smoke|ci-client-auto-test|ci-two-node-client-serving-smoke|ci-two-node-split-smoke)\. ]] || \
@@ -250,15 +258,13 @@ EOF
 
   for file in "${changed_files[@]}"; do
     # Skip non-Rust files (docs, config, etc.). Relocated product crates under
-    # mesh/crates/ and skippy/crates/ must still reach Cargo ownership matching
-    # so a relocated crate change cannot skip its compilation and tests.
-    if [[ ! "$file" =~ ^crates/ ]] && [[ ! "$file" =~ ^tools/ ]] &&
-       [[ ! "$file" =~ ^mesh/crates/ ]] && [[ ! "$file" =~ ^skippy/crates/ ]]; then
+    # mesh/crates/ and skippy/crates/ must still reach Cargo ownership matching.
+    if [[ ! "$file" =~ ^(mesh/|skippy/)?crates/ ]] && [[ ! "$file" =~ ^tools/ ]]; then
       continue
     fi
 
     # Skip UI crate files (they don't affect Rust builds)
-    if [[ "$file" =~ ^(mesh/)?crates/mesh-llm-ui/ ]]; then
+    if [[ "$file" =~ ^mesh/crates/mesh-llm-ui/ ]]; then
       continue
     fi
 

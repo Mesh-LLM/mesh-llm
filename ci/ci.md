@@ -572,7 +572,8 @@ The five lane workflows organize the catalog without changing selected rows:
 runtime, composition and smoke dependency chain inside one run, so native
 runtime producers are not duplicated.
 
-- `ci-quality-slice.yml` — action/packaging/consistency contracts, format,
+- `ci-quality-slice.yml` — action/packaging/consistency contracts (including
+  product-crate README presence, manifest descriptions, and local Markdown links), format,
   unused-dependency check (cargo-machete), bounded Clippy batches and
   generated CLI inventory freshness.
 - `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, public
@@ -585,9 +586,11 @@ runtime producers are not duplicated.
   toolchain epoch. Batches that exercise Skippy correctness tests restore an
   exact revision- and SHA-256-pinned model cache, verify the file before use,
   and leave publication to one trusted-main batch. Related Skippy crate changes
-  on pull requests also compile one fully qualified runtime test, fail if that
+  on pull requests also compile the adapter-owned
+  `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime`
+  library test in `mesh-llm-skippy-adapter`, fail if that
   test is absent, then run its binary against an immutable SmolLM2 revision
-  through the complete Mesh config/resolver/server/native SafeTensors path
+  through the Mesh config/adapter/Skippy serving/native SafeTensors path
   through tokenizer, sampled prefill, and decode with every supported load-time
   quantization. Its compiler-cache evidence is observational: a restored seed
   is marked warm with a zero hit-rate floor, and a no-request result warns
@@ -597,8 +600,8 @@ runtime producers are not duplicated.
 - `ci-{linux,macos,windows}-runtime-slice.yml` — platform-pure native runtime
   producers selected by backend rows. The Linux CPU row additionally runs the
   native runtime-event gate
-  (`scripts/ci-runtime-events-native-gate.sh`) against the runtime it just
-  built and the `family-qwen3-dense` fixture from `skippy-ci-smoke.json`,
+  (`scripts/ci-runtime-events-native-gate.sh`) against its verified runtime
+  and the `family-qwen3-dense` fixture from `skippy-ci-smoke.json`,
   authorized for pull-request, main, and manual cadences, and uploads its
   evidence file. It resolves that evidence file to an absolute path before
   Cargo starts, so the crate-local test writer and the lane check read the same
@@ -606,8 +609,8 @@ runtime producers are not duplicated.
   so PRs using the protected main workflow consume the same fix. The separate
   family-certification cadence remains unchanged. That gate is
   env-gated so an ordinary `cargo test` never touches a native symbol, which
-  is why it needs a lane of its own; this is the only lane that already has a
-  freshly built native runtime. CPU only — the reporter is
+  is why it needs a lane of its own; this lane owns the native runtime. CPU
+  only — the reporter is
   backend-independent, so another backend would buy a duplicate of the same
   evidence.
 - `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
@@ -801,7 +804,7 @@ The protected workflow checks out candidate source before invoking the existing
 composition action; no catalog or workflow-definition change is needed.
 
 Non-Windows native runtime artifacts include the checksum-bound
-`skippy-model-package` tool under `tools/`. Split-serving smoke consumers use
+`skippy-package-builder` tool under `tools/`. Split-serving smoke consumers use
 that producer-owned tool to convert registry-pinned GGUF fixtures into verified
 package-v2 directories before starting either node; the smoke job never
 compiles a missing converter. Windows runtime producers omit this tool because
@@ -861,7 +864,8 @@ architecture and policy make eligible for Depot; the numerator is the subset
 that actually receives a `depot-*` label. Control-plane planning,
 runner/selector diagnostics and lane summaries are outside the denominator;
 credential-bearing smokes, `gpu-nvidia` hardware, and unsupported or Intel
-macOS rows without a Depot-equivalent remain documented provider exceptions
+macOS rows without a Depot-equivalent, plus the hosted Linux CPU runtime cache
+producer, remain documented provider exceptions
 and are reported separately. Therefore “100% Depot” means 100% of eligible
 ordinary executor rows, not that every check or job is hosted by Depot.
 
@@ -874,6 +878,27 @@ Depot build-tool remote cache remains disabled. This is a conscious iteration-
 speed tradeoff and the shared cache is treated as attacker-controlled input,
 not a correctness or authority boundary. Hosted release and cache-warmer
 workflows retain their existing GitHub cache behavior.
+
+The Linux CPU runtime producer uses the central selector's forced-hosted
+placement on PR and main, while accelerator runtime rows retain ordinary
+provider selection. It restores an exact packaged-runtime cache on those
+GitHub-hosted jobs. Its key includes the target, pinned toolchain/image
+epoch, Skippy tree and native build/package inputs; Mesh-only source changes
+do not invalidate it. A hit must pass the runtime manifest, archive checksum,
+library/dependency, backend and target checks before the runtime-event gate
+and run-scoped artifact upload. A miss builds through the same native runtime
+action. Only a successful trusted-main push on a GitHub-hosted runner saves
+the package; PRs are restore-only and Depot jobs neither restore nor publish
+this cache. The release producers remain independent of this CI cache.
+
+Skippy and MeshLLM are separate products in the shared source tree. Each
+platform host slice first builds one backend-neutral standalone Skippy CLI and
+uploads `ci-skippy-cli-<platform>-<architecture>` with a checksum, then builds
+the MeshLLM host. Native-runtime slices build or restore one Skippy llama.cpp
+runtime per selected backend; product composition and downstream tests consume
+the platform host/runtime graph, not per-test rebuilds. Release host jobs use
+the same Skippy CLI producer and publish separate versioned CLI archives while
+MeshLLM continues to package its own host, console and selected runtime.
 
 The admin-verified organization switches have a narrower meaning than that
 consumer policy: disabling automatic Depot Cache and Registry Actions
@@ -968,10 +993,10 @@ The implemented policy uses that isolation selectively:
 | Linux sccache compiler objects | Exact trusted 2 GiB seed plus job-local writes on GitHub-hosted jobs | Main Quality completion owns publication; PRs mutate only their ephemeral copy |
 | Linux Cargo `target` directories | Disabled for Clippy, Rust tests, host, and runtime | Avoids sharded multi-GiB generations and their restore/upload latency |
 | Skippy correctness model | Restore-only for PRs; one exhaustive trusted-main Rust-test batch publishes an exact file-SHA/cache-version key | Every consuming batch verifies the pinned Qwen file SHA-256; denied-cache runners download the immutable revision without publishing |
-| Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged |
+| Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged; the Linux static ABI key includes the prepared patched llama.cpp SHA, which the restore step also checks against the archive stamp |
 | macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
 | Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |
-| Website npm store | None -- the `website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
+| Website npm store | None -- the `mesh/website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
 | SDK Rust Cargo registry/target | `Swatinem/rust-cache` restores the exact `mesh-llm-sdk-rust-cargo-v1` identity (OS/arch, target, pinned image and toolchain epochs, debug/LLD recipe, Cargo/manifest/script inputs, and cache-version) and only saves on `main` | PRs restore the trusted main seed without publishing; a miss still rebuilds the SDK test graph |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
@@ -1207,7 +1232,7 @@ The handle rule exempts only the files that implement the console output
 facility, listed as `CONSOLE_OUTPUT_OWNERS` in the same module: the sink-aware
 writer and its pre-sink CLI fallback, the inline progress renderers, the TUI
 output manager / fd capture / terminal backend, the runtime tracing writer,
-skippy-server's stderr telemetry sink, and the CLI presentation surfaces.
+skippy-serving's stderr telemetry sink, and the CLI presentation surfaces.
 A capability probe such as `io::stdout().is_terminal()` reads nothing and is
 not a handle.
 
@@ -1261,10 +1286,14 @@ branch before the dependent relocation; the latter must use identical catalogs.
 Path consumers and Cargo discovery still require updates with the physical move.
 
 Renamed frontend, serving, model and GPU benchmark crates retain their direct
-semantic aliases. The current `skippy-model-package` name is reused by model
+semantic aliases. The current `skippy-package-builder` name is reused by model
 acquisition after extraction: retain its existing split-serving rule on main,
 with model-download ownership on the relocated path. That conservatively runs
 both domains until the later catalog cleanup; existing main routing is unchanged.
+
+The frontend's current Cargo package and direct CI owner are
+`skippy-inference-api`. The package translator still recognizes the historical
+`openai-frontend` predecessor for protected pre-extraction plans.
 
 ### Protected executor compatibility for the product extraction
 

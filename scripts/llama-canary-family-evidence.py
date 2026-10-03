@@ -22,7 +22,7 @@ _MEMORY_SPEC = importlib.util.spec_from_file_location(
 MEMORY = importlib.util.module_from_spec(_MEMORY_SPEC)
 _MEMORY_SPEC.loader.exec_module(MEMORY)
 
-BINS = ("skippy-correctness", "skippy-server", "skippy-model-package", "skippy-topology-plan")
+BINS = ("skippy-correctness", "skippy", "skippy-package-builder", "skippy-topology-plan")
 CORE = {"single-step", "chain", "state-handoff"}
 # The workload oracle closure ships in the handoff so family workers consume
 # the CPU candidate and native oracle executables without compiling. Paths are
@@ -38,7 +38,7 @@ WORKLOAD_ORACLE_CANONICAL = (
     "native/bin/llama-server",
     "native/bin/llama-completion",
     "native/bin/llama-tts",
-    "cargo/debug/skippy-server",
+    "cargo/debug/skippy",
 )
 
 
@@ -312,7 +312,7 @@ def packaged_workload_manifest(root: Path, closure: Path, candidate: str) -> byt
         payload["source"] = {"head": candidate, "worktree_sha256": hashlib.sha256(b"").hexdigest()}
     else:
         subprocess.run([sys.executable, str(root / "scripts/check-skippy-workload-candidate.py"),
-                        "--candidate-binary", str(closure / "cargo/debug/skippy-server"),
+                        "--candidate-binary", str(closure / "cargo/debug/skippy"),
                         "--native-build-dir", str(closure / "native"),
                         "--producer-manifest", str(manifest)], cwd=root, check=True, timeout=60)
     for record in payload["files"].values():
@@ -334,9 +334,9 @@ def pack(args) -> None:
         shutil.copy2(source, payload / name)
     tests = [row["executable"] for row in map(json.loads, args.test_build.read_text().splitlines())
              if row.get("reason") == "compiler-artifact" and row.get("executable")
-             and row.get("target", {}).get("name") == "skippy_server" and row.get("profile", {}).get("test")]
+             and row.get("target", {}).get("name") == "skippy_serving" and row.get("profile", {}).get("test")]
     if len(tests) != 1:
-        raise ValueError("expected exactly one prebuilt skippy-server library test executable")
+        raise ValueError("expected exactly one prebuilt skippy-serving library test executable")
     check_binary(Path(tests[0]))
     shutil.copy2(tests[0], payload / "skippy-mm-test")
     # Metal is embedded in the static native library. Reject nonrelocatable

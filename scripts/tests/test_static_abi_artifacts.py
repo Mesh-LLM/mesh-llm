@@ -45,11 +45,11 @@ def sha256(path: Path) -> str:
 
 class StaticAbiArtifactTests(unittest.TestCase):
     def test_native_sdk_reuse_is_verification_only(self) -> None:
-        build_script = (ROOT / "scripts" / "build-llama.sh").read_text(
+        build_script = (ROOT / "skippy" / "scripts" / "build-llama.sh").read_text(
             encoding="utf-8",
         )
         package_script = (
-            ROOT / "scripts" / "package-native-sdk.sh"
+            ROOT / "mesh" / "scripts" / "package-native-sdk.sh"
         ).read_text(encoding="utf-8")
 
         self.assertIn("--require-existing", build_script)
@@ -97,7 +97,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
         self.assertIn("MESH_LLM_AUTO_BUILD_LLAMA=0", package_script)
 
     def test_skippy_ffi_links_mtmd_hash_dependency_after_mtmd(self) -> None:
-        build_script = (ROOT / "crates" / "skippy-ffi" / "build.rs").read_text(
+        build_script = (ROOT / "skippy" / "crates" / "skippy-ffi" / "build.rs").read_text(
             encoding="utf-8",
         )
 
@@ -113,7 +113,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
 
     def test_skippy_ffi_uses_the_native_build_scripts_canonical_directory(self) -> None:
         """Rust FFI discovery must resolve the same backend and linkage directory as native preparation."""
-        ffi_build = (ROOT / "crates" / "skippy-ffi" / "build.rs").read_text(
+        ffi_build = (ROOT / "skippy" / "crates" / "skippy-ffi" / "build.rs").read_text(
             encoding="utf-8",
         )
 
@@ -131,7 +131,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             environment["LLAMA_STAGE_BACKEND"] = backend
             environment["LLAMA_STAGE_LINK_MODE"] = "static"
             result = subprocess.run(
-                ["bash", str(ROOT / "scripts" / "build-llama.sh"), "--print-build-dir"],
+                ["bash", str(ROOT / "skippy" / "scripts" / "build-llama.sh"), "--print-build-dir"],
                 cwd=ROOT,
                 env=environment,
                 check=True,
@@ -144,7 +144,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             self.assertIn(f"static-{backend}", expected.name)
 
     def test_dynamic_output_probe_is_pipefail_safe(self) -> None:
-        build_script = (ROOT / "scripts" / "build-llama.sh").read_text(
+        build_script = (ROOT / "skippy" / "scripts" / "build-llama.sh").read_text(
             encoding="utf-8",
         )
         function = build_script.split(
@@ -191,7 +191,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             "\n".join(
                 (
                     "stamp-version=3",
-                    "patched-sha=0123456789abcdef",
+                    "patched-sha=0123456789abcdef0123456789abcdef01234567",
                     "backend=cpu",
                     f"link-mode={link_mode}",
                     f"toolchain-epoch={toolchain_epoch}",
@@ -241,9 +241,18 @@ class StaticAbiArtifactTests(unittest.TestCase):
         self,
         download: Path,
         destination: Path,
+        *,
+        prepared_sha: str = "0123456789abcdef0123456789abcdef01234567",
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["MESH_LLM_LLAMA_TOOLCHAIN_EPOCH"] = TOOLCHAIN_EPOCH
+        prepared = download.parent / "prepared-llama"
+        prepared.mkdir(exist_ok=True)
+        (prepared / ".mesh-llm-patched-sha").write_text(
+            f"{prepared_sha}\n",
+            encoding="utf-8",
+        )
+        env["LLAMA_WORKDIR"] = str(prepared)
         return subprocess.run(
             [
                 bash_executable(),
@@ -328,6 +337,22 @@ class StaticAbiArtifactTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("target_triple mismatch", result.stderr)
+
+    def test_restore_rejects_stale_patched_llama(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            download = self.write_artifact(root)
+            destination = root / "restored" / "build-stage-abi-static"
+
+            result = self.restore(
+                download,
+                destination,
+                prepared_sha="abcdef0123456789abcdef0123456789abcdef01",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("patched SHA does not match", result.stderr)
+            self.assertFalse(destination.exists())
 
     def test_restore_rejects_non_static_build_stamp(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

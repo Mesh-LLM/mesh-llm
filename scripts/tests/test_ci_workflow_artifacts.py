@@ -132,13 +132,25 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         workflow = (WORKFLOWS / "ci-rust-tests-slice.yml").read_text()
         smoke = workflow[workflow.index("  safetensors_runtime_smoke:"):]
         test_name = (
-            "inference::skippy::resolver::tests::"
+            "config::hardware_translation_tests::"
             "safetensors_checkpoint_reaches_mesh_host_runtime"
         )
 
         self.assertIn('MESH_LLM_SKIP_UI: "1"', smoke)
         self.assertIn("uses: ./.github/actions/restore-sccache-seed", smoke)
         self.assertEqual(smoke.count("cargo test --locked"), 1)
+        self.assertIn('cargo test --locked -p "$test_crate"', smoke)
+        self.assertIn('.target.name == $target', smoke)
+        self.assertIn("contains(inputs.rust_tests_matrix, 'mesh-llm-skippy-adapter')", smoke)
+        self.assertNotIn("-p mesh-llm-host-runtime", smoke)
+        source = (
+            ROOT / "mesh/crates/mesh-llm-skippy-adapter/src/config/hardware_translation_tests.rs"
+        ).read_text()
+        self.assertRegex(
+            source,
+            r'#\[test\]\s*#\[ignore = [^\n]+\]\s*'
+            r'fn safetensors_checkpoint_reaches_mesh_host_runtime\(',
+        )
         self.assertIn("set -euo pipefail", smoke)
         self.assertIn("--lib --no-run --message-format=json", smoke)
         self.assertIn('if .reason == "compiler-message" then', smoke)
@@ -222,7 +234,7 @@ class CiWorkflowArtifactTests(unittest.TestCase):
 
         cuda_benchmark = (
             ROOT
-            / "crates/mesh-llm-gpu-bench/native/cuda/membench-fingerprint.cu"
+            / "skippy/crates/skippy-gpu-bench/native/cuda/membench-fingerprint.cu"
         ).read_text()
         self.assertIn('strcmp(argv[i], "--probe")', cuda_benchmark)
         self.assertIn("if (probeMode)", cuda_benchmark)

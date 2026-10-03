@@ -93,7 +93,7 @@ Version needs section '.gnu.version_r' contains 1 entry:
             ROOT / ".github" / "actions" / "prepare-host-input" / "action.yml"
         ).read_text(encoding="utf-8")
         runtime_verifier = (
-            ROOT / "scripts" / "verify-native-runtime-package.sh"
+            ROOT / "skippy" / "scripts" / "verify-native-runtime-package.sh"
         ).read_text(encoding="utf-8")
 
         self.assertIn("--max-glibc declared", unix_action)

@@ -41,7 +41,7 @@ target/release/skippy-quantize init-quant \
 
 target/release/skippy-quantize run-quant \
   --manifest /tmp/skippy-quantize.json \
-  --backend llama-api \
+  --backend skippy-abi \
   --max-memory 32G \
   --work-dir /tmp/skippy-quantize-work \
   --spool-dir /tmp/skippy-quantize-output \
@@ -69,7 +69,7 @@ target/release/skippy-quantize quant-job \
   --tensor-type-file /mnt/recipe/tensor-types.txt \
   --window-size 1 \
   --manifest /tmp/skippy-quantize.json \
-  --backend llama-api \
+  --backend skippy-abi \
   --max-memory 32G \
   --dry-run
 ```

@@ -50,22 +50,24 @@ LLVM.LLVM`.
 
 ## Build from source
 
-Build the normal debug product: a backend-neutral dynamic host, its adjacent
-locally packaged native runtime, and the UI:
+Build both debug products in order: patched llama.cpp and the standalone
+Skippy CLI with a locally packaged runtime, then the backend-neutral MeshLLM
+host and console:
 
 ```bash
-just build
+just
 ```
+
+This produces `target/debug/skippy`, `target/debug/native-runtimes/`, and
+`target/debug/mesh-llm`. Pass `--runtime-bundle target/debug/native-runtimes`
+when running Skippy; MeshLLM discovers the adjacent runtime itself.
+Use `just skippy` when working only on the complete standalone Skippy product,
+or `just mesh` to rebuild only MeshLLM. `just build` runs the same sequence
+as bare `just`; `just skippy-cli-build` builds only Skippy's CLI.
 
 Release and packaging use the same host/runtime boundary. The only lower-level
 static compilation primitive is runtime packaging; it never builds a host.
-Build a release host once:
-
-```bash
-just release-host-build
-```
-
-Then build the backend runtime you are changing:
+For explicit local stages, build the backend runtime you are changing first:
 
 ```bash
 just release-runtime-build cpu
@@ -83,6 +85,15 @@ CUDA major and architecture from the toolchain/environment.
 PATH=/opt/cuda/bin:$PATH just release-runtime-build cuda
 # or
 PATH=/usr/local/cuda/bin:$PATH just release-runtime-build cuda
+```
+
+Then build the standalone Skippy CLI, followed by the neutral MeshLLM host
+and console once. The same host can be composed with any compatible backend
+runtime:
+
+```bash
+just skippy-cli-release-build
+just release-host-build
 ```
 
 Exercise the exact release discovery boundary with an isolated cache:
@@ -106,7 +117,7 @@ just release-bundle v0.X.0 dist
 
 ## UI development workflow
 
-The React console and embedded asset crate live in `crates/mesh-llm-ui/`.
+The React console and embedded asset crate live in `mesh/crates/mesh-llm-ui/`.
 The host binary serves the built assets through the management API.
 
 Use this two-terminal flow for UI development.
@@ -212,7 +223,7 @@ fresh clone needs none of this.
 
 A bare Windows checkout cannot build the test targets of crates that pull in
 `skippy-ffi`'s static link mode (`mesh-llm-system` does, through
-`mesh-llm-runtime-install`, which depends on `skippy-ffi` with
+`skippy-runtime-install`, which depends on `skippy-ffi` with
 `default-features = false`), because `skippy-ffi/build.rs` then requires
 the llama.cpp ABI archives to be prepared
 (`automatic native preparation is not supported for Windows from build.rs yet`).
@@ -399,7 +410,7 @@ Intel GPU benchmark execution is not currently supported in standard `just build
 
 ## Protocol Backward Compatibility
 
-Any change to `crates/mesh-llm-host-runtime/src/protocol/` or `crates/mesh-client/src/protocol/` requires backward-compatibility tests before merging.
+Any change to `mesh/crates/mesh-llm-host-runtime/src/protocol/` or `mesh/crates/mesh-client/src/protocol/` requires backward-compatibility tests before merging.
 
 Embedded clients (iOS, macOS, Android) are permanently supported. Protocol changes that break embedded client compatibility are breaking changes.
 
@@ -410,4 +421,4 @@ cargo test -p mesh-llm --test protocol_compat_v0_client
 cargo test -p mesh-llm --test protocol_convert_matrix
 ```
 
-See [`docs/design/EMBEDDED_CLIENT_ADR.md`](docs/design/EMBEDDED_CLIENT_ADR.md) for the full compatibility policy and rationale.
+See [`mesh/docs/design/EMBEDDED_CLIENT_ADR.md`](mesh/docs/design/EMBEDDED_CLIENT_ADR.md) for the full compatibility policy and rationale.

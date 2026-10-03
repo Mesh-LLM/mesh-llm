@@ -1,0 +1,42 @@
+[package]
+name = "skippy-commands"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Shared Skippy model commands and standalone command output"
+readme = "README.md"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+
+[dependencies]
+clap.workspace = true
+chrono = "0.4"
+tabwriter = "1"
+crossterm = "0.29"
+ratatui = "0.30"
+skippy-hardware-profile = { path = "../skippy-hardware-profile", version = "0.77.0" }
+skippy-model-resolver = { path = "../skippy-model-resolver", version = "0.77.0" }
+anyhow.workspace = true
+hex = "0.4"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+rustyline = "18"
+uuid = { version = "1", features = ["v4"] }
+hf-hub = { package = "skippy-hf-hub", path = "../skippy-hf-hub", version = "0.77.0", default-features = false }
+futures = "0.3"
+skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.77.0" }
+skippy-model-hf = { path = "../skippy-model-hf", version = "0.77.0" }
+skippy-model-package = { path = "../skippy-model-package", version = "0.77.0" }
+skippy-model-ref = { path = "../skippy-model-ref", version = "0.77.0" }
+skippy-package-format = { path = "../skippy-package-format", version = "0.77.0" }
+skippy-api = { path = "../skippy-api", version = "0.77.0" }
+skippy-events = { path = "../skippy-events", version = "0.77.0" }
+skippy-protocol = { path = "../skippy-protocol", version = "0.77.0" }
+skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.77.0" }
+skippy-topology = { path = "../skippy-topology", version = "0.77.0" }
+tokio = { version = "1", features = ["rt", "time", "macros", "fs"] }
+
+[dev-dependencies]
+serial_test = "4"
+tempfile = "3"

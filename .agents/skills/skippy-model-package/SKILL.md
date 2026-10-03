@@ -45,7 +45,7 @@ For a published layer package, prefer package-local diagnostics before a live
 split smoke:
 
 ```bash
-cargo test -p skippy-model-package --bin skippy-model-package
+cargo test -p skippy-package-builder --bin skippy-model-package
 skippy-model-package preflight <package-dir> --stages 2
 ```
 

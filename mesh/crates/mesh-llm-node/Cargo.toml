@@ -1,0 +1,24 @@
+[package]
+name = "mesh-llm-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Embeddable Mesh LLM node primitives for model management and serving"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+
+[features]
+default = []
+host = []
+
+[dependencies]
+anyhow.workspace = true
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.77.0" }
+skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.77.0" }
+skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.77.0" }
+skippy-model-ref = { path = "../../../skippy/crates/skippy-model-ref", version = "0.77.0" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

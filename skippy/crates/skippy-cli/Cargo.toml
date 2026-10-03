@@ -1,0 +1,41 @@
+[package]
+name = "skippy-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Standalone Skippy model serving and management CLI"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+
+[[bin]]
+name = "skippy"
+path = "src/main.rs"
+
+[features]
+default = []
+dynamic-native-runtime = ["skippy-serving/dynamic-native-runtime", "skippy-api/dynamic-native-runtime"]
+
+[dependencies]
+anyhow.workspace = true
+dirs = "6.0.0"
+clap.workspace = true
+skippy-api = { path = "../skippy-api", version = "0.77.0" }
+skippy-cache = { path = "../skippy-cache", version = "0.77.0" }
+skippy-commands = { path = "../skippy-commands", version = "0.77.0" }
+skippy-model-hf = { path = "../skippy-model-hf", version = "0.77.0" }
+skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.77.0" }
+skippy-config = { path = "../skippy-config", version = "0.77.0" }
+skippy-coordinator = { path = "../skippy-coordinator", version = "0.77.0" }
+skippy-events = { path = "../skippy-events", version = "0.77.0" }
+skippy-protocol = { path = "../skippy-protocol", version = "0.77.0" }
+skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.77.0" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.77.0" }
+skippy-serving = { path = "../skippy-serving", version = "0.77.0" }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.77.0" }
+serde_json.workspace = true
+tempfile = "3"

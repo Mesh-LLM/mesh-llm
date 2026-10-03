@@ -20,7 +20,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 ACTIONS = ROOT / ".github" / "actions"
 COMPOSE_SCRIPT = ROOT / "scripts" / "ci-compose-product-input.sh"
-RELEASE_FOOTER_MANIFEST = ROOT / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
+RELEASE_FOOTER_MANIFEST = ROOT / "mesh" / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
 XTASK_MANIFEST = ROOT / "tools" / "xtask" / "Cargo.toml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
@@ -33,6 +33,45 @@ class CiArtifactActionTests(unittest.TestCase):
         return self.read_action("compute-changes") + "\n" + (
             ACTIONS / "compute-changes" / "derive-outputs.sh"
         ).read_text(encoding="utf-8")
+
+    def test_skippy_cli_is_one_separate_platform_input_before_mesh_host(self) -> None:
+        action = self.read_action("prepare-skippy-cli-input")
+        self.assertIn("just \"$recipe\"", action)
+        self.assertIn("& just $recipe", action)
+        self.assertIn("skippy.sha256", action)
+        self.assertIn("skippy.exe.sha256", action)
+        for platform in ("linux", "macos", "windows"):
+            workflow = (ROOT / ".github" / "workflows" / f"ci-{platform}-host-slice.yml").read_text(encoding="utf-8")
+            self.assertLess(
+                workflow.index("Prepare standalone Skippy CLI"),
+                workflow.index("Prepare immutable"),
+            )
+            self.assertIn(f"ci-skippy-cli-{platform}-", workflow)
+
+    def test_skippy_release_cli_archive_is_separate_and_checksum_bound(self) -> None:
+        script = ROOT / "skippy" / "scripts" / "package-cli-release.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cli = root / "cli"
+            cli.mkdir()
+            (cli / "skippy").write_bytes(b"skippy-test-cli")
+            checksum = hashlib.sha256(b"skippy-test-cli").hexdigest()
+            (cli / "skippy.sha256").write_text(f"{checksum}  skippy\n", encoding="utf-8")
+            output = root / "release"
+            subprocess.run(
+                ["bash", str(script), "v1.2.3", "linux-x86_64", str(cli), str(output)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            archive = output / "skippy-v1.2.3-linux-x86_64-cli.tar.gz"
+            self.assertTrue(archive.is_file())
+            self.assertIn(hashlib.sha256(archive.read_bytes()).hexdigest(), (output / f"{archive.name}.sha256").read_text(encoding="utf-8"))
+            with tarfile.open(archive, "r:gz") as package:
+                self.assertEqual(set(package.getnames()), {"skippy", "skippy.sha256"})
+        release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(release.count("uses: ./.github/actions/prepare-skippy-cli-input"), 3)
+        self.assertIn("name: release-skippy-cli-windows-x86_64", release)
 
     def test_external_actions_have_sha_and_release_provenance(self) -> None:
         action_files = sorted(ACTIONS.glob("*/action.yml"))
@@ -175,7 +214,11 @@ class CiArtifactActionTests(unittest.TestCase):
         host = host_input / "mesh-llm"
         host.write_text(
             "#!/usr/bin/env bash\n"
-            f"printf 'mesh-llm {host_version}\\n'\n",
+            'if [[ "$*" == *"--print-build-contract"* ]]; then\n'
+            f"printf '%s\\n' '{json.dumps({'schema_version': 1, 'product_version': host_version.split('+')[0], 'runtime_release': '1.2.3', 'skippy_abi': '1.0.0'})}'\n"
+            'else\n'
+            f"printf 'mesh-llm {host_version}\\n'\n"
+            'fi\n',
             encoding="utf-8",
         )
         host.chmod(0o755)
@@ -201,9 +244,10 @@ class CiArtifactActionTests(unittest.TestCase):
         library_digest = hashlib.sha256(library.read_bytes()).hexdigest()
         tool_digest = hashlib.sha256(tool.read_bytes()).hexdigest()
         manifest = {
+            "schema_version": 2,
             "runtime": {
                 "id": runtime_id,
-                "mesh_version": "1.2.3",
+                "release_version": "1.2.3",
                 "skippy_abi": "1.0.0",
                 "platform": {
                     "os": "macos",
@@ -678,10 +722,10 @@ class CiArtifactActionTests(unittest.TestCase):
             "'.github/actions/resolve-native-toolchain-epoch/action.yml', "
             "'.github/actions/prepare-native-runtime-input/action.yml', "
             "'.github/actions/setup-windows-rocm-sdk/action.yml', "
-            "'scripts/build-llama.sh', 'scripts/prepare-llama.sh', "
-            "'scripts/package-native-runtime.sh', "
-            "'third_party/llama.cpp/upstream.txt', "
-            "'third_party/llama.cpp/patches/**', "
+            "'scripts/build-llama.sh', 'skippy/scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'skippy/scripts/prepare-llama.sh', "
+            "'scripts/package-native-runtime.sh', 'skippy/scripts/package-native-runtime.sh', "
+            "'skippy/llama_cpp/upstream.txt', "
+            "'skippy/llama_cpp/patches/**', "
             "'.github/cache-version.txt') }}"
         )
         self.assertIn(expected_hash, action)
@@ -1026,7 +1070,7 @@ class CiArtifactActionTests(unittest.TestCase):
         for recipe in (
             "release-host-build",
             "release-runtime-build",
-            "release-host-build-windows",
+            "skippy-cli-release-build",
         ):
             with self.subTest(recipe=recipe):
                 self.assertIn(recipe, recipe_names)
@@ -1299,9 +1343,11 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("CACHE_NAMESPACE: mesh-llm", producer)
         self.assertIn(
             "inputs.backend, inputs.target, "
-            "steps.native_toolchain.outputs.epoch, hashFiles(",
+            "steps.native_toolchain.outputs.epoch, "
+            "steps.patched_llama.outputs.sha, hashFiles(",
             producer,
         )
+        self.assertIn("patched SHA does not match prepared llama.cpp", restore_script)
         self.assertIn("'Justfile', 'just/**'", producer)
         self.assertIn(
             "uses: ./.github/actions/resolve-native-toolchain-epoch",
@@ -1720,10 +1766,10 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("type: string", producer)
         self.assertIn("host-only|full", producer)
         self.assertIn(
-            "sdk/swift/scripts/build-host-macos-xcframework.sh",
+            "mesh/sdk/swift/scripts/build-host-macos-xcframework.sh",
             producer,
         )
-        self.assertIn("sdk/swift/scripts/build-xcframework.sh", producer)
+        self.assertIn("mesh/sdk/swift/scripts/build-xcframework.sh", producer)
         self.assertIn("max-parallel: ${{ inputs.max_parallel }}", producer)
         self.assertEqual(producer.count("- aarch64-apple-ios\n"), 1)
         self.assertIn(
@@ -1754,7 +1800,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn(
             "scripts/verify-swift-xcframework.py",
             (
-                ROOT / "scripts" / "verify-swift-release-artifact.sh"
+                ROOT / "mesh" / "scripts" / "verify-swift-release-artifact.sh"
             ).read_text(encoding="utf-8"),
         )
         self.assertIn("persist-credentials: false", producer)
@@ -1913,7 +1959,7 @@ class CiArtifactActionTests(unittest.TestCase):
             ROOT / ".github" / "workflows" / "swift-sdk-artifact.yml"
         ).read_text(encoding="utf-8")
         host_builder = (
-            ROOT / "sdk" / "swift" / "scripts"
+            ROOT / "mesh" / "sdk" / "swift" / "scripts"
             / "build-host-macos-xcframework.sh"
         ).read_text(encoding="utf-8")
 
@@ -2414,7 +2460,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 if "pr_approved_ref:" in block:
                     approved_policy_calls += 1
                     self.assertIn("pr_approved_sha:", block)
-        self.assertEqual(selector_calls, 19)
+        self.assertEqual(selector_calls, 20)
         self.assertEqual(approved_policy_calls, 18)
 
         cases = (
@@ -3169,6 +3215,16 @@ class CiArtifactActionTests(unittest.TestCase):
             workflow = (
                 ROOT / ".github" / "workflows" / filename
             ).read_text(encoding="utf-8")
+            if filename == "ci-linux-runtime-slice.yml":
+                self.assertIn(
+                    "allow_depot_remote_cache: ${{ matrix.runtime.backend != 'cpu' && needs.runner_policy.outputs.allow_depot_remote_cache }}",
+                    workflow,
+                )
+                self.assertIn(
+                    "allow_native_github_cache: ${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.allow_native_github_cache_cpu || needs.runner_policy.outputs.allow_native_github_cache }}",
+                    workflow,
+                )
+                continue
             self.assertIn(
                 "allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}",
                 workflow,

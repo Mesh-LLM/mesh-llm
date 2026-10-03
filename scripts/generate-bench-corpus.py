@@ -16,7 +16,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = ROOT / "crates/skippy-bench/corpora/bench_corpus_sources.json"
+DEFAULT_CONFIG = ROOT / "skippy/crates/skippy-bench/corpora/bench_corpus_sources.json"
 DEFAULT_OUT_ROOT = ROOT / "target/bench-corpora"
 DEFAULT_HF_DIR = ROOT / "target/hf-datasets"
 

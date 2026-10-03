@@ -21,8 +21,8 @@ Related skills/docs:
 - `deploy-windows` — Windows nodes
 - `mesh-join` — creating/joining private and public meshes (tokens, NAT, multi-node)
 - `connect-agents` — pointing Goose/Claude Code/OpenCode/Pi at a running mesh
-- `docs/USAGE.md` — install details, service mode, model storage
-- `docs/CLI.md` — full command and model-ref reference
+- `mesh/docs/USAGE.md` — install details, service mode, model storage
+- `mesh/docs/CLI.md` — full command and model-ref reference
 
 ## The one rule that matters most
 

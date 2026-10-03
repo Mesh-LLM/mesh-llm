@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def shell_function(script: str, name: str) -> str:
     """Load one top-level function verbatim, excluding the script's entrypoint."""
-    source = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+    source = (ROOT / "skippy" / "scripts" / script).read_text(encoding="utf-8")
     start = source.index(f"{name}() {{\n")
     end = source.index("\n}\n", start) + 3
     return source[start:end]
