@@ -190,7 +190,7 @@ class CleanupTests(unittest.TestCase):
                 for status in ('success()', 'failure()', 'cancelled()'):
                     self.assertIn(status, step.get('if', ''))
                 self.assertEqual(step['timeout-minutes'], 5)
-        self.assertEqual(len(found), 10)
+        self.assertEqual(len(found), 11)
 
     def test_replay_builds_use_the_job_owned_worktree_root(self):
         spec = importlib.util.spec_from_file_location('replay_params', ROOT / 'scripts/agentic-replay-params.py')
