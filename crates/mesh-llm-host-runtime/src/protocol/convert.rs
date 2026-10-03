@@ -1354,6 +1354,7 @@ fn legacy_proto_config_to_mesh(
             enabled: p.enabled,
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            allow_peer_blocks: None,
             command: p.command.clone(),
             args: p.args.clone(),
             url: None,

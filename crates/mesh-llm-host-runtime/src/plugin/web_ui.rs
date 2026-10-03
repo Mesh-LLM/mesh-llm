@@ -17,6 +17,8 @@ pub struct PluginWebUiState {
     pub pages: Vec<PluginWebUiPageOverview>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub config_sections: Vec<PluginWebUiConfigSectionOverview>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub contributions: Vec<PluginWebUiContributionOverview>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_base_url: Option<String>,
     pub primary_tab_enabled: bool,
@@ -39,6 +41,8 @@ pub struct PluginWebUiManifestOverview {
     pub pages: Vec<PluginWebUiPageOverview>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub config_sections: Vec<PluginWebUiConfigSectionOverview>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub contributions: Vec<PluginWebUiContributionOverview>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -51,6 +55,9 @@ pub struct PluginWebUiPageOverview {
     pub bundle_id: String,
     pub entry_script: String,
     pub placement: PluginWebUiPagePlacement,
+    /// `Some(false)`: the page asked the host not to draw its page header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_header: Option<bool>,
 }
 
 /// The page's manifest-declared placement request. This is a request, not
@@ -90,6 +97,15 @@ pub struct PluginWebUiConfigSectionOverview {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_tab: Option<String>,
     pub bundle_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PluginWebUiContributionOverview {
+    pub id: String,
+    pub slot: String,
+    pub label: String,
+    pub bundle_id: String,
+    pub entry_script: String,
 }
 
 pub(crate) struct PluginWebUiStateInput<'a> {
@@ -218,6 +234,7 @@ fn plugin_web_ui_preference(
 struct PluginWebUiDeclaration {
     pages: Vec<PluginWebUiPageOverview>,
     config_sections: Vec<PluginWebUiConfigSectionOverview>,
+    contributions: Vec<PluginWebUiContributionOverview>,
     asset_base_url: Option<String>,
     invalid_reason: Option<String>,
 }
@@ -238,6 +255,7 @@ impl PluginWebUiDeclaration {
             unavailable_reason,
             pages: self.pages,
             config_sections: self.config_sections,
+            contributions: self.contributions,
             asset_base_url: self.asset_base_url,
             // Overwritten by `derive_plugin_web_ui_state` right after this call returns.
             primary_tab_enabled: false,
@@ -294,6 +312,11 @@ fn plugin_web_ui_declaration_from_installed(
             .iter()
             .map(plugin_web_ui_config_section_from_installed)
             .collect(),
+        contributions: web_ui
+            .contributions
+            .iter()
+            .map(plugin_web_ui_contribution_from_installed)
+            .collect(),
         asset_base_url: asset_root.map(|_| format!("/api/plugins/{plugin_name}/web-ui/assets/")),
         invalid_reason,
     }
@@ -312,6 +335,11 @@ fn plugin_web_ui_declaration_from_proto(
             .config_sections
             .iter()
             .map(plugin_web_ui_config_section_from_proto)
+            .collect(),
+        contributions: web_ui
+            .contributions
+            .iter()
+            .map(plugin_web_ui_contribution_from_proto)
             .collect(),
         asset_base_url: None,
         invalid_reason: Some("web UI bundle metadata is unavailable".into()),
@@ -332,6 +360,11 @@ pub(super) fn plugin_web_ui_manifest_overview_from_proto(
             .iter()
             .map(plugin_web_ui_config_section_from_proto)
             .collect(),
+        contributions: web_ui
+            .contributions
+            .iter()
+            .map(plugin_web_ui_contribution_from_proto)
+            .collect(),
     })
 }
 
@@ -347,6 +380,7 @@ fn plugin_web_ui_page_from_proto(page: &proto::PluginWebUiPageManifest) -> Plugi
             Ok(proto::PluginWebUiPagePlacement::Primary) => PluginWebUiPagePlacement::Primary,
             _ => PluginWebUiPagePlacement::Auxiliary,
         },
+        host_header: page.host_header,
     }
 }
 
@@ -362,6 +396,18 @@ fn plugin_web_ui_config_section_from_proto(
     }
 }
 
+fn plugin_web_ui_contribution_from_proto(
+    contribution: &proto::PluginWebUiContributionManifest,
+) -> PluginWebUiContributionOverview {
+    PluginWebUiContributionOverview {
+        id: contribution.id.clone(),
+        slot: contribution.slot.clone(),
+        label: contribution.label.clone(),
+        bundle_id: contribution.bundle_id.clone(),
+        entry_script: contribution.entry_script.clone(),
+    }
+}
+
 fn plugin_web_ui_page_from_installed(
     page: &mesh_llm_plugin_manager::store::InstalledPluginWebUiPageMetadata,
 ) -> PluginWebUiPageOverview {
@@ -373,6 +419,7 @@ fn plugin_web_ui_page_from_installed(
         bundle_id: page.bundle_id.clone(),
         entry_script: page.entry_script.clone(),
         placement: page.placement.into(),
+        host_header: page.host_header,
     }
 }
 
@@ -385,6 +432,18 @@ fn plugin_web_ui_config_section_from_installed(
         entry_script: section.entry_script.clone(),
         parent_tab: section.parent_tab.clone(),
         bundle_id: section.bundle_id.clone(),
+    }
+}
+
+fn plugin_web_ui_contribution_from_installed(
+    contribution: &mesh_llm_plugin_manager::store::InstalledPluginWebUiContributionMetadata,
+) -> PluginWebUiContributionOverview {
+    PluginWebUiContributionOverview {
+        id: contribution.id.clone(),
+        slot: contribution.slot.clone(),
+        label: contribution.label.clone(),
+        bundle_id: contribution.bundle_id.clone(),
+        entry_script: contribution.entry_script.clone(),
     }
 }
 
@@ -418,6 +477,7 @@ pub(super) fn installed_metadata_with_web_ui(
                             bundle_id: "main".into(),
                             entry_script: "assets/app.js".into(),
                             placement: mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement::Auxiliary,
+                            host_header: None,
                         },
                     ],
                     config_sections: vec![
@@ -427,6 +487,15 @@ pub(super) fn installed_metadata_with_web_ui(
                             entry_script: "assets/settings.js".into(),
                             parent_tab: Some("integrations".into()),
                             bundle_id: "main".into(),
+                        },
+                    ],
+                    contributions: vec![
+                        mesh_llm_plugin_manager::store::InstalledPluginWebUiContributionMetadata {
+                            id: "note".into(),
+                            slot: "chat_message".into(),
+                            label: "Note".into(),
+                            bundle_id: "main".into(),
+                            entry_script: "assets/note.js".into(),
                         },
                     ],
                     bundles: vec![
@@ -488,6 +557,8 @@ mod tests {
         );
         assert_eq!(state.pages.len(), 1);
         assert_eq!(state.config_sections.len(), 1);
+        assert_eq!(state.contributions.len(), 1);
+        assert_eq!(state.contributions[0].slot, "chat_message");
     }
 
     #[test]

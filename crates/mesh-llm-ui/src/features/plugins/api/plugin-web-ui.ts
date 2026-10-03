@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   PluginSummaryRaw,
   PluginWebUiConfigMutationRequest,
+  PluginWebUiContributionRaw,
+  PluginWebUiContributionSlot,
   PluginWebUiPageRaw,
   PluginWebUiStateRaw,
   PluginWebUiVisibleConfigRaw
@@ -20,8 +22,15 @@ export type PluginWebUiEntry = {
   readonly unavailableReason?: string
   readonly pages: readonly PluginWebUiPageRaw[]
   readonly configSections: NonNullable<PluginWebUiStateRaw['config_sections']>
+  readonly contributions: readonly PluginWebUiContributionRaw[]
   readonly assetBaseUrl?: string
   readonly primaryTabEnabled: boolean
+}
+
+export type PluginWebUiContributionItem = {
+  readonly pluginName: string
+  readonly webUi: PluginWebUiStateRaw
+  readonly contribution: PluginWebUiContributionRaw
 }
 
 export type PluginWebUiNavItem = {
@@ -147,6 +156,7 @@ export function adaptPluginSummaryToWebUiEntry(summary: PluginSummaryRaw): Plugi
     unavailableReason: summary.web_ui.unavailable_reason,
     pages: summary.web_ui.pages ?? [],
     configSections: summary.web_ui.config_sections ?? [],
+    contributions: summary.web_ui.contributions ?? [],
     assetBaseUrl: summary.web_ui.asset_base_url,
     primaryTabEnabled: summary.web_ui.primary_tab_enabled
   }
@@ -212,6 +222,21 @@ export function partitionPluginWebUiNavItems(entries: readonly PluginWebUiEntry[
   }
 
   return { primary, auxiliary }
+}
+
+/** The contributions to mount in one slot, from plugins whose web UI is
+ *  ready (enabled, running, bundle available). */
+export function buildPluginWebUiContributionItems(
+  summaries: readonly PluginSummaryRaw[],
+  slot: PluginWebUiContributionSlot
+): readonly PluginWebUiContributionItem[] {
+  return summaries.flatMap((summary) => {
+    const webUi = summary.web_ui
+    if (webUi.state !== 'ready' || !webUi.declared || !webUi.enabled || !webUi.available) return []
+    return (webUi.contributions ?? [])
+      .filter((contribution) => contribution.slot === slot)
+      .map((contribution) => ({ pluginName: summary.name, webUi, contribution }))
+  })
 }
 
 export function usePluginSummariesQuery(options?: { enabled?: boolean }) {

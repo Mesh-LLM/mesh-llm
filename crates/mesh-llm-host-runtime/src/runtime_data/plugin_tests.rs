@@ -87,6 +87,7 @@ fn publish_alpha_plugin_reports(collector: &RuntimeDataCollector) {
             unavailable_reason: None,
             pages: Vec::new(),
             config_sections: Vec::new(),
+            contributions: Vec::new(),
             asset_base_url: Some("/api/plugins/alpha/web-ui/assets/".into()),
             primary_tab_enabled: false,
         },

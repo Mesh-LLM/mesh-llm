@@ -12,11 +12,12 @@ process needs to behave like it was launched by an operator in a terminal, be
 observed after launch, expose readiness, keep running beyond one command, or be
 stopped cleanly later.
 
-## macOS Local Network privacy gate
+## macOS Local Network privacy
 
-Before using a remote macOS node for LAN, mDNS, or split-inference diagnosis,
-complete the `deploy-macos` skill's Local Network privacy preflight for the exact
-signed app/binary identity and launch context on every Mac. A raw UDP probe, a
+If a macOS same-LAN join or split fails, or remote macOS nodes on the same LAN
+connect only via relay, check the `deploy-macos` skill's Local Network
+troubleshooting section before diagnosing iroh (not a routine preflight;
+SSH/shell launches normally just work). A raw UDP probe, a
 LAN address in an invite, or relay connectivity is not proof that the deployed
 process was authorized. Do not collect performance data until both nodes report
 the intended LAN peer as an iroh direct path.

@@ -6,10 +6,10 @@ This is the checked-in implementation. Normative rules live in
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-wallet` and `mesh-wallet-lexe` alongside `mesh-llm-payments`;
+`mesh-llm-wallet` alongside `mesh-llm-payments`;
 `just ci-crate-lists` checks it against workspace membership. The publish
 chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
-`mesh-wallet-lexe` and `mesh-llm-payments`, including optional dependencies.
+`mesh-llm-payments`, including optional dependencies.
 
 ## Entry points
 
@@ -616,12 +616,18 @@ runtime producers are not duplicated.
   macOS Metal, and
   Windows CPU. Each row consumes its composed backend product and selects the
   exact native device name, so an unavailable backend fails at model load.
-  The Vulkan Laya row requires `MESH_VULKAN_INFERENCE_RUNNER_ENABLED=true`
-  after `verify-vulkan-device` passes in a live runner pod. It enables the
-  explicit Vulkan profile when that runner lacks `vulkaninfo`; model startup
-  and golden reads still exercise the device. The source-checked Laya action
-  repeats the exact variable gate so an older protected workflow cannot run
-  the smoke on an uncertified PR runner before the workflow gate reaches main.
+  The Vulkan Laya row requires `MESH_VULKAN_INFERENCE_RUNNER_ENABLED` to be
+  exactly `true` (lowercase) after `verify-vulkan-device` passes in a live
+  runner pod; the ROCm row requires the same exact
+  `MESH_ROCM_INFERENCE_RUNNER_ENABLED` gate before it uses the
+  repository-scoped `gpu-amd` role. A GitHub Actions expression cannot compare
+  strings case-sensitively, so the slice validates both raw values in a shell
+  step and both rows depend on the normalized result instead of comparing the
+  variable directly. The Vulkan row enables the explicit Vulkan profile when
+  its runner lacks `vulkaninfo`; model startup and golden reads still exercise
+  the device. The source-checked Laya action repeats the gate from that same
+  normalized input so an older protected workflow cannot run the smoke on an
+  uncertified PR runner before the workflow gate reaches main.
   Windows product restore passes LF-terminated manifest fields to Git Bash so
   its runtime path does not retain Python's Windows carriage return. The Laya
   parity driver decodes golden fixtures as UTF-8 on Windows, and the smoke

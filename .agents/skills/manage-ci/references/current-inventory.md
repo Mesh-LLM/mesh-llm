@@ -5,10 +5,10 @@ It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-wallet` and `mesh-wallet-lexe` alongside `mesh-llm-payments`;
+`mesh-llm-wallet` alongside `mesh-llm-payments`;
 `just ci-crate-lists` checks it against workspace membership. The publish
 chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
-`mesh-wallet-lexe` and `mesh-llm-payments`, including optional dependencies.
+`mesh-llm-payments`, including optional dependencies.
 
 The protected catalogs include `platform-windows-cfg`: ownership of any crate
 it lists selects `platform-checks` and its existing `windows-unit` row, and
@@ -818,12 +818,14 @@ rows remain exceptions. The documented `gpu-nvidia` ephemeral scale set is
 the sole currently verified uncredentialed, hardware-qualified same-repository
 PR exception. The typed Vulkan job remains skipped until
 `verify-vulkan-device` passes in a live pod and
-`MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly `true`. The typed Vulkan job
-and source-checked Laya action both enforce that gate, including when an older
-protected workflow definition still admits the job. The typed ROCm job remains
-skipped unless
-`MESH_ROCM_INFERENCE_RUNNER_ENABLED` explicitly enables the repository-scoped
-`gpu-amd` role.
+`MESH_VULKAN_INFERENCE_RUNNER_ENABLED` is exactly `true` (lowercase); the typed
+ROCm job remains skipped unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly
+`true`, which enables the repository-scoped `gpu-amd` role. Both gates are
+matched case-sensitively, because a GitHub Actions `==` comparison ignores
+case: the slice validates the raw values in a shell step and both rows depend
+on the normalized result rather than comparing the variable directly. The
+source-checked Laya action repeats the gate from that input, including when an
+older protected workflow definition still admits the job.
 
 The permanent Depot PR gate is documented in `ci/DEPOT_MIGRATION.md`; the
 accepted temporary findings and risks are in
@@ -913,8 +915,9 @@ prove the absence of ambient Depot/WebDAV authority, so the runtime sentinel
 has recorded unsafe repository-scoped cross-trust authority and must be
 redesigned and repeated successfully; no-secret/no-token, fork and provider-
 parity canaries remain required. Other variables include `CUDA_VERSION`,
-`VULKAN_SDK_VERSION`, smoke configuration variables, and release/deployment
-variables. Secret values never belong in this inventory;
+`VULKAN_SDK_VERSION`, `MESH_ROCM_INFERENCE_RUNNER_ENABLED`,
+`MESH_VULKAN_INFERENCE_RUNNER_ENABLED`, smoke configuration variables, and
+release/deployment variables. Secret values never belong in this inventory;
 known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`
 and deployment tokens.
 

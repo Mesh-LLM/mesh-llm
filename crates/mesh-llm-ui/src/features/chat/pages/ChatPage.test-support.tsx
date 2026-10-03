@@ -68,6 +68,8 @@ export function installObjectUrlShim() {
   })
 }
 
+type SendOptions = { body?: Record<string, unknown> }
+
 const chatMock = vi.hoisted(() => {
   function createUiMessage(id: string, role: 'user' | 'assistant', body: string) {
     return {
@@ -106,6 +108,7 @@ const chatMock = vi.hoisted(() => {
       content: string | MultimodalContent
       model: string
       systemPrompt: string
+      target?: unknown
     }>,
     reloadCalls: [] as string[],
     hookConversationIds: [] as string[],
@@ -279,8 +282,8 @@ vi.mock('@/features/chat/api/use-chat', async () => {
 
         return {
           messages,
-          sendMessage: vi.fn(async (content: string | MultimodalContent) => {
-            chatMock.sendCalls.push({ conversationId, content, model, systemPrompt })
+          sendMessage: vi.fn(async (content: string | MultimodalContent, options?: SendOptions) => {
+            chatMock.sendCalls.push({ conversationId, content, model, systemPrompt, target: options?.body?.target })
             const body =
               typeof content === 'string'
                 ? content

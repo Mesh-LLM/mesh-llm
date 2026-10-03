@@ -296,7 +296,7 @@ async fn post_blobstore_tool(addr: std::net::SocketAddr) -> String {
 
 #[tokio::test]
 async fn test_api_plugin_tools_rejects_unpublished_operation() {
-    // Capability-only plugins (wallet-lexe, blobstore) publish no operations, so
+    // Capability-only plugins (blobstore, wallets) publish no operations, so
     // the generic tools route must not reach them — e.g. `wallet_pay` would
     // otherwise bypass the /api/wallet ledger.
     let (plugin_manager, blobstore_root) = build_blobstore_api_plugin_manager().await;

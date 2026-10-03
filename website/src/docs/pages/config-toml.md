@@ -37,11 +37,11 @@ Network identity and binding.
 ```toml
 [owner_control]
 bind           = "[::]:7447"   # Mesh owner-control listen address
-advertise_addr = ""             # Override the address advertised to peers
+# advertise_addr = "203.0.113.10:7447"  # Override the address advertised to peers
 ```
 
 - `bind` — address and port for the owner-control endpoint. The inference API remains on `9337` unless changed by the runtime surface.
-- `advertise_addr` — address and port announced to peers. Auto-detected when empty; set it explicitly for NAT or Docker setups.
+- `advertise_addr` — address and port announced to peers. Auto-detected when unset; set it explicitly for NAT or Docker setups, with the same port as `bind`.
 
 ## Payments
 
@@ -54,8 +54,7 @@ wallet = "wallet-nwc" # Plugin name of the wallet to use
 ```
 
 - `wallet` — plugin name of the `wallet.v1` provider. When unset, mesh-llm uses
-  the only running wallet plugin, preferring any other over the built-in
-  `wallet-lexe`. Once a wallet has been used, the payment ledger is pinned to it;
+  the only running wallet plugin (for example the external `lexe-wallet`). Once a wallet has been used, the payment ledger is pinned to it;
   switching requires `mesh-llm wallet unpin` while the node is stopped.
 
 ## Telemetry

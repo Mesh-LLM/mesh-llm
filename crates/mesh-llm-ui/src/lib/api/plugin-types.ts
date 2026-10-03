@@ -10,6 +10,8 @@ export type PluginWebUiPageRaw = {
   readonly bundle_id: string
   readonly entry_script: string
   readonly placement?: PluginWebUiPlacementRaw
+  /** `false`: the page draws its own title bar and the host shows no page header. */
+  readonly host_header?: boolean
 }
 
 export type PluginWebUiConfigSectionRaw = {
@@ -20,9 +22,22 @@ export type PluginWebUiConfigSectionRaw = {
   readonly bundle_id: string
 }
 
+/** Where the host mounts a contribution: under a finished assistant chat
+ *  message, or in a Logs request's inspector header. */
+export type PluginWebUiContributionSlot = 'chat_message' | 'logs_request'
+
+export type PluginWebUiContributionRaw = {
+  readonly id: string
+  readonly slot: PluginWebUiContributionSlot
+  readonly label: string
+  readonly bundle_id: string
+  readonly entry_script: string
+}
+
 export type PluginWebUiManifestOverviewRaw = {
   readonly pages?: readonly PluginWebUiPageRaw[]
   readonly config_sections?: readonly PluginWebUiConfigSectionRaw[]
+  readonly contributions?: readonly PluginWebUiContributionRaw[]
 }
 
 export type PluginWebUiStateRaw = {
@@ -33,6 +48,7 @@ export type PluginWebUiStateRaw = {
   readonly unavailable_reason?: string
   readonly pages?: readonly PluginWebUiPageRaw[]
   readonly config_sections?: readonly PluginWebUiConfigSectionRaw[]
+  readonly contributions?: readonly PluginWebUiContributionRaw[]
   readonly asset_base_url?: string
   readonly primary_tab_enabled: boolean
 }

@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path};
 
 const INTEGRATIONS_PARENT_TAB: &str = "integrations";
+/// The host places a contribution in one of these slots, and nowhere else.
+pub const WEB_UI_CONTRIBUTION_SLOTS: [&str; 2] = ["chat_message", "logs_request"];
 
 #[derive(Clone, Debug)]
 pub struct PluginWebUiBuilder {
@@ -18,6 +20,11 @@ pub struct PluginWebUiPageBuilder {
 #[derive(Clone, Debug)]
 pub struct PluginWebUiConfigSectionBuilder {
     inner: proto::PluginWebUiConfigSectionManifest,
+}
+
+#[derive(Clone, Debug)]
+pub struct PluginWebUiContributionBuilder {
+    inner: proto::PluginWebUiContributionManifest,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +53,7 @@ pub fn web_ui_page(
             bundle_id: String::new(),
             entry_script: entry_script.into(),
             placement: proto::PluginWebUiPagePlacement::Auxiliary as i32,
+            host_header: None,
         },
     }
 }
@@ -62,6 +70,23 @@ pub fn web_ui_config_section(
             entry_script: entry_script.into(),
             parent_tab: None,
             bundle_id: String::new(),
+        },
+    }
+}
+
+pub fn web_ui_contribution(
+    id: impl Into<String>,
+    slot: impl Into<String>,
+    label: impl Into<String>,
+    entry_script: impl Into<String>,
+) -> PluginWebUiContributionBuilder {
+    PluginWebUiContributionBuilder {
+        inner: proto::PluginWebUiContributionManifest {
+            id: id.into(),
+            slot: slot.into(),
+            label: label.into(),
+            bundle_id: String::new(),
+            entry_script: entry_script.into(),
         },
     }
 }
@@ -92,6 +117,14 @@ impl PluginWebUiBuilder {
         self
     }
 
+    pub fn contribution<T: Into<proto::PluginWebUiContributionManifest>>(
+        mut self,
+        contribution: T,
+    ) -> Self {
+        self.inner.contributions.push(contribution.into());
+        self
+    }
+
     pub fn bundle<T: Into<proto::PluginWebUiBundleManifest>>(mut self, bundle: T) -> Self {
         self.inner.bundles.push(bundle.into());
         self
@@ -99,6 +132,12 @@ impl PluginWebUiBuilder {
 }
 
 impl PluginWebUiPageBuilder {
+    /// `false`: the host draws no page header above this page.
+    pub fn host_header(mut self, host_header: bool) -> Self {
+        self.inner.host_header = Some(host_header);
+        self
+    }
+
     pub fn icon(mut self, icon: impl Into<String>) -> Self {
         self.inner.icon = Some(icon.into());
         self
@@ -131,6 +170,13 @@ impl PluginWebUiConfigSectionBuilder {
     }
 }
 
+impl PluginWebUiContributionBuilder {
+    pub fn bundle_id(mut self, bundle_id: impl Into<String>) -> Self {
+        self.inner.bundle_id = bundle_id.into();
+        self
+    }
+}
+
 impl From<PluginWebUiBuilder> for proto::PluginWebUiManifest {
     fn from(value: PluginWebUiBuilder) -> Self {
         value.inner
@@ -149,6 +195,12 @@ impl From<PluginWebUiConfigSectionBuilder> for proto::PluginWebUiConfigSectionMa
     }
 }
 
+impl From<PluginWebUiContributionBuilder> for proto::PluginWebUiContributionManifest {
+    fn from(value: PluginWebUiContributionBuilder) -> Self {
+        value.inner
+    }
+}
+
 impl From<PluginWebUiBundleBuilder> for proto::PluginWebUiBundleManifest {
     fn from(value: PluginWebUiBundleBuilder) -> Self {
         value.inner
@@ -161,6 +213,8 @@ pub(super) struct PackagedPluginWebUi {
     pub pages: Vec<PackagedPluginWebUiPage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_sections: Vec<PackagedPluginWebUiConfigSection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contributions: Vec<PackagedPluginWebUiContribution>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bundles: Vec<PackagedPluginWebUiBundle>,
 }
@@ -176,6 +230,8 @@ pub(super) struct PackagedPluginWebUiPage {
     pub entry_script: String,
     #[serde(default)]
     pub placement: PackagedPluginWebUiPagePlacement,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub host_header: Option<bool>,
 }
 
 /// Mirrors `proto::PluginWebUiPagePlacement`, minus the wire-only
@@ -214,6 +270,15 @@ pub(super) struct PackagedPluginWebUiConfigSection {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct PackagedPluginWebUiContribution {
+    pub id: String,
+    pub slot: String,
+    pub label: String,
+    pub bundle_id: String,
+    pub entry_script: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct PackagedPluginWebUiBundle {
     pub id: String,
     pub root_path: String,
@@ -241,6 +306,16 @@ impl TryFrom<&proto::PluginWebUiManifest> for PackagedPluginWebUi {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        let contributions = value
+            .contributions
+            .iter()
+            .map(|contribution| {
+                PackagedPluginWebUiContribution::try_from_with_bundle_id(
+                    contribution,
+                    bundle_id.as_deref(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         let bundles = value
             .bundles
             .iter()
@@ -250,6 +325,7 @@ impl TryFrom<&proto::PluginWebUiManifest> for PackagedPluginWebUi {
         Ok(Self {
             pages,
             config_sections,
+            contributions,
             bundles,
         })
     }
@@ -289,6 +365,7 @@ impl PackagedPluginWebUiPage {
             bundle_id: value.bundle_id.clone(),
             entry_script: value.entry_script.clone(),
             placement,
+            host_header: value.host_header,
         })
     }
 }
@@ -327,6 +404,30 @@ impl PackagedPluginWebUiConfigSection {
     }
 }
 
+impl PackagedPluginWebUiContribution {
+    fn try_from_with_bundle_id(
+        value: &proto::PluginWebUiContributionManifest,
+        expected_bundle_id: Option<&str>,
+    ) -> Result<Self> {
+        validate_non_empty("web UI contribution id", &value.id)?;
+        validate_contribution_slot(&value.slot)?;
+        validate_non_empty("web UI contribution label", &value.label)?;
+        validate_bundle_reference(
+            "web UI contribution bundle_id",
+            &value.bundle_id,
+            expected_bundle_id,
+        )?;
+        validate_relative_path("web UI contribution entry_script", &value.entry_script)?;
+        Ok(Self {
+            id: value.id.clone(),
+            slot: value.slot.clone(),
+            label: value.label.clone(),
+            bundle_id: value.bundle_id.clone(),
+            entry_script: value.entry_script.clone(),
+        })
+    }
+}
+
 impl TryFrom<&proto::PluginWebUiBundleManifest> for PackagedPluginWebUiBundle {
     type Error = anyhow::Error;
 
@@ -341,12 +442,16 @@ impl TryFrom<&proto::PluginWebUiBundleManifest> for PackagedPluginWebUiBundle {
 }
 
 fn validate_v1_bundle_contract(value: &proto::PluginWebUiManifest) -> Result<Option<String>> {
-    if value.pages.is_empty() && value.config_sections.is_empty() && value.bundles.is_empty() {
+    if value.pages.is_empty()
+        && value.config_sections.is_empty()
+        && value.contributions.is_empty()
+        && value.bundles.is_empty()
+    {
         return Ok(None);
     }
     let [bundle] = value.bundles.as_slice() else {
         bail!(
-            "web UI v1 declarations with pages or config sections must declare exactly one bundle root"
+            "web UI v1 declarations with pages, config sections or contributions must declare exactly one bundle root"
         );
     };
     validate_non_empty("web UI bundle id", &bundle.id)?;
@@ -377,6 +482,16 @@ fn validate_non_empty(field_name: &str, value: &str) -> Result<()> {
 fn validate_config_parent_tab(parent_tab: &str) -> Result<()> {
     if parent_tab != INTEGRATIONS_PARENT_TAB {
         bail!("web UI config section parent_tab must be `integrations`");
+    }
+    Ok(())
+}
+
+fn validate_contribution_slot(slot: &str) -> Result<()> {
+    if !WEB_UI_CONTRIBUTION_SLOTS.contains(&slot) {
+        bail!(
+            "web UI contribution slot must be one of {}, got `{slot}`",
+            WEB_UI_CONTRIBUTION_SLOTS.join(", ")
+        );
     }
     Ok(())
 }

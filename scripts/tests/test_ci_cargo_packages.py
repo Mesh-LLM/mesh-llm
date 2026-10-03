@@ -39,6 +39,14 @@ class CargoPackageCompatibilityTests(unittest.TestCase):
         self.assertEqual(COMPAT.resolve(['skippy-model-package'], LEGACY, set(EXTRACTED), "legacy"), ['skippy-package-builder'])
         self.assertEqual(COMPAT.resolve(['skippy-model-package'], EXTRACTED, set(EXTRACTED), "current"), ['skippy-model-package'])
 
+    def test_legacy_frontend_resolves_to_the_standalone_inference_api(self):
+        available = set(EXTRACTED) - {'skippy-openai-frontend'}
+        available.add('skippy-inference-api')
+        self.assertEqual(
+            COMPAT.resolve(['openai-frontend'], LEGACY, available, 'legacy'),
+            ['skippy-inference-api'],
+        )
+
     def test_partial_plan_with_reused_name_has_explicit_generation(self):
         batch = ['skippy-model-package']
         self.assertEqual(COMPAT.resolve(batch, batch, set(EXTRACTED), 'legacy'), ['skippy-package-builder'])

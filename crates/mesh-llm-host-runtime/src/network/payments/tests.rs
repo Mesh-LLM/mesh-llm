@@ -47,6 +47,9 @@ struct Network {
     record_lifecycle: AtomicBool,
     provider_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
     payer_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// The `exchange_id` of each `openai.exchange.v1` event the provider
+    /// published, so a test can join them to its lifecycle events.
+    provider_exchange_ids: Mutex<Vec<String>>,
 }
 
 /// A trusted local plugin that declares `payment.lifecycle.v1` and keeps
@@ -489,6 +492,12 @@ async fn paid_exchange_on(
     let (_server_connection, result) = serving.await??;
     result?;
     backend.await??;
+    network.provider_exchange_ids.lock().unwrap().extend(
+        provider_events
+            .events()
+            .iter()
+            .map(|event| event.exchange_id.clone()),
+    );
     let output_tokens = if output_allowance > 4096 { 5000 } else { 3 };
     if !cancel_after_output {
         assert_seller_published_the_exchange(

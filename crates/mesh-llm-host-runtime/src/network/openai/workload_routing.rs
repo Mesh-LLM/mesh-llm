@@ -22,7 +22,10 @@ pub(super) fn is_audio_upload_path(path: &str) -> bool {
 
 /// Recognize the typed System One endpoint independently of query parameters.
 pub(super) fn is_system_one_path(path: &str) -> bool {
-    path.split('?').next().unwrap_or(path) == "/systemone"
+    matches!(
+        path.split('?').next().unwrap_or(path),
+        "/systemone" | "/v1/decisions"
+    )
 }
 
 /// Map inference endpoints to native workloads; control paths impose no class.

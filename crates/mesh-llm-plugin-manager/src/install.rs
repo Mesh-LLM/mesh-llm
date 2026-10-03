@@ -579,6 +579,7 @@ mod tests {
                     bundle_id: "main".to_string(),
                     entry_script: "assets/main.js".to_string(),
                     placement: InstalledPluginWebUiPagePlacement::Auxiliary,
+                    host_header: None,
                 }],
                 config_sections: vec![InstalledPluginWebUiConfigSectionMetadata {
                     id: "settings".to_string(),
@@ -587,6 +588,7 @@ mod tests {
                     parent_tab: Some("integrations".to_string()),
                     bundle_id: "main".to_string(),
                 }],
+                contributions: Vec::new(),
                 bundles: vec![InstalledPluginWebUiBundleMetadata {
                     id: "main".to_string(),
                     root_path: "web-ui".to_string(),

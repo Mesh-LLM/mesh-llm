@@ -39,7 +39,15 @@ pub(super) struct VerifiedFileFingerprint {
     mtime_nanos: u128,
     ctime_nanos: i128,
     device: u64,
-    inode: u64,
+    inode: u128,
+}
+
+/// What a verified fingerprint pins beyond size and mtime: the file's identity
+/// on its volume and a change time that ordinary copy tools do not restore.
+struct FileIdentity {
+    device: u64,
+    inode: u128,
+    ctime_nanos: i128,
 }
 
 fn source_registry() -> &'static Mutex<HashMap<String, BTreeSet<PathBuf>>> {
@@ -218,30 +226,76 @@ pub(super) fn verified_path_fingerprint(paths: &[PathBuf]) -> Option<Vec<Verifie
             if !metadata.is_file() || metadata.file_type().is_symlink() {
                 return None;
             }
-            let (device, inode) = file_identity(&metadata)?;
+            // Without a file identity and a change timestamp, a same-size
+            // rewrite with restored mtime cannot be distinguished. Rehash instead.
+            let identity = file_identity(path, &metadata)?;
             Some(VerifiedFileFingerprint {
                 path: path.clone(),
                 bytes: metadata.len(),
                 mtime_nanos: super::hash_cache::file_mtime_nanos(&metadata)?,
-                // Without an inode change timestamp, a same-size rewrite with
-                // restored mtime cannot be distinguished. Rehash instead.
-                ctime_nanos: super::hash_cache::file_ctime_nanos(&metadata)?,
-                device,
-                inode,
+                ctime_nanos: identity.ctime_nanos,
+                device: identity.device,
+                inode: identity.inode,
             })
         })
         .collect()
 }
 
 #[cfg(unix)]
-fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+fn file_identity(_path: &Path, metadata: &std::fs::Metadata) -> Option<FileIdentity> {
     use std::os::unix::fs::MetadataExt;
 
-    Some((metadata.dev(), metadata.ino()))
+    Some(FileIdentity {
+        device: metadata.dev(),
+        inode: u128::from(metadata.ino()),
+        ctime_nanos: super::hash_cache::file_ctime_nanos(metadata)?,
+    })
 }
 
-#[cfg(not(unix))]
-fn file_identity(_metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+/// std exposes no device, inode or change time on Windows, so read them from
+/// an open handle: the volume serial number and 128-bit file ID (`FileIdInfo`,
+/// which also covers ReFS) identify the file, and `ChangeTime` advances on any
+/// content or metadata change. Unlike Unix ctime, a process with
+/// write-attributes access can set `ChangeTime`; like the rest of this check it
+/// gates reuse of a verified hash and is not a defence against a local writer.
+#[cfg(windows)]
+fn file_identity(path: &Path, _metadata: &std::fs::Metadata) -> Option<FileIdentity> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_BASIC_INFO, FILE_ID_INFO, FileBasicInfo, FileIdInfo, GetFileInformationByHandleEx,
+    };
+
+    let file = std::fs::File::open(path).ok()?;
+    let handle = file.as_raw_handle();
+    let mut id = FILE_ID_INFO::default();
+    let mut basic = FILE_BASIC_INFO::default();
+    // SAFETY: `handle` stays open for both calls because `file` outlives them,
+    // and each buffer is the structure its information class documents,
+    // passed with that structure's exact size.
+    let queried = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileIdInfo,
+            (&raw mut id).cast(),
+            size_of::<FILE_ID_INFO>() as u32,
+        ) != 0
+            && GetFileInformationByHandleEx(
+                handle,
+                FileBasicInfo,
+                (&raw mut basic).cast(),
+                size_of::<FILE_BASIC_INFO>() as u32,
+            ) != 0
+    };
+    queried.then(|| FileIdentity {
+        device: id.VolumeSerialNumber,
+        inode: u128::from_le_bytes(id.FileId.Identifier),
+        // 100 ns ticks since 1601, only ever compared for equality.
+        ctime_nanos: i128::from(basic.ChangeTime) * 100,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_identity(_path: &Path, _metadata: &std::fs::Metadata) -> Option<FileIdentity> {
     None
 }
 
@@ -496,5 +550,69 @@ mod tests {
             Some("fallback"),
             false
         ));
+    }
+
+    #[test]
+    fn strict_package_v2_source_gets_a_content_address() {
+        let root = tempfile::tempdir().unwrap();
+        crate::inference::skippy::write_test_package_v2_fixture(
+            root.path(),
+            "fixture/model",
+            &[("payload", "shared/payload.gguf", "blk.0.weight")],
+        )
+        .unwrap();
+        let identity = crate::inference::skippy::identity_from_package_v2(root.path()).unwrap();
+
+        let strict = into_content_addressed_identity(identity)
+            .expect("local-required must accept a package-v2 source made of regular files");
+        assert!(is_content_addressed_gguf_ref(&strict.package_ref));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_fingerprint_is_reusable_and_catches_a_same_size_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.gguf");
+        std::fs::write(&path, b"first bytes").unwrap();
+        let paths = [path.clone()];
+
+        let first = verified_path_fingerprint(&paths)
+            .expect("a regular file needs a fingerprint so its verified hash can be reused");
+        assert!(verified_path_fingerprint(&paths) == Some(first.clone()));
+
+        // Same length with the original mtime restored: only the change time
+        // records the rewrite.
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&path, b"other bytes").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+
+        let rewritten = verified_path_fingerprint(&paths).unwrap();
+        assert_eq!(rewritten[0].bytes, first[0].bytes);
+        assert_eq!(rewritten[0].mtime_nanos, first[0].mtime_nanos);
+        assert!(
+            rewritten != first,
+            "a same-size rewrite with a restored mtime must not reuse the old hash"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_fingerprint_tells_a_copy_from_the_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("a.gguf");
+        let copy = dir.path().join("b.gguf");
+        std::fs::write(&original, b"model bytes").unwrap();
+        std::fs::copy(&original, &copy).unwrap();
+
+        let original = verified_path_fingerprint(&[original]).unwrap();
+        let copy = verified_path_fingerprint(&[copy]).unwrap();
+        assert_eq!(original[0].device, copy[0].device);
+        assert_ne!(original[0].inode, copy[0].inode);
     }
 }

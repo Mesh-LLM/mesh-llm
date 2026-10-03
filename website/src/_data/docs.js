@@ -39,6 +39,7 @@ export default [
     description: "Use Mesh through OpenAI-compatible clients and model-serving features.",
     links: [
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
+      ["Decisions API", "/docs/pages/decisions-api/"],
       ["System One API", "/docs/pages/system-one-api/"],
       ["Automatic routing", "/docs/pages/automatic-routing/"],
       ["KV caching", "/docs/pages/kv-caching/"],
@@ -117,6 +118,7 @@ export default [
       ["Crate API reference", "/crates/"],
       ["Skippy native API", "/docs/pages/skippy-api/"],
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
+      ["Decisions API", "/docs/pages/decisions-api/"],
       ["CLI reference", "/docs/pages/CLI/"],
       ["CLI explorer", "/docs/pages/cli-explorer/"],
       ["Testing playbook", "/docs/pages/testing/"]

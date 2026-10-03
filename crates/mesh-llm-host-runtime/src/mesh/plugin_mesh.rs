@@ -209,6 +209,17 @@ impl Node {
                 let _ = response_tx.send(response);
                 Ok(())
             }
+            crate::plugin::PluginMeshEvent::PeerBlock {
+                plugin_id,
+                request,
+                response_tx,
+            } => {
+                let response =
+                    crate::network::peer_blocks::apply_plugin_request(self, plugin_id, request)
+                        .await;
+                let _ = response_tx.send(response);
+                Ok(())
+            }
         }
     }
 

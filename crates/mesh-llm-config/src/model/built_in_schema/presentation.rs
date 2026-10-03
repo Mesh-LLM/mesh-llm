@@ -416,11 +416,11 @@ fn payments_presentation(rendered: &str) -> Option<SettingPresentation> {
         "payments.wallet" => Some(
             sp(
                 "Wallet plugin",
-                "Plugin name of the wallet that backs paid inference. When unset, the only running wallet plugin is used, preferring any other over the built-in Lexe wallet.",
+                "Plugin name of the wallet that backs paid inference. When unset, the only running wallet plugin is used.",
                 PAYMENTS_CATEGORY,
                 10,
             )
-            .placeholder("wallet-lexe")
+            .placeholder("lexe-wallet")
             .hint("text"),
         ),
         _ => None,
@@ -922,6 +922,15 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
                 "Promote the plugin's web UI page to a primary top-level tab when its manifest requests it.",
                 PLUGIN_HOST_CATEGORY,
                 16,
+            )
+            .hint("toggle"),
+        ),
+        "plugin.<plugin-name>.allow_peer_blocks" => Some(
+            sp(
+                "Peer block requests",
+                "Let the plugin ask this node to stop (or resume) routing to a peer. Off unless turned on.",
+                PLUGIN_HOST_CATEGORY,
+                17,
             )
             .hint("toggle"),
         ),

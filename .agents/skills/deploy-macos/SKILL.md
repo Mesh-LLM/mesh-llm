@@ -66,24 +66,20 @@ scp -P <SSH_PORT> /tmp/mesh-llm-bundle.tar.gz user@host:
 ssh -p <SSH_PORT> user@host 'mkdir -p ~/bin && tar xzf mesh-llm-bundle.tar.gz -C ~/bin --strip-components=1'
 ```
 
-### Clear quarantine and sign the final remote binary — ALWAYS after scp
+### Check quarantine xattrs when another transfer path was used
 
-Files transferred via scp can carry provenance/quarantine xattrs that make
-macOS SIGKILL the binary on launch (exit 137). Clear those attributes before
-signing, then sign the final remote binary once with the stable Apple-issued
-development identity used for that build:
+This `scp` and `tar` path does not normally add or propagate
+`com.apple.quarantine`. If the binary came through another transfer path and
+the attribute is present, remove it before retrying:
 
 ```bash
-xattr -cr ~/bin/mesh-llm
-codesign --force --sign "<APPLE_DEVELOPMENT_IDENTITY>" ~/bin/mesh-llm
-codesign --verify --verbose=2 ~/bin/mesh-llm
-codesign -dv --verbose=4 ~/bin/mesh-llm 2>&1 | tee /tmp/mesh-llm-codesign.txt
+if xattr -p com.apple.quarantine ~/bin/mesh-llm >/dev/null 2>&1; then
+    xattr -d com.apple.quarantine ~/bin/mesh-llm
+fi
+codesign --verify --verbose=2 ~/bin/mesh-llm   # re-sign ad-hoc only if this fails
 ```
 
-`xattr ~/bin/mesh-llm` should print nothing. Do not ad-hoc sign the
-binary: that identity is not stable across builds and can invalidate the Local
-Network privacy decision. Signing changes the file hash, so do not compare
-local and remote hashes afterward.
+No Apple-issued identity is needed for SSH/interactive-shell launches.
 
 Verify the version on the remote matches what you built:
 
@@ -91,7 +87,13 @@ Verify the version on the remote matches what you built:
 ~/bin/mesh-llm --version
 ```
 
-### Authorize macOS Local Network access — BEFORE remote diagnosis
+### Troubleshooting: macOS Local Network privacy (same-LAN join/split failures, relay-only peers)
+
+**This is not a deploy precondition.** Launching an ad-hoc/linker-signed binary
+from SSH or an interactive shell is the normal lab path and has worked across
+our Macs repeatedly. Use this section when a same-LAN join or split fails, two
+Macs on the same LAN connect via relay instead of directly, or a GUI app /
+launch agent shows a Local Network alert — check this before diagnosing iroh.
 
 macOS Local Network privacy is keyed to the **responsible code** and its code
 signature. Replacing or ad-hoc re-signing a development binary can therefore
@@ -99,10 +101,10 @@ change the identity whose decision macOS remembers. A GUI app or launch agent
 may show a blocking Local Network alert on the logged-in desktop even though
 the same network is reachable from an interactive shell.
 
-For the first multi-node run of an exact app/binary identity:
+If that happens, for the affected app/binary identity:
 
-1. Sign it once with the stable Apple-issued development identity used for that
-   build. Do not repeatedly ad-hoc re-sign it between attempts. Verify with
+1. Avoid re-signing it between attempts (a new signature can reset the
+   remembered decision); for GUI apps/launch agents prefer a stable identity. Verify with
    `codesign --verify --verbose=2 <path>` and record
    `codesign -dv --verbose=4 <path> 2>&1` in the lab evidence.
 2. Launch it once from the same responsible app/service context intended for
@@ -130,7 +132,7 @@ For the first multi-node run of an exact app/binary identity:
 
 If no alert appears, keep the process alive after its first failed LAN
 operation: macOS can fail to display the alert for very short-lived processes.
-Do not debug iroh candidate selection until this gate is complete. See Apple
+Rule this out before debugging iroh candidate selection. See Apple
 TN3179, [Understanding local network privacy](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
 
 ## Launch
@@ -205,7 +207,7 @@ A clean stop removes the instance runtime dir under `~/.mesh-llm/runtime/`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Exit 137 immediately after scp | macOS quarantine/provenance xattr | Clear xattrs, sign once with the stable Apple-issued development identity, and verify as above |
+| Exit 137 (SIGKILL) after launch | Quarantine xattr possible if another transfer path was used | Check `xattr -p com.apple.quarantine`; if present remove it, then verify the signature as above |
 | `mesh-llm: command not found` over SSH | `~/.local/bin` not on non-interactive PATH | Full path or `bash -lc` |
 | Empty `/v1/models` | Model still downloading/loading | Wait; watch skippy-native.log |
 | "No inference server available" | Election in progress or load failed | Check stderr + skippy-native.log |

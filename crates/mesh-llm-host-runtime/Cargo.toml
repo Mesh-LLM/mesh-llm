@@ -16,12 +16,6 @@ default = ["web-ui", "dynamic-native-runtime", "payments"]
 # the SDK serving path) stay payment-free and drop the rusqlite /
 # lightning-invoice / bitcoin stack unless they opt back in.
 payments = ["dep:mesh-llm-payments-types", "mesh-llm-payments-types/engine", "dep:mesh-llm-wallet"]
-# The built-in Lexe wallet implementation, served blobstore-style as
-# `mesh-llm --plugin wallet-lexe`. This is the only feature that links the Lexe
-# SDK into the executable. The shipped CLI enables it; SDK consumers do not, so
-# `payments` alone leaves the host wallet-free until an external `wallet.v1`
-# plugin is configured.
-wallet-lexe = ["payments", "dep:mesh-wallet-lexe"]
 # Embed the React web console into the binary. Default on; turn off for
 # lib-style / headless consumers that don't need the console assets.
 # Propagates to `mesh-llm-ui/embed-assets`.
@@ -47,7 +41,6 @@ sha2 = "0.11"
 [dependencies]
 mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.77.0", optional = true }
 mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.77.0", optional = true }
-mesh-wallet-lexe = { path = "../mesh-wallet-lexe", version = "0.77.0", optional = true }
 bytes = "1"
 mesh-llm-build-info.workspace = true
 mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.77.0"  }
@@ -138,6 +131,7 @@ tempfile = "3"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_UI_Shell",
 ] }

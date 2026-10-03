@@ -959,16 +959,23 @@ impl Node {
         healthy.sort_by_key(|peer| std::cmp::Reverse(affinity_score(peer)));
         deprioritized.sort_by_key(|peer| std::cmp::Reverse(affinity_score(peer)));
         healthy.extend(deprioritized);
+        // The operator's local blocks apply to every routing path that reads
+        // this list; see `network::peer_blocks`.
+        self.peer_blocks
+            .retain_unblocked(&mut healthy, crate::network::peer_blocks::now_ms());
         healthy
     }
 
-    /// Find ANY host in the mesh (fallback when no model match).
+    /// Find ANY host in the mesh (fallback when no model match). Peers the
+    /// operator blocked are never returned.
     pub async fn any_host(&self) -> Option<PeerInfo> {
+        let now_ms = crate::network::peer_blocks::now_ms();
         let state = self.state.lock().await;
         state
             .peers
             .values()
             .filter(|p| is_routing_eligible(p, &state))
+            .filter(|p| !self.peer_blocks.is_blocked(&p.id, now_ms))
             .find(|p| !p.http_routable_models().is_empty())
             .cloned()
     }
@@ -1035,6 +1042,15 @@ impl Node {
             .filter(|peer| peer.is_admitted())
             .cloned()
             .collect()
+    }
+
+    /// Admitted peers minus the ones the operator stopped routing to. Every
+    /// path that picks a peer to send a request to reads this, not `peers()`.
+    pub(crate) async fn routable_peers(&self) -> Vec<PeerInfo> {
+        let now_ms = crate::network::peer_blocks::now_ms();
+        let mut peers = self.peers().await;
+        peers.retain(|peer| !self.peer_blocks.is_blocked(&peer.id, now_ms));
+        peers
     }
 
     pub(crate) async fn connection_to_peer(&self, peer_id: EndpointId) -> Result<Connection> {
