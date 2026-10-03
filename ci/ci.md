@@ -581,8 +581,9 @@ runtime producers are not duplicated.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.
 - `ci-rust-tests-slice.yml` — deterministic affected or all-workspace Cargo
-  test batches consuming the static ABI artifact and its producer-owned
-  toolchain epoch. Batches that exercise Skippy correctness tests restore an
+  test batches that prepare patched llama before consuming the static ABI
+  artifact and verifying its patched revision and producer-owned toolchain
+  epoch. Batches that exercise Skippy correctness tests restore an
   exact revision- and SHA-256-pinned model cache, verify the file before use,
   and leave publication to one trusted-main batch. Related Skippy crate changes
   on pull requests also compile one fully qualified runtime test, fail if that
