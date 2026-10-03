@@ -1,0 +1,1008 @@
+{
+  "status": "MODULE_ONLY_RETIRED_AND_LOCAL_POSTIMAGE_QUALIFIED",
+  "original_methods": 21,
+  "rust_tests": 22,
+  "intent_map": [
+    {
+      "original": "scripts/tests/test_logging_api_docs.py",
+      "sha256": "bde380d9791b4ff9a0c397839327e08ffff730bc20939cf5e7c2fd369a4c7993",
+      "mode": 420,
+      "intents": [
+        {
+          "original_method": "test_page_keeps_operator_contract_sections",
+          "rust_test": "repo_consistency::logging_contracts::documentation::logging_docs_operator_sections_are_present_in_authored_page",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_page_covers_every_route_family",
+          "rust_test": "repo_consistency::logging_contracts::documentation::logging_docs_read_mutation_and_stream_routes_are_documented",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_cleanup_selection_documents_exact_route_exclusion",
+          "rust_test": "repo_consistency::logging_contracts::documentation::logging_docs_cleanup_route_exclusion_is_exact_and_section_owned",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_page_covers_recovery_privacy_and_configuration_contracts",
+          "rust_test": "repo_consistency::logging_contracts::documentation::logging_docs_recovery_privacy_and_configuration_remain_explicit",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_stream_error_audit_recovery_contract_is_anchored",
+          "rust_test": "repo_consistency::logging_contracts::documentation::logging_docs_stream_error_audit_recovery_is_anchored_in_both_guides",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_page_is_linked_from_developer_navigation_and_api_reference",
+          "rust_test": "repo_consistency::logging_contracts::documentation::logging_docs_navigation_and_api_reference_link_to_authored_page",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_incompatible_version_audit_scope_is_explicit_in_authored_docs",
+          "rust_test": "repo_consistency::logging_contracts::documentation::logging_docs_direct_peer_audit_and_transitive_drop_have_distinct_scope",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_schema_incompatibility_contract_is_typed_and_version_neutral",
+          "rust_test": "repo_consistency::logging_contracts::documentation::logging_docs_schema_incompatibility_is_typed_and_version_neutral",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_stable_503_table_lists_all_codes",
+          "rust_test": "repo_consistency::logging_contracts::documentation::logging_docs_stable_503_table_has_exact_error_code_set",
+          "status": "AUTHORED_UNRUN"
+        }
+      ]
+    },
+    {
+      "original": "scripts/tests/test_logging_module_boundaries.py",
+      "sha256": "d7c58f483ddc5ffe410a2aa6c060fab69b7d8b88f22c2024039419090d0e9e3c",
+      "mode": 420,
+      "intents": [
+        {
+          "original_method": "test_production_logging_responsibilities_have_named_owners",
+          "rust_test": "repo_consistency::logging_contracts::boundaries::logging_boundaries_production_responsibilities_have_named_owners",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_log_store_repository_responsibilities_have_named_owners",
+          "rust_test": "repo_consistency::logging_contracts::boundaries::logging_boundaries_store_repositories_keep_audit_detail_and_metadata_owners",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_mesh_connection_responsibilities_have_named_owners",
+          "rust_test": "repo_consistency::logging_contracts::boundaries::logging_boundaries_mesh_connection_responsibilities_have_semantic_owners",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_oversized_characterization_suites_are_split_by_concern",
+          "rust_test": "repo_consistency::logging_contracts::boundaries::logging_boundaries_characterization_suites_are_split_by_concern",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_audit_and_gossip_suites_have_semantic_children",
+          "rust_test": "repo_consistency::logging_contracts::boundaries::logging_boundaries_audit_and_gossip_suites_keep_semantic_children",
+          "status": "AUTHORED_UNRUN"
+        }
+      ]
+    },
+    {
+      "path": "scripts/tests/test_cli_inventory_contract.py",
+      "sha256": "f8379116637c8b19e85274388e6c0ecc17b33894fe30a5228ccd17eb69551532",
+      "mode": 420,
+      "original": "scripts/tests/test_cli_inventory_contract.py",
+      "intents": [
+        {
+          "original_method": "test_npm_build_and_dev_always_generate_inventory",
+          "rust_test": "cli_website::cli_website_build_and_dev_generate_inventory_and_keep_browser_tests",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_d3_is_locked_and_copied_from_local_node_modules",
+          "rust_test": "cli_website::cli_website_d3_is_locked_local_and_script_json_is_escaped",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_generated_inventory_is_ignored_and_cleaned",
+          "rust_test": "cli_website::cli_website_generated_inventory_is_ignored_and_owned_by_cleaner",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_generator_invokes_locked_rust_exporter_and_validates_schema",
+          "rust_test": "cli_website::cli_website_generator_uses_locked_exporter_and_validates_schema_and_paths",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_cli_crate_owns_the_cli_domain",
+          "rust_test": "cli_website::cli_website_cli_crate_owns_cli_domain",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_nested_cli_paths_select_inventory_validation",
+          "rust_test": "cli_website::cli_website_nested_cli_inputs_select_cli_validation_without_website_build",
+          "status": "AUTHORED_UNRUN"
+        },
+        {
+          "original_method": "test_ci_runs_inventory_and_browser_contracts",
+          "rust_test": "cli_website::cli_website_ci_keeps_inventory_and_browser_contracts_in_normal_workflows",
+          "status": "AUTHORED_UNRUN"
+        }
+      ]
+    }
+  ],
+  "source_witnesses": [
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/cleanup.rs",
+      "sha256": "5ce5d7d3fd7eb2850db7b88c8be35a8a89ac6b5fecf0d5f5d344c0319fe069aa",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/delete.rs",
+      "sha256": "3b6c13f389ef61c62f8248bc0ab34e91f5fc57b8e24d7dbd958b447d07943590",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/dto.rs",
+      "sha256": "a4e76d52a6be9708328948a80398f3381b403888ba3cb8c898933e00d24e8ef4",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/error.rs",
+      "sha256": "13fb795ef1a146f45028dcde42fdfef86c6d3f620091a06e6c7c434c1adfe35d",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/mod.rs",
+      "sha256": "b2dbd15eb3ea52806001d7cb6542212190ef7d2e5496767de28a3f1e0fe7a93e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/protocol.rs",
+      "sha256": "a17862820c6709445eee43135d52f740a937a5bf1fafcdd814f14ac35d9b9455",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/protocol/audit_entry.rs",
+      "sha256": "6196029de30df2249963a8feda18f3b07638b8e3621b0af2c3a63e4d738a9f62",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/protocol/audit_entry/tests.rs",
+      "sha256": "f7a475b3c6571c6a995ac4832f0927947f096f069d143c4d12bf18cccf20e9bb",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/query.rs",
+      "sha256": "7292b05b04c728b81651c515b29c48ca4c7fa617932f5237cb594c83599d508c",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/session.rs",
+      "sha256": "079e942e0e5d7a353d91fa06de1e0947104b6df6eee2f553e724c0e39236d1f0",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/session/tests.rs",
+      "sha256": "de82208aaf464ee98799596a1163e2dae3ccb75850db46c4199c39a2ada348be",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/session/tests/audit.rs",
+      "sha256": "91f65ddd11965a98bf5dc9b18c88d17c28f2c5f10dc04074878c50840bc79ea2",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/session/tests/queue.rs",
+      "sha256": "d7c914fcd7b556ade3929dea8c0e5b4a44881e7d5530769a763a756ddcb7bab2",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/events/stream.rs",
+      "sha256": "900c6a54135ec138b9560d2754ee4e786583f94f5f46c7a06a6753cb8d8d77ba",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/export.rs",
+      "sha256": "9d0df582c5e34dee6ba24f7430f820fd34baca65690760f86abe2720d93bf7ca",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/maintenance_control.rs",
+      "sha256": "efd07a69c70849df1793197de07095b4f92d38dd74b0a2145dc0920debb0cf58",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/mod.rs",
+      "sha256": "d2340a6af7bb6fc01407071071942f79da65dbdb7add30d2b49ba8d42a23dd47",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/parse.rs",
+      "sha256": "6d3b75387ba88081262ccc343e260f5d45694403519962cc0db32b43ceda5911",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/tests.rs",
+      "sha256": "03f9400e99408eba603670b5f430f14b3f718ec122a548b2027802411dd6fd07",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/tests/audit.rs",
+      "sha256": "d39d4f4664fb42de3dca890debfad9b07dc40bc052b190f3fe30710e2261408c",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/tests/audit_sanitization.rs",
+      "sha256": "3033efc5c1e2a18baf91aecac20feb74f25748990a7f5493118de7cd8b06b246",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/routes/logs/webhook_retry.rs",
+      "sha256": "6425a6510df8b4fe7c392c817d9d58af9ced2274fd321e9e709e5b1cb47a6ec7",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes.rs",
+      "sha256": "3ff5d0530df5a316e7a7b76270465e1509644570a744b50fb51c1ea236fee35a",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes/access_and_mutation.rs",
+      "sha256": "f2a91ad3e736a2d61310153a5d28c5c0b50c2f023307b7f54328c3dafd4e118e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes/event_stream.rs",
+      "sha256": "d68c29acd29b7b68ba800e9ed87e307333db5d1035e9a268be0b1e6d69477406",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes/event_stream/audit_sanitization.rs",
+      "sha256": "78fdfb465d764ea3b7942fcb5477584279b3c184903fd61f96e0bf4fe3145d17",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes/read_and_export.rs",
+      "sha256": "e779d3b29136aafc45ae8b5eefb34fb872f000a015e91f89664bdf20c79d6b53",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/api/tests/logs_api_routes/read_and_export/export.rs",
+      "sha256": "cc764802ce636fe87803ac8e660baf4ebf8281e8e0649cc0e9978ab10f172fca",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/bus.rs",
+      "sha256": "f43c0d5b23912c9f2d2e71563b354a380a7e38ee6be06afb88e5621c8d013948",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/cleanup.rs",
+      "sha256": "1e45e67a7731c64ef3050fa4b3f6d2f2cd44015f06ee15cf4476c33b9e2a9132",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/cleanup/tests.rs",
+      "sha256": "cb42df14bdfa452405c571f4206badd804570f9b88dbac0d24243de1b653e9fe",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/foundation.rs",
+      "sha256": "8992563731c60c38972994cf8b7866c452a7b359dcbc45ff8658e656c01ae395",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/lifecycle.rs",
+      "sha256": "9ea1f7db6565d3a8af96949006656856a9f41fcdc8b5390ce6334f673f8935cf",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/limits.rs",
+      "sha256": "d1224ccf2f5c3c45804ddd32f69e90c5ea887628ff0d459fbfa0484dcc1d5e52",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/management_lifecycle.rs",
+      "sha256": "26e51c0ec8487e3f014d01efd8367066bdd30f4ce3cc2920a79ecf412b621ea6",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/metrics.rs",
+      "sha256": "48f50d0924978d7b20a63539532937a9ac12de31a86bca59f151476f06331025",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/mod.rs",
+      "sha256": "bb1b44813d6042e2d0d27622a8159923b846b5709f8345d916d69e0db2873bc1",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/openai_lifecycle.rs",
+      "sha256": "8e7e1c16c5737b31957db6a0bd4a9cd6f06be06c4619aaf9c8c70116218e445f",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/operator_audit.rs",
+      "sha256": "4841406ef0f335ee1cdc4b3b6c827009d79343214f56e6b34300ebf4bd4f830b",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/output_projection.rs",
+      "sha256": "f00aaab0b847e57c98ea1f948d23c23e7924326f76356c039b71c96f94958c09",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/persistence.rs",
+      "sha256": "84b533d3e198fc637ba398dde63d5e6cfef307bf27688e7f8e94f77d87627887",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/policy.rs",
+      "sha256": "edd30bba12cb68fcb5b743072ff3768057de36dfdaf00e4bf89f9401f711b9bc",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/policy/artifact_redaction.rs",
+      "sha256": "cc07a054d36c2bf14e76abeda7e2881fe9a5edff1b2a86e3cfd78b1c0e032c55",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/policy/path_redaction.rs",
+      "sha256": "fb22ac780c4ed24eebebea21a37b3b539136ff4d5d711a8b74905d37d6908a0c",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/policy/path_redaction_tests.rs",
+      "sha256": "6e159f3362ce8c317a59f6005723abc7cfa86a8531a1727d44ee8133dd01f5c3",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle.rs",
+      "sha256": "41f42059b566d893673cf57ed6c3efe48f614f3acecc08f51a8634707e818865",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle/event_emission.rs",
+      "sha256": "927243d7ca14dc6791e39bf394ebb900dd87ef5cd5151ef34d0f3c037c70f556",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle/ownership.rs",
+      "sha256": "e2598f06e37015bd42bbcf6454f9c3595dc556068398f499e8eca293ed715181",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle/proxy_attempts.rs",
+      "sha256": "b001be2330238afb5c5dd8dde31a5629e43ab7e30cc71b189774145892517e2e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle/remote_attribution.rs",
+      "sha256": "d4c521485298256197c1139273f2cd35e81e28fdf41bf654b84f4fc3654de8f8",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/raw_mesh_lifecycle/tests.rs",
+      "sha256": "27c7fd2a183f5149fac80c6c8c5ed1b5c01e0529218d40257258225c2917c842",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/registry.rs",
+      "sha256": "bab1529ffe8cefac81f516aba5acc8af7a373bb04e1e8c8a584f2defa63d3be0",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/request_metadata.rs",
+      "sha256": "6101b8bccb05cc9136d165b0bd6a58a47c9308d9c44819556db1acfcfe3dbf0b",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/request_metadata/caller_identity.rs",
+      "sha256": "2180254776214749d88896e2fc1681f66f7978a5826279ab8c0d9c632a6121d3",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/request_metadata/caller_identity/tests.rs",
+      "sha256": "5306ab91b9c0472c5a4668622f37ebf4f0a5cfdb50afcda42bf18c0b00d44ec3",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/runtime_state.rs",
+      "sha256": "7c0f76a3b75cde582faf0784cd4fabeb173a38912a0a4ed1e9ea7b860ddcc562",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/runtime_state/query_facade.rs",
+      "sha256": "f7366535ab0cb36e8e6e2fcdaa91808cc204830f6641d98156af900923cc0b48",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/runtime_state/tests.rs",
+      "sha256": "6fed9e2f2b9f99d5f1dd0fb40ad915c532e6c226df87cadbd2fc002710d92c9b",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/runtime_state/tests/artifact_capture.rs",
+      "sha256": "de2ad994d58f8e3b55d20a3f1eeba06fe0a9294d6e45460d2e323e78089e3515",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/runtime_state/tests/remote_caller_attribution.rs",
+      "sha256": "8edf582e6f86aaa1ba7133cf64c614bb626958ca49140a00a0b2c546a5ec963e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/runtime_state/tests/service_lifecycle.rs",
+      "sha256": "24543a52cd6b3546f76d3a1c3def27b613d6db7aa8d39eee764719c46d0dfec6",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/runtime_state/workers.rs",
+      "sha256": "420295d160e42b523bbe5cb53ccddda84d593d9012bc378a290fe0dc2a6d7a5e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/sequences.rs",
+      "sha256": "1a05cbc1289ff8348660bbdf41cf57a55d014c5c2c099730a533f551c613f0bd",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service.rs",
+      "sha256": "e68c7723b76e4b778fdb855512a0ebe325404c57edb77bb34a498d073fe31b17",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service/artifact_persistence.rs",
+      "sha256": "31d6d6f5c642f4466b76634565f5b95e2962984d7557c2b01a4516a73cb98643",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service/event_delivery.rs",
+      "sha256": "a3c58fe75e4ab28dcf8e66dc048929166c269906e3b17121ecc8edc4487672c3",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service/operational_audit.rs",
+      "sha256": "7732ab693e5e760e5c325e9ff6ee99921628ff09dc2ccfd038389b45f26fce90",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service/operational_audit/context.rs",
+      "sha256": "3f2f0caa6b3675daa2850416588cc26f7daae1be4a8b4f04582ccbbd992d68be",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service/operational_audit/context/tests.rs",
+      "sha256": "76c4f45fe61c683a10ad507917c99c2a7b730f704e09daab70b6a30afbbf99f4",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service/persistence_delivery.rs",
+      "sha256": "a42a85b8b8576532e8c745633ba340f94590e9f4f6313e0df30c971cef83d7c7",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service_errors.rs",
+      "sha256": "896bf09d2e775651d8e5f8ddacd8548c1b52d70fcf87c4babe183d06c7a68e8c",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service_tests.rs",
+      "sha256": "e976f0dc052fe657ea79abe59efaa1db9fb53c8151395fda1bddac6fbddb1ead",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service_tests/configuration.rs",
+      "sha256": "af39e57c0f8eefe2b852352fa8358bf27d47f731f2815667aba25bdd40f8c44d",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service_tests/delivery_shutdown.rs",
+      "sha256": "4ee34acddd16afec66e55511e96cba0e70ecc8f53af61dccb444fc8d7505c462",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service_tests/lifecycle_registry.rs",
+      "sha256": "da8b41a66afe1f249ebbc0bc10a6ee7a65a1a8a1f18701f822eaea4bbab1677b",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/service_tests/support.rs",
+      "sha256": "2a0999f0e02f633f0a5b3d0be844399a10cec9ffe00044d82941b1f602d92230",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/webhook_delivery.rs",
+      "sha256": "8aae48e01d5511e597ed724e528ff008d38519215ac001ff07d7af5aa8c6a06e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/webhook_delivery/tests.rs",
+      "sha256": "7a5eb2231868d7937b03bcee1a85af4ff4f9dd18293f678478815aaeaeda228e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/webhook_delivery/tests/fake_http_server.rs",
+      "sha256": "f8189b8cacf37bd35629e96b5a4f808800e7d675bd08c4c4b2d9d2199bee935a",
+      "mode": 420,
+      "previous_sha256": "57a0df2176c09861cb9dfb2305c4e6e5bb7b41a5c69c493f3bc1654a299a5240"
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/webhook_scheduler.rs",
+      "sha256": "191c99912118256dee269d47aa3a91c759478f95873b12386460e0068339aafb",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/writer.rs",
+      "sha256": "179b7533c9b4c6ec36a4069f3bb92b54e9ce25da2d1c3e66a493978d973ec3d7",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/mesh/connections.rs",
+      "sha256": "2164742d1b7a590fbebc5740ae737d6569a76fe7e279efc6e87bfe549f135028",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/mesh/connections/inbound.rs",
+      "sha256": "111ac6b152cbabfcb16a07c61afb7aafbe665fd04410932dc0f8552dcec48aa2",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/mesh/connections/inbound/stage.rs",
+      "sha256": "bc10031f4db6fd0348f30bd18bfcf253262d5d64174a5b067a607a6f492a61a1",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/mesh/connections/tunnel.rs",
+      "sha256": "7b89543a354363c523a1015cbcb761469ce868d87a4df8336c7b526b8491de74",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/mesh/tests/gossip.rs",
+      "sha256": "7a4855b8c6e8ac3114ab166475d83947e4780fc9507615fb047db79152d8bfb6",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/mesh/tests/gossip/admission.rs",
+      "sha256": "d1756a73e5a99aab09d335e0fe2dd87a08efd62f55348b1f653fc33bdff884a1",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/mesh/tests/gossip/discovery.rs",
+      "sha256": "856aa2048ef1ba625b760efb6ed06543b08abbaec71112b5dcb8bf9471a3d05e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/mesh/tests/gossip/merge_and_refresh.rs",
+      "sha256": "ce4b966f7258d6bca44d3a6973aa0c73aaf0f29a327dce7e6270f7a98d5bc050",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/network/openai/transport_tests.rs",
+      "sha256": "5b7f835028f7313942c8da621b2cc42b7d7c57906f08bbc267cebee8454ff800",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/network/openai/transport_tests/durable_artifacts.rs",
+      "sha256": "768d23faf1f8edb2c6a917ed02391f1a01524b57ffff867595cdaadc2fe5d5eb",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/network/openai/transport_tests/lifecycle.rs",
+      "sha256": "077ae0f0035766a25e95492b7adc296c0d0cf2c4c0e164bf73922735b5769c48",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/network/openai/transport_tests/routing.rs",
+      "sha256": "ef0dac1e1e37ea2342c47f15b98a789d5443e8877b1c706c805cfc570a1abba3",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/network/openai/transport_tests/workload_routing.rs",
+      "sha256": "3941882580aa51c73256e26417f7306fa59e75d8b7eb75120f39ae7689a5629b",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/runtime/operational_logging.rs",
+      "sha256": "bede28128642a5386e7b0f903f8f06271b0ddf6dcf8324d4852c69ff0c6cec2d",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/runtime/operational_logging/tests.rs",
+      "sha256": "b7b6d354f7ca4e83920a92c67aa7ad8a0e92ba3d86fffd6e7a0bc83bca539223",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/api_acceptance_tests/summary_audit.rs",
+      "sha256": "51c7e4241eb0e7397703c0538a86aefff33aaa6c7f411df9df84bee5c6d18cfb",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/api_acceptance_tests/summary_audit/basic.rs",
+      "sha256": "6503d80da6f1cdf5793fa2bede9f9d4b3b6e1e4f030a0702fecf0789c4b7ec94",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/api_acceptance_tests/summary_audit/query.rs",
+      "sha256": "905daab6166eb0dba027864e23bafb7d7ccc05e92f221bcfffe5e3d25e98b414",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/api_acceptance_tests/summary_audit/sanitization.rs",
+      "sha256": "16f03e58100078d9263220b4360c7cc40c72b70df7a9413e1af114d3dd987d1e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/maintenance.rs",
+      "sha256": "bb8722dd1dd5bf33924565a877ca5497fc9b108045b4e91ca7fb10f7e0dc5210",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/maintenance/execution.rs",
+      "sha256": "cf3059a572cc98c47dbba04a0b7cd5d2047a2d6d5c757d9ccd8b7b18526a59ae",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/maintenance/metadata_delete.rs",
+      "sha256": "52ac3de554ba1afef41601bc585515f372d739d5d7c4e354ef1c1fcd8c32b5da",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/maintenance/scope_filters.rs",
+      "sha256": "d82bad17717e67eb29fb498ad6411b953487b7c84e5ee0cdd70ece514d85b2d5",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/maintenance/tests.rs",
+      "sha256": "74d71488ce93460deaa872dd50b7eda93cc38729de5171ff54c95cc6d78977db",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/maintenance/tests/cleanup.rs",
+      "sha256": "1eb961ee07c821c8233433914d282f5c3dba57e613837edf7673b7c8e9f0adaa",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/maintenance/tests/delete_one.rs",
+      "sha256": "6fc66117ad88146b69340dd468465bc523c5aa8c570a65e5af3333305f54ce80",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/repositories.rs",
+      "sha256": "ff28304c48770f4a05e25cf0f73da9514af8cb002fdcc533549159c433afae5c",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/repositories/audit/detail.rs",
+      "sha256": "f861922abaa052e6fe6044484e941ba7bd8eef713daa0ea299111130dc1cf877",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/repositories/audit/model.rs",
+      "sha256": "56193e5fd610ee67d44f5f685b5fa671d128bf8c6bbabec4c1484e0a8b20fb4e",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/repositories/audit/paging.rs",
+      "sha256": "64b963af5651f9f0e9025165f2b5a47b8abda3ffc296545e20cf8711fede9252",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-log-store/src/repositories/audit/projection.rs",
+      "sha256": "a58895a104f35d1c59ea753f9129a378e7590540bca54cd6fb8aa16f82234b42",
+      "mode": 420
+    },
+    {
+      "path": "docs/LOGGING.md",
+      "sha256": "3d6bc7b2ec8108646f0c36b7eefdad2b18de8a3d5468d054eda57c025d0fd2bd",
+      "mode": 420
+    },
+    {
+      "path": "website/src/_data/docs.js",
+      "sha256": "4e4cc1115bb9902c27fde36ac883f62480653c0d974b1f78b4428a370759fa23",
+      "mode": 420
+    },
+    {
+      "path": "website/src/docs/pages/api-reference.md",
+      "sha256": "ded61faf9f8117a63a2dcee1d3920d479cce011207c978dc23b5fd9059ca4ecd",
+      "mode": 420
+    },
+    {
+      "path": "website/src/docs/pages/logging-api.md",
+      "sha256": "eefd5fe73c9aa8bca4018e05586ff8e0ed3e78fe7b7d34b8e1b5521d713424a6",
+      "mode": 420
+    },
+    {
+      "path": "website/package.json",
+      "sha256": "1a050d143db61f44300561f05b60527e415f40d52b9f3e845146d23961f0a924",
+      "mode": 420
+    },
+    {
+      "path": "website/package-lock.json",
+      "sha256": "4ec40a4229e5a886f696bbe82ebff96d7840cf44c29d3495b98006201f3486ae",
+      "mode": 420
+    },
+    {
+      "path": "website/.eleventy.js",
+      "sha256": "d6d482e20b8e3cd2d929f11b4d112ea3f7170ebfc39f20830834419fbcbcefe1",
+      "mode": 420
+    },
+    {
+      "path": "website/.gitignore",
+      "sha256": "bdd4fa7aab1a3033a9503ed21eda0563e4694b56a60942f7835e539af94ac62c",
+      "mode": 420
+    },
+    {
+      "path": "website/scripts/clean-generated-site.mjs",
+      "sha256": "64b562a9d8889e4569b34151bab3f6d35876733010429bf0fb8d21f00dd90094",
+      "mode": 420
+    },
+    {
+      "path": "website/scripts/generate-cli-inventory.mjs",
+      "sha256": "fcccd9ae5ce1ba0ec0405cf46f97600ac11ac474155950754f69fa0b6d2bf4da",
+      "mode": 420
+    },
+    {
+      "path": "ci/ownership.yml",
+      "sha256": "a6aeb00517444fd5d82a11665abb72100fb5ed51ac35bfbf75c622cb9a14eda7",
+      "mode": 420
+    },
+    {
+      "path": ".github/actions/compute-changes/derive-outputs.sh",
+      "sha256": "a13925b875ec9d583b9a0d331208e46d6018f4ad858dd74cec66dd360932752d",
+      "mode": 420
+    },
+    {
+      "path": ".github/workflows/ci-quality-slice.yml",
+      "sha256": "c1a0eb9d1787b433b7274820a6ee76c4fd38ba1fbaa31f9c009c9d0fbe38f5b7",
+      "mode": 420
+    },
+    {
+      "path": ".github/workflows/ci-web-slice.yml",
+      "sha256": "55e2bc7ef0793c3dabfe746eafd565e9c4f5a97da44a4af8a01947ac6f5602a6",
+      "mode": 420
+    },
+    {
+      "path": ".github/workflows/website-pages.yml",
+      "sha256": "fb321e7d6bbd89a1281685f7ef79d99e8d7fa08937b7d1a7af699148e9588f2d",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repository/affected_crates.rs",
+      "sha256": "3a9952931d6e3ec138468cabd12ab7e6bf5f8c845c7a3fd836e567c43841578a",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repository/affected_crates/graph.rs",
+      "sha256": "3c9575f979697bb88d13861ee94987a9cdf87e308a9bb22d59d67d8a77901c81",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repository/affected_crates/paths.rs",
+      "sha256": "f466278f1dafd68df6b19df7f12fb2c51440bf28dabcb968c8f39ab905bb88d7",
+      "mode": 420
+    }
+  ],
+  "rust_owners": [
+    {
+      "path": "tools/xtask/src/repo_consistency.rs",
+      "sha256": "72966f569b363a54cc20d90399dc97c308ab9f5723dd8fba751d0976162dc617",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repo_consistency/logging_contracts.rs",
+      "sha256": "f7edcaeacfff62e42d0d4cd3c81672236596e37ca2df04de47b878c7038b2387",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repo_consistency/logging_contracts/boundaries.rs",
+      "sha256": "6cd349b2115f8ecb8ec085ed63d561b82335ef2e0fac7beb3b6750ef689e4a92",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repo_consistency/logging_contracts/documentation.rs",
+      "sha256": "ba3c7ad2ec5753aeb0f83a841a4e7b79f2b330dc81a0373684823ec1d11fa92a",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/lane_l2_quality_contracts.rs",
+      "sha256": "4a028a7433d153f31ab49e695caa1f100de4c35e03cf20ec4bc8857d17e8afbc",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/lane_l2_quality_contracts/cli_website.rs",
+      "sha256": "07a42feb6ffc2cc3ec63f853efdf859e0591579a281293562adef901f4acfee6",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/webhook_delivery/tests/fake_http_server.rs",
+      "sha256": "f8189b8cacf37bd35629e96b5a4f808800e7d675bd08c4c4b2d9d2199bee935a",
+      "mode": 420
+    }
+  ],
+  "focused_receipts": {
+    "status": "PASS_FOCUSED",
+    "receipts": [
+      {
+        "name": "format",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/logging-cli-contracts-focused-path-corrected-format.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "logging",
+        "status": "PASS",
+        "exit_code": 0,
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "log": ".omo/evidence/resume-20261002/logging-cli-contracts-focused-path-corrected-logging.log",
+        "sha256": "9ad628f9ec3de5cc8a6d26ce1438ac07abe46148a8c04c9c3d767398c2997c04"
+      },
+      {
+        "name": "cli-website",
+        "status": "PASS",
+        "exit_code": 0,
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "log": ".omo/evidence/resume-20261002/logging-cli-contracts-focused-path-corrected-cli-website.log",
+        "sha256": "0b277518c22bd5614fc95cbbbc27530e1c6d970ee45c9ff2185691bf866a0f28"
+      },
+      {
+        "name": "quality-cohort",
+        "status": "PASS",
+        "exit_code": 0,
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "log": ".omo/evidence/resume-20261002/logging-cli-contracts-focused-path-corrected-quality-cohort.log",
+        "sha256": "97bf5ffc4ce65fda4165dc74a3489551d905b4e070b0c78531647da7dc47a1d8"
+      },
+      {
+        "name": "fmt-check",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/logging-cli-contracts-focused-path-corrected-fmt-check.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "clippy",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/logging-cli-contracts-focused-path-corrected-clippy.log",
+        "sha256": "bd81186cc7a39618b3e1dd237eaf049c66929c9f9f37a4755d2d8ef44e6ce7c7"
+      }
+    ],
+    "source_freeze": ".omo/evidence/resume-20261002/logging-cli-contracts-focused-source-freeze.json"
+  },
+  "limits": {
+    "logging": {
+      "ownership": "Parse declaration ownership rather than rejecting imports, reexports, calls or comments. Semantic owner groups additionally require owned declarations in children; ordinary owner groups preserve the original external-module and parent-exclusion rule.",
+      "documentation": "Preserve authored route, trust, error, recovery and configuration contracts. Ignore line wrapping for prose, retain exact route and error-code spelling.",
+      "limits": "Structural source and authored documentation tests only. Does not qualify live logging behavior or modify product Rust, website, generated docs or original Python tests.",
+      "activation": "Only after the current six-module frozen aggregate and checkpoint complete. Keep original Python modules until replacement tests and normal validation pass."
+    },
+    "cli": "Authored component wiring, lockfile, generation, cleanup and normal workflow contracts. Nested CLI selection runs the actual Rust affected-crates command on current Cargo metadata with a 30-second bound and offline Cargo, and requires direct ownership rather than a fail-open fallback. No product build, exporter/browser runtime certification, website artifact edit, protected catalog edit, or remote CI execution. Originals retained until owning tests and local normal integration qualification."
+  },
+  "activation": "Original module retirement after owning Rust tests and Clippy passed; final full and normal postimage validation required before checkpoint.",
+  "normal_owner_wiring_correction": {
+    "status": "QUALIFIED_BY_ROOT_POSTIMAGE",
+    "manifest": ".omo/evidence/resume-20261002/root-cli-normal-owner-wiring/manifest.json",
+    "manifest_sha256": "7baf9b37618eb93448f49d7320fdb16809ad5dbc048de6a7b91e757e520c60af",
+    "previous_normal_receipt": ".omo/evidence/resume-20261002/logging-cli-contracts-postimage-normal-receipt.json",
+    "previous_normal_log_sha256": "3c9bb0a51f420c82742a8131f301e5f7a9aa2ee49c506a43f975124dbcd27859",
+    "previous_normal_exit_code": 0,
+    "previous_normal_rust": {
+      "targets": 88,
+      "passed": 4041,
+      "failed": 0,
+      "ignored": 2
+    },
+    "reason": "Missing normal owner admission; actual tests passed but omitted eight Quality/CLI tests. No projection was accepted as current qualification.",
+    "required_target": "lane_l2_quality_contracts",
+    "required_quality_targets": 88,
+    "corrected_sources": [
+      {
+        "path": "just/ci.just",
+        "sha256": "90eeb58e388bba1809beb2995a3d146e66e54692262b46b8711e4eacb4f3e080",
+        "mode": 420
+      },
+      {
+        "path": "ci/automation-migration/quality-rust-contract-targets.json",
+        "sha256": "a2e7b2dd7ca72522efa5a50ef0a6399b91ca0b0353fd4be3bad66d31f9efc9df",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/lane_l2_quality_contracts/cli_website.rs",
+        "sha256": "07a42feb6ffc2cc3ec63f853efdf859e0591579a281293562adef901f4acfee6",
+        "mode": 420
+      },
+      {
+        "path": "ci/ci.md",
+        "sha256": "a7fc50e5a462653b5c4211addfc61585efbd9127a0d796663ce9e668775671bf",
+        "mode": 420
+      },
+      {
+        "path": ".agents/skills/manage-ci/references/current-inventory.md",
+        "sha256": "88049b29c1c55b02f2cfe549baf7da40bd258898deac4a6e00c7fbf9e1434eaf",
+        "mode": 420
+      }
+    ],
+    "previous_status": "APPLIED_UNQUALIFIED"
+  },
+  "previous_rust_owners_before_normal_wiring": [
+    {
+      "path": "tools/xtask/src/repo_consistency.rs",
+      "sha256": "72966f569b363a54cc20d90399dc97c308ab9f5723dd8fba751d0976162dc617",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repo_consistency/logging_contracts.rs",
+      "sha256": "f7edcaeacfff62e42d0d4cd3c81672236596e37ca2df04de47b878c7038b2387",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repo_consistency/logging_contracts/boundaries.rs",
+      "sha256": "6cd349b2115f8ecb8ec085ed63d561b82335ef2e0fac7beb3b6750ef689e4a92",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/repo_consistency/logging_contracts/documentation.rs",
+      "sha256": "ba3c7ad2ec5753aeb0f83a841a4e7b79f2b330dc81a0373684823ec1d11fa92a",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/lane_l2_quality_contracts.rs",
+      "sha256": "4a028a7433d153f31ab49e695caa1f100de4c35e03cf20ec4bc8857d17e8afbc",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/lane_l2_quality_contracts/cli_website.rs",
+      "sha256": "9cf9434ee953bfef0c558c0e8981ff9cd48860ad0341835de15896dc7f0588c7",
+      "mode": 420
+    },
+    {
+      "path": "crates/mesh-llm-host-runtime/src/logging/webhook_delivery/tests/fake_http_server.rs",
+      "sha256": "f8189b8cacf37bd35629e96b5a4f808800e7d675bd08c4c4b2d9d2199bee935a",
+      "mode": 420
+    }
+  ],
+  "previous_activation_status": "MODULE_ONLY_RETIRED_POSTIMAGE_UNQUALIFIED",
+  "root_postimage_qualification": {
+    "status": "PASS_LOCAL_POSTIMAGE",
+    "full": {
+      "receipt": ".omo/evidence/resume-20261002/logging-cli-smoke-diagnostic-postimage-full-receipt.json",
+      "log_sha256": "9056fd0aadbbab3632303374b09d94f377534d83f754c9d96e16049340ade85b",
+      "targets": 109,
+      "passed": 4134,
+      "failed": 0,
+      "ignored": 2
+    },
+    "normal": {
+      "receipt": ".omo/evidence/resume-20261002/logging-cli-smoke-diagnostic-postimage-normal-receipt.json",
+      "log_sha256": "3a62fda0dea85b7269d34fcef3c2dfe152bb3ddaf641dfa766d5829b7d317181",
+      "targets": 89,
+      "passed": 4049,
+      "failed": 0,
+      "ignored": 2
+    },
+    "legacy": {
+      "run": 1053,
+      "passed": 1039,
+      "failed": 0,
+      "skipped": 14,
+      "seconds": 394.125
+    },
+    "focused_receipts": ".omo/evidence/resume-20261002/logging-cli-normal-owner-boundary-corrected-focused-receipts.json",
+    "limits": "Typed authored logging documentation/source ownership and CLI website component contracts, including actual affected-crates selection. Independent product logging, browser/exporter runtime and hosted/platform/model/SDK acceptance remain unverified.",
+    "diagnostic_change": {
+      "source": "tools/xtask/tests/migration_required_smoke/executable/mod.rs",
+      "qualification": ".omo/evidence/resume-20261002/smoke-early-exit-diagnostic-configured-qualification.json",
+      "original_failed_aggregate": ".omo/evidence/resume-20261002/logging-cli-normal-owner-corrected-postimage-full-receipt.json",
+      "remaining_uncertainty": "Original intermittent early-exit failure has not been causally explained; diagnostic assertion preserves the exact rejection type and reason and exposes any recurrence. Subsequent passing results do not establish a root cause fix."
+    }
+  }
+}

@@ -1461,7 +1461,7 @@
       "id": "boundary:quality-contracts:portable-contract-tests",
       "caller": "just:with-lld",
       "line": 0,
-      "source_block": "exec cargo test --locked -p xtask --bin xtask --test automation_selector --test canary_cache_configuration --test canary_controller_plan --test canary_result_gate --test ci_runner_cache_contract --test family_battery_environment --test family_battery_prepared_source --test lane_l12_build_llama --test lane_l2_authority --test lane_l3_abi_restore --test lane_l3_cache_metadata --test lane_l3_display_projection --test lane_l3_l2_dispatch --test lane_l7_logging_recovery --test lane_l7_plans --test local_ports --test migration_archives --test migration_bootstrap --test migration_canary_aggregate_cli --test migration_canary_receipts --test migration_canary_receipts_parity --test migration_cargo_metadata --test migration_cargo_packages_cli --test migration_ci_graph --test migration_ci_operations --test migration_ci_plan --test migration_cli --test migration_family_plan --test migration_hf_artifact_cli --test migration_hf_artifact_controls --test migration_hf_converted_artifact --test migration_lifecycle --test migration_models --test migration_native_fixtures --test migration_native_generator --test migration_native_policy --test migration_optional_isolation --test migration_package_source_version --test migration_patch_bytes --test migration_patch_shards --test migration_prepared_inputs --test migration_process --test migration_product --test migration_qualification_cli --test migration_release --test migration_report_contract --test migration_report_safety --test migration_repository --test migration_run_family --test migration_workload_oracle_cli --test migration_xcframework_cli --test openai_smoke_config --test prepared_source --test release_inventory_evidence --test release_inventory_provenance --test release_inventory_publication --test replay_acceptance_gates --test replay_arm_pass --test replay_build_arm --test replay_context_preflight --test replay_external_engines --test replay_external_run --test replay_history --test replay_history_hub --test replay_interruption --test replay_l3 --test replay_manifest_preflight --test replay_manual_profile --test replay_manual_resume_refs --test replay_model_preflight --test replay_pass_schedule --test replay_pooled_rows --test replay_progress --test replay_publication_prepare --test replay_report --test replay_retirement --test replay_run_execution --test replay_server_cell --test replay_session_evidence --test replay_trajectory_execution --test swift_api_checksum --test swift_privacy_adapter --test swift_producer_environment --test workload_certify_contract --test workload_oracle_producer_contract --test workload_smoke_config --test workload_start_retry -- --test-threads=1",
+      "source_block": "exec cargo test --locked -p xtask --bin xtask --test automation_selector --test canary_cache_configuration --test canary_controller_plan --test canary_result_gate --test ci_runner_cache_contract --test family_battery_environment --test family_battery_prepared_source --test lane_l12_build_llama --test lane_l2_authority --test lane_l2_quality_contracts --test lane_l3_abi_restore --test lane_l3_cache_metadata --test lane_l3_display_projection --test lane_l3_l2_dispatch --test lane_l7_logging_recovery --test lane_l7_plans --test local_ports --test migration_archives --test migration_bootstrap --test migration_canary_aggregate_cli --test migration_canary_receipts --test migration_canary_receipts_parity --test migration_cargo_metadata --test migration_cargo_packages_cli --test migration_ci_graph --test migration_ci_operations --test migration_ci_plan --test migration_cli --test migration_family_plan --test migration_hf_artifact_cli --test migration_hf_artifact_controls --test migration_hf_converted_artifact --test migration_lifecycle --test migration_models --test migration_native_fixtures --test migration_native_generator --test migration_native_policy --test migration_optional_isolation --test migration_package_source_version --test migration_patch_bytes --test migration_patch_shards --test migration_prepared_inputs --test migration_process --test migration_product --test migration_qualification_cli --test migration_release --test migration_report_contract --test migration_report_safety --test migration_repository --test migration_run_family --test migration_workload_oracle_cli --test migration_xcframework_cli --test openai_smoke_config --test prepared_source --test release_inventory_evidence --test release_inventory_provenance --test release_inventory_publication --test replay_acceptance_gates --test replay_arm_pass --test replay_build_arm --test replay_context_preflight --test replay_external_engines --test replay_external_run --test replay_history --test replay_history_hub --test replay_interruption --test replay_l3 --test replay_manifest_preflight --test replay_manual_profile --test replay_manual_resume_refs --test replay_model_preflight --test replay_pass_schedule --test replay_pooled_rows --test replay_progress --test replay_publication_prepare --test replay_report --test replay_retirement --test replay_run_execution --test replay_server_cell --test replay_session_evidence --test replay_trajectory_execution --test swift_api_checksum --test swift_privacy_adapter --test swift_producer_environment --test workload_certify_contract --test workload_oracle_producer_contract --test workload_smoke_config --test workload_start_retry -- --test-threads=1",
       "occurrence": 1,
       "candidate_id": null,
       "bound_child": null,
@@ -1570,398 +1570,403 @@
         },
         {
           "path": "just/ci.just",
-          "line": 196,
+          "line": 197,
           "text": "--test lane_l3_abi_restore \\"
         },
         {
           "path": "just/ci.just",
-          "line": 197,
+          "line": 198,
           "text": "--test lane_l3_cache_metadata \\"
         },
         {
           "path": "just/ci.just",
-          "line": 198,
+          "line": 199,
           "text": "--test lane_l3_display_projection \\"
         },
         {
           "path": "just/ci.just",
-          "line": 199,
+          "line": 200,
           "text": "--test lane_l3_l2_dispatch \\"
         },
         {
           "path": "just/ci.just",
-          "line": 200,
+          "line": 201,
           "text": "--test lane_l7_logging_recovery \\"
         },
         {
           "path": "just/ci.just",
-          "line": 201,
+          "line": 202,
           "text": "--test lane_l7_plans \\"
         },
         {
           "path": "just/ci.just",
-          "line": 202,
+          "line": 203,
           "text": "--test local_ports \\"
         },
         {
           "path": "just/ci.just",
-          "line": 203,
+          "line": 204,
           "text": "--test migration_archives \\"
         },
         {
           "path": "just/ci.just",
-          "line": 204,
+          "line": 205,
           "text": "--test migration_bootstrap \\"
         },
         {
           "path": "just/ci.just",
-          "line": 205,
+          "line": 206,
           "text": "--test migration_canary_aggregate_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 206,
+          "line": 207,
           "text": "--test migration_canary_receipts \\"
         },
         {
           "path": "just/ci.just",
-          "line": 207,
+          "line": 208,
           "text": "--test migration_canary_receipts_parity \\"
         },
         {
           "path": "just/ci.just",
-          "line": 208,
+          "line": 209,
           "text": "--test migration_cargo_metadata \\"
         },
         {
           "path": "just/ci.just",
-          "line": 209,
+          "line": 210,
           "text": "--test migration_cargo_packages_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 210,
+          "line": 211,
           "text": "--test migration_ci_graph \\"
         },
         {
           "path": "just/ci.just",
-          "line": 211,
+          "line": 212,
           "text": "--test migration_ci_operations \\"
         },
         {
           "path": "just/ci.just",
-          "line": 212,
+          "line": 213,
           "text": "--test migration_ci_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 213,
+          "line": 214,
           "text": "--test migration_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 214,
+          "line": 215,
           "text": "--test migration_family_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 215,
+          "line": 216,
           "text": "--test migration_hf_artifact_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 216,
+          "line": 217,
           "text": "--test migration_hf_artifact_controls \\"
         },
         {
           "path": "just/ci.just",
-          "line": 217,
+          "line": 218,
           "text": "--test migration_hf_converted_artifact \\"
         },
         {
           "path": "just/ci.just",
-          "line": 218,
+          "line": 219,
           "text": "--test migration_lifecycle \\"
         },
         {
           "path": "just/ci.just",
-          "line": 219,
+          "line": 220,
           "text": "--test migration_models \\"
         },
         {
           "path": "just/ci.just",
-          "line": 220,
+          "line": 221,
           "text": "--test migration_native_fixtures \\"
         },
         {
           "path": "just/ci.just",
-          "line": 221,
+          "line": 222,
           "text": "--test migration_native_generator \\"
         },
         {
           "path": "just/ci.just",
-          "line": 222,
+          "line": 223,
           "text": "--test migration_native_policy \\"
         },
         {
           "path": "just/ci.just",
-          "line": 223,
+          "line": 224,
           "text": "--test migration_optional_isolation \\"
         },
         {
           "path": "just/ci.just",
-          "line": 224,
+          "line": 225,
           "text": "--test migration_package_source_version \\"
         },
         {
           "path": "just/ci.just",
-          "line": 225,
+          "line": 226,
           "text": "--test migration_patch_bytes \\"
         },
         {
           "path": "just/ci.just",
-          "line": 226,
+          "line": 227,
           "text": "--test migration_patch_shards \\"
         },
         {
           "path": "just/ci.just",
-          "line": 227,
+          "line": 228,
           "text": "--test migration_prepared_inputs \\"
         },
         {
           "path": "just/ci.just",
-          "line": 228,
+          "line": 229,
           "text": "--test migration_process \\"
         },
         {
           "path": "just/ci.just",
-          "line": 229,
+          "line": 230,
           "text": "--test migration_product \\"
         },
         {
           "path": "just/ci.just",
-          "line": 230,
+          "line": 231,
           "text": "--test migration_qualification_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 231,
+          "line": 232,
           "text": "--test migration_release \\"
         },
         {
           "path": "just/ci.just",
-          "line": 232,
+          "line": 233,
           "text": "--test migration_report_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 233,
+          "line": 234,
           "text": "--test migration_report_safety \\"
         },
         {
           "path": "just/ci.just",
-          "line": 234,
+          "line": 235,
           "text": "--test migration_repository \\"
         },
         {
           "path": "just/ci.just",
-          "line": 235,
+          "line": 236,
           "text": "--test migration_run_family \\"
         },
         {
           "path": "just/ci.just",
-          "line": 236,
+          "line": 237,
           "text": "--test migration_workload_oracle_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 237,
+          "line": 238,
           "text": "--test migration_xcframework_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 238,
+          "line": 239,
           "text": "--test openai_smoke_config \\"
         },
         {
           "path": "just/ci.just",
-          "line": 239,
+          "line": 240,
           "text": "--test prepared_source \\"
         },
         {
           "path": "just/ci.just",
-          "line": 240,
+          "line": 241,
           "text": "--test release_inventory_evidence \\"
         },
         {
           "path": "just/ci.just",
-          "line": 241,
+          "line": 242,
           "text": "--test release_inventory_provenance \\"
         },
         {
           "path": "just/ci.just",
-          "line": 242,
+          "line": 243,
           "text": "--test release_inventory_publication \\"
         },
         {
           "path": "just/ci.just",
-          "line": 243,
+          "line": 244,
           "text": "--test replay_acceptance_gates \\"
         },
         {
           "path": "just/ci.just",
-          "line": 244,
+          "line": 245,
           "text": "--test replay_arm_pass \\"
         },
         {
           "path": "just/ci.just",
-          "line": 245,
+          "line": 246,
           "text": "--test replay_build_arm \\"
         },
         {
           "path": "just/ci.just",
-          "line": 246,
+          "line": 247,
           "text": "--test replay_context_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 247,
+          "line": 248,
           "text": "--test replay_external_engines \\"
         },
         {
           "path": "just/ci.just",
-          "line": 248,
+          "line": 249,
           "text": "--test replay_external_run \\"
         },
         {
           "path": "just/ci.just",
-          "line": 249,
+          "line": 250,
           "text": "--test replay_history \\"
         },
         {
           "path": "just/ci.just",
-          "line": 250,
+          "line": 251,
           "text": "--test replay_history_hub \\"
         },
         {
           "path": "just/ci.just",
-          "line": 251,
+          "line": 252,
           "text": "--test replay_interruption \\"
         },
         {
           "path": "just/ci.just",
-          "line": 252,
+          "line": 253,
           "text": "--test replay_l3 \\"
         },
         {
           "path": "just/ci.just",
-          "line": 253,
+          "line": 254,
           "text": "--test replay_manifest_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 254,
+          "line": 255,
           "text": "--test replay_manual_profile \\"
         },
         {
           "path": "just/ci.just",
-          "line": 255,
+          "line": 256,
           "text": "--test replay_manual_resume_refs \\"
         },
         {
           "path": "just/ci.just",
-          "line": 256,
+          "line": 257,
           "text": "--test replay_model_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 257,
+          "line": 258,
           "text": "--test replay_pass_schedule \\"
         },
         {
           "path": "just/ci.just",
-          "line": 258,
+          "line": 259,
           "text": "--test replay_pooled_rows \\"
         },
         {
           "path": "just/ci.just",
-          "line": 259,
+          "line": 260,
           "text": "--test replay_progress \\"
         },
         {
           "path": "just/ci.just",
-          "line": 260,
+          "line": 261,
           "text": "--test replay_publication_prepare \\"
         },
         {
           "path": "just/ci.just",
-          "line": 261,
+          "line": 262,
           "text": "--test replay_report \\"
         },
         {
           "path": "just/ci.just",
-          "line": 262,
+          "line": 263,
           "text": "--test replay_retirement \\"
         },
         {
           "path": "just/ci.just",
-          "line": 263,
+          "line": 264,
           "text": "--test replay_run_execution \\"
         },
         {
           "path": "just/ci.just",
-          "line": 264,
+          "line": 265,
           "text": "--test replay_server_cell \\"
         },
         {
           "path": "just/ci.just",
-          "line": 265,
+          "line": 266,
           "text": "--test replay_session_evidence \\"
         },
         {
           "path": "just/ci.just",
-          "line": 266,
+          "line": 267,
           "text": "--test replay_trajectory_execution \\"
         },
         {
           "path": "just/ci.just",
-          "line": 267,
+          "line": 268,
           "text": "--test swift_api_checksum \\"
         },
         {
           "path": "just/ci.just",
-          "line": 268,
+          "line": 269,
           "text": "--test swift_privacy_adapter \\"
         },
         {
           "path": "just/ci.just",
-          "line": 269,
+          "line": 270,
           "text": "--test swift_producer_environment \\"
         },
         {
           "path": "just/ci.just",
-          "line": 270,
+          "line": 271,
           "text": "--test workload_certify_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 271,
+          "line": 272,
           "text": "--test workload_oracle_producer_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 272,
+          "line": 273,
           "text": "--test workload_smoke_config \\"
         },
         {
           "path": "just/ci.just",
-          "line": 273,
+          "line": 274,
           "text": "--test workload_start_retry \\"
         },
         {
           "path": "just/ci.just",
-          "line": 274,
+          "line": 275,
           "text": "-- --test-threads=1"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 196,
+          "text": "--test lane_l2_quality_contracts \\"
         }
       ]
     }
@@ -6106,5 +6111,148 @@
         "sha256": "596b9fccc43040918fcce4cd93e091e4375254591677c412c801bc71a85d359b"
       }
     ]
+  },
+  "logging_cli_twenty_one_intent_retirement": {
+    "status": "MODULE_ONLY_RETIRED_AND_LOCAL_POSTIMAGE_QUALIFIED",
+    "original_methods": 21,
+    "rust_tests": 22,
+    "deletions": [
+      {
+        "path": "scripts/tests/test_logging_api_docs.py",
+        "sha256": "bde380d9791b4ff9a0c397839327e08ffff730bc20939cf5e7c2fd369a4c7993",
+        "mode": 420
+      },
+      {
+        "path": "scripts/tests/test_logging_module_boundaries.py",
+        "sha256": "d7c58f483ddc5ffe410a2aa6c060fab69b7d8b88f22c2024039419090d0e9e3c",
+        "mode": 420
+      },
+      {
+        "path": "scripts/tests/test_cli_inventory_contract.py",
+        "sha256": "f8379116637c8b19e85274388e6c0ecc17b33894fe30a5228ccd17eb69551532",
+        "mode": 420
+      }
+    ],
+    "durable_coverage": {
+      "path": "ci/automation-migration/logging-cli-contracts-retirement-coverage.json",
+      "sha256": "57ec1bd2b2a63c9ed408ba1c7a9d21716bac8abac633af936e6893feec8874f0"
+    },
+    "python_paths_after": 147,
+    "core_modules_after": 74,
+    "current_quality_targets": 88,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "90eeb58e388bba1809beb2995a3d146e66e54692262b46b8711e4eacb4f3e080",
+      "roster_line": 24,
+      "normalized_fingerprint": "a55ce7e1b4660c2a",
+      "count": 74
+    },
+    "qualification_hold": "Owning Rust source/documentation tests and Clippy passed; final source postimage full/normal integration validation required.",
+    "previous_normal_owner_wiring": {
+      "current_quality_targets": 87,
+      "current_just": {
+        "path": "just/ci.just",
+        "sha256": "3c515faca947fc4a8522c2fa094e9014b973f50d29c17f0e9ec8f4e9b6972000",
+        "roster_line": 24,
+        "normalized_fingerprint": "a55ce7e1b4660c2a",
+        "count": 74
+      },
+      "durable_coverage": {
+        "path": "ci/automation-migration/logging-cli-contracts-retirement-coverage.json",
+        "sha256": "eb38025e632d5ed6bdcf1e53640ea7c870c93f8a8f6bc97e16338542ba7aae16"
+      }
+    },
+    "normal_owner_wiring_correction": {
+      "status": "QUALIFIED_BY_ROOT_POSTIMAGE",
+      "manifest": ".omo/evidence/resume-20261002/root-cli-normal-owner-wiring/manifest.json",
+      "manifest_sha256": "7baf9b37618eb93448f49d7320fdb16809ad5dbc048de6a7b91e757e520c60af",
+      "previous_normal_receipt": ".omo/evidence/resume-20261002/logging-cli-contracts-postimage-normal-receipt.json",
+      "previous_normal_log_sha256": "3c9bb0a51f420c82742a8131f301e5f7a9aa2ee49c506a43f975124dbcd27859",
+      "previous_normal_exit_code": 0,
+      "previous_normal_rust": {
+        "targets": 88,
+        "passed": 4041,
+        "failed": 0,
+        "ignored": 2
+      },
+      "reason": "Missing normal owner admission; actual tests passed but omitted eight Quality/CLI tests. No projection was accepted as current qualification.",
+      "required_target": "lane_l2_quality_contracts",
+      "required_quality_targets": 88,
+      "corrected_sources": [
+        {
+          "path": "just/ci.just",
+          "sha256": "90eeb58e388bba1809beb2995a3d146e66e54692262b46b8711e4eacb4f3e080",
+          "mode": 420
+        },
+        {
+          "path": "ci/automation-migration/quality-rust-contract-targets.json",
+          "sha256": "a2e7b2dd7ca72522efa5a50ef0a6399b91ca0b0353fd4be3bad66d31f9efc9df",
+          "mode": 420
+        },
+        {
+          "path": "tools/xtask/tests/lane_l2_quality_contracts/cli_website.rs",
+          "sha256": "07a42feb6ffc2cc3ec63f853efdf859e0591579a281293562adef901f4acfee6",
+          "mode": 420
+        },
+        {
+          "path": "ci/ci.md",
+          "sha256": "a7fc50e5a462653b5c4211addfc61585efbd9127a0d796663ce9e668775671bf",
+          "mode": 420
+        },
+        {
+          "path": ".agents/skills/manage-ci/references/current-inventory.md",
+          "sha256": "88049b29c1c55b02f2cfe549baf7da40bd258898deac4a6e00c7fbf9e1434eaf",
+          "mode": 420
+        }
+      ],
+      "previous_status": "APPLIED_UNQUALIFIED"
+    },
+    "normal_owner_wiring_boundary_rebind": {
+      "status": "QUALIFIED_BY_ROOT_POSTIMAGE",
+      "previous_boundary_sha256": "fcb6eb7e7c13c1c0d9fe4f385d98fa659c30ea9cfa5bbcb3e41a3e03de8dd405",
+      "current_boundary_sha256": "fcb99d06dde4f938abdc6ee8ad836274054ea86b36f253b9f42782702ee2e4d1",
+      "required_targets": 88,
+      "reason": "Rebind the exact current full argv and shifted source evidence; retain historical87-target publication snapshots.",
+      "previous_status": "APPLIED_UNQUALIFIED"
+    },
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "full": {
+        "receipt": ".omo/evidence/resume-20261002/logging-cli-smoke-diagnostic-postimage-full-receipt.json",
+        "log_sha256": "9056fd0aadbbab3632303374b09d94f377534d83f754c9d96e16049340ade85b",
+        "targets": 109,
+        "passed": 4134,
+        "failed": 0,
+        "ignored": 2
+      },
+      "normal": {
+        "receipt": ".omo/evidence/resume-20261002/logging-cli-smoke-diagnostic-postimage-normal-receipt.json",
+        "log_sha256": "3a62fda0dea85b7269d34fcef3c2dfe152bb3ddaf641dfa766d5829b7d317181",
+        "targets": 89,
+        "passed": 4049,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 1053,
+        "passed": 1039,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 394.125
+      },
+      "focused_receipts": ".omo/evidence/resume-20261002/logging-cli-normal-owner-boundary-corrected-focused-receipts.json",
+      "limits": "Typed authored logging documentation/source ownership and CLI website component contracts, including actual affected-crates selection. Independent product logging, browser/exporter runtime and hosted/platform/model/SDK acceptance remain unverified.",
+      "diagnostic_change": {
+        "source": "tools/xtask/tests/migration_required_smoke/executable/mod.rs",
+        "qualification": ".omo/evidence/resume-20261002/smoke-early-exit-diagnostic-configured-qualification.json",
+        "original_failed_aggregate": ".omo/evidence/resume-20261002/logging-cli-normal-owner-corrected-postimage-full-receipt.json",
+        "remaining_uncertainty": "Original intermittent early-exit failure has not been causally explained; diagnostic assertion preserves the exact rejection type and reason and exposes any recurrence. Subsequent passing results do not establish a root cause fix."
+      }
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/logging-cli-contracts-retirement-coverage.json",
+      "sha256": "cd4290864cc78653f5ecebbdc2142c0b7d83f7006842f91e5e3e53486bcef5f0"
+    }
   }
 }

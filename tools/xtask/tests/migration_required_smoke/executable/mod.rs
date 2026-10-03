@@ -82,7 +82,14 @@ macro_rules! rejects {
             let options = options(directory.path(), $scenario);
             let error =
                 command::execute(directory.path(), &options, &Cancellation::default()).unwrap_err();
-            assert_eq!(error.downcast_ref::<Rejected>().unwrap().reason, $reason);
+            let rejected = error.downcast_ref::<Rejected>().unwrap_or_else(|| {
+                panic!(
+                    "unexpected smoke error: {error:?}; reason: {}; reports: {:?}",
+                    output::reason(error.as_ref()),
+                    output::reports(error.as_ref())
+                )
+            });
+            assert_eq!(rejected.reason, $reason);
         }
     };
 }

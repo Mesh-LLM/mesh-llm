@@ -565,19 +565,6 @@
       ]
     ],
     [
-      "scripts/tests/test_cli_inventory_contract.py",
-      [
-        [
-          "launch",
-          "scripts/affected-crates.sh",
-          "bash with mesh-llm-cli changed file and repository cwd; asserts affected-crate output",
-          [
-            78
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_compare_event_benchmark_matrix.py",
       [
         [
@@ -1907,7 +1894,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "1e46d9d97fbec87904cf61ff11032b536032b7dae7666a6b76883416b73b2628",
+  "observed_source_sha256": "a93c96bfd2f86b40c80fe51c379e7fe099d0964a3653181b7ed298aa7707e98e",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -3039,5 +3026,144 @@
         "sha256": "596b9fccc43040918fcce4cd93e091e4375254591677c412c801bc71a85d359b"
       }
     ]
+  },
+  "logging_cli_twenty_one_intent_retirement": {
+    "status": "MODULE_ONLY_RETIRED_AND_LOCAL_POSTIMAGE_QUALIFIED",
+    "original_methods": 21,
+    "rust_tests": 22,
+    "deletions": [
+      {
+        "path": "scripts/tests/test_logging_api_docs.py",
+        "sha256": "bde380d9791b4ff9a0c397839327e08ffff730bc20939cf5e7c2fd369a4c7993",
+        "mode": 420
+      },
+      {
+        "path": "scripts/tests/test_logging_module_boundaries.py",
+        "sha256": "d7c58f483ddc5ffe410a2aa6c060fab69b7d8b88f22c2024039419090d0e9e3c",
+        "mode": 420
+      },
+      {
+        "path": "scripts/tests/test_cli_inventory_contract.py",
+        "sha256": "f8379116637c8b19e85274388e6c0ecc17b33894fe30a5228ccd17eb69551532",
+        "mode": 420
+      }
+    ],
+    "durable_coverage": {
+      "path": "ci/automation-migration/logging-cli-contracts-retirement-coverage.json",
+      "sha256": "57ec1bd2b2a63c9ed408ba1c7a9d21716bac8abac633af936e6893feec8874f0"
+    },
+    "python_paths_after": 147,
+    "core_modules_after": 74,
+    "current_quality_targets": 88,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "90eeb58e388bba1809beb2995a3d146e66e54692262b46b8711e4eacb4f3e080",
+      "roster_line": 24,
+      "normalized_fingerprint": "a55ce7e1b4660c2a",
+      "count": 74
+    },
+    "qualification_hold": "Owning Rust source/documentation tests and Clippy passed; final source postimage full/normal integration validation required.",
+    "current_test_tree": {
+      "sha256": "a93c96bfd2f86b40c80fe51c379e7fe099d0964a3653181b7ed298aa7707e98e",
+      "candidate_source_paths": 66
+    },
+    "previous_normal_owner_wiring": {
+      "current_quality_targets": 87,
+      "current_just": {
+        "path": "just/ci.just",
+        "sha256": "3c515faca947fc4a8522c2fa094e9014b973f50d29c17f0e9ec8f4e9b6972000",
+        "roster_line": 24,
+        "normalized_fingerprint": "a55ce7e1b4660c2a",
+        "count": 74
+      },
+      "durable_coverage": {
+        "path": "ci/automation-migration/logging-cli-contracts-retirement-coverage.json",
+        "sha256": "eb38025e632d5ed6bdcf1e53640ea7c870c93f8a8f6bc97e16338542ba7aae16"
+      }
+    },
+    "normal_owner_wiring_correction": {
+      "status": "QUALIFIED_BY_ROOT_POSTIMAGE",
+      "manifest": ".omo/evidence/resume-20261002/root-cli-normal-owner-wiring/manifest.json",
+      "manifest_sha256": "7baf9b37618eb93448f49d7320fdb16809ad5dbc048de6a7b91e757e520c60af",
+      "previous_normal_receipt": ".omo/evidence/resume-20261002/logging-cli-contracts-postimage-normal-receipt.json",
+      "previous_normal_log_sha256": "3c9bb0a51f420c82742a8131f301e5f7a9aa2ee49c506a43f975124dbcd27859",
+      "previous_normal_exit_code": 0,
+      "previous_normal_rust": {
+        "targets": 88,
+        "passed": 4041,
+        "failed": 0,
+        "ignored": 2
+      },
+      "reason": "Missing normal owner admission; actual tests passed but omitted eight Quality/CLI tests. No projection was accepted as current qualification.",
+      "required_target": "lane_l2_quality_contracts",
+      "required_quality_targets": 88,
+      "corrected_sources": [
+        {
+          "path": "just/ci.just",
+          "sha256": "90eeb58e388bba1809beb2995a3d146e66e54692262b46b8711e4eacb4f3e080",
+          "mode": 420
+        },
+        {
+          "path": "ci/automation-migration/quality-rust-contract-targets.json",
+          "sha256": "a2e7b2dd7ca72522efa5a50ef0a6399b91ca0b0353fd4be3bad66d31f9efc9df",
+          "mode": 420
+        },
+        {
+          "path": "tools/xtask/tests/lane_l2_quality_contracts/cli_website.rs",
+          "sha256": "07a42feb6ffc2cc3ec63f853efdf859e0591579a281293562adef901f4acfee6",
+          "mode": 420
+        },
+        {
+          "path": "ci/ci.md",
+          "sha256": "a7fc50e5a462653b5c4211addfc61585efbd9127a0d796663ce9e668775671bf",
+          "mode": 420
+        },
+        {
+          "path": ".agents/skills/manage-ci/references/current-inventory.md",
+          "sha256": "88049b29c1c55b02f2cfe549baf7da40bd258898deac4a6e00c7fbf9e1434eaf",
+          "mode": 420
+        }
+      ],
+      "previous_status": "APPLIED_UNQUALIFIED"
+    },
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "full": {
+        "receipt": ".omo/evidence/resume-20261002/logging-cli-smoke-diagnostic-postimage-full-receipt.json",
+        "log_sha256": "9056fd0aadbbab3632303374b09d94f377534d83f754c9d96e16049340ade85b",
+        "targets": 109,
+        "passed": 4134,
+        "failed": 0,
+        "ignored": 2
+      },
+      "normal": {
+        "receipt": ".omo/evidence/resume-20261002/logging-cli-smoke-diagnostic-postimage-normal-receipt.json",
+        "log_sha256": "3a62fda0dea85b7269d34fcef3c2dfe152bb3ddaf641dfa766d5829b7d317181",
+        "targets": 89,
+        "passed": 4049,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 1053,
+        "passed": 1039,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 394.125
+      },
+      "focused_receipts": ".omo/evidence/resume-20261002/logging-cli-normal-owner-boundary-corrected-focused-receipts.json",
+      "limits": "Typed authored logging documentation/source ownership and CLI website component contracts, including actual affected-crates selection. Independent product logging, browser/exporter runtime and hosted/platform/model/SDK acceptance remain unverified.",
+      "diagnostic_change": {
+        "source": "tools/xtask/tests/migration_required_smoke/executable/mod.rs",
+        "qualification": ".omo/evidence/resume-20261002/smoke-early-exit-diagnostic-configured-qualification.json",
+        "original_failed_aggregate": ".omo/evidence/resume-20261002/logging-cli-normal-owner-corrected-postimage-full-receipt.json",
+        "remaining_uncertainty": "Original intermittent early-exit failure has not been causally explained; diagnostic assertion preserves the exact rejection type and reason and exposes any recurrence. Subsequent passing results do not establish a root cause fix."
+      }
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/logging-cli-contracts-retirement-coverage.json",
+      "sha256": "cd4290864cc78653f5ecebbdc2142c0b7d83f7006842f91e5e3e53486bcef5f0"
+    }
   }
 }

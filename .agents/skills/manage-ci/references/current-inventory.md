@@ -1460,6 +1460,11 @@ remain required. No provider, permission, cache-authority or five-entrypoint
 contract changed. The shared runtime-reuse adapter honors the prepared automation
 executable, so copied SDK consumers do not depend on local Cargo aliases.
 
+The CLI/website contract owner `lane_l2_quality_contracts` is selected by the
+required normal Rust roster in `ci/automation-migration/quality-rust-contract-targets.json`
+and `just ci-automation-contracts`; the full Rust suite alone does not satisfy
+this normal-path replacement obligation.
+
 Laya parity and packaged-product smoke now use Rust `automation laya parity`
 and `automation laya product` through the shared automation adapter. Their
 Python drivers and direct tests are removed; Rust golden and retained-process
