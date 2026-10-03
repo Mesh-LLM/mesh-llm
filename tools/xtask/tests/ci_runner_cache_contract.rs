@@ -42,3 +42,6 @@ mod evidence_runtime;
 
 #[path = "ci_runner_cache_contract/publication.rs"]
 mod publication;
+
+#[path = "ci_runner_cache_contract/controller_checks.rs"]
+mod controller_checks;

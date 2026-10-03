@@ -3240,5 +3240,185 @@
         "sha256": "7ab94da215854c04b680978a452a789c10d6c77d23bafc66b239d8a35df8ece4"
       }
     ]
+  },
+  "installer_release_six_intent_retirement": {
+    "status": "MODULE_ONLY_RETIRED_LOCAL_CONTRACTS_QUALIFIED_REQUIRED_INDEPENDENT_GATES_RETAINED",
+    "predecessor_checkpoint": "6df48bea566f8969eebee1380551ef30ffeb3d5e",
+    "original_methods": 6,
+    "owning_fixture_groups": 6,
+    "deletions": [
+      {
+        "path": "scripts/tests/test_install_sccache.py",
+        "sha256": "a937d6a9b6b73fe722232cea6660797c6f0a4223e42e2160c330207bbf378654",
+        "mode": 420,
+        "preserved_preimage": "deletion-preimages/scripts/tests/test_install_sccache.py"
+      },
+      {
+        "path": "scripts/tests/test_release_script.py",
+        "sha256": "b504f7f20c7a29958c2af7225ae9095f510c1338f48ca3fe1739457163c68ebe",
+        "mode": 420,
+        "preserved_preimage": "deletion-preimages/scripts/tests/test_release_script.py"
+      }
+    ],
+    "durable_coverage": {
+      "path": "ci/automation-migration/installer-release-retirement-coverage.json",
+      "sha256": "a87b14344f9157ee125fed502dec1c8eb220067abc1298dd94c4e5a082a81670"
+    },
+    "current_test_tree": {
+      "sha256": "7f514576d63d5b5732fbe3156a8161484b9be558613d43b663cfa49342769a06",
+      "candidate_source_paths": 70
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "efd00276f620ced70ee1e3bb5e0129e44d098dc1b5b6914209f2d8152536454e",
+      "roster_line": 24,
+      "normalized_fingerprint": "44e48a0fcdc64d4a",
+      "count": 81
+    },
+    "projected_counts": {
+      "python_paths_before": 156,
+      "python_paths_after": 154,
+      "core_modules_before": 83,
+      "core_modules_after": 81,
+      "current_quality_targets_unchanged": 87
+    },
+    "required_gates": "Postimage inventory/policy/fmt, six unchanged owning fixture groups and full normal CI; actual platform/provider/native/model/SDK acceptance remains unverified.",
+    "previous_postimage_status": "ROOT_PREPARED_NOT_APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_aggregate_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "full": {
+        "receipt": ".omo/evidence/resume-20261002/installer-release-controller-six-module-aggregate-full-receipt.json",
+        "log_sha256": "cb008cdf72cbe792a9cb9a3e90a74c0bff97e907f23189c835ffbb317477f1da",
+        "targets": 109,
+        "passed": 4112,
+        "failed": 0,
+        "ignored": 2
+      },
+      "normal": {
+        "receipt": ".omo/evidence/resume-20261002/installer-release-controller-six-module-aggregate-normal-receipt.json",
+        "log_sha256": "053a99ce8f78c6689076ec550a37589926a4a776f73af583fa80a62f06ae492b",
+        "targets": 88,
+        "passed": 4026,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 1074,
+        "passed": 1060,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 367.695
+      },
+      "focused_receipts": ".omo/evidence/resume-20261002/installer-release-controller-six-module-selection-corrected-focused-receipts.json",
+      "limits": "Finite actual copied-script/controller scalar/parsed graph/native Just contracts. Production helpers and shared Just reader retained; real hosted/provider/platform/native/model/SDK gates remain independent and unverified."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/installer-release-retirement-coverage.json",
+      "sha256": "bd2aa5176d2ad4c10a72df48938ea26bbbad9eea43f2e39cf616e36081e1f131"
+    }
+  },
+  "pr_summary_lld_just_static_thirty_four_intent_retirement": {
+    "status": "MODULE_ONLY_RETIRED_LOCAL_CONTRACTS_QUALIFIED_REQUIRED_INDEPENDENT_GATES_RETAINED",
+    "original_methods": 34,
+    "deletions": [
+      {
+        "path": "scripts/tests/test_pr_builds_summary.py",
+        "sha256": "808010b63144a5f3fd0860e5612aada49f78cab7937bd7883325756aea4fc15a",
+        "mode": 420,
+        "preserved_preimage": ".omo/evidence/resume-20261002/pr-summary-five-intent-retirement-blueprint/deletion-preimages/scripts/tests/test_pr_builds_summary.py"
+      },
+      {
+        "path": "scripts/tests/test_lld_lib.py",
+        "sha256": "34af84d509ca56fc464be2adce115eed970563944ca66e88fd6b03cc398ff636",
+        "methods": 14,
+        "mode": 420,
+        "preserved_preimage": ".omo/evidence/resume-20261002/lld-just-eighteen-intent-retirement-blueprint/deletion-preimages/scripts/tests/test_lld_lib.py"
+      },
+      {
+        "path": "scripts/tests/test_justfile_shell_portability.py",
+        "sha256": "ee34c74e65fd92ca7a4a90602fd398fab7e4fcb3146c6f9c31404cadcbc67489",
+        "methods": 4,
+        "mode": 420,
+        "preserved_preimage": ".omo/evidence/resume-20261002/lld-just-eighteen-intent-retirement-blueprint/deletion-preimages/scripts/tests/test_justfile_shell_portability.py"
+      },
+      {
+        "path": "scripts/tests/test_static_abi_artifacts.py",
+        "sha256": "b4e650346467972af3d1c2abf18592f066e26375a398ee18f6a3b04d1a5c401a",
+        "mode": 420,
+        "preserved_preimage": ".omo/evidence/resume-20261002/static-abi-eleven-intent-retirement-blueprint/deletion-preimages/scripts/tests/test_static_abi_artifacts.py"
+      }
+    ],
+    "durable_coverages": [
+      {
+        "path": "ci/automation-migration/pr-summary-retirement-coverage.json",
+        "sha256": "0cfab9e034c3025263994e4532fa653fbb03b0adf745ba12dba7dacd28e60d7a"
+      },
+      {
+        "path": "ci/automation-migration/lld-just-retirement-coverage.json",
+        "sha256": "96221c6134d98cdc445182158fe52dd2dcf872f048eb9ad92a0fc028154f0d79"
+      },
+      {
+        "path": "ci/automation-migration/static-abi-retirement-coverage.json",
+        "sha256": "e8a3c5fcb21f2ae30e88c85303167bbc7bae76d58b170bf48f1bfffc96a8ffc4"
+      }
+    ],
+    "current_test_tree": {
+      "sha256": "1e46d9d97fbec87904cf61ff11032b536032b7dae7666a6b76883416b73b2628",
+      "candidate_source_paths": 67
+    },
+    "python_paths_after": 150,
+    "core_modules_after": 77,
+    "current_quality_targets": 87,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "fc7d3ec3f1f27275f0d4d2f0320fb51b6229aa7e921cc903d891b310154db6d1",
+      "roster_line": 24,
+      "normalized_fingerprint": "726a0019610eb468",
+      "count": 77
+    },
+    "qualification_hold": "Five controller causal cases/whole cohort and unchanged graph/linker/Just owners qualified; final postimage aggregate remains required. Independent platform/provider/native/model/SDK acceptance is not established.",
+    "previous_postimage_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_aggregate_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "full": {
+        "receipt": ".omo/evidence/resume-20261002/installer-release-controller-six-module-aggregate-full-receipt.json",
+        "log_sha256": "cb008cdf72cbe792a9cb9a3e90a74c0bff97e907f23189c835ffbb317477f1da",
+        "targets": 109,
+        "passed": 4112,
+        "failed": 0,
+        "ignored": 2
+      },
+      "normal": {
+        "receipt": ".omo/evidence/resume-20261002/installer-release-controller-six-module-aggregate-normal-receipt.json",
+        "log_sha256": "053a99ce8f78c6689076ec550a37589926a4a776f73af583fa80a62f06ae492b",
+        "targets": 88,
+        "passed": 4026,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 1074,
+        "passed": 1060,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 367.695
+      },
+      "focused_receipts": ".omo/evidence/resume-20261002/installer-release-controller-six-module-selection-corrected-focused-receipts.json",
+      "limits": "Finite actual copied-script/controller scalar/parsed graph/native Just contracts. Production helpers and shared Just reader retained; real hosted/provider/platform/native/model/SDK gates remain independent and unverified."
+    },
+    "previous_durable_coverages": [
+      {
+        "path": "ci/automation-migration/pr-summary-retirement-coverage.json",
+        "sha256": "c9c31b7b07c2c38c98e0e181f53603441996b25d1f5a38166e89cae327987ef3"
+      },
+      {
+        "path": "ci/automation-migration/lld-just-retirement-coverage.json",
+        "sha256": "da45939aed507a03a6796c784d7d8b441a5ef5ad1f9f38accd0a058e3541fd16"
+      },
+      {
+        "path": "ci/automation-migration/static-abi-retirement-coverage.json",
+        "sha256": "596b9fccc43040918fcce4cd93e091e4375254591677c412c801bc71a85d359b"
+      }
+    ]
   }
 }
