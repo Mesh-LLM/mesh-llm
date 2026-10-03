@@ -88,7 +88,10 @@ pub(super) fn take_direct_iteration_batch(
     mut token_budget: usize,
 ) -> Vec<DirectIteration> {
     let mut batch = Vec::new();
-    let mut batched_sessions = BTreeSet::new();
+    // Sessions that already have a request in this wave or deferred from it.
+    // A later request from such a session must wait so it cannot overtake
+    // the earlier one.
+    let mut claimed_sessions = BTreeSet::new();
     let mut deferred = VecDeque::new();
     let queued = queue.len();
     for _ in 0..queued {
@@ -98,16 +101,21 @@ pub(super) fn take_direct_iteration_batch(
         let Some(request) = queue.pop_front() else {
             break;
         };
-        if batched_sessions.contains(&request.session_id) {
+        if claimed_sessions.contains(&request.session_id) {
             deferred.push_back(request);
             continue;
         }
+        // Keep scanning past a chunk that does not fit so smaller decode rows
+        // queued behind a large prefill chunk still join this wave. The
+        // deferred chunk keeps its place ahead of later arrivals, and the
+        // queue head always fits a fresh budget, so it cannot starve.
         if request.token_ids.len() > token_budget {
+            claimed_sessions.insert(request.session_id.clone());
             deferred.push_back(request);
-            break;
+            continue;
         }
         token_budget = token_budget.saturating_sub(request.token_ids.len());
-        batched_sessions.insert(request.session_id.clone());
+        claimed_sessions.insert(request.session_id.clone());
         batch.push(request);
         if token_budget == 0 {
             break;

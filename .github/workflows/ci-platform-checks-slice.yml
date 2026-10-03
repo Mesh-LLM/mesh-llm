@@ -247,7 +247,13 @@ jobs:
           # hence the explicit exit check after each one.
           $crates = @($env:TEST_CRATES | ConvertFrom-Json) + @($env:WINDOWS_TEST_CRATES | ConvertFrom-Json)
           foreach ($crate in $crates) {
-            cargo test --locked -p $crate --lib
+            if ($crate -eq 'mesh-llm-skippy-adapter') {
+              # The adapter reaches skippy-ffi without the dynamic loader by
+              # default. Windows unit tests do not prepare static llama ABI.
+              cargo test --locked -p $crate --lib --features mesh-llm-skippy-adapter/dynamic-native-runtime
+            } else {
+              cargo test --locked -p $crate --lib
+            }
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           # Feature unification turns on `skippy-ffi`'s `dynamic-runtime`, whose

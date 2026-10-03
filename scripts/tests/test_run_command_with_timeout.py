@@ -52,11 +52,32 @@ class TimeoutSignalSafetyTests(unittest.TestCase):
             mock.patch.object(
                 RUNNER.subprocess,
                 "check_output",
-                return_value=" 4321 S\n",
+                side_effect=[
+                    " 4321 S\n",
+                    " 4321 S\n",
+                    " 99 1 4321 501 S /usr/bin/python3\n",
+                ],
             ),
         ):
-            with self.assertRaisesRegex(RUNNER.CleanupError, "live process-group member"):
+            with self.assertRaisesRegex(
+                RUNNER.CleanupError,
+                r"live process-group member.*pid=99 ppid=1 uid=501 stat=S executable=/usr/bin/python3",
+            ):
                 RUNNER.cleanup_completed_group(process)
+
+    def test_process_details_do_not_include_command_arguments(self) -> None:
+        with mock.patch.object(
+            RUNNER.subprocess,
+            "check_output",
+            return_value=" 99 1 4321 501 S /usr/bin/python3\n 100 1 5 501 S /bin/sh\n",
+        ) as inspect:
+            self.assertEqual(
+                "pid=99 ppid=1 uid=501 stat=S executable=/usr/bin/python3",
+                RUNNER.describe_live_group_members(4321),
+            )
+        inspect.assert_called_once_with(
+            ["ps", "-axo", "pid=,ppid=,pgid=,uid=,stat=,comm="], text=True,
+        )
 
     def test_cleanup_error_returns_dedicated_infrastructure_status(self) -> None:
         process = mock.Mock()
