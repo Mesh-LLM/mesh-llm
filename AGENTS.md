@@ -661,7 +661,7 @@ Pull request titles and descriptions should be user-focused by default.
 
 ```bash
 just bundle    # /tmp/mesh-llm-bundle.tar.gz — single mesh-llm binary
-# scp bundle to remote, tar xzf, then on macOS: codesign -s - mesh-llm && xattr -cr <dir>
+# scp bundle to remote, tar xzf; on macOS verify with codesign --verify --verbose=2 and re-sign ad hoc (-s -) only if verification fails
 ```
 
 For the full per-platform deploy flows, see the repo skills
@@ -707,10 +707,11 @@ bash -c './target/debug/mesh-llm serve --model "..." --auto > /tmp/mesh.log 2>&1
 2. `just build && just bundle`
 3. Kill ALL processes on ALL nodes — `pkill -9 -f mesh-llm`
 4. Verify clean — `ps -eo pid,args | grep -E 'mesh-llm' | grep -v grep` must be empty.
-5. Deploy bundle — scp + tar + codesign on remote nodes.
-6. If macOS peers on the same LAN connect only via relay, or a desktop Local
-   Network alert appears, follow the `deploy-macos` Local Network troubleshooting
-   section before diagnosing iroh. It is not a routine preflight.
+5. Deploy bundle — scp + tar on remote nodes; verify the signature and re-sign
+   ad hoc only if verification fails.
+6. If a macOS same-LAN join or split fails, peers connect only via relay, or a
+   desktop Local Network alert appears, follow the `deploy-macos` Local Network
+   troubleshooting section before diagnosing iroh. It is not a routine preflight.
 7. Verify version — `mesh-llm --version` on every node.
 
 ### After starting nodes
