@@ -229,12 +229,6 @@ jobs:
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         shell: pwsh
         env:
-          # One host-runtime test peaks between 2.0 and 2.25 MiB of stack on
-          # MSVC debug frames since #1887, and a 2 MiB test thread dies of
-          # STATUS_STACK_OVERFLOW, taking the whole harness with it. Reserve
-          # more until the frame is found; the measurements are in the stack
-          # overflow issue linked from #1554.
-          RUST_MIN_STACK: "8388608"
           TEST_CRATES: ${{ steps.packages.outputs.crates }}
           WINDOWS_TEST_CRATES: ${{ steps.windows_packages.outputs.crates }}
           WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_dynamic_packages.outputs.crates }}
