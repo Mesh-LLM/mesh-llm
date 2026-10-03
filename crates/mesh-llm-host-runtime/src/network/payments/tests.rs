@@ -504,6 +504,7 @@ async fn paid_exchange_on(
             &provider_events.events(),
             expected_request_digest.as_deref(),
             &provider.id().to_string(),
+            &hex::encode(payer.id().as_bytes()),
             output_tokens,
         );
     } else {
@@ -552,6 +553,7 @@ fn assert_seller_published_the_exchange(
     events: &[crate::plugin::openai_exchange::OpenAiExchangeEnvelope],
     expected_request_digest: Option<&str>,
     provider_node_id: &str,
+    payer_node_id: &str,
     output_tokens: u64,
 ) {
     use crate::plugin::openai_exchange::{
@@ -592,6 +594,12 @@ fn assert_seller_published_the_exchange(
         .as_ref()
         .expect("served here, so this node's serving provenance is attached");
     assert_eq!(provenance.served_by_node_id, provider_node_id);
+    // The node that asked, from the payments stream's authenticated remote
+    // id: without it the serving node has no one to give its record to.
+    assert_eq!(
+        provenance.requested_by_node_id.as_deref(),
+        Some(payer_node_id)
+    );
 }
 
 fn paid_request(max_tokens: Option<u32>) -> Result<super::request::PaidRequest> {

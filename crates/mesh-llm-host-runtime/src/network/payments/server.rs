@@ -87,6 +87,9 @@ async fn serve_inner(
         .context("paid model must be served locally")?;
     // Checks the seller's current price, wakes the receiving wallet during
     // prefill, and waits out this peer's prior debt before opening serving.
+    // The payer, as the stream's QUIC-authenticated remote id: the terminal
+    // exchange event names it, as the free path names the tunnel's.
+    let payer = peer;
     let peer = peer.to_string();
     let _: Empty = payments
         .call(
@@ -161,6 +164,7 @@ async fn serve_inner(
         completed && closed.is_ok(),
         &model_for_events,
         request_digest.as_deref(),
+        payer,
     )
     .await;
     let transport_alive = generated?;
@@ -252,10 +256,13 @@ async fn end_exchange(
     served: bool,
     model: &str,
     request_digest: Option<&str>,
+    payer: iroh::EndpointId,
 ) {
     if let Some((exchange, delivered)) = exchange {
         let outcome = exchange_outcome(served, delivered, adapter).await;
-        exchange.finish(node, model, &outcome, request_digest).await;
+        exchange
+            .finish(node, model, &outcome, request_digest, payer)
+            .await;
     }
 }
 
