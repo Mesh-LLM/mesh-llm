@@ -9788,5 +9788,14 @@
       "path": "ci/automation-migration/ui-package-retirement-coverage.json",
       "sha256": "657ac12b687b01c623653f8c191883a8263c519ccc77c8b66eafdbd528675719"
     }
+  },
+  "ui_build_orchestration_ownership": {
+    "status": "LOCAL_UI_OWNER_CHECKPOINT_FOLLOWUPS_OPEN",
+    "durable_coverage": {
+      "path": "ci/automation-migration/ui-build-ownership-coverage.json",
+      "sha256": "3579db723f7c032c205cd4d3f62658afb0935704df0a413c77fd2412b0092df2"
+    },
+    "owner": "tools/xtask/src/automation/ui_build",
+    "limits": "Windows ownership and independent platform/product acceptance remain open; no Python retirement."
   }
 }

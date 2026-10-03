@@ -96,6 +96,7 @@ fn run() -> DynResult<()> {
             let root = repository::RepositoryRoot::resolve(None)?;
             automation::startup_recovery::run(root.as_path(), rest)
         }
+        cli::CliCommand::UiBuild(rest) => automation::ui_build::run(rest),
         cli::CliCommand::LoggingConsole(rest) => {
             let root = repository::RepositoryRoot::resolve(None)?;
             automation::logging_console::run(root.as_path(), rest)
