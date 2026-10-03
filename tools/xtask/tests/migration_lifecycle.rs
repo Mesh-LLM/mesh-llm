@@ -186,3 +186,9 @@ mod static_abi_build_policy;
 
 #[path = "migration_lifecycle/product_composition_adapter.rs"]
 mod product_composition_adapter;
+
+#[path = "migration_lifecycle/sccache_installer.rs"]
+mod sccache_installer;
+
+#[path = "migration_lifecycle/release_script.rs"]
+mod release_script;
