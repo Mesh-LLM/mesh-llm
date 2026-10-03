@@ -535,8 +535,8 @@ the installed archive, extracted files, and local plugin metadata.
 ## Default Plugins
 
 A fresh node installs a short list of default plugins once, on first run
-(`mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`). The list starts empty;
-each entry is added by its own change. Payment and wallet plugins are never on
+(`mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`). Today the list is
+`capsule-emit-mesh` 0.1.1; each entry is added by its own change. Payment and wallet plugins are never on
 it: a node pays or gets paid only through a plugin its operator chose. A
 default installs as an ordinary package, so it can serve a web UI like any
 installed plugin.
@@ -554,6 +554,16 @@ release.
 The node says what it did: one line when a default is installed, naming the
 version and how to remove it, and one warning when it couldn't be. After that a
 default is silent: later starts don't look it up, download it, or log about it.
+
+`capsule-emit-mesh` keeps a signed record of each request this node serves, on
+the node's own disk. By default it keeps SHA-256 digests of the request and
+response, never their text; keeping text takes two operator opt-ins
+(`MESH_LLM_PLUGIN_EXCHANGE_BODIES=1` on the host and the plugin's own setting).
+It is quiet while the node is: with no served requests it writes no records and
+cuts no checkpoints, and it makes no network calls unless the operator
+configures a witness URL. Remove it with `mesh-llm plugins delete
+capsule-emit-mesh`, or keep it installed but off with `mesh-llm plugins disable
+capsule-emit-mesh`.
 
 Opting out:
 

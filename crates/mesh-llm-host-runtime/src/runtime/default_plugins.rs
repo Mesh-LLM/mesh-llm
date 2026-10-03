@@ -132,4 +132,13 @@ mod tests {
             "an empty list does nothing, not even a catalog lookup"
         );
     }
+
+    #[test]
+    fn the_default_list_carries_the_plugin() {
+        assert!(
+            DEFAULT_PLUGINS
+                .iter()
+                .any(|default| default.name == "capsule-emit-mesh")
+        );
+    }
 }

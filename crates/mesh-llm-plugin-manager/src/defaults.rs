@@ -55,11 +55,28 @@ impl DefaultPlugin {
     }
 }
 
-/// The plugins a fresh node installs. Empty: an entry is added by its own PR,
-/// and bumping one is a one-entry change per release. Payment and wallet
+/// The plugins a fresh node installs. Each entry is added by its own PR, and
+/// bumping one is a one-entry change per release. Payment and wallet
 /// plugins are never on this list: a node pays or gets paid only through a
 /// plugin its operator chose.
-pub const DEFAULT_PLUGINS: &[DefaultPlugin] = &[];
+pub const DEFAULT_PLUGINS: &[DefaultPlugin] = &[DefaultPlugin {
+    name: "capsule-emit-mesh",
+    version: "0.1.1",
+    sha256: &[
+        (
+            "aarch64-apple-darwin",
+            "4391a8cca80cafa67ed2e7185d57d4c0ccd4627fa0e8bbe7d820c55d1f9582f3",
+        ),
+        (
+            "x86_64-unknown-linux-gnu",
+            "412e768c4fe867211592aee8876ec191cbd388eae834b5a29809d3975a1dad91",
+        ),
+        (
+            "aarch64-unknown-linux-gnu",
+            "bbeef683d1b569efa27bbcec39f22f5f4dd5438166ff66983dccf2ceb0638d60",
+        ),
+    ],
+}];
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Offered {
