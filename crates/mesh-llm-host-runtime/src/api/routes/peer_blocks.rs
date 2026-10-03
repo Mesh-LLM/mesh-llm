@@ -89,13 +89,17 @@ pub(super) async fn handle(
             let Some(peer) = parse_peer(&request.peer) else {
                 return respond_error(stream, 400, "peer must be a 64-hex endpoint id").await;
             };
-            node.peer_blocks.block(
-                &peer,
-                request.length,
-                Requester::Operator,
-                request.reason,
-                now_ms(),
-            )
+            let blocks = node.peer_blocks.clone();
+            peer_blocks::offload(move || {
+                blocks.block(
+                    &peer,
+                    request.length,
+                    Requester::Operator,
+                    request.reason,
+                    now_ms(),
+                )
+            })
+            .await
         }
         ("POST", UNBLOCK_ROUTE) => {
             let request: UnblockRequest = match serde_json::from_str(body) {
@@ -105,8 +109,11 @@ pub(super) async fn handle(
             let Some(peer) = parse_peer(&request.peer) else {
                 return respond_error(stream, 400, "peer must be a 64-hex endpoint id").await;
             };
-            node.peer_blocks
-                .unblock(&peer, Requester::Operator, request.reason, now_ms())
+            let blocks = node.peer_blocks.clone();
+            peer_blocks::offload(move || {
+                blocks.unblock(&peer, Requester::Operator, request.reason, now_ms())
+            })
+            .await
         }
         _ => return respond_error(stream, 405, "method not allowed").await,
     };

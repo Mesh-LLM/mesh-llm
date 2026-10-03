@@ -1178,8 +1178,11 @@ An operator can tell their own node to stop routing to a peer: `POST
 "until_undone" }`, undone with `POST /api/peer-blocks/unblock`, listed with `GET
 /api/peer-blocks`. The routes are loopback-only. A block is local to this node:
 it is never gossiped or shared. While it holds, the router, the any-host
-fallback and consult-peer selection skip that peer; local targets are never
-affected.
+fallback, consult-peer selection and split-serving stage selection skip that
+peer, so a block also keeps a peer from being picked as a split stage that
+would receive the user's content; local targets are never affected. The split
+readiness report lists such a peer as a `blocked` exclusion rather than a
+candidate.
 
 A plugin may request the same change with a `PeerBlockRequest`
 (`PluginContext::request_peer_block`), but only if the operator has opted that

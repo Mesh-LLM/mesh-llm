@@ -186,7 +186,8 @@ async fn test_on_demand_transitive_peer_connection_completes_gossip() -> Result<
 
 /// A peer the operator blocked is skipped by the live host list, the
 /// any-host fallback and consultations, and routable again once unblocked.
-/// Split-serving stage selection is not covered (it reads `peers()`).
+/// Split-serving stage selection is covered separately by
+/// `split_participants_exclude_a_blocked_peer` in `runtime::local_split`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn blocked_peer_is_skipped_by_routing_until_unblocked() -> Result<()> {
     use crate::network::peer_blocks::{BlockLength, Requester, now_ms};

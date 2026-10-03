@@ -107,6 +107,26 @@ pub(crate) struct RoutingChoice {
     pub(crate) reason: Option<serde_json::Value>,
 }
 
+/// Run a block-store mutation on the blocking pool.
+///
+/// Every mutation's durable save fsyncs, and both callers (the loopback
+/// management API and the plugin request path) are async, so the save must not
+/// run on an async worker. A worker that fails to join is reported as a save
+/// failure, which both callers already surface as an error.
+pub(crate) async fn offload<T, F>(mutation: F) -> Result<T, BlockError>
+where
+    F: FnOnce() -> Result<T, BlockError> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(mutation)
+        .await
+        .map_err(|error| {
+            BlockError::Save(std::io::Error::other(format!(
+                "peer block worker failed: {error}"
+            )))
+        })?
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BlockError {
     #[error("this peer is not blocked")]
@@ -489,7 +509,12 @@ pub(crate) async fn apply_plugin_request(
     request: crate::plugin::proto::PeerBlockRequest,
 ) -> Result<crate::plugin::proto::PeerBlockResponse, crate::plugin::proto::ErrorResponse> {
     let allowed = plugin_may_request(node.config_state.lock().await.config(), &plugin_id);
-    let choice = plugin_request_choice(&node.peer_blocks, plugin_id, allowed, request, now_ms())?;
+    let blocks = node.peer_blocks.clone();
+    let choice = tokio::task::spawn_blocking(move || {
+        plugin_request_choice(&blocks, plugin_id, allowed, request, now_ms())
+    })
+    .await
+    .map_err(|error| request_error(format!("peer block worker failed: {error}")))??;
     publish(node, &choice).await;
     let choice_json =
         serde_json::to_string(&choice).map_err(|error| request_error(error.to_string()))?;

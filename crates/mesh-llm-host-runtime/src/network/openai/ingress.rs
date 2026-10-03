@@ -880,22 +880,28 @@ async fn route_missing_local_model(
 
     // Try remote mesh first.
     match resolve_remote_mesh_route(ctx, model_name, target, excluded).await {
-        RemoteMeshRoute::TargetUnavailable { target_hex } => {
+        RemoteMeshRoute::TargetUnavailable {
+            target_hex,
+            blocked,
+        } => {
             // Fail closed: never substitute another peer for an explicitly
             // named `x-mesh-target` that doesn't (or no longer) serve this
             // model -- that would silently defeat the live-twin check the
-            // header exists for.
+            // header exists for. When the operator's own block is the reason
+            // the peer is absent, say so rather than implying it never served
+            // the model.
+            let message = if blocked {
+                format!(
+                    "x-mesh-target '{target_hex}' is blocked by this operator -- refusing to fall back to another peer"
+                )
+            } else {
+                format!(
+                    "x-mesh-target '{target_hex}' does not serve model '{model_name}' -- refusing to fall back to another peer"
+                )
+            };
             return response_outcome(
                 409,
-                proxy::send_error_observed(
-                    tcp_stream,
-                    409,
-                    &format!(
-                        "x-mesh-target '{target_hex}' does not serve model '{model_name}' -- refusing to fall back to another peer"
-                    ),
-                    route_observer,
-                )
-                .await,
+                proxy::send_error_observed(tcp_stream, 409, &message, route_observer).await,
             );
         }
         RemoteMeshRoute::Targets(mesh_targets) => {
@@ -1134,7 +1140,12 @@ enum RemoteMeshRoute {
     /// `x-mesh-target` named a peer that isn't in the (possibly
     /// `x-mesh-exclude`-filtered) candidate set for this model. The caller
     /// must fail closed, never substitute a different peer.
-    TargetUnavailable { target_hex: String },
+    TargetUnavailable {
+        target_hex: String,
+        /// The operator's local block is why this peer is not a candidate
+        /// (rather than it never advertising the model).
+        blocked: bool,
+    },
     /// No remote host serves this model (after exclusion) -- fall through to
     /// local/plugin/404 handling exactly as when neither header is present.
     NoRemoteHost,
@@ -1172,6 +1183,10 @@ async fn resolve_remote_mesh_route(
         } else {
             RemoteMeshRoute::TargetUnavailable {
                 target_hex: hex::encode(target.as_bytes()),
+                blocked: ctx
+                    .node
+                    .peer_blocks
+                    .is_blocked(&target, crate::network::peer_blocks::now_ms()),
             }
         };
     }
