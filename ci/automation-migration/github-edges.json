@@ -5945,5 +5945,1617 @@
       "path": "ci/automation-migration/timeout-helper-retirement-coverage.json",
       "sha256": "5643283d4407dff3e253d6687805cc328af0bf5ba43e43e296e0e5371f4a54e8"
     }
+  },
+  "manual_parity_downloader_production_cutover_and_legacy_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 141,
+    "core_modules_after": 69,
+    "required_targets": 108,
+    "durable_coverage": {
+      "path": "ci/automation-migration/parity-download-retirement-coverage.json",
+      "sha256": "69b927a22d303681bba56312946c13b42a53289249c75c4b5005f1df34c32cd3"
+    },
+    "current_test_tree": {
+      "sha256": "1432c146bee2baa6f6c01c7b9f85eb332c55f506bad69849a6adf040ac43b6ea",
+      "paths": 62
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "0ee0e1883fb73a0282be2285f06e7ef3ace881a1eae6005b3686568ebefd7c64",
+      "roster_line": 24,
+      "count": 69
+    },
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "current_source_correction": {
+      "status": "LOCAL_POSTIMAGE_QUALIFIED",
+      "reason": "Reported nested file must choose the longest matching selected suffix when a root artifact shares its basename.",
+      "proof_filter": "parity_download_owner::actual_shell_pins_and_verifies_both_nested_model_and_projector_files",
+      "method_count_unchanged": 11,
+      "source_bindings": [
+        {
+          "path": "tools/xtask/src/model_registry/parity_download/materialize.rs",
+          "previous_sha256": "18a60f7207ebcf12c93e8517e5ae76751a466988c293ebc367ac64ca404059bc",
+          "sha256": "32b7cda8431733c117e7c5490e5fb180a5d5d52c9de40585760e29a15a820d53"
+        },
+        {
+          "path": "tools/xtask/tests/migration_lifecycle/parity_download_owner.rs",
+          "previous_sha256": "b545772a6a0cc5c3ff66458f5cde1328f584c1062e634a264d5859ee3e5e6b94",
+          "sha256": "eb278c8f51c1e69917494c0e4f8abc721bb9e33d76957a21a148bc726cb4f812"
+        }
+      ],
+      "qualification": "Initial focused receipts prove the prior source snapshot. Requalification of current source is required; original positive directory branch is unchanged.",
+      "previous_status": "APPLIED_REQUALIFICATION_PENDING"
+    },
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "current_focused_receipts": ".omo/evidence/resume-20261002/parity-download-corrected-focused-receipts.json",
+      "initial_positive_receipts": ".omo/evidence/resume-20261002/parity-download-focused-receipts.json",
+      "initial_positive_scope": "Original directory-root positive fixture qualified before retirement; current caller tests requalified nested/file-root/shared-basename behavior.",
+      "aggregate_receipts": ".omo/evidence/resume-20261002/parity-download-retirement-postimage-receipts.json",
+      "full": {
+        "name": "full",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/parity-download-retirement-postimage-full.log",
+        "sha256": "089d5e2e388670165231bb8313e253750d576f62b75d7c722071e4c3e1db372f",
+        "targets": 109,
+        "passed": 4222,
+        "failed": 0,
+        "ignored": 2,
+        "summaries": [
+          {
+            "target": "Running unittests src/main.rs (target/debug/deps/xtask-7a59d79dd57fa17e)",
+            "status": "ok",
+            "passed": 1571,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/automation_selector.rs (target/debug/deps/automation_selector-362704e806411e4e)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/canary_cache_configuration.rs (target/debug/deps/canary_cache_configuration-239f9a1500765983)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/canary_controller_plan.rs (target/debug/deps/canary_controller_plan-4d769d68d735cb02)",
+            "status": "ok",
+            "passed": 21,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/canary_result_gate.rs (target/debug/deps/canary_result_gate-081c9320b833f038)",
+            "status": "ok",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/ci_runner_cache_contract.rs (target/debug/deps/ci_runner_cache_contract-0586acd9283a211d)",
+            "status": "ok",
+            "passed": 115,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/family_battery_environment.rs (target/debug/deps/family_battery_environment-8d497e25d44f7fa3)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/family_battery_prepared_source.rs (target/debug/deps/family_battery_prepared_source-3520b225c45fcf08)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/l4_producers.rs (target/debug/deps/l4_producers-7962b5633a27acf0)",
+            "status": "ok",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l11_optional_tooling.rs (target/debug/deps/lane_l11_optional_tooling-61b80cf1b77eb81c)",
+            "status": "ok",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l12_build_llama.rs (target/debug/deps/lane_l12_build_llama-f8c517ea8995b1c8)",
+            "status": "ok",
+            "passed": 11,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l1_ui_delivery.rs (target/debug/deps/lane_l1_ui_delivery-6e996ddb4a4ef800)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_authority.rs (target/debug/deps/lane_l2_authority-e30eaf6eb856d0e9)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_hosted_bootstrap.rs (target/debug/deps/lane_l2_hosted_bootstrap-bb21e53f80e72a4a)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_quality_contracts.rs (target/debug/deps/lane_l2_quality_contracts-6b2ad1758ad6c4ab)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_registry_pulls.rs (target/debug/deps/lane_l2_registry_pulls-ef3ff12e89e3fabc)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_runtime_lifecycle.rs (target/debug/deps/lane_l2_runtime_lifecycle-fbe9626c09093849)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_runtime_seed.rs (target/debug/deps/lane_l2_runtime_seed-225e196f40d5e0cc)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l3_abi_restore.rs (target/debug/deps/lane_l3_abi_restore-5d9c1a66670777bd)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l3_cache_metadata.rs (target/debug/deps/lane_l3_cache_metadata-d542374426dd762c)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l3_display_projection.rs (target/debug/deps/lane_l3_display_projection-8247bd4746c93177)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l3_l2_dispatch.rs (target/debug/deps/lane_l3_l2_dispatch-8615e63339798cdd)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l5_adapter_contracts.rs (target/debug/deps/lane_l5_adapter_contracts-8ce60859c5571123)",
+            "status": "ok",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l5_release_product.rs (target/debug/deps/lane_l5_release_product-8afecc23dc6325eb)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l6_sdk_swift.rs (target/debug/deps/lane_l6_sdk_swift-1e07aa5acf43c3a0)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_control_plane.rs (target/debug/deps/lane_l7_control_plane-8d8953decf3e7ed2)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_daemon_lifecycle.rs (target/debug/deps/lane_l7_daemon_lifecycle-c9a6d27c0cc8c0c5)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_logging_console.rs (target/debug/deps/lane_l7_logging_console-cdbd345611cae84d)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_logging_recovery.rs (target/debug/deps/lane_l7_logging_recovery-13597dad8ed7d2d2)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_plans.rs (target/debug/deps/lane_l7_plans-5b311acc1e136bac)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_sdk_fixture.rs (target/debug/deps/lane_l7_sdk_fixture-b0167655f189bc34)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_split_recovery.rs (target/debug/deps/lane_l7_split_recovery-8ab49f072fafbf99)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_standalone.rs (target/debug/deps/lane_l7_standalone-31513769a2d8b52f)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l8_smoke.rs (target/debug/deps/lane_l8_smoke-cb8eedf81771ae35)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/laya_cli_fixture.rs (target/debug/deps/laya_cli_fixture-803dc24c72221659)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/local_ports.rs (target/debug/deps/local_ports-0b328c8c89b41577)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_archives.rs (target/debug/deps/migration_archives-6373a363a20355f6)",
+            "status": "ok",
+            "passed": 52,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_bootstrap.rs (target/debug/deps/migration_bootstrap-cdbdb873642a680f)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_canary_aggregate_cli.rs (target/debug/deps/migration_canary_aggregate_cli-3f27a2b1a9c344e3)",
+            "status": "ok",
+            "passed": 11,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_canary_receipts.rs (target/debug/deps/migration_canary_receipts-206f8644034a4fa3)",
+            "status": "ok",
+            "passed": 72,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_canary_receipts_parity.rs (target/debug/deps/migration_canary_receipts_parity-47639d9deb65b0eb)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_cargo_metadata.rs (target/debug/deps/migration_cargo_metadata-dbdd692ca15efe9d)",
+            "status": "ok",
+            "passed": 10,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_cargo_packages_cli.rs (target/debug/deps/migration_cargo_packages_cli-e4ec82dc96bd8cd9)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_ci_graph.rs (target/debug/deps/migration_ci_graph-02cb7a3781b4c73d)",
+            "status": "ok",
+            "passed": 103,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_ci_operations.rs (target/debug/deps/migration_ci_operations-6179fab79e686342)",
+            "status": "ok",
+            "passed": 142,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_ci_plan.rs (target/debug/deps/migration_ci_plan-3c0b3d9a66008811)",
+            "status": "ok",
+            "passed": 28,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_cli.rs (target/debug/deps/migration_cli-9a753db3220cbb19)",
+            "status": "ok",
+            "passed": 11,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_family_plan.rs (target/debug/deps/migration_family_plan-16915856f2c8941a)",
+            "status": "ok",
+            "passed": 32,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_hf_artifact_cli.rs (target/debug/deps/migration_hf_artifact_cli-c7f47845a73ff30c)",
+            "status": "ok",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_hf_artifact_controls.rs (target/debug/deps/migration_hf_artifact_controls-a1816621b4f95dd9)",
+            "status": "ok",
+            "passed": 17,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_hf_converted_artifact.rs (target/debug/deps/migration_hf_converted_artifact-93d5aba06242b7f1)",
+            "status": "ok",
+            "passed": 18,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_lifecycle.rs (target/debug/deps/migration_lifecycle-9956ed5c5a7e785e)",
+            "status": "ok",
+            "passed": 682,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_models.rs (target/debug/deps/migration_models-7e1480fa33bcb135)",
+            "status": "ok",
+            "passed": 26,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_native_fixtures.rs (target/debug/deps/migration_native_fixtures-f2b12124754d3c90)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_native_generator.rs (target/debug/deps/migration_native_generator-8c520659317c2de3)",
+            "status": "ok",
+            "passed": 79,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_native_policy.rs (target/debug/deps/migration_native_policy-e52a80f99a8a8c01)",
+            "status": "ok",
+            "passed": 20,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_optional_isolation.rs (target/debug/deps/migration_optional_isolation-0d837d4b39a1d910)",
+            "status": "ok",
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_package_source_version.rs (target/debug/deps/migration_package_source_version-afd7b9e5af817450)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_patch_bytes.rs (target/debug/deps/migration_patch_bytes-ea7a5c7ed3b55a40)",
+            "status": "ok",
+            "passed": 35,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_patch_shards.rs (target/debug/deps/migration_patch_shards-a4c3b3fd74b1203e)",
+            "status": "ok",
+            "passed": 31,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_prepared_inputs.rs (target/debug/deps/migration_prepared_inputs-755bbca0b3ade8ad)",
+            "status": "ok",
+            "passed": 62,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_process.rs (target/debug/deps/migration_process-0a5cf09c8711a4b1)",
+            "status": "ok",
+            "passed": 138,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_product.rs (target/debug/deps/migration_product-353dbdcec1dee38a)",
+            "status": "ok",
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_qualification_cli.rs (target/debug/deps/migration_qualification_cli-2ee72acfb52114c3)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_release.rs (target/debug/deps/migration_release-f73994ddcf31fea5)",
+            "status": "ok",
+            "passed": 38,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_report_contract.rs (target/debug/deps/migration_report_contract-8235d788093f4b00)",
+            "status": "ok",
+            "passed": 13,
+            "failed": 0,
+            "ignored": 2
+          },
+          {
+            "target": "Running tests/migration_report_safety.rs (target/debug/deps/migration_report_safety-19df49764f68b96d)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_repository.rs (target/debug/deps/migration_repository-163f88aa37591dd6)",
+            "status": "ok",
+            "passed": 27,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_run_family.rs (target/debug/deps/migration_run_family-b5a45a8459c3f64a)",
+            "status": "ok",
+            "passed": 16,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_workload_oracle_cli.rs (target/debug/deps/migration_workload_oracle_cli-5241938754bdf3a8)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_xcframework_cli.rs (target/debug/deps/migration_xcframework_cli-5506fdd323a69f91)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/openai_smoke_config.rs (target/debug/deps/openai_smoke_config-e3620e9e41849366)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/opencode_config_adapter.rs (target/debug/deps/opencode_config_adapter-e388272eba33af68)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/opencode_fixture_evidence.rs (target/debug/deps/opencode_fixture_evidence-468778cc357a5924)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/prepared_source.rs (target/debug/deps/prepared_source-3b8308fe7ea4c229)",
+            "status": "ok",
+            "passed": 76,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/release_inventory_evidence.rs (target/debug/deps/release_inventory_evidence-3f5d1d91cd018128)",
+            "status": "ok",
+            "passed": 81,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/release_inventory_provenance.rs (target/debug/deps/release_inventory_provenance-9ac9b0dd8c038551)",
+            "status": "ok",
+            "passed": 77,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/release_inventory_publication.rs (target/debug/deps/release_inventory_publication-a51cd1c1ca174575)",
+            "status": "ok",
+            "passed": 86,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_acceptance_gates.rs (target/debug/deps/replay_acceptance_gates-0faaa1ba6af80bac)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_arm_pass.rs (target/debug/deps/replay_arm_pass-e3e6107a7b1666cc)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_build_arm.rs (target/debug/deps/replay_build_arm-fbdf04d993a685a5)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_context_preflight.rs (target/debug/deps/replay_context_preflight-6bcabb1a04f596bf)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_external_engines.rs (target/debug/deps/replay_external_engines-36fdacc622537b56)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_external_run.rs (target/debug/deps/replay_external_run-91d7560114b1d017)",
+            "status": "ok",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_history.rs (target/debug/deps/replay_history-27e6ccebbf89b861)",
+            "status": "ok",
+            "passed": 14,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_history_hub.rs (target/debug/deps/replay_history_hub-450bdc3749d73a05)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_interruption.rs (target/debug/deps/replay_interruption-aa49068d2e278015)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_l3.rs (target/debug/deps/replay_l3-75cb9cea741abf7f)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_manifest_preflight.rs (target/debug/deps/replay_manifest_preflight-c3f3ad0a31fbcdef)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_manual_profile.rs (target/debug/deps/replay_manual_profile-49596ecded1263bd)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_manual_resume_refs.rs (target/debug/deps/replay_manual_resume_refs-1402abba56794623)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_model_preflight.rs (target/debug/deps/replay_model_preflight-75822d396329bc10)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_pass_schedule.rs (target/debug/deps/replay_pass_schedule-5bd097ca136cfac5)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_pooled_rows.rs (target/debug/deps/replay_pooled_rows-af3ecae98d5a7566)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_progress.rs (target/debug/deps/replay_progress-099d1d9cbd8a4e90)",
+            "status": "ok",
+            "passed": 10,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_publication_prepare.rs (target/debug/deps/replay_publication_prepare-c6eb4028f6c7c20e)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_report.rs (target/debug/deps/replay_report-9f2e7a37bb012533)",
+            "status": "ok",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_retirement.rs (target/debug/deps/replay_retirement-d579a24d5fb2b29a)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_run_execution.rs (target/debug/deps/replay_run_execution-f67e10c4ab3a6aca)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_server_cell.rs (target/debug/deps/replay_server_cell-866e986a7b2d7b75)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_session_evidence.rs (target/debug/deps/replay_session_evidence-81680a97365018d7)",
+            "status": "ok",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_trajectory_execution.rs (target/debug/deps/replay_trajectory_execution-c12955f41a380f2f)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/swift_api_checksum.rs (target/debug/deps/swift_api_checksum-405d8e11090e0bf0)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/swift_privacy_adapter.rs (target/debug/deps/swift_privacy_adapter-d2b568e2d2f4aad9)",
+            "status": "ok",
+            "passed": 18,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/swift_producer_environment.rs (target/debug/deps/swift_producer_environment-9647cc0ae939f744)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/workload_certify_contract.rs (target/debug/deps/workload_certify_contract-8aeaa58cdf367489)",
+            "status": "ok",
+            "passed": 77,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/workload_oracle_producer_contract.rs (target/debug/deps/workload_oracle_producer_contract-3582a8bff5d1fd72)",
+            "status": "ok",
+            "passed": 75,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/workload_smoke_config.rs (target/debug/deps/workload_smoke_config-496ba0c066948fe9)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/workload_start_retry.rs (target/debug/deps/workload_start_retry-dbd5b8ab9bad5156)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/parity-download-retirement-postimage-normal.log",
+        "sha256": "c9dee869e3b0879a57cce8525cb63222e2510e45560bf54a55ce8f7c87d8ab93",
+        "targets": 109,
+        "passed": 4222,
+        "failed": 0,
+        "ignored": 2,
+        "summaries": [
+          {
+            "target": "Running unittests src/main.rs (target/debug/deps/xtask-7a59d79dd57fa17e)",
+            "status": "ok",
+            "passed": 1571,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/automation_selector.rs (target/debug/deps/automation_selector-362704e806411e4e)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/canary_cache_configuration.rs (target/debug/deps/canary_cache_configuration-239f9a1500765983)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/canary_controller_plan.rs (target/debug/deps/canary_controller_plan-4d769d68d735cb02)",
+            "status": "ok",
+            "passed": 21,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/canary_result_gate.rs (target/debug/deps/canary_result_gate-081c9320b833f038)",
+            "status": "ok",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/ci_runner_cache_contract.rs (target/debug/deps/ci_runner_cache_contract-0586acd9283a211d)",
+            "status": "ok",
+            "passed": 115,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/family_battery_environment.rs (target/debug/deps/family_battery_environment-8d497e25d44f7fa3)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/family_battery_prepared_source.rs (target/debug/deps/family_battery_prepared_source-3520b225c45fcf08)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/l4_producers.rs (target/debug/deps/l4_producers-7962b5633a27acf0)",
+            "status": "ok",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l11_optional_tooling.rs (target/debug/deps/lane_l11_optional_tooling-61b80cf1b77eb81c)",
+            "status": "ok",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l12_build_llama.rs (target/debug/deps/lane_l12_build_llama-f8c517ea8995b1c8)",
+            "status": "ok",
+            "passed": 11,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l1_ui_delivery.rs (target/debug/deps/lane_l1_ui_delivery-6e996ddb4a4ef800)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_authority.rs (target/debug/deps/lane_l2_authority-e30eaf6eb856d0e9)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_hosted_bootstrap.rs (target/debug/deps/lane_l2_hosted_bootstrap-bb21e53f80e72a4a)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_quality_contracts.rs (target/debug/deps/lane_l2_quality_contracts-6b2ad1758ad6c4ab)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_registry_pulls.rs (target/debug/deps/lane_l2_registry_pulls-ef3ff12e89e3fabc)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_runtime_lifecycle.rs (target/debug/deps/lane_l2_runtime_lifecycle-fbe9626c09093849)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l2_runtime_seed.rs (target/debug/deps/lane_l2_runtime_seed-225e196f40d5e0cc)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l3_abi_restore.rs (target/debug/deps/lane_l3_abi_restore-5d9c1a66670777bd)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l3_cache_metadata.rs (target/debug/deps/lane_l3_cache_metadata-d542374426dd762c)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l3_display_projection.rs (target/debug/deps/lane_l3_display_projection-8247bd4746c93177)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l3_l2_dispatch.rs (target/debug/deps/lane_l3_l2_dispatch-8615e63339798cdd)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l5_adapter_contracts.rs (target/debug/deps/lane_l5_adapter_contracts-8ce60859c5571123)",
+            "status": "ok",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l5_release_product.rs (target/debug/deps/lane_l5_release_product-8afecc23dc6325eb)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l6_sdk_swift.rs (target/debug/deps/lane_l6_sdk_swift-1e07aa5acf43c3a0)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_control_plane.rs (target/debug/deps/lane_l7_control_plane-8d8953decf3e7ed2)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_daemon_lifecycle.rs (target/debug/deps/lane_l7_daemon_lifecycle-c9a6d27c0cc8c0c5)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_logging_console.rs (target/debug/deps/lane_l7_logging_console-cdbd345611cae84d)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_logging_recovery.rs (target/debug/deps/lane_l7_logging_recovery-13597dad8ed7d2d2)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_plans.rs (target/debug/deps/lane_l7_plans-5b311acc1e136bac)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_sdk_fixture.rs (target/debug/deps/lane_l7_sdk_fixture-b0167655f189bc34)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_split_recovery.rs (target/debug/deps/lane_l7_split_recovery-8ab49f072fafbf99)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l7_standalone.rs (target/debug/deps/lane_l7_standalone-31513769a2d8b52f)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/lane_l8_smoke.rs (target/debug/deps/lane_l8_smoke-cb8eedf81771ae35)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/laya_cli_fixture.rs (target/debug/deps/laya_cli_fixture-803dc24c72221659)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/local_ports.rs (target/debug/deps/local_ports-0b328c8c89b41577)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_archives.rs (target/debug/deps/migration_archives-6373a363a20355f6)",
+            "status": "ok",
+            "passed": 52,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_bootstrap.rs (target/debug/deps/migration_bootstrap-cdbdb873642a680f)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_canary_aggregate_cli.rs (target/debug/deps/migration_canary_aggregate_cli-3f27a2b1a9c344e3)",
+            "status": "ok",
+            "passed": 11,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_canary_receipts.rs (target/debug/deps/migration_canary_receipts-206f8644034a4fa3)",
+            "status": "ok",
+            "passed": 72,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_canary_receipts_parity.rs (target/debug/deps/migration_canary_receipts_parity-47639d9deb65b0eb)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_cargo_metadata.rs (target/debug/deps/migration_cargo_metadata-dbdd692ca15efe9d)",
+            "status": "ok",
+            "passed": 10,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_cargo_packages_cli.rs (target/debug/deps/migration_cargo_packages_cli-e4ec82dc96bd8cd9)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_ci_graph.rs (target/debug/deps/migration_ci_graph-02cb7a3781b4c73d)",
+            "status": "ok",
+            "passed": 103,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_ci_operations.rs (target/debug/deps/migration_ci_operations-6179fab79e686342)",
+            "status": "ok",
+            "passed": 142,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_ci_plan.rs (target/debug/deps/migration_ci_plan-3c0b3d9a66008811)",
+            "status": "ok",
+            "passed": 28,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_cli.rs (target/debug/deps/migration_cli-9a753db3220cbb19)",
+            "status": "ok",
+            "passed": 11,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_family_plan.rs (target/debug/deps/migration_family_plan-16915856f2c8941a)",
+            "status": "ok",
+            "passed": 32,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_hf_artifact_cli.rs (target/debug/deps/migration_hf_artifact_cli-c7f47845a73ff30c)",
+            "status": "ok",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_hf_artifact_controls.rs (target/debug/deps/migration_hf_artifact_controls-a1816621b4f95dd9)",
+            "status": "ok",
+            "passed": 17,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_hf_converted_artifact.rs (target/debug/deps/migration_hf_converted_artifact-93d5aba06242b7f1)",
+            "status": "ok",
+            "passed": 18,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_lifecycle.rs (target/debug/deps/migration_lifecycle-9956ed5c5a7e785e)",
+            "status": "ok",
+            "passed": 682,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_models.rs (target/debug/deps/migration_models-7e1480fa33bcb135)",
+            "status": "ok",
+            "passed": 26,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_native_fixtures.rs (target/debug/deps/migration_native_fixtures-f2b12124754d3c90)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_native_generator.rs (target/debug/deps/migration_native_generator-8c520659317c2de3)",
+            "status": "ok",
+            "passed": 79,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_native_policy.rs (target/debug/deps/migration_native_policy-e52a80f99a8a8c01)",
+            "status": "ok",
+            "passed": 20,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_optional_isolation.rs (target/debug/deps/migration_optional_isolation-0d837d4b39a1d910)",
+            "status": "ok",
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_package_source_version.rs (target/debug/deps/migration_package_source_version-afd7b9e5af817450)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_patch_bytes.rs (target/debug/deps/migration_patch_bytes-ea7a5c7ed3b55a40)",
+            "status": "ok",
+            "passed": 35,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_patch_shards.rs (target/debug/deps/migration_patch_shards-a4c3b3fd74b1203e)",
+            "status": "ok",
+            "passed": 31,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_prepared_inputs.rs (target/debug/deps/migration_prepared_inputs-755bbca0b3ade8ad)",
+            "status": "ok",
+            "passed": 62,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_process.rs (target/debug/deps/migration_process-0a5cf09c8711a4b1)",
+            "status": "ok",
+            "passed": 138,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_product.rs (target/debug/deps/migration_product-353dbdcec1dee38a)",
+            "status": "ok",
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_qualification_cli.rs (target/debug/deps/migration_qualification_cli-2ee72acfb52114c3)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_release.rs (target/debug/deps/migration_release-f73994ddcf31fea5)",
+            "status": "ok",
+            "passed": 38,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_report_contract.rs (target/debug/deps/migration_report_contract-8235d788093f4b00)",
+            "status": "ok",
+            "passed": 13,
+            "failed": 0,
+            "ignored": 2
+          },
+          {
+            "target": "Running tests/migration_report_safety.rs (target/debug/deps/migration_report_safety-19df49764f68b96d)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_repository.rs (target/debug/deps/migration_repository-163f88aa37591dd6)",
+            "status": "ok",
+            "passed": 27,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_run_family.rs (target/debug/deps/migration_run_family-b5a45a8459c3f64a)",
+            "status": "ok",
+            "passed": 16,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_workload_oracle_cli.rs (target/debug/deps/migration_workload_oracle_cli-5241938754bdf3a8)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/migration_xcframework_cli.rs (target/debug/deps/migration_xcframework_cli-5506fdd323a69f91)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/openai_smoke_config.rs (target/debug/deps/openai_smoke_config-e3620e9e41849366)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/opencode_config_adapter.rs (target/debug/deps/opencode_config_adapter-e388272eba33af68)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/opencode_fixture_evidence.rs (target/debug/deps/opencode_fixture_evidence-468778cc357a5924)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/prepared_source.rs (target/debug/deps/prepared_source-3b8308fe7ea4c229)",
+            "status": "ok",
+            "passed": 76,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/release_inventory_evidence.rs (target/debug/deps/release_inventory_evidence-3f5d1d91cd018128)",
+            "status": "ok",
+            "passed": 81,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/release_inventory_provenance.rs (target/debug/deps/release_inventory_provenance-9ac9b0dd8c038551)",
+            "status": "ok",
+            "passed": 77,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/release_inventory_publication.rs (target/debug/deps/release_inventory_publication-a51cd1c1ca174575)",
+            "status": "ok",
+            "passed": 86,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_acceptance_gates.rs (target/debug/deps/replay_acceptance_gates-0faaa1ba6af80bac)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_arm_pass.rs (target/debug/deps/replay_arm_pass-e3e6107a7b1666cc)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_build_arm.rs (target/debug/deps/replay_build_arm-fbdf04d993a685a5)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_context_preflight.rs (target/debug/deps/replay_context_preflight-6bcabb1a04f596bf)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_external_engines.rs (target/debug/deps/replay_external_engines-36fdacc622537b56)",
+            "status": "ok",
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_external_run.rs (target/debug/deps/replay_external_run-91d7560114b1d017)",
+            "status": "ok",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_history.rs (target/debug/deps/replay_history-27e6ccebbf89b861)",
+            "status": "ok",
+            "passed": 14,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_history_hub.rs (target/debug/deps/replay_history_hub-450bdc3749d73a05)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_interruption.rs (target/debug/deps/replay_interruption-aa49068d2e278015)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_l3.rs (target/debug/deps/replay_l3-75cb9cea741abf7f)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_manifest_preflight.rs (target/debug/deps/replay_manifest_preflight-c3f3ad0a31fbcdef)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_manual_profile.rs (target/debug/deps/replay_manual_profile-49596ecded1263bd)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_manual_resume_refs.rs (target/debug/deps/replay_manual_resume_refs-1402abba56794623)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_model_preflight.rs (target/debug/deps/replay_model_preflight-75822d396329bc10)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_pass_schedule.rs (target/debug/deps/replay_pass_schedule-5bd097ca136cfac5)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_pooled_rows.rs (target/debug/deps/replay_pooled_rows-af3ecae98d5a7566)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_progress.rs (target/debug/deps/replay_progress-099d1d9cbd8a4e90)",
+            "status": "ok",
+            "passed": 10,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_publication_prepare.rs (target/debug/deps/replay_publication_prepare-c6eb4028f6c7c20e)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_report.rs (target/debug/deps/replay_report-9f2e7a37bb012533)",
+            "status": "ok",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_retirement.rs (target/debug/deps/replay_retirement-d579a24d5fb2b29a)",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_run_execution.rs (target/debug/deps/replay_run_execution-f67e10c4ab3a6aca)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_server_cell.rs (target/debug/deps/replay_server_cell-866e986a7b2d7b75)",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_session_evidence.rs (target/debug/deps/replay_session_evidence-81680a97365018d7)",
+            "status": "ok",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/replay_trajectory_execution.rs (target/debug/deps/replay_trajectory_execution-c12955f41a380f2f)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/swift_api_checksum.rs (target/debug/deps/swift_api_checksum-405d8e11090e0bf0)",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/swift_privacy_adapter.rs (target/debug/deps/swift_privacy_adapter-d2b568e2d2f4aad9)",
+            "status": "ok",
+            "passed": 18,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/swift_producer_environment.rs (target/debug/deps/swift_producer_environment-9647cc0ae939f744)",
+            "status": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/workload_certify_contract.rs (target/debug/deps/workload_certify_contract-8aeaa58cdf367489)",
+            "status": "ok",
+            "passed": 77,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/workload_oracle_producer_contract.rs (target/debug/deps/workload_oracle_producer_contract-3582a8bff5d1fd72)",
+            "status": "ok",
+            "passed": 75,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/workload_smoke_config.rs (target/debug/deps/workload_smoke_config-496ba0c066948fe9)",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "target": "Running tests/workload_start_retry.rs (target/debug/deps/workload_start_retry-dbd5b8ab9bad5156)",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          }
+        ],
+        "legacy": {
+          "run": 1011,
+          "passed": 997,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 381.403
+        }
+      },
+      "limits": "Local typed CLI/native child/fake HF and current required roster proof. Actual HF/network/model/native GPU/SDK/Windows/hosted execution remains unverified."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/parity-download-retirement-coverage.json",
+      "sha256": "7ccb4c0fb7b384a203584d1bf2ded989ac2d846f3417ee17b01a0cebcff7c9e9"
+    }
   }
 }

@@ -195,3 +195,6 @@ mod release_script;
 
 #[path = "migration_lifecycle/publication_diagnostics.rs"]
 mod publication_diagnostics;
+
+#[path = "migration_lifecycle/parity_download_owner.rs"]
+mod parity_download_owner;

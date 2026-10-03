@@ -293,7 +293,7 @@ fn model_registry_actual_manifest_consumers_declare_authorized_cadence() -> Test
     let parity = fs::read_to_string(
         repository_root().join("skippy/scripts/download-skippy-parity-candidates.sh"),
     )?;
-    assert!(parity.contains("\"manual\" not in artifact.get(\"cadences\", [])"));
+    assert!(parity.contains("mesh_automation models parity-download --cadence manual"));
     Ok(())
 }
 
