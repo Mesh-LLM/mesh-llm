@@ -97,10 +97,16 @@ source SHA, and uploads the reproducible failure log.
 one main source SHA and the upstream target before any hardware work. Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
-preflight. Changed pins then use one candidate pass followed (only when all
+preflight. Changed pins use up to three distributed repair attempts. Each
+attempt runs one complete candidate family pass followed (only when all
 families pass) by one independent build and complete verification pass on the
-exact same commit. A failed pass retains evidence and stops instead of starting
-another agent/candidate cycle.
+exact same commit. A candidate-class family failure emits digest-bound evidence
+and resumes from that exact candidate in the next bounded agent session.
+Runner/workflow failures or missing receipts receive one targeted retry of only
+the affected families on the same immutable package without Goose or a rebuild;
+candidate failures from a mixed pass remain retained. Repeated infrastructure
+failure, corrupt/foreign/invalid evidence, or exhaustion after attempt three
+stops without invoking Goose and denies publication.
 
 
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
@@ -166,9 +172,15 @@ job-result gate also rejects failed/cancelled jobs whose receipts never upload.
 Rebuilt producers have distinct identities and cannot reuse old receipts.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-Reruns retain attempt-labelled family/build history; these diagnostics never
-substitute for either complete certification pass or trigger a new automatic
-repair candidate.
+Reruns retain attempt-labelled family/build history. These diagnostics never
+substitute for either complete certification pass. The hosted aggregate emits
+a digest-bound classification artifact for candidate repair or a single
+targeted infrastructure recheck. That recheck runs only the runner/workflow-
+failed or missing families against the same producer package, without Goose or
+compilation. Reconciliation retains valid candidate failures from the initial
+pass and emits automatic-repair input only when the remaining failures are
+proved candidate-class; it binds that evidence to the producer identity and
+exact candidate package.
 
 `scripts/plan-family-battery.py` validates the versioned JSON family policy
 before native compilation: the three core parity lanes for certified causal
@@ -248,16 +260,21 @@ absolute timeout cap. Dry-run planning reflects the declared native-head lane;
 actual execution still requires the immutable metadata and tensor scans.
 
 Aggregation reports every failed receipt, including its runner and outcome, in
-the job log and Actions summary before rejecting the pass. Worker/aggregate
-failures remain recoverable by later bounded repair passes; only complete
-independent success permits publication.
+the job log and Actions summary before rejecting the pass. Candidate-class
+worker failures remain recoverable by later bounded repair passes;
+runner/workflow failures receive one targeted same-candidate recheck. A clean
+recheck plus the retained initial successes completes that immutable full pass;
+a repeated infrastructure failure or invalid aggregate evidence stops. Only
+complete independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 
-Within the candidate build job, Goose resumes the same session for
+Within each candidate build job, Goose resumes the same session for
 prepare/build failures under the existing 11.5-hour coding-admission and
-12-hour per-gate budgets. A failed distributed or independent-verification pass
-stops after preserving evidence. Candidates are local, uncertified commits
+12-hour per-gate budgets. A repairable distributed or independent-verification
+failure starts a new bounded session on the next attempt after restoring the
+exact prior candidate as uncommitted changes on the frozen base. Every edit
+invalidates all prior family results. Candidates are local, uncertified commits
 until both full family passes are green. The separate GitHub-hosted publisher
 alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
 No Actions-write credential or dispatch controller is needed. Feature-ref
