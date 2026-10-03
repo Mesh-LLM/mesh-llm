@@ -27,7 +27,8 @@ def get_json(url, payload=None, timeout=120):
 
 
 def probability(value):
-    return isinstance(value, (int, float)) and math.isfinite(value) and 0 <= value <= 1
+    # type() rejects bool, which isinstance accepts as an int subclass.
+    return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
 
 
 def main():
@@ -82,14 +83,14 @@ def main():
         not probability(item.get("probability")) for item in choice["probabilities"]
     ):
         raise RuntimeError(f"invalid choice probabilities: {choice}")
-    if not isinstance(score.get("score"), (int, float)) or not math.isfinite(score["score"]) or not probability(score.get("confidence")):
+    if type(score.get("score")) not in (int, float) or not math.isfinite(score["score"]) or not probability(score.get("confidence")):
         raise RuntimeError(f"invalid score answer: {score}")
     if [(item.get("value"), item.get("label")) for item in score.get("probabilities", [])] != [(0, "0"), (1, "1")] or any(
         not probability(item.get("probability")) for item in score["probabilities"]
     ):
         raise RuntimeError(f"invalid score probabilities: {score}")
     usage = body.get("usage", {})
-    if any(not isinstance(usage.get(key), int) or usage[key] < 0 for key in ("input_tokens", "output_tokens", "total_tokens")):
+    if any(type(usage.get(key)) is not int or usage[key] < 0 for key in ("input_tokens", "output_tokens", "total_tokens")):
         raise RuntimeError(f"invalid usage: {usage}")
     print(f"Decisions live smoke passed: model={model}, questions=predicate,choice,score")
 
