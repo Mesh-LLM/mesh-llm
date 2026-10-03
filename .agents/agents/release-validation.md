@@ -30,9 +30,11 @@ Skippy, plugin, configuration, telemetry, or benchmark validation.
 
 For new release inventory automation, follow the Rust ownership rule in
 `.agents/skills/manage-ci/SKILL.md`; use typed `tools/xtask` commands, not new
-Python helpers. From the repository root,
-`cargo xtool repo-consistency ci-crate-lists` is a working alias example, not
-a replacement for the transitional release inventory command in the skill.
+Python helpers. From the repository root, the raw owner is
+`cargo xtool release inventory`; use `just release-inventory` on Unix.
+Windows currently uses the portable native command directly. Follow the skill
+for candidate/base provenance, output and uncertainty semantics. Raw inventory
+collection does not authorize product builds, remote hosts or publication.
 
 ## Required Inputs And Authorization
 

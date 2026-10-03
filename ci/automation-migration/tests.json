@@ -1721,8 +1721,8 @@
         "test_only_with_lld_is_private_and_imports_create_no_modules",
         "test_root_keeps_prelude_default_and_ordered_flat_imports"
       ],
-      "current_source_sha256": "af60c244a9022a8a5460cb229d106af12cdefe4d516f62f04c961e6906a168ce",
-      "source_refresh_note": "Historical baseline sha256 preserved; current_source_sha256 binds exact maintained whitelist correction, all3 methods retained."
+      "current_source_sha256": "a4334307db0bcf87a81588022fb276630042ecb21f5e05bb5c8cb89fc0470fb5",
+      "source_refresh_note": "Historical baseline sha256 preserved; current_source_sha256 binds exact current release inventory recipe ownership, all3 methods retained."
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -6042,5 +6042,24 @@
     "focused": "3 passed; current inventory/policy and complete normal requalification pending",
     "historical_snapshots": "preserved",
     "catalog_source_snapshot": "Original catalog sha retained; it already differs from the validated current159 preimage and is historical inventory provenance."
+  },
+  "release_inventory_recipe_assertion_refresh": {
+    "scope": "Retained Just import ownership assertion includes the actual new release-inventory facade in its release owner; all original assertions unchanged.",
+    "file": "scripts/tests/test_justfile_layout.py",
+    "preimage_sha256": "af60c244a9022a8a5460cb229d106af12cdefe4d516f62f04c961e6906a168ce",
+    "postimage_sha256": "a4334307db0bcf87a81588022fb276630042ecb21f5e05bb5c8cb89fc0470fb5",
+    "previous_observed_source_sha256": "05f89bad1fa1d8f979f30a9045c7c3fe910bd64384e577bcfe3e7a52d84c6de8",
+    "current_observed_source_sha256": "ad4f16390f7c1ebd9aadaffb985422fa8ca59ab9c3826b451adcccad1911ae67",
+    "paths": 74,
+    "shifted_rows": 0,
+    "failed_normal_log": ".omo/evidence/resume-20261002/release159-normal.log",
+    "failed_normal_log_sha256": "d35984a9bac576c9803c1268abc62301cf2c9cd89aeb3497b652513a276549e0",
+    "qualification": "FOCUSED_PASSED_CURRENT_GATES_AND_COMPLETE_NORMAL_PENDING",
+    "historical_snapshots": "preserved",
+    "focused": {
+      "log": ".omo/evidence/resume-20261002/release-layout-assertion-focused.log",
+      "sha256": "79897d011a1aaa76145e639592b1207fa563cb1187e00ac85c3ee31c86a0b15f",
+      "passed": 3
+    }
   }
 }
