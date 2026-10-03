@@ -544,14 +544,9 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         status_code: 200,
         usage: state.observed_usage,
         cache_cost: state.observed_cache_cost,
-        // The Responses-API stream reshapes each typed upstream chunk through
-        // `skippy_inference_api`'s incremental emitters rather than folding raw
-        // deltas the way the chat-completions stream above does; assembling
-        // an equivalent response to digest would mean extending that typed
-        // chunk model. Left absent (never fabricated) as a documented
-        // follow-up; the chat-completions stream path already provides real
-        // streaming assembly.
-        output_digests: Default::default(),
+        // The assembly folded every upstream chat chunk before translation.
+        // Publish its digest only after a complete [DONE] frame.
+        output_digests: assembly.output_digests(),
     })
 }
 
