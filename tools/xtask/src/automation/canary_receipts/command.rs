@@ -5,6 +5,8 @@ use crate::command::DynResult;
 use crate::repository::check_args::{Grammar, ParsedArgs};
 use crate::repository::check_report::CheckReport;
 use std::{fs::OpenOptions, io::Write, path::Path};
+#[path = "publication_diagnostics.rs"]
+mod publication_diagnostics;
 #[path = "result_gate.rs"]
 mod result_gate;
 
@@ -40,6 +42,9 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
             return super::canary_package_closure::verification_source::run_inspection(rest, verb);
         }
         [verb, rest @ ..] if verb == "result" => return result_gate::run(rest),
+        [verb, rest @ ..] if verb == "redact-publication-log" => {
+            return publication_diagnostics::run(rest);
+        }
         [verb, rest @ ..] if verb == "receipt" || verb == "publication" => {
             return super::canary_handoff::run(rest, verb == "publication");
         }

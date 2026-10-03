@@ -1472,6 +1472,13 @@ roster, and the Just guard requires that exact roster without a test filter.
 Platform conditions remain in their owning tests. These finite fixtures do not
 replace live native, SDK, model, browser or hosted-runner acceptance.
 
+The trusted canary publisher freezes its prepared controller before checking out
+the certified candidate. `automation canary-receipts redact-publication-log`
+owns credential redaction of Git and pull-request diagnostics. The publisher
+waits for each redactor before releasing private state, preserves exact-commit
+publication and ambiguous-response reconciliation, and performs no candidate
+Cargo bootstrap in the credential-bearing step.
+
 Laya parity and packaged-product smoke now use Rust `automation laya parity`
 and `automation laya product` through the shared automation adapter. Their
 Python drivers and direct tests are removed; Rust golden and retained-process
