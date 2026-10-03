@@ -110,3 +110,69 @@ fn deadline_cancellation_and_normal_exit_clean_only_owned_tree() {
     sentinel.kill().unwrap();
     sentinel.wait().unwrap();
 }
+
+#[test]
+fn completed_leader_at_expired_deadline_preserves_actual_exit_and_ignores_zombie_group() {
+    for code in [0, 7] {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &format!("exit {code}")]);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = platform::OwnedChild::spawn_inherited(&mut command).unwrap();
+        let until = Instant::now() + Duration::from_secs(3);
+        while !child.exited().unwrap() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            child.exited().unwrap(),
+            "fixture leader must exit before deadline observation"
+        );
+        let started = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        let (outcome, failure) = monitor(&mut child, &limits(), &Cancellation::default(), started);
+        let (cleanup, status) = control::shutdown(&mut child, &limits(), || {});
+        assert_eq!(outcome, Outcome::Exited);
+        assert!(failure.is_none());
+        assert!(cleanup.complete && !cleanup.forced && cleanup.failure.is_none());
+        assert!(!cleanup.graceful_signal_failed);
+        assert_eq!(status.unwrap().code(), Some(code));
+    }
+}
+
+#[test]
+fn cancellation_after_spawn_keeps_cleanup_ownership_and_stops_descendant_writes() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut sentinel = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let mut command = Command::new("/bin/sh");
+    command.current_dir(directory.path()).args([
+        "-c",
+        "trap '' TERM; i=0; while :; do printf '%s' \"$i\" > writes; i=$((i+1)); /bin/sleep 0.01; done",
+    ]);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = platform::OwnedChild::spawn_inherited(&mut command).unwrap();
+    let until = Instant::now() + Duration::from_secs(3);
+    while !directory.path().join("writes").is_file() && Instant::now() < until {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let ready = directory.path().join("writes").is_file();
+    // Cancellation recorded while ownership is acquired cannot perform cleanup
+    // inside spawn or wait. The monitor reports it, then the owning scope cleans.
+    let token = Cancellation::default();
+    token.cancel();
+    let (outcome, failure) = monitor(&mut child, &limits(), &token, Instant::now());
+    let (cleanup, _) = control::shutdown(&mut child, &limits(), || token.cancel());
+    let sentinel_alive = sentinel.try_wait().unwrap().is_none();
+    sentinel.kill().unwrap();
+    sentinel.wait().unwrap();
+    assert!(ready && sentinel_alive);
+    assert_eq!(outcome, Outcome::Cancelled);
+    assert!(failure.is_none());
+    assert!(cleanup.complete && cleanup.forced && cleanup.failure.is_none());
+    let before = fs::read(directory.path().join("writes")).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(fs::read(directory.path().join("writes")).unwrap(), before);
+}

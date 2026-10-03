@@ -88,3 +88,42 @@ fn migration_process_successful_kill_with_survivors_is_not_cleanup_proof() {
     assert!(matches!(cleanup.failure, Some(Failure::CleanupDeadline)));
     assert_eq!(tree.reap_calls, 0);
 }
+
+#[cfg(unix)]
+struct InactiveCompletedTree {
+    reap_calls: usize,
+}
+#[cfg(unix)]
+impl Leader for InactiveCompletedTree {
+    fn exited(&mut self) -> Result<bool, Failure> {
+        Ok(true)
+    }
+}
+#[cfg(unix)]
+impl Tree for InactiveCompletedTree {
+    fn active(&mut self) -> Result<bool, Failure> {
+        // Platform membership excludes zombies; no live member remains.
+        Ok(false)
+    }
+    fn graceful(&mut self) -> Result<(), Failure> {
+        panic!("inactive group must not be signalled, even if signalling would be denied")
+    }
+    fn force(&mut self) -> Result<(), Failure> {
+        panic!("inactive group must not be force-signalled")
+    }
+    fn reap(&mut self) -> Result<Option<ExitStatus>, Failure> {
+        use std::os::unix::process::ExitStatusExt;
+        self.reap_calls += 1;
+        Ok(Some(ExitStatus::from_raw(0)))
+    }
+}
+#[cfg(unix)]
+#[test]
+fn inactive_completed_group_is_reaped_without_permission_sensitive_signal_attempts() {
+    let mut tree = InactiveCompletedTree { reap_calls: 0 };
+    let (cleanup, status) = shutdown(&mut tree, &limits(), || {});
+    assert!(cleanup.complete && !cleanup.forced && !cleanup.graceful_signal_failed);
+    assert!(cleanup.failure.is_none());
+    assert!(status.unwrap().success());
+    assert_eq!(tree.reap_calls, 1);
+}

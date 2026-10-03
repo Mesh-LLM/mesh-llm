@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import signal
 import stat
 import struct
 import subprocess
@@ -30,7 +29,6 @@ BATTERY = ROOT / "skippy" / "scripts" / "skippy-family-battery.sh"
 BATTERY_PLANNER = ROOT / "skippy" / "scripts" / "plan-family-battery.py"
 FAMILY_CERTIFY = ROOT / "skippy" / "scripts" / "family-certify.sh"
 FAMILY_OUTCOME = ROOT / "scripts" / "lib" / "family-outcome.sh"
-TIMEOUT_RUNNER = ROOT / "scripts" / "run-command-with-timeout.py"
 REWRITER_CHECK = ROOT / "skippy" / "scripts" / "check-skippy-generated-family-patch.sh"
 
 
@@ -486,91 +484,6 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
                     self.assertEqual(0, result.returncode, result.stderr)
                     self.assertEqual(expected, result.stdout.strip())
 
-    def test_portable_timeout_runner_bounds_the_process_group(self) -> None:
-        result = subprocess.run(
-            [
-                str(TIMEOUT_RUNNER),
-                "--seconds",
-                "1",
-                "--label",
-                "fixture",
-                "--",
-                sys.executable,
-                "-c",
-                "import time; time.sleep(30)",
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=15,
-        )
-        self.assertEqual(124, result.returncode)
-        self.assertIn("fixture timed out after 1s", result.stderr)
-
-    @unittest.skipIf(os.name == "nt", "POSIX process-group signal semantics")
-    def test_timeout_runner_cleans_process_group_when_signalled(self) -> None:
-        for received_signal in (signal.SIGINT, signal.SIGTERM):
-            with self.subTest(received_signal=received_signal):
-                wrapper = subprocess.Popen(
-                    [
-                        str(TIMEOUT_RUNNER),
-                        "--seconds",
-                        "30",
-                        "--label",
-                        "signal-fixture",
-                        "--",
-                        sys.executable,
-                        "-c",
-                        "import os,time; print(os.getpid(), flush=True); time.sleep(30)",
-                    ],
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                child_pid = None
-                try:
-                    assert wrapper.stdout is not None
-                    child_pid = int(wrapper.stdout.readline())
-                    wrapper.send_signal(received_signal)
-                    _, stderr = wrapper.communicate(timeout=15)
-
-                    self.assertEqual(128 + received_signal, wrapper.returncode)
-                    self.assertIn(
-                        f"signal-fixture received signal {received_signal}", stderr
-                    )
-                    with self.assertRaises(ProcessLookupError):
-                        os.kill(child_pid, 0)
-                finally:
-                    # A regression must not leave its fixture running on CI.
-                    if wrapper.poll() is None:
-                        wrapper.kill()
-                    if child_pid is not None:
-                        try:
-                            os.killpg(child_pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                    wrapper.communicate(timeout=5)
-
-    def test_timeout_runner_closes_manifest_stdin_for_children(self) -> None:
-        result = subprocess.run(
-            [
-                str(TIMEOUT_RUNNER),
-                "--seconds",
-                "5",
-                "--label",
-                "stdin-fixture",
-                "--",
-                sys.executable,
-                "-c",
-                "import sys; raise SystemExit(0 if sys.stdin.read() == '' else 9)",
-            ],
-            input="a later manifest row\n",
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=10,
-        )
-        self.assertEqual(0, result.returncode, result.stderr)
 
 
 class SkippyFamilyBatteryTests(unittest.TestCase):
