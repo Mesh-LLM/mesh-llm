@@ -195,6 +195,8 @@ Switches:
   diagnostics as JSONL. See [SWARM_CAPTURE.md](SWARM_CAPTURE.md) for the full
   debug-capture workflow.
 - `--publish`: publish your mesh for discovery.
+- `--no-default-plugins`: don't install the default plugins on first run (same
+  as `MESH_LLM_NO_DEFAULT_PLUGINS=1`). See [Default Plugins](plugins/README.md#default-plugins).
 - `--require-release-attestation`: when creating a requirement-aware mesh,
   require peers to present a trusted release attestation.
 - `--release-signer-key <KEY>`: allow a release signer key in the creation-time

@@ -7,7 +7,7 @@ use sha2::Digest;
 
 use crate::{
     archive::{ExtractedPluginArchive, extract_plugin_archive},
-    catalog::PluginCatalog,
+    catalog::{PinnedRelease, PluginCatalog, is_sha256_hex},
     github::{GitHubReleaseAsset, GitHubReleaseClient},
     select_plugin_asset,
     source_ref::{
@@ -135,6 +135,64 @@ pub async fn install_default_plugin(
         version: Some(PluginVersion::new(pin.version.to_string())?),
     };
     install_resolved_plugin(resolved, options, progress, None, Some(pin.sha256)).await
+}
+
+/// Install catalog plugin `name` as a default at `pin`, a pin the caller holds
+/// in reviewed code rather than one the catalog supplies. The catalog still
+/// says where the plugin lives. If its entry pins this platform as well, the
+/// two pins must agree, so neither can be changed alone. A pin whose digest is
+/// not a SHA-256 (a placeholder) is refused before anything is fetched.
+pub async fn install_default_plugin_at(
+    name: &str,
+    pin: PinnedRelease<'_>,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<InstallOutcome> {
+    if !is_sha256_hex(pin.sha256) {
+        bail!(
+            "default plugin '{name}' {} pins no SHA-256 for {} ({:?}); not installed",
+            pin.version,
+            options.target.triple(),
+            pin.sha256
+        );
+    }
+    progress.report(PluginProgressEvent::ResolvingCatalog {
+        name: name.to_string(),
+    });
+    let catalog = PluginCatalog::fetch(&Client::new(), &options.catalog_url).await?;
+    let entry = catalog
+        .find_exact(name)
+        .with_context(|| format!("default plugin '{name}' was not found in the catalog"))?;
+    if let Ok(catalog_pin) = entry.pinned_release(options.target.triple()) {
+        ensure_pins_agree(name, pin, catalog_pin)?;
+    }
+    let resolved = ResolvedInstallSource {
+        plugin_name: entry.name.clone(),
+        source: GitHubPluginSource::from_url(&entry.github_url)?,
+        version: Some(PluginVersion::new(pin.version.to_string())?),
+    };
+    install_resolved_plugin(resolved, options, progress, None, Some(pin.sha256)).await
+}
+
+/// The built-in pin and the catalog's must name the same release (with or
+/// without a leading `v`) and the same digest.
+fn ensure_pins_agree(
+    name: &str,
+    ours: PinnedRelease<'_>,
+    catalog: PinnedRelease<'_>,
+) -> Result<()> {
+    let bare = |version: &str| version.strip_prefix('v').unwrap_or(version).to_string();
+    if bare(ours.version) != bare(catalog.version) || ours.sha256 != catalog.sha256 {
+        bail!(
+            "default plugin '{name}': the catalog pins {} {} but this build pins {} {}; \
+             not installed",
+            catalog.version,
+            catalog.sha256,
+            ours.version,
+            ours.sha256
+        );
+    }
+    Ok(())
 }
 
 pub fn install_plugin_archive(
@@ -908,6 +966,74 @@ mod tests {
             message.contains(&pinned) && message.contains(&replaced),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_built_in_pin_and_a_catalog_pin_must_agree() {
+        let digest = "abababababababababababababababababababababababababababababababab";
+        let ours = PinnedRelease {
+            version: "0.1.0",
+            sha256: digest,
+        };
+        ensure_pins_agree(
+            "demo",
+            ours,
+            PinnedRelease {
+                version: "v0.1.0",
+                ..ours
+            },
+        )
+        .expect("a leading v is the same release");
+        let other_digest = PinnedRelease {
+            sha256: "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            ..ours
+        };
+        let error = ensure_pins_agree("demo", ours, other_digest).unwrap_err();
+        assert!(error.to_string().contains("not installed"), "{error}");
+        let other_release = PinnedRelease {
+            version: "0.2.0",
+            ..ours
+        };
+        assert!(ensure_pins_agree("demo", ours, other_release).is_err());
+    }
+
+    #[test]
+    fn a_placeholder_pin_is_refused_before_any_fetch() {
+        use std::future::Future;
+
+        let temp = TempDir::new().unwrap();
+        let options = PluginInstallOptions {
+            store_root: temp.path().join("store"),
+            install_root: temp.path().join("installed"),
+            catalog_url: "http://127.0.0.1:9/unreachable".to_string(),
+            target: PluginTarget::current().unwrap(),
+        };
+        let mut events: Vec<PluginProgressEvent> = Vec::new();
+        let pin = PinnedRelease {
+            version: "0.1.0",
+            sha256: "TODO-AFTER-TAG",
+        };
+        let result = {
+            let mut progress = |event: PluginProgressEvent| events.push(event);
+            let mut install = std::pin::pin!(install_default_plugin_at(
+                "demo",
+                pin,
+                &options,
+                &mut progress
+            ));
+            // Polled once with a waker that never fires: the refusal comes
+            // before any lookup, so it is ready at once.
+            match install
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+            {
+                std::task::Poll::Ready(result) => result,
+                std::task::Poll::Pending => panic!("a placeholder pin must not reach the network"),
+            }
+        };
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("pins no SHA-256"), "{error}");
+        assert!(events.is_empty(), "nothing was looked up");
     }
 
     #[test]
