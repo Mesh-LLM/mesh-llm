@@ -79,3 +79,6 @@ mod just_native_component_tests;
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     just_process::operation(|| run_inventory(args))
 }
+
+#[cfg(all(test, unix))]
+mod just_shell_portability_tests;

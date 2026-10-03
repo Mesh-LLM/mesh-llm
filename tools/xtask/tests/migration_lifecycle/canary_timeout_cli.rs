@@ -189,3 +189,70 @@ fn nested_outer_cancellation_leaves_inner_cleanup_margin_and_unrelated_sentinel(
         "inner owner must finish inside outer30s grace"
     );
 }
+
+#[test]
+fn actual_cli_closes_piped_manifest_input_before_command_launch() {
+    let root = tempfile::tempdir().unwrap();
+    let command_input = input(
+        root.path(),
+        "if IFS= read -r row; then printf '%s' \"$row\" > consumed-row; exit 9; fi; exit 0",
+        2,
+    );
+    let invocation = spec(
+        "/bin/sh",
+        vec![
+            "-c".into(),
+            "printf 'a later manifest row\\n' | \"$@\"".into(),
+            "stdin fixture".into(),
+            env!("CARGO_BIN_EXE_xtask").into(),
+            "automation".into(),
+            "canary-timeout".into(),
+            "--input".into(),
+            command_input.to_str().unwrap().into(),
+        ],
+        root.path(),
+    );
+    let report = raw(&invocation, &Cancellation::default());
+    assert!(
+        report.process.failure.is_none(),
+        "{:?}",
+        report.process.failure
+    );
+    assert!(report.process.cleanup.complete);
+    assert_eq!(report.process.status.unwrap().code(), Some(0));
+    assert!(!root.path().join("consumed-row").exists());
+}
+
+#[test]
+fn actual_cli_refuses_special_and_oversize_requests_before_child_launch() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let valid = input(root.path(), "printf launched > launched", 2);
+    let fifo = root.path().join("request.fifo");
+    let fifo_name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+    let link = root.path().join("request.link");
+    symlink(&valid, &link).unwrap();
+    let oversized = root.path().join("oversized.json");
+    fs::File::create(&oversized)
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    let invalid = root.path().join("invalid.json");
+    fs::write(&invalid, b"{malformed").unwrap();
+    for path in [&fifo, &link, &oversized, &invalid] {
+        let report = raw(&cli(path, root.path()), &Cancellation::default());
+        assert_eq!(
+            report.process.outcome,
+            Outcome::Exited,
+            "{:?}",
+            report.process.outcome
+        );
+        assert!(report.process.failure.is_none());
+        assert!(report.process.cleanup.complete);
+        assert!(!report.process.status.unwrap().success());
+        assert!(!root.path().join("launched").exists());
+    }
+}

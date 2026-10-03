@@ -22,6 +22,7 @@ pub(crate) mod canary_source_plan;
 pub(crate) mod canary_timeout;
 pub(crate) mod client_readiness;
 mod codepoint_json;
+pub(crate) mod cohort_identity;
 pub(crate) mod control_plane_qa;
 pub(crate) mod daemon_lifecycle;
 pub(crate) mod family_battery_policy;

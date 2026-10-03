@@ -157,7 +157,7 @@
       "id": "boundary:pr_linux:lane",
       "line": 98,
       "occurrence": 1,
-      "rationale": "Caller identity is .github/workflows/pr_linux.yml (PR \u00b7 linux); the callee is a protected @main ref, external to this checkout. The same-commit main_linux.yml lane walks the local ci-linux-lane.yml.",
+      "rationale": "Caller identity is .github/workflows/pr_linux.yml (PR · linux); the callee is a protected @main ref, external to this checkout. The same-commit main_linux.yml lane walks the local ci-linux-lane.yml.",
       "reachable_bytes": "ci-linux-lane.yml and its transitive actions/scripts at protected refs/heads/main of Mesh-LLM/mesh-llm when the PR run starts",
       "replacement_owner": "task 26 protected rollout prerequisites and shadow receipts",
       "selector": "reusable workflow ref Mesh-LLM/mesh-llm/.github/workflows/ci-linux-lane.yml@main called by pull_request entrypoint .github/workflows/pr_linux.yml",
@@ -251,7 +251,7 @@
       "id": "boundary:pr_macos:lane",
       "line": 72,
       "occurrence": 1,
-      "rationale": "Caller identity is .github/workflows/pr_macos.yml (PR \u00b7 macos); the callee is a protected @main ref, external to this checkout. The same-commit main_macos.yml lane walks the local ci-macos-lane.yml.",
+      "rationale": "Caller identity is .github/workflows/pr_macos.yml (PR · macos); the callee is a protected @main ref, external to this checkout. The same-commit main_macos.yml lane walks the local ci-macos-lane.yml.",
       "reachable_bytes": "ci-macos-lane.yml and its transitive actions/scripts at protected refs/heads/main of Mesh-LLM/mesh-llm when the PR run starts",
       "replacement_owner": "task 26 protected rollout prerequisites and shadow receipts",
       "selector": "reusable workflow ref Mesh-LLM/mesh-llm/.github/workflows/ci-macos-lane.yml@main called by pull_request entrypoint .github/workflows/pr_macos.yml",
@@ -345,7 +345,7 @@
       "id": "boundary:pr_quality:lane",
       "line": 73,
       "occurrence": 1,
-      "rationale": "Caller identity is .github/workflows/pr_quality.yml (PR \u00b7 quality); the callee is a protected @main ref, external to this checkout. The same-commit main_quality.yml lane walks the local ci-quality-lane.yml.",
+      "rationale": "Caller identity is .github/workflows/pr_quality.yml (PR · quality); the callee is a protected @main ref, external to this checkout. The same-commit main_quality.yml lane walks the local ci-quality-lane.yml.",
       "reachable_bytes": "ci-quality-lane.yml and its transitive actions/scripts at protected refs/heads/main of Mesh-LLM/mesh-llm when the PR run starts",
       "replacement_owner": "task 26 protected rollout prerequisites and shadow receipts",
       "selector": "reusable workflow ref Mesh-LLM/mesh-llm/.github/workflows/ci-quality-lane.yml@main called by pull_request entrypoint .github/workflows/pr_quality.yml",
@@ -439,7 +439,7 @@
       "id": "boundary:pr_website:lane",
       "line": 71,
       "occurrence": 1,
-      "rationale": "Caller identity is .github/workflows/pr_website.yml (PR \u00b7 website); the callee is a protected @main ref, external to this checkout. The same-commit main_website.yml lane walks the local ci-website-lane.yml.",
+      "rationale": "Caller identity is .github/workflows/pr_website.yml (PR · website); the callee is a protected @main ref, external to this checkout. The same-commit main_website.yml lane walks the local ci-website-lane.yml.",
       "reachable_bytes": "ci-website-lane.yml and its transitive actions/scripts at protected refs/heads/main of Mesh-LLM/mesh-llm when the PR run starts",
       "replacement_owner": "task 26 protected rollout prerequisites and shadow receipts",
       "selector": "reusable workflow ref Mesh-LLM/mesh-llm/.github/workflows/ci-website-lane.yml@main called by pull_request entrypoint .github/workflows/pr_website.yml",
@@ -533,7 +533,7 @@
       "id": "boundary:pr_windows:lane",
       "line": 72,
       "occurrence": 1,
-      "rationale": "Caller identity is .github/workflows/pr_windows.yml (PR \u00b7 windows); the callee is a protected @main ref, external to this checkout. The same-commit main_windows.yml lane walks the local ci-windows-lane.yml.",
+      "rationale": "Caller identity is .github/workflows/pr_windows.yml (PR · windows); the callee is a protected @main ref, external to this checkout. The same-commit main_windows.yml lane walks the local ci-windows-lane.yml.",
       "reachable_bytes": "ci-windows-lane.yml and its transitive actions/scripts at protected refs/heads/main of Mesh-LLM/mesh-llm when the PR run starts",
       "replacement_owner": "task 26 protected rollout prerequisites and shadow receipts",
       "selector": "reusable workflow ref Mesh-LLM/mesh-llm/.github/workflows/ci-windows-lane.yml@main called by pull_request entrypoint .github/workflows/pr_windows.yml",
@@ -1407,7 +1407,7 @@
       "evidence": [
         {
           "path": "just/ci.just",
-          "line": 170,
+          "line": 171,
           "text": "just with-lld cargo build --locked -p xtask --bins --examples"
         },
         {
@@ -1475,432 +1475,432 @@
       "evidence": [
         {
           "path": "just/ci.just",
-          "line": 185,
+          "line": 186,
           "text": "just with-lld cargo test --locked -p xtask --bin xtask \\"
         },
         {
           "path": "just/ci.just",
-          "line": 186,
+          "line": 187,
           "text": "--test automation_selector \\"
         },
         {
           "path": "just/ci.just",
-          "line": 187,
+          "line": 188,
           "text": "--test canary_cache_configuration \\"
         },
         {
           "path": "just/ci.just",
-          "line": 188,
+          "line": 189,
           "text": "--test canary_controller_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 189,
+          "line": 190,
           "text": "--test canary_result_gate \\"
         },
         {
           "path": "just/ci.just",
-          "line": 190,
+          "line": 191,
           "text": "--test ci_runner_cache_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 191,
+          "line": 192,
           "text": "--test family_battery_environment \\"
         },
         {
           "path": "just/ci.just",
-          "line": 192,
+          "line": 193,
           "text": "--test family_battery_prepared_source \\"
         },
         {
           "path": "just/ci.just",
-          "line": 193,
+          "line": 194,
           "text": "--test lane_l12_build_llama \\"
         },
         {
           "path": "just/ci.just",
-          "line": 194,
+          "line": 195,
           "text": "--test lane_l2_authority \\"
         },
         {
           "path": "just/ci.just",
-          "line": 195,
+          "line": 196,
           "text": "--test lane_l3_abi_restore \\"
         },
         {
           "path": "just/ci.just",
-          "line": 196,
+          "line": 197,
           "text": "--test lane_l3_cache_metadata \\"
         },
         {
           "path": "just/ci.just",
-          "line": 197,
+          "line": 198,
           "text": "--test lane_l3_display_projection \\"
         },
         {
           "path": "just/ci.just",
-          "line": 198,
+          "line": 199,
           "text": "--test lane_l3_l2_dispatch \\"
         },
         {
           "path": "just/ci.just",
-          "line": 199,
+          "line": 200,
           "text": "--test lane_l7_logging_recovery \\"
         },
         {
           "path": "just/ci.just",
-          "line": 200,
+          "line": 201,
           "text": "--test lane_l7_plans \\"
         },
         {
           "path": "just/ci.just",
-          "line": 201,
+          "line": 202,
           "text": "--test local_ports \\"
         },
         {
           "path": "just/ci.just",
-          "line": 202,
+          "line": 203,
           "text": "--test migration_archives \\"
         },
         {
           "path": "just/ci.just",
-          "line": 203,
+          "line": 204,
           "text": "--test migration_bootstrap \\"
         },
         {
           "path": "just/ci.just",
-          "line": 204,
+          "line": 205,
           "text": "--test migration_canary_aggregate_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 205,
+          "line": 206,
           "text": "--test migration_canary_receipts \\"
         },
         {
           "path": "just/ci.just",
-          "line": 206,
+          "line": 207,
           "text": "--test migration_canary_receipts_parity \\"
         },
         {
           "path": "just/ci.just",
-          "line": 207,
+          "line": 208,
           "text": "--test migration_cargo_metadata \\"
         },
         {
           "path": "just/ci.just",
-          "line": 208,
+          "line": 209,
           "text": "--test migration_cargo_packages_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 209,
+          "line": 210,
           "text": "--test migration_ci_graph \\"
         },
         {
           "path": "just/ci.just",
-          "line": 210,
+          "line": 211,
           "text": "--test migration_ci_operations \\"
         },
         {
           "path": "just/ci.just",
-          "line": 211,
+          "line": 212,
           "text": "--test migration_ci_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 212,
+          "line": 213,
           "text": "--test migration_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 213,
+          "line": 214,
           "text": "--test migration_family_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 214,
+          "line": 215,
           "text": "--test migration_hf_artifact_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 215,
+          "line": 216,
           "text": "--test migration_hf_artifact_controls \\"
         },
         {
           "path": "just/ci.just",
-          "line": 216,
+          "line": 217,
           "text": "--test migration_hf_converted_artifact \\"
         },
         {
           "path": "just/ci.just",
-          "line": 217,
+          "line": 218,
           "text": "--test migration_lifecycle \\"
         },
         {
           "path": "just/ci.just",
-          "line": 218,
+          "line": 219,
           "text": "--test migration_models \\"
         },
         {
           "path": "just/ci.just",
-          "line": 219,
+          "line": 220,
           "text": "--test migration_native_fixtures \\"
         },
         {
           "path": "just/ci.just",
-          "line": 220,
+          "line": 221,
           "text": "--test migration_native_generator \\"
         },
         {
           "path": "just/ci.just",
-          "line": 221,
+          "line": 222,
           "text": "--test migration_native_policy \\"
         },
         {
           "path": "just/ci.just",
-          "line": 222,
+          "line": 223,
           "text": "--test migration_optional_isolation \\"
         },
         {
           "path": "just/ci.just",
-          "line": 223,
+          "line": 224,
           "text": "--test migration_package_source_version \\"
         },
         {
           "path": "just/ci.just",
-          "line": 224,
+          "line": 225,
           "text": "--test migration_patch_bytes \\"
         },
         {
           "path": "just/ci.just",
-          "line": 225,
+          "line": 226,
           "text": "--test migration_patch_shards \\"
         },
         {
           "path": "just/ci.just",
-          "line": 226,
+          "line": 227,
           "text": "--test migration_prepared_inputs \\"
         },
         {
           "path": "just/ci.just",
-          "line": 227,
+          "line": 228,
           "text": "--test migration_process \\"
         },
         {
           "path": "just/ci.just",
-          "line": 228,
+          "line": 229,
           "text": "--test migration_product \\"
         },
         {
           "path": "just/ci.just",
-          "line": 229,
+          "line": 230,
           "text": "--test migration_qualification_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 230,
+          "line": 231,
           "text": "--test migration_release \\"
         },
         {
           "path": "just/ci.just",
-          "line": 231,
+          "line": 232,
           "text": "--test migration_report_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 232,
+          "line": 233,
           "text": "--test migration_report_safety \\"
         },
         {
           "path": "just/ci.just",
-          "line": 233,
+          "line": 234,
           "text": "--test migration_repository \\"
         },
         {
           "path": "just/ci.just",
-          "line": 234,
+          "line": 235,
           "text": "--test migration_run_family \\"
         },
         {
           "path": "just/ci.just",
-          "line": 235,
+          "line": 236,
           "text": "--test migration_workload_oracle_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 236,
+          "line": 237,
           "text": "--test migration_xcframework_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 237,
+          "line": 238,
           "text": "--test openai_smoke_config \\"
         },
         {
           "path": "just/ci.just",
-          "line": 238,
+          "line": 239,
           "text": "--test prepared_source \\"
         },
         {
           "path": "just/ci.just",
-          "line": 239,
+          "line": 240,
           "text": "--test replay_acceptance_gates \\"
         },
         {
           "path": "just/ci.just",
-          "line": 240,
+          "line": 241,
           "text": "--test replay_arm_pass \\"
         },
         {
           "path": "just/ci.just",
-          "line": 241,
+          "line": 242,
           "text": "--test replay_build_arm \\"
         },
         {
           "path": "just/ci.just",
-          "line": 242,
+          "line": 243,
           "text": "--test replay_context_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 243,
+          "line": 244,
           "text": "--test replay_external_engines \\"
         },
         {
           "path": "just/ci.just",
-          "line": 244,
+          "line": 245,
           "text": "--test replay_external_run \\"
         },
         {
           "path": "just/ci.just",
-          "line": 245,
+          "line": 246,
           "text": "--test replay_history \\"
         },
         {
           "path": "just/ci.just",
-          "line": 246,
+          "line": 247,
           "text": "--test replay_history_hub \\"
         },
         {
           "path": "just/ci.just",
-          "line": 247,
+          "line": 248,
           "text": "--test replay_interruption \\"
         },
         {
           "path": "just/ci.just",
-          "line": 248,
+          "line": 249,
           "text": "--test replay_l3 \\"
         },
         {
           "path": "just/ci.just",
-          "line": 249,
+          "line": 250,
           "text": "--test replay_manifest_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 250,
+          "line": 251,
           "text": "--test replay_manual_profile \\"
         },
         {
           "path": "just/ci.just",
-          "line": 251,
+          "line": 252,
           "text": "--test replay_manual_resume_refs \\"
         },
         {
           "path": "just/ci.just",
-          "line": 252,
+          "line": 253,
           "text": "--test replay_model_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 253,
+          "line": 254,
           "text": "--test replay_pass_schedule \\"
         },
         {
           "path": "just/ci.just",
-          "line": 254,
+          "line": 255,
           "text": "--test replay_pooled_rows \\"
         },
         {
           "path": "just/ci.just",
-          "line": 255,
+          "line": 256,
           "text": "--test replay_progress \\"
         },
         {
           "path": "just/ci.just",
-          "line": 256,
+          "line": 257,
           "text": "--test replay_publication_prepare \\"
         },
         {
           "path": "just/ci.just",
-          "line": 257,
+          "line": 258,
           "text": "--test replay_report \\"
         },
         {
           "path": "just/ci.just",
-          "line": 258,
+          "line": 259,
           "text": "--test replay_retirement \\"
         },
         {
           "path": "just/ci.just",
-          "line": 259,
+          "line": 260,
           "text": "--test replay_run_execution \\"
         },
         {
           "path": "just/ci.just",
-          "line": 260,
+          "line": 261,
           "text": "--test replay_server_cell \\"
         },
         {
           "path": "just/ci.just",
-          "line": 261,
+          "line": 262,
           "text": "--test replay_session_evidence \\"
         },
         {
           "path": "just/ci.just",
-          "line": 262,
+          "line": 263,
           "text": "--test replay_trajectory_execution \\"
         },
         {
           "path": "just/ci.just",
-          "line": 263,
+          "line": 264,
           "text": "--test swift_api_checksum \\"
         },
         {
           "path": "just/ci.just",
-          "line": 264,
+          "line": 265,
           "text": "--test swift_privacy_adapter \\"
         },
         {
           "path": "just/ci.just",
-          "line": 265,
+          "line": 266,
           "text": "--test swift_producer_environment \\"
         },
         {
           "path": "just/ci.just",
-          "line": 266,
+          "line": 267,
           "text": "--test workload_certify_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 267,
+          "line": 268,
           "text": "--test workload_oracle_producer_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 268,
+          "line": 269,
           "text": "--test workload_smoke_config \\"
         },
         {
           "path": "just/ci.just",
-          "line": 269,
+          "line": 270,
           "text": "--test workload_start_retry \\"
         },
         {
           "path": "just/ci.just",
-          "line": 270,
+          "line": 271,
           "text": "-- --test-threads=1"
         },
         {
@@ -3132,7 +3132,7 @@
   "selected_process_calls": [
     {
       "caller": "scripts/skippy-family-battery.sh",
-      "line": 192,
+      "line": 191,
       "source_block": "\"${plan_args[@]}\"",
       "child": "tools/xtask (configured frozen controller automation executable or existing Just automation-run facade)",
       "child_source_known": true,
@@ -3382,7 +3382,7 @@
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",
-      "line": 539,
+      "line": 523,
       "source_block": "\"${repair_workload_automation[@]}\" automation canary-receipts workload-manifest verify \\",
       "child": "tools/xtask configured absolute regular executable or trusted Just automation facade",
       "child_source_known": true,
@@ -3402,7 +3402,7 @@
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",
-      "line": 197,
+      "line": 196,
       "source_block": "if \"${automation[@]}\" automation canary-timeout --input \"$input\"; then",
       "child": "tools/xtask configured absolute regular executable admitted before repair agent work; existing protected build controller for *-build",
       "child_source_known": true,
@@ -3472,7 +3472,7 @@
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",
-      "line": 275,
+      "line": 267,
       "source_block": "if run_verification_logged \"full family certification plan\" \"$log\" \"$@\"; then status=0; else status=$?; fi",
       "child": "pre-agent frozen controller; closed repair or independent verification command set",
       "child_source_known": false,
@@ -3482,7 +3482,7 @@
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",
-      "line": 277,
+      "line": 269,
       "source_block": "if \"$@\"; then status=0; else status=$?; fi",
       "child": "pre-agent frozen controller; closed repair or independent verification command set",
       "child_source_known": false,
@@ -3492,7 +3492,7 @@
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",
-      "line": 482,
+      "line": 468,
       "source_block": "\"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
       "child": "pre-agent frozen controller; closed repair or independent verification command set",
       "child_source_known": false,
@@ -3502,7 +3502,7 @@
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",
-      "line": 487,
+      "line": 473,
       "source_block": "elif \"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
       "child": "pre-agent frozen controller; closed repair or independent verification command set",
       "child_source_known": false,
@@ -3512,7 +3512,7 @@
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",
-      "line": 247,
+      "line": 239,
       "source_block": "\"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
       "child": "pre-agent frozen controller; closed repair or independent verification command set",
       "child_source_known": false,
@@ -3522,7 +3522,7 @@
     },
     {
       "caller": "scripts/llama-canary-agent-repair.sh",
-      "line": 252,
+      "line": 244,
       "source_block": "elif \"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
       "child": "pre-agent frozen controller; closed repair or independent verification command set",
       "child_source_known": false,
@@ -4003,12 +4003,12 @@
     "unit_target": "xtask",
     "sources": {
       "just/ci.just": {
-        "sha256": "6e3e69b0019a329a068a7d8bbb36613087174923298f226fe71a8d3ef2f038d8",
-        "line_count": 270
+        "sha256": "71526f8376f4ddc03e5804d6c148b003738633600c610db3b016567be5546c3b",
+        "line_count": 271
       },
       ".github/workflows/ci-quality-slice.yml": {
-        "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
-        "line_count": 649
+        "sha256": "c1a0eb9d1787b433b7274820a6ee76c4fd38ba1fbaa31f9c009c9d0fbe38f5b7",
+        "line_count": 654
       }
     },
     "status": "Authored wiring only; parent must integrate and qualify normal ci-validate. Legacy roster, PyYAML and all required SDK/native/model/protected gates retained.",
@@ -4495,7 +4495,8 @@
       }
     ],
     "runtime_receipt": null,
-    "qualification_limit": "No maintained execution or CI/workflow/model/native qualification by author. Root must qualify copied actual content/logging/deadline/cancellation wrappers, scanner and current inventory before any qualified cutover claim. Full verification/native/model gates remain separate."
+    "qualification_limit": "No maintained execution or CI/workflow/model/native qualification by author. Root must qualify copied actual content/logging/deadline/cancellation wrappers, scanner and current inventory before any qualified cutover claim. Full verification/native/model gates remain separate.",
+    "current_dead_fallback_supersedes_retained_lines": "next_wave_semantic_composition; old8 syntactic lines remain historical; current source has zero wrapper fallback launches and unchanged pinned uv/Jinja component."
   },
   "system_one_serializer_caller_cutover": {
     "status": "authored_unqualified",
@@ -5029,5 +5030,126 @@
       "scope": "first seven owning filters only; later unrelated dispatch failure/global exit101 does not invalidate passed sections; no whole-suite green claim"
     },
     "activation_gate": "Requires successful activation of exact seven-file predecessor, root final guard verification and inventory/remaining-roster qualification. Do not apply directly to maintained174/core94. No shared helper/fallback roster/production owner removed."
+  },
+  "next_wave_semantic_composition": {
+    "status": "AUTHORED_UNRUN_UNAPPLIED; metrics40 retirement conditional on root final owner proof/checkpoint",
+    "source_composition_manifest": ".omo/evidence/resume-20261002/nextwave-semantic-composition/source-composition.json",
+    "metrics40_original_intent_map": ".omo/evidence/resume-20261002/metrics-sccache-forty-intent-retirement/intent-map.json",
+    "deleted_python_sources": [
+      "scripts/tests/test_collect_ci_metrics.py",
+      "scripts/collect-ci-metrics.py",
+      "scripts/tests/test_sccache_evidence.py",
+      "scripts/summarize-sccache-stats.py"
+    ],
+    "active_inventory_python_paths": 160,
+    "core_python_modules": 85,
+    "canonical_rust_contract_registry": 84,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "7b929f1e8f2a4c17753793066d6e378ab4c0669c59458c43eea38dbc6b7d0e1b",
+      "line": 24,
+      "normalized_fingerprint": "49deb46a6fd88b71",
+      "count": 85
+    },
+    "current_repair": {
+      "path": "scripts/llama-canary-agent-repair.sh",
+      "sha256": "d761059f9423953e970546bc4d5404c2974d6737836a109ff353f36d97582895",
+      "line_count": 1013,
+      "removed_dead_calls": 8,
+      "retained_wrapper_python_fallback_calls": 0,
+      "pinned_component": "uv/Jinja2==3.1.6 unchanged bytes"
+    },
+    "current_battery": {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "a57f820d6704613d7955059163fb7590b67f6a672336971cc0cc1f8436d5255f",
+      "removed_prerequisite": "require_cmd python3"
+    },
+    "test_tree": {
+      "sha256": "bae0427a912e63177c59800d52beaeac7f40e575cb9f2c044aec863aa1da9ce5",
+      "paths": 74
+    },
+    "new_proofs": "UNRUN: battery1,canary mode2,timeout CLI5/bin3/shared inherited,SDK/native6,GLIBC collector3groups14cases,performance6/shared hash2/schema3 replay regression; actual terminal root counts govern",
+    "preserved": "All prior histories/source witnesses/retirement records except explicit current snapshots; SDK/provider/platform/component/native/model gates and canonical84 unchanged"
+  },
+  "battery_prerequisite_binding_refresh": {
+    "previous_line": 192,
+    "current_line": 191,
+    "source_block": "\"${plan_args[@]}\"",
+    "reason": "Remove unused require_cmd python3 shifts unchanged actual typed plan command by one line; current selected call binding only, historical source records preserved",
+    "previous_invocations_sha256": "f3a4b79497cc3f0a42154a48ba8a2d2514714812ae6b4c810a42ec895ea298d9"
+  },
+  "canary_dead_fallback_binding_refresh": {
+    "caller": "scripts/llama-canary-agent-repair.sh",
+    "source_sha256": "d761059f9423953e970546bc4d5404c2974d6737836a109ff353f36d97582895",
+    "previous_invocations_sha256": "41a2cb6bcbd8d62e4d7d84be6be95bdf1205b9c53e81f0280a002e5e4335ff15",
+    "changes": [
+      {
+        "source_block": "\"${repair_workload_automation[@]}\" automation canary-receipts workload-manifest verify \\",
+        "previous_line": 539,
+        "current_line": 523
+      },
+      {
+        "source_block": "if \"${automation[@]}\" automation canary-timeout --input \"$input\"; then",
+        "previous_line": 197,
+        "current_line": 196
+      },
+      {
+        "source_block": "if run_verification_logged \"full family certification plan\" \"$log\" \"$@\"; then status=0; else status=$?; fi",
+        "previous_line": 275,
+        "current_line": 267
+      },
+      {
+        "source_block": "if \"$@\"; then status=0; else status=$?; fi",
+        "previous_line": 277,
+        "current_line": 269
+      },
+      {
+        "source_block": "\"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
+        "previous_line": 247,
+        "current_line": 239
+      },
+      {
+        "source_block": "\"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
+        "previous_line": 482,
+        "current_line": 468
+      },
+      {
+        "source_block": "elif \"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
+        "previous_line": 252,
+        "current_line": 244
+      },
+      {
+        "source_block": "elif \"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\" --input \"$input\"; then",
+        "previous_line": 487,
+        "current_line": 473
+      }
+    ],
+    "reason": "Exact actual source blocks and occurrence cardinality preserved; only current selected launch line bindings refreshed after8 dead fallback removals; histories unchanged"
+  },
+  "required_node_component_wiring": {
+    "source": {
+      "just/ci.just": {
+        "sha256": "71526f8376f4ddc03e5804d6c148b003738633600c610db3b016567be5546c3b",
+        "line_count": 271
+      },
+      ".github/workflows/ci-quality-slice.yml": {
+        "sha256": "c1a0eb9d1787b433b7274820a6ee76c4fd38ba1fbaa31f9c009c9d0fbe38f5b7",
+        "line_count": 654
+      }
+    },
+    "reason": "Existing required finite action fixtures invoke Node; exact existing setup-node pin and Node24.20.0 added to quality_contracts with dependency cache disabled, local preflight precedes bootstrap; no Python edge/roster/SDK/provider demotion",
+    "owning_filters": [
+      "ci_validation::workflow_guards::quality_contracts",
+      "ci_runner_cache_contract::cache_publication"
+    ],
+    "qualification": "PENDING_CURRENT_UNION",
+    "historical_records_preserved": true,
+    "current_boundary_evidence_shift": {
+      "path": "just/ci.just",
+      "inserted_line": 164,
+      "shift": 1,
+      "entries": 87,
+      "scope": "Current boundary_records evidence only; exact text checked and historical records preserved"
+    }
   }
 }

@@ -35,6 +35,7 @@ fn actual_interrupts_return_exact_status_after_cleanup() {
         let report = execute(&Input {
             label: "signal fixture".into(),
             seconds: 8,
+            stdin: CommandStdin::Closed,
             cwd: root.clone(),
             executable: "/bin/sh".into(),
             arguments: vec![

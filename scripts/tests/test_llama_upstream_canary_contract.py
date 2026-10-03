@@ -89,23 +89,25 @@ class ParityCliInvocationTests(unittest.TestCase):
         self.assertTrue(payload is None or "llama_model" in payload)
 
     def test_workflow_and_wrapper_use_valid_invocations(self) -> None:
-        # The exact command strings embedded in the workflow and wrapper
-        # must be the valid global-first form, never the rejected
-        # subcommand-first form.
+        # The wrapper dispatches parity through the typed owners. The retained
+        # helper's global-first CLI is tested separately above; its obsolete
+        # fallback must not return to the production wrapper.
         workflow = WORKFLOW.read_text(encoding="utf-8")
         wrapper = (ROOT / "scripts" / "llama-canary-agent-repair.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            "skippy-llama-parity.py --llama-src .deps/llama.cpp validate", wrapper
+            'repair_source_inspection local-parity-inventory "" "$CERTIFY_LOG"', wrapper
         )
         self.assertNotIn("next-boundary-target", workflow)
         self.assertIn(
-            "skippy-llama-parity.py --llama-src .deps/llama.cpp validate", wrapper
+            "automation canary-receipts parity-inventory --input", wrapper
         )
         for text in (workflow, wrapper):
             self.assertNotIn("validate --llama-src", text)
             self.assertNotIn("--json --llama-src", text)
+        self.assertIn('verification_source_inspection verification-parity-inventory "$CERTIFY_LOG"', wrapper)
+        self.assertNotIn("skippy-llama-parity.py", wrapper)
 
 
 class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
@@ -409,7 +411,9 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         wrapper = (ROOT / "scripts" / "llama-canary-agent-repair.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("generate-split-certified.py --check", wrapper)
+        self.assertIn("controller_split_roster true", wrapper)
+        self.assertIn("repair_source_inspection local-split-roster true", wrapper)
+        self.assertIn("verification_source_inspection verification-split-roster-check", wrapper)
         self.assertIn("check_split_certification_roster\n", wrapper)
         gates = wrapper[
             wrapper.index("run_candidate_gates()") : wrapper.index(

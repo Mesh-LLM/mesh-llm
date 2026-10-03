@@ -26,6 +26,25 @@ pub fn supervise_inherited(
     limits: &Limits,
     cancel: &Cancellation,
 ) -> Result<InheritedReport, Failure> {
+    supervise_with_stdin(spec, limits, cancel, Stdio::inherit())
+}
+
+/// Argument-driven children receive EOF while stdout and stderr remain live.
+/// Tree ownership, exit/deadline ordering and cleanup use the same inherited owner.
+pub fn supervise_inherited_closed_stdin(
+    spec: &ProcessSpec,
+    limits: &Limits,
+    cancel: &Cancellation,
+) -> Result<InheritedReport, Failure> {
+    supervise_with_stdin(spec, limits, cancel, Stdio::null())
+}
+
+fn supervise_with_stdin(
+    spec: &ProcessSpec,
+    limits: &Limits,
+    cancel: &Cancellation,
+    stdin: Stdio,
+) -> Result<InheritedReport, Failure> {
     limits.validate()?;
     if !matches!(limits.readiness, Readiness::None)
         || !matches!(limits.completion, Completion::Exit)
@@ -36,7 +55,7 @@ pub fn supervise_inherited(
     }
     let mut command = spec.command()?;
     command
-        .stdin(Stdio::inherit())
+        .stdin(stdin)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     if cancel.is_cancelled() {

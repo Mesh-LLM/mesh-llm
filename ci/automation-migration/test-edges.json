@@ -226,9 +226,9 @@
           "wrapper runs Python -c sleep(30) under timeout; asserts exit 124 and timeout diagnostic, no Goose",
           [
             87,
-            272,
-            383,
-            400
+            276,
+            387,
+            404
           ]
         ],
         [
@@ -331,7 +331,7 @@
           "scripts/skippy-family-battery.sh",
           "_dry_run invokes the actual battery with temporary manifest, --dry-run and fake hf availability; captures status/output to assert build-once, workload routing and admission without running model inference",
           [
-            637
+            641
           ]
         ]
       ]
@@ -586,29 +586,6 @@
           "bash with mesh-llm-cli changed file and repository cwd; asserts affected-crate output",
           [
             78
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_collect_ci_metrics.py",
-      [
-        [
-          "launch",
-          "scripts/collect-ci-metrics.py",
-          "subprocess executes fixed metrics CLI against synthetic workflow/job JSON; argv continuation is same process",
-          [
-            271,
-            636
-          ]
-        ],
-        [
-          "assembly",
-          "scripts/collect-ci-metrics.py argv",
-          "sys.executable and SCRIPT are argv continuations of the preceding metrics runs",
-          [
-            273,
-            637
           ]
         ]
       ]
@@ -1045,20 +1022,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_collect_ci_metrics.py",
-      "members": [
-        [
-          15,
-          "125a7d40e8b070af",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/collect-ci-metrics.py",
-          "SCRIPT constant identifies fixed metrics module"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_compare_event_benchmark_matrix.py",
       "members": [
         [
@@ -1145,7 +1108,7 @@
       "file": "scripts/tests/test_llama_canary_agent_repair_contract.py",
       "members": [
         [
-          415,
+          419,
           "51209f5cb2aad7e3",
           1,
           "dynamic-import",
@@ -1163,7 +1126,7 @@
           "Main bd5514dd8 retained source: return subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          269,
+          273,
           "a64ba1ba06692892",
           1,
           "subprocess-or-interpreter",
@@ -1826,38 +1789,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_sccache_evidence.py",
-      "members": [
-        [
-          707,
-          "b055144f6196d6bd",
-          1,
-          "subprocess-or-interpreter",
-          "conditional",
-          "fixture-selected Rust automation or shell adapter argv",
-          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
-        ],
-        [
-          715,
-          "13ca18bc3a83fc8c",
-          1,
-          "subprocess-or-interpreter",
-          "conditional",
-          "fixture-selected Rust automation or shell adapter argv",
-          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
-        ],
-        [
-          186,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "existing source-owned command or inert source reference retained from main",
-          "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_static_abi_artifacts.py",
       "members": [
         [
@@ -1884,7 +1815,7 @@
       "file": "scripts/tests/test_llama_upstream_canary_contract.py",
       "members": [
         [
-          259,
+          261,
           "0bb8fafe2022eacf",
           1,
           "subprocess-or-interpreter",
@@ -1893,7 +1824,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          270,
+          272,
           "fcde2ef6bba29634",
           1,
           "subprocess-or-interpreter",
@@ -1902,7 +1833,7 @@
           "Main bd5514dd8 retained source: invalid = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          289,
+          291,
           "ada8261f4230c053",
           1,
           "subprocess-or-interpreter",
@@ -1911,7 +1842,7 @@
           "Main bd5514dd8 retained source: prepared = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          425,
+          429,
           "0bb8fafe2022eacf",
           2,
           "subprocess-or-interpreter",
@@ -1920,7 +1851,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          442,
+          446,
           "0bb8fafe2022eacf",
           3,
           "subprocess-or-interpreter",
@@ -1929,7 +1860,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          450,
+          454,
           "b055144f6196d6bd",
           1,
           "subprocess-or-interpreter",
@@ -1938,7 +1869,7 @@
           "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          466,
+          470,
           "199ce1cfcc1f5f1c",
           1,
           "subprocess-or-interpreter",
@@ -1947,7 +1878,7 @@
           "Main bd5514dd8 retained source: wrapper = subprocess.Popen(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          474,
+          478,
           "b055144f6196d6bd",
           2,
           "subprocess-or-interpreter",
@@ -1956,7 +1887,7 @@
           "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          507,
+          511,
           "0bb8fafe2022eacf",
           4,
           "subprocess-or-interpreter",
@@ -1965,7 +1896,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          515,
+          519,
           "b055144f6196d6bd",
           3,
           "subprocess-or-interpreter",
@@ -1974,7 +1905,7 @@
           "Main bd5514dd8 retained source: sys.executable,; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          759,
+          763,
           "53c026884edc220c",
           1,
           "subprocess-or-interpreter",
@@ -1983,7 +1914,7 @@
           "Main bd5514dd8 retained source: generated = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          770,
+          774,
           "0bb8fafe2022eacf",
           5,
           "subprocess-or-interpreter",
@@ -1992,7 +1923,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          980,
+          984,
           "0bb8fafe2022eacf",
           6,
           "subprocess-or-interpreter",
@@ -2001,7 +1932,7 @@
           "Main bd5514dd8 retained source: result = subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
         ],
         [
-          1024,
+          1028,
           "b0c6e8c6c4abee0f",
           1,
           "subprocess-or-interpreter",
@@ -2081,7 +2012,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "1e3dcf692de15855f4332c082b8ae921bfcb03b38a8e5b6de9068e09e0ee336a",
+  "observed_source_sha256": "05f89bad1fa1d8f979f30a9045c7c3fe910bd64384e577bcfe3e7a52d84c6de8",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -2820,6 +2751,46 @@
     },
     "activation_gate": "Requires successful activation of exact seven-file predecessor, root final guard verification and inventory/remaining-roster qualification. Do not apply directly to maintained174/core94. No shared helper/fallback roster/production owner removed."
   },
+  "next_wave_semantic_composition": {
+    "status": "AUTHORED_UNRUN_UNAPPLIED; metrics40 retirement conditional on root final owner proof/checkpoint",
+    "source_composition_manifest": ".omo/evidence/resume-20261002/nextwave-semantic-composition/source-composition.json",
+    "metrics40_original_intent_map": ".omo/evidence/resume-20261002/metrics-sccache-forty-intent-retirement/intent-map.json",
+    "deleted_python_sources": [
+      "scripts/tests/test_collect_ci_metrics.py",
+      "scripts/collect-ci-metrics.py",
+      "scripts/tests/test_sccache_evidence.py",
+      "scripts/summarize-sccache-stats.py"
+    ],
+    "active_inventory_python_paths": 160,
+    "core_python_modules": 85,
+    "canonical_rust_contract_registry": 84,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "7b929f1e8f2a4c17753793066d6e378ab4c0669c59458c43eea38dbc6b7d0e1b",
+      "line": 24,
+      "normalized_fingerprint": "49deb46a6fd88b71",
+      "count": 85
+    },
+    "current_repair": {
+      "path": "scripts/llama-canary-agent-repair.sh",
+      "sha256": "d761059f9423953e970546bc4d5404c2974d6737836a109ff353f36d97582895",
+      "line_count": 1013,
+      "removed_dead_calls": 8,
+      "retained_wrapper_python_fallback_calls": 0,
+      "pinned_component": "uv/Jinja2==3.1.6 unchanged bytes"
+    },
+    "current_battery": {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "a57f820d6704613d7955059163fb7590b67f6a672336971cc0cc1f8436d5255f",
+      "removed_prerequisite": "require_cmd python3"
+    },
+    "test_tree": {
+      "sha256": "bae0427a912e63177c59800d52beaeac7f40e575cb9f2c044aec863aa1da9ce5",
+      "paths": 74
+    },
+    "new_proofs": "UNRUN: battery1,canary mode2,timeout CLI5/bin3/shared inherited,SDK/native6,GLIBC collector3groups14cases,performance6/shared hash2/schema3 replay regression; actual terminal root counts govern",
+    "preserved": "All prior histories/source witnesses/retirement records except explicit current snapshots; SDK/provider/platform/component/native/model gates and canonical84 unchanged"
+  },
   "legacy_cache_caller_fixture_refresh": {
     "scope": "Windows platform-checks configure-sccache caller expected-policy roster matches actual newly added runner-policy-bound production caller; only retained test fixture and its current source bindings changed",
     "preimage_sha256": "567b4f9c5dbb7d6c5f3c730f6bc66e741acda3f0aa82e93272f4d455e64439c2",
@@ -2830,5 +2801,38 @@
     "failed_log_sha256": "a3f2771c3de2c62bce19d6986923e71ca99025ffd23993f3796de1203e95f729",
     "legacy_result": "1182 run /1 failed /14 skipped; normal CI terminal1",
     "qualification": "PENDING"
+  },
+  "required_node_component_wiring": {
+    "source": {
+      "just/ci.just": {
+        "sha256": "71526f8376f4ddc03e5804d6c148b003738633600c610db3b016567be5546c3b",
+        "line_count": 271
+      },
+      ".github/workflows/ci-quality-slice.yml": {
+        "sha256": "c1a0eb9d1787b433b7274820a6ee76c4fd38ba1fbaa31f9c009c9d0fbe38f5b7",
+        "line_count": 654
+      }
+    },
+    "reason": "Existing required finite action fixtures invoke Node; exact existing setup-node pin and Node24.20.0 added to quality_contracts with dependency cache disabled, local preflight precedes bootstrap; no Python edge/roster/SDK/provider demotion",
+    "owning_filters": [
+      "ci_validation::workflow_guards::quality_contracts",
+      "ci_runner_cache_contract::cache_publication"
+    ],
+    "qualification": "PENDING_CURRENT_UNION",
+    "historical_records_preserved": true
+  },
+  "parity_invocation_assertion_refresh": {
+    "scope": "Retained parity invocation assertion checks actual typed canary paths and rejects removed unreachable Python fallback; original helper CLI behavior remains tested separately.",
+    "file": "scripts/tests/test_llama_upstream_canary_contract.py",
+    "preimage_sha256": "83070b989a8052011a964feb224c21361b42657c721b622df548090c6dd4121f",
+    "postimage_sha256": "9e40f950a6e8eac669f3ac67dedc349bcd67792baae0786d93492108e7297bda",
+    "previous_observed_source_sha256": "bae0427a912e63177c59800d52beaeac7f40e575cb9f2c044aec863aa1da9ce5",
+    "current_observed_source_sha256": "05f89bad1fa1d8f979f30a9045c7c3fe910bd64384e577bcfe3e7a52d84c6de8",
+    "paths": 74,
+    "shifted_rows": 14,
+    "failed_normal_log": ".omo/evidence/resume-20261002/current159-ci-validate.log",
+    "failed_normal_log_sha256": "772f1d8ac3dd82988d83c7a4dbcc1955be48a492aefff696d649e13d4463331f",
+    "focused": "3 passed; current inventory/policy and complete normal requalification pending",
+    "historical_snapshots": "preserved"
   }
 }

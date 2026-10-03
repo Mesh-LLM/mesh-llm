@@ -144,7 +144,6 @@ require_cmd() {
 }
 
 require_cmd jq
-require_cmd python3
 if (( DRY_RUN == 0 )); then
   require_cmd hf
 fi

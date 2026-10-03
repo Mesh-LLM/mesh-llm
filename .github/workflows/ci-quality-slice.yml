@@ -207,6 +207,11 @@ jobs:
       - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Validate GitHub Actions
         run: actionlint -config-file .github/actionlint.yaml
+      - name: Prepare Node for required automation fixtures
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          package-manager-cache: false
       - name: Test CI, packaging, and SDK contracts
         run: |
           just ci-automation-contracts

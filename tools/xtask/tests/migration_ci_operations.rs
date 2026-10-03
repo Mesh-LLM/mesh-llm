@@ -44,3 +44,6 @@ mod support;
 pub mod process;
 #[path = "migration_ci_operations/sccache_summary.rs"]
 mod sccache_summary;
+
+#[path = "migration_ci_operations/performance_history.rs"]
+mod performance_history;

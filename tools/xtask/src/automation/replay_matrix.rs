@@ -7,7 +7,7 @@ pub(super) mod cell_execution;
 mod cell_qualification;
 mod cell_summary;
 mod cell_workload;
-mod cohort_identity;
+use super::cohort_identity;
 mod context_eligibility;
 pub(super) mod context_preflight;
 pub(super) mod digest;

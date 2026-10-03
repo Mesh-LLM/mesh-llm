@@ -155,3 +155,34 @@ mod family_evidence_workflow;
 
 #[path = "migration_lifecycle/family_build_dispatch.rs"]
 mod family_build_dispatch;
+
+#[path = "migration_lifecycle/family_battery_no_python.rs"]
+mod family_battery_no_python;
+
+#[path = "migration_lifecycle/canary_mode_dispatch.rs"]
+mod canary_mode_dispatch;
+
+#[cfg(unix)]
+#[path = "migration_lifecycle/native_sdk_restore.rs"]
+mod native_sdk_restore;
+
+#[path = "migration_lifecycle/static_abi_sdk_prebuilt.rs"]
+mod static_abi_sdk_prebuilt;
+
+#[path = "migration_lifecycle/static_abi_dynamic_outputs.rs"]
+mod static_abi_dynamic_outputs;
+
+#[path = "migration_lifecycle/static_abi_ffi_boundary.rs"]
+mod static_abi_ffi_boundary;
+
+#[path = "migration_lifecycle/native_release_recipes.rs"]
+mod native_release_recipes;
+
+#[path = "migration_lifecycle/lld_shell_contract.rs"]
+mod lld_shell_contract;
+
+#[path = "migration_lifecycle/static_abi_build_policy.rs"]
+mod static_abi_build_policy;
+
+#[path = "migration_lifecycle/product_composition_adapter.rs"]
+mod product_composition_adapter;

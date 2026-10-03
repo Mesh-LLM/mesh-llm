@@ -107,6 +107,25 @@ fn check_local_arguments(lines: &[&str], range: Range<usize>) -> DynResult<()> {
     }
     Ok(())
 }
+fn guarded_certification_plan(lines: &[&str], index: usize) -> DynResult<bool> {
+    let Some(range) = function(lines, "run_certification")? else {
+        return Ok(false);
+    };
+    let expected = [
+        "run_certification() {",
+        r#"if [[ "$HARNESS_MODE" != repair && "$HARNESS_MODE" != verify ]]; then"#,
+        r#"echo "local certification requires repair or verify mode" >&2"#,
+        "return 2",
+        "fi",
+    ];
+    Ok(range.contains(&index)
+        && lines[index].trim() == PLAN_USES[1]
+        && lines[range]
+            .iter()
+            .take(expected.len())
+            .map(|line| line.trim())
+            .eq(expected))
+}
 pub(super) fn check_shape(path: &str, lines: &[&str]) -> DynResult<()> {
     if path != CALLER {
         return Ok(());
@@ -126,13 +145,13 @@ pub(super) fn check_shape(path: &str, lines: &[&str]) -> DynResult<()> {
             .enumerate()
             .filter(|(_, l)| l.trim().starts_with("repair_family_plan "))
         {
-            if index == 0
-                || !matches!(
+            let directly_guarded = index > 0
+                && matches!(
                     lines[index - 1].trim(),
                     "if [[ \"$HARNESS_MODE\" == repair ]]; then"
                         | "if [[ \"$HARNESS_MODE\" == repair || \"$HARNESS_MODE\" == verify ]]; then"
-                )
-            {
+                );
+            if !directly_guarded && !guarded_certification_plan(lines, index)? {
                 return Err("selected repair: plan call outside exact repair mode".into());
             }
         }
