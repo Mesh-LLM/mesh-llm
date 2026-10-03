@@ -561,6 +561,37 @@ Required fields:
 | `author_email` | Plugin author or maintainer email.                                                            |
 | `author_name`  | Plugin author or maintainer display name.                                                     |
 
+Optional pin fields:
+
+| Field     | Meaning                                                                                                   |
+| --------- | --------------------------------------------------------------------------------------------------------- |
+| `version` | The exact release tag the entry pins, such as `v0.1.0`.                                                   |
+| `sha256`  | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.      |
+
+```json
+{
+  "name": "cool-plugin",
+  "description": "Example plugin for mesh-llm.",
+  "github_url": "https://github.com/mesh-llm/cool-plugin",
+  "author_email": "dev@example.com",
+  "author_name": "Mesh LLM",
+  "version": "v0.1.0",
+  "sha256": {
+    "aarch64-apple-darwin": "<64 hex>",
+    "x86_64-unknown-linux-gnu": "<64 hex>",
+    "aarch64-unknown-linux-gnu": "<64 hex>"
+  }
+}
+```
+
+An ordinary `mesh-llm plugin install` ignores the pin fields. A default install
+(a plugin installed without the operator naming it) requires them: the entry
+must pin a version and a digest for this platform, and the downloaded archive
+must match that digest as well as GitHub's reported one before it is extracted.
+A missing pin or a mismatch is an error and nothing is installed, so a release
+asset replaced after it was pinned is refused. Bumping a pin is one line in
+`plugins.jsonl`.
+
 Catalog rules:
 
 - one plugin per JSONL line
