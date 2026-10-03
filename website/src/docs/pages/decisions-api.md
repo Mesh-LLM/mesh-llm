@@ -1,6 +1,6 @@
 ---
 title: Decisions API
-description: Use Mesh's preview OpenAI Decisions endpoint with System One models
+description: Use Mesh's Decisions endpoint with System One models
 ---
 
 # Decisions API
@@ -9,10 +9,6 @@ description: Use Mesh's preview OpenAI Decisions endpoint with System One models
 text. A request can combine a yes/no `predicate`, a `choice` from supplied
 options, and a numeric `score`. Mesh serves the request through a local or
 reachable mesh model; it does not send the input to OpenAI.
-
-This endpoint follows the early request and response shape observed in
-[RubyLLM's recorded OpenAI exchange](https://github.com/crmne/ruby_llm/blob/a1a8513375e76562cbe6ab77dd3220e9e6180d4e/spec/fixtures/vcr_cassettes/providers_openai_with_the_decisions_api_judges_all_three_question_types_through_the_compact_dsl.yml).
-The shape is provisional, not a published OpenAI API contract.
 
 ## Start and find a model
 
