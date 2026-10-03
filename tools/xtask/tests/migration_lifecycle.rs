@@ -192,3 +192,6 @@ mod sccache_installer;
 
 #[path = "migration_lifecycle/release_script.rs"]
 mod release_script;
+
+#[path = "migration_lifecycle/publication_diagnostics.rs"]
+mod publication_diagnostics;
