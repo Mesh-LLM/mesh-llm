@@ -582,8 +582,9 @@ runtime producers are not duplicated.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.
 - `ci-rust-tests-slice.yml` — deterministic affected or all-workspace Cargo
-  test batches consuming the static ABI artifact and its producer-owned
-  toolchain epoch. Batches that exercise Skippy correctness tests restore an
+  test batches that prepare patched llama before consuming the static ABI
+  artifact and verifying its patched revision and producer-owned toolchain
+  epoch. Batches that exercise Skippy correctness tests restore an
   exact revision- and SHA-256-pinned model cache, verify the file before use,
   and leave publication to one trusted-main batch. Related Skippy crate changes
   on pull requests also compile the adapter-owned
@@ -993,8 +994,8 @@ The implemented policy uses that isolation selectively:
 | Linux sccache compiler objects | Exact trusted 2 GiB seed plus job-local writes on GitHub-hosted jobs | Main Quality completion owns publication; PRs mutate only their ephemeral copy |
 | Linux Cargo `target` directories | Disabled for Clippy, Rust tests, host, and runtime | Avoids sharded multi-GiB generations and their restore/upload latency |
 | Skippy correctness model | Restore-only for PRs; one exhaustive trusted-main Rust-test batch publishes an exact file-SHA/cache-version key | Every consuming batch verifies the pinned Qwen file SHA-256; denied-cache runners download the immutable revision without publishing |
-| Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged; the Linux static ABI key includes the prepared patched llama.cpp SHA, which the restore step also checks against the archive stamp |
-| macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
+| Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged; the Linux static ABI key includes the prepared patched llama.cpp SHA, which the restore step checks against the archive stamp |
+| macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; macOS keys include the prepared patched llama SHA and validate hits before use; no restore prefixes cross an ABI boundary |
 | Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |
 | Website npm store | None -- the `mesh/website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
 | SDK Rust Cargo registry/target | `Swatinem/rust-cache` restores the exact `mesh-llm-sdk-rust-cargo-v1` identity (OS/arch, target, pinned image and toolchain epochs, debug/LLD recipe, Cargo/manifest/script inputs, and cache-version) and only saves on `main` | PRs restore the trusted main seed without publishing; a miss still rebuilds the SDK test graph |

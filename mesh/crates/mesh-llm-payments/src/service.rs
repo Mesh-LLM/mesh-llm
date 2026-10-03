@@ -404,13 +404,15 @@ impl PaymentService {
         })
     }
 
-    pub async fn wait_received(&self, invoice: &Invoice) -> Result<()> {
+    /// Wait for this incoming payment to succeed; returns the receiving
+    /// wallet's own record of it (what it credited and the fee it deducted).
+    pub async fn wait_received(&self, invoice: &Invoice) -> Result<Transaction> {
         let payment = self.await_incoming(invoice, false, None).await?;
         ensure!(
             payment.status == PaymentStatus::Succeeded,
             "incoming payment did not succeed"
         );
-        Ok(())
+        Ok(payment)
     }
 
     async fn await_incoming(

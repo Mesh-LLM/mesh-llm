@@ -1,6 +1,7 @@
 //! Best-effort payment lifecycle observations, payer and provider side; never
 //! a ledger, replay service or payment authority.
 use mesh_llm_payments_types::RequestTerms;
+use mesh_llm_payments_types::contract::SettledReceived;
 use mesh_llm_wallet::{invoice::Invoice, provider::Transaction};
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -40,6 +41,22 @@ struct Event {
     payment_hash: Option<String>,
     amount_msat: u64,
     tokens: Option<u64>,
+    /// A settlement as the wallet recorded it: what it credited (provider side)
+    /// and the fee it charged (payer: paid on top; provider: deducted). Absent
+    /// when the wallet did not say, so such events are unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credited_msat: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fee_msat: Option<u64>,
+}
+
+/// An event's optional members: the delivered watermark, and a settlement's
+/// amounts as the wallet reported them. All absent unless the phase has them.
+#[derive(Clone, Copy, Default)]
+struct Optional {
+    tokens: Option<u64>,
+    credited_msat: Option<u64>,
+    fee_msat: Option<u64>,
 }
 
 /// One bounded queue per observed paid exchange. No task or hashing without a subscriber.
@@ -138,16 +155,21 @@ impl Observations {
             segment,
             transaction.payment_hash.clone(),
             transaction.amount_msat,
+            None,
+            Some(transaction.fee_msat),
         );
     }
 
     /// Provider side: the receiving wallet reported `invoice` settled and the
-    /// provider recorded it received.
-    pub(crate) fn received(&self, segment: u32, invoice: &Invoice) {
+    /// provider recorded it received. `amount_msat` stays the invoice amount;
+    /// what the wallet credited and deducted ride alongside when it said.
+    pub(crate) fn received(&self, segment: u32, invoice: &Invoice, settled: &SettledReceived) {
         self.settlement(
             segment,
             Some(invoice.payment_hash.clone()),
             invoice.amount_msat.unwrap_or(0),
+            settled.credited_msat,
+            settled.fee_msat,
         );
     }
 
@@ -174,8 +196,15 @@ impl Observations {
         );
     }
 
-    fn settlement(&self, segment: u32, payment_hash: Option<String>, amount_msat: u64) {
-        self.emit(
+    fn settlement(
+        &self,
+        segment: u32,
+        payment_hash: Option<String>,
+        amount_msat: u64,
+        credited_msat: Option<u64>,
+        fee_msat: Option<u64>,
+    ) {
+        self.emit_with(
             if segment == 0 {
                 "input_settlement_observed"
             } else {
@@ -185,7 +214,11 @@ impl Observations {
             Some(segment),
             payment_hash,
             amount_msat,
-            None,
+            Optional {
+                tokens: None,
+                credited_msat,
+                fee_msat,
+            },
         );
     }
 
@@ -197,6 +230,28 @@ impl Observations {
         payment_hash: Option<String>,
         amount_msat: u64,
         tokens: Option<u64>,
+    ) {
+        self.emit_with(
+            phase,
+            source,
+            segment,
+            payment_hash,
+            amount_msat,
+            Optional {
+                tokens,
+                ..Optional::default()
+            },
+        );
+    }
+
+    fn emit_with(
+        &self,
+        phase: &'static str,
+        source: &'static str,
+        segment: Option<u32>,
+        payment_hash: Option<String>,
+        amount_msat: u64,
+        optional: Optional,
     ) {
         let (Some(sender), Some(role)) = (&self.sender, self.role) else {
             return;
@@ -212,7 +267,9 @@ impl Observations {
             segment,
             payment_hash,
             amount_msat,
-            tokens,
+            tokens: optional.tokens,
+            credited_msat: optional.credited_msat,
+            fee_msat: optional.fee_msat,
         };
         let Ok(value) = serde_json::to_value(&event) else {
             return;
@@ -392,6 +449,94 @@ mod tests {
         assert_eq!(event.settlement, Some("terminal"));
         assert_eq!(event.exchange_id, "exchange-two");
         assert_eq!(event.payment_hash.as_deref(), Some("public-hash"));
+    }
+
+    fn invoice(amount_msat: u64) -> Invoice {
+        Invoice {
+            bolt11: "lnbc-private".into(),
+            payment_hash: "public-hash".into(),
+            payee: "payee".into(),
+            amount_msat: Some(amount_msat),
+            expires_at_ms: 1000,
+        }
+    }
+
+    #[test]
+    fn payer_settlement_carries_the_wallets_fee() {
+        let (observations, mut receiver) = observing(Role::Payer, "exchange-fee");
+        let payment = Transaction {
+            id: "wallet-private".into(),
+            payment_hash: Some("public-hash".into()),
+            inbound: false,
+            amount_msat: 1000,
+            fee_msat: 3,
+            status: mesh_llm_wallet::provider::PaymentStatus::Succeeded,
+            claiming: false,
+            status_msg: None,
+            created_at_ms: 0,
+            settled_at_ms: Some(1),
+        };
+        observations.settled(1, &payment);
+        let event = receiver.try_recv().unwrap();
+        assert_eq!(
+            (event.amount_msat, event.fee_msat, event.credited_msat),
+            (1000, Some(3), None)
+        );
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""fee_msat":3"#) && !json.contains("credited_msat"));
+    }
+
+    #[test]
+    fn provider_settlement_carries_what_the_wallet_credited_and_deducted() {
+        let (observations, mut receiver) = observing(Role::Provider, "provider-fee");
+        let settled = SettledReceived {
+            credited_msat: Some(995),
+            fee_msat: Some(5),
+        };
+        observations.received(0, &invoice(1000), &settled);
+        let event = receiver.try_recv().unwrap();
+        assert_eq!(event.phase, "input_settlement_observed");
+        assert_eq!(
+            event.amount_msat, 1000,
+            "amount_msat stays the invoice amount"
+        );
+        assert_eq!((event.credited_msat, event.fee_msat), (Some(995), Some(5)));
+    }
+
+    #[test]
+    fn a_settlement_the_wallet_did_not_describe_is_unchanged_on_the_wire() {
+        let (observations, mut receiver) = observing(Role::Provider, "provider-plain");
+        observations.received(1, &invoice(1000), &SettledReceived::default());
+        let event = receiver.try_recv().unwrap();
+        let json = serde_json::to_value(&event).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        let mut before = vec![
+            "exchange_id",
+            "event_ref",
+            "terms_digest",
+            "role",
+            "phase",
+            "source",
+            "settlement",
+            "segment",
+            "payment_hash",
+            "amount_msat",
+            "tokens",
+        ];
+        before.sort_unstable();
+        assert_eq!(
+            keys, before,
+            "exactly the members events had before wallet amounts"
+        );
+        let mut blank = json.clone();
+        blank["event_ref"] = serde_json::Value::String(String::new());
+        assert_eq!(request_body_digest(&blank, None).unwrap(), event.event_ref);
     }
 
     #[test]

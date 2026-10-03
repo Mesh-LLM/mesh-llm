@@ -184,8 +184,7 @@ jobs:
         env:
           UI_DIR: ${{ steps.layout.outputs.ui_dir }}
         run: mkdir -p "$UI_DIR/dist" && printf '<html></html>' > "$UI_DIR/dist/index.html"
-      - name: Prepare patched llama.cpp when required
-        if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-quantize') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') || (contains(steps.resolve_batch_crates.outputs.crates, 'skippy-model-package') || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-package-builder')) || contains(steps.resolve_batch_crates.outputs.crates, 'skippy-ffi') }}
+      - name: Prepare patched llama.cpp for static ABI verification
         run: scripts/prepare-llama.sh pinned
       - name: Download immutable static ABI input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

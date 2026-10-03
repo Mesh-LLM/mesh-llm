@@ -1451,6 +1451,23 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("restore-static-abi-input", routing)
         self.assertIn("static-abi-artifact", routing)
 
+    def test_macos_static_abi_cache_tracks_prepared_llama_revision(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "ci-platform-checks-slice.yml"
+        ).read_text(encoding="utf-8")
+        prepare = workflow.index("name: Prepare patched llama.cpp ABI checkout")
+        identify = workflow.index("name: Identify patched llama.cpp for cache reuse")
+        restore = workflow.index("name: Restore static Metal ABI build")
+        self.assertLess(prepare, identify)
+        self.assertLess(identify, restore)
+        cache_key = next(
+            line for line in workflow.splitlines()
+            if "-skippy-abi-static-metal-" in line and "key:" in line
+        )
+        self.assertIn("steps.patched_llama.outputs.sha", cache_key)
+        self.assertIn("skippy/llama_cpp/patches/**", cache_key)
+        self.assertIn(".deps/llama.cpp/.mesh-llm-patched-sha", workflow)
+
     def test_protected_reusable_producers_own_runner_and_cache_policy(
         self,
     ) -> None:

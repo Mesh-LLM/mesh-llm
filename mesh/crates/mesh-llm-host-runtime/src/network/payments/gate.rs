@@ -5,7 +5,7 @@ use anyhow::{Context, Result, ensure};
 use mesh_llm_payments_types::{
     contract::{
         ArrivalResponse, Empty, InputInvoiceResponse, InvoiceRequest, RecordDeliveredRequest,
-        ServeFinishRequest, ServeInputInvoiceRequest, ops,
+        ServeFinishRequest, ServeInputInvoiceRequest, SettledReceived, ops,
     },
     lifetimes::{INPUT_ARRIVAL_WAIT, PRE_PAYMENT_OUTPUT_TOKENS},
     pricing::Pricing,
@@ -269,7 +269,7 @@ impl Authorization {
         };
         let payments = self.payments.clone();
         let settlement = tokio::spawn(async move {
-            let _: Empty = payments
+            let settled: SettledReceived = payments
                 .call(
                     ops::SETTLE_RECEIVED,
                     &InvoiceRequest {
@@ -277,7 +277,7 @@ impl Authorization {
                     },
                 )
                 .await?;
-            observations.received(0, &invoice);
+            observations.received(0, &invoice, &settled);
             anyhow::Ok(())
         });
         *self.input_settlement.lock().await = Some(settlement);
