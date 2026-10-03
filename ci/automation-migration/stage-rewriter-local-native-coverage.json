@@ -1,0 +1,169 @@
+{
+  "status": "PASS_LOCAL_ARM64_LLVM22_NATIVE_CTEST",
+  "qualified_source_head": "7166ba31b863b0a975b9c5a1b5ed2a1be4bb0a71",
+  "source_files": [
+    {
+      "path": "tools/skippy-stage-rewriter/CMakeLists.txt",
+      "sha256": "60304c95f37bc10b7d97a58a86cdbdaa1c0660490913a7a53519159629b24a82"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/README.md",
+      "sha256": "54e4f265560b1091fcf9f152ead30a820b172993e36ed8d63cd4eb736f3941f5"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/main.cpp",
+      "sha256": "ea6e9a9807a23b8d5f8c3c7ad249d56d2c59e7c15842afe45150804374521634"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/rewriter_fixture.cpp",
+      "sha256": "893b9e25023acd95ca96fd2939d344f234cd261f3f31761a7334c1a71e37ebc2"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/altup-sideband.cpp",
+      "sha256": "85af13c8347a4d7460921a969c873b760c8148d68bc93b8ecb115e8d9b13c7d0"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/auxiliary.cpp",
+      "sha256": "5e4d25c54dfba51915b53a1c931d1f62af59e82210646ad87154f4ce528caadd"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/combined-context.cpp",
+      "sha256": "5eebb700cbbb2bac6c210e2954f4573dbd8e045c102ce4c6e2502a5f3d5d6526"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/continue-path.cpp",
+      "sha256": "a069cae405512fde75f7633daed08cc7bfafbd3590efa60dd4b6d00fba924295"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/continue-unbraced.cpp",
+      "sha256": "70afd0ce3e78c7d0bfcd1ecfb4b1a7759355fdbb3ca203290e1163a88a44db3c"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/conventional.cpp",
+      "sha256": "d89d6b4171453c69f7a81c10fa4e24677546f5c7ea3db722df3c5738a9d7bd5a"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/delegated-opaque.cpp",
+      "sha256": "9b32d0f5ea6b0729f633974394811deb3ce52be657963963e53b63cc15a6ed6b"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/delegated-stacks.cpp",
+      "sha256": "e141f3816a01c2a9915df9e55240b4aa45f2293b659cd05e08ee5a6888ed934d"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/embedding-prelude-else.cpp",
+      "sha256": "e77973d0ce4c9661bbc997aca04f9906352c809a322c1eba49e87b117617cc10"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/embedding-prelude.cpp",
+      "sha256": "82b2396c78289f078dc7229513974f145b461547343488edc428f05632c4800c"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/filter-only.cpp",
+      "sha256": "ad635cf590a12b82770e431fb3ff6b3cc16cba7b3d3a0f2f64ae85f7470dcd28"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/glm-dsa.cpp",
+      "sha256": "67192f352cff30b9d051537ecfb3616de37ac74619acbfdbad9e19eb60be6c07"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/hyperconnection-initializer.cpp",
+      "sha256": "e44400fcda6c3f7ef7c9c57350f05a3ac0f2f1585817581a2ebb897c3328c6eb"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/hyperconnection.cpp",
+      "sha256": "7649578eaf9c72cd91db12bfbc217184ccd01d7afa995e6e709d992bd0763b26"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/kimi-k3.cpp",
+      "sha256": "7f92a2d0a58c3eff672685853bf787e8d7a08ea0cd87e6450e5ac81dd19cc653"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/local-loop-bound.cpp",
+      "sha256": "e0d658f5b331972531678d6e882c074a23bb0706d0d740270d2a1ff4bf47cdaf"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/multiple-assignments.cpp",
+      "sha256": "41d57e7594be0d828c2102943a6c5e8cc6de80833b05d6641b24006ff4c0108d"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/multiple-domains.cpp",
+      "sha256": "c3b6dfaaa8ded7cddf4866b23b17f8f21cb70c8b17ea1ccb3372837e00816309"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/nonlocal-exit.cpp",
+      "sha256": "f8fd432eb9509533ef44c4a46ae92f225bd5c4ac1aa4458c733dfd13f6ae3ab3"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/per-layer-sideband.cpp",
+      "sha256": "1d405994b9ca32e26cbefff358219dbb1be38a08d901591ae8e049dce995e0e1"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/preloop-embedding-mode.cpp",
+      "sha256": "67dbbf77d89b0d714acf33ccd021e1c1b6181c929f035b452296aeaca9fa4566"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/range-owned-inputs.cpp",
+      "sha256": "d69783fffa0df07eedc59d5106665ca84a252e34e46370f937e293a8a98158fa"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/rwkv-first-value.cpp",
+      "sha256": "2d7cc15d6522e523eba3c6ec30f4acfc128513bdfd6bac972f000663553cdf80"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/self-carried.cpp",
+      "sha256": "c89c38b523e01910d7dc639453313ae0d0e0f8ae8a784e4eed5a889cfcf208b0"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/stage-zero-sideband.cpp",
+      "sha256": "57e6af4d30755606e9afc35a4b1b7ace18fea4126ac61eb75ca032f89903fa6e"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/switch-break.cpp",
+      "sha256": "c760ee7be1334474dffc931ae3c25c9ce195d96121ac351248ae1e068b12bf6f"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/trailing-work.cpp",
+      "sha256": "a979bd046eda3dc1b7a1f4786de1c247f79e3ceb06e027bf4852168e4031b52c"
+    },
+    {
+      "path": "tools/skippy-stage-rewriter/tests/source/src/models/two-loops.cpp",
+      "sha256": "985b452d338b26360dce9afc6896ffe9b9bb2dbd749c5882d313a998d71a2895"
+    }
+  ],
+  "receipts": [
+    {
+      "name": "build",
+      "status": "PASS",
+      "exit_code": 0,
+      "log": ".omo/evidence/resume-20261002/native-rewriter-build.log",
+      "sha256": "2cf21d5b9e0f7570b5952b3934ea209077bb467e19212608b1736b79909d83b1",
+      "request": ".omo/evidence/resume-20261002/native-rewriter-build-request.json",
+      "request_sha256": "515982af1a44b8a357e6b0eff118d1c7fae440985c69019091c15da0bd03f287"
+    },
+    {
+      "name": "ctest",
+      "status": "PASS",
+      "exit_code": 0,
+      "log": ".omo/evidence/resume-20261002/native-rewriter-ctest.log",
+      "sha256": "f8cf97f6175ce674c2ca35c257dc426f8ef1dcc1d8a446f2f1f631145a709e3e",
+      "request": ".omo/evidence/resume-20261002/native-rewriter-ctest-request.json",
+      "request_sha256": "845932a50e39b8e20a742733fdcf4fd4dc8bdb33d132244ce8bde30927bfd20f"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/Users/ndizazzo/dev/mesh/mesh-llm/.omo/evidence/resume-20261002/native-rewriter-isolated-build/skippy-stage-rewriter",
+      "sha256": "eb63dd608bff224016a86c07985137cf263f51582cb2f79437b5f30ea2c7957a"
+    },
+    {
+      "path": "/Users/ndizazzo/dev/mesh/mesh-llm/.omo/evidence/resume-20261002/native-rewriter-isolated-build/skippy-stage-rewriter-fixture",
+      "sha256": "d14b5c7f52887a5407533b4f726568d180d797a099e4ca39ed5aa1d451ffd0ed"
+    }
+  ],
+  "source_receipt": {
+    "path": ".omo/evidence/resume-20261002/native-rewriter-isolated-final-receipts.json",
+    "sha256": "a4ee4a2a633fff535d42ae32abba72afbe8e0fcfd87799737f8a9fc85255f047"
+  },
+  "limits": "Local arm64 native CMake/Ninja and CTest on existing LLVM22.1.8 only. Linker reports Homebrew LLVM dylibs built for macOS26; no lower deployment-target or product/backend/model/SDK/hosted/platform acceptance claimed."
+}

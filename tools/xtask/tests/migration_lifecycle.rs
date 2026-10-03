@@ -204,3 +204,6 @@ mod pr_sibling_cancellation;
 
 #[path = "migration_lifecycle/ui_package_contracts.rs"]
 mod ui_package_contracts;
+
+#[path = "migration_lifecycle/just_layout_contracts.rs"]
+mod just_layout_contracts;

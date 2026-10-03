@@ -1,0 +1,129 @@
+{
+  "imports": [
+    "just/build.just",
+    "just/release-build.just",
+    "just/skippy.just",
+    "just/mesh.just",
+    "just/release-bundle.just",
+    "just/website-ui.just",
+    "just/ci.just",
+    "just/mesh-client.just",
+    "just/utilities.just"
+  ],
+  "recipes": {
+    "just/build.just": [
+      "bootstrap-build-tools",
+      "build",
+      "build-dev",
+      "build-linux",
+      "build-mac",
+      "build-runtime",
+      "qa-logging-console-e2e",
+      "with-lld"
+    ],
+    "just/release-build.just": [
+      "llama-build",
+      "llama-prepare",
+      "llama-prepare-latest",
+      "release",
+      "release-build",
+      "release-build-aarch64",
+      "release-build-aarch64-cuda",
+      "release-build-cuda",
+      "release-build-cuda-windows",
+      "release-build-rocm",
+      "release-build-rocm-windows",
+      "release-build-vulkan",
+      "release-build-vulkan-windows",
+      "release-build-windows",
+      "release-host-build",
+      "release-host-build-windows",
+      "release-runtime-build"
+    ],
+    "just/skippy.just": [
+      "bench-corpus",
+      "competitive-benchmark-build",
+      "family-certify",
+      "metrics-server",
+      "metrics-server-build",
+      "skippy-native-full-replay",
+      "skippy-native-tests",
+      "skippy-openai-smoke",
+      "skippy-quantize-build",
+      "skippy-quantize-release-build",
+      "skippy-quantize-standalone-build",
+      "skippy-quantize-standalone-release-build",
+      "skippy-rewriter-build",
+      "skippy-wan-lab-build-bins",
+      "skippy-workload-oracles-build",
+      "spec-bench"
+    ],
+    "just/mesh.just": [
+      "bundle",
+      "download-model",
+      "mesh-join",
+      "mesh-worker"
+    ],
+    "just/release-bundle.just": [
+      "check-env-mutation-contract",
+      "check-release",
+      "release-attestation",
+      "release-bundle",
+      "release-bundle-aarch64",
+      "release-bundle-aarch64-cuda",
+      "release-bundle-cuda",
+      "release-bundle-cuda-windows",
+      "release-bundle-rocm",
+      "release-bundle-rocm-windows",
+      "release-bundle-vulkan",
+      "release-bundle-vulkan-windows",
+      "release-bundle-windows",
+      "release-inventory"
+    ],
+    "just/website-ui.just": [
+      "cli-inventory-check",
+      "crate-docs",
+      "ui-dev",
+      "ui-dev-public",
+      "ui-test",
+      "website-build",
+      "website-clean",
+      "website-dev"
+    ],
+    "just/ci.just": [
+      "automation-bootstrap",
+      "automation-run",
+      "ci-automation-contracts",
+      "ci-crate-lists",
+      "ci-legacy-contracts",
+      "ci-sccache-seed-build",
+      "ci-shellcheck",
+      "ci-validate",
+      "no-console-print",
+      "publish-crates",
+      "test-all"
+    ],
+    "just/mesh-client.just": [
+      "auto",
+      "mesh-client"
+    ],
+    "just/utilities.just": [
+      "cache-cargo-clean",
+      "cache-cargo-metadata",
+      "cache-prune",
+      "cache-prune-dry-run",
+      "cache-status",
+      "check-commits",
+      "clean",
+      "diff",
+      "docker-build-client",
+      "docker-run-client",
+      "hooks-install",
+      "llama-summary",
+      "llama-update-pin",
+      "stop",
+      "test",
+      "ui-clean"
+    ]
+  }
+}
