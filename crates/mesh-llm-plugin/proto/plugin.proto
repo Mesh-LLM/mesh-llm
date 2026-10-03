@@ -194,6 +194,22 @@ message PluginManifest {
   repeated MeshEventSubscriptionManifest mesh_event_subscriptions = 10;
   optional PluginConfigSchemaManifest config_schema = 11;
   optional PluginWebUiManifest web_ui = 12;
+  repeated VirtualModelManifest virtual_models = 13;
+}
+
+message VirtualModelManifest {
+  string model_id = 1;
+  string handler = 2;
+  repeated string input_modalities = 3;
+  repeated string output_modalities = 4;
+  bool supports_tools = 5;
+  bool supports_streaming = 6;
+  bool requires_candidates = 7;
+  // Lines the host drips onto a streaming client while it waits for this
+  // virtual model's single response. A plugin turns are request/response and
+  // can be silent for seconds, so a streaming caller otherwise sees no bytes
+  // at all until the turn completes. Empty (the default) means no drip.
+  repeated string progress_lines = 8;
 }
 
 message PluginWebUiManifest {
@@ -485,6 +501,7 @@ enum ServiceKind {
   SERVICE_KIND_PROMPT = 2;
   SERVICE_KIND_RESOURCE = 3;
   SERVICE_KIND_COMPLETION = 4;
+  SERVICE_KIND_VIRTUAL_MODEL = 5;
 }
 
 message InvokeServiceRequest {

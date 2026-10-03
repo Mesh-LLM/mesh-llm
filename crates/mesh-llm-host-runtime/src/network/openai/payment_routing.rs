@@ -367,3 +367,33 @@ mod tests {
         Ok(())
     }
 }
+
+/// MoA-style virtual models call peers without the payment protocol, so a peer
+/// that charges for `name` would answer 402 and, because 402 is not a
+/// retryable replica error, take the whole worker down even when a free
+/// replica exists. Keep them on free replicas until committee-level payment is
+/// designed (#2059).
+#[cfg(feature = "payments")]
+pub(super) async fn exclude_paid_hosts(
+    node: &Node,
+    name: &str,
+    hosts: Vec<iroh::EndpointId>,
+) -> Vec<iroh::EndpointId> {
+    let mut free = Vec::with_capacity(hosts.len());
+    for host in hosts {
+        if node.peer_payment_offer(host, name).await.is_none() {
+            free.push(host);
+        }
+    }
+    free
+}
+
+/// Without the payments feature no peer can advertise a price.
+#[cfg(not(feature = "payments"))]
+pub(super) async fn exclude_paid_hosts(
+    _node: &Node,
+    _name: &str,
+    hosts: Vec<iroh::EndpointId>,
+) -> Vec<iroh::EndpointId> {
+    hosts
+}

@@ -503,6 +503,7 @@ pub struct ToolRouter {
 }
 
 pub type OperationRouter = ToolRouter;
+pub type VirtualModelRouter = ToolRouter;
 
 impl ToolRouter {
     pub fn new() -> Self {

@@ -137,6 +137,27 @@ fn recorded_lifecycle_events(
         .collect()
 }
 
+/// The lifecycle events recorded for one request. Tests share the process-wide
+/// logging bus, so an assertion that reads the whole window can be satisfied by
+/// another test's request for the same model.
+fn request_lifecycle_events(
+    service: &LoggingService,
+    request_id: &str,
+) -> Vec<mesh_llm_events::logging::events::LifecycleEvent> {
+    service
+        .bus_ref()
+        .replay_window()
+        .records
+        .into_iter()
+        .filter(|record| record.entry.payload.contains(request_id))
+        .filter_map(|record| {
+            let envelope = serde_json::from_str::<serde_json::Value>(&record.entry.payload).ok()?;
+            let payload = envelope.get("payload")?.as_str()?;
+            serde_json::from_str(payload).ok()
+        })
+        .collect()
+}
+
 #[path = "transport_tests/durable_artifacts.rs"]
 mod durable_artifacts;
 #[path = "transport_tests/lifecycle.rs"]

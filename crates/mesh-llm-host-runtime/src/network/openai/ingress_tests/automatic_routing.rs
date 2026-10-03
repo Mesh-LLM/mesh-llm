@@ -196,6 +196,7 @@ async fn resolve(
         &mut request,
         targets,
         None,
+        true,
         descriptors,
         None,
         &affinity,
@@ -221,6 +222,7 @@ async fn resolve_path(
         &mut request,
         targets,
         None,
+        true,
         descriptors,
         None,
         &affinity,
@@ -829,35 +831,6 @@ async fn text_request_still_convenes_a_committee_across_two_nodes() {
 }
 
 #[tokio::test]
-async fn models_listing_advertises_the_directive_with_the_mesh_capability_union() {
-    // The directive must report what the *mesh* can accept. With a text-only
-    // local model and a vision model on a peer, `mesh` has to advertise vision
-    // — a media request will be routed to that peer.
-    use crate::network::openai::moa_gateway::context_selection::virtual_mesh_capabilities;
-
-    let models = vec![
-        "local-text-model".to_string(),
-        "remote-vision-model".to_string(),
-    ];
-    let descriptors = vec![
-        descriptor("local-text-model", false, false),
-        descriptor("remote-vision-model", true, false),
-    ];
-
-    let union = virtual_mesh_capabilities(&models, &descriptors);
-    assert!(
-        union.supports_vision_runtime(),
-        "one peer serves a vision model, so the directive must advertise vision"
-    );
-    assert!(
-        crate::network::openai::moa_gateway::context_selection::should_advertise_virtual_mesh(
-            &models
-        ),
-        "the directive must be listed whenever the mesh serves anything"
-    );
-}
-
-#[tokio::test]
 async fn an_explicitly_named_model_is_never_reinterpreted() {
     let (node, targets) = node_serving(&["text-model", "vision-model"]).await;
     let descriptors = vec![
@@ -901,6 +874,7 @@ async fn forwarded_model_field(
         &mut request,
         targets,
         None,
+        true,
         descriptors,
         None,
         &affinity,
@@ -1002,6 +976,7 @@ async fn a_non_chat_endpoint_resolves_to_a_single_model() {
         &mut request,
         &targets,
         None,
+        true,
         &descriptors,
         None,
         &affinity,

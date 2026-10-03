@@ -104,6 +104,7 @@ pub struct PluginManifestOverview {
     pub completions: usize,
     pub http_bindings: usize,
     pub endpoints: usize,
+    pub virtual_models: usize,
     pub mesh_channels: usize,
     pub mesh_event_subscriptions: usize,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -196,6 +197,21 @@ pub struct InferenceEndpointRoute {
     pub endpoint_id: String,
     pub address: String,
     pub models: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VirtualModelRoute {
+    pub plugin_name: String,
+    pub model_id: String,
+    pub handler: String,
+    pub input_modalities: Vec<String>,
+    pub output_modalities: Vec<String>,
+    pub supports_tools: bool,
+    pub supports_streaming: bool,
+    pub requires_candidates: bool,
+    /// Lines to drip onto a streaming caller while the plugin's single
+    /// response is still in flight; empty means no drip.
+    pub progress_lines: Vec<String>,
 }
 
 #[cfg(test)]
