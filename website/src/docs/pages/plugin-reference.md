@@ -142,8 +142,8 @@ The v1 host API is:
 the `web_ui_enabled` preference. The config endpoint returns the mounted
 plugin's visible settings and schema; its patch accepts only plugin-owned
 `settings` and optional `unset` keys. It rejects host-owned fields such as
-`enabled`, `web_ui_enabled`, `web_ui_primary_tab`, `command`, `args`, `url`, and
-`startup`. `PATCH .../primary-tab` accepts `{ "enabled": true | false }` and
+`enabled`, `web_ui_enabled`, `web_ui_primary_tab`, `allow_peer_blocks`, `command`,
+`args`, `url`, and `startup`. `PATCH .../primary-tab` accepts `{ "enabled": true | false }` and
 persists the operator's `web_ui_primary_tab` preference separately.
 Malformed mutations return HTTP 400; schema-invalid values return HTTP 422.
 

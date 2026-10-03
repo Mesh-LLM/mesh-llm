@@ -588,6 +588,7 @@ mod tests {
                     parent_tab: Some("integrations".to_string()),
                     bundle_id: "main".to_string(),
                 }],
+                contributions: Vec::new(),
                 bundles: vec![InstalledPluginWebUiBundleMetadata {
                     id: "main".to_string(),
                     root_path: "web-ui".to_string(),

@@ -9,9 +9,7 @@ Provider-neutral Lightning wallet abstraction for mesh-llm.
 
 No wallet SDK is linked here. Concrete wallets are plugin processes. Default
 Mesh builds retain the payment infrastructure but require an external `wallet.v1` provider for wallet
-operations. The optional built-in `crates/mesh-wallet-lexe` is compiled out by
-default; when explicitly enabled, it is served from the mesh-llm executable as
-`--plugin wallet-lexe`. Wallet availability and spending authorization are
+operations, such as the external `lexe-wallet` plugin. Wallet availability and spending authorization are
 separate from compiling payment infrastructure.
 
 The host owns invoice lifetime (`create_invoice(amount, expiry_secs)`) and fee caps

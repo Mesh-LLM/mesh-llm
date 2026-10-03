@@ -7,6 +7,7 @@ import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
 import type { LogRequestId } from '@/features/logs/api/ids'
 import type { LogOutcome, LogRequest } from '@/features/logs/api/schemas'
 import { useLogRequestSummaryQuery } from '@/features/logs/api/use-log-request-details-query'
+import { PluginContributionSlot } from '@/features/plugins/web-ui/PluginContributionSlot'
 
 type LogRequestInspectorHeaderProps = {
   readonly requestId: LogRequestId
@@ -58,6 +59,12 @@ export function LogRequestInspectorHeader({ requestId, knownRequest }: LogReques
       <div className="mt-2.5 min-w-0 max-w-3xl sm:mt-3">
         <CopyInstructionRow label="Request ID" value={requestId.toString()} />
       </div>
+      {summaryQuery.data ? (
+        <PluginContributionSlot
+          className="mt-2.5 flex min-w-0 max-w-3xl flex-wrap items-center gap-2"
+          subject={{ slot: 'logs_request', requestId: requestId.toString(), exchangeId: summaryQuery.data.exchangeId }}
+        />
+      ) : null}
     </SharedModalHeader>
   )
 }

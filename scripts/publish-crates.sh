@@ -380,7 +380,6 @@ should_skip_initial_dry_run() {
 publish_crates=(
     mesh-llm-plugin
     mesh-llm-wallet
-    mesh-wallet-lexe
     mesh-llm-payments-types
     mesh-llm-payments
     mesh-llm-identity

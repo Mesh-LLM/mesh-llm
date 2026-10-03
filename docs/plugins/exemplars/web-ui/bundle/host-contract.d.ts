@@ -18,6 +18,14 @@ export type PluginWebUiConfigSection = {
   readonly parent_tab?: 'integrations'
 }
 
+export type PluginWebUiContribution = {
+  readonly id: string
+  readonly slot: 'chat_message' | 'logs_request'
+  readonly label: string
+  readonly bundle_id: string
+  readonly entry_script: string
+}
+
 export type PluginWebUiVisibleConfig = {
   readonly plugin: string
   readonly settings: Readonly<Record<string, unknown>>
@@ -35,6 +43,7 @@ export type MeshPluginUiHost = {
     readonly unavailable_reason?: string
     readonly pages?: readonly PluginWebUiPage[]
     readonly config_sections?: readonly PluginWebUiConfigSection[]
+    readonly contributions?: readonly PluginWebUiContribution[]
     readonly asset_base_url?: string
   }
   readonly appearance: {
@@ -102,6 +111,28 @@ export type MeshPluginUiConfigMountContext = {
   readonly section: PluginWebUiConfigSection
 }
 
+/** Host ids for the slot's row; optional fields are absent when unknown. */
+export type MeshPluginUiContributionSubject =
+  | {
+      readonly slot: 'chat_message'
+      readonly messageId: string
+      readonly clientNonce?: string
+      readonly model?: string
+      readonly servedBy?: string
+    }
+  | {
+      readonly slot: 'logs_request'
+      readonly requestId: string
+      readonly exchangeId?: string
+    }
+
+export type MeshPluginUiContributionMountContext = {
+  readonly element: HTMLElement
+  readonly host: MeshPluginUiHost
+  readonly contribution: PluginWebUiContribution
+  readonly subject: MeshPluginUiContributionSubject
+}
+
 export type MeshPluginUiRegistration = {
     readonly pages: Readonly<Record<string, (context: {
       readonly element: HTMLElement
@@ -113,6 +144,9 @@ export type MeshPluginUiRegistration = {
       readonly host: MeshPluginUiHost
       readonly section: PluginWebUiConfigSection
     }) => MeshPluginUiMountHandle | Promise<MeshPluginUiMountHandle>>>
+    readonly contributions?: Readonly<Record<string, (
+      context: MeshPluginUiContributionMountContext
+    ) => MeshPluginUiMountHandle | Promise<MeshPluginUiMountHandle>>>
 }
 
 export type MeshPluginUiBundleModule = {

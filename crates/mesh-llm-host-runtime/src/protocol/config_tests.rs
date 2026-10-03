@@ -40,6 +40,7 @@ fn config_sync_full_config_roundtrip() {
             enabled: Some(true),
             web_ui_enabled: Some(false),
             web_ui_primary_tab: Some(true),
+            allow_peer_blocks: Some(true),
             command: Some("mesh-llm".to_string()),
             args: vec!["--plugin".to_string()],
             url: None,
@@ -76,6 +77,7 @@ fn config_sync_full_config_roundtrip() {
     assert_eq!(restored.plugins[0].enabled, Some(true));
     assert_eq!(restored.plugins[0].web_ui_enabled, Some(false));
     assert_eq!(restored.plugins[0].web_ui_primary_tab, Some(true));
+    assert_eq!(restored.plugins[0].allow_peer_blocks, Some(true));
     assert_eq!(restored.plugins[0].command.as_deref(), Some("mesh-llm"));
     assert_eq!(restored.plugins[0].args, vec!["--plugin"]);
 }

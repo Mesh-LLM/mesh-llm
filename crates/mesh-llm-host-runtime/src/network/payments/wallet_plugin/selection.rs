@@ -4,21 +4,20 @@
 //! receivables are only meaningful against the wallet that created them, so a
 //! pinned ledger never silently moves to another plugin. Without a pin the
 //! operator's `[payments] wallet` choice wins, and without that the host uses
-//! the only wallet plugin. The built-in Lexe wallet runs by default, so it
-//! yields to any other wallet plugin the operator configured.
+//! the only wallet plugin.
 //!
 //! Choosing automatically pins the choice, so it is refused while any plugin
 //! that could be a wallet is down. A plugin that crashes loses its capability
 //! list, so a stopped wallet plugin looks like any other stopped plugin; if
 //! the host chose among the running ones, a crash would hand the ledger to
-//! Lexe for good.
+//! another wallet for good.
 
 use anyhow::{Result, bail};
 use mesh_llm_config::PaymentsConfig;
 use mesh_llm_wallet::contract::CAPABILITY;
 use mesh_llm_wallet::provisioning::WalletPin;
 
-use crate::plugin::{PluginSummary, WALLET_LEXE_PLUGIN_ID};
+use crate::plugin::PluginSummary;
 
 /// The wallet plugin the operator chose in `[payments] wallet`, if any. A
 /// blank value means no choice.
@@ -94,14 +93,9 @@ pub fn select_wallet_plugin(
             down.join(", ")
         );
     }
-    let preferred: Vec<&String> = running
-        .iter()
-        .filter(|name| name.as_str() != WALLET_LEXE_PLUGIN_ID)
-        .collect();
-    match (preferred.as_slice(), running) {
-        ([only], _) => Ok((*only).clone()),
-        ([], [only]) => Ok(only.clone()),
-        ([], []) => bail!("no wallet plugin is running (capability '{CAPABILITY}' unavailable)"),
+    match running {
+        [only] => Ok(only.clone()),
+        [] => bail!("no wallet plugin is running (capability '{CAPABILITY}' unavailable)"),
         _ => bail!(
             "several wallet plugins are running ({}); choose one with `[payments] wallet`",
             running.join(", ")
@@ -155,21 +149,14 @@ mod tests {
 
     #[test]
     fn the_only_running_wallet_is_used() {
-        let running = names(&[WALLET_LEXE_PLUGIN_ID]);
+        let running = names(&["lexe-wallet"]);
         let selected = select_wallet_plugin(&running, &[], None, None).unwrap();
-        assert_eq!(selected, WALLET_LEXE_PLUGIN_ID);
-    }
-
-    #[test]
-    fn another_wallet_plugin_is_preferred_over_the_default_lexe_wallet() {
-        let running = names(&["wallet-nwc", WALLET_LEXE_PLUGIN_ID]);
-        let selected = select_wallet_plugin(&running, &[], None, None).unwrap();
-        assert_eq!(selected, "wallet-nwc");
+        assert_eq!(selected, "lexe-wallet");
     }
 
     #[test]
     fn a_plugin_that_might_be_a_wallet_blocks_automatic_choice() {
-        let running = names(&[WALLET_LEXE_PLUGIN_ID]);
+        let running = names(&["lexe-wallet"]);
         let down = names(&["wallet-ldk-server"]);
         let error = select_wallet_plugin(&running, &down, None, None)
             .unwrap_err()
@@ -178,11 +165,11 @@ mod tests {
         assert!(error.contains("[payments] wallet"), "{error}");
 
         // An explicit choice or a pin says what the operator meant.
-        let chosen = select_wallet_plugin(&running, &down, None, Some(WALLET_LEXE_PLUGIN_ID));
-        assert_eq!(chosen.unwrap(), WALLET_LEXE_PLUGIN_ID);
-        let pinned = pin(WALLET_LEXE_PLUGIN_ID);
+        let chosen = select_wallet_plugin(&running, &down, None, Some("lexe-wallet"));
+        assert_eq!(chosen.unwrap(), "lexe-wallet");
+        let pinned = pin("lexe-wallet");
         let reopened = select_wallet_plugin(&running, &down, Some(&pinned), None);
-        assert_eq!(reopened.unwrap(), WALLET_LEXE_PLUGIN_ID);
+        assert_eq!(reopened.unwrap(), "lexe-wallet");
     }
 
     #[test]
@@ -192,7 +179,7 @@ mod tests {
         let crashed = summary("wallet-ldk-server", "restarting", &[]);
         let failed_wallet = summary("my-wallet", "error", &[CAPABILITY]);
         let other = summary("search", "stopped", &["search.v1"]);
-        let running = summary(WALLET_LEXE_PLUGIN_ID, "running", &[]);
+        let running = summary("lexe-wallet", "running", &[]);
         let mut disabled = summary("old-wallet", "disabled", &[]);
         disabled.enabled = false;
         let deferred = summary("lazy-tools", "deferred", &[]);
@@ -204,8 +191,8 @@ mod tests {
     }
 
     #[test]
-    fn two_non_default_wallets_need_an_explicit_choice() {
-        let running = names(&["wallet-a", "wallet-b", WALLET_LEXE_PLUGIN_ID]);
+    fn two_wallets_need_an_explicit_choice() {
+        let running = names(&["wallet-a", "wallet-b"]);
         let error = select_wallet_plugin(&running, &[], None, None)
             .unwrap_err()
             .to_string();
@@ -216,20 +203,20 @@ mod tests {
 
     #[test]
     fn an_explicit_choice_must_be_running() {
-        let running = names(&[WALLET_LEXE_PLUGIN_ID]);
+        let running = names(&["lexe-wallet"]);
         let error = select_wallet_plugin(&running, &[], None, Some("wallet-nwc"))
             .unwrap_err()
             .to_string();
         assert!(error.contains("not running"), "{error}");
-        assert!(error.contains(WALLET_LEXE_PLUGIN_ID), "{error}");
+        assert!(error.contains("lexe-wallet"), "{error}");
     }
 
     #[test]
-    fn a_pin_overrides_preference_but_not_an_explicit_conflicting_choice() {
-        let running = names(&["wallet-nwc", WALLET_LEXE_PLUGIN_ID]);
-        let pinned = pin(WALLET_LEXE_PLUGIN_ID);
+    fn a_pin_overrides_automatic_choice_but_not_an_explicit_conflicting_choice() {
+        let running = names(&["wallet-nwc", "lexe-wallet"]);
+        let pinned = pin("lexe-wallet");
         let selected = select_wallet_plugin(&running, &[], Some(&pinned), None).unwrap();
-        assert_eq!(selected, WALLET_LEXE_PLUGIN_ID);
+        assert_eq!(selected, "lexe-wallet");
 
         let error = select_wallet_plugin(&running, &[], Some(&pinned), Some("wallet-nwc"))
             .unwrap_err()
@@ -240,7 +227,7 @@ mod tests {
     #[test]
     fn a_pinned_wallet_that_is_not_running_is_not_replaced() {
         let running = names(&["wallet-nwc"]);
-        let error = select_wallet_plugin(&running, &[], Some(&pin(WALLET_LEXE_PLUGIN_ID)), None)
+        let error = select_wallet_plugin(&running, &[], Some(&pin("lexe-wallet")), None)
             .unwrap_err()
             .to_string();
         assert!(error.contains("not running"), "{error}");

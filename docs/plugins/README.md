@@ -96,6 +96,7 @@ Use the typed builders from `mesh_llm_plugin::manifest`:
 - `web_ui`
 - `web_ui_page`
 - `web_ui_config_section`
+- `web_ui_contribution`
 - `web_ui_bundle`
 
 Rules for the declared bundle paths:
@@ -103,8 +104,9 @@ Rules for the declared bundle paths:
 - keep paths package-relative and below the package root; do not use an empty
   path or `.` as a bundle root
 - declare exactly one non-empty bundle id and one bundle root for v1 whenever
-  the block declares pages or config sections
-- set every page and config-section `bundle_id` to that declared bundle id
+  the block declares pages, config sections or contributions
+- set every page, config-section and contribution `bundle_id` to that declared
+  bundle id
 - give every page and config section a non-empty id and display label/title
 - keep page `route` values as slugs, not paths or URLs; do not include `/`,
   `\`, protocol syntax, or traversal-style dot prefixes
@@ -117,6 +119,7 @@ Rules for the declared bundle paths:
   console tab (default, if omitted, is `"auxiliary"`); this is only a request —
   see "Primary Tab Placement" below for what else must be true before the host
   honors it
+- set a contribution's `slot` to `chat_message` or `logs_request`
 
 ### Primary Tab Placement
 
@@ -206,8 +209,8 @@ The config route is also host-owned and plugin-scoped. `GET` returns:
 
 The `plugin` field must match the mounted plugin when present. Mutations may
 only touch plugin-owned `settings` keys; host-owned fields such as `enabled`,
-`web_ui_enabled`, `web_ui_primary_tab`, `command`, `args`, `url`, and `startup`
-are rejected.
+`web_ui_enabled`, `web_ui_primary_tab`, `allow_peer_blocks`, `command`, `args`,
+`url`, and `startup` are rejected.
 Malformed requests return `400`; schema-invalid setting values return `422`;
 successful mutations return the newly visible plugin config.
 
@@ -238,6 +241,18 @@ mounted from) above each plugin page. A page with its own title bar can set
 draws no visible header, keeps the page label as its accessible heading, and
 still names the plugin in the navigation.
 
+A plugin can also put a small element next to the host's own data, outside its
+pages. There are exactly two contribution slots:
+
+| Slot | Where the host mounts it | What the host passes (`subject`) |
+| --- | --- | --- |
+| `chat_message` | under each finished assistant chat message | `messageId`, and when known `clientNonce`, `model`, `servedBy` |
+| `logs_request` | in the Logs request inspector header | `requestId`, and when known `exchangeId` |
+
+The host passes ids only, mounts nothing plugin-specific, and leaves the slot
+empty when the projection is not ready or the bundle fails to load. What the
+element shows (a note, a link to the plugin's own page) is the plugin's.
+
 Plugin-owned settings declared in `config_schema` continue to render through
 the console's standard schema controls. A custom config-section bundle should
 add plugin-specific actions or context; it should not recreate a schema field
@@ -261,12 +276,17 @@ handlers for pages and config sections.
   fragments, backslashes, and `.`/`..` path segments are rejected
 - `host.network.json(...)` rejects non-2xx responses; use `fetchPlugin(...)`
   when the bundle needs to inspect a non-success status itself
-- registrations must return a `pages` object, optional `configSections` object,
-  and `{ unmount() }` from every mounted handler; malformed results surface as
+- registrations must return a `pages` object, optional `configSections` and
+  `contributions` objects, and `{ unmount() }` from every mounted handler; malformed results surface as
   host contract errors rather than failing later during cleanup
 - the host imports bundle code only after the projection is ready, enabled,
-  available, has a same-origin `asset_base_url`, and the requested page or
-  section exists
+  available, has a same-origin `asset_base_url`, and the requested page,
+  section or contribution exists
+- a contribution handler receives `{ element, host, contribution, subject }`;
+  the host unmounts it and mounts it again when any id in `subject` changes,
+  and it may mount once per chat message, so keep it small; every mount gets
+  a fresh `element` that the host removes after `unmount()` or a failed mount,
+  and a handler that resolves after its subject changed is unmounted at once
 - ship browser-importable JavaScript; the host does not transpile TypeScript,
   JSX, CommonJS, or unresolved bare npm imports
 - use the exemplar's self-contained `bundle/host-contract.d.ts` for author
@@ -1176,6 +1196,64 @@ Plugins may declare mesh channels for plugin-specific peer-to-peer coordination.
 These should use the generic plugin mesh transport rather than dedicated core stream types for individual plugins.
 
 Core should not embed plugin-specific wire protocols in the main mesh transport when the behavior can live behind the generic plugin channel mechanism.
+
+## Peer Routing Blocks
+
+An operator can tell their own node to stop routing to a peer: `POST
+/api/peer-blocks` with `{ "peer": "<64-hex id>", "length": "seven_days" |
+"until_undone" }`, undone with `POST /api/peer-blocks/unblock`, listed with `GET
+/api/peer-blocks`. The routes are loopback-only. A block is local to this node:
+it is never gossiped or shared. While it holds, the router, the any-host
+fallback, consult-peer selection and split-serving stage selection skip that
+peer, so a block also keeps a peer from being picked as a split stage that
+would receive the user's content; local targets are never affected. The split
+readiness report lists such a peer as a `blocked` exclusion rather than a
+candidate.
+
+A plugin may request the same change with a `PeerBlockRequest`
+(`PluginContext::request_peer_block`), but only if the operator has opted that
+plugin in:
+
+```toml
+[[plugin]]
+name = "example"
+allow_peer_blocks = true
+```
+
+Without it (the default) the host refuses the request and nothing changes. The
+setting is read on every request, so turning it off takes effect at once;
+blocks the plugin already holds stay until they lapse or the operator lifts
+them. The host records the plugin as the requester (by the name the host knows
+the plugin connection by) and stores the plugin's optional `reason_json`
+without reading it. A plugin can re-block or undo only a block it requested,
+so it can never take over or lift the operator's block or another plugin's;
+the operator can change or undo any block. An opted-in plugin can block any
+peer, including all of them; blocks stay local to this node and the operator
+can lift them.
+
+The host advertises the `peer_blocks.v1` host capability in its
+`InitializeRequest`. Against a host without it, `request_peer_block` fails at
+once with an "unsupported by host" error instead of waiting; every request is
+also bounded by its own timeout.
+
+Blocks are saved to `peer_blocks.json` in the identity state directory. Each
+save writes a temporary file, syncs it, renames it over the old one, and syncs
+the directory, so a crash leaves the old store or the new one. A missing file
+is an empty store. If the file cannot be read, or cannot be decoded and then
+cannot be set aside as `peer_blocks.json.corrupt-<ms>`, the node starts with no
+blocks and saves nothing for the rest of the run, so the file is never
+overwritten; `GET /api/peer-blocks` reports why as `not_saved`.
+
+Every change is published once, as JSON, on the local channel
+`routing.choice.v1` to the plugins that declare it:
+
+```json
+{ "change": "block", "peer": "<64-hex id>", "at_ms": 0, "until_ms": 0,
+  "requested_by": "operator | plugin:<id>", "reason": {} }
+```
+
+`until_ms` and `reason` are omitted when absent. The host keeps no ranking, no
+history of changes, and no shared lists.
 
 ## What The Host Owns
 

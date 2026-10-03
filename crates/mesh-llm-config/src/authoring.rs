@@ -495,6 +495,7 @@ impl ConfigEditor {
                     enabled: None,
                     web_ui_enabled: None,
                     web_ui_primary_tab: None,
+                    allow_peer_blocks: None,
                     command: None,
                     args: Vec::new(),
                     url: None,
@@ -701,6 +702,11 @@ impl PluginConfigEditor<'_> {
 
     pub fn web_ui_primary_tab(&mut self, enabled: Option<bool>) -> &mut Self {
         self.plugin.web_ui_primary_tab = enabled;
+        self
+    }
+
+    pub fn allow_peer_blocks(&mut self, allowed: Option<bool>) -> &mut Self {
+        self.plugin.allow_peer_blocks = allowed;
         self
     }
 
@@ -1339,5 +1345,25 @@ ctx_size = 8192
         assert_eq!(deserialized.plugins[0].web_ui_primary_tab, None);
         assert_eq!(deserialized.plugins[1].web_ui_primary_tab, Some(false));
         assert_eq!(deserialized.plugins[2].web_ui_primary_tab, Some(true));
+    }
+
+    #[test]
+    fn plugin_allow_peer_blocks_is_off_unless_set() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor.upsert_plugin("unset").unwrap();
+        editor
+            .upsert_plugin("allowed")
+            .unwrap()
+            .allow_peer_blocks(Some(true));
+
+        let config = editor.into_config();
+        let serialized = config_to_toml(&config).expect("should serialize");
+        let toml_str = serialized.to_string();
+        assert!(!toml_str.contains("name = \"unset\"\nallow_peer_blocks"));
+        assert!(toml_str.contains("name = \"allowed\"\nallow_peer_blocks = true"));
+
+        let deserialized = parse_config_toml(&serialized).expect("should deserialize");
+        assert!(!deserialized.plugins[0].peer_blocks_allowed());
+        assert!(deserialized.plugins[1].peer_blocks_allowed());
     }
 }

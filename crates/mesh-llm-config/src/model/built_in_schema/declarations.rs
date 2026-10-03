@@ -308,6 +308,17 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             &format!("{plugin_prefix}.web_ui_primary_tab"),
             ConfigValueSchema::Boolean,
         ),
+        {
+            // The host reads this on every request, so turning it off takes
+            // effect at once; it must not be labelled as needing a restart.
+            let mut setting = plugin_setting(
+                &format!("{plugin_prefix}.allow_peer_blocks"),
+                ConfigValueSchema::Boolean,
+            );
+            setting.apply_mode = ConfigApplyMode::DynamicApply;
+            setting.restart_scope = ConfigRestartScope::None;
+            setting
+        },
         plugin_setting(
             &format!("{plugin_prefix}.command"),
             ConfigValueSchema::String,

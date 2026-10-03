@@ -101,7 +101,7 @@ async fn serve_inner(
             },
         )
         .await?;
-    let lifecycle = super::lifecycle::ProviderLifecycle::for_node(node).await;
+    let (lifecycle, exchange_id) = provider_observers(node).await;
     let _instance = node.begin_runtime_instance_request(port).await?;
     let model_for_events = model.clone();
     let (events, mut receiver) = mpsc::unbounded_channel();
@@ -127,9 +127,12 @@ async fn serve_inner(
     });
     let _serving_guard = ServingGuard { gate: gate.clone() };
     // The same exchange events the free serving path publishes.
-    let exchange =
-        crate::network::openai::paid_exchange::PaidServedExchange::begin(node, &model_for_events)
-            .await;
+    let exchange = crate::network::openai::paid_exchange::PaidServedExchange::begin(
+        node,
+        &model_for_events,
+        exchange_id.as_deref(),
+    )
+    .await;
     let mut delivered = exchange.as_ref().map(|_| DeliveredCapture::default());
     let generated = generate(
         reader,
@@ -208,6 +211,19 @@ async fn serve_inner(
         wire::write(writer, &Frame::Complete).await?;
     }
     Ok(())
+}
+
+/// The provider lifecycle for this paid serving request, and the one fresh
+/// ID naming the request on both of the provider's channels,
+/// `payment.lifecycle.v1` and `openai.exchange.v1`, so a plugin subscribed to
+/// both joins them exactly. The ID is minted only when a plugin subscribes to
+/// either, and is never the private request (recovery) ID.
+async fn provider_observers(node: &Node) -> (super::lifecycle::ProviderLifecycle, Option<String>) {
+    let lifecycle = super::lifecycle::ProviderLifecycle::for_node(node).await;
+    let subscribed = lifecycle.is_subscribed()
+        || crate::network::openai::paid_exchange::PaidServedExchange::is_subscribed(node).await;
+    let exchange_id = subscribed.then(|| uuid::Uuid::new_v4().to_string());
+    (lifecycle.named(exchange_id.clone()), exchange_id)
 }
 
 /// Served only when the backend's response reached the payer in full:

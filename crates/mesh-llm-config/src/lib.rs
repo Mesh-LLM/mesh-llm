@@ -924,6 +924,10 @@ gpu_id = "pci:0000:65:00.0"
                 vec!["plugin.<plugin-name>.web_ui_primary_tab"],
             ),
             (
+                "PluginConfigEditor::allow_peer_blocks",
+                vec!["plugin.<plugin-name>.allow_peer_blocks"],
+            ),
+            (
                 "PluginConfigEditor::command",
                 vec!["plugin.<plugin-name>.command"],
             ),
