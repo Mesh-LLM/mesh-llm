@@ -9,6 +9,21 @@ use skippy_ffi::{
 };
 
 pub const MAX_LOGIT_BIAS: usize = 256;
+/// Token window for the repetition and DRY penalty samplers when none is set,
+/// matching llama.cpp's default for history-based samplers.
+pub const DEFAULT_PENALTY_LAST_N: i32 = 64;
+
+/// Resolves a penalty window for llama.cpp. -1 once meant "the whole context",
+/// but llama.cpp dropped that and disables a sampler given a negative window,
+/// so the legacy value falls back to the default window instead.
+pub fn penalty_window(last_n: i32) -> i32 {
+    if last_n == -1 {
+        DEFAULT_PENALTY_LAST_N
+    } else {
+        last_n
+    }
+}
+
 pub const ACTIVATION_BOUNDARY_DESC_VERSION: u32 = skippy_ffi::ACTIVATION_BOUNDARY_DESC_VERSION;
 
 /// Runtime memory semantics reported by the loaded llama.cpp model.
@@ -692,7 +707,7 @@ impl Default for SamplingConfig {
             presence_penalty: 0.0,
             frequency_penalty: 0.0,
             repeat_penalty: 1.0,
-            penalty_last_n: -1,
+            penalty_last_n: DEFAULT_PENALTY_LAST_N,
             logit_bias: Vec::new(),
             typical_p: 1.0,
             top_nsigma: -1.0,
@@ -702,7 +717,7 @@ impl Default for SamplingConfig {
                 multiplier: 0.0,
                 base: 1.75,
                 allowed_length: 2,
-                penalty_last_n: 64,
+                penalty_last_n: DEFAULT_PENALTY_LAST_N,
                 sequence_breakers: vec!["\n".into(), ":".into(), "\"".into(), "*".into()],
             },
             xtc: XtcSamplingConfig {
@@ -735,6 +750,11 @@ impl SamplingConfig {
     }
 
     pub(crate) fn as_raw(&self) -> Result<RawSamplingConfig> {
+        if self.penalty_last_n < -1 || self.dry.penalty_last_n < -1 {
+            return Err(anyhow!(
+                "sampling penalty windows must be greater than or equal to -1"
+            ));
+        }
         if self.logit_bias.len() > MAX_LOGIT_BIAS {
             return Err(anyhow!("sampling logit_bias exceeds the native limit"));
         }
@@ -786,7 +806,7 @@ impl SamplingConfig {
             flags: u32::from(self.enabled) | (u32::from(self.ignore_eos) << 1),
             seed: self.seed,
             top_k: self.top_k,
-            penalty_last_n: self.penalty_last_n,
+            penalty_last_n: penalty_window(self.penalty_last_n),
             temperature: self.temperature,
             top_p: self.top_p,
             presence_penalty: self.presence_penalty,
@@ -801,7 +821,7 @@ impl SamplingConfig {
             dry_multiplier: self.dry.multiplier,
             dry_base: self.dry.base,
             dry_allowed_length: self.dry.allowed_length,
-            dry_penalty_last_n: self.dry.penalty_last_n,
+            dry_penalty_last_n: penalty_window(self.dry.penalty_last_n),
             xtc_probability: self.xtc.probability,
             xtc_threshold: self.xtc.threshold,
             mirostat_mode: self.mirostat_mode,
@@ -1187,6 +1207,42 @@ mod kv_page_descriptor_tests {
 
             assert!(sampling.as_raw().is_err(), "breaker={breaker:?}");
         }
+    }
+
+    #[test]
+    fn sampling_raw_resolves_penalty_windows_for_llama_cpp() {
+        for (window, expected) in [(-1, DEFAULT_PENALTY_LAST_N), (0, 0), (128, 128)] {
+            let raw = SamplingConfig {
+                penalty_last_n: window,
+                dry: DrySamplingConfig {
+                    penalty_last_n: window,
+                    ..SamplingConfig::default().dry
+                },
+                ..SamplingConfig::default()
+            }
+            .as_raw()
+            .unwrap();
+            assert_eq!(raw.penalty_last_n, expected, "window={window}");
+            assert_eq!(raw.dry_penalty_last_n, expected, "window={window}");
+        }
+    }
+
+    #[test]
+    fn sampling_raw_rejects_penalty_windows_below_legacy_alias() {
+        let penalties = SamplingConfig {
+            penalty_last_n: -2,
+            ..SamplingConfig::default()
+        };
+        let dry = SamplingConfig {
+            dry: DrySamplingConfig {
+                penalty_last_n: -2,
+                ..SamplingConfig::default().dry
+            },
+            ..SamplingConfig::default()
+        };
+
+        assert!(penalties.as_raw().is_err());
+        assert!(dry.as_raw().is_err());
     }
 
     #[test]

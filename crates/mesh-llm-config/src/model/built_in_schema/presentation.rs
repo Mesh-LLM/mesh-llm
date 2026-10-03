@@ -687,7 +687,7 @@ fn generation_defaults_presentation(rendered: &str) -> Option<SettingPresentatio
         "defaults.request_defaults.repeat_last_n" => Some(
             sp(
                 "Repeat last-n window",
-                "Set how much recent token history the repeat penalty checks.",
+                "Set how many recent tokens the repeat penalty checks (default 64, 0 disables).",
                 REQUEST_DEFAULTS_CATEGORY,
                 60,
             )

@@ -332,7 +332,7 @@ are applied by the embedded OpenAI frontend before prompt rendering.
 | `request_defaults.top_nsigma` | float | backend range | both | request-time | wired | none |
 | `request_defaults.dynatemp_range`<br>`request_defaults.dynatemp_exponent` | float | `>= 0.0` | both | request-time | wired | none |
 | `request_defaults.repeat_penalty` | float | `>= 0.0` | both | request-time | wired | none |
-| `request_defaults.repeat_last_n` | integer | `>= -1` | both | request-time | wired | none |
+| `request_defaults.repeat_last_n` | integer | `>= 0`, default `64`; legacy `-1` uses the default | both | request-time | wired | none |
 | `request_defaults.presence_penalty`<br>`request_defaults.frequency_penalty` | float | backend range | both | request-time | wired | none |
 | `request_defaults.dry` | object | typed multiplier, base, length, window, and sequence breakers | both | request-time | wired | none |
 | `request_defaults.xtc` | object | probability and threshold | both | request-time | wired | none |
