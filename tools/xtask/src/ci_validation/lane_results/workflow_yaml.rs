@@ -115,7 +115,7 @@ impl<'a> Reader<'a> {
 
     /// A mapping at `indent`; `first` is an entry sharing a `- ` line.
     fn map(&mut self, indent: usize, first: Option<&'a str>) -> Result<Node, String> {
-        let mut entries = Vec::new();
+        let mut entries: Vec<(String, Node)> = Vec::new();
         let mut pending = first;
         loop {
             let body = match pending.take() {
@@ -130,6 +130,12 @@ impl<'a> Reader<'a> {
             };
             let (key, value) =
                 split_key(body).ok_or_else(|| format!("expected a key at line {}", self.at + 1))?;
+            if entries.iter().any(|(existing, _)| existing == key) {
+                return Err(format!(
+                    "duplicate workflow key '{key}' at line {}",
+                    self.at + 1
+                ));
+            }
             self.at += 1;
             entries.push((key.to_owned(), self.value(indent, value)?));
         }

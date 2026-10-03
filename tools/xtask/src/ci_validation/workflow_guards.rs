@@ -98,3 +98,12 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
 fn field<'a>(node: &'a Node, name: &str) -> Option<&'a str> {
     node.get(name).and_then(Node::text)
 }
+
+/// Reuse the permission owner's declaration semantics for native entrypoint authority.
+pub(super) fn job_permission_is_none(
+    document: &Node,
+    job: &Node,
+    permission: &str,
+) -> Result<bool, String> {
+    permissions::effective_none(document, job, permission)
+}

@@ -17,3 +17,10 @@ mod graph_failures;
 mod happy;
 #[path = "migration_ci_graph/result_failures.rs"]
 mod result_failures;
+
+#[path = "migration_ci_graph/native_check_authority.rs"]
+mod native_check_authority;
+#[path = "../src/process/mod.rs"]
+pub mod process;
+#[path = "migration_ci_graph/workflow_uniqueness.rs"]
+mod workflow_uniqueness;

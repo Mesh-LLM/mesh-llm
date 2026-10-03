@@ -34,6 +34,29 @@ impl Grant {
     }
 }
 
+/// Flow mappings support literal permission names, optionally simply quoted.
+/// Refuse escapes and complex keys rather than treating an unknown syntax as none.
+fn permission_name(raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    let name = if raw.starts_with(['\'', '"']) {
+        let quote = raw.as_bytes()[0];
+        if raw.len() < 2 || raw.as_bytes().last().copied() != Some(quote) {
+            return Err("unsupported permission key syntax".into());
+        }
+        &raw[1..raw.len() - 1]
+    } else {
+        raw
+    };
+    if !name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("unsupported permission key syntax".into());
+    }
+    Ok(name.to_owned())
+}
+
 fn parse(node: &Node) -> Result<Grant, String> {
     match node {
         Node::Scalar(text) if text == "read-all" => Ok(Grant::All(Level::Read)),
@@ -45,22 +68,45 @@ fn parse(node: &Node) -> Result<Grant, String> {
                 .filter(|entry| !entry.trim().is_empty())
             {
                 let (name, level) = entry.split_once(':').ok_or("invalid permission mapping")?;
-                levels.insert(name.trim().to_owned(), Level::parse(level)?);
+                let name = permission_name(name)?;
+                if levels.insert(name.clone(), Level::parse(level)?).is_some() {
+                    return Err(format!("duplicate permission {name}"));
+                }
             }
             Ok(Grant::Named(levels))
         }
         Node::Map(entries) => {
             let mut levels = BTreeMap::new();
             for (name, value) in entries {
-                levels.insert(
-                    name.clone(),
-                    Level::parse(value.text().ok_or("permission level must be scalar")?)?,
-                );
+                let name = permission_name(name)?;
+                if levels
+                    .insert(
+                        name.clone(),
+                        Level::parse(value.text().ok_or("permission level must be scalar")?)?,
+                    )
+                    .is_some()
+                {
+                    return Err(format!("duplicate permission {name}"));
+                }
             }
             Ok(Grant::Named(levels))
         }
         Node::Scalar(_) | Node::Seq(_) => Err("invalid permissions declaration".into()),
     }
+}
+
+/// A job declaration overrides the workflow declaration; omitted scopes are none.
+/// An absent workflow declaration leaves repository defaults unknown, not proven none.
+pub(super) fn effective_none(
+    document: &Node,
+    job: &Node,
+    permission: &str,
+) -> Result<bool, String> {
+    let declaration = job
+        .get("permissions")
+        .or_else(|| document.get("permissions"))
+        .ok_or("effective permissions depend on undeclared repository defaults")?;
+    Ok(parse(declaration)?.level(permission) == Level::None)
 }
 
 fn requested(document: &Node) -> Result<Option<BTreeMap<String, Level>>, String> {
@@ -191,3 +237,7 @@ mod tests {
         assert!(check(&workflows).is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "permissions_effective_tests.rs"]
+mod effective_tests;
