@@ -94,6 +94,18 @@ async fn payer_and_provider_each_observe_one_paid_exchange() -> Result<()> {
         assert_eq!(phase(&provider, invoice)["source"], "provider_asserted");
         assert_eq!(phase(&provider, settlement)["source"], "wallet_reported");
         assert_eq!(phase(&provider, settlement)["settlement"], "terminal");
+        // Each side's settlement carries its own wallet's numbers, as the
+        // wallet reported them. This mock wallet records an inbound payment at
+        // the invoice amount with a 10 msat fee (a real wallet may report the
+        // credit net of its fee; the host passes on whatever it says).
+        assert!(phase(&payer, settlement)["fee_msat"].is_u64());
+        assert!(phase(&payer, settlement).get("credited_msat").is_none());
+        let received = phase(&provider, settlement);
+        assert_eq!(
+            received["credited_msat"],
+            phase(&provider, invoice)["amount_msat"]
+        );
+        assert_eq!(received["fee_msat"], 10);
     }
 
     // Both sides accepted the same terms: the provider priced them and the

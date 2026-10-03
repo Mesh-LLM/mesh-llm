@@ -197,6 +197,24 @@ pub struct InvoiceRequest {
     pub invoice: mesh_llm_wallet::invoice::Invoice,
 }
 
+/// `settle_received`'s answer: the receiving wallet's own record of the
+/// payment, as its `Transaction` reports it. Both members are optional, so a
+/// provider that answers `{}` still conforms; the host then knows only the
+/// invoice amount. Values are what the wallet reported, not checked against
+/// the invoice (an overpayment shows as a credit above the invoice amount).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SettledReceived {
+    /// The inbound transaction's `amount_msat`: what the wallet reports it
+    /// credited. Lexe reports it net of the receive fee (995 for a 1,000 msat
+    /// invoice with a 5 msat fee). Absent when the wallet reported no amount.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credited_msat: Option<u64>,
+    /// The inbound transaction's `fee_msat`: the fee the wallet reports it
+    /// deducted on receipt (0 when it reported none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fee_msat: Option<u64>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ArrivalResponse {
     /// True when a transient claiming state was seen; false when the wait
@@ -246,6 +264,21 @@ pub struct InputInvoiceResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settled_received_accepts_a_provider_that_answers_empty() {
+        let settled: SettledReceived = serde_json::from_str("{}").unwrap();
+        assert_eq!((settled.credited_msat, settled.fee_msat), (None, None));
+        assert_eq!(serde_json::to_string(&settled).unwrap(), "{}");
+        let full = SettledReceived {
+            credited_msat: Some(995),
+            fee_msat: Some(5),
+        };
+        assert_eq!(
+            serde_json::to_string(&full).unwrap(),
+            r#"{"credited_msat":995,"fee_msat":5}"#
+        );
+    }
 
     /// Every operation the host may invoke, so a new one cannot ship without
     /// being classified as bounded or as a wallet wait.
