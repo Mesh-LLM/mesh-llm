@@ -40,9 +40,7 @@ mesh-llm-system = { path = "../mesh-llm-system", version = "0.77.0", features = 
 mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.77.0" }
 skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.77.0" }
 skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.77.0" }
-skippy-model-package = { path = "../../../skippy/crates/skippy-model-package", version = "0.77.0" }
 skippy-model-ref = { path = "../../../skippy/crates/skippy-model-ref", version = "0.77.0" }
-skippy-package-format = { path = "../../../skippy/crates/skippy-package-format", version = "0.77.0" }
 rpassword = "7.5"
 reqwest = { version = "0.13", features = ["blocking", "json"] }
 serde.workspace = true
@@ -50,7 +48,6 @@ serde_json.workspace = true
 strum = { workspace = true }
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1"
 toml = "1.1"
 toml_edit = "0.25"
 url = "2"
