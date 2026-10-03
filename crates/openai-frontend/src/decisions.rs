@@ -112,7 +112,9 @@ impl DecisionsQuestion {
                     criteria: levels
                         .iter()
                         .map(|level| {
-                            SystemOneJson::from(level.description.as_deref().unwrap_or(""))
+                            SystemOneJson::from(
+                                level.description.as_deref().unwrap_or(level.label.as_str()),
+                            )
                         })
                         .collect(),
                 })
@@ -268,6 +270,25 @@ mod tests {
         assert_eq!(
             criteria.iter().map(|(name, _)| name).collect::<Vec<_>>(),
             vec!["zeta", "alpha"]
+        );
+    }
+
+    #[test]
+    fn score_criteria_fall_back_to_level_labels_without_description() {
+        let request: DecisionsRequest = serde_json::from_str(
+            r#"{"model":"laya","input":"tone","questions":[{"type":"score","name":"urgency","levels":[{"label":"low"},{"label":"high"}]}]}"#,
+        )
+        .unwrap();
+        let converted = request.to_system_one().unwrap();
+        let SystemOneQuestion::Score { criteria, .. } = &converted.questions["urgency"] else {
+            panic!("expected score");
+        };
+        assert_eq!(
+            criteria
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>(),
+            vec!["low", "high"]
         );
     }
 }
