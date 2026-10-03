@@ -85,25 +85,7 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         self.assertIn("VERIFICATION_DEADLINE_AT", self.wrapper)
         self.assertIn("automation canary-timeout --input", self.wrapper)
 
-        result = subprocess.run(
-            [
-                str(ROOT / "scripts" / "run-command-with-timeout.py"),
-                "--seconds",
-                "1",
-                "--label",
-                "agent developer task",
-                "--",
-                sys.executable,
-                "-c",
-                "import time; time.sleep(30)",
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=15,
-        )
-        self.assertEqual(124, result.returncode)
-        self.assertIn("agent developer task timed out after 1s", result.stderr)
+        # Deadline/status and process cleanup belong to the real Rust CLI fixtures.
 
     def test_each_returned_candidate_gets_a_full_verification_window(self) -> None:
         # Exercise the actual shell loop with a deterministic clock. The first

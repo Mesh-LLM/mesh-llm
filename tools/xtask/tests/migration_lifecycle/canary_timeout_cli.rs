@@ -256,3 +256,130 @@ fn actual_cli_refuses_special_and_oversize_requests_before_child_launch() {
         assert!(!root.path().join("launched").exists());
     }
 }
+
+fn raw_with_cleanup_budget(spec: &ProcessSpec) -> crate::process::RawProcessReport {
+    let mut budget = limits();
+    budget.execution = Duration::from_secs(25);
+    supervise_raw(
+        spec,
+        &budget,
+        &Cancellation::default(),
+        RawCaptureOptions {
+            stdout: NonZeroUsize::new(32768),
+            stderr: NonZeroUsize::new(32768),
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn actual_cli_completed_stubborn_writer_stops_before_workspace_handoff() {
+    let root = tempfile::tempdir().unwrap();
+    let command = input(
+        root.path(),
+        "(trap '' TERM; echo ready > writer-ready; i=0; while [ \"$i\" -lt 1000 ]; do printf '%s' \"$i\" > writes; i=$((i+1)); /bin/sleep 0.02; done) >/dev/null 2>&1 & while [ ! -f writer-ready ] || [ ! -f writes ]; do /bin/sleep 0.01; done; exit 0",
+        20,
+    );
+    let report = raw_with_cleanup_budget(&cli(&command, root.path()));
+    assert!(report.process.cleanup.complete);
+    assert_eq!(report.process.status.unwrap().code(), Some(0));
+    let before = fs::read(root.path().join("writes")).unwrap();
+    thread::sleep(Duration::from_millis(120));
+    assert_eq!(
+        fs::read(root.path().join("writes")).unwrap(),
+        before,
+        "completed command must not hand back a workspace while a descendant can still write"
+    );
+}
+
+fn repeated_signal_case(first: i32, second: i32) {
+    let root = tempfile::tempdir().unwrap();
+    let command = input(
+        root.path(),
+        "trap 'echo observed > stop-seen' TERM; echo ready > ready; i=0; while [ \"$i\" -lt 1000 ]; do printf '%s' \"$i\" > writes; i=$((i+1)); /bin/sleep 0.02; done",
+        20,
+    );
+    let invocation = spec(
+        "/bin/sh",
+        vec![
+            "-c".into(),
+            "echo $$ > wrapper-pid; exec \"$@\"".into(),
+            "signal launcher".into(),
+            env!("CARGO_BIN_EXE_xtask").into(),
+            "automation".into(),
+            "canary-timeout".into(),
+            "--input".into(),
+            command.to_str().unwrap().into(),
+        ],
+        root.path(),
+    );
+    let directory = root.path().to_path_buf();
+    let signals = thread::spawn(move || {
+        let wait_for = |name: &str| {
+            let until = Instant::now() + Duration::from_secs(5);
+            while !directory.join(name).is_file() && Instant::now() < until {
+                thread::sleep(Duration::from_millis(5));
+            }
+            directory.join(name).is_file()
+        };
+        if !wait_for("ready") {
+            return false;
+        }
+        let pid: i32 = fs::read_to_string(directory.join("wrapper-pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(pid > 0);
+        // SAFETY: the still-unreaped outer owned child reserves this exact PID.
+        if unsafe { libc::kill(pid, first) } != 0 {
+            return false;
+        }
+        if !wait_for("stop-seen") {
+            return false;
+        }
+        // SAFETY: first signal triggered inner cleanup; the wrapper remains owned
+        // until the raw supervisor returns, and its PID cannot be recycled.
+        unsafe { libc::kill(pid, second) == 0 }
+    });
+    let report = raw_with_cleanup_budget(&invocation);
+    let delivered = signals.join().unwrap();
+    assert!(report.process.cleanup.complete);
+    assert!(
+        delivered,
+        "both signals must be observed at their causal boundaries"
+    );
+    assert_eq!(report.process.status.unwrap().code(), Some(128 + first));
+    assert!(
+        String::from_utf8_lossy(report.stderr.unwrap().as_bytes())
+            .contains(&format!("CLI fixture received signal {first}"))
+    );
+    let before = fs::read(root.path().join("writes")).unwrap();
+    thread::sleep(Duration::from_millis(120));
+    assert_eq!(fs::read(root.path().join("writes")).unwrap(), before);
+}
+
+#[test]
+fn actual_cli_deadline_retains_caller_label_and_stops_owned_command() {
+    let root = tempfile::tempdir().unwrap();
+    for label in ["fixture", "agent developer task"] {
+        let request = input(root.path(), "exec /bin/sleep 30", 1);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+        value["label"] = label.into();
+        fs::write(&request, serde_json::to_vec(&value).unwrap()).unwrap();
+        let report = raw_with_cleanup_budget(&cli(&request, root.path()));
+        assert!(report.process.cleanup.complete);
+        assert_eq!(report.process.status.unwrap().code(), Some(124));
+        assert!(
+            String::from_utf8_lossy(report.stderr.unwrap().as_bytes())
+                .contains(&format!("{label} timed out after 1s"))
+        );
+    }
+}
+
+#[test]
+fn actual_cli_repeated_signal_during_cleanup_preserves_first_status_and_reaps_writer() {
+    repeated_signal_case(libc::SIGTERM, libc::SIGINT);
+    repeated_signal_case(libc::SIGINT, libc::SIGTERM);
+}
