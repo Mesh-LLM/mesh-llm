@@ -584,7 +584,7 @@ Optional pin fields:
 }
 ```
 
-An ordinary `mesh-llm plugin install` ignores the pin fields. A default install
+An ordinary `mesh-llm plugins install` ignores the pin fields. A default install
 (a plugin installed without the operator naming it) requires them: the entry
 must pin a version and a digest for this platform, and the downloaded archive
 must match that digest as well as GitHub's reported one before it is extracted.
