@@ -187,12 +187,6 @@ selection. The chat guardrail wrapper does not screen System One requests.
 `usage.output_tokens` is zero because no text is generated. This is not full
 compute accounting or a production OpenJEV compatibility guarantee.
 
-## OpenAI Decisions preview shape
-
-The [Decisions API](/docs/pages/decisions-api/) adapts the early
-`POST /v1/decisions` shape to the same System One models. Use its guide for
-model discovery, request and response examples, and adapter limits.
-
 For Laya, replace `YOUR_DISCOVERED_LAYA_ID` below with its exact ID from
 `/v1/models`. Do not assume the ID is the filename or download reference; it
 can be a canonical Hugging Face ID or a content-hash ID. Object-valued `state`
@@ -219,6 +213,12 @@ curl http://127.0.0.1:9337/systemone \
     }
   }'
 ```
+
+## Decisions API
+
+The [Decisions API](/docs/pages/decisions-api/) provides `POST /v1/decisions`
+for the same System One models. Use its guide for model discovery, request and
+response examples, and adapter limits.
 
 ## Backend differences
 
