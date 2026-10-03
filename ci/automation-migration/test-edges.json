@@ -620,19 +620,6 @@
       ]
     ],
     [
-      "scripts/tests/test_justfile_layout.py",
-      [
-        [
-          "launch",
-          "just --dump --dump-format json and just --summary",
-          "read-only Just metadata subprocesses; assert imported recipe visibility, no Python child implied",
-          [
-            101
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_justfile_release_runtime.py",
       [
         [
@@ -1464,29 +1451,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_justfile_layout.py",
-      "members": [
-        [
-          109,
-          "13a8c6961ba93d33",
-          1,
-          "subprocess-or-interpreter",
-          "conditional",
-          "fixture-selected Rust automation or shell adapter argv",
-          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
-        ],
-        [
-          110,
-          "c75828aa4a0352c6",
-          1,
-          "subprocess-or-interpreter",
-          "conditional",
-          "fixture-selected Rust automation or shell adapter argv",
-          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_llama_upstream_canary_contract.py",
       "members": [
         [
@@ -1619,7 +1583,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "6d8b1b593571da9fad192ac7b094a9d9d209a9992942fa2726b45566a9a2d4aa",
+  "observed_source_sha256": "3ec1caca70aabc97b69cc2e9136f8021b9b37f12a22f8b08c05fa070a97fb99c",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9797,5 +9761,65 @@
     },
     "owner": "tools/xtask/src/automation/ui_build",
     "limits": "Windows ownership and independent platform/product acceptance remain open; no Python retirement."
+  },
+  "just_layout_fixture_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 138,
+    "core_modules_after": 66,
+    "required_targets": 108,
+    "durable_coverage": {
+      "path": "ci/automation-migration/just-layout-retirement-coverage.json",
+      "sha256": "f43f35257ef65c85e83b82ab811ba65d5b98ec89770d9b71d6ccd6eb26677f08"
+    },
+    "current_test_tree": {
+      "sha256": "3ec1caca70aabc97b69cc2e9136f8021b9b37f12a22f8b08c05fa070a97fb99c",
+      "paths": 59
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "5964d2cc61e020728d21e445a19264a538aa8cb8d12101ab0781ac776807497f",
+      "roster_line": 24,
+      "count": 66
+    },
+    "native_rewriter_local_qualification": {
+      "path": "ci/automation-migration/stage-rewriter-local-native-coverage.json",
+      "sha256": "a2a52094188a037da125bdd2c79f67bebb7872d1220edccd08e8eeb7eedfa0ea"
+    },
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/just-layout-owner-focused-receipts.json",
+        "sha256": "a4d55db32ffbed5319defdc1e912ba28e219f3813fb6d3c4dac6e5156dc6f2d7"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/just-layout-retirement-postimage-receipts.json",
+        "sha256": "858694e8e72179680c8a24ba4419ac4c99bee6114eac25d0e51237b6e8cb806d"
+      },
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/just-layout-retirement-postimage-normal.log",
+        "sha256": "8bc49cf15fa24db6ba7e4f1d11396ae1cbece4332090658bf04db6d8ada23976",
+        "targets": 109,
+        "passed": 4281,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 988,
+          "passed": 974,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 382.818
+        }
+      },
+      "original_intent_scope": "All three original Python intentions passed before retirement; four native Just groups cover real parsing, flat import/default policy, recipe placement, moved-recipe refusal and public/private metadata/summary behavior.",
+      "limits": "Local Unix Just facade contract retirement and separately recorded local arm64/LLVM22 native CTest qualification. Windows native selection, real UI/product, other platform/backend/model/SDK/hosted acceptance remain open."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/just-layout-retirement-coverage.json",
+      "sha256": "98cea22d3dbbc0df64e59e842ac8e4061875260f545b14579d5c88614efe494d"
+    }
   }
 }
