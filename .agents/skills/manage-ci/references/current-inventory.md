@@ -798,6 +798,9 @@ and Windows native ABI caches may publish into GitHub's isolated PR merge-ref
 scope for same-PR reruns. UI installs (`ui_quality`, `ui_e2e`, `ui_artifact`) point pnpm at the runner
 image's baked store instead of an Actions cache — there is no shared pnpm
 key or publisher to race. Trusted main owns shared publication.
+The macOS Metal unit ABI key includes the prepared patched llama SHA and both
+legacy and extracted patch-queue paths; a cache hit is verified against the
+prepared checkout before unit tests run.
 
 PR Rust-test, host, native-runtime, product, platform-check, and full Swift
 target matrices receive `fail_fast: true`; main/manual and release pass
