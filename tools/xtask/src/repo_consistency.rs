@@ -502,3 +502,7 @@ test-all:
         assert_eq!(actual_isolated, isolated);
     }
 }
+
+#[cfg(test)]
+#[path = "repo_consistency/logging_contracts.rs"]
+mod logging_contracts;

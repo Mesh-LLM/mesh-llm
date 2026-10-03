@@ -56,3 +56,6 @@ fn commit_validation_and_publication_keep_their_trust_and_approval_boundaries() 
     );
     Ok(())
 }
+
+#[path = "lane_l2_quality_contracts/cli_website.rs"]
+mod cli_website;

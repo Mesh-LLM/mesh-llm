@@ -8,6 +8,7 @@
   "family_battery_prepared_source",
   "lane_l12_build_llama",
   "lane_l2_authority",
+  "lane_l2_quality_contracts",
   "lane_l3_abi_restore",
   "lane_l3_cache_metadata",
   "lane_l3_display_projection",

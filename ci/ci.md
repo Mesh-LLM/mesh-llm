@@ -27,6 +27,11 @@ discovery is removed. SDK compatibility, blocked control-plane callers and live
 canary coverage still require their existing environments. This is not a claim
 that the required graph has no interpreter dependency.
 
+The CLI/website contract owner `lane_l2_quality_contracts` is selected by the
+required normal Rust roster in `ci/automation-migration/quality-rust-contract-targets.json`
+and `just ci-automation-contracts`; the full Rust suite alone does not satisfy
+this normal-path replacement obligation.
+
 Runtime reuse now honors the prepared automation executable through the shared
 adapter, including when the consumer is copied outside Cargo alias discovery.
 Local SDK fixtures execute that same adapter and reject incompatible runtime
