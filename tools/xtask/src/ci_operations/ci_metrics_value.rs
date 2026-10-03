@@ -1,7 +1,7 @@
-//! The Python objects `json.load` gives `collect-ci-metrics.py`: ordered
-//! dicts (a repeated key keeps its first position and last value), ints,
-//! floats including `NaN`/`Infinity`, and their `str`, `==` and
-//! `json.dumps(..., indent=2[, sort_keys=True])` behavior.
+//! JSON-shaped saved inputs and generated CI report fields. Input parsing uses
+//! the repository JSON owner; report publication separately requires finite
+//! numeric values. Exact decimal attempt identities may exceed i128.
+//! Ordered objects retain source order for raw snapshots; report keys are sorted.
 
 use crate::ci_plan::document::Json;
 use crate::ci_plan::plan_bytes::write_string;
@@ -84,7 +84,7 @@ pub(crate) fn object<const N: usize>(entries: [(&str, Value); N]) -> Value {
     )
 }
 
-/// Python `str(value)`.
+/// Render strings directly and other report fields through the compact formatter.
 pub(crate) fn display(value: &Value) -> String {
     match value {
         Value::Str(text) => text.clone(),
@@ -92,7 +92,7 @@ pub(crate) fn display(value: &Value) -> String {
     }
 }
 
-/// Python `repr(value)`.
+/// Compact report-value formatting; this is not an interpreter representation.
 pub(crate) fn repr(value: &Value) -> String {
     match value {
         Value::Null => "null".to_owned(),
@@ -116,30 +116,7 @@ pub(crate) fn repr(value: &Value) -> String {
     }
 }
 
-/// Python `==` (`1 == 1.0 == True`). `NaN` equals itself, as `json`'s
-/// shared `NaN` constant is one object and dict lookups check identity.
-pub(crate) fn equal(left: &Value, right: &Value) -> bool {
-    match (left, right) {
-        (Value::Null, Value::Null) => true,
-        (Value::Str(a), Value::Str(b)) => a == b,
-        (Value::Array(a), Value::Array(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| equal(x, y))
-        }
-        (Value::Object(a), Value::Object(b)) => {
-            a.len() == b.len()
-                && a.iter()
-                    .all(|(key, item)| right.get(key).is_some_and(|other| equal(item, other)))
-        }
-        (Value::BigInt(a), Value::BigInt(b)) => a == b,
-        (Value::BigInt(_), _) | (_, Value::BigInt(_)) => false,
-        (Value::Bool(left), Value::Bool(right)) => left == right,
-        (Value::Int(left), Value::Int(right)) => left == right,
-        (Value::Float(left), Value::Float(right)) => left == right,
-        _ => false,
-    }
-}
-
-/// `json.dumps(value, indent=2, sort_keys=sort_keys)`.
+/// Emit indented report or raw-snapshot JSON, with optional key sorting.
 pub(crate) fn dumps(value: &Value, sort_keys: bool) -> String {
     let mut out = String::new();
     write_value(&mut out, value, 0, sort_keys);

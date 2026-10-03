@@ -25,6 +25,8 @@ mod build_cache;
 mod ci_metrics;
 #[path = "migration_ci_operations/ci_metrics_compare.rs"]
 mod ci_metrics_compare;
+#[path = "migration_ci_operations/ci_metrics_contracts.rs"]
+mod ci_metrics_contracts;
 #[path = "migration_ci_operations/ci_metrics_github.rs"]
 mod ci_metrics_github;
 #[path = "migration_ci_operations/ci_metrics_github_stub.rs"]
@@ -37,3 +39,8 @@ mod runner_identity;
 mod sccache_stats;
 #[path = "migration_ci_operations/support.rs"]
 mod support;
+
+#[path = "../src/process/mod.rs"]
+pub mod process;
+#[path = "migration_ci_operations/sccache_summary.rs"]
+mod sccache_summary;

@@ -121,3 +121,39 @@ fn stable_projection_orders_equal_size_families_without_modifying_source_plan() 
     assert_eq!(result["include"][1]["families"], "zeta");
     assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), value);
 }
+
+#[test]
+fn pinned_artifact_bytes_override_understated_resource_estimate_and_missing_sizes_refuse() {
+    let mut row = model("large", "causal_generation", 100 * GIB);
+    row["resources"]["estimated_model_bytes"] = json!(1);
+    assert_eq!(
+        project_json(&plan(vec![row.clone()]))["include"][0]["memory_tier"],
+        "accelerator-memory-256plus"
+    );
+    row["artifact"]["file_integrity"] = json!({});
+    assert!(project(&serde_json::to_vec(&plan(vec![row])).unwrap()).is_err());
+}
+#[test]
+fn current_full_roster_routes_published_large_families_without_mutating_canonical_plan() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let manifest = root.join("ci/llama-canary/family-certified.json");
+    let original = std::fs::read(&manifest).unwrap();
+    let bytes = crate::ci_plan::family::controller_plan(&root, &manifest).unwrap();
+    let copy = bytes.clone();
+    let projected = serde_json::to_value(project(&bytes).unwrap()).unwrap();
+    let rows = projected["include"].as_array().unwrap();
+    for family in ["minimax-m3", "inkling", "glm45-air", "qwen4exp", "llama4"] {
+        let row = rows.iter().find(|row| row["families"] == family).unwrap();
+        assert_eq!(row["memory_tier"], "accelerator-memory-256plus", "{family}");
+    }
+    let row = rows
+        .iter()
+        .find(|row| row["families"] == "lfm2-vl")
+        .unwrap();
+    assert_eq!(row["memory_tier"], "accelerator-memory-128plus");
+    assert_eq!(bytes, copy);
+    assert_eq!(std::fs::read(&manifest).unwrap(), original);
+}

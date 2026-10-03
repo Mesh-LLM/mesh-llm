@@ -175,10 +175,12 @@ mod tests {
     use super::{float_sum, round, summarize};
 
     #[test]
-    fn migration_ci_operations_metrics_numbers_follow_cpython() {
+    fn ci_metrics_linear_percentiles_and_empty_samples() {
         let summary = summarize([10.0, 20.0, 30.0, 40.0].map(Some));
         assert_eq!(summary.stats.map(|stats| stats[2]), Some(25.0));
         assert_eq!(summary.p95(), Some(38.5));
+        assert_eq!(summary.stats.map(|stats| stats[3]), Some(37.0));
+        assert_eq!(summary.mean(), Some(25.0));
         assert_eq!(round(0.0625, 3), 0.062);
         assert_eq!(round(1234.5675, 3), 1234.568);
         assert_eq!(float_sum([0.1, 0.2, 0.3]), 0.6);

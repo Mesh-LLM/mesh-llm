@@ -7,10 +7,8 @@ use std::fs;
 #[test]
 fn actionlint_extractor_has_no_python_child_after_cutover() -> DynResult<()> {
     let root = crate::repository::RepositoryRoot::resolve(None)?;
-    let paths = [
-        ".github/actions/install-actionlint/action.yml".to_owned(),
-        "scripts/safe-extract-tar.py".to_owned(),
-    ];
+    let paths = [".github/actions/install-actionlint/action.yml".to_owned()];
+    assert!(!root.as_path().join("scripts/safe-extract-tar.py").exists());
     let observed = scan::scan_paths(root.as_path(), &paths)?;
     let validated = observed.iter().map(|row| row.id.clone()).collect();
     let graph = report(root.as_path(), &paths, &observed, &validated, &[&paths[0]])?;

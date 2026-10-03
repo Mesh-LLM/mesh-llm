@@ -6,7 +6,7 @@ use crate::ci_operations::ci_metrics_normalize::{Failure, Job, Outcome, Run};
 use crate::ci_operations::ci_metrics_observe::{Observation, contaminated, included, observation};
 use crate::ci_operations::ci_metrics_stats::Counter;
 use crate::ci_operations::ci_metrics_time::elapsed;
-use crate::ci_operations::ci_metrics_value::{Value, equal};
+use crate::ci_operations::ci_metrics_value::Value;
 
 const SKIPPED: &str = "skipped";
 
@@ -101,8 +101,7 @@ fn add_run<'a>(pass: &mut Pass<'a>, run: &'a Run) -> Outcome<()> {
     let terminal_sample = terminal.and_then(|terminal| {
         samples
             .iter()
-            .rev()
-            .find(|sample| equal(&sample.job.id, &terminal.id))
+            .find(|sample| std::ptr::eq(sample.job, terminal))
     });
     if let (Some(terminal), Some(sample)) = (terminal, terminal_sample) {
         pass.terminal_counts.add(&terminal.name);
@@ -204,3 +203,7 @@ fn add_run<'a>(pass: &mut Pass<'a>, run: &'a Run) -> Outcome<()> {
     ));
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "ci_metrics_analyze_tests.rs"]
+mod tests;

@@ -1,9 +1,8 @@
-use crate::command::{DynResult, run_command, trimmed_stderr_or_stdout};
+use crate::command::DynResult;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Deserialize)]
 pub(super) struct Justfile {
@@ -41,19 +40,7 @@ pub(super) struct Dependency {
 }
 
 pub(super) fn dump(root: &Path) -> DynResult<Justfile> {
-    let mut command = Command::new("just");
-    command
-        .current_dir(root)
-        .args(["--justfile", "Justfile", "--dump", "--dump-format", "json"]);
-    let output = run_command(&mut command)?;
-    if !output.status.success() {
-        return Err(format!(
-            "Just recipe: parse failed: {}",
-            trimmed_stderr_or_stdout(&output)
-        )
-        .into());
-    }
-    Ok(serde_json::from_slice(&output.stdout)?)
+    Ok(serde_json::from_slice(&super::just_process::dump(root)?)?)
 }
 
 fn command_words(line: &str) -> impl Iterator<Item = &str> {
@@ -114,19 +101,7 @@ pub(super) fn check_recipe_children(root: &Path, required: &BTreeSet<String>) ->
     if !root.join("Justfile").is_file() {
         return Ok(());
     }
-    let mut command = Command::new("just");
-    command
-        .current_dir(root)
-        .args(["--justfile", "Justfile", "--dump", "--dump-format", "json"]);
-    let result = run_command(&mut command)?;
-    if !result.status.success() {
-        return Err(format!(
-            "Just recipe: parse failed: {}",
-            trimmed_stderr_or_stdout(&result)
-        )
-        .into());
-    }
-    let parsed: Justfile = serde_json::from_slice(&result.stdout)?;
+    let parsed = dump(root)?;
     let mut queue = required.iter().cloned().collect::<VecDeque<_>>();
     let mut visited = BTreeSet::new();
     while let Some(name) = queue.pop_front() {

@@ -175,3 +175,7 @@ fn actual_ipv6_loopback_contract_dials_bare_address_with_http_bracketed_authorit
     assert_eq!(json["status"], "pass");
     assert_eq!(server.calls.lock().unwrap().len(), 14);
 }
+
+mod serialization;
+
+mod contracts;

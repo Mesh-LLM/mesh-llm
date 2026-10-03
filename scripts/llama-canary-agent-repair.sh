@@ -105,7 +105,8 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 # Legacy workload automation selection begins.
-if [[ "$HARNESS_MODE" == repair ]]; then
+# Normal verify freezes this trusted controller before importing candidate source.
+if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
   if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
     repair_workload_controller="$MESH_LLM_AUTOMATION_BIN"
   else
@@ -169,10 +170,10 @@ rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || t
 run_for() {
   local label="$1" seconds="$2"
   shift 2
-  if [[ "$HARNESS_MODE" == *-build || "$HARNESS_MODE" == repair ]]; then
+  if [[ "$HARNESS_MODE" == *-build || "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
     local transaction_root input executable result timeout_parent
     local automation=()
-    if [[ "$HARNESS_MODE" == repair ]]; then
+    if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
       repair_workload_controller_unchanged || return 125
       automation=("${repair_workload_automation[@]}")
       timeout_parent="${RUNNER_TEMP:-/tmp}"
@@ -181,7 +182,7 @@ run_for() {
       timeout_parent="${RUNNER_TEMP:?}"
     fi
     executable="$(command -v "$1")" || return 125
-    if [[ "$HARNESS_MODE" == repair && "$executable" != /* && "$executable" == */* ]]; then
+    if [[ ( "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ) && "$executable" != /* && "$executable" == */* ]]; then
       executable="$PWD/$executable"
     fi
     if [[ "$executable" != /* ]]; then
@@ -201,6 +202,9 @@ run_for() {
       result=$?
     fi
     rm -rf "$transaction_root" || return 125
+    if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
+      repair_workload_controller_unchanged || return 125
+    fi
     return "$result"
   fi
   local cleanup=()
@@ -222,15 +226,61 @@ record_failure_class() {
   fi
 }
 
+verification_source_inspection() {
+  local verb="$1" log="${2:-}" transaction_root input status
+  [[ "$HARNESS_MODE" == verify ]] || return 1
+  case "$verb" in
+    verification-source-admit|verification-manifest-policy|verification-parity-inventory|verification-split-roster-check) ;;
+    *) echo "unsupported independent verification inspection" >&2; return 1 ;;
+  esac
+  repair_workload_controller_unchanged || return 1
+  transaction_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/independent-verification.XXXXXXXX")" || return 1
+  input="$transaction_root/input.json"
+  if ! jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "$BASE_HEAD" \
+    --arg controller_sha "$repair_workload_controller_sha" --arg root "$ROOT" \
+    --arg base "$CANDIDATE_BASE_HEAD" --arg candidate "$CERTIFIED_SHA" --arg tree "$VERIFICATION_TREE" \
+    '{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},
+      root:$root,base:$base,candidate:$candidate,tree:$tree}}' > "$input"; then
+    rm -rf "$transaction_root"
+    return 1
+  fi
+  if [[ -n "$log" ]]; then
+    if run_verification_logged "parity manifest validation" "$log" \
+      "${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+      status=0
+    else
+      status=$?
+    fi
+  elif "${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -rf "$transaction_root" || return 1
+  repair_workload_controller_unchanged || return 1
+  return "$status"
+}
+
+verification_candidate_unchanged() {
+  if [[ "$HARNESS_MODE" == verify && -n "$CERTIFIED_SHA" ]]; then
+    verification_source_inspection verification-source-admit
+  fi
+}
+
 repair_family_plan_step() {
   local log="$1"
   shift
+  local status
   repair_workload_controller_unchanged || return 1
+  verification_candidate_unchanged || return 1
   if [[ -n "$log" ]]; then
-    run_verification_logged "full family certification plan" "$log" "$@"
+    if run_verification_logged "full family certification plan" "$log" "$@"; then status=0; else status=$?; fi
   else
-    "$@"
+    if "$@"; then status=0; else status=$?; fi
   fi
+  verification_candidate_unchanged || return 1
+  repair_workload_controller_unchanged || return 1
+  return "$status"
 }
 
 repair_family_plan() {
@@ -260,7 +310,7 @@ check_family_cache() {
     cp "$transaction_root/admitted/plan.json" "$PLAN_PATH"
     return
   fi
-  if [[ "$HARNESS_MODE" == repair ]]; then
+  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
     repair_family_plan 256
     return
   fi
@@ -508,6 +558,10 @@ validate_agent_manifest_changes() {
     repair_source_inspection local-manifest-policy > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
     return
   fi
+  if [[ "$HARNESS_MODE" == verify ]]; then
+    verification_source_inspection verification-manifest-policy > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+    return
+  fi
   python3 scripts/validate-llama-canary-agent-manifests.py \
     --base-ref "$CANDIDATE_BASE_HEAD" \
     --llama-src "$ROOT/.deps/llama.cpp" \
@@ -719,12 +773,14 @@ run_certification() {
   echo "trusted candidate gate: certify" | tee -a "$CERTIFY_LOG"
   if [[ "$HARNESS_MODE" == repair ]]; then
     repair_source_inspection local-parity-inventory "" "$CERTIFY_LOG" || return 1
+  elif [[ "$HARNESS_MODE" == verify ]]; then
+    verification_source_inspection verification-parity-inventory "$CERTIFY_LOG" || return 1
   else
   run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
     python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate \
     || return 1
   fi
-  if [[ "$HARNESS_MODE" == repair ]]; then
+  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
     repair_family_plan 1 "$CERTIFY_LOG" || return 1
   else
   run_verification_logged "full family certification plan" "$CERTIFY_LOG" \
@@ -836,6 +892,9 @@ write_split_certification_roster() {
     controller_split_roster false
   elif [[ "$HARNESS_MODE" == repair ]]; then
     repair_source_inspection local-split-roster false
+  elif [[ "$HARNESS_MODE" == verify ]]; then
+    echo "independent verification cannot write the split roster" >&2
+    return 1
   else
     python3 scripts/generate-split-certified.py
   fi
@@ -846,6 +905,8 @@ check_split_certification_roster() {
     controller_split_roster true
   elif [[ "$HARNESS_MODE" == repair ]]; then
     repair_source_inspection local-split-roster true
+  elif [[ "$HARNESS_MODE" == verify ]]; then
+    verification_source_inspection verification-split-roster-check
   else
     python3 scripts/generate-split-certified.py --check
   fi
@@ -918,6 +979,7 @@ write_pr_body() {
 }
 
 finalize_certified_tree() {
+  verification_candidate_unchanged || return 1
   verify_repair_pin || return 1
   if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
     echo "verified checkout changed tracked files during final verification" >&2
@@ -930,7 +992,7 @@ finalize_certified_tree() {
   write_pr_body
   git -c core.hooksPath=/dev/null -C "$TRUSTED_ROOT" \
     branch -f "$BRANCH" "$CERTIFIED_SHA"
-  git -C "$TRUSTED_ROOT" bundle create "$BUNDLE" "$BRANCH" "^${BASE_HEAD}"
+  git -C "$TRUSTED_ROOT" bundle create "$BUNDLE" "$BRANCH" "^${CANDIDATE_BASE_HEAD}"
   git -C "$TRUSTED_ROOT" bundle verify "$BUNDLE" >/dev/null
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     {
@@ -1050,6 +1112,9 @@ load_candidate_bundle
 trap cleanup_verification_worktree EXIT
 materialize_verification_tree
 VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
+if [[ "$HARNESS_MODE" == verify ]]; then
+  verification_source_inspection verification-source-admit || exit 1
+fi
 echo "starting independent verification build of the exact candidate"
 if run_candidate_gates; then
   :

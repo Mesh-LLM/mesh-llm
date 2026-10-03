@@ -2,6 +2,8 @@ mod cache_authority;
 mod cache_boundaries;
 mod cache_callers;
 mod cache_consumers;
+mod cache_evidence;
+mod cache_identity;
 mod cache_predicate;
 mod canary_build;
 mod canary_execution;
@@ -77,6 +79,14 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     cache_consumers::check(&workflows)?;
     cache_callers::check(&workflows)?;
     cache_boundaries::check(&workflows)?;
+    cache_evidence::check(&workflows)?;
+    cache_identity::check(&workflows)?;
+    let capture =
+        std::fs::read_to_string(root.join(".github/actions/capture-sccache-stats/action.yml"))?;
+    cache_evidence::capture_action(&workflow_yaml::parse(&capture)?)?;
+    let configure =
+        std::fs::read_to_string(root.join(".github/actions/configure-sccache-gha/action.yml"))?;
+    cache_evidence::configure_action(&workflow_yaml::parse(&configure)?)?;
     for name in ["restore-windows-abi-cache", "setup-windows-rocm-sdk"] {
         let source =
             std::fs::read_to_string(root.join(format!(".github/actions/{name}/action.yml")))?;

@@ -3,6 +3,11 @@ mod repair;
 #[cfg(test)]
 #[path = "selected_repair_tests.rs"]
 mod repair_tests;
+#[path = "selected_system_one.rs"]
+mod system_one;
+#[cfg(test)]
+#[path = "selected_system_one_tests.rs"]
+mod system_one_tests;
 use super::ledger::SelectedProcessCall;
 use crate::command::DynResult;
 use std::collections::BTreeMap;
@@ -23,7 +28,8 @@ const SELECTED_SCRIPTS: [&str; 8] = [
 fn typed_caller(path: &str) -> bool {
     matches!(
         path,
-        "scripts/skippy-ci-smoke.sh"
+        "scripts/skippy-system-one-smoke.sh"
+            | "scripts/skippy-ci-smoke.sh"
             | "scripts/skippy-workload-certify.sh"
             | "scripts/llama-canary-agent-repair.sh"
     )
@@ -91,6 +97,14 @@ fn typed_source_argv(lines: &[&str], index: usize) -> DynResult<String> {
 fn typed_owner(argv: &str) -> Option<&'static str> {
     [
         (
+            "automation system-one-smoke stage",
+            "tools/xtask/src/automation/system_one_smoke.rs",
+        ),
+        (
+            "automation system-one-smoke report",
+            "tools/xtask/src/automation/system_one_smoke.rs",
+        ),
+        (
             "automation canary-receipts prepared-source",
             "tools/xtask/src/automation/canary_receipts/package_closure/prepared_source.rs",
         ),
@@ -157,7 +171,9 @@ fn check_system_one_binding(
     lines: &[&str],
     index: usize,
 ) -> DynResult<()> {
-    if record.caller != "scripts/skippy-system-one-smoke.sh" {
+    if record.caller != "scripts/skippy-system-one-smoke.sh"
+        || !lines[index].trim().starts_with("\"${case_command[@]}\"")
+    {
         return Ok(());
     }
     let start = index
@@ -296,6 +312,7 @@ pub(super) fn check_selected_processes(
         }
         let lines = text.lines().collect::<Vec<_>>();
         repair::check_shape(path, &lines)?;
+        system_one::check_shape(path, &lines)?;
         for (index, line) in lines.iter().enumerate() {
             if !indirect_launch(path, line) && !repair::is_launch(path, &lines, index) {
                 continue;

@@ -12,6 +12,8 @@ mod candidate_plan;
 mod candidate_view;
 #[path = "package_closure/executable.rs"]
 mod executable;
+#[path = "package_closure/frozen_verifier.rs"]
+mod frozen_verifier;
 #[path = "package_closure/input.rs"]
 mod input;
 #[cfg(test)]
@@ -40,6 +42,8 @@ mod split_roster;
 #[cfg(test)]
 #[path = "package_closure/tests.rs"]
 mod tests;
+#[path = "package_closure/verification_source.rs"]
+pub(crate) mod verification_source;
 #[path = "package_closure/workload.rs"]
 mod workload;
 

@@ -296,13 +296,7 @@ pub(super) fn candidate_bundle(
         ],
         None,
     )?;
-    if std::str::from_utf8(&heads)?
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        != [candidate, branch]
-    {
-        return Err("candidate bundle head/branch differs from exact package".into());
-    }
+    source::candidate_bundle_identity(&heads, candidate, branch)?;
     candidate_view::policy(&target, base, candidate)?;
     view.cleanup()
 }

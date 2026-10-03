@@ -1,5 +1,6 @@
 mod checks;
 mod exception_policy;
+mod just_process;
 mod just_recipes;
 mod ledger;
 mod loader_closure;
@@ -21,7 +22,7 @@ use crate::command::DynResult;
 use checks::{check_inventory, check_policy};
 use ledger::{MigrationLedgers, tracked_paths};
 
-pub(crate) fn run(args: &[String]) -> DynResult<()> {
+fn run_inventory(args: &[String]) -> DynResult<()> {
     let root = crate::repo_consistency::repo_root()?;
     let ledgers = MigrationLedgers::load(&root)?;
     let paths = tracked_paths(&root)?;
@@ -71,3 +72,10 @@ mod shard_tests;
 mod test_shard_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod just_native_component_tests;
+
+pub(crate) fn run(args: &[String]) -> DynResult<()> {
+    just_process::operation(|| run_inventory(args))
+}

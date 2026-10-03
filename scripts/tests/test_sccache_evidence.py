@@ -98,6 +98,7 @@ class SccacheEvidenceTests(unittest.TestCase):
                 "needs.runner_policy.outputs.allow_native_github_cache_cpu || "
                 "needs.runner_policy.outputs.allow_native_github_cache }}"
             ),
+            ("ci-platform-checks-slice.yml", "platform_checks"): policy,
             ("ci-quality-slice.yml", "quality_contracts"): policy,
             ("ci-quality-slice.yml", "rust_clippy"): policy,
             ("ci-quality-slice.yml", "cli_docs_sync"): policy,

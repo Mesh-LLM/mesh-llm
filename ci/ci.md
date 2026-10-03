@@ -950,6 +950,9 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+Windows platform checks apply the shared sccache policy immediately after
+installation, using the selected runner's native and Depot cache permissions.
+
 The checked-in Cargo configuration is the repository-wide Rust accelerator
 owner: `sccache` is mandatory, Linux final links prefer the probed mold driver
 and fall back to a compatible lld or the platform linker when mold is absent or
@@ -1550,7 +1553,7 @@ read-only model cache. The runner still requires preinstalled `uv`.
 
 ### Self-hosted job disk cleanup
 
-The persistent build and family jobs run `scripts/cleanup-self-hosted.py`
+The persistent build and family jobs run `cargo xtool ci-ops runner-cleanup`
 after artifact upload attempts, on success, failure and cancellation. It removes
 known job-local Cargo debug outputs, prepared llama sources, native/workload
 builds, downloaded handoffs and the worker SDK environment. Evidence and the

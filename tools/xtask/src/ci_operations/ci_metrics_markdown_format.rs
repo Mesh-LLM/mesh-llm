@@ -1,6 +1,4 @@
-//! The value formatting `render_markdown` of `collect-ci-metrics.py` relies
-//! on: `human()` durations, `markdown_escape()`, `or 'n/a'` truthiness and
-//! the `:.1%` share format.
+//! Markdown report formatting for durations, counts, shares and text dimensions.
 
 use crate::ci_operations::ci_metrics_normalize::{Failure, Outcome};
 use crate::ci_operations::ci_metrics_value::{Value, display};
@@ -28,8 +26,7 @@ pub(crate) fn or_na(value: &Value) -> String {
     }
 }
 
-/// `markdown_escape(value)`: `str(value)` with pipes escaped and newlines
-/// flattened to spaces.
+/// Escape Markdown table pipes and flatten embedded newlines.
 pub(crate) fn escape_text(text: &str) -> String {
     text.replace('|', "\\|").replace('\n', " ")
 }
@@ -38,7 +35,7 @@ pub(crate) fn escape(value: &Value) -> String {
     escape_text(&display(value))
 }
 
-/// `markdown_escape(value or 'n/a')`.
+/// Render a nonempty text dimension, otherwise n/a.
 pub(crate) fn escape_or_na(value: &Value) -> String {
     match value {
         Value::Str(text) if !text.is_empty() => escape_text(text),
@@ -46,8 +43,7 @@ pub(crate) fn escape_or_na(value: &Value) -> String {
     }
 }
 
-/// `int(round(seconds))`: ties to even; `NaN` is a caught `ValueError`,
-/// infinity an uncaught `OverflowError`.
+/// Round finite nonnegative durations to whole seconds, with ties to even.
 fn rounded(value: &Value) -> Outcome<Option<i128>> {
     match value {
         Value::Null => Ok(None),
@@ -66,8 +62,7 @@ fn rounded(value: &Value) -> Outcome<Option<i128>> {
     }
 }
 
-/// `human(seconds)`: `n/a`, `Ns`, `Nm Ns` or `Nh Nm Ns` with Python's
-/// floor `divmod`.
+/// Render available durations as seconds, minutes or hours.
 pub(crate) fn human(value: &Value) -> Outcome<String> {
     let Some(total) = rounded(value)? else {
         return Ok("n/a".to_owned());

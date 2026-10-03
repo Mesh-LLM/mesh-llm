@@ -224,3 +224,42 @@ pub(super) fn prepared(root: &Path) -> DynResult<Provenance> {
     process::text(&checkout, &["diff-index", "--quiet", "HEAD", "--"])?;
     Ok(provenance)
 }
+
+/// Git advertises a branch bundle using its full ref; identity stores the admitted branch name.
+pub(super) fn candidate_bundle_identity(
+    bytes: &[u8],
+    candidate: &str,
+    name: &str,
+) -> DynResult<()> {
+    revision(candidate)?;
+    branch(name)?;
+    let reference = format!("refs/heads/{name}");
+    if std::str::from_utf8(bytes)?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        != [candidate, reference.as_str()]
+    {
+        return Err("candidate bundle head/branch differs from exact identity".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod bundle_identity_tests {
+    use super::candidate_bundle_identity;
+    #[test]
+    fn admitted_bundle_ref_is_exact_and_never_accepts_foreign_or_extra_heads() {
+        let candidate = "a".repeat(40);
+        let branch = "llama-canary/repair-finite";
+        let valid = format!("{candidate} refs/heads/{branch}\n");
+        assert!(candidate_bundle_identity(valid.as_bytes(), &candidate, branch).is_ok());
+        for advertised in [
+            format!("{candidate} {branch}\n"),
+            format!("{candidate} refs/tags/{branch}\n"),
+            format!("{} refs/heads/{branch}\n", "b".repeat(40)),
+            format!("{valid}{candidate} refs/heads/other\n"),
+        ] {
+            assert!(candidate_bundle_identity(advertised.as_bytes(), &candidate, branch).is_err());
+        }
+    }
+}

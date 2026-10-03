@@ -126,7 +126,12 @@ pub(super) fn check_shape(path: &str, lines: &[&str]) -> DynResult<()> {
             .enumerate()
             .filter(|(_, l)| l.trim().starts_with("repair_family_plan "))
         {
-            if index == 0 || lines[index - 1].trim() != "if [[ \"$HARNESS_MODE\" == repair ]]; then"
+            if index == 0
+                || !matches!(
+                    lines[index - 1].trim(),
+                    "if [[ \"$HARNESS_MODE\" == repair ]]; then"
+                        | "if [[ \"$HARNESS_MODE\" == repair || \"$HARNESS_MODE\" == verify ]]; then"
+                )
             {
                 return Err("selected repair: plan call outside exact repair mode".into());
             }
@@ -134,16 +139,22 @@ pub(super) fn check_shape(path: &str, lines: &[&str]) -> DynResult<()> {
         let range = function(lines, "repair_family_plan_step")?
             .ok_or("selected repair: missing plan step")?;
         let body = lines[range].iter().map(|l| l.trim()).collect::<Vec<_>>();
-        for required in [
-            "repair_workload_controller_unchanged || return 1",
-            "run_verification_logged \"full family certification plan\" \"$log\" \"$@\"",
-            "\"$@\"",
-        ] {
-            if !body.contains(&required) {
-                return Err("selected repair: changed bounded plan launch".into());
-            }
+        if !body.contains(&"repair_workload_controller_unchanged || return 1") {
+            return Err("selected repair: changed bounded plan launch".into());
+        }
+        let old = body
+            .contains(&r#"run_verification_logged "full family certification plan" "$log" "$@""#)
+            && body.contains(&r#""$@""#);
+        let guarded = body.contains(&r#"if run_verification_logged "full family certification plan" "$log" "$@"; then status=0; else status=$?; fi"#)
+            && body.contains(&r#"if "$@"; then status=0; else status=$?; fi"#)
+            && body.iter().filter(|line| **line == "verification_candidate_unchanged || return 1").count() == 2;
+        if (!old && !guarded)
+            || (check_presence(lines, "verification_source_inspection")? && !guarded)
+        {
+            return Err("selected repair: changed bounded plan forwarding".into());
         }
     }
+    check_verification(lines)?;
     if check_presence(lines, "repair_source_inspection")? {
         if calls(lines, "repair_source_inspection ") != LOCAL_CALLS {
             return Err("selected repair: changed or expanded local verb ownership".into());
@@ -179,13 +190,18 @@ pub(super) fn is_launch(path: &str, lines: &[&str], index: usize) -> bool {
     if path != CALLER {
         return false;
     }
-    for name in ["repair_family_plan_step", "repair_source_inspection"] {
+    for name in [
+        "repair_family_plan_step",
+        "repair_source_inspection",
+        "verification_source_inspection",
+    ] {
         if let Ok(Some(range)) = function(lines, name)
             && range.contains(&index)
             && (lines[index].trim() == "\"$@\""
+                || lines[index].trim() == r#"if "$@"; then status=0; else status=$?; fi"#
                 || lines[index]
                     .trim()
-                    .starts_with("run_verification_logged \"full family certification plan\"")
+                    .contains("run_verification_logged \"full family certification plan\"")
                 || lines[index].trim().contains(
                     "\"${repair_workload_automation[@]}\" automation canary-receipts \"$verb\"",
                 ))
@@ -201,8 +217,12 @@ pub(super) fn binding(path: &str, lines: &[&str], index: usize) -> DynResult<Opt
     }
     check_shape(path, lines)?;
     let plan = function(lines, "repair_family_plan_step")?.is_some_and(|r| r.contains(&index));
+    let verification =
+        function(lines, "verification_source_inspection")?.is_some_and(|r| r.contains(&index));
     let name = if plan {
         "repair_family_plan_step"
+    } else if verification {
+        "verification_source_inspection"
     } else {
         "repair_source_inspection"
     };
@@ -213,6 +233,11 @@ pub(super) fn binding(path: &str, lines: &[&str], index: usize) -> DynResult<Opt
             .ok_or("selected repair: missing plan projection")?;
         source.extend(lines[projection].iter().map(|l| l.trim()));
         source.extend(PLAN_USES);
+        if let Some(candidate) = function(lines, "verification_candidate_unchanged")? {
+            source.extend(lines[candidate].iter().map(|line| line.trim()));
+        }
+    } else if verification {
+        source.extend(VERIFICATION_CALLS);
     } else {
         source.extend(LOCAL_CALLS);
     }
@@ -220,9 +245,114 @@ pub(super) fn binding(path: &str, lines: &[&str], index: usize) -> DynResult<Opt
         argv: source.join("\n"),
         owner: if plan {
             "tools/xtask/src/ci_plan/family/mod.rs; tools/xtask/src/automation/family_battery_policy.rs"
+        } else if verification {
+            "tools/xtask/src/automation/canary_receipts/package_closure/verification_source.rs"
         } else {
             "tools/xtask/src/automation/canary_receipts/package_closure/local_inspection.rs"
         },
-        child: "pre-agent frozen normal-repair controller; closed source-owned command set",
+        child: "pre-agent frozen controller; closed repair or independent verification command set",
     }))
 }
+
+const VERIFICATION_CALLS: [&str; 5] = [
+    "verification_source_inspection verification-source-admit",
+    "verification_source_inspection verification-manifest-policy > >(tee -a \"$MANIFEST_POLICY_LOG\") 2>&1",
+    "verification_source_inspection verification-parity-inventory \"$CERTIFY_LOG\" || return 1",
+    "verification_source_inspection verification-split-roster-check",
+    "verification_source_inspection verification-source-admit || exit 1",
+];
+fn check_verification(lines: &[&str]) -> DynResult<()> {
+    if !check_presence(lines, "verification_source_inspection")? {
+        return Ok(());
+    }
+    if calls(lines, "verification_source_inspection ") != VERIFICATION_CALLS {
+        return Err("selected verify: changed or expanded independent verb ownership".into());
+    }
+    let range = function(lines, "verification_source_inspection")?
+        .ok_or("selected verify: missing owner")?;
+    let actual = lines[range]
+        .iter()
+        .map(|line| line.trim())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if actual != VERIFICATION_HELPER {
+        return Err("selected verify: changed independent launch or authority schema".into());
+    }
+    let candidate = function(lines, "verification_candidate_unchanged")?
+        .ok_or("selected verify: missing candidate recheck")?;
+    let candidate_body = lines[candidate]
+        .iter()
+        .map(|line| line.trim())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if candidate_body
+        != "verification_candidate_unchanged() {\nif [[ \"$HARNESS_MODE\" == verify && -n \"$CERTIFIED_SHA\" ]]; then\nverification_source_inspection verification-source-admit\nfi\n}"
+    {
+        return Err("selected verify: changed candidate revalidation ownership".into());
+    }
+    for (index, _) in lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim().starts_with("verification_source_inspection "))
+    {
+        if index == 0
+            || !matches!(
+                lines[index - 1].trim(),
+                "if [[ \"$HARNESS_MODE\" == verify && -n \"$CERTIFIED_SHA\" ]]; then"
+                    | "if [[ \"$HARNESS_MODE\" == verify ]]; then"
+                    | "elif [[ \"$HARNESS_MODE\" == verify ]]; then"
+            )
+        {
+            return Err(
+                "selected verify: caller outside exact independent verification mode".into(),
+            );
+        }
+    }
+    let freeze = lines
+        .iter()
+        .position(|line| line.trim() == "# Legacy workload automation selection begins.")
+        .ok_or("selected verify: missing trusted freeze")?;
+    let load = lines
+        .iter()
+        .position(|line| *line == "load_candidate_bundle")
+        .ok_or("selected verify: missing candidate import")?;
+    if freeze >= load {
+        return Err("selected verify: trusted freeze after candidate import".into());
+    }
+    Ok(())
+}
+
+const VERIFICATION_HELPER: &str = r###"verification_source_inspection() {
+local verb="$1" log="${2:-}" transaction_root input status
+[[ "$HARNESS_MODE" == verify ]] || return 1
+case "$verb" in
+verification-source-admit|verification-manifest-policy|verification-parity-inventory|verification-split-roster-check) ;;
+*) echo "unsupported independent verification inspection" >&2; return 1 ;;
+esac
+repair_workload_controller_unchanged || return 1
+transaction_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/independent-verification.XXXXXXXX")" || return 1
+input="$transaction_root/input.json"
+if ! jq -n --arg controller_root "$TRUSTED_ROOT" --arg controller_revision "$BASE_HEAD" \
+--arg controller_sha "$repair_workload_controller_sha" --arg root "$ROOT" \
+--arg base "$CANDIDATE_BASE_HEAD" --arg candidate "$CERTIFIED_SHA" --arg tree "$VERIFICATION_TREE" \
+'{authority:{controller:{root:$controller_root,revision:$controller_revision,executable_sha256:$controller_sha},
+root:$root,base:$base,candidate:$candidate,tree:$tree}}' > "$input"; then
+rm -rf "$transaction_root"
+return 1
+fi
+if [[ -n "$log" ]]; then
+if run_verification_logged "parity manifest validation" "$log" \
+"${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+status=0
+else
+status=$?
+fi
+elif "${repair_workload_automation[@]}" automation canary-receipts "$verb" --input "$input"; then
+status=0
+else
+status=$?
+fi
+rm -rf "$transaction_root" || return 1
+repair_workload_controller_unchanged || return 1
+return "$status"
+}"###;
