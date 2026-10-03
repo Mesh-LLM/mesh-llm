@@ -3,7 +3,7 @@ import type { RuntimeControlBootstrapPayload } from '@/features/configuration/ap
 export const OWNER_CONTROL_READ_ONLY_MESSAGE =
   'No owner-control identity on this node, run both commands to unlock saving.'
 export const OWNER_CONTROL_SAVE_ERROR = 'Config was not saved. Runtime control is disabled: missing owner identity.'
-export const OWNER_CONTROL_DOCS_URL = 'https://meshllm.cloud/'
+export const OWNER_CONTROL_DOCS_URL = 'https://meshllm.cloud/docs/'
 
 export function formatRuntimeControlDisabledReason(bootstrap: RuntimeControlBootstrapPayload | undefined) {
   if (bootstrap?.disabled_reason === 'missing_owner_identity') return 'missing owner identity'
