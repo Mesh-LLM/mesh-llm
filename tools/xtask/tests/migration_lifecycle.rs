@@ -198,3 +198,6 @@ mod publication_diagnostics;
 
 #[path = "migration_lifecycle/parity_download_owner.rs"]
 mod parity_download_owner;
+
+#[path = "migration_lifecycle/pr_sibling_cancellation.rs"]
+mod pr_sibling_cancellation;
