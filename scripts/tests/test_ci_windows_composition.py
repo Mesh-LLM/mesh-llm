@@ -58,8 +58,6 @@ def _windows_unit_row_crates() -> set[str]:
 # change under test. A crate leaves this list, for a platform-windows* crate
 # rule and the windows-unit row, once its suite is confirmed green there.
 WINDOWS_UNVERIFIED_CRATES = {
-    # Built-in Lexe wallet is being deleted (#2134); no longer routed to Windows.
-    "mesh-wallet-lexe",
     "mesh-llm-commands",
     # Green on Windows, but each has an extracted successor in the Mesh/Skippy
     # layout migration, so it is routed once the catalog carries successors.

@@ -416,11 +416,11 @@ fn payments_presentation(rendered: &str) -> Option<SettingPresentation> {
         "payments.wallet" => Some(
             sp(
                 "Wallet plugin",
-                "Plugin name of the wallet that backs paid inference. When unset, the only running wallet plugin is used, preferring any other over the built-in Lexe wallet.",
+                "Plugin name of the wallet that backs paid inference. When unset, the only running wallet plugin is used.",
                 PAYMENTS_CATEGORY,
                 10,
             )
-            .placeholder("wallet-lexe")
+            .placeholder("lexe-wallet")
             .hint("text"),
         ),
         _ => None,

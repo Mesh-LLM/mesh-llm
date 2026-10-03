@@ -78,7 +78,7 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
-| `payments.wallet` | string | unset: the only running `wallet.v1` plugin, preferring any other over `wallet-lexe` | node-level | process restart | wired | none |
+| `payments.wallet` | string | unset: the only running `wallet.v1` plugin | node-level | process restart | wired | none |
 | `telemetry.enabled` | boolean | `false` | node-level | process restart | wired | none |
 | `telemetry.service_name` | string | `mesh-llm` | node-level | process restart | wired | none |
 | `telemetry.endpoint` | URL | unset | node-level | process restart | wired | none |

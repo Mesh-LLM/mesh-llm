@@ -29,8 +29,7 @@ serving = [
 # `wallet.v1` plugin adapter. Off by default: an embedding consumer (e.g. Buzz)
 # that enables `serving` alone stays payment-free and does not compile the
 # rusqlite/lightning-invoice/bitcoin stack. Enabling it still links no wallet
-# SDK; the built-in Lexe wallet is a separate host-runtime feature
-# (`wallet-lexe`) that only the shipped `mesh-llm` CLI enables. An SDK host with
+# SDK. A host with
 # `payments` needs an external `wallet.v1` plugin configured to actually pay.
 payments = ["serving", "mesh-llm-embedded-runtime/payments"]
 
