@@ -354,7 +354,8 @@ main.
 If crates.io accepts only a prefix of the stable package chain,
 `resume-crates-release.yml` resumes publication from the existing immutable
 release tag. The operator supplies both the stable tag and its exact peeled
-commit SHA. The workflow runs only from the default branch, verifies those two
+commit SHA. The workflow has `packages: read` to pull its pinned GHCR runner
+image. It runs only from the default branch, verifies those two
 identities against the remote tag and checkout, and uses the trusted
 default-branch `publish-crates.sh` controller against the tagged source. Resume
 mode skips versions that crates.io confirms are already published and falls
