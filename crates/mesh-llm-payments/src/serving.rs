@@ -15,7 +15,7 @@ use crate::invoice::Invoice;
 use crate::ledger::{RequestTerms, receivables::Receivable};
 use crate::lifetimes::INPUT_INVOICE_EXPIRY_SECS;
 use crate::service::{Arrival, PaymentService};
-use crate::wallet::PaymentStatus;
+use crate::wallet::{PaymentStatus, Transaction};
 
 impl PaymentService {
     /// Check the offered price, wake the receiving wallet, wait out the
@@ -93,10 +93,12 @@ impl PaymentService {
         })
     }
 
-    /// Wait for `invoice` to settle and record it received.
-    pub async fn settle_received(&self, invoice: &Invoice) -> Result<()> {
-        self.wait_received(invoice).await?;
-        self.ledger.mark_received(&invoice.payment_hash)
+    /// Wait for `invoice` to settle and record it received; returns the
+    /// receiving wallet's record of the payment.
+    pub async fn settle_received(&self, invoice: &Invoice) -> Result<Transaction> {
+        let payment = self.wait_received(invoice).await?;
+        self.ledger.mark_received(&invoice.payment_hash)?;
+        Ok(payment)
     }
 
     pub async fn arrival(&self, invoice: &Invoice, deadline: Duration) -> Result<bool> {

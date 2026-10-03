@@ -49,6 +49,32 @@ async fn incoming_settlement_before_subscription_is_not_missed() -> Result<()> {
 }
 
 #[tokio::test]
+async fn received_payment_reports_what_the_wallet_credited_and_deducted() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    let invoice = invoice(11, 1000);
+    wallet.payments.lock().unwrap().insert(
+        invoice.payment_hash.clone(),
+        Transaction {
+            id: invoice.payment_hash.clone(),
+            payment_hash: Some(invoice.payment_hash.clone()),
+            inbound: true,
+            amount_msat: 995,
+            fee_msat: 5,
+            status: PaymentStatus::Succeeded,
+            claiming: false,
+            status_msg: None,
+            created_at_ms: crate::now_ms(),
+            settled_at_ms: Some(crate::now_ms()),
+        },
+    );
+    let payment = service.wait_received(&invoice).await?;
+    assert_eq!((payment.amount_msat, payment.fee_msat), (995, 5));
+    Ok(())
+}
+
+#[tokio::test]
 async fn expired_incoming_invoice_still_recognizes_an_existing_receipt() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());

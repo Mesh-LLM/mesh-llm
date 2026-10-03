@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 use mesh_llm_payments_types::contract::{
     Empty, IdRequest, InvoiceRequest, OutputReceivableResponse, ServeBeginRequest,
-    ServeRecoverResponse, ops,
+    ServeRecoverResponse, SettledReceived, ops,
 };
 use mesh_llm_payments_types::wire::{self, Frame};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -197,7 +197,7 @@ async fn serve_inner(
             )
             .await?;
         }
-        let _: Empty = payments
+        let settled: SettledReceived = payments
             .call(
                 ops::SETTLE_RECEIVED,
                 &InvoiceRequest {
@@ -205,7 +205,7 @@ async fn serve_inner(
                 },
             )
             .await?;
-        observations.received(1, &receipt.invoice);
+        observations.received(1, &receipt.invoice, &settled);
     }
     if transport_alive {
         wire::write(writer, &Frame::Complete).await?;
