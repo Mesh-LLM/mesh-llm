@@ -1,8 +1,9 @@
 //! `models`: the test-model artifact registry. `generate` projects
 //! `ci/model-artifacts/registry.json` into suite manifests and the family
 //! roster; `resolve` and `restore-inputs` hand consumers exactly one
-//! cadence-authorized, integrity-pinned artifact. Outputs are byte-compatible
-//! with the legacy Python generator, resolver and restore-action step.
+//! cadence-authorized, integrity-pinned artifact. Their established consumer
+//! formats are retained. `parity-download` owns manual discovery and verified
+//! candidate materialization without inline Python.
 
 mod argv;
 mod certification;
@@ -11,6 +12,7 @@ mod fields;
 mod generate;
 pub(crate) mod json_bytes;
 mod manifest;
+mod parity_download;
 mod projection;
 mod registry;
 mod resolve;
@@ -25,6 +27,7 @@ pub(crate) enum ModelsCommand {
     Generate,
     Resolve,
     RestoreInputs,
+    ParityDownload,
 }
 
 impl ModelsCommand {
@@ -33,6 +36,7 @@ impl ModelsCommand {
             "generate" => Some(Self::Generate),
             "resolve" => Some(Self::Resolve),
             "restore-inputs" => Some(Self::RestoreInputs),
+            "parity-download" => Some(Self::ParityDownload),
             _ => None,
         }
     }
@@ -49,6 +53,7 @@ pub(crate) fn run(
         ModelsCommand::Generate => generate::run(Path::new(&root()?), args),
         ModelsCommand::Resolve => resolve::run(args),
         ModelsCommand::RestoreInputs => restore_inputs::run(args),
+        ModelsCommand::ParityDownload => parity_download::run(args),
     };
     report.emit()
 }

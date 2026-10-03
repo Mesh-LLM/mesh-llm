@@ -10,7 +10,7 @@ use crate::ci_plan::document::Json;
 use crate::repository::check_args::Grammar;
 use crate::repository::check_report::CheckReport;
 use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -179,7 +179,18 @@ fn joined(root: &str, name: &str) -> String {
 }
 
 /// Size first, then a streamed SHA-256, against the pinned record.
-fn verify(root: &str, file: &PinnedFile) -> ModelResult<String> {
+pub(super) fn verify(root: &str, file: &PinnedFile) -> ModelResult<String> {
+    verify_with_guard(root, file, &mut || Ok(()))
+}
+
+/// The parity owner supplies cancellation/deadline admission between file chunks.
+/// Existing resolver callers keep their established adapter and output contract.
+pub(super) fn verify_with_guard(
+    root: &str,
+    file: &PinnedFile,
+    guard: &mut impl FnMut() -> std::io::Result<()>,
+) -> ModelResult<String> {
+    guard().map_err(|error| ModelError(error.to_string()))?;
     let shown = joined(root, &file.name);
     let path = Path::new(root).join(&file.name);
     if !path.is_file() {
@@ -195,25 +206,51 @@ fn verify(root: &str, file: &PinnedFile) -> ModelResult<String> {
             file.size_bytes
         ));
     }
-    let actual = stream_sha256(&path).map_err(|error| io_error(&error, &shown))?;
+    let actual =
+        stream_sha256(&path, file.size_bytes, guard).map_err(|error| io_error(&error, &shown))?;
     if actual != file.sha256 {
         return fail(format!(
             "artifact SHA-256 mismatch for {shown}: expected {}, got {actual}",
             file.sha256
         ));
     }
+    guard().map_err(|error| ModelError(error.to_string()))?;
     Ok(format!(
         "verified immutable test artifact: {shown} ({actual_size} bytes)\n"
     ))
 }
 
-fn stream_sha256(path: &Path) -> std::io::Result<String> {
-    let mut reader = File::open(path)?;
+fn stream_sha256(
+    path: &Path,
+    maximum: u64,
+    guard: &mut impl FnMut() -> std::io::Result<()>,
+) -> std::io::Result<String> {
+    guard()?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("artifact must remain a regular file"));
+    }
+    let mut reader = file.take(
+        maximum
+            .checked_add(1)
+            .ok_or_else(|| std::io::Error::other("artifact size overflow"))?,
+    );
     let mut digest = Sha256::new();
     let mut chunk = vec![0_u8; 1024 * 1024];
     loop {
+        guard()?;
         match reader.read(&mut chunk)? {
-            0 => return Ok(hex::encode(digest.finalize())),
+            0 => {
+                guard()?;
+                return Ok(hex::encode(digest.finalize()));
+            }
             read => digest.update(&chunk[..read]),
         }
     }
@@ -254,6 +291,72 @@ fn write_outputs(path: &str, prefix: &str, summary: &[(&str, String)]) -> ModelR
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parity_hash_guard_refuses_cancellation_between_chunks_before_verification() {
+        let scratch = tempfile::tempdir().unwrap();
+        let file = scratch.path().join("model.gguf");
+        std::fs::write(&file, vec![42_u8; 3 * 1024 * 1024]).unwrap();
+        let cancellation = crate::process::Cancellation::default();
+        let mut calls = 0;
+        let mut guard = || {
+            calls += 1;
+            if calls == 3 {
+                cancellation.cancel();
+            }
+            if cancellation.is_cancelled() {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "cancelled",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        let result = stream_sha256(&file, 3 * 1024 * 1024, &mut guard);
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
+        assert_eq!(calls, 3);
+        let actual = stream_sha256(&file, 3 * 1024 * 1024, &mut || Ok(())).unwrap();
+        assert_eq!(
+            actual,
+            hex::encode(Sha256::digest(vec![42_u8; 3 * 1024 * 1024]))
+        );
+    }
+
+    #[test]
+    fn parity_verified_claim_is_refused_when_guard_cancels_after_complete_hash() {
+        let scratch = tempfile::tempdir().unwrap();
+        let bytes = vec![42_u8; 3 * 1024 * 1024];
+        std::fs::write(scratch.path().join("model.gguf"), &bytes).unwrap();
+        let record = PinnedFile {
+            name: "model.gguf".into(),
+            size_bytes: bytes.len() as u64,
+            sha256: hex::encode(Sha256::digest(&bytes)),
+            url: "https://fixture.invalid/model.gguf".into(),
+        };
+        let cancellation = crate::process::Cancellation::default();
+        let mut calls = 0;
+        let mut guard = || {
+            calls += 1;
+            // Three bounded chunks have been consumed before the EOF guard.
+            if calls == 7 {
+                cancellation.cancel();
+            }
+            if cancellation.is_cancelled() {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "cancelled",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        let refused = verify_with_guard(scratch.path().to_str().unwrap(), &record, &mut guard);
+        assert!(refused.is_err());
+        assert_eq!(calls, 7);
+        let healthy = verify(scratch.path().to_str().unwrap(), &record).unwrap();
+        assert!(healthy.contains("verified immutable test artifact:"));
+    }
 
     #[test]
     fn migration_models_output_prefix_is_a_safe_identifier() {
