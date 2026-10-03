@@ -30,7 +30,14 @@ fn execute(fail: bool, install: bool) -> (tempfile::TempDir, std::process::Outpu
     )
     .unwrap();
     std::fs::write(root_path.join("model.gguf"), b"inert fixture").unwrap();
-    let binary = repository().join("target/debug/examples/migration_smoke_fixture");
+    let binary = Path::new(env!("CARGO_BIN_EXE_xtask"))
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join(format!(
+            "migration_smoke_fixture{}",
+            std::env::consts::EXE_SUFFIX
+        ));
     let mut command = std::process::Command::new("bash");
     command
         .arg(repository().join("scripts/ci-sdk-fixture.sh"))

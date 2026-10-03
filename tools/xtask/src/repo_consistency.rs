@@ -506,3 +506,7 @@ test-all:
 #[cfg(test)]
 #[path = "repo_consistency/logging_contracts.rs"]
 mod logging_contracts;
+
+#[cfg(test)]
+#[path = "repo_consistency/synthetic_graph_contracts.rs"]
+mod synthetic_graph_contracts;

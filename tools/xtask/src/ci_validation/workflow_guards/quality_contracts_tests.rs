@@ -15,6 +15,7 @@ fn inputs() -> (String, Vec<String>) {
 #[test]
 fn current_quality_and_local_recipes_select_owning_portable_targets() {
     let (source, targets) = inputs();
+    integration_owners(&root(), &targets).unwrap();
     recipe(&source, &targets).unwrap();
     local(&source).unwrap();
     let workflow = super::super::workflow_yaml::parse(
@@ -150,4 +151,26 @@ fn only_fixture_suffix_case_is_admitted_and_control_transfer_cannot_skip_tests()
         );
         assert!(recipe(&changed, &targets).is_err(), "{transfer}");
     }
+}
+
+#[test]
+fn replacement_owner_cannot_be_omitted_from_the_normal_registry() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("tools/xtask/tests");
+    std::fs::create_dir_all(directory.join("support")).unwrap();
+    for name in [
+        "registered.rs",
+        "replacement.rs",
+        "README.md",
+        "support/fixture.rs",
+    ] {
+        std::fs::write(directory.join(name), b"inert target fixture").unwrap();
+    }
+    let targets = vec!["registered".to_owned(), "replacement".to_owned()];
+    integration_owners(root.path(), &targets).unwrap();
+    let error = integration_owners(root.path(), &targets[..1]).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Quality integration owners omitted from normal CI: replacement"
+    );
 }

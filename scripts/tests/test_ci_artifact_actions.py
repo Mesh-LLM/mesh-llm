@@ -2388,7 +2388,7 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         # `--cadence` must stay literal on both invocations: a manifest
         # consumer declares the cadence it is authorized for, and
-        # `test_model_artifact_registry` verifies that by reading the call
+        # the Rust model registry consumer contract verifies that by reading the call
         # site rather than tracing an array.
         self.assertEqual(action.count('--cadence "$MODEL_CADENCE"'), 1)
         self.assertIn('--model-cadence="$MODEL_CADENCE"', action)

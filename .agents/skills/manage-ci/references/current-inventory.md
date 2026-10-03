@@ -1447,7 +1447,7 @@ self-hosted job, including custom `mesh-llm-*` runner matrix labels.
 
 
 The native Skippy suite includes sparse synthetic graph-contract tests for every
-canary registry family. `scripts/tests/test_synthetic_graph_registry.py` makes
+canary registry family. `tools/xtask/src/repo_consistency/synthetic_graph_contracts.rs` makes
 missing fixtures and registry dimension/MTP drift fail CI validation. The matrix
 checks admitted stage chains and explicit unsupported contracts without model
 weights; it does not confer real-model certification. See
@@ -1464,6 +1464,13 @@ The CLI/website contract owner `lane_l2_quality_contracts` is selected by the
 required normal Rust roster in `ci/automation-migration/quality-rust-contract-targets.json`
 and `just ci-automation-contracts`; the full Rust suite alone does not satisfy
 this normal-path replacement obligation.
+
+The normal Rust contract roster selects all maintained xtask integration targets,
+including producer, release, QA-adapter, SDK-fixture, replay and agent-client
+fixtures. A source-owner census rejects an integration target absent from the
+roster, and the Just guard requires that exact roster without a test filter.
+Platform conditions remain in their owning tests. These finite fixtures do not
+replace live native, SDK, model, browser or hosted-runner acceptance.
 
 Laya parity and packaged-product smoke now use Rust `automation laya parity`
 and `automation laya product` through the shared automation adapter. Their

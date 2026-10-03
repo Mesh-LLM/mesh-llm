@@ -34,7 +34,8 @@ fn run(marker: Option<&str>) -> (tempfile::TempDir, std::process::Output) {
     let fixture = Path::new(env!("CARGO_BIN_EXE_xtask"))
         .parent()
         .unwrap()
-        .join("examples/l7_daemon_fixture");
+        .join("examples")
+        .join(format!("l7_daemon_fixture{}", std::env::consts::EXE_SUFFIX));
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()

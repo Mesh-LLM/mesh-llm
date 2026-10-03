@@ -27,6 +27,7 @@ fn script(text: &str, step: &str) -> Result<String, Box<dyn Error>> {
         .join("\n"))
 }
 
+#[cfg(unix)]
 #[test]
 fn hosted_profile_rejects_nonhosted_and_unknown_contexts() -> TestResult {
     let action = fs::read_to_string(root().join(".github/actions/prepare-automation/action.yml"))?;

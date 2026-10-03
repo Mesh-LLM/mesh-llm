@@ -36,6 +36,8 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [dev-dependencies]
+glob = "=0.3.4"
+regex = "=1.13.1"
 tar = "0.4"
 
 [[bin]]

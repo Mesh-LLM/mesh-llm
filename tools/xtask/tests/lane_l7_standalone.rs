@@ -23,7 +23,14 @@ fn standalone_shell_runs_all_checks_with_explicit_sizing() {
         .map(|listener| listener.local_addr().unwrap().port())
         .collect();
     drop(listeners);
-    let binary = repository().join("target/debug/examples/migration_smoke_fixture");
+    let binary = Path::new(env!("CARGO_BIN_EXE_xtask"))
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join(format!(
+            "migration_smoke_fixture{}",
+            std::env::consts::EXE_SUFFIX
+        ));
     let output = std::process::Command::new("bash")
         .arg(repository().join("scripts/ci-smoke-test.sh"))
         .arg(binary)

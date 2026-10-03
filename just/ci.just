@@ -21,7 +21,7 @@ ci-validate:
 
 # Explicit surviving transitional coverage; retire modules only with intent owners.
 ci-legacy-contracts:
-    python3 -m unittest scripts.tests.test_cuda_toolkit scripts.tests.test_prepare_llama scripts.tests.test_package_native_runtime scripts.tests.test_depot_authority_sentinel scripts.tests.test_generate_split_certified scripts.tests.test_skippy_llama_parity scripts.tests.test_ci_windows_composition scripts.tests.test_skippy_scheduler_fixtures scripts.tests.test_ci_workflow_artifacts scripts.tests.test_llama_canary_handoff_contract scripts.tests.test_reusable_workflow_runner_trust scripts.tests.test_qa_agent_tool_call_reliability scripts.tests.test_promote_layer_package_snapshot scripts.tests.test_runtime_events_native_gate scripts.tests.test_workload_lane_execution scripts.tests.test_depot_registry_canary_workflow scripts.tests.test_skippy_waiting_prefix_ab scripts.tests.test_build_accelerator_defaults scripts.tests.test_build_ui scripts.tests.test_build_windows scripts.tests.test_skippy_radix_cache_ab scripts.tests.test_kv_nightly_workflow_contract scripts.tests.test_download_skippy_parity_candidates scripts.tests.test_agentic_replay_nightly_workflow scripts.tests.test_ci_pr_canary_workflow scripts.tests.test_install_sh scripts.tests.test_ci_lane_workflows scripts.tests.test_ci_product_composer scripts.tests.test_skippy_native_evidence_contract scripts.tests.test_run_event_benchmark_matrix scripts.tests.test_ci_two_node_split_smoke scripts.tests.test_ci_native_toolchain_routing scripts.tests.test_ci_prepare_native_runtime scripts.tests.test_skippy_competitive_benchmark scripts.tests.test_qa_kv_tool_loop_stability scripts.tests.test_llama_canary_agent_manifest_policy scripts.tests.test_release_version_script scripts.tests.test_model_artifact_registry scripts.tests.test_pr_workflow_artifacts scripts.tests.test_hf_skippy_mtp_certify_job scripts.tests.test_ci_source_layout scripts.tests.test_ci_openai_embeddings_smoke scripts.tests.test_check_skippy_workload_candidate scripts.tests.test_resume_crates_release_workflow scripts.tests.test_compare_event_benchmark_matrix scripts.tests.test_llama_canary_family_evidence scripts.tests.test_install_ps1 scripts.tests.test_hf_xet_portability_smoke scripts.tests.test_kv_restart_replay scripts.tests.test_llama_canary_agent_repair_contract scripts.tests.test_run_command_with_timeout scripts.tests.test_synthetic_graph_registry scripts.tests.test_agentic_trajectory_manifest scripts.tests.test_justfile_layout scripts.tests.test_plan_family_battery scripts.tests.test_macos_deployment_target scripts.tests.test_llama_upstream_canary_contract scripts.tests.test_llama_review_regressions scripts.tests.test_skippy_adaptive_prefill_ab scripts.tests.test_canary_family_memory scripts.tests.test_skippy_agentic_prompt_manifest scripts.tests.test_skippy_mixed_prefill_decode_ab scripts.tests.test_ci_sdk_producers scripts.tests.test_llama_canary_mesh_ref scripts.tests.test_llama_native_full_replay scripts.tests.test_ci_artifact_actions scripts.tests.test_depot_canary_workflow scripts.tests.test_skippy_system_one_smoke scripts.tests.test_qa_nightly_stability scripts.tests.test_pr_sibling_cancellation scripts.tests.test_skippy_static_link scripts.tests.test_justfile_release_runtime scripts.tests.test_skippy_dynamic_link scripts.tests.test_release_workflow_artifacts
+    python3 -m unittest scripts.tests.test_cuda_toolkit scripts.tests.test_prepare_llama scripts.tests.test_package_native_runtime scripts.tests.test_depot_authority_sentinel scripts.tests.test_generate_split_certified scripts.tests.test_skippy_llama_parity scripts.tests.test_ci_windows_composition scripts.tests.test_skippy_scheduler_fixtures scripts.tests.test_ci_workflow_artifacts scripts.tests.test_llama_canary_handoff_contract scripts.tests.test_reusable_workflow_runner_trust scripts.tests.test_qa_agent_tool_call_reliability scripts.tests.test_promote_layer_package_snapshot scripts.tests.test_runtime_events_native_gate scripts.tests.test_workload_lane_execution scripts.tests.test_depot_registry_canary_workflow scripts.tests.test_skippy_waiting_prefix_ab scripts.tests.test_build_accelerator_defaults scripts.tests.test_build_ui scripts.tests.test_build_windows scripts.tests.test_skippy_radix_cache_ab scripts.tests.test_kv_nightly_workflow_contract scripts.tests.test_download_skippy_parity_candidates scripts.tests.test_agentic_replay_nightly_workflow scripts.tests.test_ci_pr_canary_workflow scripts.tests.test_install_sh scripts.tests.test_ci_lane_workflows scripts.tests.test_ci_product_composer scripts.tests.test_skippy_native_evidence_contract scripts.tests.test_run_event_benchmark_matrix scripts.tests.test_ci_two_node_split_smoke scripts.tests.test_ci_native_toolchain_routing scripts.tests.test_ci_prepare_native_runtime scripts.tests.test_skippy_competitive_benchmark scripts.tests.test_qa_kv_tool_loop_stability scripts.tests.test_llama_canary_agent_manifest_policy scripts.tests.test_release_version_script scripts.tests.test_pr_workflow_artifacts scripts.tests.test_hf_skippy_mtp_certify_job scripts.tests.test_ci_source_layout scripts.tests.test_ci_openai_embeddings_smoke scripts.tests.test_check_skippy_workload_candidate scripts.tests.test_resume_crates_release_workflow scripts.tests.test_compare_event_benchmark_matrix scripts.tests.test_llama_canary_family_evidence scripts.tests.test_install_ps1 scripts.tests.test_hf_xet_portability_smoke scripts.tests.test_kv_restart_replay scripts.tests.test_llama_canary_agent_repair_contract scripts.tests.test_run_command_with_timeout scripts.tests.test_agentic_trajectory_manifest scripts.tests.test_justfile_layout scripts.tests.test_plan_family_battery scripts.tests.test_llama_upstream_canary_contract scripts.tests.test_llama_review_regressions scripts.tests.test_skippy_adaptive_prefill_ab scripts.tests.test_canary_family_memory scripts.tests.test_skippy_agentic_prompt_manifest scripts.tests.test_skippy_mixed_prefill_decode_ab scripts.tests.test_ci_sdk_producers scripts.tests.test_llama_canary_mesh_ref scripts.tests.test_llama_native_full_replay scripts.tests.test_ci_artifact_actions scripts.tests.test_depot_canary_workflow scripts.tests.test_skippy_system_one_smoke scripts.tests.test_qa_nightly_stability scripts.tests.test_pr_sibling_cancellation scripts.tests.test_skippy_static_link scripts.tests.test_justfile_release_runtime scripts.tests.test_skippy_dynamic_link scripts.tests.test_release_workflow_artifacts
 
 # Run CI/workspace crate-list consistency checks.
 ci-crate-lists:
@@ -198,15 +198,33 @@ ci-automation-contracts:
         --test ci_runner_cache_contract \
         --test family_battery_environment \
         --test family_battery_prepared_source \
+        --test l4_producers \
+        --test lane_l11_optional_tooling \
         --test lane_l12_build_llama \
+        --test lane_l1_ui_delivery \
         --test lane_l2_authority \
+        --test lane_l2_hosted_bootstrap \
         --test lane_l2_quality_contracts \
+        --test lane_l2_registry_pulls \
+        --test lane_l2_runtime_lifecycle \
+        --test lane_l2_runtime_seed \
         --test lane_l3_abi_restore \
         --test lane_l3_cache_metadata \
         --test lane_l3_display_projection \
         --test lane_l3_l2_dispatch \
+        --test lane_l5_adapter_contracts \
+        --test lane_l5_release_product \
+        --test lane_l6_sdk_swift \
+        --test lane_l7_control_plane \
+        --test lane_l7_daemon_lifecycle \
+        --test lane_l7_logging_console \
         --test lane_l7_logging_recovery \
         --test lane_l7_plans \
+        --test lane_l7_sdk_fixture \
+        --test lane_l7_split_recovery \
+        --test lane_l7_standalone \
+        --test lane_l8_smoke \
+        --test laya_cli_fixture \
         --test local_ports \
         --test migration_archives \
         --test migration_bootstrap \
@@ -244,6 +262,8 @@ ci-automation-contracts:
         --test migration_workload_oracle_cli \
         --test migration_xcframework_cli \
         --test openai_smoke_config \
+        --test opencode_config_adapter \
+        --test opencode_fixture_evidence \
         --test prepared_source \
         --test release_inventory_evidence \
         --test release_inventory_provenance \

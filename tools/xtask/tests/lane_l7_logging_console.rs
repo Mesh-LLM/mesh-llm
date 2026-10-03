@@ -11,9 +11,18 @@ fn run(browser_fail: bool) -> (tempfile::TempDir, std::process::Output) {
     let root = tempfile::tempdir().unwrap();
     let location = root.path().canonicalize().unwrap();
     let profile = Path::new(env!("CARGO_BIN_EXE_xtask")).parent().unwrap();
-    let fixture = profile.join("examples/l7_logging_fixture");
+    let fixture = profile.join("examples").join(format!(
+        "l7_logging_fixture{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     std::fs::create_dir(location.join("bin")).unwrap();
-    std::fs::copy(&fixture, location.join("bin/pnpm")).unwrap();
+    std::fs::copy(
+        &fixture,
+        location
+            .join("bin")
+            .join(format!("pnpm{}", std::env::consts::EXE_SUFFIX)),
+    )
+    .unwrap();
     if browser_fail {
         std::fs::write(location.join("browser-fail"), b"fail").unwrap();
     }

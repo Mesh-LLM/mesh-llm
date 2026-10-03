@@ -19,8 +19,12 @@ fn run(marker: Option<&str>) -> (tempfile::TempDir, std::process::Output) {
     let fixture = Path::new(env!("CARGO_BIN_EXE_xtask"))
         .parent()
         .unwrap()
-        .join("examples/l7_control_fixture");
-    let released = location.join("released-fixture");
+        .join("examples")
+        .join(format!(
+            "l7_control_fixture{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+    let released = location.join(format!("released-fixture{}", std::env::consts::EXE_SUFFIX));
     std::fs::copy(&fixture, &released).unwrap();
     use std::io::Write;
     std::fs::OpenOptions::new()
