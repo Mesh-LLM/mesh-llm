@@ -23,6 +23,7 @@ impl<'a> LaneGraph<'a> {
         let graph = Self {
             jobs: tree.get("jobs").map(Node::entries).unwrap_or_default(),
         };
+        graph.summary_cardinality()?;
         graph.identity(lane)?;
         triggers(tree)?;
         concurrency(tree)?;
@@ -31,6 +32,16 @@ impl<'a> LaneGraph<'a> {
             graph.job(name, job)?;
         }
         Ok(graph)
+    }
+
+    fn summary_cardinality(&self) -> Checked<()> {
+        let count = self.jobs.iter().filter(|(name, _)| name == SUMMARY).count();
+        if count != 1 {
+            return Err(format!(
+                "lane workflow must contain exactly one summary job, found {count}"
+            ));
+        }
+        Ok(())
     }
 
     fn job_named(&self, name: &str) -> Option<&'a Node> {
@@ -242,3 +253,7 @@ fn secrets(name: &str, job: &Node) -> Checked<()> {
         )),
     }
 }
+
+#[cfg(test)]
+#[path = "lane_summary_uniqueness_tests.rs"]
+mod summary_uniqueness_tests;

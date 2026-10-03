@@ -47,3 +47,35 @@ fn migration_ci_graph_yaml_reads_the_workflow_subset() {
     let y = tree.get("jobs").and_then(|jobs| jobs.get("y")).expect("y");
     assert_eq!(y.get("needs").map(Node::list), Some(vec!["x"]));
 }
+
+#[test]
+fn workflow_yaml_duplicate_keys_refuse_first_last_ambiguity() {
+    for (source, key) in [
+        ("jobs:\n  summary: {}\n  summary: {}\n", "summary"),
+        ("jobs:\n  quality: {}\n  quality: {}\n", "quality"),
+        ("jobs:\n  summary:\n    if: first\n    if: second\n", "if"),
+        (
+            "jobs:\n  quality:\n    steps:\n      - uses: first\n        uses: second\n",
+            "uses",
+        ),
+    ] {
+        let error = parse(source).unwrap_err();
+        assert!(
+            error.contains(&format!("duplicate workflow key '{key}'")),
+            "{error}"
+        );
+    }
+}
+#[test]
+fn workflow_yaml_same_keys_in_distinct_owners_and_scalar_bodies_remain_valid() {
+    let tree = parse("jobs:\n  first:\n    name: First\n    steps:\n      - run: |\n          name: repeated text\n          name: repeated text\n  second:\n    name: Second\n    steps:\n      - run: echo positive\n").unwrap();
+    let jobs = tree.get("jobs").unwrap();
+    assert_eq!(
+        jobs.get("first").unwrap().get("name").unwrap().text(),
+        Some("First")
+    );
+    assert_eq!(
+        jobs.get("second").unwrap().get("name").unwrap().text(),
+        Some("Second")
+    );
+}

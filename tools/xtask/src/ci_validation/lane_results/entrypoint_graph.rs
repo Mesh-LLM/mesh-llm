@@ -117,6 +117,7 @@ fn entrypoint(tree: &Node, entry: Entry, lane: Lane) -> Checked<()> {
     if jobs != ["plan", "lane", "required"] {
         return Err("jobs must be exactly plan, lane and required".to_owned());
     }
+    native_check_authority(tree)?;
     let plan = job(tree, "plan")?;
     let expected = format!("${{{{ steps.plan.outputs.{}_lane_plan }}}}", lane.name());
     let outputs = plan.get("outputs");
@@ -139,6 +140,31 @@ fn entrypoint(tree: &Node, entry: Entry, lane: Lane) -> Checked<()> {
         return Err("lane job must receive the digest-bound lane plan".to_owned());
     }
     required(job(tree, "required")?, entry, lane)
+}
+
+/// Direct native entrypoints own native required checks, not controller-created IDs.
+/// This binds automatic token capabilities, not arbitrary shell or separate PATs.
+fn native_check_authority(tree: &Node) -> Checked<()> {
+    for name in ["plan", "required"] {
+        if !crate::ci_validation::workflow_guards::job_permission_is_none(
+            tree,
+            job(tree, name)?,
+            "checks",
+        )? {
+            return Err(format!(
+                "native entry job {name} must have effective checks permission none"
+            ));
+        }
+    }
+    let inputs = job(tree, "lane")?.get("with");
+    for name in ["lane_check_id", "overall_check_id", "correlation_id"] {
+        if inputs.is_some_and(|with| with.get(name).is_some()) {
+            return Err(format!(
+                "direct native lane must omit controller-owned {name}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// PR lanes receive no secrets. Trusted main passes each secret by name to
