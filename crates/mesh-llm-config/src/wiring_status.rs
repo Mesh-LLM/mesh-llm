@@ -169,6 +169,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "payments.wallet",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "telemetry.enabled",
         status: WiringStatus::Wired,
         owner: "n/a",
@@ -1636,6 +1643,20 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "plugin.<name>.web_ui_enabled",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
+        path: "plugin.<name>.web_ui_primary_tab",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
+        path: "plugin.<name>.allow_peer_blocks",
         status: WiringStatus::Wired,
         owner: "n/a",
         reason: "",

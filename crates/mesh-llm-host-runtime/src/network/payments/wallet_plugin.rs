@@ -10,10 +10,16 @@
 //! 2. **The wallet identity is pinned.** After the first successful open the
 //!    host writes `payments/wallet-provider.json`. Later opens must return the
 //!    same identity or fail; outstanding ledger state is only meaningful
-//!    against the wallet that created it.
+//!    against the wallet that created it. Which plugin is opened is decided
+//!    in [`selection`].
 //! 3. **Settlement waits carry no IPC deadline.** `wait_for_*` block on the
 //!    plugin for as long as the caller is willing to wait; the caller owns
 //!    cancellation by dropping the future.
+//! 4. **Fees count against the daily budget.** Each `pay` carries the fee
+//!    headroom the host authorized, and whatever fee the wallet reports is
+//!    recorded as spend. A wallet that cannot bound fees can exceed that
+//!    headroom, and so the daily budget and the request's cap; the overrun is
+//!    recorded after the fact, not prevented.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,7 +28,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use mesh_llm_wallet::contract::{
     self, CAPABILITY, Empty, LookupResponse, OpenRequest, OpenResponse, PayRequest,
-    PaymentHashRequest, TransactionsRequest, WalletError, WalletErrorKind, ops,
+    PaymentHashRequest, TransactionsRequest, WalletError, WalletErrorKind, WalletFeatures, ops,
 };
 use mesh_llm_wallet::invoice::Invoice;
 use mesh_llm_wallet::provider::{Balance, PayError, Transaction, WalletProvider};
@@ -33,10 +39,30 @@ use tokio::sync::Mutex;
 
 use crate::plugin::PluginManager;
 
-/// Sub-directory under the payment directory handed to the wallet plugin.
-/// Kept as `lexe/` for on-disk compatibility with wallets provisioned by the
-/// in-process implementation this replaces.
-const WALLET_SUBDIR: &str = "lexe";
+pub mod selection;
+
+use selection::{possible_wallets_not_running, select_wallet_plugin};
+
+/// Parent of every wallet plugin's data directory.
+const WALLETS_SUBDIR: &str = "wallets";
+
+/// The directory handed to `plugin` as its wallet state directory.
+///
+/// Each plugin gets its own, so switching wallets never hands one backend
+/// another's seed or credentials. Plugin names come from operator config, so
+/// anything that could escape the payments directory is refused.
+fn wallet_directory(payment_directory: &Path, plugin: &str) -> Result<PathBuf> {
+    let safe = !plugin.is_empty()
+        && plugin != "."
+        && plugin != ".."
+        && plugin
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !safe {
+        bail!("wallet plugin name '{plugin}' cannot be used as a directory name");
+    }
+    Ok(payment_directory.join(WALLETS_SUBDIR).join(plugin))
+}
 
 /// Where the factory finds the plugin manager. It is resolved at `open()`
 /// time, not construction time: the payment service can be created during
@@ -47,25 +73,30 @@ pub type PluginManagerSlot = Arc<Mutex<Option<PluginManager>>>;
 /// Resolves the `wallet.v1` provider through the plugin manager.
 pub struct PluginWalletFactory {
     plugin_manager: PluginManagerSlot,
+    /// The wallet plugin chosen in `[payments] wallet`, if any.
+    configured_wallet: Option<String>,
 }
 
 impl PluginWalletFactory {
-    pub fn new(plugin_manager: PluginManagerSlot) -> Self {
-        Self { plugin_manager }
+    pub fn new(plugin_manager: PluginManagerSlot, configured_wallet: Option<String>) -> Self {
+        Self {
+            plugin_manager,
+            configured_wallet,
+        }
     }
 
-    fn wallet_directory(payment_directory: &Path) -> PathBuf {
-        payment_directory.join(WALLET_SUBDIR)
-    }
-
-    /// A wallet provisioned by the in-process implementation this replaces
-    /// has a seed but no pin yet. It must still count as a wallet: paid
-    /// routing and the legacy-bridge ingress guard both key off this, and
-    /// reading "no wallet" after an upgrade would silently disable both.
-    fn legacy_wallet_present(payment_directory: &Path) -> bool {
-        Self::wallet_directory(payment_directory)
-            .join("seedphrase.txt")
-            .is_file()
+    /// Names of the running plugins that serve `wallet.v1`.
+    async fn running_wallet_plugins(plugin_manager: &PluginManager) -> Result<Vec<String>> {
+        let mut names: Vec<String> = plugin_manager
+            .capability_providers()
+            .await?
+            .into_iter()
+            .filter(|provider| provider.capability == CAPABILITY && provider.available)
+            .map(|provider| provider.plugin_name)
+            .collect();
+        names.sort();
+        names.dedup();
+        Ok(names)
     }
 
     async fn plugin_manager(&self) -> Result<PluginManager> {
@@ -82,22 +113,27 @@ impl WalletFactory for PluginWalletFactory {
         // `open` refuses to proceed and reports why, which is safer than
         // pretending there is nothing to protect.
         !matches!(WalletPin::load(payment_directory), Ok(None))
-            || Self::legacy_wallet_present(payment_directory)
     }
 
     async fn open(&self, payment_directory: &Path) -> Result<Arc<dyn WalletProvider>> {
         let plugin_manager = self.plugin_manager().await?;
-        let provider = plugin_manager
-            .available_provider_for_capability(CAPABILITY)
-            .await?
-            .ok_or_else(|| {
-                anyhow!("no wallet plugin is running (capability '{CAPABILITY}' unavailable)")
-            })?;
+        // Read the pin before contacting any plugin so a corrupt pin is
+        // reported without provisioning anything.
+        let pin = WalletPin::load(payment_directory)?;
+        let running = Self::running_wallet_plugins(&plugin_manager).await?;
+        let down = possible_wallets_not_running(&plugin_manager.list().await);
+        let plugin_name = select_wallet_plugin(
+            &running,
+            &down,
+            pin.as_ref(),
+            self.configured_wallet.as_deref(),
+        )?;
         let wallet = PluginWalletProvider {
             plugin_manager,
-            plugin_name: provider.plugin_name,
+            wallet_directory: wallet_directory(payment_directory, &plugin_name)?,
+            plugin_name,
             payment_directory: payment_directory.to_path_buf(),
-            wallet_directory: Self::wallet_directory(payment_directory),
+            features: std::sync::Mutex::new(WalletFeatures::default()),
             open_lock: Mutex::new(()),
         };
         wallet.open_and_pin().await?;
@@ -111,6 +147,8 @@ pub struct PluginWalletProvider {
     plugin_name: String,
     payment_directory: PathBuf,
     wallet_directory: PathBuf,
+    /// What the plugin reported it supports at the most recent open.
+    features: std::sync::Mutex<WalletFeatures>,
     /// Serializes re-opens. After a plugin restart every in-flight request
     /// observes `not_open` at once; only one of them should drive the open
     /// and the pin check.
@@ -148,7 +186,8 @@ impl PluginWalletProvider {
                     bail!(
                         "wallet identity mismatch: ledger is pinned to plugin '{}' wallet '{}', \
                          but plugin '{}' opened wallet '{}'. Refusing to settle against a \
-                         different wallet.",
+                         different wallet; `mesh-llm wallet unpin` switches wallets once no \
+                         payment is outstanding.",
                         pin.plugin,
                         pin.wallet_id,
                         self.plugin_name,
@@ -167,7 +206,18 @@ impl PluginWalletProvider {
                 .context("persist wallet pin")?;
             }
         }
+        *self
+            .features
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = response.features;
         Ok(())
+    }
+
+    fn features(&self) -> WalletFeatures {
+        self.features
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Invoke one operation on the bound plugin and decode the result.
@@ -246,6 +296,12 @@ impl WalletProvider for PluginWalletProvider {
     }
 
     async fn create_invoice(&self, amount_msat: Option<u64>, expiry_secs: u32) -> Result<Invoice> {
+        if amount_msat.is_none() && !self.features().amountless_invoices {
+            bail!(
+                "wallet plugin '{}' cannot create amount-less invoices; specify an amount",
+                self.plugin_name
+            );
+        }
         self.call_reopening(
             ops::CREATE_INVOICE,
             &contract::CreateInvoiceRequest {

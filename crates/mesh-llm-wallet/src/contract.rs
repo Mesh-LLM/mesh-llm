@@ -2,8 +2,9 @@
 //!
 //! A wallet plugin advertises [`CAPABILITY`] in its manifest and serves the
 //! operations below over the ordinary plugin operation transport. The host
-//! resolves the provider by capability, never by plugin name, so any plugin
-//! that speaks this contract can back paid inference.
+//! finds wallet plugins by this capability, so any plugin that speaks this
+//! contract can back paid inference; which one does is decided by the wallet
+//! pin and the operator's configuration.
 //!
 //! Every shape here is additive JSON: unknown fields are ignored on both
 //! sides, and new optional fields may be added without a version bump.
@@ -11,9 +12,9 @@
 //! `wallet.v2`.
 //!
 //! The host, not the plugin, owns token metering, output gating, the ledger,
-//! budgets, settlement bookkeeping, invoice lifetimes and fee caps. The plugin
-//! only turns wallet intents into wallet facts: invoices, payments, balances
-//! and settlement observation.
+//! budgets, settlement bookkeeping, invoice lifetimes and fee headroom. The
+//! plugin only turns wallet intents into wallet facts: invoices, payments,
+//! balances and settlement observation.
 
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +71,34 @@ pub struct OpenResponse {
     pub identity: WalletIdentity,
     /// True if this call created a brand-new wallet rather than loading one.
     pub created: bool,
+    /// What this wallet can guarantee. Absent from plugins that predate the
+    /// field; those were written against the original contract, whose
+    /// defaults [`WalletFeatures::default`] reproduces.
+    #[serde(default)]
+    pub features: WalletFeatures,
+}
+
+/// Capabilities that differ between wallet backends. The host checks them to
+/// refuse a request the wallet cannot serve before sending it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WalletFeatures {
+    /// Whether `wallet_create_invoice` accepts `amount_msat: None`.
+    #[serde(default = "default_amountless_invoices")]
+    pub amountless_invoices: bool,
+}
+
+impl Default for WalletFeatures {
+    /// The guarantees the original `wallet.v1` contract required of every
+    /// plugin.
+    fn default() -> Self {
+        Self {
+            amountless_invoices: default_amountless_invoices(),
+        }
+    }
+}
+
+fn default_amountless_invoices() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -229,6 +258,17 @@ mod tests {
         let error = WalletError::new(WalletErrorKind::Uncertain, "socket closed");
         let json = serde_json::to_string(&error).unwrap();
         assert_eq!(WalletError::decode(&json), error);
+    }
+
+    #[test]
+    fn open_response_without_features_gets_original_contract_guarantees() {
+        let response: OpenResponse = serde_json::from_value(serde_json::json!({
+            "identity": {"wallet_id": "w", "provider": "p", "network": "mainnet"},
+            "created": false,
+        }))
+        .unwrap();
+        assert_eq!(response.features, WalletFeatures::default());
+        assert!(response.features.amountless_invoices);
     }
 
     #[test]

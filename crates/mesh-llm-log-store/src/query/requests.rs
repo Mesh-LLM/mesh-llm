@@ -31,6 +31,23 @@ impl LogStore {
         }
     }
 
+    /// Resolve the request that carries the given exchange join-key, if any
+    /// — the read side of a deep link keyed on the exchange id. `exchange_id` is
+    /// unique per exchange (minted once, host-side), so at most one summary
+    /// row can ever match.
+    pub fn query_request_by_exchange_id(
+        &self,
+        exchange_id: &str,
+    ) -> Result<Option<RequestRecordWithCaller>, LogStoreError> {
+        let connection = self.conn();
+        let sql = format!("SELECT {REQUEST_COLUMNS} FROM summaries WHERE exchange_id = ? LIMIT 1");
+        match connection.query_row(&sql, [exchange_id], request_record_with_caller) {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(LogStoreError::QueryFailed(error.to_string())),
+        }
+    }
+
     pub fn query_requests_by_ids(
         &self,
         request_ids: &[String],

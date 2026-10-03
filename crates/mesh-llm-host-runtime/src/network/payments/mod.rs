@@ -5,6 +5,7 @@ pub(crate) mod client;
 mod delivery;
 pub mod engine;
 mod gate;
+pub(crate) mod lifecycle;
 pub(crate) mod node_ext;
 pub(crate) mod request;
 mod server;

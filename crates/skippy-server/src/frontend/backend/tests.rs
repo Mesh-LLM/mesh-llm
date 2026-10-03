@@ -1348,6 +1348,7 @@ struct RecordingHookPolicy {
     deny: bool,
     hang_before_dispatch: bool,
     terminals: Mutex<Vec<HookTerminalRecord>>,
+    terminal_exchange_ids: Mutex<Vec<String>>,
 }
 
 #[async_trait]
@@ -1368,9 +1369,13 @@ impl OpenAiHookPolicy for RecordingHookPolicy {
     async fn on_chat_completion_terminal(
         &self,
         _request: &ChatCompletionRequest,
-        _exchange_id: &str,
+        exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
+        self.terminal_exchange_ids
+            .lock()
+            .unwrap()
+            .push(exchange_id.to_string());
         let record = match outcome {
             ChatCompletionOutcome::Success { response } => HookTerminalRecord::Success {
                 model: response.model.clone(),
@@ -1436,6 +1441,65 @@ async fn stage_backend_success_fires_terminal_exactly_once() {
             model: "hooks-test-model".to_string()
         }]
     );
+}
+
+/// the `exchange_id` a successful chat completion
+/// response carries must be the exact same value the terminal hook observed
+/// for this exchange — the shared join key that the Logs record and any other
+/// consumer of the exchange events correlate on.
+#[tokio::test]
+async fn stage_backend_success_attaches_the_same_exchange_id_the_terminal_hook_observed() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let response = backend
+        .chat_completion_with_hooks(request, |request| async move {
+            Ok(ChatCompletionResponse::new(
+                request.model,
+                "ok",
+                Usage::new(1, 1),
+            ))
+        })
+        .await
+        .expect("fake dispatch succeeds");
+
+    let terminal_exchange_ids = policy.terminal_exchange_ids.lock().unwrap();
+    assert_eq!(terminal_exchange_ids.len(), 1);
+    let observed_exchange_id = &terminal_exchange_ids[0];
+    assert!(!observed_exchange_id.is_empty());
+    assert_eq!(
+        response.exchange_id.as_deref(),
+        Some(observed_exchange_id.as_str())
+    );
+}
+
+/// A chat completion whose request never enables mesh hooks never arms a
+/// `TerminalGuard` — there is no tracked exchange, so the
+/// response must carry no join-key rather than a dangling one.
+#[tokio::test]
+async fn stage_backend_success_without_mesh_hooks_carries_no_exchange_id() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "hooks-test-model",
+        "messages": [{"role": "user", "content": "hi"}],
+    }))
+    .expect("minimal chat completion request");
+
+    let response = backend
+        .chat_completion_with_hooks(request, |request| async move {
+            Ok(ChatCompletionResponse::new(
+                request.model,
+                "ok",
+                Usage::new(1, 1),
+            ))
+        })
+        .await
+        .expect("fake dispatch succeeds");
+
+    assert!(policy.terminal_exchange_ids.lock().unwrap().is_empty());
+    assert_eq!(response.exchange_id, None);
 }
 
 #[tokio::test]
@@ -1537,9 +1601,10 @@ async fn stage_backend_stream_that_ends_normally_fires_stream_completed_terminal
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
+    let context = OpenAiRequestContext::new();
 
     let mut stream = backend
-        .chat_completion_stream_with_hooks(request, |request| async move {
+        .chat_completion_stream_with_hooks(request, &context, |request| async move {
             Ok(Box::pin(futures_util::stream::iter(vec![
                 Ok(ChatCompletionChunk::delta(request.model.clone(), "hi")),
                 Ok(ChatCompletionChunk::done(request.model)),
@@ -1558,6 +1623,11 @@ async fn stage_backend_stream_that_ends_normally_fires_stream_completed_terminal
 
     let terminals = policy.terminals.lock().unwrap();
     assert_eq!(terminals.as_slice(), [HookTerminalRecord::StreamCompleted]);
+    let exchange_ids = policy.terminal_exchange_ids.lock().unwrap();
+    assert_eq!(
+        context.exchange_id().as_deref(),
+        exchange_ids.first().map(String::as_str)
+    );
 }
 
 /// The explicit case this wiring exists for: a client disconnects (or an
@@ -1569,9 +1639,10 @@ async fn stage_backend_stream_dropped_mid_stream_fires_exactly_one_cancelled_ter
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
+    let context = OpenAiRequestContext::new();
 
     let mut stream = backend
-        .chat_completion_stream_with_hooks(request, |request| async move {
+        .chat_completion_stream_with_hooks(request, &context, |request| async move {
             let first = ChatCompletionChunk::delta(request.model, "partial");
             Ok(Box::pin(
                 futures_util::stream::once(async move { Ok(first) })
@@ -1594,9 +1665,10 @@ async fn stage_backend_stream_error_chunk_fires_error_terminal_exactly_once() {
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
+    let context = OpenAiRequestContext::new();
 
     let mut stream = backend
-        .chat_completion_stream_with_hooks(request, |request| async move {
+        .chat_completion_stream_with_hooks(request, &context, |request| async move {
             Ok(Box::pin(futures_util::stream::iter(vec![
                 Ok(ChatCompletionChunk::delta(request.model, "hi")),
                 Err(OpenAiError::backend("upstream exploded")),
@@ -1626,9 +1698,10 @@ async fn stage_backend_stream_denied_never_dispatches_and_fires_terminal_exactly
     });
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
+    let context = OpenAiRequestContext::new();
 
     let error = match backend
-        .chat_completion_stream_with_hooks(request, |_request| async move {
+        .chat_completion_stream_with_hooks(request, &context, |_request| async move {
             panic!("a denied request must never reach dispatch")
         })
         .await

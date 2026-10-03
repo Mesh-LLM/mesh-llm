@@ -60,6 +60,10 @@ pub enum ControlCommand {
     Unblock {
         peer: String,
     },
+    /// Forget which wallet backs this ledger so a different wallet plugin can
+    /// be used. Refused while any payment could still settle in the pinned
+    /// wallet, or while this process has the wallet open. Ledger-only.
+    Unpin,
     Policy {
         value: Option<Policy>,
     },

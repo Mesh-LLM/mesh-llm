@@ -30,6 +30,10 @@ pub(crate) struct SplitReadinessNodeInput {
     pub(crate) model_source: Option<String>,
     pub(crate) stage_protocol_generation_supported: bool,
     pub(crate) artifact_transfer_supported: bool,
+    /// The operator blocked this peer (or holds a plugin's block). Split
+    /// stages receive the user's content, so a blocked peer is never a
+    /// candidate.
+    pub(crate) blocked: bool,
     pub(crate) stage_path: SplitStagePathSnapshot,
 }
 
@@ -130,12 +134,15 @@ impl MeshApi {
             model_source: None,
             stage_protocol_generation_supported: true,
             artifact_transfer_supported: true,
+            blocked: false,
             stage_path: SplitStagePathSnapshot::unknown(),
         };
         let mut peers = Vec::new();
+        let blocked_now_ms = crate::network::peer_blocks::now_ms();
         for peer in node.peers().await {
+            let blocked = node.peer_blocks.is_blocked(&peer.id, blocked_now_ms);
             let stage_path = node.split_stage_path_snapshot(peer.id).await;
-            peers.push(peer_readiness_input(peer, stage_path));
+            peers.push(peer_readiness_input(peer, stage_path, blocked));
         }
         let active_topology_count = node.stage_topologies().await.len();
         let active_stage_count = node
@@ -197,6 +204,7 @@ pub(crate) fn build_split_readiness_report(input: SplitReadinessInput) -> SplitR
 fn peer_readiness_input(
     peer: PeerInfo,
     stage_path: SplitStagePathSnapshot,
+    blocked: bool,
 ) -> SplitReadinessNodeInput {
     SplitReadinessNodeInput {
         node_id: peer.id.to_string(),
@@ -212,6 +220,7 @@ fn peer_readiness_input(
         model_source: peer.model_source,
         stage_protocol_generation_supported: peer.stage_protocol_generation_supported,
         artifact_transfer_supported: peer.artifact_transfer_supported,
+        blocked,
         stage_path,
     }
 }
@@ -228,6 +237,9 @@ fn split_node_exclusion_reason(
     model_ref: &str,
     node: &SplitReadinessNodeInput,
 ) -> Option<SplitReadinessExclusionReason> {
+    if node.blocked {
+        return Some(SplitReadinessExclusionReason::Blocked);
+    }
     if node.role == SplitReadinessNodeRole::Client {
         return Some(SplitReadinessExclusionReason::Client);
     }
@@ -569,8 +581,9 @@ fn split_capacity_shortfall_blocker(
     })
 }
 
-const fn split_readiness_exclusion_reason_order() -> [SplitReadinessExclusionReason; 9] {
+const fn split_readiness_exclusion_reason_order() -> [SplitReadinessExclusionReason; 10] {
     [
+        SplitReadinessExclusionReason::Blocked,
         SplitReadinessExclusionReason::StageControlUnreachable,
         SplitReadinessExclusionReason::PackageManifestMismatch,
         SplitReadinessExclusionReason::ArtifactTransferUnavailable,
@@ -711,6 +724,7 @@ fn model_matches(candidate: &str, model_ref: &str) -> bool {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SplitReadinessExclusionReason {
+    Blocked,
     Client,
     MissingVram,
     MissingModelInterest,
@@ -725,6 +739,7 @@ enum SplitReadinessExclusionReason {
 impl SplitReadinessExclusionReason {
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Blocked => "blocked",
             Self::Client => "client",
             Self::MissingVram => "missing_vram",
             Self::MissingModelInterest => "missing_model_interest",
@@ -739,6 +754,9 @@ impl SplitReadinessExclusionReason {
 
     const fn recommendation(self) -> &'static str {
         match self {
+            Self::Blocked => {
+                "Unblock this peer, or remove the plugin block, to let it join split serving."
+            }
             Self::Client => "Run this peer in serve mode if it should contribute compute.",
             Self::MissingVram => {
                 "Check GPU visibility or pass a lower --max-vram only after confirming the backend is detected."
@@ -810,6 +828,7 @@ mod tests {
             model_source: None,
             stage_protocol_generation_supported: true,
             artifact_transfer_supported: true,
+            blocked: false,
             stage_path: crate::mesh::SplitStagePathSnapshot::direct(Some(4)),
         }
     }
@@ -1101,5 +1120,32 @@ mod tests {
             report.blockers[0].short_node_ids,
             vec!["missinga".to_string(), "missingb".to_string()]
         );
+    }
+
+    #[test]
+    fn split_readiness_reports_a_blocked_peer_as_excluded() {
+        let mut blocked = node(
+            "peer000000000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        blocked.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
+        blocked.blocked = true;
+
+        let report = build_split_readiness_report(SplitReadinessInput {
+            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
+            peers: vec![blocked],
+            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
+            active_topology_count: 0,
+            active_stage_count: 0,
+        });
+
+        assert_eq!(report.participant_count, 1, "only the local node remains");
+        assert_eq!(report.exclusions.len(), 1);
+        assert_eq!(report.exclusions[0].reason, "blocked");
+        assert_eq!(report.exclusions[0].vram_bytes, 8_000_000_000);
+        assert_eq!(report.blockers[0].reason, "blocked");
+        assert_eq!(report.blockers[0].count, 1);
     }
 }

@@ -20,13 +20,14 @@ use tokio::sync::Mutex;
 use crate::backend::{OpenedWallet, WalletBackend};
 use crate::contract::{
     CAPABILITY, CreateInvoiceRequest, Empty, LookupResponse, OpenRequest, OpenResponse, PayRequest,
-    PaymentHashRequest, TransactionsRequest, WalletError, WalletIdentity, ops,
+    PaymentHashRequest, TransactionsRequest, WalletError, WalletFeatures, WalletIdentity, ops,
 };
 use crate::provider::WalletProvider;
 
 struct OpenState {
     directory: PathBuf,
     identity: WalletIdentity,
+    features: WalletFeatures,
     provider: Arc<dyn WalletProvider>,
 }
 
@@ -70,12 +71,14 @@ impl<B: WalletBackend> WalletServer<B> {
             return Ok(OpenResponse {
                 identity: state.identity.clone(),
                 created: false,
+                features: state.features.clone(),
             });
         }
         let OpenedWallet {
             identity,
             provider,
             created,
+            features,
         } = self
             .backend
             .open(&directory)
@@ -84,9 +87,14 @@ impl<B: WalletBackend> WalletServer<B> {
         *self.open.lock().await = Some(OpenState {
             directory,
             identity: identity.clone(),
+            features: features.clone(),
             provider,
         });
-        Ok(OpenResponse { identity, created })
+        Ok(OpenResponse {
+            identity,
+            created,
+            features,
+        })
     }
 }
 
@@ -198,7 +206,7 @@ pub fn wallet_operation_router<B: WalletBackend>(server: &Arc<WalletServer<B>>) 
         &mut router,
         server,
         ops::PAY,
-        "Pay an invoice within a fee cap.",
+        "Pay an invoice, keeping fees within the given headroom where the wallet can.",
         |s, req: PayRequest| async move {
             s.provider()
                 .await?
@@ -357,6 +365,9 @@ mod tests {
                 },
                 provider: Arc::new(FakeProvider),
                 created,
+                features: WalletFeatures {
+                    amountless_invoices: false,
+                },
             })
         }
     }
@@ -386,6 +397,10 @@ mod tests {
             .await
             .unwrap();
         assert!(first.created);
+        assert!(
+            !first.features.amountless_invoices,
+            "backend features are reported"
+        );
         let second = server
             .open(OpenRequest {
                 directory: dir.display().to_string(),

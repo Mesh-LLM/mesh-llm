@@ -171,6 +171,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         env: Default::default(),
         startup: Default::default(),
         web_ui_enabled: None,
+        web_ui_primary_tab: None,
         installed_metadata: Some(metadata),
     }))
 }

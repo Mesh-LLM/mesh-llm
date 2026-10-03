@@ -409,7 +409,8 @@ pub(crate) async fn exchange_tracked(
     )
     .await?;
     let observations =
-        super::paid_events::Observations::for_exchange(evidence.as_ref(), &terms).await;
+        crate::network::payments::lifecycle::Observations::for_exchange(evidence.as_ref(), &terms)
+            .await;
     observations.accepted(terms.max_total_msat);
     observations.invoice(0, &invoice);
     let mut accounted_msat = 0u64;

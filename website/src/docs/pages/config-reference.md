@@ -78,6 +78,7 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
+| `payments.wallet` | string | unset: the only running `wallet.v1` plugin | node-level | process restart | wired | none |
 | `telemetry.enabled` | boolean | `false` | node-level | process restart | wired | none |
 | `telemetry.service_name` | string | `mesh-llm` | node-level | process restart | wired | none |
 | `telemetry.endpoint` | URL | unset | node-level | process restart | wired | none |
@@ -376,6 +377,8 @@ sampling at the backend when it selects mode `1` or `2`.
 | `plugin.<name>.name` | string | required | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.enabled` | boolean | `true` | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.web_ui_enabled` | boolean | unset (follows the plugin's declared default) | plugin entry | plugin process restart | wired | none |
+| `plugin.<name>.web_ui_primary_tab` | boolean | unset (`false`; primary placement stays off until explicitly enabled) | plugin entry | plugin process restart | wired | none |
+| `plugin.<name>.allow_peer_blocks` | boolean | unset (`false`; the plugin's peer block requests are refused until explicitly enabled) | plugin entry | applies dynamically | wired | none |
 | `plugin.<name>.command` | string | required unless `url` is set | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.args` | array of string | `[]` | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.url` | URL | unset | plugin entry | plugin process restart | wired for HTTP(S) adapter URLs; `tcp://` control is rejected because no authenticated capability handshake exists | none |

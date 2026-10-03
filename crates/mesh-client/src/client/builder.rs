@@ -11,9 +11,18 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Notify;
+
+mod openai_stream;
 
 type CancelFlagMap =
     Arc<Mutex<HashMap<String, (Arc<AtomicBool>, Arc<dyn crate::events::EventListener>)>>>;
+type OpenAiStreamMap = Arc<Mutex<HashMap<String, ActiveOpenAiStream>>>;
+
+struct ActiveOpenAiStream {
+    cancelled: Arc<AtomicBool>,
+    cancel_notify: Arc<Notify>,
+}
 
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 const MAX_MESH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
@@ -113,6 +122,7 @@ impl ClientBuilder {
             config: self.config,
             connected: false,
             cancel_flags: Arc::new(Mutex::new(HashMap::new())),
+            openai_streams: Arc::new(Mutex::new(HashMap::new())),
             listeners: Arc::new(Mutex::new(HashMap::new())),
             reconnect_attempts: 0,
             user_disconnected: false,
@@ -125,6 +135,7 @@ pub struct MeshClient {
     pub(crate) config: ClientConfig,
     pub(crate) connected: bool,
     pub(crate) cancel_flags: CancelFlagMap,
+    openai_streams: OpenAiStreamMap,
     pub listeners: Arc<Mutex<HashMap<String, Arc<dyn crate::events::EventListener>>>>,
     pub reconnect_attempts: u32,
     pub user_disconnected: bool,
@@ -153,8 +164,99 @@ impl MeshClient {
             .map(|model| Model {
                 id: model.id.clone(),
                 name: model.id,
+                context_length: model.metadata.context_length,
             })
             .collect())
+    }
+
+    /// Send an OpenAI-compatible JSON request without projecting it into a
+    /// language-specific SDK type.
+    ///
+    /// This is the forward-compatible path for agent payloads. Tool schemas,
+    /// tool calls, multimodal content, structured-output settings, usage, and
+    /// future OpenAI fields are preserved in the JSON body and response.
+    pub async fn openai_request(
+        &self,
+        path: &str,
+        body_json: String,
+    ) -> Result<OpenAiResponse, ClientError> {
+        let body_json =
+            prepare_openai_request(path, &body_json, false).map_err(ClientError::Endpoint)?;
+
+        let response = request_post_bytes(&self.config, path, body_json)
+            .await
+            .map_err(ClientError::Endpoint)?;
+        parse_openai_response(&response).map_err(ClientError::Endpoint)
+    }
+
+    /// Start a protocol-preserving OpenAI-compatible SSE request.
+    ///
+    /// Complete SSE events are delivered without projecting their JSON shape,
+    /// so text, reasoning, tool-call argument deltas, usage, and future event
+    /// types remain available to language bindings.
+    pub fn openai_stream(
+        &self,
+        path: &str,
+        body_json: String,
+        listener: Arc<dyn crate::events::OpenAiStreamListener>,
+    ) -> Result<RequestId, ClientError> {
+        let body_json =
+            prepare_openai_request(path, &body_json, true).map_err(ClientError::Endpoint)?;
+        let request_id = RequestId::new();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_notify = Arc::new(Notify::new());
+        self.openai_streams.lock().unwrap().insert(
+            request_id.0.clone(),
+            ActiveOpenAiStream {
+                cancelled: cancelled.clone(),
+                cancel_notify: cancel_notify.clone(),
+            },
+        );
+
+        let config = self.config.clone();
+        let path = path.to_string();
+        let id = request_id.0.clone();
+        let streams = self.openai_streams.clone();
+        self.runtime.handle().spawn(async move {
+            let result = openai_stream::run(
+                &config,
+                &path,
+                body_json,
+                &id,
+                cancelled.clone(),
+                cancel_notify,
+                listener.clone(),
+            )
+            .await;
+            streams.lock().unwrap().remove(&id);
+            let was_cancelled = cancelled.load(Ordering::Acquire)
+                || result.as_ref().is_err_and(|error| error.cancelled);
+            if was_cancelled {
+                listener.on_event(crate::events::OpenAiStreamEvent::Failed {
+                    request_id: id,
+                    status_code: None,
+                    error: "cancelled".to_string(),
+                    body: None,
+                });
+            } else {
+                match result {
+                    Ok(()) => {
+                        listener.on_event(crate::events::OpenAiStreamEvent::Completed {
+                            request_id: id,
+                        });
+                    }
+                    Err(error) => {
+                        listener.on_event(crate::events::OpenAiStreamEvent::Failed {
+                            request_id: id,
+                            status_code: error.status_code,
+                            error: error.message,
+                            body: error.body,
+                        });
+                    }
+                }
+            }
+        });
+        Ok(request_id)
     }
 
     /// Start a chat completion request. Sync — returns a `RequestId` immediately.
@@ -279,7 +381,8 @@ impl MeshClient {
     }
 
     /// Cancel an in-flight request. No-op if the `request_id` is unknown.
-    /// Emits `Event::Failed { error: "cancelled" }` to the request's listener when found.
+    /// Emits `Event::Failed { error: "cancelled" }` to a legacy request listener when found.
+    /// OpenAI stream cancellation is emitted by the stream task after it stops producing events.
     pub fn cancel(&self, request_id: RequestId) {
         let entry = self.cancel_flags.lock().unwrap().remove(&request_id.0);
         if let Some((flag, listener)) = entry {
@@ -288,6 +391,13 @@ impl MeshClient {
                 request_id: request_id.0.clone(),
                 error: "cancelled".to_string(),
             });
+            return;
+        }
+
+        let entry = self.openai_streams.lock().unwrap().remove(&request_id.0);
+        if let Some(active) = entry {
+            active.cancelled.store(true, Ordering::Release);
+            active.cancel_notify.notify_one();
         }
     }
 
@@ -300,6 +410,7 @@ impl MeshClient {
     }
 
     pub async fn disconnect(&mut self) {
+        self.cancel_openai_streams();
         self.user_disconnected = true;
         self.connected = false;
         self.emit_event(crate::events::Event::Disconnected {
@@ -324,6 +435,14 @@ impl MeshClient {
             .unwrap()
             .insert(listener_id.clone(), listener);
         listener_id
+    }
+
+    fn cancel_openai_streams(&self) {
+        let streams = std::mem::take(&mut *self.openai_streams.lock().unwrap());
+        for active in streams.into_values() {
+            active.cancelled.store(true, Ordering::Release);
+            active.cancel_notify.notify_one();
+        }
     }
 
     pub fn remove_event_listener(&self, listener_id: &str) {
@@ -359,10 +478,18 @@ pub struct ResponsesRequest {
     pub input: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenAiResponse {
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Model {
     pub id: String,
     pub name: String,
+    pub context_length: Option<u32>,
 }
 
 pub struct Status {
@@ -400,6 +527,13 @@ struct ModelsResponse {
 #[derive(Deserialize)]
 struct ModelEntry {
     id: String,
+    #[serde(default)]
+    metadata: ModelMetadata,
+}
+
+#[derive(Default, Deserialize)]
+struct ModelMetadata {
+    context_length: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -601,21 +735,109 @@ async fn http_request(base_url: &str, request: String) -> Result<Vec<u8>, String
 }
 
 fn parse_json_response<T: for<'de> Deserialize<'de>>(response: &[u8]) -> Result<T, String> {
+    let response = parse_openai_response(response)?;
+    if !(200..300).contains(&response.status_code) {
+        return Err(format!(
+            "HTTP request failed with status {}: {}",
+            response.status_code, response.body
+        ));
+    }
+    serde_json::from_str(&response.body).map_err(|err| format!("decode JSON: {err}"))
+}
+
+fn validate_openai_path(path: &str) -> Result<(), String> {
+    if !path.starts_with("/v1/") {
+        return Err("OpenAI request path must start with /v1/".to_string());
+    }
+    if path.contains("..")
+        || path
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b' ')
+    {
+        return Err("OpenAI request path contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
+fn prepare_openai_request(path: &str, body_json: &str, stream: bool) -> Result<String, String> {
+    validate_openai_path(path)?;
+    let mut body = serde_json::from_str::<serde_json::Value>(body_json)
+        .map_err(|error| format!("invalid JSON request body: {error}"))?;
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| "OpenAI request body must be a JSON object".to_string())?;
+    object.insert("stream".to_string(), serde_json::Value::Bool(stream));
+    serde_json::to_string(&body).map_err(|error| format!("serialize JSON request body: {error}"))
+}
+
+fn parse_openai_response(response: &[u8]) -> Result<OpenAiResponse, String> {
     let header_end = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
         .ok_or_else(|| "malformed HTTP response".to_string())?;
-    let status_line_end = response
-        .windows(2)
-        .position(|window| window == b"\r\n")
-        .ok_or_else(|| "missing HTTP status line".to_string())?;
-    let status_line = std::str::from_utf8(&response[..status_line_end])
-        .map_err(|err| format!("invalid HTTP status line: {err}"))?;
-    if !status_line.contains(" 200 ") {
-        let body = String::from_utf8_lossy(&response[header_end + 4..]).to_string();
-        return Err(format!("HTTP request failed: {status_line}: {body}"));
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut parsed = httparse::Response::new(&mut headers);
+    let status = parsed
+        .parse(&response[..header_end + 4])
+        .map_err(|error| format!("parse HTTP response: {error}"))?;
+    if !status.is_complete() {
+        return Err("incomplete HTTP response headers".to_string());
     }
-    serde_json::from_slice(&response[header_end + 4..]).map_err(|err| format!("decode JSON: {err}"))
+    let status_code = parsed
+        .code
+        .ok_or_else(|| "HTTP response is missing a status code".to_string())?;
+    let content_type = parsed
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("content-type"))
+        .map(|header| String::from_utf8_lossy(header.value).trim().to_string());
+    let is_chunked = parsed.headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("transfer-encoding")
+            && String::from_utf8_lossy(header.value)
+                .split(',')
+                .any(|value| value.trim().eq_ignore_ascii_case("chunked"))
+    });
+    let body_bytes = &response[header_end + 4..];
+    let body_bytes = if is_chunked {
+        decode_chunked_body(body_bytes)?
+    } else {
+        body_bytes.to_vec()
+    };
+    let body = String::from_utf8(body_bytes)
+        .map_err(|error| format!("OpenAI response body is not UTF-8: {error}"))?;
+    Ok(OpenAiResponse {
+        status_code,
+        content_type,
+        body,
+    })
+}
+
+fn decode_chunked_body(mut input: &[u8]) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    loop {
+        let line_end = input
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .ok_or_else(|| "malformed chunked response: missing size terminator".to_string())?;
+        let size_text = std::str::from_utf8(&input[..line_end])
+            .map_err(|error| format!("invalid chunk size: {error}"))?;
+        let size_text = size_text.split(';').next().unwrap_or(size_text).trim();
+        let size = usize::from_str_radix(size_text, 16)
+            .map_err(|error| format!("invalid chunk size '{size_text}': {error}"))?;
+        input = &input[line_end + 2..];
+        if size == 0 {
+            break;
+        }
+        let chunk_end = size
+            .checked_add(2)
+            .ok_or_else(|| "malformed chunked response: chunk size overflows usize".to_string())?;
+        if input.len() < chunk_end || &input[size..chunk_end] != b"\r\n" {
+            return Err("malformed chunked response: incomplete chunk".to_string());
+        }
+        output.extend_from_slice(&input[..size]);
+        input = &input[chunk_end..];
+    }
+    Ok(output)
 }
 
 fn host_header(base_url: &str) -> Result<String, String> {
@@ -723,6 +945,140 @@ mod socket_addr_tests {
     fn rejects_empty_authority() {
         assert!(socket_addr("http://").is_err());
         assert!(socket_addr("").is_err());
+    }
+}
+
+#[cfg(test)]
+mod openai_response_tests {
+    use super::{
+        decode_chunked_body, parse_openai_response, prepare_openai_request, validate_openai_path,
+    };
+
+    #[test]
+    fn parses_json_response_without_projecting_agent_fields() {
+        let body = r#"{"choices":[{"message":{"tool_calls":[{"id":"call_1","function":{"name":"search","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"total_tokens":12}}"#;
+        let wire = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = parse_openai_response(wire.as_bytes()).expect("response parses");
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.content_type.as_deref(), Some("application/json"));
+        assert_eq!(response.body, body);
+    }
+
+    #[test]
+    fn decodes_chunked_sse_without_losing_tool_call_deltas() {
+        let chunk = b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\"}]}}]}\n\n";
+        let mut encoded = format!("{:X}\r\n", chunk.len()).into_bytes();
+        encoded.extend_from_slice(chunk);
+        encoded.extend_from_slice(b"\r\n0\r\n\r\n");
+
+        assert_eq!(decode_chunked_body(&encoded).expect("chunks decode"), chunk);
+    }
+
+    #[test]
+    fn rejects_chunk_size_that_overflows_platform_usize() {
+        let encoded = format!("{:X}\r\n", usize::MAX);
+
+        let error = decode_chunked_body(encoded.as_bytes()).expect_err("oversized chunk fails");
+
+        assert!(error.contains("overflows usize"));
+    }
+
+    #[test]
+    fn rejects_paths_that_can_escape_or_inject_headers() {
+        assert!(validate_openai_path("/v1/chat/completions").is_ok());
+        assert!(validate_openai_path("/v1/responses").is_ok());
+        assert!(validate_openai_path("/admin").is_err());
+        assert!(validate_openai_path("/v1/../admin").is_err());
+        assert!(validate_openai_path("/v1/models\r\nX-Evil: yes").is_err());
+    }
+
+    #[test]
+    fn streaming_requests_force_the_protocol_stream_flag() {
+        let body = prepare_openai_request(
+            "/v1/chat/completions",
+            r#"{"model":"test","stream":false,"tools":[{"type":"function"}]}"#,
+            true,
+        )
+        .expect("streaming body is valid");
+        let value: serde_json::Value = serde_json::from_str(&body).expect("body remains JSON");
+
+        assert_eq!(value["stream"], true);
+        assert_eq!(value["tools"][0]["type"], "function");
+    }
+
+    #[test]
+    fn buffered_requests_disable_the_protocol_stream_flag() {
+        let body = prepare_openai_request(
+            "/v1/responses",
+            r#"{"model":"test","stream":true,"input":"hello"}"#,
+            false,
+        )
+        .expect("buffered body is valid");
+        let value: serde_json::Value = serde_json::from_str(&body).expect("body remains JSON");
+
+        assert_eq!(value["stream"], false);
+        assert_eq!(value["input"], "hello");
+    }
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::ModelsResponse;
+
+    #[test]
+    fn parses_served_context_length_and_preserves_legacy_models() {
+        let response: ModelsResponse = serde_json::from_str(
+            r#"{"data":[{"id":"ready","metadata":{"context_length":131072}},{"id":"legacy"}]}"#,
+        )
+        .expect("models response parses");
+
+        assert_eq!(response.data[0].metadata.context_length, Some(131_072));
+        assert_eq!(response.data[1].metadata.context_length, None);
+    }
+}
+
+#[cfg(test)]
+mod openai_stream_lifecycle_tests {
+    use super::{ActiveOpenAiStream, ClientBuilder, InviteToken};
+    use crate::crypto::keys::OwnerKeypair;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+
+    #[tokio::test]
+    async fn disconnect_cancels_and_drains_openai_streams() {
+        let mut client = ClientBuilder::new(
+            OwnerKeypair::generate(),
+            InviteToken("test-invite".to_string()),
+        )
+        .build()
+        .expect("client builds");
+        let first_cancelled = Arc::new(AtomicBool::new(false));
+        let second_cancelled = Arc::new(AtomicBool::new(false));
+        for (request_id, cancelled) in [
+            ("stream-1", first_cancelled.clone()),
+            ("stream-2", second_cancelled.clone()),
+        ] {
+            client.openai_streams.lock().unwrap().insert(
+                request_id.to_string(),
+                ActiveOpenAiStream {
+                    cancelled,
+                    cancel_notify: Arc::new(Notify::new()),
+                },
+            );
+        }
+
+        client.disconnect().await;
+
+        assert!(first_cancelled.load(Ordering::Acquire));
+        assert!(second_cancelled.load(Ordering::Acquire));
+        assert!(client.openai_streams.lock().unwrap().is_empty());
     }
 }
 

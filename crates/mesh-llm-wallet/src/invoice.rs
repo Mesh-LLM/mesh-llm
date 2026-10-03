@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, ensure};
-use lightning_invoice::{Bolt11Invoice, Currency};
+use lightning_invoice::Bolt11Invoice;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -16,12 +16,10 @@ pub struct Invoice {
 }
 
 impl Invoice {
+    /// Parse an invoice for any network. Whether it is on the wallet's
+    /// network is for the wallet's backend to decide.
     pub fn parse(bolt11: &str) -> Result<Self> {
         let parsed: Bolt11Invoice = bolt11.parse().context("invalid BOLT11 invoice")?;
-        ensure!(
-            parsed.currency() == Currency::Bitcoin,
-            "mainnet invoice required"
-        );
         let expires_at_ms = parsed
             .expires_at()
             .context("invoice expiry overflow")?
@@ -37,6 +35,8 @@ impl Invoice {
         })
     }
 
+    /// Check an invoice before paying `amount_msat` of it. This does not
+    /// check the network.
     pub fn validate_payment(&self, amount_msat: u64, now_ms: u64) -> Result<()> {
         ensure!(
             *self == Self::parse(&self.bolt11)?,
@@ -60,12 +60,16 @@ impl Invoice {
 pub(crate) mod tests {
     use super::*;
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
-    use lightning_invoice::{InvoiceBuilder, PaymentHash, PaymentSecret};
+    use lightning_invoice::{Currency, InvoiceBuilder, PaymentHash, PaymentSecret};
 
     /// A signed mainnet test invoice. Shared with other in-crate tests.
     pub(crate) fn sample_invoice(number: u8, amount_msat: u64) -> Invoice {
+        Invoice::parse(&signed_bolt11(Currency::Bitcoin, number, amount_msat)).unwrap()
+    }
+
+    fn signed_bolt11(currency: Currency, number: u8, amount_msat: u64) -> String {
         let secret = SecretKey::from_slice(&[7; 32]).unwrap();
-        let bolt11 = InvoiceBuilder::new(Currency::Bitcoin)
+        InvoiceBuilder::new(currency)
             .description("test".into())
             .payment_hash(PaymentHash([number; 32]))
             .payment_secret(PaymentSecret([42; 32]))
@@ -75,8 +79,19 @@ pub(crate) mod tests {
             .amount_milli_satoshis(amount_msat)
             .build_signed(|hash| Secp256k1::new().sign_ecdsa_recoverable(hash, &secret))
             .unwrap()
-            .to_string();
-        Invoice::parse(&bolt11).unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn invoices_parse_on_any_network() {
+        for currency in [
+            Currency::Regtest,
+            Currency::Signet,
+            Currency::BitcoinTestnet,
+        ] {
+            let invoice = Invoice::parse(&signed_bolt11(currency, 5, 1000)).unwrap();
+            assert!(invoice.validate_payment(1000, crate::now_ms()).is_ok());
+        }
     }
 
     #[test]

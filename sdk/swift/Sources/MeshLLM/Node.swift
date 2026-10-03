@@ -22,6 +22,49 @@ public struct RequestId: Sendable {
     public let value: String
 }
 
+public struct OpenAIResponse: Sendable {
+    public let statusCode: UInt16
+    public let contentType: String?
+    public let body: String
+
+    public func jsonObject() throws -> Any {
+        try JSONSerialization.jsonObject(with: Data(body.utf8))
+    }
+}
+
+public struct OpenAISSEEvent: Sendable {
+    public let requestId: String
+    public let event: String?
+    public let data: String
+    public let raw: String
+
+    public var isDone: Bool { data == "[DONE]" }
+
+    public func jsonObject() throws -> Any? {
+        guard !isDone else { return nil }
+        return try JSONSerialization.jsonObject(with: Data(data.utf8))
+    }
+}
+
+public enum OpenAIStreamEvent: Sendable {
+    case started(requestId: String, statusCode: UInt16, contentType: String?)
+    case sse(OpenAISSEEvent)
+}
+
+public struct OpenAIStreamFailure: Error, Sendable, CustomStringConvertible {
+    public let requestId: String
+    public let statusCode: UInt16?
+    public let message: String
+    public let body: String?
+
+    public var description: String {
+        if let statusCode {
+            return "OpenAI-compatible stream failed with HTTP \(statusCode): \(message)"
+        }
+        return message
+    }
+}
+
 public struct ConsoleOptions: Sendable {
     public let assetDirectory: URL
     public let port: UInt16?
@@ -204,9 +247,69 @@ public final class Client: @unchecked Sendable {
             return models.map(Node.mapModel)
         }
 
+        public func request(path: String, body: [String: Any]) async throws -> OpenAIResponse {
+            let bodyJson = try encodeOpenAIObject(body)
+            let handle = self.handle
+            let response = try await runBlocking {
+                try handle.openaiRequest(path: path, bodyJson: bodyJson)
+            }
+            return OpenAIResponse(
+                statusCode: response.statusCode,
+                contentType: response.contentType,
+                body: response.body
+            )
+        }
+
+        public func chatCompletions(_ body: [String: Any]) async throws -> OpenAIResponse {
+            var request = body
+            request["stream"] = false
+            return try await self.request(path: "/v1/chat/completions", body: request)
+        }
+
+        public func responses(_ body: [String: Any]) async throws -> OpenAIResponse {
+            var request = body
+            request["stream"] = false
+            return try await self.request(path: "/v1/responses", body: request)
+        }
+
+        public func stream(path: String, body: [String: Any]) -> AsyncThrowingStream<OpenAIStreamEvent, Error> {
+            do {
+                var request = body
+                request["stream"] = true
+                let bodyJson = try encodeOpenAIObject(request)
+                return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
+                    do {
+                        let bridge = OpenAIStreamBridge(continuation: continuation) { [handle] requestId in
+                            handle.cancel(requestId: requestId)
+                        }
+                        let requestId = try handle.openaiStream(
+                            path: path,
+                            bodyJson: bodyJson,
+                            listener: bridge
+                        )
+                        bridge.activate(requestId: requestId)
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+            } catch {
+                return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+
+        public func streamChatCompletions(_ body: [String: Any]) -> AsyncThrowingStream<OpenAIStreamEvent, Error> {
+            stream(path: "/v1/chat/completions", body: body)
+        }
+
+        public func streamResponses(_ body: [String: Any]) -> AsyncThrowingStream<OpenAIStreamEvent, Error> {
+            stream(path: "/v1/responses", body: body)
+        }
+
         public func chat(_ request: ChatRequest) -> AsyncThrowingStream<Event, Error> {
             let native = Node.mapChatRequest(request)
-            return AsyncThrowingStream { continuation in
+            return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                 do {
                     let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
                         handle.cancel(requestId: requestId)
@@ -221,7 +324,7 @@ public final class Client: @unchecked Sendable {
 
         public func responses(_ request: ResponsesRequest) -> AsyncThrowingStream<Event, Error> {
             let native = Node.mapResponsesRequest(request)
-            return AsyncThrowingStream { continuation in
+            return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                 do {
                     let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
                         handle.cancel(requestId: requestId)
@@ -364,9 +467,69 @@ public final class Node: @unchecked Sendable {
             return models.map(Node.mapModel)
         }
 
+        public func request(path: String, body: [String: Any]) async throws -> OpenAIResponse {
+            let bodyJson = try encodeOpenAIObject(body)
+            let handle = self.handle
+            let response = try await runBlocking {
+                try handle.openaiRequest(path: path, bodyJson: bodyJson)
+            }
+            return OpenAIResponse(
+                statusCode: response.statusCode,
+                contentType: response.contentType,
+                body: response.body
+            )
+        }
+
+        public func chatCompletions(_ body: [String: Any]) async throws -> OpenAIResponse {
+            var request = body
+            request["stream"] = false
+            return try await self.request(path: "/v1/chat/completions", body: request)
+        }
+
+        public func responses(_ body: [String: Any]) async throws -> OpenAIResponse {
+            var request = body
+            request["stream"] = false
+            return try await self.request(path: "/v1/responses", body: request)
+        }
+
+        public func stream(path: String, body: [String: Any]) -> AsyncThrowingStream<OpenAIStreamEvent, Error> {
+            do {
+                var request = body
+                request["stream"] = true
+                let bodyJson = try encodeOpenAIObject(request)
+                return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
+                    do {
+                        let bridge = OpenAIStreamBridge(continuation: continuation) { [handle] requestId in
+                            try? handle.cancel(requestId: requestId)
+                        }
+                        let requestId = try handle.openaiStream(
+                            path: path,
+                            bodyJson: bodyJson,
+                            listener: bridge
+                        )
+                        bridge.activate(requestId: requestId)
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+            } catch {
+                return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+
+        public func streamChatCompletions(_ body: [String: Any]) -> AsyncThrowingStream<OpenAIStreamEvent, Error> {
+            stream(path: "/v1/chat/completions", body: body)
+        }
+
+        public func streamResponses(_ body: [String: Any]) -> AsyncThrowingStream<OpenAIStreamEvent, Error> {
+            stream(path: "/v1/responses", body: body)
+        }
+
         public func chat(_ request: ChatRequest) -> AsyncThrowingStream<Event, Error> {
             let native = Node.mapChatRequest(request)
-            return AsyncThrowingStream { continuation in
+            return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                 do {
                     let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
                         try? handle.cancel(requestId: requestId)
@@ -381,7 +544,7 @@ public final class Node: @unchecked Sendable {
 
         public func responses(_ request: ResponsesRequest) -> AsyncThrowingStream<Event, Error> {
             let native = Node.mapResponsesRequest(request)
-            return AsyncThrowingStream { continuation in
+            return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
                 do {
                     let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
                         try? handle.cancel(requestId: requestId)
@@ -548,6 +711,29 @@ private func runBlocking<T>(_ work: @escaping () throws -> T) async throws -> T 
             }
         }
     }
+}
+
+private func encodeOpenAIObject(_ body: [String: Any]) throws -> String {
+    guard JSONSerialization.isValidJSONObject(body) else {
+        throw EncodingError.invalidValue(
+            body,
+            EncodingError.Context(
+                codingPath: [],
+                debugDescription: "OpenAI request body must be a JSON object"
+            )
+        )
+    }
+    let data = try JSONSerialization.data(withJSONObject: body)
+    guard let encoded = String(data: data, encoding: .utf8) else {
+        throw EncodingError.invalidValue(
+            body,
+            EncodingError.Context(
+                codingPath: [],
+                debugDescription: "OpenAI request body was not valid UTF-8"
+            )
+        )
+    }
+    return encoded
 }
 
 private func runNonThrowing<T>(_ work: @escaping () -> T) async -> T {

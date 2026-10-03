@@ -58,6 +58,19 @@ def wait_for_model(process: subprocess.Popen[str], api_port: int, timeout: float
 def stop(process: subprocess.Popen[str]) -> None:
     if process.poll() is not None:
         return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+        return
     process.terminate()
     try:
         process.wait(timeout=10)

@@ -6,6 +6,7 @@ pub(crate) mod mdns_reverse_dial;
 pub(crate) mod metrics;
 pub(crate) mod nostr;
 pub(crate) mod openai;
+pub(crate) mod peer_blocks;
 pub(crate) mod proxy;
 pub(crate) mod reservations;
 pub(crate) mod router;

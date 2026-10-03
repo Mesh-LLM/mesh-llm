@@ -187,7 +187,7 @@ fn unknown_nonempty_version_zero_is_rejected_before_database_mutation() {
 
 #[test]
 fn unknown_future_version_is_rejected_before_database_mutation() {
-    assert_unknown_schema_rejected_before_mutation(2);
+    assert_unknown_schema_rejected_before_mutation(CURRENT_VERSION + 1);
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn markerless_identified_version_one_is_rejected_before_wal_or_schema_mutation()
         error,
         LogStoreError::SchemaIncompatible {
             found: 1,
-            supported: 1
+            supported: CURRENT_VERSION
         }
     ));
     assert!(!root.path().join("log_store.db-wal").exists());
@@ -263,7 +263,7 @@ fn assert_unknown_schema_rejected_before_mutation(version: u32) {
 
     assert!(matches!(
         error,
-        LogStoreError::SchemaIncompatible { found, supported: 1 } if found == version
+        LogStoreError::SchemaIncompatible { found, supported: CURRENT_VERSION } if found == version
     ));
     let connection = rusqlite::Connection::open(database).expect("reopen fixture database");
     assert_eq!(

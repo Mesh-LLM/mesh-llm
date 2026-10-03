@@ -98,6 +98,28 @@ impl WalletPin {
     }
 }
 
+impl WalletPin {
+    /// Forget which wallet backs this payment directory, so the next open
+    /// may adopt a different one. Returns the removed pin, or `None` if there
+    /// was none or it was unreadable (a damaged pin is removable too).
+    ///
+    /// The caller must first establish that nothing outstanding in the ledger
+    /// still depends on the pinned wallet.
+    pub fn remove(directory: &Path) -> Result<Option<Self>> {
+        let pin = Self::load(directory).ok().flatten();
+        match std::fs::remove_file(Self::path(directory)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(anyhow::Error::new(error).context("remove wallet pin"));
+            }
+        }
+        #[cfg(unix)]
+        std::fs::File::open(directory)?.sync_all()?;
+        Ok(pin)
+    }
+}
+
 /// Persisted wallet state exists for this payment directory. Side-effect free.
 pub fn has_persisted_wallet(directory: &Path) -> bool {
     NoWalletFactory.is_provisioned(directory)
@@ -134,6 +156,25 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn remove_returns_the_pin_and_tolerates_absent_and_corrupt_pins() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(WalletPin::remove(dir.path()).unwrap(), None);
+        let pin = WalletPin {
+            plugin: "wallet-lexe".into(),
+            wallet_id: "abc".into(),
+            provider: "lexe".into(),
+            network: "mainnet".into(),
+        };
+        pin.store(dir.path()).unwrap();
+        assert_eq!(WalletPin::remove(dir.path()).unwrap(), Some(pin));
+        assert!(WalletPin::load(dir.path()).unwrap().is_none());
+
+        std::fs::write(WalletPin::path(dir.path()), b"{not json").unwrap();
+        assert_eq!(WalletPin::remove(dir.path()).unwrap(), None);
+        assert!(!WalletPin::path(dir.path()).exists());
     }
 
     #[test]

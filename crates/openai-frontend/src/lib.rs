@@ -5,6 +5,7 @@ mod backend_lifecycle;
 pub mod chat;
 pub mod common;
 pub mod completions;
+mod decisions;
 pub mod embeddings;
 pub mod errors;
 mod guardrails;

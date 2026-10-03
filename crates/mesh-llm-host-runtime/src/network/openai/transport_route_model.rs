@@ -18,6 +18,46 @@ pub(crate) struct RouteModelRequestContext<'a> {
     /// which reads it back out after this call to attach it to its own
     /// terminal plugin event; `None` for every other caller.
     pub(crate) peer_capsule_id: Option<&'a PeerCapsuleIdSink>,
+    /// Where to record which peer delivered a served attempt. Set by the
+    /// ingress paths that publish a terminal exchange event, which read it
+    /// back after this call to name the serving node even when the client
+    /// sent no `x-mesh-target`; `None` for every other caller.
+    pub(crate) served_by_node_id: Option<&'a ServedByNodeIdSink>,
+}
+
+/// A delivered 2xx outcome: the routing-side test for "this attempt was
+/// served", which gates the `ServedByNodeIdSink` write. Mirrors
+/// `ingress::outcome_was_served`, kept here where the per-attempt target is in
+/// scope.
+fn route_outcome_was_served(outcome: &RouteDispatchOutcome) -> bool {
+    matches!(
+        outcome,
+        RouteDispatchOutcome::Responded(200..=299)
+            | RouteDispatchOutcome::RespondedWithDigests {
+                status_code: 200..=299,
+                ..
+            }
+            | RouteDispatchOutcome::RespondedWithUsage {
+                status_code: 200..=299,
+                ..
+            }
+    )
+}
+
+/// Name the peer that delivered this attempt, so the terminal event can carry
+/// `served_by_node_id` even when the client sent no `x-mesh-target`. Only for
+/// a served outcome from a `Remote` target: never a value for a local serve or
+/// a failure.
+fn record_served_by_node_id(
+    sink: Option<&ServedByNodeIdSink>,
+    outcome: &RouteDispatchOutcome,
+    target: &election::InferenceTarget,
+) {
+    if let (Some(sink), true) = (sink, route_outcome_was_served(outcome))
+        && let election::InferenceTarget::Remote(endpoint_id) = target
+    {
+        sink.set(hex::encode(endpoint_id.as_bytes()));
+    }
 }
 
 pub async fn route_model_request(
@@ -40,6 +80,7 @@ pub async fn route_model_request(
         route_observer: context.route_observer,
         served_by_header: context.served_by_header,
         peer_capsule_id: context.peer_capsule_id,
+        served_by_node_id: context.served_by_node_id,
     };
     route_model_request_inner(args).await
 }
@@ -56,6 +97,7 @@ struct RouteModelRequestArgs<'a> {
     route_observer: OpenAiRouteObserver<'a>,
     served_by_header: Option<&'a str>,
     peer_capsule_id: Option<&'a PeerCapsuleIdSink>,
+    served_by_node_id: Option<&'a ServedByNodeIdSink>,
 }
 
 struct RouteModelState {
@@ -113,6 +155,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         route_observer,
         served_by_header,
         peer_capsule_id,
+        served_by_node_id,
     } = args;
     let route_started = Instant::now();
     let mut tcp_stream = tcp_stream;
@@ -259,6 +302,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         ) {
             RouteModelDisposition::Continue => continue,
             RouteModelDisposition::Return(result) => {
+                record_served_by_node_id(served_by_node_id, &result, &target);
                 return finalize_route_model_result(
                     &node,
                     model,
@@ -1080,6 +1124,7 @@ mod tests {
             .unwrap();
         let affinity = AffinityRouter::new();
         let sink = PeerCapsuleIdSink::new();
+        let served_by = ServedByNodeIdSink::new();
 
         let mut targets = election::ModelTargets::default();
         targets.targets.insert(
@@ -1128,6 +1173,7 @@ mod tests {
                 route_observer: OpenAiRouteObserver::default(),
                 served_by_header: None,
                 peer_capsule_id: Some(&sink),
+                served_by_node_id: Some(&served_by),
             },
         )
         .await;
@@ -1153,6 +1199,11 @@ mod tests {
             None,
             "the sink must not carry the FIRST (retried-away-from) peer's \
              capsule_id onto a later attempt that never asserted one itself"
+        );
+        assert_eq!(
+            served_by.take(),
+            None,
+            "a local target delivered, so no peer is named as the server"
         );
     }
 }

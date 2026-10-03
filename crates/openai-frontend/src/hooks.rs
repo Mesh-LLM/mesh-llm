@@ -558,6 +558,7 @@ impl OpenAiBackend for HookedOpenAiBackend {
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionStream> {
         let exchange_id = uuid::Uuid::new_v4().to_string();
+        context.publish_exchange_id(exchange_id.clone());
         // Same admission-time arming as `chat_completion_with_context` above
         // — see its comment. A future dropped while `before_chat_completion`
         // is still running still gets exactly one terminal callback.

@@ -1,6 +1,10 @@
 import { LogPageCursor, LogReplayCursor, LogRequestId } from '@/features/logs/api/ids'
 import type { LogsRequestQuery } from '@/features/logs/api/client'
-import { LOG_EVENT_CATEGORIES, type LogEventCategory } from '@/features/logs/lib/log-event-ledger'
+import {
+  LOG_EVENT_CATEGORIES,
+  type LogEventCategory,
+  type LogEventLedgerRow
+} from '@/features/logs/lib/log-event-ledger'
 import {
   DEFAULT_LOG_REQUEST_DETAIL_TAB,
   normalizeLogRequestDetailTab,
@@ -78,6 +82,11 @@ const FILTER_KEYS: readonly LogsFilterKey[] = ['model', 'provider', 'engine', 'r
 
 export type LogsLedgerSearch = {
   readonly focusRequestId?: string
+  /** Deep link keyed on a request's `exchange_id` --
+   *  resolved against whatever page of requests is already loaded (the same
+   *  bound `focusRequestId` already accepts) and opened as the request
+   *  inspector once found. Never a half-link: absent means nothing to open. */
+  readonly focusExchangeId?: string
   readonly replayCursor?: string
   readonly cursor?: string
   readonly trail?: readonly string[]
@@ -155,6 +164,7 @@ export function parseLogsLedgerSearch(search: Record<string, unknown>): LogsLedg
   const pageCursor = cursor(search['cursor'])
 
   const focusRequestId = optionalString(search['focusRequestId'])
+  const focusExchangeId = optionalString(search['focusExchangeId'])
   const replayCursor = optionalString(search['replayCursor'])
   const trail = cursorTrail(search['trail'])
   const categories = eventCategories(search['categories'])
@@ -177,6 +187,7 @@ export function parseLogsLedgerSearch(search: Record<string, unknown>): LogsLedg
     ...(to ? { to } : {}),
     ...(timeRange ? { timeRange } : {}),
     ...(focusRequestId ? { focusRequestId } : {}),
+    ...(focusExchangeId ? { focusExchangeId } : {}),
     ...(replayCursor && isReplayCursor(replayCursor) ? { replayCursor } : {}),
     ...(pageCursor ? { cursor: pageCursor } : {}),
     ...(trail.length > 0 ? { trail } : {}),
@@ -292,6 +303,23 @@ export function closeLogInspector(search: LogsLedgerSearchWithTabInput): LogsLed
 export function logInspectorFromSearch(search: LogsLedgerSearch): LogInspector | undefined {
   if (!search.inspectType || !search.inspectId) return undefined
   return { type: search.inspectType, id: search.inspectId }
+}
+
+/**
+ * resolve a `focusExchangeId` deep link
+ * against whatever page of requests is already loaded, so `LogsLedger` can
+ * open that request's inspector without a dedicated resolve-by-exchange-id
+ * round trip. Returns `undefined` when no loaded row carries that exchange
+ * id yet (e.g. it is on a page not fetched yet) -- the caller must
+ * treat that as "nothing to open yet", never fabricate a match.
+ */
+export function resolveFocusExchangeRequestId(
+  rows: readonly LogEventLedgerRow[],
+  focusExchangeId: string | undefined
+): string | undefined {
+  if (!focusExchangeId) return undefined
+  const match = rows.find((row) => row.type === 'request' && row.request.exchangeId === focusExchangeId)
+  return match?.type === 'request' ? match.request.requestId.toString() : undefined
 }
 
 export function legacyRequestInspectorSearch(

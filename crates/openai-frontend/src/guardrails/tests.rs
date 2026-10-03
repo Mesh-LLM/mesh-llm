@@ -1344,6 +1344,7 @@ fn response_with_content_with_usage(
         usage,
         timings: None,
         capsule_marker: None,
+        exchange_id: None,
     }
 }
 
@@ -1380,6 +1381,7 @@ fn response_with_tool_calls_with_usage(
         usage,
         timings: None,
         capsule_marker: None,
+        exchange_id: None,
     }
 }
 

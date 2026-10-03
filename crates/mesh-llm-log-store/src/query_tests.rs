@@ -209,6 +209,7 @@ fn authenticated_relay_upsert_replaces_and_protects_the_complete_caller_tuple() 
             None,
             Some("127.0.0.1:40123"),
             Some("local_http"),
+            None,
             "2026-08-20T12:00:00Z",
         )
         .expect("persist provisional local caller");
@@ -222,6 +223,7 @@ fn authenticated_relay_upsert_replaces_and_protects_the_complete_caller_tuple() 
             Some(endpoint_id),
             None,
             Some("relay"),
+            None,
             "2026-08-20T12:00:01Z",
         )
         .expect("replace with authenticated relay caller");
@@ -235,6 +237,7 @@ fn authenticated_relay_upsert_replaces_and_protects_the_complete_caller_tuple() 
             None,
             Some("127.0.0.1:49999"),
             Some("local_http"),
+            None,
             "2026-08-20T12:00:02Z",
         )
         .expect("ignore later provisional local caller");
@@ -269,6 +272,7 @@ fn authenticated_endpoint_only_caller_round_trips_through_public_query_api() {
             Some("provider-a"),
             Some("engine-a"),
             Some(endpoint_id),
+            None,
             None,
             None,
             "2026-08-20T12:00:00Z",
@@ -319,6 +323,7 @@ fn endpoint_only_upsert_replaces_local_or_empty_and_protects_first_authenticated
                 None,
                 caller_addr,
                 caller_path_type,
+                None,
                 "2026-08-20T12:00:00Z",
             )
             .expect("persist initial caller");
@@ -330,6 +335,7 @@ fn endpoint_only_upsert_replaces_local_or_empty_and_protects_first_authenticated
                 None,
                 None,
                 Some(endpoint_id),
+                None,
                 None,
                 None,
                 "2026-08-20T12:00:01Z",
@@ -356,6 +362,7 @@ fn endpoint_only_upsert_replaces_local_or_empty_and_protects_first_authenticated
                     later_endpoint,
                     later_addr,
                     later_path,
+                    None,
                     "2026-08-20T12:00:02Z",
                 )
                 .expect("ignore later caller");
@@ -391,6 +398,7 @@ fn unrecognized_stage_caller_does_not_replace_local_request_metadata() {
             None,
             Some("127.0.0.1:40123"),
             Some("local_http"),
+            None,
             "2026-08-20T12:00:00Z",
         )
         .expect("persist provisional local caller");
@@ -404,6 +412,7 @@ fn unrecognized_stage_caller_does_not_replace_local_request_metadata() {
             Some(endpoint_id),
             Some("192.0.2.75:11204"),
             Some("remote_quic_stage"),
+            None,
             "2026-08-20T12:00:01Z",
         )
         .expect("ignore unrecognized stage caller");
@@ -445,6 +454,7 @@ fn unrecognized_stage_caller_does_not_enter_empty_summary_metadata() {
                 Some(endpoint_id),
                 Some("192.0.2.76:11204"),
                 Some(path_type),
+                None,
                 "2026-08-20T12:00:00Z",
             )
             .expect("ignore unrecognized caller on empty summary");
@@ -522,6 +532,7 @@ fn partial_caller_tuples_do_not_enter_empty_summary_metadata() {
                 caller_endpoint_id,
                 caller_addr,
                 caller_path_type,
+                None,
                 "2026-08-20T12:00:00Z",
             )
             .expect("ignore partial caller tuple");
@@ -577,6 +588,7 @@ fn supported_caller_tuples_are_canonicalized_before_persistence() {
                 caller_endpoint_id,
                 caller_addr,
                 caller_path_type,
+                None,
                 "2026-08-20T12:00:00Z",
             )
             .expect("persist supported caller tuple");
@@ -1044,4 +1056,140 @@ fn related_records_are_typed_scoped_and_path_free() {
     );
     assert_eq!(proxies.items.len(), 1);
     assert_eq!(proxies.items[0].attempt_id, "attempt-a");
+}
+
+/// A deep link keyed on the exchange id resolves the one
+/// request carrying that exchange join-key, and never matches a request
+/// with no exchange id (or a different one).
+#[test]
+fn query_request_by_exchange_id_resolves_the_one_matching_summary() {
+    let (_root, store) = open_store();
+    store
+        .insert_summary(
+            "req-with-exchange",
+            Some("model-a"),
+            Some("chat_completions"),
+            Some("provider-a"),
+            Some("engine-a"),
+            "2026-08-20T12:00:00Z",
+            None,
+            None,
+            None,
+        )
+        .expect("insert request with exchange");
+    store
+        .upsert_summary_metadata_with_caller(
+            "req-with-exchange",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("exch-abc123"),
+            "2026-08-20T12:00:00Z",
+        )
+        .expect("merge exchange id");
+    store
+        .insert_summary(
+            "req-without-exchange",
+            Some("model-a"),
+            Some("chat_completions"),
+            Some("provider-a"),
+            Some("engine-a"),
+            "2026-08-20T12:00:01Z",
+            None,
+            None,
+            None,
+        )
+        .expect("insert request without exchange");
+
+    let resolved = store
+        .query_request_by_exchange_id("exch-abc123")
+        .expect("query by exchange id")
+        .expect("exchange id resolves a request");
+    assert_eq!(resolved.request.request_id, "req-with-exchange");
+    assert_eq!(resolved.request.exchange_id.as_deref(), Some("exch-abc123"));
+
+    assert!(
+        store
+            .query_request_by_exchange_id("exch-does-not-exist")
+            .expect("query by unknown exchange id")
+            .is_none()
+    );
+}
+
+/// `exchange_id` is host-minted once per exchange, so
+/// two different requests should never collide on one -- but if something
+/// upstream ever did assign a duplicate, `idx_summaries_exchange_id` (the
+/// unique partial index) must reject the second write as a clean `Err`, not
+/// silently overwrite the first row's join key or panic.
+#[test]
+fn a_second_request_cannot_steal_an_exchange_id_already_claimed_by_another() {
+    let (_root, store) = open_store();
+    store
+        .insert_summary(
+            "req-first-claim",
+            Some("model-a"),
+            Some("chat_completions"),
+            Some("provider-a"),
+            Some("engine-a"),
+            "2026-08-20T12:00:00Z",
+            None,
+            None,
+            None,
+        )
+        .expect("insert first request");
+    store
+        .upsert_summary_metadata_with_caller(
+            "req-first-claim",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("exch-contested"),
+            "2026-08-20T12:00:00Z",
+        )
+        .expect("first request claims the exchange id");
+
+    store
+        .insert_summary(
+            "req-second-claim",
+            Some("model-a"),
+            Some("chat_completions"),
+            Some("provider-a"),
+            Some("engine-a"),
+            "2026-08-20T12:00:01Z",
+            None,
+            None,
+            None,
+        )
+        .expect("insert second request");
+    let collision = store.upsert_summary_metadata_with_caller(
+        "req-second-claim",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("exch-contested"),
+        "2026-08-20T12:00:01Z",
+    );
+    assert!(
+        collision.is_err(),
+        "a second request claiming an already-claimed exchange id must fail, not silently succeed"
+    );
+
+    // The first row's join key must survive the rejected collision untouched.
+    let resolved = store
+        .query_request_by_exchange_id("exch-contested")
+        .expect("query by exchange id")
+        .expect("exchange id still resolves its original request");
+    assert_eq!(resolved.request.request_id, "req-first-claim");
 }

@@ -50,8 +50,26 @@ pub struct MeshConfig {
     pub models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     pub plugins: Vec<PluginConfigEntry>,
+    #[serde(default, skip_serializing_if = "PaymentsConfig::is_default")]
+    pub payments: PaymentsConfig,
     #[serde(flatten, default)]
     pub extra: BTreeMap<String, toml::Value>,
+}
+
+/// `[payments]`: which wallet backs paid inference. Spending policy and
+/// prices live in the payment ledger, not here.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PaymentsConfig {
+    /// Plugin name of the `wallet.v1` provider to use. When unset the host
+    /// uses the only running wallet plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<String>,
+}
+
+impl PaymentsConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -1136,6 +1154,8 @@ struct RawMeshConfig {
     models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     plugins: Vec<PluginConfigEntry>,
+    #[serde(default)]
+    payments: PaymentsConfig,
     #[serde(flatten, default)]
     extra: BTreeMap<String, toml::Value>,
 }
@@ -1239,6 +1259,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             runtime: raw.runtime,
             models: raw.models,
             plugins: raw.plugins,
+            payments: raw.payments,
             extra: raw.extra,
         })
     }
@@ -1696,6 +1717,12 @@ pub struct PluginConfigEntry {
     pub enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_ui_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_ui_primary_tab: Option<bool>,
+    /// Whether this plugin may ask the host to block or unblock routing to a
+    /// peer. Host-owned; off unless the operator turns it on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_peer_blocks: Option<bool>,
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]
@@ -1729,6 +1756,20 @@ impl PluginWebUiPreference {
 impl PluginConfigEntry {
     pub const fn web_ui_preference(&self, declares_web_ui: bool) -> PluginWebUiPreference {
         PluginWebUiPreference::resolve(self.web_ui_enabled, declares_web_ui)
+    }
+
+    /// Off unless the operator has explicitly opted in. Unlike
+    /// `web_ui_preference`, this never gates the web UI's availability —
+    /// it only asks whether a manifest page that requests
+    /// `placement = "primary"` should be promoted.
+    pub const fn web_ui_primary_tab_preference(&self) -> bool {
+        matches!(self.web_ui_primary_tab, Some(true))
+    }
+
+    /// Off unless the operator has explicitly opted in: only then may the
+    /// plugin request peer routing blocks. Operator blocks never need it.
+    pub const fn peer_blocks_allowed(&self) -> bool {
+        matches!(self.allow_peer_blocks, Some(true))
     }
 }
 

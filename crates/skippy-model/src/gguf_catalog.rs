@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{Read, Seek};
+use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -77,7 +77,7 @@ fn read_gguf_catalog_with_mode(
         .with_context(|| format!("read GGUF size {}", path.display()))?
         .len();
     let mut reader = CatalogReader {
-        reader: file,
+        reader: BufReader::new(file),
         artifact_bytes,
     };
 
@@ -192,7 +192,9 @@ fn read_gguf_catalog_with_mode(
 }
 
 struct CatalogReader {
-    reader: File,
+    // Metadata is parsed field by field; unbuffered, every 4- or 8-byte field
+    // would be its own read syscall (about 250k for a 49k-token vocabulary).
+    reader: BufReader<File>,
     artifact_bytes: u64,
 }
 

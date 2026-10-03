@@ -9,6 +9,10 @@ pub struct RequestRecord {
     pub provider: Option<String>,
     pub engine: Option<String>,
     pub status_code: Option<i64>,
+    /// The host-minted per-exchange join-key other consumers of the
+    /// exchange (plugins, the terminal event) can join on. `None` for a request that never dispatched through the
+    /// exchange-tracked chat/responses path.
+    pub exchange_id: Option<String>,
 }
 
 #[non_exhaustive]

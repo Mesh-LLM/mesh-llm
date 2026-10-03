@@ -44,6 +44,7 @@ fn released_request_record_struct_literal_remains_source_compatible() {
         provider: Some("released-provider".to_owned()),
         engine: Some("released-engine".to_owned()),
         status_code: Some(200),
+        exchange_id: None,
     };
 
     assert_eq!(record.request_id, "released-request");

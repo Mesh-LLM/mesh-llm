@@ -41,7 +41,7 @@ impl Drop for OutputSinkResetGuard {
 /// Record type for the test Vec-backed persistence sink. Captures all persisted data deterministically without I/O.
 #[derive(Clone, Debug)]
 pub(super) enum TestRecord {
-    Summary(RequestSummaryEntry),
+    Summary(Box<RequestSummaryEntry>),
     Event {
         request_id: String,
         event_id: String,
@@ -142,9 +142,9 @@ impl PersistSink for TestSink {
         if let Some(TestRecord::Summary(existing)) = records.iter_mut().find(|record| {
             matches!(record, TestRecord::Summary(existing) if existing.request_id == entry.request_id)
         }) {
-            *existing = entry;
+            **existing = entry;
         } else {
-            records.push(TestRecord::Summary(entry));
+            records.push(TestRecord::Summary(Box::new(entry)));
         }
         Ok(())
     }

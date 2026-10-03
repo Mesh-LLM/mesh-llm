@@ -53,6 +53,10 @@ export type LogRequest = {
   readonly callerEndpointId?: string
   readonly callerAddr?: string
   readonly callerPathType?: LogCallerPathType
+  /** The host-minted per-exchange join-key other consumers of the
+   *  exchange (plugins, the terminal event) can join on -- present only for a chat/responses completion dispatched
+   *  through the exchange-tracked path. Absent for every other request. */
+  readonly exchangeId?: string
 }
 
 export type LogAuditEntry = {

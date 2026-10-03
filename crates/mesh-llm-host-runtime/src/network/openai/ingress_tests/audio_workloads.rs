@@ -62,6 +62,7 @@ async fn route_audio(path: &str, chunked: bool) {
             targets,
             affinity::AffinityRouter::new(),
             crate::runtime::IngressType::LocalOpenAi,
+            None,
         )
         .await;
     });

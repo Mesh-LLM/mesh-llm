@@ -22,8 +22,11 @@ fn fresh_database_is_exactly_complete_current_schema() {
 
     apply_migrations(&connection).expect("apply fresh schema");
 
-    assert_eq!(CURRENT_VERSION, 1);
-    assert!(MIGRATIONS.is_empty());
+    assert_eq!(CURRENT_VERSION, 2);
+    assert_eq!(
+        MIGRATIONS.iter().map(|m| m.version).collect::<Vec<_>>(),
+        [2]
+    );
     assert_eq!(
         connection
             .pragma_query_value(None, "application_id", |row| row.get::<_, u32>(0))
@@ -34,7 +37,7 @@ fn fresh_database_is_exactly_complete_current_schema() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
             .expect("schema version"),
-        1
+        2
     );
     let application_tables = schema_object_names(&connection, "table")
         .into_iter()
@@ -69,6 +72,7 @@ fn fresh_database_is_exactly_complete_current_schema() {
             "caller_endpoint_id",
             "caller_addr",
             "caller_path_type",
+            "exchange_id",
         ]
     );
     assert_eq!(

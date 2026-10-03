@@ -22,6 +22,13 @@ pub enum PluginMeshEvent {
         request: proto::OpenMeshStreamRequest,
         response_tx: oneshot::Sender<Result<proto::OpenMeshStreamResponse, proto::ErrorResponse>>,
     },
+    /// `plugin_id` is the host's name for the plugin connection, never an id
+    /// the plugin claimed in its envelope.
+    PeerBlock {
+        plugin_id: String,
+        request: proto::PeerBlockRequest,
+        response_tx: oneshot::Sender<Result<proto::PeerBlockResponse, proto::ErrorResponse>>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

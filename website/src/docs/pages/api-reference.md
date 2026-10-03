@@ -22,7 +22,8 @@ http://localhost:9337/v1
 ```
 
 See [OpenAI-Compatible API](/docs/pages/openai-compatible-api/) for model
-listing and inference behavior.
+listing and inference behavior. For typed predicate, choice, and score
+questions, see the [Decisions API](/docs/pages/decisions-api/).
 
 For privacy-safe local request history, live replay, export, cleanup, and
 terminal webhook delivery, see the

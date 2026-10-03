@@ -127,6 +127,27 @@ mod tests {
     }
 
     #[test]
+    fn plugin_args_keep_their_order_and_leading_dashes() {
+        let cli = Cli::try_parse_from([
+            "mesh-llm",
+            "--log-format",
+            "json",
+            "--plugin",
+            "blobstore",
+            "--plugin-arg=--root",
+            "--plugin-arg=/srv/blobs",
+        ])
+        .expect("built-in plugin arguments should parse");
+
+        assert_eq!(cli.plugin.as_deref(), Some("blobstore"));
+        assert_eq!(cli.plugin_args, ["--root", "/srv/blobs"]);
+        assert!(
+            Cli::try_parse_from(["mesh-llm", "--plugin-arg=--root"]).is_err(),
+            "plugin arguments only mean something in plugin mode"
+        );
+    }
+
+    #[test]
     fn split_topology_lock_requires_split_mode() {
         let error = Cli::try_parse_from([
             "mesh-llm",

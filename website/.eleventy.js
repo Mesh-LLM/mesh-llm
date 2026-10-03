@@ -3,12 +3,14 @@ import ini from "highlight.js/lib/languages/ini";
 import bash from "highlight.js/lib/languages/bash";
 import json from "highlight.js/lib/languages/json";
 import rust from "highlight.js/lib/languages/rust";
+import python from "highlight.js/lib/languages/python";
 import markdownItAnchor from "markdown-it-anchor";
 
 hljs.registerLanguage("ini", ini);
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("json", json);
 hljs.registerLanguage("rust", rust);
+hljs.registerLanguage("python", python);
 
 const decodeHtmlEntities = (value) =>
   value

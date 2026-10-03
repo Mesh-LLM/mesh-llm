@@ -489,6 +489,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
         self.assertIn("enable_vulkan_inference: ${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED == 'true' }}", linux)
         self.assertIn("gpu-amd", linux)
         self.assertIn("gpu-nvidia", linux)
+        vulkan_job = linux.split("\n  laya_vulkan:", 1)[1].split(
+            "\n  laya_rocm:", 1
+        )[0]
+        self.assertIn("MESH_LLM_VULKAN_AVAILABLE: '1'", vulkan_job)
 
         laya_action = (ROOT / ".github/actions/run-laya-product-smoke/action.yml").read_text()
         self.assertEqual(

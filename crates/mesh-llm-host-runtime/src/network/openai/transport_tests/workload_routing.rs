@@ -422,6 +422,7 @@ async fn host_dispatch_rejects_local_legacy_target_without_capable_replicas() {
                 served_by_header: None,
                 route_observer: OpenAiRouteObserver::default(),
                 peer_capsule_id: None,
+                served_by_node_id: None,
             },
         ),
     )

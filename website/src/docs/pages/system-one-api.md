@@ -214,6 +214,12 @@ curl http://127.0.0.1:9337/systemone \
   }'
 ```
 
+## Decisions API
+
+The [Decisions API](/docs/pages/decisions-api/) provides `POST /v1/decisions`
+for the same System One models. Use its guide for model discovery, request and
+response examples, and adapter limits.
+
 ## Backend differences
 
 Two model families answer System One reads with the same request and response

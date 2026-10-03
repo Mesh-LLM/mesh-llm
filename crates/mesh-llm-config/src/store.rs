@@ -238,3 +238,28 @@ fn atomic_write(target: &Path, contents: &[u8]) -> std::io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PaymentsConfig;
+
+    #[test]
+    fn a_chosen_payments_wallet_survives_save_and_load() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("config.toml");
+        let store = ConfigStore::open(&path);
+        let config = MeshConfig {
+            version: Some(1),
+            payments: PaymentsConfig {
+                wallet: Some("my-wallet".into()),
+            },
+            ..MeshConfig::default()
+        };
+
+        store.save(&config).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("[payments]"), "{written}");
+        assert_eq!(store.load().unwrap().payments, config.payments);
+    }
+}

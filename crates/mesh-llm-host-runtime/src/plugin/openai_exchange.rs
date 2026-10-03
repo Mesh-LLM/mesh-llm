@@ -79,8 +79,10 @@ pub enum ClientNonceSource {
 /// prompt or response text is carried — provenance only.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ServingProvenance {
-    /// The node that actually served the inference — this host's own mesh
-    /// endpoint id.
+    /// The node that actually served the inference. On a host-served
+    /// terminal this is this host's own mesh endpoint id; on a `RemoteMesh`
+    /// terminal it is the peer the routing node observed deliver the
+    /// exchange (never the routing node itself).
     pub served_by_node_id: String,
     /// Serving host name, when the hardware survey resolved one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -142,6 +144,15 @@ pub struct ServingProvenance {
     /// metal enum on the served-model path).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_soc: Option<bool>,
+    /// The mesh node that asked this host to serve the exchange, hex-encoded.
+    /// Set only when the request arrived over the mesh HTTP tunnel, from the
+    /// tunnel's own QUIC-authenticated remote `EndpointId`
+    /// (`network/tunnel/inbound_http.rs`), never from anything the request
+    /// carries, so a client cannot set or spoof it. Omitted for a request
+    /// that reached this node's local API directly (no requesting mesh node)
+    /// and on every non-host-served path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_by_node_id: Option<String>,
 }
 
 /// The real token accounting the host observed for a served exchange, from
@@ -418,6 +429,13 @@ pub struct OpenAiExchangeEnvelope {
     /// model — never fabricated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_digest: Option<String>,
+    /// A client-chosen id marking this exchange as one of a pair (or set) the
+    /// client sent to different nodes on purpose, copied unread from the
+    /// request's `x-mesh-twin-bracket` header. The host never sends a second
+    /// request, picks a second node or compares answers: pairing is the
+    /// client's choice. `None` when the header is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub twin_bracket_id: Option<String>,
 }
 
 impl OpenAiExchangeEnvelope {
@@ -442,6 +460,7 @@ impl OpenAiExchangeEnvelope {
             response_digest: None,
             tool_calls_digest: None,
             reasoning_digest: None,
+            twin_bracket_id: None,
         }
     }
 
@@ -469,6 +488,7 @@ impl OpenAiExchangeEnvelope {
             response_digest: None,
             tool_calls_digest: None,
             reasoning_digest: None,
+            twin_bracket_id: None,
         }
     }
 
@@ -504,6 +524,14 @@ impl OpenAiExchangeEnvelope {
     #[must_use]
     pub fn with_request_digest(mut self, digest: String) -> Self {
         self.request_digest = Some(digest);
+        self
+    }
+
+    /// Attach the client's twin bracket id (see
+    /// [`twin_bracket_id`](Self::twin_bracket_id)); `None` leaves it absent.
+    #[must_use]
+    pub fn with_twin_bracket_id(mut self, twin_bracket_id: Option<String>) -> Self {
+        self.twin_bracket_id = twin_bracket_id;
         self
     }
 
@@ -564,6 +592,7 @@ impl OpenAiExchangeEnvelope {
             response_digest: None,
             tool_calls_digest: None,
             reasoning_digest: None,
+            twin_bracket_id: None,
         }
     }
 
@@ -591,11 +620,13 @@ impl OpenAiExchangeEnvelope {
     /// [`OpenAiExchangeEnvelope::nonce_source`] for the full explanation.
     ///
     /// `serving_provenance`/`usage`/`request_digest`/the output digests are
-    /// never attached on this constructor — the raw-proxy host-served
-    /// callsite that resolves those
-    /// (`network/openai/ingress.rs::publish_raw_proxy_terminal`) is a
-    /// different dispatch path (`RawProxy`); a routing node forwarding to a
-    /// peer never resolves them for itself.
+    /// not set by this constructor. The routing node attaches, through the
+    /// builders, only what it observed itself
+    /// (`network/openai/ingress.rs::remote_delivered_terminal`): the peer it
+    /// saw deliver as `serving_provenance.served_by_node_id` (every hardware
+    /// and model field stays absent, since this node never touched them), the
+    /// digest of the request body it forwarded, and the digests over the
+    /// response bytes it relayed. `usage` is never attached here.
     pub fn terminal_remote_mesh(
         exchange_id: impl Into<String>,
         model: impl Into<String>,
@@ -623,6 +654,7 @@ impl OpenAiExchangeEnvelope {
             response_digest: None,
             tool_calls_digest: None,
             reasoning_digest: None,
+            twin_bracket_id: None,
         }
     }
 }
@@ -1134,6 +1166,7 @@ mod tests {
             gpu: None,
             vram_bytes: None,
             is_soc: Some(true),
+            requested_by_node_id: None,
         });
 
         let value = serde_json::to_value(&envelope).expect("serialize");
@@ -1184,6 +1217,7 @@ mod tests {
             gpu: None,
             vram_bytes: None,
             is_soc: None,
+            requested_by_node_id: None,
         });
 
         let value = serde_json::to_value(&envelope).expect("serialize");

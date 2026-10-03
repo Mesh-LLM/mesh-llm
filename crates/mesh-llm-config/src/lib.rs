@@ -781,14 +781,9 @@ gpu_id = "pci:0000:65:00.0"
         }
     }
 
-    #[test]
-    fn authoring_mutators_remain_schema_classified() {
-        let canonical_paths: BTreeSet<_> = built_in_config_schema()
-            .settings
-            .into_iter()
-            .map(|setting| setting.path.render())
-            .collect();
-        let tracked = BTreeMap::from([
+    /// Each authoring mutator and the canonical schema paths it writes.
+    fn tracked_authoring_mutators() -> BTreeMap<&'static str, Vec<&'static str>> {
+        BTreeMap::from([
             ("ConfigEditor::set_version", vec!["version"]),
             ("ConfigEditor::set_gpu_assignment", vec!["gpu.assignment"]),
             ("ConfigEditor::set_gpu_parallel", vec!["gpu.parallel"]),
@@ -925,6 +920,14 @@ gpu_id = "pci:0000:65:00.0"
                 vec!["plugin.<plugin-name>.web_ui_enabled"],
             ),
             (
+                "PluginConfigEditor::web_ui_primary_tab",
+                vec!["plugin.<plugin-name>.web_ui_primary_tab"],
+            ),
+            (
+                "PluginConfigEditor::allow_peer_blocks",
+                vec!["plugin.<plugin-name>.allow_peer_blocks"],
+            ),
+            (
                 "PluginConfigEditor::command",
                 vec!["plugin.<plugin-name>.command"],
             ),
@@ -949,7 +952,17 @@ gpu_id = "pci:0000:65:00.0"
                 "PluginConfigEditor::lazy_start",
                 vec!["plugin.<plugin-name>.startup.lazy_start"],
             ),
-        ]);
+        ])
+    }
+
+    #[test]
+    fn authoring_mutators_remain_schema_classified() {
+        let canonical_paths: BTreeSet<_> = built_in_config_schema()
+            .settings
+            .into_iter()
+            .map(|setting| setting.path.render())
+            .collect();
+        let tracked = tracked_authoring_mutators();
         let ignored = BTreeSet::from([
             "ConfigEditor::new",
             "ConfigEditor::into_config",
@@ -993,6 +1006,7 @@ gpu_id = "pci:0000:65:00.0"
         let occurrences = [
             ("MeshConfig", 1usize),
             ("OwnerControlConfig", 1),
+            ("PaymentsConfig", 1),
             ("GpuConfig", 1),
             ("RuntimeConfig", 1),
             ("NativeRuntimeConfig", 1),
@@ -1024,6 +1038,7 @@ gpu_id = "pci:0000:65:00.0"
             "GpuConfig",
             "MeshRequirementsConfig",
             "OwnerControlConfig",
+            "PaymentsConfig",
             "RuntimeConfig",
             "NativeRuntimeConfig",
             "RuntimeKvCacheConfig",

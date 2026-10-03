@@ -2,6 +2,7 @@
 
 const path = require('node:path')
 const nativeRuntime = require('./native-runtime')
+const { Inference, OpenAIRequestError } = require('./inference')
 const nativeModuleCache = new Map()
 
 function loadNativeAddon() {
@@ -148,28 +149,6 @@ class Node {
   }
 }
 
-class Inference {
-  constructor(handle) {
-    this._handle = handle
-  }
-
-  async listModels() {
-    return parse(await this._handle.listModelsJson())
-  }
-
-  async chat(request, options = {}) {
-    return parse(await this._handle.chatJson(JSON.stringify(request), options.timeoutMs || null))
-  }
-
-  async responses(request, options = {}) {
-    return parse(await this._handle.responsesJson(JSON.stringify(request), options.timeoutMs || null))
-  }
-
-  cancel(requestId) {
-    return this._handle.cancel(requestId)
-  }
-}
-
 class Models {
   constructor(handle) {
     this._handle = handle
@@ -233,7 +212,9 @@ function defaultConsoleAssetDir() {
 module.exports = {
   Client,
   Console,
+  Inference,
   Node,
+  OpenAIRequestError,
   generateOwnerKeypairHex: native.generateOwnerKeypairHex,
   currentMeshVersion: nativeRuntime.currentMeshVersion,
   currentSkippyAbiVersion: nativeRuntime.currentSkippyAbiVersion,

@@ -41,6 +41,9 @@ pub enum WalletCommand {
         /// Full peer ID from `wallet blocked`, or a unique prefix of at least 8 characters.
         peer: String,
     },
+    /// Forget which wallet backs the payment ledger so another can be opened.
+    /// Only works with the node stopped; refused while any payment still depends on the old wallet.
+    Unpin,
     /// Use free providers only, or automatically pay for inference within a daily budget.
     Policy {
         #[arg(long, value_enum)]

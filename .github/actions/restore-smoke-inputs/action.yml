@@ -247,6 +247,7 @@ runs:
         )
         PY
         IFS=$'\t' read -r version backend host_path runtime_path < "$manifest_fields"
+        runtime_path="${runtime_path%$'\r'}"
         scripts/verify-native-runtime-package.sh "$extract_root/$runtime_path"
         python3 scripts/compose-product-bundle.py \
           --bundle "$extract_root" \

@@ -178,6 +178,9 @@ export type ThreadMessage = {
   tokens?: string
   tokPerSec?: string
   ttft?: string
+  /** The per-request client nonce the serving frontend echoed
+   *  (`x-capsule-client-nonce`); absent when the response carried none. */
+  clientNonce?: string
   inspectMessage?: TransparencyMessage
   inspectLabel?: string
 }

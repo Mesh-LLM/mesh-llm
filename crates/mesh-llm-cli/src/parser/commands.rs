@@ -621,6 +621,16 @@ pub struct Cli {
     #[arg(long, hide = true)]
     pub plugin: Option<String>,
 
+    /// Internal: one argument for the built-in plugin run by `--plugin`,
+    /// taken from its `[[plugin]]` stanza's `args`. Repeated in order.
+    #[arg(
+        long = "plugin-arg",
+        hide = true,
+        requires = "plugin",
+        allow_hyphen_values = true
+    )]
+    pub plugin_args: Vec<String>,
+
     /// Update mesh-llm before continuing for release-bundle installs if a newer bundled release is available.
     #[arg(long, global = true)]
     pub auto_update: bool,

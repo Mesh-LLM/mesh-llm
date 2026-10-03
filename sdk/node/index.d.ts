@@ -68,6 +68,52 @@ export type InferenceResult = {
   events: unknown[]
 }
 
+export type OpenAIRequestBody = Record<string, unknown>
+
+export type OpenAIResponse = {
+  statusCode: number
+  contentType?: string | null
+  body: string
+  json(): unknown
+}
+
+export type OpenAIStreamStarted = {
+  type: 'started'
+  requestId: string
+  statusCode: number
+  contentType?: string | null
+}
+
+export type OpenAIStreamSSE = {
+  type: 'sse'
+  requestId: string
+  event?: string | null
+  data: string
+  raw: string
+  done: boolean
+  json(): unknown | null
+}
+
+export type OpenAIStreamEvent = OpenAIStreamStarted | OpenAIStreamSSE
+
+export declare class OpenAIRequestError extends Error {
+  readonly statusCode: number | null
+  readonly body: string | null
+}
+
+export declare class Inference {
+  listModels(): Promise<Model[]>
+  chat(request: ChatRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
+  responsesText(request: ResponsesRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
+  request(path: string, body: OpenAIRequestBody, options?: { raiseForStatus?: boolean }): Promise<OpenAIResponse>
+  chatCompletions(body: OpenAIRequestBody): Promise<unknown>
+  responses(body: OpenAIRequestBody): Promise<unknown>
+  stream(path: string, body: OpenAIRequestBody): AsyncGenerator<OpenAIStreamEvent, void, unknown>
+  streamChatCompletions(body: OpenAIRequestBody): AsyncGenerator<OpenAIStreamEvent, void, unknown>
+  streamResponses(body: OpenAIRequestBody): AsyncGenerator<OpenAIStreamEvent, void, unknown>
+  cancel(requestId: string): Promise<void>
+}
+
 export type DevicePolicy = 'auto' | 'cpu' | 'gpu' | { gpu: string[] }
 
 export type LoadModelOptions = {
@@ -172,12 +218,7 @@ export type ClientOptions = {
 
 export declare class Client {
   static create(options: ClientOptions): Client
-  readonly inference: {
-    listModels(): Promise<Model[]>
-    chat(request: ChatRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
-    responses(request: ResponsesRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
-    cancel(requestId: string): Promise<void>
-  }
+  readonly inference: Inference
   start(): Promise<void>
   stop(): Promise<void>
   reconnect(): Promise<void>
@@ -186,12 +227,7 @@ export declare class Client {
 
 export declare class Node {
   static create(options: NodeOptions): Node
-  readonly inference: {
-    listModels(): Promise<Model[]>
-    chat(request: ChatRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
-    responses(request: ResponsesRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
-    cancel(requestId: string): Promise<void>
-  }
+  readonly inference: Inference
   readonly models: {
     recommended(): Promise<ModelSummary[]>
     search(query: { query: string; limit?: number }): Promise<ModelSummary[]>

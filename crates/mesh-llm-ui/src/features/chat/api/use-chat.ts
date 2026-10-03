@@ -10,6 +10,8 @@ type UseMeshChatOptions = {
   conversationId: string
   model: string
   systemPrompt?: string
+  /** A node endpoint id: when set, requests go to that node only. */
+  target?: string
   initialMessages: ThreadMessage[]
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void
 }
@@ -31,21 +33,24 @@ export function useMeshChat({
   conversationId,
   model,
   systemPrompt = '',
+  target = '',
   initialMessages,
   onResponseMetadata
 }: UseMeshChatOptions): UseChatReturn {
   const previousConversationIdRef = useRef(conversationId)
   const [currentModel] = useState(() => createMutableStringSource(model))
   const [currentSystemPrompt] = useState(() => createMutableStringSource(systemPrompt))
+  const [currentTarget] = useState(() => createMutableStringSource(target))
 
   useLayoutEffect(() => {
     currentModel.setValue(model)
     currentSystemPrompt.setValue(systemPrompt)
-  }, [currentModel, currentSystemPrompt, model, systemPrompt])
+    currentTarget.setValue(target)
+  }, [currentModel, currentSystemPrompt, currentTarget, model, systemPrompt, target])
 
   const connection = useMemo(
-    () => createMeshConnectionAdapter(currentModel, onResponseMetadata, currentSystemPrompt),
-    [currentModel, currentSystemPrompt, onResponseMetadata]
+    () => createMeshConnectionAdapter(currentModel, onResponseMetadata, currentSystemPrompt, currentTarget),
+    [currentModel, currentSystemPrompt, currentTarget, onResponseMetadata]
   )
   const hydratedMessages = useMemo(() => threadMessagesToUIMessages(initialMessages), [initialMessages])
   const chat = useChat({ threadId: conversationId, connection, initialMessages: hydratedMessages })

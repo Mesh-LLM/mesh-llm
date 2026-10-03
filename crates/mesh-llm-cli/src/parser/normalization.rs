@@ -68,6 +68,7 @@ const VALUE_TAKING_FLAGS: &[&str] = &[
     "--region",
     "--name",
     "--plugin",
+    "--plugin-arg",
     "--draft",
     "--bin-dir",
     "--relay",

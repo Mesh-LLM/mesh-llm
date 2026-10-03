@@ -56,6 +56,7 @@ impl PaymentService {
                 let peer = self.ledger.resolve_blocked_peer(&peer)?;
                 Ok(serde_json::to_value(self.ledger.unblock_peer(&peer)?)?)
             }
+            ControlCommand::Unpin => self.unpin_wallet(),
             ControlCommand::Policy { value } => {
                 if let Some(value) = value {
                     self.ledger.set_policy(&value)?;
@@ -68,6 +69,29 @@ impl PaymentService {
                 Ok(serde_json::to_value(self.ledger.pricing()?)?)
             }
         }
+    }
+
+    fn unpin_wallet(&self) -> Result<Value> {
+        // A running node may be opening its wallet against the pin right now,
+        // so the pin only changes while no node can be running.
+        ensure!(
+            self.is_ledger_only(),
+            "stop mesh-llm, then run `mesh-llm wallet unpin` again"
+        );
+        let blockers = self.ledger.wallet_switch_blockers()?;
+        if !blockers.is_empty() {
+            anyhow::bail!(
+                "payments still depend on the pinned wallet ({} unresolved outgoing, {} unpaid \
+                 invoices). Run mesh-llm with the pinned wallet so it settles or records them, \
+                 or forgive a peer's unpaid invoices with `mesh-llm wallet unblock`, then retry: \
+                 {}",
+                blockers.unresolved_payments.len(),
+                blockers.unpaid_invoices.len(),
+                serde_json::to_string(&blockers)?
+            );
+        }
+        let unpinned = crate::provisioning::WalletPin::remove(self.directory())?;
+        Ok(json!({"unpinned": unpinned}))
     }
 
     async fn send_invoice(&self, bolt11: &str, amount: Option<u64>, fee: u64) -> Result<Value> {

@@ -72,6 +72,33 @@ impl PeerCapsuleIdSink {
     }
 }
 
+/// A single-slot side channel for the hex-encoded `EndpointId` of the peer that
+/// actually delivered a routed attempt. Same threading rationale as
+/// [`PeerCapsuleIdSink`]: `RouteDispatchOutcome` is `Copy` and built on paths
+/// that have nothing to do with which peer served, so the served peer id rides
+/// this sink rather than being folded into the outcome.
+///
+/// Set where the delivered attempt returns and its chosen target is in scope,
+/// so a request that never named an `x-mesh-target` still learns which peer
+/// served it. Never invents a value: stays `None` when nothing was served or
+/// the delivering target was this node's own local backend.
+#[derive(Default)]
+pub(crate) struct ServedByNodeIdSink(std::sync::Mutex<Option<String>>);
+
+impl ServedByNodeIdSink {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(in crate::network::openai) fn set(&self, value: String) {
+        *self.0.lock().unwrap() = Some(value);
+    }
+
+    pub(crate) fn take(&self) -> Option<String> {
+        self.0.lock().unwrap().take()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::network::openai) enum RouteAttemptResult {
     Delivered {

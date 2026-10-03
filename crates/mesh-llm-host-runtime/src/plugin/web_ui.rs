@@ -17,8 +17,11 @@ pub struct PluginWebUiState {
     pub pages: Vec<PluginWebUiPageOverview>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub config_sections: Vec<PluginWebUiConfigSectionOverview>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub contributions: Vec<PluginWebUiContributionOverview>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_base_url: Option<String>,
+    pub primary_tab_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
@@ -38,6 +41,8 @@ pub struct PluginWebUiManifestOverview {
     pub pages: Vec<PluginWebUiPageOverview>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub config_sections: Vec<PluginWebUiConfigSectionOverview>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub contributions: Vec<PluginWebUiContributionOverview>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -49,6 +54,39 @@ pub struct PluginWebUiPageOverview {
     pub route: String,
     pub bundle_id: String,
     pub entry_script: String,
+    pub placement: PluginWebUiPagePlacement,
+    /// `Some(false)`: the page asked the host not to draw its page header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_header: Option<bool>,
+}
+
+/// The page's manifest-declared placement request. This is a request, not
+/// a promotion decision: the console also requires the operator's
+/// persisted `primary_tab_enabled` preference (see
+/// `crate::api::routes::plugins::web_ui`) before it treats the page as a
+/// primary tab, and may still fall back to auxiliary when the tab bar is
+/// full.
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginWebUiPagePlacement {
+    #[default]
+    Auxiliary,
+    Primary,
+}
+
+impl From<mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement>
+    for PluginWebUiPagePlacement
+{
+    fn from(value: mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement) -> Self {
+        match value {
+            mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement::Auxiliary => {
+                Self::Auxiliary
+            }
+            mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement::Primary => {
+                Self::Primary
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -61,11 +99,21 @@ pub struct PluginWebUiConfigSectionOverview {
     pub bundle_id: String,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PluginWebUiContributionOverview {
+    pub id: String,
+    pub slot: String,
+    pub label: String,
+    pub bundle_id: String,
+    pub entry_script: String,
+}
+
 pub(crate) struct PluginWebUiStateInput<'a> {
     pub plugin_name: &'a str,
     pub live_manifest: Option<&'a proto::PluginManifest>,
     pub installed_metadata: Option<&'a InstalledPluginMetadata>,
     pub web_ui_enabled: Option<bool>,
+    pub web_ui_primary_tab: bool,
     pub runtime_available: bool,
     pub runtime_unavailable_reason: Option<&'a str>,
 }
@@ -75,8 +123,9 @@ pub(crate) fn derive_plugin_web_ui_state(input: PluginWebUiStateInput<'_>) -> Pl
     let Some(declaration) = declaration else {
         return PluginWebUiState::default();
     };
+    let primary_tab_enabled = input.web_ui_primary_tab;
     let preference = plugin_web_ui_preference(input.web_ui_enabled, true);
-    match preference {
+    let mut state = match preference {
         PluginWebUiPreference::None => PluginWebUiState::default(),
         PluginWebUiPreference::Disabled => declaration.state(
             PluginWebUiStateKind::Disabled,
@@ -85,7 +134,9 @@ pub(crate) fn derive_plugin_web_ui_state(input: PluginWebUiStateInput<'_>) -> Pl
             Some("web UI disabled by configuration".into()),
         ),
         PluginWebUiPreference::Enabled => enabled_plugin_web_ui_state(input, declaration),
-    }
+    };
+    state.primary_tab_enabled = primary_tab_enabled;
+    state
 }
 
 fn enabled_plugin_web_ui_state(
@@ -120,6 +171,7 @@ pub(super) fn inactive_web_ui_state(
             live_manifest: None,
             installed_metadata: Some(&metadata),
             web_ui_enabled,
+            web_ui_primary_tab: summary.web_ui.primary_tab_enabled,
             runtime_available: summary.status == "running",
             runtime_unavailable_reason: summary.error.as_deref(),
         });
@@ -182,6 +234,7 @@ fn plugin_web_ui_preference(
 struct PluginWebUiDeclaration {
     pages: Vec<PluginWebUiPageOverview>,
     config_sections: Vec<PluginWebUiConfigSectionOverview>,
+    contributions: Vec<PluginWebUiContributionOverview>,
     asset_base_url: Option<String>,
     invalid_reason: Option<String>,
 }
@@ -202,7 +255,10 @@ impl PluginWebUiDeclaration {
             unavailable_reason,
             pages: self.pages,
             config_sections: self.config_sections,
+            contributions: self.contributions,
             asset_base_url: self.asset_base_url,
+            // Overwritten by `derive_plugin_web_ui_state` right after this call returns.
+            primary_tab_enabled: false,
         }
     }
 }
@@ -256,6 +312,11 @@ fn plugin_web_ui_declaration_from_installed(
             .iter()
             .map(plugin_web_ui_config_section_from_installed)
             .collect(),
+        contributions: web_ui
+            .contributions
+            .iter()
+            .map(plugin_web_ui_contribution_from_installed)
+            .collect(),
         asset_base_url: asset_root.map(|_| format!("/api/plugins/{plugin_name}/web-ui/assets/")),
         invalid_reason,
     }
@@ -274,6 +335,11 @@ fn plugin_web_ui_declaration_from_proto(
             .config_sections
             .iter()
             .map(plugin_web_ui_config_section_from_proto)
+            .collect(),
+        contributions: web_ui
+            .contributions
+            .iter()
+            .map(plugin_web_ui_contribution_from_proto)
             .collect(),
         asset_base_url: None,
         invalid_reason: Some("web UI bundle metadata is unavailable".into()),
@@ -294,6 +360,11 @@ pub(super) fn plugin_web_ui_manifest_overview_from_proto(
             .iter()
             .map(plugin_web_ui_config_section_from_proto)
             .collect(),
+        contributions: web_ui
+            .contributions
+            .iter()
+            .map(plugin_web_ui_contribution_from_proto)
+            .collect(),
     })
 }
 
@@ -305,6 +376,11 @@ fn plugin_web_ui_page_from_proto(page: &proto::PluginWebUiPageManifest) -> Plugi
         route: page.route.clone(),
         bundle_id: page.bundle_id.clone(),
         entry_script: page.entry_script.clone(),
+        placement: match proto::PluginWebUiPagePlacement::try_from(page.placement) {
+            Ok(proto::PluginWebUiPagePlacement::Primary) => PluginWebUiPagePlacement::Primary,
+            _ => PluginWebUiPagePlacement::Auxiliary,
+        },
+        host_header: page.host_header,
     }
 }
 
@@ -320,6 +396,18 @@ fn plugin_web_ui_config_section_from_proto(
     }
 }
 
+fn plugin_web_ui_contribution_from_proto(
+    contribution: &proto::PluginWebUiContributionManifest,
+) -> PluginWebUiContributionOverview {
+    PluginWebUiContributionOverview {
+        id: contribution.id.clone(),
+        slot: contribution.slot.clone(),
+        label: contribution.label.clone(),
+        bundle_id: contribution.bundle_id.clone(),
+        entry_script: contribution.entry_script.clone(),
+    }
+}
+
 fn plugin_web_ui_page_from_installed(
     page: &mesh_llm_plugin_manager::store::InstalledPluginWebUiPageMetadata,
 ) -> PluginWebUiPageOverview {
@@ -330,6 +418,8 @@ fn plugin_web_ui_page_from_installed(
         route: page.route.clone(),
         bundle_id: page.bundle_id.clone(),
         entry_script: page.entry_script.clone(),
+        placement: page.placement.into(),
+        host_header: page.host_header,
     }
 }
 
@@ -342,6 +432,18 @@ fn plugin_web_ui_config_section_from_installed(
         entry_script: section.entry_script.clone(),
         parent_tab: section.parent_tab.clone(),
         bundle_id: section.bundle_id.clone(),
+    }
+}
+
+fn plugin_web_ui_contribution_from_installed(
+    contribution: &mesh_llm_plugin_manager::store::InstalledPluginWebUiContributionMetadata,
+) -> PluginWebUiContributionOverview {
+    PluginWebUiContributionOverview {
+        id: contribution.id.clone(),
+        slot: contribution.slot.clone(),
+        label: contribution.label.clone(),
+        bundle_id: contribution.bundle_id.clone(),
+        entry_script: contribution.entry_script.clone(),
     }
 }
 
@@ -374,6 +476,8 @@ pub(super) fn installed_metadata_with_web_ui(
                             route: "index.html".into(),
                             bundle_id: "main".into(),
                             entry_script: "assets/app.js".into(),
+                            placement: mesh_llm_plugin_manager::store::InstalledPluginWebUiPagePlacement::Auxiliary,
+                            host_header: None,
                         },
                     ],
                     config_sections: vec![
@@ -383,6 +487,15 @@ pub(super) fn installed_metadata_with_web_ui(
                             entry_script: "assets/settings.js".into(),
                             parent_tab: Some("integrations".into()),
                             bundle_id: "main".into(),
+                        },
+                    ],
+                    contributions: vec![
+                        mesh_llm_plugin_manager::store::InstalledPluginWebUiContributionMetadata {
+                            id: "note".into(),
+                            slot: "chat_message".into(),
+                            label: "Note".into(),
+                            bundle_id: "main".into(),
+                            entry_script: "assets/note.js".into(),
                         },
                     ],
                     bundles: vec![
@@ -419,6 +532,7 @@ mod tests {
             live_manifest: None,
             installed_metadata,
             web_ui_enabled,
+            web_ui_primary_tab: false,
             runtime_available,
             runtime_unavailable_reason: Some("plugin process is not running"),
         })
@@ -443,6 +557,8 @@ mod tests {
         );
         assert_eq!(state.pages.len(), 1);
         assert_eq!(state.config_sections.len(), 1);
+        assert_eq!(state.contributions.len(), 1);
+        assert_eq!(state.contributions[0].slot, "chat_message");
     }
 
     #[test]

@@ -44,6 +44,10 @@ UPSTREAM_CPU_ERROR = {
 ALLOWANCE = 0.005
 
 
+def read_fixture(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def answer_probabilities(answer: dict[str, Any]) -> dict[str, float]:
     """The probabilities a Jev answer reports, keyed by option."""
     if "noul" in answer:
@@ -133,7 +137,7 @@ def main() -> int:
 
     results = []
     for path in fixtures:
-        golden = json.loads(path.read_text(encoding="utf-8"))
+        golden = read_fixture(path)
         try:
             if args.base_url:
                 answers, ids = read_via_http(args.base_url, args.model, golden, args.timeout), None
@@ -149,7 +153,10 @@ def main() -> int:
 
     failed = [result for result in results if result["failures"]]
     if args.json_out:
-        args.json_out.write_text(json.dumps({"results": results, "passed": not failed}, indent=2))
+        args.json_out.write_text(
+            json.dumps({"results": results, "passed": not failed}, indent=2),
+            encoding="utf-8",
+        )
     print("laya parity:", "pass" if not failed else f"{len(failed)} fixture(s) failed")
     return 1 if failed else 0
 
