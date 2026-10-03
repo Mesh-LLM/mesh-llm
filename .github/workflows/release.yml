@@ -1761,6 +1761,31 @@ jobs:
       - name: Remove smoke-only binary
         run: rm -f release-artifacts/mesh-llm
 
+      - name: Verify complete Node SDK addon release matrix
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          for target in darwin-arm64 linux-arm64 linux-x64 win32-x64; do
+            archive="mesh-llm-node-sdk-addon-$version-$target.tar.gz"
+            sidecar="$archive.sha256"
+            test -s "release-artifacts/$archive" || {
+              echo "Missing Node SDK addon release asset: $archive" >&2
+              exit 1
+            }
+            test -s "release-artifacts/$sidecar" || {
+              echo "Missing Node SDK addon checksum: $sidecar" >&2
+              exit 1
+            }
+            grep -Eq "^[0-9a-f]{64}  $archive$" "release-artifacts/$sidecar" || {
+              echo "Invalid Node SDK addon checksum: $sidecar" >&2
+              exit 1
+            }
+            (cd release-artifacts && shasum -a 256 -c "$sidecar")
+          done
+
       - name: Generate native runtime release manifest
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
