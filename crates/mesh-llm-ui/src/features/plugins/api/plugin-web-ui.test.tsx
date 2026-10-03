@@ -349,6 +349,7 @@ function webUiEntry(
       }
     ],
     configSections: [],
+    contributions: [],
     primaryTabEnabled: options.primaryTabEnabled
   }
 }

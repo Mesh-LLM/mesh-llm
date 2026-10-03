@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import {
   BrainCircuit,
   Eye,
@@ -67,6 +67,8 @@ type MessageRowProps = {
   onStopStreaming?: () => void
   onRemoveQueued?: () => void
   attachments?: MessageAttachmentAction[]
+  /** Rendered under a response's stats bar (plugin contributions). */
+  footer?: ReactNode
 }
 
 function AttachmentIcon({ kind }: { kind: MessageAttachmentAction['kind'] }) {
@@ -193,7 +195,8 @@ export function MessageRow({
   ttft,
   onStopStreaming,
   onRemoveQueued,
-  attachments = []
+  attachments = [],
+  footer
 }: MessageRowProps) {
   const isUser = messageRole === 'user'
   const isResponse = !isUser
@@ -349,6 +352,7 @@ export function MessageRow({
           inspectLabel={accessibleInspectLabel}
         />
       ) : null}
+      {isResponse && !isError ? footer : null}
     </>
   )
   const content = isError ? (

@@ -23,8 +23,8 @@ pub use self::types::{
     ToolCallResult, ToolSummary,
 };
 pub use self::web_ui::{
-    PluginWebUiConfigSectionOverview, PluginWebUiManifestOverview, PluginWebUiPageOverview,
-    PluginWebUiState, PluginWebUiStateKind,
+    PluginWebUiConfigSectionOverview, PluginWebUiContributionOverview, PluginWebUiManifestOverview,
+    PluginWebUiPageOverview, PluginWebUiState, PluginWebUiStateKind,
 };
 pub(crate) use self::web_ui::{PluginWebUiStateInput, derive_plugin_web_ui_state};
 use self::web_ui::{
@@ -101,10 +101,10 @@ use mesh_llm_plugin::MeshVisibility;
 use mesh_llm_plugin_manager::store::InstalledPluginWebUiValidationStatus;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
-/// Built-in Lexe wallet plugin, served like blobstore from this executable as
-/// `mesh-llm --plugin wallet-lexe`. Compiled in only with the `wallet-lexe`
-/// feature; the name stays defined so config validation is feature-independent.
-pub const WALLET_LEXE_PLUGIN_ID: &str = "wallet-lexe";
+/// Name of the removed built-in Lexe wallet. A leftover `[[plugin]]` stanza
+/// with this name is ignored with a warning; Lexe now ships as the external
+/// `lexe-wallet` plugin.
+pub const RETIRED_WALLET_LEXE_PLUGIN_ID: &str = "wallet-lexe";
 /// Built-in payments engine, served in-process as the `payments.v1`
 /// capability. Registered only with the `payments` feature.
 pub const PAYMENTS_PLUGIN_ID: &str = "payments";
@@ -1596,8 +1596,6 @@ pub async fn run_plugin_process(name: String, args: Vec<String>) -> Result<()> {
     }
     match name.as_str() {
         BLOBSTORE_PLUGIN_ID => crate::plugins::blobstore::run_plugin(name).await,
-        #[cfg(feature = "wallet-lexe")]
-        WALLET_LEXE_PLUGIN_ID => mesh_wallet_lexe::run_plugin(name).await,
         _ => bail!("Unknown built-in plugin '{}'", name),
     }
 }

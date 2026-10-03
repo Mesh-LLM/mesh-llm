@@ -73,6 +73,9 @@ pub struct PluginInitializeRequest {
     pub host_version: String,
     pub host_info_json: String,
     pub mesh_visibility: MeshVisibility,
+    /// Empty for a host older than this field.
+    #[serde(default)]
+    pub host_capabilities: Vec<String>,
 }
 
 impl From<proto::InitializeRequest> for PluginInitializeRequest {
@@ -82,6 +85,7 @@ impl From<proto::InitializeRequest> for PluginInitializeRequest {
             host_version: value.host_version,
             host_info_json: value.host_info_json,
             mesh_visibility: MeshVisibility::from_proto(value.mesh_visibility),
+            host_capabilities: value.host_capabilities,
         }
     }
 }
@@ -634,6 +638,8 @@ struct RuntimeState<P> {
     plugin_id: String,
     outbound_tx: mpsc::Sender<proto::Envelope>,
     pending_host_responses: PendingHostResponses,
+    /// What the host listed in its `InitializeRequest`; empty until then.
+    host_capabilities: std::sync::RwLock<Arc<[String]>>,
 }
 
 struct OrderedPayload {
@@ -661,6 +667,7 @@ impl PluginRuntime {
             plugin_id,
             outbound_tx,
             pending_host_responses: Arc::new(Mutex::new(HashMap::new())),
+            host_capabilities: std::sync::RwLock::new(Arc::from([])),
         });
         let mut writer = tokio::spawn(Self::write_loop(
             write,
@@ -946,6 +953,11 @@ impl PluginRuntime {
         request_id: u64,
         request: proto::InitializeRequest,
     ) -> Result<bool> {
+        *state
+            .host_capabilities
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Arc::from(request.host_capabilities.clone());
         let mut plugin = state.plugin.write().await;
         let mut context = Self::context(&state);
         let init_result = plugin
@@ -1139,6 +1151,13 @@ impl PluginRuntime {
             state.plugin_id.clone(),
             state.outbound_tx.clone(),
             state.pending_host_responses.clone(),
+        )
+        .with_host_capabilities(
+            state
+                .host_capabilities
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
         )
     }
 

@@ -2,9 +2,8 @@
 
 Integer-msat pricing, durable spending authorization, and two-payment inference
 settlement over a provider-neutral wallet. The wallet trait, BOLT11 validation
-and the `wallet.v1` plugin contract live in `mesh-llm-wallet`; the shipped
-Lexe implementation is the `mesh-wallet-lexe` crate, served as the built-in
-`mesh-llm --plugin wallet-lexe` process. This crate links no wallet SDK and owns
+and the `wallet.v1` plugin contract live in `mesh-llm-wallet`; concrete
+wallets such as Lexe are external plugins (`lexe-wallet`). This crate links no wallet SDK and owns
 invoice lifetimes (`lifetimes`) and fee policy (`pricing`). Applications use the
 local management API.
 

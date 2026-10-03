@@ -61,8 +61,7 @@ pub struct MeshConfig {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PaymentsConfig {
     /// Plugin name of the `wallet.v1` provider to use. When unset the host
-    /// uses the only running wallet plugin, preferring any other over the
-    /// built-in Lexe wallet.
+    /// uses the only running wallet plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallet: Option<String>,
 }
@@ -1720,6 +1719,10 @@ pub struct PluginConfigEntry {
     pub web_ui_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_ui_primary_tab: Option<bool>,
+    /// Whether this plugin may ask the host to block or unblock routing to a
+    /// peer. Host-owned; off unless the operator turns it on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_peer_blocks: Option<bool>,
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]
@@ -1761,6 +1764,12 @@ impl PluginConfigEntry {
     /// `placement = "primary"` should be promoted.
     pub const fn web_ui_primary_tab_preference(&self) -> bool {
         matches!(self.web_ui_primary_tab, Some(true))
+    }
+
+    /// Off unless the operator has explicitly opted in: only then may the
+    /// plugin request peer routing blocks. Operator blocks never need it.
+    pub const fn peer_blocks_allowed(&self) -> bool {
+        matches!(self.allow_peer_blocks, Some(true))
     }
 }
 

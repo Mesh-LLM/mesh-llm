@@ -2136,3 +2136,49 @@ fn real_inkling_metadata_uses_safe_f16_without_publisher_defaults() {
         "model architecture and weight size must not quantize live K/V"
     );
 }
+
+#[tokio::test]
+async fn split_participants_exclude_a_blocked_peer() {
+    use crate::network::peer_blocks::{BlockLength, Requester, now_ms};
+
+    let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
+        .await
+        .unwrap();
+    let model = "test/model";
+    let peer = split_test_peer(0x21, model, true);
+    let peer_id = peer.id;
+    node.insert_test_peer(peer).await;
+
+    let before = collect_split_participant_membership(&node, model, model, false).await;
+    assert!(
+        before.participants.iter().any(|p| p.node_id == peer_id),
+        "setup: an unblocked peer that wants the model is a split participant"
+    );
+
+    node.peer_blocks
+        .block(
+            &peer_id,
+            BlockLength::UntilUndone,
+            Requester::Operator,
+            None,
+            now_ms(),
+        )
+        .expect("block the peer");
+
+    let after = collect_split_participant_membership(&node, model, model, false).await;
+    assert!(
+        after.participants.iter().all(|p| p.node_id != peer_id),
+        "a blocked peer must never be selected as a split stage: {:?}",
+        after
+            .participants
+            .iter()
+            .map(|p| p.node_id)
+            .collect::<Vec<_>>()
+    );
+    let exclusion = after
+        .excluded
+        .iter()
+        .find(|e| e.node_id == peer_id)
+        .expect("the operator's block is reported as an exclusion reason");
+    assert_eq!(exclusion.reason.as_str(), "blocked");
+}

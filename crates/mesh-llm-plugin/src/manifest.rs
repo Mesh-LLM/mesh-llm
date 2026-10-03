@@ -12,7 +12,8 @@ use self::control_behavior::PackagedPluginControlBehavior;
 use self::web_ui::PackagedPluginWebUi;
 pub use self::web_ui::{
     PluginWebUiBuilder, PluginWebUiBundleBuilder, PluginWebUiConfigSectionBuilder,
-    PluginWebUiPageBuilder, web_ui, web_ui_bundle, web_ui_config_section, web_ui_page,
+    PluginWebUiContributionBuilder, PluginWebUiPageBuilder, WEB_UI_CONTRIBUTION_SLOTS, web_ui,
+    web_ui_bundle, web_ui_config_section, web_ui_contribution, web_ui_page,
 };
 
 #[cfg(test)]

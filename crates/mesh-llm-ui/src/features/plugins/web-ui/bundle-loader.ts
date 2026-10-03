@@ -33,6 +33,10 @@ export function assertPluginUiRegistration(value: unknown): asserts value is Mes
     throw new PluginUiBundleContractError('Plugin bundle configSections must be an object when provided')
   }
   if (isRecord(value.configSections)) assertMountMap(value.configSections, 'configSections')
+  if (value.contributions !== undefined && !isRecord(value.contributions)) {
+    throw new PluginUiBundleContractError('Plugin bundle contributions must be an object when provided')
+  }
+  if (isRecord(value.contributions)) assertMountMap(value.contributions, 'contributions')
 }
 
 export function assertPluginUiMountHandle(value: unknown): asserts value is MeshPluginUiMountHandle {

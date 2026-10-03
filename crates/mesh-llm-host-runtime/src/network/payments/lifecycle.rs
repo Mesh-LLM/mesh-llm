@@ -228,9 +228,12 @@ impl Observations {
 
 /// Provider side, resolved once per serving request before anything is
 /// priced: holds the plugin manager only when a loaded plugin declares the
-/// channel, so a node with no subscriber never generates an ID or hashes.
+/// channel, so a node with no subscriber never hashes.
 #[derive(Clone, Default)]
-pub(crate) struct ProviderLifecycle(Option<PluginManager>);
+pub(crate) struct ProviderLifecycle {
+    manager: Option<PluginManager>,
+    exchange_id: Option<String>,
+}
 
 impl ProviderLifecycle {
     pub(crate) async fn for_node(node: &Node) -> Self {
@@ -240,17 +243,35 @@ impl ProviderLifecycle {
         if !manager.any_plugin_declares_mesh_channel(CHANNEL).await {
             return Self::default();
         }
-        Self(Some(manager))
+        Self {
+            manager: Some(manager),
+            exchange_id: None,
+        }
+    }
+
+    /// Whether a loaded plugin subscribes to this channel.
+    pub(crate) fn is_subscribed(&self) -> bool {
+        self.manager.is_some()
+    }
+
+    /// Name the serving request's exchange with `exchange_id`, the id its
+    /// `openai.exchange.v1` events carry, so the provider's two channels join.
+    pub(crate) fn named(self, exchange_id: Option<String>) -> Self {
+        Self {
+            exchange_id,
+            ..self
+        }
     }
 
     /// Start observing a serving request once its input invoice exists. The
-    /// provider has no payer-side exchange to join: it names the exchange
-    /// with its own fresh ID, never the private request (recovery) ID.
+    /// provider has no payer-side exchange to join: the serving path names
+    /// the exchange with its own fresh ID ([`Self::named`]), never the private
+    /// request (recovery) ID. Nothing is observed for an unnamed request.
     pub(crate) fn observe(&self, terms: &RequestTerms) -> Observations {
-        let Some(manager) = self.0.clone() else {
+        let (Some(manager), Some(exchange_id)) = (self.manager.clone(), self.exchange_id.clone())
+        else {
             return Observations::default();
         };
-        let exchange_id = uuid::Uuid::new_v4().to_string();
         let mut terms = terms.clone();
         terms.exchange_id = Some(exchange_id.clone());
         Observations::start(manager, Role::Provider, exchange_id, &terms).unwrap_or_default()

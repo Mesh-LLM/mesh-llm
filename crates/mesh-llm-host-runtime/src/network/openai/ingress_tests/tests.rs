@@ -1916,6 +1916,55 @@ async fn resolve_remote_mesh_route_fails_closed_for_a_target_that_does_not_serve
 }
 
 #[tokio::test]
+async fn resolve_remote_mesh_route_names_the_operator_block_on_a_blocked_target() {
+    use crate::network::peer_blocks::{BlockLength, Requester, now_ms};
+
+    let model = "acme/code-model:Q4_K_M";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    let peer = test_remote_peer(0x10, model);
+    let target = peer.id;
+    node.insert_test_peer(peer).await;
+    let targets = election::ModelTargets::default();
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = remote_mesh_test_ctx(&node, &targets, &affinity);
+
+    assert!(
+        matches!(
+            resolve_remote_mesh_route(&ctx, model, Some(target), &[]).await,
+            RemoteMeshRoute::Targets(_)
+        ),
+        "setup: an unblocked target that serves the model resolves to a forced pool"
+    );
+
+    node.peer_blocks
+        .block(
+            &target,
+            BlockLength::UntilUndone,
+            Requester::Operator,
+            None,
+            now_ms(),
+        )
+        .expect("block the peer");
+
+    match resolve_remote_mesh_route(&ctx, model, Some(target), &[]).await {
+        RemoteMeshRoute::TargetUnavailable { blocked, .. } => assert!(
+            blocked,
+            "the operator's block, not a missing model, is why the target is unavailable"
+        ),
+        other => panic!(
+            "a blocked explicit target must fail closed, got: {}",
+            match other {
+                RemoteMeshRoute::Targets(_) => "Targets",
+                RemoteMeshRoute::TargetUnavailable { .. } => unreachable!(),
+                RemoteMeshRoute::NoRemoteHost => "NoRemoteHost",
+            }
+        ),
+    }
+}
+
+#[tokio::test]
 async fn resolve_remote_mesh_route_exclude_removes_a_peer_from_the_candidate_set() {
     let model = "acme/code-model:Q4_K_M";
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
@@ -1942,7 +1991,7 @@ async fn resolve_remote_mesh_route_exclude_removes_a_peer_from_the_candidate_set
             "expected the non-excluded peer to remain routable, got a different route: {}",
             match other {
                 RemoteMeshRoute::Targets(_) => unreachable!(),
-                RemoteMeshRoute::TargetUnavailable { target_hex } => target_hex,
+                RemoteMeshRoute::TargetUnavailable { target_hex, .. } => target_hex,
                 RemoteMeshRoute::NoRemoteHost => "NoRemoteHost".to_string(),
             }
         ),

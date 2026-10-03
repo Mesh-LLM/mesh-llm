@@ -283,6 +283,9 @@ impl ExternalPlugin {
                     host_version: crate::VERSION.to_string(),
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
+                    host_capabilities: vec![
+                        mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
+                    ],
                 }),
                 Some(self.spec.startup.init_timeout()),
             )
@@ -1090,6 +1093,7 @@ pub(crate) mod tests {
                         parent_tab: Some("integrations".into()),
                         bundle_id: "main".into(),
                     }],
+                    contributions: Vec::new(),
                     bundles: vec![InstalledPluginWebUiBundleMetadata {
                         id: "main".into(),
                         root_path: "web".into(),
@@ -1435,6 +1439,7 @@ pub(crate) mod tests {
                 enabled: Some(true),
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
+                allow_peer_blocks: None,
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: Vec::new(),
                 url: Some("\u{2003}https://plugin.example.test/v1\u{2003}".into()),
