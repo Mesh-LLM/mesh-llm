@@ -187,3 +187,34 @@ fn exported_package_cannot_change_the_verifier_candidate_or_pinned_source() {
     fs::write(&identity_path, serde_json::to_vec(&identity).unwrap()).unwrap();
     assert!(package::exported(&request, None).is_err());
 }
+
+#[test]
+fn admitted_producer_branch_is_preserved_when_current_verifier_attempt_advances() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut request = input(directory.path());
+    let package_path = directory.path().join("package");
+    previous(&mut request, &package_path);
+    request.run_attempt = "3".into();
+    let (_, identity) = package::previous(&request).unwrap().unwrap();
+    let environment = super::environment::wrapper(&request, Some((&package_path, &identity)));
+    for (key, expected) in [
+        ("CANARY_CANDIDATE_BRANCH", "llama-canary/repair-fixture"),
+        ("CANARY_CANDIDATE_SHA", identity.candidate.as_str()),
+        ("GITHUB_RUN_ATTEMPT", "3"),
+        ("CANARY_HARNESS_MODE", "verify-build"),
+    ] {
+        let value = environment.get(std::ffi::OsStr::new(key)).unwrap();
+        assert!(
+            matches!(value, crate::process::Value::Public(actual) if actual == std::ffi::OsStr::new(expected)),
+            "{key}"
+        );
+    }
+    let bundle = package_path.join("candidate.bundle");
+    assert!(
+        matches!(environment.get(std::ffi::OsStr::new("CANARY_INPUT_BUNDLE")), Some(crate::process::Value::Public(actual)) if actual == bundle.as_os_str())
+    );
+    let producer: serde_json::Value =
+        serde_json::from_slice(&fs::read(package_path.join("identity.json")).unwrap()).unwrap();
+    assert_eq!(producer["run_attempt"], "1");
+    assert_eq!(producer["branch"], "llama-canary/repair-fixture");
+}

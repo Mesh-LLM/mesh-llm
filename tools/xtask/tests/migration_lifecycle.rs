@@ -34,6 +34,8 @@ mod automation {
 }
 #[path = "migration_lifecycle/blocked_signals.rs"]
 mod blocked_signals;
+#[path = "migration_lifecycle/cleanup_owner.rs"]
+mod cleanup_owner;
 #[cfg(unix)]
 #[path = "migration_lifecycle/cli.rs"]
 mod cli;
@@ -53,6 +55,8 @@ mod protocol;
 mod pty;
 #[path = "migration_lifecycle/runner_cleanup.rs"]
 mod runner_cleanup;
+#[path = "migration_lifecycle/runner_cleanup_contracts.rs"]
+mod runner_cleanup_contracts;
 #[path = "migration_lifecycle/selected_ref.rs"]
 mod selected_ref;
 #[path = "migration_lifecycle/support.rs"]
@@ -133,3 +137,21 @@ mod package_input_admission;
 
 #[path = "../src/ci_validation/lane_results/workflow_yaml.rs"]
 mod workflow_yaml;
+
+#[path = "migration_lifecycle/verification_source_cli.rs"]
+mod verification_source_cli;
+
+#[path = "migration_lifecycle/certification_producer_admission.rs"]
+mod certification_producer_admission;
+
+#[path = "migration_lifecycle/affected_crates_relocated_cli.rs"]
+mod affected_crates_relocated_cli;
+
+#[path = "migration_lifecycle/compute_changes_justfiles.rs"]
+mod compute_changes_justfiles;
+
+#[path = "migration_lifecycle/family_evidence_workflow.rs"]
+mod family_evidence_workflow;
+
+#[path = "migration_lifecycle/family_build_dispatch.rs"]
+mod family_build_dispatch;

@@ -207,3 +207,33 @@ fn help_does_not_read_package_or_emit_github_files() -> TestResult {
     assert!(!given.path("output").exists());
     Ok(())
 }
+
+#[test]
+fn certify_only_package_mutations_refuse_before_summary_green_or_receipt_work() -> TestResult {
+    for (key, value) in [
+        ("controller", serde_json::json!("c".repeat(40))),
+        ("candidate", serde_json::json!("c".repeat(40))),
+        ("base", serde_json::json!("c".repeat(40))),
+        ("mesh_source", serde_json::json!("")),
+        ("pass_id", serde_json::json!("verify-1")),
+        ("bundle_sha256", serde_json::json!("d".repeat(64))),
+    ] {
+        let mut given = Fixture::new()?;
+        let path = given.path("package/identity.json");
+        let mut identity: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        identity["mesh_source"] = serde_json::json!("a".repeat(40));
+        identity[key] = value;
+        let bytes = serde_json::to_vec(&identity)?;
+        given.identity = fixture_files::hash_bytes(&bytes);
+        fs::write(&path, &bytes)?;
+        // Rebind expected identity to changed bytes: refusal must concern logical
+        // selected-source admission, not merely a stale outer digest.
+        let when = given.run(&["--selected-source", &"a".repeat(40)])?;
+        assert!(!when.status.success(), "{key}: {when:?}");
+        assert!(when.stdout.is_empty(), "{key}");
+        assert!(!given.path("summary").exists(), "{key}");
+        assert!(!given.path("output").exists(), "{key}");
+        assert_eq!(fs::read(&path)?, bytes);
+    }
+    Ok(())
+}

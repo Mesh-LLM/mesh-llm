@@ -4,13 +4,14 @@
 //! found on `PATH` and invoked with the legacy argv; the process call sits
 //! behind [`Gh`] so the collection logic does not own process spawning.
 
+use super::ci_metrics_github_process;
 use crate::ci_operations::build_cache_tree::io_text;
 use crate::ci_operations::ci_metrics_argv::Args;
 use crate::ci_operations::ci_metrics_normalize::{Failure, Outcome};
 use crate::ci_operations::ci_metrics_value::{Value, display, object, parse};
+use crate::process::Cancellation;
 use crate::repository::text::strip;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 /// `RUN_FIELDS`: the `gh run list/view --json` field list.
 const RUN_FIELDS: &str = "databaseId,attempt,workflowName,displayTitle,event,status,conclusion,\
@@ -29,9 +30,19 @@ pub(crate) trait Gh {
 }
 
 /// The `gh` executable found on `PATH`.
-pub(crate) struct GhCli;
+pub(crate) struct GhCli {
+    cancellation: Cancellation,
+}
 
-fn text_mode(bytes: &[u8]) -> String {
+impl GhCli {
+    pub(crate) fn new(cancellation: &Cancellation) -> Self {
+        Self {
+            cancellation: cancellation.clone(),
+        }
+    }
+}
+
+pub(super) fn text_mode(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)
         .replace("\r\n", "\n")
         .replace('\r', "\n")
@@ -39,15 +50,7 @@ fn text_mode(bytes: &[u8]) -> String {
 
 impl Gh for GhCli {
     fn run(&mut self, arguments: &[String]) -> std::io::Result<GhOutput> {
-        let output = Command::new("gh")
-            .args(arguments)
-            .stdin(Stdio::inherit())
-            .output()?;
-        Ok(GhOutput {
-            success: output.status.success(),
-            stdout: text_mode(&output.stdout),
-            stderr: text_mode(&output.stderr),
-        })
+        ci_metrics_github_process::run(arguments, &self.cancellation)
     }
 }
 

@@ -25,6 +25,7 @@ mod ci_metrics_argv;
 mod ci_metrics_calendar;
 mod ci_metrics_compare;
 mod ci_metrics_github;
+mod ci_metrics_github_process;
 mod ci_metrics_input;
 pub(crate) mod ci_metrics_int;
 mod ci_metrics_markdown;
@@ -37,6 +38,7 @@ mod ci_metrics_rollup;
 mod ci_metrics_runner;
 mod ci_metrics_stats;
 pub(crate) mod ci_metrics_time;
+mod ci_metrics_transport;
 pub(crate) mod ci_metrics_value;
 mod evidence_binding;
 mod evidence_catalog;
@@ -65,6 +67,7 @@ mod sccache_argv;
 mod sccache_evidence;
 mod sccache_render;
 mod sccache_stats;
+mod sccache_summary;
 mod sdk_census;
 mod seed_census;
 mod workflow_bindings;
@@ -81,6 +84,7 @@ pub(crate) enum CiOperationsCommand {
     RunnerCleanup,
     BuildCache,
     SccacheStats,
+    SccacheSummary,
     CollectMetrics,
     AuthorityAudit,
     RegistryPulls,
@@ -96,6 +100,7 @@ impl CiOperationsCommand {
             "runner-cleanup" => Some(Self::RunnerCleanup),
             "build-cache" => Some(Self::BuildCache),
             "sccache-stats" => Some(Self::SccacheStats),
+            "sccache-summary" => Some(Self::SccacheSummary),
             "collect-metrics" => Some(Self::CollectMetrics),
             "authority-audit" => Some(Self::AuthorityAudit),
             "registry-pulls" => Some(Self::RegistryPulls),
@@ -139,6 +144,7 @@ pub(crate) fn run(
         }
         CiOperationsCommand::BuildCache => build_cache::run(args),
         CiOperationsCommand::SccacheStats => sccache_stats::run(args),
+        CiOperationsCommand::SccacheSummary => sccache_summary::run(args),
         CiOperationsCommand::CollectMetrics => ci_metrics::run(args),
         CiOperationsCommand::RunnerIdentity => {
             let mut failure = None;

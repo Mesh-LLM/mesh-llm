@@ -116,8 +116,13 @@ fn execute(input: &Input) -> DynResult<()> {
                 failure("infrastructure", "process-supervision")?;
             }
             Err(format!(
-                "canary build wrapper failed: {:?}, status {:?}",
-                report.outcome, report.status
+                "canary build wrapper failed: {:?}, exit code {:?}, status {:?}",
+                report.outcome,
+                report
+                    .status
+                    .as_ref()
+                    .and_then(std::process::ExitStatus::code),
+                report.status
             )
             .into())
         }

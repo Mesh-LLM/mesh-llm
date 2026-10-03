@@ -119,6 +119,11 @@ jobs:
         uses: ./.github/actions/setup-macos-lld
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         if: ${{ matrix.check.platform == 'windows' }}
+      - uses: ./.github/actions/configure-sccache-gha
+        if: ${{ matrix.check.platform == 'windows' }}
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         if: ${{ matrix.check.platform == 'windows' }}
         with:

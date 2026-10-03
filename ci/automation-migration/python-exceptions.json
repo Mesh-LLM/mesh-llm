@@ -359,8 +359,8 @@
       },
       {
         "path": "scripts/llama-canary-agent-repair.sh",
-        "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
-        "line_count": 973,
+        "sha256": "b7309c24cde4efd37565cb74f2050705995d1794175fd67502b13e578a8ad340",
+        "line_count": 1038,
         "previous_projected_source_sha256": "e5b5a7edf0bbaaa5ad418e60a2a0d96d94aad08a727bd743a3340d82971eb9ac"
       },
       {
@@ -652,5 +652,109 @@
     ],
     "no_counts_or_roster_changes": true,
     "workflow_trust_boundaries": "All workflow payloads/permissions/pins/platform records unchanged by this ledger transaction; normal repair local authority never becomes immutable workflow receipt."
+  },
+  "normal_verify_caller_cutover": {
+    "status": "authored_unqualified; source-bound integration, runtime qualification pending",
+    "source_bindings": [
+      {
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "sha256": "b7309c24cde4efd37565cb74f2050705995d1794175fd67502b13e578a8ad340",
+        "line_count": 1038
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_repair.rs",
+        "sha256": "c93ede840a5c275c32bb299a83b8e60e708e3943a9a30efd529764271dffa8fc",
+        "line_count": 358
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_repair_tests.rs",
+        "sha256": "06fde27c3b66366403a529b3e8d6c92e2cb01e29c774525ea720d75b44313938",
+        "line_count": 195
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/verification_source_cli.rs",
+        "sha256": "046f935948ce35ee70f81aa60f336ab1395e2ca587312ad4868e0dd27f40720f",
+        "line_count": 458
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/verification_caller_wrapper.rs",
+        "sha256": "fcb7788cb5bf8b6c74b15989affd09e2c26bad977e54b5d21b7627727e03ba5f",
+        "line_count": 490
+      }
+    ],
+    "predecessor_manifest": {
+      "path": ".omo/evidence/resume-20261002/next-wave-reviewed-integration/manifest.json",
+      "sha256": "056fbfb6e8bfa782b56ff36c0b43adf9a698089b046fe76af4a509226b6ed08f"
+    },
+    "retained_syntactic_python_fallback_lines": [
+      212,
+      316,
+      322,
+      518,
+      728,
+      735,
+      811,
+      823
+    ],
+    "retained_component_environment_line": 662,
+    "normal_verify_source_reachability": "For admitted HARNESS_MODE=verify the frozen trusted controller is selected before candidate bundle loading. Typed timeout, bounded plan/cache forwarding, candidate/controller source admission, manifest policy, parity inventory and check-only roster routes precede or bypass every retained Python fallback. Roster-write dispatch refuses in verify mode. This is reviewed source reachability; runtime qualification remains pending.",
+    "authority_boundary": "Independent verification retains exact clean candidate root/base/commit/tree and separate trusted controller root/revision/executable digest. LocalRepairSource remains repair-only; protected *-build workflow Context paths remain unchanged.",
+    "retained_boundaries": "Eight Python fallback syntactic calls, their Python files/imports/test callers, family-evidence source_plan subprocesses and uv jinja2 native build component remain. No fallback is classified as an approved Python exception. No file/module/Just-roster/count reduction is made.",
+    "required_qualification": [
+      {
+        "target": "xtask bin",
+        "filter": "verification_source",
+        "source_declared_groups": 10
+      },
+      {
+        "target": "migration_lifecycle",
+        "filter": "verification_source_cli",
+        "source_declared_groups": 13
+      },
+      {
+        "target": "xtask bin",
+        "filter": "migration_inventory::selected_process::repair_tests",
+        "source_declared_groups": 3
+      },
+      {
+        "target": "migration inventory and normal policy checks",
+        "filter": "root established serial validation",
+        "source_declared_groups": null
+      }
+    ],
+    "runtime_receipt": null,
+    "qualification_limit": "No maintained execution or CI/workflow/model/native qualification by author. Root must qualify copied actual content/logging/deadline/cancellation wrappers, scanner and current inventory before any qualified cutover claim. Full verification/native/model gates remain separate."
+  },
+  "system_one_serializer_caller_cutover": {
+    "status": "authored_unqualified",
+    "qualification_receipts": null,
+    "shell": {
+      "path": "scripts/skippy-system-one-smoke.sh",
+      "sha256": "a2bd13659d84138450ba29fd14f5c1637d8a7adb0feaf084fffad341e286be29",
+      "line_count": 481,
+      "mode": "0755"
+    },
+    "scanner_bindings": [
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_process.rs",
+        "sha256": "6cfccc44bdd5e87a510f294318a56d2d0210bb4ce3017832bb8645a1eeee63b7"
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_system_one.rs",
+        "sha256": "23bf81ac60cfded9f21ccdb350e7ae860a0d22bc5ccf7b9bd2c6f7b2ccb1e875"
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_system_one_tests.rs",
+        "sha256": "185f1519a1a5a9a5483ea6a6a520633f14f32fd945ccc7536c0b979685ca06d0"
+      }
+    ],
+    "selected_process_launches": 6,
+    "explicit_python_override": "retained runtime-selected boundary; unclassified, no approved exception",
+    "static_candidate_delta": {
+      "removed_inline_port_stage_report": 3,
+      "removed_prewarm_python_availability_selection": 1,
+      "remaining_python_candidates": 3
+    },
+    "pending": "Root actual syntax, ShellCheck, six-launch scanner ownership/mutations, serializer and copied wrapper fixtures, full inventory/required closures/Clippy/format/CI; no native/model qualification or deletion implied."
   }
 }

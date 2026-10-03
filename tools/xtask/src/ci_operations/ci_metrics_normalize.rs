@@ -1,17 +1,16 @@
-//! `load_runs`, `normalize_run`, `normalize_job`, `normalize_step` and
-//! `labels` of `collect-ci-metrics.py`. Fields are evaluated in the legacy
-//! dict-literal order, so the first invalid timestamp reported matches.
+//! Normalize saved/GitHub CI records into run, job and step observations.
+//! Alias selection is first-present; timestamp fields are checked in record order.
 
 use crate::ci_operations::ci_metrics_input::check_job_shape;
 use crate::ci_operations::ci_metrics_time::{Instant, TimeError, elapsed, timestamp};
 use crate::ci_operations::ci_metrics_value::Value;
 
-/// How a legacy exception surfaces.
+/// Metric collection failures retain the established CLI status categories.
 #[derive(Debug)]
 pub(crate) enum Failure {
     /// Caught by `main`: `ci metrics error: {message}`, status 2.
     Reported(String),
-    /// An exception `main` does not catch (a Python traceback, status 1).
+    /// A structural failure reported through the CLI status-1 category.
     Uncaught(String),
 }
 
@@ -104,7 +103,7 @@ fn normalize_step(raw_step: &Value) -> Outcome<Step> {
     })
 }
 
-/// `_number(value)`: a non-negative `float(value)`, bools excluded.
+/// Admit finite nonnegative durations from numbers or saved decimal text.
 fn number(value: Option<&Value>) -> Outcome<Option<f64>> {
     let parsed = match value {
         Some(Value::Int(int)) => int.to_string().parse::<f64>().ok(),
@@ -207,6 +206,10 @@ pub(crate) fn normalize_run(raw_run: &Value) -> Outcome<Run> {
     };
     let attempt = attempt(pick(raw_run, &["attempt", "run_attempt"]))?;
     let id = raw(raw_run, &["id", "databaseId", "database_id"]);
+    if matches!(id, Value::Array(_) | Value::Object(_)) {
+        return Err(Failure::Reported("CI run identity must be a scalar".into()));
+    }
+
     let workflow = text(raw_run, &["workflow_name", "workflowName"], "");
     let title = text(raw_run, &["title", "displayTitle"], "");
     let event = text(raw_run, &["event"], "");

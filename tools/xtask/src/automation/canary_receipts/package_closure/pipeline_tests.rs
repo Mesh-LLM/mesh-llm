@@ -155,6 +155,9 @@ impl Fixture {
         }
     }
     fn pack(&self) -> (PathBuf, Digest) {
+        self.pack_candidate(&self.base, None)
+    }
+    fn pack_candidate(&self, candidate: &str, bundle: Option<PathBuf>) -> (PathBuf, Digest) {
         let receipt = self.directory.path().join("producer-receipt.json");
         let digest = producer_receipt::write(&producer_receipt::Input {
             context: self.context.clone(),
@@ -170,13 +173,18 @@ impl Fixture {
             context: self.context.clone(),
             root: self.root.clone(),
             output: output.clone(),
-            candidate: self.base.clone(),
+            candidate: candidate.to_owned(),
             base: self.base.clone(),
             branch: "llama-canary/repair-fixture".into(),
             pass_id: "repair-1".into(),
-            mode: "pinned-build".into(),
+            mode: if bundle.is_some() {
+                "repair-build"
+            } else {
+                "pinned-build"
+            }
+            .into(),
             test_build: self.test_build.clone(),
-            bundle: None,
+            bundle,
             summary,
             workload_oracles: self.closure.clone(),
             admitted_plan: self.admitted.clone(),
@@ -426,3 +434,197 @@ fn controller_receipt_survives_staging_but_rejects_replaced_source_or_producer()
         .is_err()
     );
 }
+
+fn changed_package(fixture: &Fixture) -> (PathBuf, Digest, String) {
+    let relative = "candidate.txt";
+    fs::write(
+        fixture.root.join(relative),
+        b"exact candidate source bytes\n",
+    )
+    .unwrap();
+    process::text(&fixture.root, &["add", relative]).unwrap();
+    let tree = process::text(&fixture.root, &["write-tree"]).unwrap();
+    let candidate = process::text(
+        &fixture.root,
+        &[
+            "-c",
+            "user.name=Package Fixture",
+            "-c",
+            "user.email=package-fixture@example.invalid",
+            "commit-tree",
+            &tree,
+            "-p",
+            &fixture.base,
+            "-m",
+            "finite changed candidate",
+        ],
+    )
+    .unwrap();
+    let source_identity = workload::source_identity(
+        &fixture.root,
+        &fixture.directory.path().join("candidate-source.diff"),
+    )
+    .unwrap();
+    let producer = fixture.closure.join("producer.json");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&producer).unwrap()).unwrap();
+    document["source"] = serde_json::to_value(source_identity).unwrap();
+    fs::write(producer, serde_json::to_vec(&document).unwrap()).unwrap();
+    let receipt = fixture.admitted.join("source-plan.json");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+    document["selected_revision"] = candidate.clone().into();
+    fs::write(receipt, serde_json::to_vec(&document).unwrap()).unwrap();
+    let branch = "refs/heads/llama-canary/repair-fixture";
+    process::text(&fixture.root, &["update-ref", branch, &candidate]).unwrap();
+    let bundle = fixture.directory.path().join("candidate.bundle");
+    process::git(
+        &fixture.root,
+        &[
+            "bundle".into(),
+            "create".into(),
+            bundle.clone().into(),
+            branch.into(),
+            format!("^{}", fixture.base).into(),
+        ],
+        None,
+    )
+    .unwrap();
+    let (package, digest) = fixture.pack_candidate(&candidate, Some(bundle));
+    (package, digest, candidate)
+}
+
+#[test]
+fn changed_candidate_bundle_restores_exact_detached_identity_and_preserves_controller() {
+    if isolated(
+        "changed_candidate_bundle_restores_exact_detached_identity_and_preserves_controller",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let (package, digest, candidate) = changed_package(&fixture);
+    let root = fixture.consumer();
+    assert_eq!(
+        process::text(&root, &["rev-parse", "HEAD"]).unwrap(),
+        fixture.base
+    );
+    let result = restoring::restore(&restoring::Input {
+        context: fixture.context.clone(),
+        root: root.clone(),
+        package,
+        identity_sha256: digest,
+    })
+    .unwrap();
+    assert_eq!(result["candidate"], candidate);
+    assert_eq!(
+        process::text(&root, &["rev-parse", "HEAD"]).unwrap(),
+        candidate
+    );
+    assert_eq!(
+        process::text(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "HEAD"
+    );
+    assert_eq!(
+        fs::read(root.join("candidate.txt")).unwrap(),
+        b"exact candidate source bytes\n"
+    );
+    assert_eq!(
+        process::text(&root, &["status", "--porcelain", "--untracked-files=no"]).unwrap(),
+        ""
+    );
+    assert_eq!(
+        process::text(&fixture.root, &["rev-parse", "HEAD"]).unwrap(),
+        fixture.base
+    );
+    assert_eq!(source::prepared(&root).unwrap().head, fixture.native);
+    assert!(
+        workload::verify_producer(
+            &root,
+            &root.join(".deps/canary-workload-oracles"),
+            &fixture.directory.path().join("restored-source.diff"),
+            &fixture.native
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn digest_bound_protected_candidate_bundle_refuses_before_consumer_publication() {
+    if isolated("digest_bound_protected_candidate_bundle_refuses_before_consumer_publication") {
+        return;
+    }
+    let fixture = Fixture::new();
+    let (package, _, _) = changed_package(&fixture);
+    process::text(&fixture.root, &["reset", "--hard", &fixture.base]).unwrap();
+    fs::create_dir(fixture.root.join("scripts")).unwrap();
+    fs::write(
+        fixture.root.join("scripts/control.sh"),
+        b"protected candidate payload\n",
+    )
+    .unwrap();
+    let candidate = commit(&fixture.root, "finite protected source change");
+    process::text(
+        &fixture.root,
+        &[
+            "update-ref",
+            "refs/heads/llama-canary/repair-fixture",
+            &candidate,
+        ],
+    )
+    .unwrap();
+    let bundle = package.join("candidate.bundle");
+    fs::remove_file(&bundle).unwrap();
+    process::git(
+        &fixture.root,
+        &[
+            "bundle".into(),
+            "create".into(),
+            bundle.clone().into(),
+            "refs/heads/llama-canary/repair-fixture".into(),
+            format!("^{}", fixture.base).into(),
+        ],
+        None,
+    )
+    .unwrap();
+    process::text(
+        &fixture.root,
+        &["checkout", "--quiet", "--detach", &fixture.base],
+    )
+    .unwrap();
+    let identity_path = package.join("identity.json");
+    let mut identity: serde_json::Value =
+        serde_json::from_slice(&fs::read(&identity_path).unwrap()).unwrap();
+    identity["candidate"] = candidate.into();
+    identity["bundle_sha256"] = serde_json::to_value(Digest::of_file(&bundle).unwrap()).unwrap();
+    let bytes = serde_json::to_vec(&identity).unwrap();
+    fs::write(identity_path, &bytes).unwrap();
+    let root = fixture.consumer();
+    let result = restoring::restore(&restoring::Input {
+        context: fixture.context.clone(),
+        root: root.clone(),
+        package,
+        identity_sha256: Digest::of_bytes(&bytes),
+    });
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("protected orchestration")
+    );
+    assert_eq!(
+        process::text(&root, &["rev-parse", "HEAD"]).unwrap(),
+        fixture.base
+    );
+    assert!(!root.join("scripts/control.sh").exists());
+    assert!(!root.join("candidate.txt").exists());
+    assert!(!root.join("target").exists());
+    assert!(!root.join(".deps").exists());
+    assert!(
+        process::text(&root, &["status", "--porcelain"])
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[path = "handoff_sealing_tests.rs"]
+mod handoff_sealing_tests;

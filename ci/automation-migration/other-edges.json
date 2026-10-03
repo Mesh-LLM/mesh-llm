@@ -788,7 +788,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          813,
+          815,
           "374b927a548a1046",
           1,
           "prose",
@@ -796,7 +796,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1123,
+          1125,
           "b7a562e2b1d3673f",
           1,
           "prose",
@@ -804,7 +804,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1164,
+          1166,
           "0934d1ce8f661df3",
           1,
           "prose",
@@ -812,7 +812,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1190,
+          1192,
           "3894bbba68037f7b",
           1,
           "prose",
@@ -820,7 +820,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1218,
+          1220,
           "d1e95ba515d2e6ee",
           1,
           "prose",
@@ -828,7 +828,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1222,
+          1224,
           "d6b4ea35c364a6aa",
           1,
           "prose",
@@ -836,15 +836,7 @@
           "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
         ],
         [
-          1226,
-          "fd29fdc80ac15e00",
-          1,
-          "prose",
-          "CI ownership or retained HF conversion environment description",
-          "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
-        ],
-        [
-          1251,
+          1253,
           "fdc0a30f00b17d4e",
           1,
           "prose",
@@ -2034,8 +2026,8 @@
       },
       {
         "path": "scripts/llama-canary-agent-repair.sh",
-        "sha256": "0e99dab4de639bd11b15f76078c9b7ec007c0d8f35a4ad8d25db3a2a501c0d10",
-        "line_count": 973,
+        "sha256": "b7309c24cde4efd37565cb74f2050705995d1794175fd67502b13e578a8ad340",
+        "line_count": 1038,
         "previous_projected_source_sha256": "e5b5a7edf0bbaaa5ad418e60a2a0d96d94aad08a727bd743a3340d82971eb9ac"
       },
       {
@@ -2220,7 +2212,7 @@
     "unit_target": "xtask",
     "sources": {
       "just/ci.just": {
-        "sha256": "3383a8eb8d10fdfebbf08512a5fc5d4643d2defffe5d99327543827f806621c8",
+        "sha256": "6e3e69b0019a329a068a7d8bbb36613087174923298f226fe71a8d3ef2f038d8",
         "line_count": 270
       },
       ".github/workflows/ci-quality-slice.yml": {
@@ -2500,5 +2492,459 @@
     },
     "historical_records": "Retain prior baselines, method rosters, whitelist and platform boundaries; only current path/source/edge views refreshed.",
     "limits": "Phase A broad lifecycle had 558 PASS/4 FAIL; corrected SDK5/batch6/runtime6 passed. Package3/build10 passed in that broad receipt. Native policy20/product19 passed separately. No claim of latest complete canonical suite, real SDK runtime, native/model/platform/protected qualification."
+  },
+  "normal_verify_caller_cutover": {
+    "status": "authored_unqualified; source-bound integration, runtime qualification pending",
+    "source_bindings": [
+      {
+        "path": "scripts/llama-canary-agent-repair.sh",
+        "sha256": "b7309c24cde4efd37565cb74f2050705995d1794175fd67502b13e578a8ad340",
+        "line_count": 1038
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_repair.rs",
+        "sha256": "c93ede840a5c275c32bb299a83b8e60e708e3943a9a30efd529764271dffa8fc",
+        "line_count": 358
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_repair_tests.rs",
+        "sha256": "06fde27c3b66366403a529b3e8d6c92e2cb01e29c774525ea720d75b44313938",
+        "line_count": 195
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/verification_source_cli.rs",
+        "sha256": "046f935948ce35ee70f81aa60f336ab1395e2ca587312ad4868e0dd27f40720f",
+        "line_count": 458
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/verification_caller_wrapper.rs",
+        "sha256": "fcb7788cb5bf8b6c74b15989affd09e2c26bad977e54b5d21b7627727e03ba5f",
+        "line_count": 490
+      }
+    ],
+    "predecessor_manifest": {
+      "path": ".omo/evidence/resume-20261002/next-wave-reviewed-integration/manifest.json",
+      "sha256": "056fbfb6e8bfa782b56ff36c0b43adf9a698089b046fe76af4a509226b6ed08f"
+    },
+    "retained_syntactic_python_fallback_lines": [
+      212,
+      316,
+      322,
+      518,
+      728,
+      735,
+      811,
+      823
+    ],
+    "retained_component_environment_line": 662,
+    "normal_verify_source_reachability": "For admitted HARNESS_MODE=verify the frozen trusted controller is selected before candidate bundle loading. Typed timeout, bounded plan/cache forwarding, candidate/controller source admission, manifest policy, parity inventory and check-only roster routes precede or bypass every retained Python fallback. Roster-write dispatch refuses in verify mode. This is reviewed source reachability; runtime qualification remains pending.",
+    "authority_boundary": "Independent verification retains exact clean candidate root/base/commit/tree and separate trusted controller root/revision/executable digest. LocalRepairSource remains repair-only; protected *-build workflow Context paths remain unchanged.",
+    "retained_boundaries": "Eight Python fallback syntactic calls, their Python files/imports/test callers, family-evidence source_plan subprocesses and uv jinja2 native build component remain. No fallback is classified as an approved Python exception. No file/module/Just-roster/count reduction is made.",
+    "required_qualification": [
+      {
+        "target": "xtask bin",
+        "filter": "verification_source",
+        "source_declared_groups": 10
+      },
+      {
+        "target": "migration_lifecycle",
+        "filter": "verification_source_cli",
+        "source_declared_groups": 13
+      },
+      {
+        "target": "xtask bin",
+        "filter": "migration_inventory::selected_process::repair_tests",
+        "source_declared_groups": 3
+      },
+      {
+        "target": "migration inventory and normal policy checks",
+        "filter": "root established serial validation",
+        "source_declared_groups": null
+      }
+    ],
+    "runtime_receipt": null,
+    "qualification_limit": "No maintained execution or CI/workflow/model/native qualification by author. Root must qualify copied actual content/logging/deadline/cancellation wrappers, scanner and current inventory before any qualified cutover claim. Full verification/native/model gates remain separate."
+  },
+  "system_one_serializer_caller_cutover": {
+    "status": "authored_unqualified",
+    "qualification_receipts": null,
+    "shell": {
+      "path": "scripts/skippy-system-one-smoke.sh",
+      "sha256": "a2bd13659d84138450ba29fd14f5c1637d8a7adb0feaf084fffad341e286be29",
+      "line_count": 481,
+      "mode": "0755"
+    },
+    "scanner_bindings": [
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_process.rs",
+        "sha256": "6cfccc44bdd5e87a510f294318a56d2d0210bb4ce3017832bb8645a1eeee63b7"
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_system_one.rs",
+        "sha256": "23bf81ac60cfded9f21ccdb350e7ae860a0d22bc5ccf7b9bd2c6f7b2ccb1e875"
+      },
+      {
+        "path": "tools/xtask/src/migration_inventory/selected_system_one_tests.rs",
+        "sha256": "185f1519a1a5a9a5483ea6a6a520633f14f32fd945ccc7536c0b979685ca06d0"
+      }
+    ],
+    "selected_process_launches": 6,
+    "explicit_python_override": "retained runtime-selected boundary; unclassified, no approved exception",
+    "static_candidate_delta": {
+      "removed_inline_port_stage_report": 3,
+      "removed_prewarm_python_availability_selection": 1,
+      "remaining_python_candidates": 3
+    },
+    "pending": "Root actual syntax, ShellCheck, six-launch scanner ownership/mutations, serializer and copied wrapper fixtures, full inventory/required closures/Clippy/format/CI; no native/model qualification or deletion implied."
+  },
+  "producer_and_cleanup_retirement": {
+    "status": "owning intent qualification passed; guarded retirement activation candidate",
+    "coverage": "ci/automation-migration/producer-cleanup-retirement-coverage.json",
+    "coverage_sha256": "dbc4ad7bc7a5ebdfa51fc181f2237987f54568cd1a6b000b079cc49917d7ff8e",
+    "source_closure": "Only cleanup test import and actual helper CLI launch plus Just discovery removed; retained Rust helper spelling is negative refusal input; docs use typed command.",
+    "current_receipts": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave49-domains-focused.log",
+        "sha256": "fc99140fae826b2414cd355c0fb93350feb1e0916f646e1bd5567d41960e3fb9",
+        "producer_passed": 1,
+        "cleanup_passed": 7,
+        "note": "Terminal individual subcommand summaries; later unrelated SystemOne group failed13/14. Not overall log pass."
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave49-final-focused.log",
+        "sha256": "0a8342cee03bdee413bb48652daf2b56ad9bf4c05c01506b35f43af2c8420187",
+        "cleanup_unit_passed": 33,
+        "workflow_finalization_passed": 7,
+        "inventory": "PASS",
+        "policy": "PASS",
+        "clippy": "PASS",
+        "scope": "Terminal exact owning subcommands; guarded source/ledger retirement not yet applied by worker."
+      }
+    ],
+    "remaining_python_paths": 174,
+    "current_core_roster_count": 94,
+    "current_core_roster": [
+      "scripts.tests.test_cuda_toolkit",
+      "scripts.tests.test_prepare_llama",
+      "scripts.tests.test_package_native_runtime",
+      "scripts.tests.test_depot_authority_sentinel",
+      "scripts.tests.test_generate_split_certified",
+      "scripts.tests.test_skippy_llama_parity",
+      "scripts.tests.test_ci_compute_changes_expression_limit",
+      "scripts.tests.test_ci_windows_composition",
+      "scripts.tests.test_skippy_scheduler_fixtures",
+      "scripts.tests.test_ci_workflow_artifacts",
+      "scripts.tests.test_llama_canary_handoff_contract",
+      "scripts.tests.test_reusable_workflow_runner_trust",
+      "scripts.tests.test_pr_builds_summary",
+      "scripts.tests.test_qa_agent_tool_call_reliability",
+      "scripts.tests.test_static_abi_artifacts",
+      "scripts.tests.test_promote_layer_package_snapshot",
+      "scripts.tests.test_runtime_events_native_gate",
+      "scripts.tests.test_performance_history",
+      "scripts.tests.test_workload_lane_execution",
+      "scripts.tests.test_depot_registry_canary_workflow",
+      "scripts.tests.test_skippy_waiting_prefix_ab",
+      "scripts.tests.test_claude_compatibility_workflow",
+      "scripts.tests.test_build_accelerator_defaults",
+      "scripts.tests.test_build_ui",
+      "scripts.tests.test_build_windows",
+      "scripts.tests.test_skippy_radix_cache_ab",
+      "scripts.tests.test_kv_nightly_workflow_contract",
+      "scripts.tests.test_sccache_evidence",
+      "scripts.tests.test_compute_changes_justfiles",
+      "scripts.tests.test_generate_native_runtime_release_manifest",
+      "scripts.tests.test_ci_batch_crate_filter",
+      "scripts.tests.test_download_skippy_parity_candidates",
+      "scripts.tests.test_agentic_replay_nightly_workflow",
+      "scripts.tests.test_ci_pr_canary_workflow",
+      "scripts.tests.test_install_sh",
+      "scripts.tests.test_ci_lane_workflows",
+      "scripts.tests.test_ci_product_composer",
+      "scripts.tests.test_justfile_shell_portability",
+      "scripts.tests.test_skippy_native_evidence_contract",
+      "scripts.tests.test_run_event_benchmark_matrix",
+      "scripts.tests.test_ci_two_node_split_smoke",
+      "scripts.tests.test_ci_native_toolchain_routing",
+      "scripts.tests.test_ci_prepare_native_runtime",
+      "scripts.tests.test_justfile_source",
+      "scripts.tests.test_skippy_competitive_benchmark",
+      "scripts.tests.test_qa_kv_tool_loop_stability",
+      "scripts.tests.test_llama_canary_agent_manifest_policy",
+      "scripts.tests.test_native_artifact_verifiers",
+      "scripts.tests.test_release_version_script",
+      "scripts.tests.test_model_artifact_registry",
+      "scripts.tests.test_pr_workflow_artifacts",
+      "scripts.tests.test_hf_skippy_mtp_certify_job",
+      "scripts.tests.test_install_sccache",
+      "scripts.tests.test_ci_source_layout",
+      "scripts.tests.test_ci_openai_embeddings_smoke",
+      "scripts.tests.test_logging_api_docs",
+      "scripts.tests.test_check_skippy_workload_candidate",
+      "scripts.tests.test_resume_crates_release_workflow",
+      "scripts.tests.test_compare_event_benchmark_matrix",
+      "scripts.tests.test_llama_canary_family_evidence",
+      "scripts.tests.test_install_ps1",
+      "scripts.tests.test_hf_xet_portability_smoke",
+      "scripts.tests.test_kv_restart_replay",
+      "scripts.tests.test_llama_canary_agent_repair_contract",
+      "scripts.tests.test_logging_module_boundaries",
+      "scripts.tests.test_release_script",
+      "scripts.tests.test_run_command_with_timeout",
+      "scripts.tests.test_synthetic_graph_registry",
+      "scripts.tests.test_affected_crates_layout",
+      "scripts.tests.test_agentic_trajectory_manifest",
+      "scripts.tests.test_justfile_layout",
+      "scripts.tests.test_plan_family_battery",
+      "scripts.tests.test_macos_deployment_target",
+      "scripts.tests.test_llama_upstream_canary_contract",
+      "scripts.tests.test_llama_review_regressions",
+      "scripts.tests.test_skippy_adaptive_prefill_ab",
+      "scripts.tests.test_canary_family_memory",
+      "scripts.tests.test_skippy_agentic_prompt_manifest",
+      "scripts.tests.test_skippy_mixed_prefill_decode_ab",
+      "scripts.tests.test_ci_sdk_producers",
+      "scripts.tests.test_lld_lib",
+      "scripts.tests.test_llama_canary_mesh_ref",
+      "scripts.tests.test_llama_native_full_replay",
+      "scripts.tests.test_ci_artifact_actions",
+      "scripts.tests.test_depot_canary_workflow",
+      "scripts.tests.test_skippy_system_one_smoke",
+      "scripts.tests.test_qa_nightly_stability",
+      "scripts.tests.test_pr_sibling_cancellation",
+      "scripts.tests.test_skippy_static_link",
+      "scripts.tests.test_justfile_release_runtime",
+      "scripts.tests.test_skippy_dynamic_link",
+      "scripts.tests.test_cli_inventory_contract",
+      "scripts.tests.test_release_workflow_artifacts",
+      "scripts.tests.test_collect_ci_metrics"
+    ],
+    "current_just_source": {
+      "path": "just/ci.just",
+      "sha256": "93615d6b41f8f74fa9bc2214ee1d41342ae5e50e1578668e3148356e80d338e4",
+      "line_count": 271,
+      "line": 24,
+      "line_fingerprint": "aee90e90c54cee43"
+    },
+    "retained_repair_source": {
+      "path": "scripts/tests/test_llama_canary_agent_repair_contract.py",
+      "sha256": "f61611ce02a9e54c5d21a8664eca97b2c0c2bf839f935514ae973859973465c6",
+      "line_count": 435,
+      "test_methods": [
+        "test_wrapper_keeps_one_agent_session_until_ordered_gates_are_green",
+        "test_pinned_build_checks_pin_without_rewriting_it",
+        "test_wrapper_reexecs_natively_before_state_initialization",
+        "test_agent_and_final_verification_have_explicit_budgets",
+        "test_each_returned_candidate_gets_a_full_verification_window",
+        "test_prepare_owns_pin_and_exact_prepared_upstream",
+        "test_build_gate_is_complete",
+        "test_model_cache_is_an_infrastructure_gate_outside_agent_repair",
+        "test_certification_is_full_and_uses_prebuilt_candidate",
+        "test_agent_has_no_github_credentials_or_publication_authority",
+        "test_agent_failure_records_the_exit_status_in_evidence",
+        "test_agent_cannot_change_harness_or_commit",
+        "test_protected_status_detects_untracked_python_startup_hook",
+        "test_failure_paths_do_not_publish",
+        "test_certified_commit_is_bound_to_verified_tree",
+        "test_verify_mode_restores_tree_identity_from_candidate_commit",
+        "test_publisher_pushes_only_exact_ready_commit",
+        "test_final_verification_clears_agent_native_products_and_forces_smokes",
+        "test_agent_runbook_describes_complete_developer_task",
+        "test_dispatch_sha_is_rejected_before_use",
+        "test_shell_syntax",
+        "test_persistent_runner_scratch_is_scoped_and_pruned",
+        "test_runnable_row_carrying_unsupported_reason_is_rejected"
+      ]
+    },
+    "history": "All earlier retirement/roster/census snapshots unchanged; normal_verify current92a,0798/b07, whitelist/platform/canonical84/SDK and exceptions retained.",
+    "removed_typed_prose_identity": {
+      "source": ".agents/skills/manage-ci/references/current-inventory.md",
+      "line": 1228,
+      "reason": "Rust cleanup command replaces obsolete Python reference; current Python candidate absent"
+    }
+  },
+  "quality_runtime_artifact_retirement": {
+    "status": "conditional source-reviewed proposal; NOT activated or qualified by this shelf",
+    "python_census_before": 174,
+    "python_census_after": 167,
+    "core_python_modules_before": 94,
+    "core_python_modules_after": 90,
+    "canonical_rust_contract_registry": 84,
+    "deletions": [
+      {
+        "path": "scripts/tests/test_ci_compute_changes_expression_limit.py",
+        "sha256": "a58e7349993d23160103c1f6a0602544d68da9f29343ff446dea324974ae8cb5",
+        "mode": "0o644"
+      },
+      {
+        "path": "scripts/tests/test_claude_compatibility_workflow.py",
+        "sha256": "8a9896ea2f4a81d579fec8c890b0ebcf32290865cb6655e2afbaeac951fc08c6",
+        "mode": "0o644"
+      },
+      {
+        "path": "scripts/tests/test_ci_batch_crate_filter.py",
+        "sha256": "44ca16cfbda45cf808c131a8c3db44cecad2c80e5ac95485b1e91c7a0ae23c8c",
+        "mode": "0o644"
+      },
+      {
+        "path": "scripts/tests/test_generate_native_runtime_release_manifest.py",
+        "sha256": "5616ead4c9b325e6b753bdda11b4d88e459b4f54e4bc8b3a183a3dbec3264732",
+        "mode": "0o644"
+      },
+      {
+        "path": "scripts/safe-extract-tar.py",
+        "sha256": "c05726349246cb5cf52dd2e050c9901b93e2c3b355b51a4cb6912b8ff64248b6",
+        "mode": "0o755"
+      },
+      {
+        "path": "scripts/verify-checksum-sidecar.py",
+        "sha256": "18f6a5a5204ef57b06664046f7d3c2f67c617771a61f9a185af859a421efc8fa",
+        "mode": "0o755"
+      },
+      {
+        "path": "scripts/select-release-notes-base.py",
+        "sha256": "692c23c9f49221456010e8b934a2d36aa4d781ce4947a8dc9ee332ad6b37884b",
+        "mode": "0o644"
+      }
+    ],
+    "original_methods": {
+      "scripts/tests/test_ci_compute_changes_expression_limit.py": [
+        "test_compute_changes_run_scalars_stay_below_github_limit"
+      ],
+      "scripts/tests/test_claude_compatibility_workflow.py": [
+        "test_real_client_test_is_enabled_and_required_for_affected_prs",
+        "test_manual_live_gate_can_build_the_repository"
+      ],
+      "scripts/tests/test_ci_batch_crate_filter.py": [
+        "test_batch_resolves_against_the_checked_out_workspace",
+        "test_all_absent_batch_skips_cargo",
+        "test_failed_metadata_runs_the_planned_batch_unchanged",
+        "test_present_batch_runs_without_warnings",
+        "test_renamed_batches_are_translated_before_the_workspace_filter"
+      ],
+      "scripts/tests/test_generate_native_runtime_release_manifest.py": [
+        "test_generated_manifest_is_single_valid_json_document",
+        "test_requires_valid_canonical_sidecar",
+        "test_rejects_traversing_archive_member",
+        "test_rejects_runtime_version_that_does_not_match_tag",
+        "test_rejects_sibling_payload_outside_artifact_directory"
+      ]
+    },
+    "intent_total": 13,
+    "quality_intents": 8,
+    "runtime_release_intents": 5,
+    "artifact_helper_legacy_intents_already_retired": 14,
+    "current_just_source": {
+      "path": "just/ci.just",
+      "sha256": "c9c8fd98b5995972a515f4650cd03312909fa4cf475fdb3d05fc5658d33a4883",
+      "line_count": 270,
+      "roster_line": 24,
+      "roster_fingerprint": "098ab3fed9814f03"
+    },
+    "current_qualification_required": [
+      {
+        "command": "just with-lld cargo test --offline --locked -p xtask --bin xtask compute_changes_budget -- --test-threads=1",
+        "source_groups": 6
+      },
+      {
+        "command": "just with-lld cargo test --offline --locked -p xtask --bin xtask claude_clients -- --test-threads=1",
+        "source_groups": 10
+      },
+      {
+        "command": "just with-lld cargo test --offline --locked -p xtask --test migration_lifecycle ci_batch_filter -- --test-threads=1",
+        "source_primary_groups": 5,
+        "nested_parser_may_select_additional": true
+      },
+      {
+        "command": "just with-lld cargo test --offline --locked -p xtask --test migration_lifecycle runtime_release_manifest_wrapper -- --test-threads=1",
+        "source_groups": 4,
+        "legacy_intents": 5
+      }
+    ],
+    "existing_scoped_receipts": [
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-archive-tests.log",
+        "sha256": "5af7b05924b3e845d4ac808b62e32003ee5fb8697c276a962b6d919f17611b83",
+        "terminal": "test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s",
+        "scope": "unchanged archive/release component only"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/next-wave-release-tests.log",
+        "sha256": "0260ca4afe173330995fe0cf10c90acdbce8d935252b6fb67f4f289aca580292",
+        "terminal": "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.00s",
+        "scope": "unchanged archive/release component only"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/phase-b-full-xtask-corrected.log",
+        "sha256": "d5f18bd0f39ea4f9b66a38a59079a21828162412f6714bc94ce6a9cb351b4f40",
+        "scope": "historical full PhaseB checkpoint845; not current39 whole-suite qualification"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/phase-b-full-xtask-summary.json",
+        "sha256": "8f5b85d2dcf2febb56a2fd558468f87f488e312cb76122e1fed93b169327238e",
+        "scope": "historical full PhaseB checkpoint845; not current39 whole-suite qualification"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/phase-b-checkpoint-receipt.json",
+        "sha256": "bf259cfd2f8ce5fc2665203eb83cfbf9bb5c79d0c8276cf31a462a9af983d89a",
+        "scope": "historical full PhaseB checkpoint845; not current39 whole-suite qualification"
+      }
+    ],
+    "activation_gate": "Root must bind terminal nonzero-selection current quality and runtime-wrapper receipts, recheck all exact guards, then authorize apply/deletions as one transaction. This authored shelf runs no tests and changes no maintained files.",
+    "preserved": "All historical identities, prior retirement records, protected pins, retained SDK/platform/native/model gates, canonical84 registry, required-graph synthetic helper fixtures and inert warm-cache/changed-path identities."
+  },
+  "classifier_just_three_module_retirement": {
+    "status": "conditional dependent source-only retirement transaction; passed owning scoped receipt, not activated",
+    "dependency_manifest": ".omo/evidence/resume-20261002/quality-runtime-artifact-reviewed-retirement/manifest.json",
+    "dependency_manifest_sha256": "05cced9d857316fdfb0299640632aa19a0507da500409a8110aec8c71a8a46ec",
+    "python_paths_before": 167,
+    "python_paths_after": 164,
+    "core_python_modules_before": 90,
+    "core_python_modules_after": 87,
+    "canonical_rust_contract_registry": 84,
+    "coverage": {
+      "path": "ci/automation-migration/classifier-just-three-module-retirement-coverage.json",
+      "sha256": "ed4048289a971a7f927b3b2327b563b1f30e5e9799fce4212988e7b50fb080f8"
+    },
+    "deletions": [
+      {
+        "path": "scripts/tests/test_affected_crates_layout.py",
+        "sha256": "d254c0f4b27a8bfc8276ac7733e6b3c4f2aff64e7834fbe86da1f61f48ed59c6",
+        "mode": "0o644"
+      },
+      {
+        "path": "scripts/tests/test_compute_changes_justfiles.py",
+        "sha256": "3b2bdca0fc0cac6bfb71dcb456fd9d26b692f79f3edd1f4ff477d45b94d1c9db",
+        "mode": "0o644"
+      },
+      {
+        "path": "scripts/tests/test_justfile_source.py",
+        "sha256": "2456cc087cded09e97f9e675ba4a711a1a5bd5a4124c7e1aada2b97fefdc7d5b",
+        "mode": "0o644"
+      }
+    ],
+    "current_just_source": {
+      "sha256": "6e3e69b0019a329a068a7d8bbb36613087174923298f226fe71a8d3ef2f038d8",
+      "line_count": 270,
+      "roster_line": 24,
+      "fingerprint": "a8d46eca62fec82a"
+    },
+    "owning_receipt": {
+      "source": ".omo/evidence/resume-20261002/followup39-behavioral-qualification.log",
+      "prefix_bytes": 7188,
+      "prefix_sha256": "13795fb7bdd54be4338c62f31a3201ab90291c7917f67b5f2573261aef776ac4",
+      "snapshot": "scoped-receipts/followup39-first-seven-passed.log",
+      "passed_by_filter": [
+        6,
+        7,
+        3,
+        9,
+        8,
+        6,
+        5
+      ],
+      "scope": "first seven owning filters only; later unrelated dispatch failure/global exit101 does not invalidate passed sections; no whole-suite green claim"
+    },
+    "activation_gate": "Requires successful activation of exact seven-file predecessor, root final guard verification and inventory/remaining-roster qualification. Do not apply directly to maintained174/core94. No shared helper/fallback roster/production owner removed."
   }
 }

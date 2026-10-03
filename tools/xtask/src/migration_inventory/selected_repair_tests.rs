@@ -50,8 +50,8 @@ fn normal_repair_closed_forwarding_and_local_verbs_are_bound_at_actual_launches(
         .collect::<Vec<_>>();
     assert_eq!(
         narrow.len(),
-        4,
-        "two bounded plan forwarding paths and two local inspection paths"
+        6,
+        "two bounded plan forwarding paths, two local and two independent inspection paths"
     );
     check_selected_processes(&root, &owned)?;
     for missing in narrow {
@@ -150,4 +150,46 @@ fn normal_repair_rejects_changed_omitted_or_expanded_callsite_authority() -> Dyn
     );
     fs::remove_dir_all(root)?;
     Ok(())
+}
+
+#[test]
+fn normal_verify_rejects_missing_expanded_or_rebound_independent_authority() {
+    let text = source();
+    for (old, new) in [
+        (
+            "verification_source_inspection() {",
+            "unowned_verification() {",
+        ),
+        (
+            "verification_source_inspection verification-split-roster-check",
+            "verification_source_inspection verification-split-roster-write",
+        ),
+        (
+            "verification_source_inspection verification-parity-inventory",
+            "verification_source_inspection \"$dynamic_verb\"",
+        ),
+        (
+            "verification_source_inspection verification-source-admit || exit 1",
+            "verification_source_inspection verification-source-admit || exit 1\n  verification_source_inspection unowned",
+        ),
+        (
+            "--arg controller_revision \"$BASE_HEAD\"",
+            "--arg controller_revision \"$CANDIDATE_BASE_HEAD\"",
+        ),
+        (
+            "--arg candidate \"$CERTIFIED_SHA\" --arg tree \"$VERIFICATION_TREE\"",
+            "--arg candidate \"$CERTIFIED_SHA\" --arg tree \"$OTHER_TREE\"",
+        ),
+        (
+            "verification_candidate_unchanged() {",
+            "unowned_candidate_check() {",
+        ),
+    ] {
+        assert!(text.contains(old), "missing fixture target {old}");
+        assert!(
+            repair::check_shape(CALLER, &text.replace(old, new).lines().collect::<Vec<_>>())
+                .is_err(),
+            "admitted {old}"
+        );
+    }
 }

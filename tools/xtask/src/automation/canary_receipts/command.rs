@@ -26,6 +26,19 @@ const GRAMMAR: Grammar = Grammar {
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     match args {
+        [verb, rest @ ..] if verb == "verification-source-admit" => {
+            return super::canary_package_closure::verification_source::run(rest);
+        }
+        [verb, rest @ ..]
+            if matches!(
+                verb.as_str(),
+                "verification-manifest-policy"
+                    | "verification-parity-inventory"
+                    | "verification-split-roster-check"
+            ) =>
+        {
+            return super::canary_package_closure::verification_source::run_inspection(rest, verb);
+        }
         [verb, rest @ ..] if verb == "result" => return result_gate::run(rest),
         [verb, rest @ ..] if verb == "receipt" || verb == "publication" => {
             return super::canary_handoff::run(rest, verb == "publication");

@@ -860,7 +860,9 @@ boundary.
   Depot jobs enable the GitHub Actions cache API while direct Depot remote
   cache remains disabled. Hosted PR, release, and cache-warmer selections
   retain native GitHub cache behavior.
-- `configure-sccache-gha`: event/provider-derived compiler-cache setup.
+- `configure-sccache-gha`: event/provider-derived compiler-cache setup. The
+  Windows platform-check lane applies it immediately after sccache installation,
+  with both cache permissions from the shared runner policy.
 - `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
   central runner policy permits it only for GitHub-hosted selections, and
   native runtime restore is explicitly disabled after zero-reuse qualification.
@@ -1420,7 +1422,7 @@ read-only model cache. The runner still requires preinstalled `uv`.
 
 ### Self-hosted job disk cleanup
 
-The persistent build and family jobs run `scripts/cleanup-self-hosted.py`
+The persistent build and family jobs run `cargo xtool ci-ops runner-cleanup`
 after artifact upload attempts, on success, failure and cancellation. It removes
 known job-local Cargo debug outputs, prepared llama sources, native/workload
 builds, downloaded handoffs and the worker SDK environment. Evidence and the

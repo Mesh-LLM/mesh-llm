@@ -7,6 +7,7 @@
 //! `comparison`. Without `--input`, runs come from GitHub through the `gh`
 //! CLI (`ci_metrics_github`).
 
+use super::ci_metrics_transport;
 use crate::ci_operations::build_cache_tree::io_text;
 use crate::ci_operations::ci_metrics_argv::{Args, parse};
 use crate::ci_operations::ci_metrics_compare::compare_reports;
@@ -17,6 +18,8 @@ use crate::ci_operations::ci_metrics_normalize::{Failure, Outcome, normalize_run
 use crate::ci_operations::ci_metrics_report::{Request, analyze, validate_finite};
 use crate::ci_operations::ci_metrics_value::{Value, dumps, object};
 use crate::ci_plan::catalog::python_path_display;
+use crate::command_interrupt::Interrupt;
+use crate::process::Cancellation;
 use crate::repository::check_report::CheckReport;
 use std::io::Read as _;
 use std::path::Path;
@@ -27,7 +30,7 @@ pub(crate) fn run(args: &[String]) -> CheckReport {
         Err(report) => return report,
     };
     let mut report = CheckReport::default();
-    match collect(&args, &mut report) {
+    match collect_owned(&args, &mut report) {
         Ok(()) => {}
         Err(Failure::Reported(message)) => {
             report
@@ -41,6 +44,18 @@ pub(crate) fn run(args: &[String]) -> CheckReport {
         }
     }
     report
+}
+
+fn collect_owned(args: &Args, out: &mut CheckReport) -> Outcome<()> {
+    if args.input.as_deref() == Some("-") || args.compare_input.as_deref() == Some("-") {
+        return collect(args, out, &Cancellation::default());
+    }
+    let interrupt = Interrupt::install().map_err(|error| Failure::Reported(error.to_string()))?;
+    let result = collect(args, out, &interrupt.cancellation());
+    interrupt
+        .finish()
+        .map_err(|error| Failure::Reported(error.to_string()))?;
+    result
 }
 
 fn truthy(value: Option<&String>) -> Option<&str> {
@@ -74,19 +89,25 @@ fn analyze_runs(
 }
 
 /// `--input` runs with a `file` source, or live GitHub runs.
-fn primary_runs(args: &Args) -> Outcome<(Vec<Value>, Value)> {
+fn primary_runs(args: &Args, cancellation: &Cancellation) -> Outcome<(Vec<Value>, Value)> {
     match truthy(args.input.as_ref()) {
-        Some(path) => Ok((load_runs(&read_input(path)?)?, file_source(path))),
-        None => Ok((fetch_runs(&mut GhCli, args)?, github_source(args))),
+        Some(path) => Ok((
+            load_runs(&read_input(path, cancellation)?)?,
+            file_source(path),
+        )),
+        None => Ok((
+            fetch_runs(&mut GhCli::new(cancellation), args)?,
+            github_source(args),
+        )),
     }
 }
 
-fn collect(args: &Args, out: &mut CheckReport) -> Outcome<()> {
-    let (raw_runs, source) = primary_runs(args)?;
+fn collect(args: &Args, out: &mut CheckReport, cancellation: &Cancellation) -> Outcome<()> {
+    let (raw_runs, source) = primary_runs(args, cancellation)?;
     let mut report = analyze_runs(args, &raw_runs, source, || labels(&args.label))?;
     if let Some(path) = truthy(args.compare_input.as_ref()) {
         let cohort = || Ok(vec![("cohort".to_owned(), Value::text("baseline"))]);
-        let baseline_runs = load_runs(&read_input(path)?)?;
+        let baseline_runs = load_runs(&read_input(path, cancellation)?)?;
         let baseline = analyze_runs(args, &baseline_runs, file_source(path), cohort)?;
         let comparison = compare_reports(&baseline, &report);
         if let Value::Object(entries) = &mut report {
@@ -96,6 +117,7 @@ fn collect(args: &Args, out: &mut CheckReport) -> Outcome<()> {
     validate_finite(&report)?;
     // Rendering also validates report field types before any output is published.
     let summary = render_markdown(&report, request_top(args))?;
+    ci_metrics_transport::check(cancellation)?;
     if let Some(path) = truthy(args.raw_out.as_ref()) {
         let raw = object([
             ("schema_version", Value::Int(1)),
@@ -125,7 +147,7 @@ fn os_error(error: &std::io::Error, shown: &str) -> Failure {
 }
 
 /// `open(path, encoding="utf-8")` or `sys.stdin`, read whole.
-fn read_input(path: &str) -> Outcome<Vec<u8>> {
+fn read_input(path: &str, cancellation: &Cancellation) -> Outcome<Vec<u8>> {
     let mut bytes = Vec::new();
     if path == "-" {
         std::io::stdin()
@@ -134,7 +156,7 @@ fn read_input(path: &str) -> Outcome<Vec<u8>> {
             .map_err(|error| os_error(&error, "<stdin>"))?;
         return Ok(bytes);
     }
-    std::fs::read(path).map_err(|error| os_error(&error, path))
+    ci_metrics_transport::read_file(Path::new(path), cancellation)
 }
 
 /// `write(path, content)`: `-` is stdout; otherwise create the parents

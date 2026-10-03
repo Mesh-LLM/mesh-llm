@@ -1,3 +1,4 @@
+use crate::cleanup_owner as ownership;
 use crate::{
     protocol::Behavior,
     pty::{self, Terminal},
@@ -7,8 +8,6 @@ use std::{
     fs::File,
     process::{Command, Stdio},
 };
-#[path = "cleanup_owner.rs"]
-mod ownership;
 
 #[test]
 fn cleanup_git_when_caller_supplies_repository_workspace_refuses_before_child_start() {

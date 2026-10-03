@@ -1,68 +1,10 @@
-//! argparse emulation for `scripts/collect-ci-metrics.py`: every option of
-//! `parse_args` (string, `int` and `append` options), unique-prefix
-//! abbreviations with ambiguity errors, `=value`, `-h`, `--` handling,
-//! Python 3.13's sequential error order, then the script's own
-//! `parser.error` rules in source order.
+//! Native option admission for read-only CI timing analysis.
 
-use crate::ci_operations::build_cache_options::{Kind, classify, help_flag, is_option_like};
-use crate::ci_operations::ci_metrics_int::python_int;
-use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
-use crate::repository::text::repr;
+use std::collections::BTreeSet;
 
-const PROG: &str = "collect-ci-metrics.py";
-const USAGE: &str = "\
-usage: collect-ci-metrics.py [-h] [--repo REPO] [--workflow WORKFLOW]
-                             [--run-id RUN_ID] [--input INPUT]
-                             [--compare-input COMPARE_INPUT] [--limit LIMIT]
-                             [--status STATUS] [--branch BRANCH]
-                             [--event EVENT] [--created CREATED] [--top TOP]
-                             [--label KEY=VALUE] [--json-out JSON_OUT]
-                             [--markdown-out MARKDOWN_OUT] [--raw-out RAW_OUT]
-";
-const HELP: &str = "
-Collect read-only GitHub Actions timing and runner metrics.
+const USAGE: &str = "cargo xtool ci-ops collect-metrics (--input <file|-> | --workflow <workflow> | --run-id <positive-id>...) [--repo <repo>] [--compare-input <file>] [--limit <positive-integer>] [--top <positive-integer>] [--status <status>] [--branch <branch>] [--event <event>] [--created <date-filter>] [--label KEY=VALUE]... [--json-out <file|->] [--markdown-out <file|->] [--raw-out <file|->]";
 
-options:
-  -h, --help            show this help message and exit
-  --repo REPO
-  --workflow WORKFLOW
-  --run-id RUN_ID
-  --input INPUT         Detailed run JSON, --raw-out JSON, or -
-  --compare-input COMPARE_INPUT
-                        Detailed/raw run JSON for a historical baseline cohort
-  --limit LIMIT
-  --status STATUS
-  --branch BRANCH
-  --event EVENT
-  --created CREATED     GitHub date filter, e.g. >=2026-07-01
-  --top TOP
-  --label KEY=VALUE
-  --json-out JSON_OUT
-  --markdown-out MARKDOWN_OUT
-  --raw-out RAW_OUT     Save detailed inputs for offline analysis
-";
-const OPTIONS: [&str; 17] = [
-    "-h",
-    "--help",
-    "--repo",
-    "--workflow",
-    "--run-id",
-    "--input",
-    "--compare-input",
-    "--limit",
-    "--status",
-    "--branch",
-    "--event",
-    "--created",
-    "--top",
-    "--label",
-    "--json-out",
-    "--markdown-out",
-    "--raw-out",
-];
-
-/// The parsed namespace; unset string options are `None` like argparse.
 #[derive(Debug)]
 pub(crate) struct Args {
     pub(crate) repo: String,
@@ -105,117 +47,106 @@ impl Default for Args {
 }
 
 fn fail(message: &str) -> CheckReport {
-    error(USAGE, PROG, message)
+    CheckReport::usage(USAGE, message)
 }
 
-/// Parses `args`, or returns the help/usage report argparse would produce.
-pub(crate) fn parse(args: &[String]) -> Result<Args, CheckReport> {
-    let mut parsed = Args::default();
-    let mut extras: Vec<String> = Vec::new();
-    let mut positional_only = false;
-    let mut index = 0;
-    while let Some(arg) = args.get(index) {
-        index += 1;
-        if positional_only || arg == "--" {
-            positional_only = true;
-            extras.push(arg.clone());
-            continue;
-        }
-        match classify(arg, &OPTIONS) {
-            Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
-            Kind::Known("-h" | "--help", explicit, sep) => {
-                help_flag(explicit, sep, "-h/--help", &fail)?;
-                return Err(CheckReport::success(format!("{USAGE}{HELP}")));
-            }
-            Kind::Known(option, explicit, _) => {
-                let value = take_value(explicit, args, &mut index, option)?;
-                apply(&mut parsed, option, value)?;
-            }
-        }
+pub(crate) fn parse(arguments: &[String]) -> Result<Args, CheckReport> {
+    if matches!(arguments, [flag] if flag == "--help" || flag == "-h") {
+        return Err(CheckReport::success(format!("usage: {USAGE}\n")));
     }
-    if !extras.is_empty() {
-        return Err(fail(&format!(
-            "unrecognized arguments: {}",
-            extras.join(" ")
-        )));
+    let mut parsed = Args::default();
+    let mut seen = BTreeSet::new();
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        let (option, inline) = argument
+            .split_once('=')
+            .map_or((argument.as_str(), None), |(option, value)| {
+                (option, Some(value))
+            });
+        if !matches!(
+            option,
+            "--repo"
+                | "--workflow"
+                | "--run-id"
+                | "--input"
+                | "--compare-input"
+                | "--limit"
+                | "--status"
+                | "--branch"
+                | "--event"
+                | "--created"
+                | "--top"
+                | "--label"
+                | "--json-out"
+                | "--markdown-out"
+                | "--raw-out"
+        ) {
+            return Err(fail(&format!(
+                "unknown option or positional argument: {option}"
+            )));
+        }
+        if !matches!(option, "--run-id" | "--label") && !seen.insert(option.to_owned()) {
+            return Err(fail(&format!("{option} may be supplied only once")));
+        }
+        let value = inline
+            .or_else(|| arguments.next().map(String::as_str))
+            .filter(|value| !value.is_empty() && !value.starts_with("--"))
+            .ok_or_else(|| fail(&format!("{option} requires a nonempty value")))?;
+        apply(&mut parsed, option, value)?;
     }
     validate(&parsed)?;
     Ok(parsed)
 }
 
-fn take_value(
-    explicit: Option<String>,
-    args: &[String],
-    index: &mut usize,
-    option: &str,
-) -> Result<String, CheckReport> {
-    if let Some(value) = explicit {
-        return Ok(value);
-    }
-    match args.get(*index) {
-        Some(next) if !is_option_like(next, &OPTIONS) => {
-            *index += 1;
-            Ok(next.clone())
-        }
-        _ => Err(fail(&format!("argument {option}: expected one argument"))),
-    }
-}
-
 fn integer(option: &str, value: &str) -> Result<i64, CheckReport> {
-    python_int(value).ok_or_else(|| {
-        fail(&format!(
-            "argument {option}: invalid int value: {}",
-            repr(value)
-        ))
-    })
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(fail(&format!(
+            "{option} requires a positive decimal integer"
+        )));
+    }
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| fail(&format!("{option} requires a positive decimal integer")))
 }
 
-fn apply(parsed: &mut Args, option: &str, value: String) -> Result<(), CheckReport> {
+fn apply(parsed: &mut Args, option: &str, value: &str) -> Result<(), CheckReport> {
     match option {
-        "--repo" => parsed.repo = value,
-        "--workflow" => parsed.workflow = Some(value),
-        "--run-id" => parsed.run_id.push(integer(option, &value)?),
-        "--input" => parsed.input = Some(value),
-        "--compare-input" => parsed.compare_input = Some(value),
-        "--limit" => parsed.limit = integer(option, &value)?,
-        "--status" => parsed.status = value,
-        "--branch" => parsed.branch = Some(value),
-        "--event" => parsed.event = Some(value),
-        "--created" => parsed.created = Some(value),
-        "--top" => parsed.top = integer(option, &value)?,
-        "--label" => parsed.label.push(value),
-        "--json-out" => parsed.json_out = Some(value),
-        "--markdown-out" => parsed.markdown_out = Some(value),
-        _ => parsed.raw_out = Some(value),
+        "--repo" => parsed.repo = value.into(),
+        "--workflow" => parsed.workflow = Some(value.into()),
+        "--run-id" => parsed.run_id.push(integer(option, value)?),
+        "--input" => parsed.input = Some(value.into()),
+        "--compare-input" => parsed.compare_input = Some(value.into()),
+        "--limit" => parsed.limit = integer(option, value)?,
+        "--status" => parsed.status = value.into(),
+        "--branch" => parsed.branch = Some(value.into()),
+        "--event" => parsed.event = Some(value.into()),
+        "--created" => parsed.created = Some(value.into()),
+        "--top" => parsed.top = integer(option, value)?,
+        "--label" => parsed.label.push(value.into()),
+        "--json-out" => parsed.json_out = Some(value.into()),
+        "--markdown-out" => parsed.markdown_out = Some(value.into()),
+        "--raw-out" => parsed.raw_out = Some(value.into()),
+        _ => unreachable!("options admitted before values"),
     }
     Ok(())
 }
 
-/// The script's `parser.error` rules; empty strings are falsy in Python.
 fn validate(args: &Args) -> Result<(), CheckReport> {
-    let truthy = |value: &Option<String>| value.as_deref().is_some_and(|text| !text.is_empty());
-    let input = truthy(&args.input);
-    let workflow = truthy(&args.workflow);
-    let run_id = !args.run_id.is_empty();
-    if input && (workflow || run_id) {
+    let sources = usize::from(args.input.is_some())
+        + usize::from(args.workflow.is_some())
+        + usize::from(!args.run_id.is_empty());
+    if sources != 1 {
         return Err(fail(
-            "--input cannot be combined with --workflow or --run-id",
+            "exactly one of --input, --workflow, or --run-id is required",
         ));
     }
-    if workflow && run_id {
-        return Err(fail("--workflow cannot be combined with --run-id"));
-    }
-    if !input && !workflow && !run_id {
-        return Err(fail("one of --input, --workflow, or --run-id is required"));
-    }
-    if args.limit < 1 || args.top < 1 {
-        return Err(fail("--limit and --top must be at least 1"));
-    }
-    let stdout_outputs = [&args.json_out, &args.markdown_out, &args.raw_out]
+    let stdout = [&args.json_out, &args.markdown_out, &args.raw_out]
         .into_iter()
-        .filter(|path| path.as_deref() == Some("-"))
+        .filter(|value| value.as_deref() == Some("-"))
         .count();
-    if stdout_outputs > 1 {
+    if stdout > 1 {
         return Err(fail("only one output may use stdout (-)"));
     }
     Ok(())

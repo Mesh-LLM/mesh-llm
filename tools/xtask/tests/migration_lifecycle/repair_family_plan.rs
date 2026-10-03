@@ -6,7 +6,6 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -61,7 +60,14 @@ impl Fixture {
             .split("\nremaining_verification_seconds()")
             .next()
             .unwrap();
-        fs::write(root.join("adapter.sh"),format!("set -euo pipefail\n{selection}\nrepair_family_plan_step() {{{helpers}\nrun_verification_logged() {{ local label=\"$1\" log=\"$2\"; shift 2; printf '%s\\n' \"$label\" >> \"$log\"; \"$@\"; }}\n")).unwrap();
+        let candidate_guard = source
+            .split_once("verification_candidate_unchanged() {\n")
+            .unwrap()
+            .1
+            .split_once("\n}\n")
+            .unwrap()
+            .0;
+        fs::write(root.join("adapter.sh"),format!("set -euo pipefail\n{selection}\nverification_candidate_unchanged() {{{candidate_guard}\n}}\nrepair_family_plan_step() {{{helpers}\nrun_verification_logged() {{ local label=\"$1\" log=\"$2\"; shift 2; printf '%s\\n' \"$label\" >> \"$log\"; \"$@\"; }}\n")).unwrap();
         fs::copy(env!("CARGO_BIN_EXE_xtask"), root.join("controller")).unwrap();
         let mut manifest: Json = serde_json::from_slice(
             &fs::read(repo.join("ci/llama-canary/family-certified.json")).unwrap(),
@@ -103,9 +109,13 @@ impl Fixture {
         }
     }
     fn run(&self, body: &str) -> process::RawProcessReport {
+        self.run_mode("repair", body)
+    }
+    fn run_mode(&self, mode: &str, body: &str) -> process::RawProcessReport {
         let environment: BTreeMap<_, _> = [
             ("PATH", std::env::var("PATH").unwrap()),
-            ("HARNESS_MODE", "repair".into()),
+            ("HARNESS_MODE", mode.into()),
+            ("CERTIFIED_SHA", String::new()),
             (
                 "MESH_LLM_AUTOMATION_BIN",
                 self.root.join("controller").display().to_string(),
@@ -199,21 +209,30 @@ fn actual_repair_cache_caller_rejects_corrupt_explicit_cache_and_changed_frozen_
     assert!(!changed.root.join("plan.json").exists());
 }
 #[test]
-fn actual_verify_branch_keeps_legacy_planner_and_never_uses_repair_owner() {
-    let f = Fixture::new();
-    fs::create_dir(f.root.join("bin")).unwrap();
-    let python = f.root.join("bin/python3");
-    fs::write(
-        &python,
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> legacy.args\nexit 0\n",
+fn actual_verify_preimport_cache_uses_frozen_typed_owner_and_refuses_corrupt_cache() {
+    let fixture = Fixture::new();
+    // check_family_cache precedes candidate bundle import in the real main;
+    // CERTIFIED_SHA is still empty. Post-import verification is qualified by
+    // verification_source_cli/wrapper_qualification over actual local Git trees.
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/llama-canary-agent-repair.sh"),
     )
     .unwrap();
-    fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
-    let report = f.run("HARNESS_MODE=verify\nPATH=\"$ROOT/bin:$PATH\"\ncheck_family_cache");
-    assert!(report.process.success());
-    let log = fs::read_to_string(f.root.join("legacy.args")).unwrap();
-    assert_eq!(log.lines().count(), 2);
-    assert!(log.contains("--shard-count 256 --check-cache"));
-    assert!(log.contains("--verify-plan"));
-    assert!(!f.root.join("plan.json").exists());
+    assert!(
+        source.find("\nif ! check_family_cache;").unwrap()
+            < source.find("\nload_candidate_bundle\n").unwrap()
+    );
+    let report = fixture.run_mode("verify", "check_family_cache");
+    assert!(report.process.success(), "{:?}", report.process);
+    assert_eq!(fixture.plan()["selected_family_count"], 2);
+    assert_eq!(fixture.plan()["shards"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        fixture.plan()["manifest"],
+        "ci/llama-canary/family-certified.json"
+    );
+    let mut bytes = fs::read(&fixture.blob).unwrap();
+    bytes[0] = b'X';
+    fs::write(&fixture.blob, bytes).unwrap();
+    let rejected = fixture.run_mode("verify", "check_family_cache");
+    assert!(!rejected.process.success(), "{:?}", rejected.process);
 }

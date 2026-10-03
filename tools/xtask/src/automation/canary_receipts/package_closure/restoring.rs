@@ -76,13 +76,7 @@ pub(super) fn restore(input: &Input) -> DynResult<serde_json::Value> {
             ],
             None,
         )?;
-        if std::str::from_utf8(&heads)?
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            != [identity.candidate.as_str(), identity.branch.as_str()]
-        {
-            return Err("candidate bundle differs from exact identity".into());
-        }
+        source::candidate_bundle_identity(&heads, &identity.candidate, &identity.branch)?;
         candidate_view::policy(&staged, &identity.base, &identity.candidate)?;
         process::text(
             &staged,

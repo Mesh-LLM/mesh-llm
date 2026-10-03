@@ -476,7 +476,7 @@ impl RepairCaller {
             format!(
                 r#"set -euo pipefail
 {selector}
-if [[ "$HARNESS_MODE" != repair ]]; then printf 'legacy-selector-not-applicable\n'; exit 0; fi
+if [[ "$HARNESS_MODE" != repair ]]; then printf 'repair-snapshot-not-applicable\n'; exit 0; fi
 if [[ "${{FREEZE_MUTATION:-}}" == yes ]]; then
   MESH_LLM_AUTOMATION_BIN=relative-after-selection
   OWNER="$TRUSTED_ROOT/would-be-rebuilt-owner"
@@ -807,8 +807,8 @@ fn legacy_repair_changed_frozen_controller_is_rejected_before_admission_and_stag
 }
 
 #[test]
-fn legacy_repair_controller_initialization_does_not_bootstrap_or_admit_other_harness_modes() {
-    for mode in ["verify", "repair-build", "verify-build", "pinned-build"] {
+fn legacy_repair_controller_initialization_is_not_applicable_to_three_build_modes() {
+    for mode in ["repair-build", "verify-build", "pinned-build"] {
         let fixture = legacy_repair_fixture();
         let mut caller = RepairCaller::new(&fixture);
         caller.harness_mode = mode;
@@ -818,9 +818,39 @@ fn legacy_repair_controller_initialization_does_not_bootstrap_or_admit_other_har
         assert!(output.success(), "{mode}: {output:?}");
         assert!(
             String::from_utf8_lossy(&output.stdout.bytes_retained)
-                .contains("legacy-selector-not-applicable")
+                .contains("repair-snapshot-not-applicable")
         );
         assert!(!caller.just_trace.exists());
+        assert!(!caller.trace.exists());
+        assert!(!caller.receipt.exists());
+        assert!(!fixture.temp.path().join("controller.marker").exists());
+    }
+}
+
+#[test]
+fn normal_verify_controller_selection_requires_actual_owner_or_trusted_bootstrap() {
+    for configured in [Some(""), Some(env!("CARGO_BIN_EXE_xtask")), None] {
+        let fixture = legacy_repair_fixture();
+        let mut caller = RepairCaller::new(&fixture);
+        caller.harness_mode = "verify";
+        let output = caller.invoke(&fixture, configured, false, &Cancellation::default());
+        assert_eq!(
+            output.success(),
+            configured != Some(""),
+            "{configured:?}: {output:?}"
+        );
+        if configured == Some("") {
+            assert!(
+                String::from_utf8_lossy(&output.stderr.bytes_retained)
+                    .contains("must be an absolute executable")
+            );
+        } else {
+            assert!(
+                String::from_utf8_lossy(&output.stdout.bytes_retained)
+                    .contains("repair-snapshot-not-applicable")
+            );
+        }
+        assert_eq!(caller.just_trace.exists(), configured.is_none());
         assert!(!caller.trace.exists());
         assert!(!caller.receipt.exists());
         assert!(!fixture.temp.path().join("controller.marker").exists());

@@ -1,5 +1,4 @@
-//! Input-shape rules of `collect-ci-metrics.py`: `load_runs`, the
-//! `TypeError` a non-dict job raises inside `normalize_job`, and `labels`.
+//! Saved CI run envelopes, object-shaped jobs and benchmark label admission.
 
 use crate::ci_operations::ci_metrics_normalize::{Failure, Outcome};
 use crate::ci_operations::ci_metrics_value::{Value, parse};

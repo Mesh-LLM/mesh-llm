@@ -32,10 +32,17 @@ const WEBSITE_DOC_FILES: &[&str] = &[
 const WEBSITE_DOC_DIRS: &[&str] = &["assets", "catalog", "docs", "pagefind"];
 
 pub(super) fn is_website_input(file: &str) -> bool {
-    if file.starts_with("website/") || file == "install.sh" || file == "install.ps1" {
+    if file.starts_with("website/")
+        || file.starts_with("mesh/website/")
+        || file == "install.sh"
+        || file == "install.ps1"
+    {
         return true;
     }
-    let Some(rest) = file.strip_prefix("docs/") else {
+    let Some(rest) = file
+        .strip_prefix("docs/")
+        .or_else(|| file.strip_prefix("mesh/docs/"))
+    else {
         return false;
     };
     WEBSITE_DOC_FILES.contains(&rest)
@@ -46,30 +53,38 @@ pub(super) fn is_website_input(file: &str) -> bool {
 }
 
 pub(super) fn is_ui_input(file: &str) -> bool {
-    file.starts_with("crates/mesh-llm-ui/")
+    file.starts_with("crates/mesh-llm-ui/") || file.starts_with("mesh/crates/mesh-llm-ui/")
 }
 
 /// Whether one changed path forces the all-workspace selection.
 pub(super) fn escalates(file: &str) -> bool {
     file == FORCE_ALL
         || file == "third_party/llama.cpp/upstream.txt"
+        || file == "skippy/third_party/llama.cpp/upstream.txt"
         || file.starts_with("third_party/llama.cpp/patches/")
+        || file.starts_with("skippy/third_party/llama.cpp/patches/")
         || file == "Cargo.lock"
         || file == "Cargo.toml"
         || file == ".github/cache-version.txt"
         || file == "rust-toolchain"
         || file == "rust-toolchain.toml"
-        || file.strip_prefix("scripts/").is_some_and(|rest| {
-            ESCALATING_SCRIPTS.iter().any(|name| {
-                rest.strip_prefix(name)
-                    .is_some_and(|tail| tail.starts_with('.'))
+        || file
+            .strip_prefix("scripts/")
+            .or_else(|| file.strip_prefix("mesh/scripts/"))
+            .or_else(|| file.strip_prefix("skippy/scripts/"))
+            .is_some_and(|rest| {
+                ESCALATING_SCRIPTS.iter().any(|name| {
+                    rest.strip_prefix(name)
+                        .is_some_and(|tail| tail.starts_with('.'))
+                })
             })
-        })
 }
 
 /// Whether a changed path can be owned by a Rust crate.
 pub(super) fn may_own_rust(file: &str) -> bool {
-    (file.starts_with("crates/") || file.starts_with("tools/")) && !is_ui_input(file)
+    // Cargo metadata already supplies exact package-directory ownership.
+    // A root-name prefilter can silently discard a relocated workspace package.
+    !is_ui_input(file)
 }
 
 #[cfg(test)]
@@ -88,5 +103,8 @@ mod tests {
         assert!(escalates("third_party/llama.cpp/patches/0001.patch"));
         assert!(!may_own_rust("crates/mesh-llm-ui/src/app.tsx"));
         assert!(may_own_rust("tools/xtask/src/main.rs"));
+        assert!(may_own_rust("mesh/crates/relocated/src/lib.rs"));
+        assert!(may_own_rust("skippy/crates/relocated/src/lib.rs"));
+        assert!(!may_own_rust("mesh/crates/mesh-llm-ui/src/app.tsx"));
     }
 }

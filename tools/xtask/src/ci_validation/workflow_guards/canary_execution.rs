@@ -272,4 +272,26 @@ mod tests {
         h::replace(execute, &["run"], Node::Scalar(source));
         assert!(aggregate(h::job(&node, "aggregate").unwrap()).is_err());
     }
+    #[test]
+    fn family_memory_dispatch_preserves_selected_source_sdk_before_certification() {
+        let document = family();
+        let job = h::job(&document, "family").unwrap();
+        let Node::Seq(runners) = h::member(job, "runs-on").unwrap() else {
+            panic!("family runner list required")
+        };
+        assert!(runners.iter().any(
+            |runner| matches!(runner, Node::Scalar(value) if value == "${{ matrix.memory_tier }}")
+        ));
+        let steps = h::steps(job).unwrap();
+        let (sdk, _) = h::step(steps, "uses", "./.github/actions/setup-canary-python").unwrap();
+        let (certify, command) = h::step(steps, "id", "certify").unwrap();
+        h::before(sdk, certify).unwrap();
+        h::binding(
+            h::member(command, "env").unwrap(),
+            "MEMORY_TIER",
+            "${{ matrix.memory_tier }}",
+        )
+        .unwrap();
+        worker(steps).unwrap();
+    }
 }

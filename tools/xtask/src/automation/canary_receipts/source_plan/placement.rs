@@ -181,3 +181,18 @@ fn add(left: u64, right: u64) -> DynResult<u64> {
     left.checked_add(right)
         .ok_or_else(|| "memory estimate overflow".into())
 }
+
+#[cfg(test)]
+mod tier_boundary_tests {
+    use super::{GIB, tier_for};
+    #[test]
+    fn exact_ten_percent_tier_boundaries_and_one_byte_over_are_preserved() {
+        let small = 128 * GIB * 90 / 100;
+        let large = 256 * GIB * 90 / 100;
+        assert_eq!(tier_for(small, None).unwrap(), 128);
+        assert_eq!(tier_for(small + 1, None).unwrap(), 256);
+        assert_eq!(tier_for(large, None).unwrap(), 256);
+        assert!(tier_for(large + 1, None).is_err());
+        assert!(tier_for(0, None).is_err());
+    }
+}

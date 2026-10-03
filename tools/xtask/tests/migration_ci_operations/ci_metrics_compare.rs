@@ -148,16 +148,7 @@ fn migration_ci_operations_ci_metrics_compare_streams() -> TestResult {
         &["--input", "-", "--compare-input", "-", "--json-out", OUTPUT],
         Some(&stdin),
     )?;
-    case(
-        "compare_empty_value",
-        &[
-            "--input",
-            "sample_runs.json",
-            "--compare-input=",
-            "--json-out",
-            OUTPUT,
-        ],
-    )?;
+    // Empty option values are rejected by native argument admission fixtures.
     Ok(())
 }
 

@@ -5,9 +5,8 @@
 //! the exit status, both streams and any written output file with a golden
 //! in `fixtures/ci_operations/ci_metrics/`, captured from the legacy script
 //! under Python 3.13 (`{root}` is the temp dir). `generated_at` is wall-clock
-//! time, so its value is masked in both. With the legacy interpreter
-//! configured, the legacy script also runs on identical inputs and the two
-//! must agree byte for byte after that mask.
+//! time, so its value is masked before the Rust output is compared with
+//! those frozen provenance fixtures. Native option admission has its own checks.
 //!
 //! Markdown cases also compare the `--markdown-out` file (or the summary on
 //! stdout when no output path is given). `--compare-input` cases live in
@@ -136,8 +135,7 @@ fn port(
     sandbox.run(Path::new(env!("CARGO_BIN_EXE_xtask")), &prefix, args, stdin)
 }
 
-/// Runs the port, then (if configured) the legacy script on a reset copy;
-/// both must match each other and the captured golden.
+/// Runs the Rust owner against frozen captured report contracts.
 pub(crate) fn case_with_stdin(
     name: &str,
     args: &[&str],
@@ -162,10 +160,17 @@ pub(crate) fn case_with_stdin(
         text.replace("**False**", "**false**")
             .replace("**True**", "**true**")
     });
-    if matches!(name, "report_nan_float_id" | "markdown_nan_float_id") {
+    if matches!(
+        name,
+        "report_nan_float_id" | "markdown_nan_float_id" | "value_duplicate_keys"
+    ) {
         assert_eq!(actual.code, 2);
         assert!(actual.stdout.is_empty());
         assert!(!actual.stderr.is_empty());
+        if name == "value_duplicate_keys" {
+            // Its last duplicate ID is an array: native run admission refuses it.
+            assert!(actual.stderr.contains("CI run identity must be a scalar"));
+        }
         assert!(
             actual.output.is_none()
                 && actual.raw_output.is_none()
@@ -190,7 +195,13 @@ pub(crate) fn case(name: &str, args: &[&str]) -> Result<Observed, Box<dyn Error>
 
 /// A report case: `--input <file> --json-out <OUTPUT>` plus `extra`.
 fn report(name: &str, input: &str, extra: &[&str]) -> Result<Observed, Box<dyn Error>> {
-    let mut args = vec!["--input", input, "--json-out", OUTPUT];
+    let mut args = vec!["--input", input];
+    if !extra
+        .iter()
+        .any(|arg| *arg == "--json-out" || arg.starts_with("--json-out="))
+    {
+        args.extend(["--json-out", OUTPUT]);
+    }
     args.extend_from_slice(extra);
     case(name, &args)
 }
@@ -292,9 +303,8 @@ fn migration_ci_operations_ci_metrics_reports_runner_dimensions() -> TestResult 
     Ok(())
 }
 
-/// Python object semantics the port must keep: exact big integers, `NaN`,
-/// duplicate keys, codec errors, and the tracebacks (status 1) of
-/// exceptions the legacy script does not catch.
+/// Native JSON admission preserves valid numbers and rejects invalid identities,
+/// codec errors, and malformed job shapes before publishing a report.
 #[test]
 fn migration_ci_operations_ci_metrics_preserves_json_and_rejects_invalid_job_shapes() -> TestResult
 {
@@ -442,63 +452,46 @@ fn migration_ci_operations_ci_metrics_reports_input_errors() -> TestResult {
 }
 
 #[test]
-fn migration_ci_operations_ci_metrics_matches_argparse() -> TestResult {
-    let cases: [(&str, &[&str]); 20] = [
-        ("argv_help", &["-h"]),
-        ("argv_help_bundled", &["--input", "x", "--help"]),
-        ("argv_help_explicit", &["--help=1"]),
-        ("argv_empty", &[]),
-        (
-            "argv_unknown",
-            &["--input", "x", "--json-out", "-", "extra", "--nope"],
-        ),
-        ("argv_double_dash", &["--input", "x", "--", "--json-out"]),
-        ("argv_ambiguous", &["--input", "x", "--r", "y"]),
-        (
-            "argv_prefix",
-            &[
-                "--input",
-                "sample_runs.json",
-                "--json-out",
-                OUTPUT,
-                "--status",
-                "all",
-            ],
-        ),
-        ("argv_expected_value", &["--input", "x", "--label"]),
-        ("argv_invalid_int", &["--input", "x", "--limit", "ten"]),
-        ("argv_invalid_run_id", &["--run-id", "1.5"]),
-        (
-            "argv_input_and_workflow",
-            &["--input", "x", "--workflow", "w"],
-        ),
-        (
-            "argv_input_and_run_id",
-            &["--input", "x", "--run-id", "1_0"],
-        ),
-        (
-            "argv_workflow_and_run_id",
-            &["--workflow", "w", "--run-id", "3"],
-        ),
-        ("argv_top_zero", &["--input", "x", "--top", "0"]),
-        ("argv_limit_negative", &["--input", "x", "--limit", "-1"]),
-        (
-            "argv_two_stdout",
-            &["--input", "x", "--json-out", "-", "--raw-out", "-"],
-        ),
-        ("argv_empty_input_value", &["--input", ""]),
-        (
-            "argv_negative_number_value",
-            &["--input", "x", "--top", "-5"],
-        ),
-        (
-            "argv_error_before_later_option",
-            &["--limit", "x", "--bogus", "--top"],
-        ),
-    ];
-    for (name, args) in cases {
-        case(name, args)?;
+fn migration_ci_operations_ci_metrics_native_argument_admission() -> TestResult {
+    let sandbox = Sandbox::new("native-arguments")?;
+    for args in [
+        &[][..],
+        &["--input", "x", "--r", "y"][..],
+        &["--input", "x", "--top", "-1"][..],
+        &["--run-id", "1_0"][..],
+        &["--input", ""][..],
+        &["--input", "x", "--compare-input="][..],
+        &["--input", "x", "--input", "y"][..],
+        &["--input", "x", "--help"][..],
+        &["--input", "x", "--json-out", "-", "--raw-out", "-"][..],
+    ] {
+        let actual = port(&sandbox, args, None)?;
+        assert_eq!(actual.code, 2);
+        assert!(actual.stdout.is_empty());
+        assert!(actual.stderr.contains("cargo xtool ci-ops collect-metrics"));
+        assert!(
+            actual.output.is_none()
+                && actual.markdown_output.is_none()
+                && actual.raw_output.is_none()
+        );
     }
+    for help in ["-h", "--help"] {
+        let actual = port(&sandbox, &[help], None)?;
+        assert_eq!(actual.code, 0);
+        assert!(actual.stdout.contains("cargo xtool ci-ops collect-metrics"));
+        assert!(actual.stderr.is_empty());
+    }
+    let actual = port(
+        &sandbox,
+        &[
+            "--input=sample_runs.json",
+            "--json-out=out/nested/metrics.json",
+            "--status=all",
+        ],
+        None,
+    )?;
+    assert_eq!(actual.code, 0, "{}", actual.stderr);
+    assert_eq!(report_json(&actual)?["schema_version"], 3);
     Ok(())
 }
 

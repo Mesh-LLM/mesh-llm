@@ -30,3 +30,12 @@ mod consumers;
 
 #[path = "../src/ci_validation/workflow_guards/cache_boundaries.rs"]
 mod cache_boundaries;
+
+#[path = "../src/ci_validation/workflow_guards/cache_evidence.rs"]
+mod cache_evidence;
+#[path = "../src/ci_validation/workflow_guards/cache_identity.rs"]
+mod cache_identity;
+#[path = "ci_runner_cache_contract/evidence_contracts.rs"]
+mod evidence_contracts;
+#[path = "ci_runner_cache_contract/evidence_runtime.rs"]
+mod evidence_runtime;
