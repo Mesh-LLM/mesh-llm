@@ -110,6 +110,14 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         orchestrator = (WORKFLOWS / "ci-linux-lane.yml").read_text()
         producer = (WORKFLOWS / "static-abi-artifact.yml").read_text()
         consumer = (WORKFLOWS / "ci-rust-tests-slice.yml").read_text()
+        prepare = consumer.index("name: Prepare patched llama.cpp for static ABI verification")
+        restore = consumer.index("name: Restore immutable static ABI input")
+        self.assertLess(prepare, restore)
+        self.assertIn(
+            "run: scripts/prepare-llama.sh pinned",
+            consumer[prepare:restore],
+        )
+        self.assertNotIn("if:", consumer[prepare:restore].split("run:", 1)[0])
 
         self.assertIn(
             "value: ${{ jobs.static_abi_artifact.outputs.toolchain_epoch }}",
