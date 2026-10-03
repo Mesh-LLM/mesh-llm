@@ -108,7 +108,7 @@ run_with_timeout() {
   shift
   if ! jq -n --arg label "$label" --argjson seconds "$SMOKE_COMMAND_TIMEOUT_SECS" \
     --arg cwd "$PWD" --arg executable "$executable" --args \
-    '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
+    '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional,stdin:"inherit"}' \
     -- "$@" > "$input"; then
     rm -f "$input"
     rmdir "$transaction_root" || true

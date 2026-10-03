@@ -24,6 +24,7 @@ serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
 syn = { version = "2", features = ["full", "visit"] }
 thiserror = "2"
+tempfile = "3"
 tokio = { version = "=1.53.1", features = ["rt", "net", "time", "macros", "io-util", "sync"] }
 toml = "0.9"
 uuid = "=1.26.0"
@@ -35,7 +36,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [dev-dependencies]
-tempfile = "3"
+tar = "0.4"
 
 [[bin]]
 name = "laya-product-fixture"

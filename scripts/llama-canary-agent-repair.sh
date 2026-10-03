@@ -170,49 +170,41 @@ rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || t
 run_for() {
   local label="$1" seconds="$2"
   shift 2
-  if [[ "$HARNESS_MODE" == *-build || "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
-    local transaction_root input executable result timeout_parent
-    local automation=()
-    if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
-      repair_workload_controller_unchanged || return 125
-      automation=("${repair_workload_automation[@]}")
-      timeout_parent="${RUNNER_TEMP:-/tmp}"
-    else
-      automation=("${MESH_LLM_AUTOMATION_BIN:?}")
-      timeout_parent="${RUNNER_TEMP:?}"
-    fi
-    executable="$(command -v "$1")" || return 125
-    if [[ ( "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ) && "$executable" != /* && "$executable" == */* ]]; then
-      executable="$PWD/$executable"
-    fi
-    if [[ "$executable" != /* ]]; then
-      echo "$label requires an absolute executable" >&2
-      return 125
-    fi
-    transaction_root="$(mktemp -d "$timeout_parent/canary-timeout.XXXXXXXX")" || return 125
-    input="$transaction_root/input.json"
-    shift
-    jq -n --arg label "$label" --argjson seconds "$seconds" --arg cwd "$PWD" \
-      --arg executable "$executable" --args \
-      '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
-      -- "$@" > "$input" || { rm -rf "$transaction_root"; return 125; }
-    if "${automation[@]}" automation canary-timeout --input "$input"; then
-      result=0
-    else
-      result=$?
-    fi
-    rm -rf "$transaction_root" || return 125
-    if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
-      repair_workload_controller_unchanged || return 125
-    fi
-    return "$result"
+  local transaction_root input executable result timeout_parent
+  local automation=()
+  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
+    repair_workload_controller_unchanged || return 125
+    automation=("${repair_workload_automation[@]}")
+    timeout_parent="${RUNNER_TEMP:-/tmp}"
+  else
+    automation=("${MESH_LLM_AUTOMATION_BIN:?}")
+    timeout_parent="${RUNNER_TEMP:?}"
   fi
-  local cleanup=()
-  if [[ "$label" == "agent developer task" ]]; then
-    cleanup+=(--cleanup-on-exit)
+  executable="$(command -v "$1")" || return 125
+  if [[ ( "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ) && "$executable" != /* && "$executable" == */* ]]; then
+    executable="$PWD/$executable"
   fi
-  python3 scripts/run-command-with-timeout.py \
-    --seconds "$seconds" --label "$label" "${cleanup[@]}" -- "$@"
+  if [[ "$executable" != /* ]]; then
+    echo "$label requires an absolute executable" >&2
+    return 125
+  fi
+  transaction_root="$(mktemp -d "$timeout_parent/canary-timeout.XXXXXXXX")" || return 125
+  input="$transaction_root/input.json"
+  shift
+  jq -n --arg label "$label" --argjson seconds "$seconds" --arg cwd "$PWD" \
+    --arg executable "$executable" --args \
+    '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
+    -- "$@" > "$input" || { rm -rf "$transaction_root"; return 125; }
+  if "${automation[@]}" automation canary-timeout --input "$input"; then
+    result=0
+  else
+    result=$?
+  fi
+  rm -rf "$transaction_root" || return 125
+  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
+    repair_workload_controller_unchanged || return 125
+  fi
+  return "$result"
 }
 
 record_failure_class() {
@@ -314,14 +306,8 @@ check_family_cache() {
     repair_family_plan 256
     return
   fi
-  mkdir -p "$(dirname "$PLAN_PATH")"
-  python3 scripts/plan-family-battery.py \
-    --manifest ci/llama-canary/family-certified.json \
-    --shard-count 256 \
-    --check-cache \
-    --cache-root "$HF_CACHE" \
-    --output "$PLAN_PATH"
-  python3 scripts/plan-family-battery.py --verify-plan "$PLAN_PATH"
+  echo "unsupported canary cache mode: $HARNESS_MODE" >&2
+  return 2
 }
 
 remaining_verification_seconds() {
@@ -562,10 +548,8 @@ validate_agent_manifest_changes() {
     verification_source_inspection verification-manifest-policy > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
     return
   fi
-  python3 scripts/validate-llama-canary-agent-manifests.py \
-    --base-ref "$CANDIDATE_BASE_HEAD" \
-    --llama-src "$ROOT/.deps/llama.cpp" \
-    > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+  echo "unsupported canary manifest mode: $HARNESS_MODE" >&2
+  return 2
 }
 
 agent_feedback_prompt() {
@@ -759,6 +743,10 @@ run_full_build() {
 
 # Local CLI compatibility path. CI uses *-build modes and separate family jobs.
 run_certification() {
+  if [[ "$HARNESS_MODE" != repair && "$HARNESS_MODE" != verify ]]; then
+    echo "local certification requires repair or verify mode" >&2
+    return 2
+  fi
   local setting workload_settings
   local workload_env=()
   workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
@@ -775,23 +763,8 @@ run_certification() {
     repair_source_inspection local-parity-inventory "" "$CERTIFY_LOG" || return 1
   elif [[ "$HARNESS_MODE" == verify ]]; then
     verification_source_inspection verification-parity-inventory "$CERTIFY_LOG" || return 1
-  else
-  run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
-    python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate \
-    || return 1
   fi
-  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
-    repair_family_plan 1 "$CERTIFY_LOG" || return 1
-  else
-  run_verification_logged "full family certification plan" "$CERTIFY_LOG" \
-    python3 scripts/plan-family-battery.py \
-      --manifest ci/llama-canary/family-certified.json \
-      --shard-count 1 \
-      --check-cache \
-      --cache-root "$HF_CACHE" \
-      --output "$PLAN_PATH" \
-    || return 1
-  fi
+  repair_family_plan 1 "$CERTIFY_LOG" || return 1
   run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
     "${workload_env[@]}" \
@@ -896,7 +869,8 @@ write_split_certification_roster() {
     echo "independent verification cannot write the split roster" >&2
     return 1
   else
-    python3 scripts/generate-split-certified.py
+    echo "unsupported canary roster mode: $HARNESS_MODE" >&2
+    return 2
   fi
 }
 
@@ -908,7 +882,8 @@ check_split_certification_roster() {
   elif [[ "$HARNESS_MODE" == verify ]]; then
     verification_source_inspection verification-split-roster-check
   else
-    python3 scripts/generate-split-certified.py --check
+    echo "unsupported canary roster mode: $HARNESS_MODE" >&2
+    return 2
   fi
 }
 

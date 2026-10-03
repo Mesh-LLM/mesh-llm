@@ -3,11 +3,19 @@ use crate::command::DynResult;
 use crate::command_interrupt::Interrupt;
 use crate::process::{
     Completion, InheritedReport, Limits, Outcome, ProcessSpec, Readiness, Value,
-    supervise_inherited,
+    supervise_inherited, supervise_inherited_closed_stdin,
 };
 use crate::repository::{check_args::Grammar, check_report::CheckReport};
 use serde::Deserialize;
-use std::{fs, path::PathBuf, time::Duration};
+#[cfg(all(test, unix))]
+use std::fs;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+#[path = "canary_timeout/input.rs"]
+mod input;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -17,6 +25,16 @@ struct Input {
     cwd: PathBuf,
     executable: PathBuf,
     arguments: Vec<String>,
+    #[serde(default)]
+    stdin: CommandStdin,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CommandStdin {
+    #[default]
+    Closed,
+    Inherit,
 }
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
@@ -35,26 +53,63 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     if !parsed.positionals.is_empty() {
         return GRAMMAR.error("unexpected positional arguments").emit();
     }
-    let input: Input =
-        serde_json::from_slice(&fs::read(parsed.last("--input").ok_or("missing --input")?)?)?;
-    execute(&input).emit()
+    execute_path(Path::new(parsed.last("--input").ok_or("missing --input")?))?.emit()
 }
 
-fn execute(input: &Input) -> CheckReport {
-    match supervise(input) {
-        Ok(report) => report,
-        Err(error) => CheckReport {
-            stdout: String::new(),
-            stderr: format!(
-                "{} infrastructure supervision failed: {error}\n",
-                input.label
-            ),
-            code: 125,
-        },
+fn execute_path(path: &Path) -> DynResult<CheckReport> {
+    let interrupt = Interrupt::install()?;
+    let loaded = input::read(path, &interrupt.cancellation())
+        .and_then(|bytes| Ok(serde_json::from_slice::<Input>(&bytes)?));
+    match loaded {
+        Ok(input) => Ok(execute_owned(&input, interrupt)),
+        Err(error) => {
+            #[cfg(unix)]
+            let signal = interrupt.finish_signal()?;
+            #[cfg(windows)]
+            let signal = match interrupt.finish() {
+                Ok(()) => None,
+                Err(crate::command_interrupt::Reason::Interrupted) => Some(2),
+                Err(error) => return Err(error.into()),
+            };
+            match signal {
+                Some(signal) => Ok(CheckReport {
+                    stdout: String::new(),
+                    stderr: "canary timeout interrupted during request admission\n".into(),
+                    code: 128 + signal,
+                }),
+                None => Err(error),
+            }
+        }
     }
 }
 
-fn supervise(input: &Input) -> DynResult<CheckReport> {
+#[cfg(all(test, unix))]
+fn execute(input: &Input) -> CheckReport {
+    match Interrupt::install() {
+        Ok(interrupt) => execute_owned(input, interrupt),
+        Err(error) => infrastructure(input, error),
+    }
+}
+
+fn infrastructure(input: &Input, error: impl std::fmt::Display) -> CheckReport {
+    CheckReport {
+        stdout: String::new(),
+        stderr: format!(
+            "{} infrastructure supervision failed: {error}\n",
+            input.label
+        ),
+        code: 125,
+    }
+}
+
+fn execute_owned(input: &Input, interrupt: Interrupt) -> CheckReport {
+    match supervise(input, interrupt) {
+        Ok(report) => report,
+        Err(error) => infrastructure(input, error),
+    }
+}
+
+fn supervise(input: &Input, interrupt: Interrupt) -> DynResult<CheckReport> {
     if input.seconds == 0
         || input.seconds > 86400
         || input.label.is_empty()
@@ -82,8 +137,12 @@ fn supervise(input: &Input) -> DynResult<CheckReport> {
         readiness: Readiness::None,
         completion: Completion::Exit,
     };
-    let interrupt = Interrupt::install()?;
-    let result = supervise_inherited(&spec, &limits, &interrupt.cancellation());
+    // Replay loops own their input; prompt-driven smoke callers explicitly opt in.
+    let supervisor = match input.stdin {
+        CommandStdin::Closed => supervise_inherited_closed_stdin,
+        CommandStdin::Inherit => supervise_inherited,
+    };
+    let result = supervisor(&spec, &limits, &interrupt.cancellation());
     // Restore handlers only after owned-tree cleanup, then freeze first signal.
     #[cfg(unix)]
     let signal = interrupt.finish_signal()?;

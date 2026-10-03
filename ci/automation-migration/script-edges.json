@@ -326,76 +326,12 @@
       "file": "scripts/llama-canary-agent-repair.sh",
       "members": [
         [
-          212,
-          "7f0ae9a73f4448bd",
-          1,
-          "script",
-          "scripts/run-command-with-timeout.py",
-          "run_for: --seconds timeout --label label optional --cleanup-on-exit -- remaining command array; combined output tee log, nonzero/124 budget failure propagated; legacy timeout invocation is retained syntactically; normal repair, admitted normal verify and protected build modes use the typed timeout owner Final projected source: retained non-repair/verify fallback only; normal repair uses frozen typed local/plan owners. Current normal-verify cutover: Admitted normal verify uses the frozen typed timeout/plan/cache/content owner before this fallback; normal repair and protected build paths retain their existing typed owners. Syntactic Python fallback and implementation remain; runtime qualification pending."
-        ],
-        [
-          518,
-          "1d0915cce3e94cb3",
-          1,
-          "script",
-          "scripts/validate-llama-canary-agent-manifests.py",
-          "Retained non-repair/verify fallback: --base-ref CANDIDATE_BASE_HEAD and --llama-src selected prepared tree; policy log uses tee; nonzero rejects candidate. Normal repair uses frozen local-manifest-policy; protected build modes use immutable package-context manifest-policy. Current normal-verify cutover: Admitted normal verify uses the frozen typed timeout/plan/cache/content owner before this fallback; normal repair and protected build paths retain their existing typed owners. Syntactic Python fallback and implementation remain; runtime qualification pending."
-        ],
-        [
-          662,
+          646,
           "5af7e4058f86f917",
           1,
           "environment",
           "uv run with jinja2==3.1.6",
           "LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- arch -arm64 bash scripts/build-llama.sh with CMake flags; environment installs dependency and runs native build, failures abort"
-        ],
-        [
-          728,
-          "61060159e19b736b",
-          1,
-          "script",
-          "scripts/skippy-llama-parity.py",
-          "--llama-src .deps/llama.cpp validate with continued options; stdout/stderr inherited; nonzero fails canary gate Final projected source: retained non-repair/verify fallback only; normal repair uses frozen typed local/plan owners. Current normal-verify cutover: Admitted normal verify uses the frozen typed timeout/plan/cache/content owner before this fallback; normal repair and protected build paths retain their existing typed owners. Syntactic Python fallback and implementation remain; runtime qualification pending."
-        ],
-        [
-          316,
-          "8faf38bee64ae451",
-          1,
-          "script",
-          "scripts/plan-family-battery.py",
-          "Retained non-repair/verify cache preflight: source-owned manifest, shard-count 256, cache-root HF_CACHE, and PLAN_PATH output; normal repair uses bounded typed family-plan and cache-policy forwarding. Current normal-verify cutover: Admitted normal verify uses the frozen typed timeout/plan/cache/content owner before this fallback; normal repair and protected build paths retain their existing typed owners. Syntactic Python fallback and implementation remain; runtime qualification pending."
-        ],
-        [
-          811,
-          "2cb072e565e9e041",
-          1,
-          "script",
-          "scripts/generate-split-certified.py",
-          "no args; writes split certification roster; output/status inherited, failure rejects canary Final projected source: retained non-repair/verify fallback only; normal repair uses frozen typed local/plan owners. Current normal-verify cutover: Admitted normal verify refuses roster writes before this fallback; repair and protected build modes use their existing typed roster writers. Syntactic Python fallback and implementation remain; runtime qualification pending."
-        ],
-        [
-          823,
-          "180a08a4e49894c0",
-          1,
-          "script",
-          "scripts/generate-split-certified.py",
-          "--check validates generated roster without writing; inherited diagnostics, nonzero rejects canary Final projected source: retained non-repair/verify fallback only; normal repair uses frozen typed local/plan owners. Current normal-verify cutover: Admitted normal verify uses the frozen typed timeout/plan/cache/content owner before this fallback; normal repair and protected build paths retain their existing typed owners. Syntactic Python fallback and implementation remain; runtime qualification pending."
-        ],
-        [
-          322,
-          "b4ca5a08609ed376",
-          1,
-          "script",
-          "scripts/plan-family-battery.py cache and immutable plan preflight before repair",
-          "Retained non-repair/verify preflight checks PLAN_PATH; normal repair uses frozen typed family-plan --verify-plan. Current normal-verify cutover: Admitted normal verify uses the frozen typed timeout/plan/cache/content owner before this fallback; normal repair and protected build paths retain their existing typed owners. Syntactic Python fallback and implementation remain; runtime qualification pending."
-        ],
-        [
-          735,
-          "8faf38bee64ae451",
-          2,
-          "script",
-          "scripts/plan-family-battery.py cache and immutable plan preflight before repair",
-          "Retained non-repair/verify certification plan: source-owned manifest, shard-count 1, cache-root HF_CACHE, PLAN_PATH output, and inherited logged failure propagation. Normal repair uses frozen typed family-plan and cache-policy forwarding. Current normal-verify cutover: Admitted normal verify uses the frozen typed timeout/plan/cache/content owner before this fallback; normal repair and protected build paths retain their existing typed owners. Syntactic Python fallback and implementation remain; runtime qualification pending."
         ]
       ]
     },
@@ -501,24 +437,11 @@
       "members": [
         [
           24,
-          "a8d46eca62fec82a",
+          "49deb46a6fd88b71",
           1,
           "environment",
-          "explicit surviving87 scripts.tests modules",
-          "After dependent reviewed quality/runtime/artifact and classifier/Just test retirement; all surviving modules and shared Python Just source helper remain required with no protected/SDK/platform/native gate demotion."
-        ]
-      ]
-    },
-    {
-      "file": "scripts/skippy-family-battery.sh",
-      "members": [
-        [
-          134,
-          "ba28975e02098c5d",
-          1,
-          "selection",
-          "require_cmd python3",
-          "availability guard before family battery commands; no launch"
+          "explicit surviving85 scripts.tests modules",
+          "Conditional metrics40 retirement after exact owning proof/checkpoint; surviving85 modules and all protected SDK/native/model/platform/component gates remain mandatory."
         ]
       ]
     },
@@ -894,22 +817,6 @@
         ]
       ],
       "root": "optional canary candidate source verification"
-    },
-    {
-      "boundary": "repo/run IDs, filters and output selected by CLI; --input file/stdin mode never spawns gh",
-      "file": "scripts/collect-ci-metrics.py",
-      "members": [
-        [
-          231,
-          "0bb8fafe2022eacf",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "conditional: gh run view|run list|api <bounded caller args>",
-          "run_gh_json captures text stdout/stderr check=True; lists runs or paginated job data, errors become RuntimeError; writes report only at requested output path"
-        ]
-      ],
-      "root": "optional read-only live GitHub CI timing collection"
     },
     {
       "boundary": "repo/revision/source and HF destination are CLI inputs; upload-only mode skips clone/build/conversion",
@@ -1427,11 +1334,6 @@
       "scripts/ci-cargo-packages.py",
       "9f15bd3e32bd9263dfec4d1b6f7f5744680a196e79c0f387ade538341f1ecb36",
       111
-    ],
-    [
-      "scripts/collect-ci-metrics.py",
-      "a4760d2b12283ea775a83faf2eae7bdb7e5517db0b95a77d471c6856ae3592b0",
-      1540
     ],
     [
       "scripts/generate-bench-corpus.py",
@@ -2086,12 +1988,12 @@
     "unit_target": "xtask",
     "sources": {
       "just/ci.just": {
-        "sha256": "93615d6b41f8f74fa9bc2214ee1d41342ae5e50e1578668e3148356e80d338e4",
-        "line_count": 270
+        "sha256": "71526f8376f4ddc03e5804d6c148b003738633600c610db3b016567be5546c3b",
+        "line_count": 271
       },
       ".github/workflows/ci-quality-slice.yml": {
-        "sha256": "1df13a9910ce1a5a2bf57913fb32ddbb5fc12145870a664b24d286b0fc1dc3c9",
-        "line_count": 649
+        "sha256": "c1a0eb9d1787b433b7274820a6ee76c4fd38ba1fbaa31f9c009c9d0fbe38f5b7",
+        "line_count": 654
       }
     },
     "status": "Authored wiring only; parent must integrate and qualify normal ci-validate. Legacy roster, PyYAML and all required SDK/native/model/protected gates retained.",
@@ -2333,7 +2235,8 @@
       }
     ],
     "runtime_receipt": null,
-    "qualification_limit": "No maintained execution or CI/workflow/model/native qualification by author. Root must qualify copied actual content/logging/deadline/cancellation wrappers, scanner and current inventory before any qualified cutover claim. Full verification/native/model gates remain separate."
+    "qualification_limit": "No maintained execution or CI/workflow/model/native qualification by author. Root must qualify copied actual content/logging/deadline/cancellation wrappers, scanner and current inventory before any qualified cutover claim. Full verification/native/model gates remain separate.",
+    "current_dead_fallback_supersedes_retained_lines": "next_wave_semantic_composition; old8 syntactic lines remain historical; current source has zero wrapper fallback launches and unchanged pinned uv/Jinja component."
   },
   "system_one_serializer_caller_cutover": {
     "status": "authored_unqualified",
@@ -2711,5 +2614,64 @@
       "scope": "first seven owning filters only; later unrelated dispatch failure/global exit101 does not invalidate passed sections; no whole-suite green claim"
     },
     "activation_gate": "Requires successful activation of exact seven-file predecessor, root final guard verification and inventory/remaining-roster qualification. Do not apply directly to maintained174/core94. No shared helper/fallback roster/production owner removed."
+  },
+  "next_wave_semantic_composition": {
+    "status": "AUTHORED_UNRUN_UNAPPLIED; metrics40 retirement conditional on root final owner proof/checkpoint",
+    "source_composition_manifest": ".omo/evidence/resume-20261002/nextwave-semantic-composition/source-composition.json",
+    "metrics40_original_intent_map": ".omo/evidence/resume-20261002/metrics-sccache-forty-intent-retirement/intent-map.json",
+    "deleted_python_sources": [
+      "scripts/tests/test_collect_ci_metrics.py",
+      "scripts/collect-ci-metrics.py",
+      "scripts/tests/test_sccache_evidence.py",
+      "scripts/summarize-sccache-stats.py"
+    ],
+    "active_inventory_python_paths": 160,
+    "core_python_modules": 85,
+    "canonical_rust_contract_registry": 84,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "7b929f1e8f2a4c17753793066d6e378ab4c0669c59458c43eea38dbc6b7d0e1b",
+      "line": 24,
+      "normalized_fingerprint": "49deb46a6fd88b71",
+      "count": 85
+    },
+    "current_repair": {
+      "path": "scripts/llama-canary-agent-repair.sh",
+      "sha256": "d761059f9423953e970546bc4d5404c2974d6737836a109ff353f36d97582895",
+      "line_count": 1013,
+      "removed_dead_calls": 8,
+      "retained_wrapper_python_fallback_calls": 0,
+      "pinned_component": "uv/Jinja2==3.1.6 unchanged bytes"
+    },
+    "current_battery": {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "a57f820d6704613d7955059163fb7590b67f6a672336971cc0cc1f8436d5255f",
+      "removed_prerequisite": "require_cmd python3"
+    },
+    "test_tree": {
+      "sha256": "bae0427a912e63177c59800d52beaeac7f40e575cb9f2c044aec863aa1da9ce5",
+      "paths": 74
+    },
+    "new_proofs": "UNRUN: battery1,canary mode2,timeout CLI5/bin3/shared inherited,SDK/native6,GLIBC collector3groups14cases,performance6/shared hash2/schema3 replay regression; actual terminal root counts govern",
+    "preserved": "All prior histories/source witnesses/retirement records except explicit current snapshots; SDK/provider/platform/component/native/model gates and canonical84 unchanged"
+  },
+  "required_node_component_wiring": {
+    "source": {
+      "just/ci.just": {
+        "sha256": "71526f8376f4ddc03e5804d6c148b003738633600c610db3b016567be5546c3b",
+        "line_count": 271
+      },
+      ".github/workflows/ci-quality-slice.yml": {
+        "sha256": "c1a0eb9d1787b433b7274820a6ee76c4fd38ba1fbaa31f9c009c9d0fbe38f5b7",
+        "line_count": 654
+      }
+    },
+    "reason": "Existing required finite action fixtures invoke Node; exact existing setup-node pin and Node24.20.0 added to quality_contracts with dependency cache disabled, local preflight precedes bootstrap; no Python edge/roster/SDK/provider demotion",
+    "owning_filters": [
+      "ci_validation::workflow_guards::quality_contracts",
+      "ci_runner_cache_contract::cache_publication"
+    ],
+    "qualification": "PENDING_CURRENT_UNION",
+    "historical_records_preserved": true
   }
 }

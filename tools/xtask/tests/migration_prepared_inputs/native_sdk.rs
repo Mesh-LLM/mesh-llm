@@ -106,6 +106,35 @@ fn migration_prepared_inputs_sdk_manifest_rejects_field_contract_violations() ->
     for (edit, expected) in cases {
         assert_output(&verify_edit(edit)?, 1, "", &format!("{expected}\n"));
     }
+    // Keep both identities and the directory consistent so this reaches the
+    // backend/flavor contract, rather than failing the earlier id check.
+    let scratch = Scratch::new("sdk-unknown-flavor")?;
+    let unknown_id = "meshllm-native-linux-x86_64-made-up";
+    let mut value = manifest();
+    value["flavor"] = json!("made-up");
+    value["artifact_id"] = json!(unknown_id);
+    value["native_runtime_id"] = json!(unknown_id);
+    let original = artifact(&scratch, &value)?;
+    let renamed = scratch.join(unknown_id);
+    fs::rename(original, &renamed)?;
+    let before = snapshot(scratch.path())?;
+    let output = verify(&scratch, &renamed)?;
+    assert_output(
+        &output,
+        1,
+        "",
+        "flavor does not match backend: made-up != cpu\n",
+    );
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        diagnostic.contains("flavor does not match backend: made-up != cpu"),
+        "expected causal backend/flavor refusal, got: {diagnostic}"
+    );
+    assert_eq!(
+        snapshot(scratch.path())?,
+        before,
+        "flavor refusal preserves input"
+    );
     Ok(())
 }
 

@@ -42,7 +42,7 @@ mod unix;
 #[cfg(windows)]
 mod windows;
 
-pub use inherited::{InheritedReport, supervise_inherited};
+pub use inherited::{InheritedReport, supervise_inherited, supervise_inherited_closed_stdin};
 pub use line::{LineEnding, LineMatcher, ObservedLine};
 pub use probe::{
     Probe, ProbeContext, ProbeDecision, ProbeReport, ReadinessProbe, supervise_with_probe,

@@ -480,7 +480,7 @@ artifact or branch-protection migration.
 
 ## Measurement and rollback evidence
 
-Use `scripts/collect-ci-metrics.py` to monitor all five focused PR lanes and
+Use `cargo xtool ci-ops collect-metrics` to monitor all five focused PR lanes and
 their historical GitHub cohorts. Keep raw run/job JSON under `/tmp` or an issue
 artifact. Schema-v3 reports separate workflow wall and queue, job runner queue,
 measured dependency wait (otherwise `n/a`), execution, runner-minutes,

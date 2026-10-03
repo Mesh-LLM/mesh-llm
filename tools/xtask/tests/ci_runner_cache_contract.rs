@@ -39,3 +39,6 @@ mod cache_identity;
 mod evidence_contracts;
 #[path = "ci_runner_cache_contract/evidence_runtime.rs"]
 mod evidence_runtime;
+
+#[path = "ci_runner_cache_contract/publication.rs"]
+mod publication;

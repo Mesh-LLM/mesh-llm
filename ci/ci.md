@@ -849,7 +849,7 @@ artifact build per active platform workflow because artifacts are run-scoped;
 UI tests still execute only in the Website graph and host producers never
 rebuild the UI themselves.
 
-Timing evidence is collected read-only with `scripts/collect-ci-metrics.py`.
+Timing evidence is collected read-only with `cargo xtool ci-ops collect-metrics`.
 Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,
 execution, runner-minutes, cancelled runner-minutes and peak workers separate,
 and group results by provider, OS, architecture, semantic runner role and

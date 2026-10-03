@@ -376,15 +376,6 @@
       "required": true
     },
     {
-      "classification": "read-only CI evidence tool",
-      "deletion_condition": "Port report schema and calculations; keep as read-only evidence path until parity.",
-      "exception": null,
-      "path": "scripts/collect-ci-metrics.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence",
-      "required": false
-    },
-    {
       "classification": "benchmark comparison",
       "deletion_condition": "Port generic matrix/report logic or document optional evaluation boundary.",
       "exception": null,
@@ -565,15 +556,6 @@
       "required": false
     },
     {
-      "classification": "required artifact extraction",
-      "deletion_condition": "Safe extraction parity across archives and all consumers migrated.",
-      "exception": null,
-      "path": "scripts/safe-extract-zip.py",
-      "phase": 3,
-      "replacement_owner": "tools/xtask artifact",
-      "required": true
-    },
-    {
       "classification": "upstream/native parity validation",
       "deletion_condition": "Port generic inventory/report logic; preserve only proven upstream-specific operations if isolated.",
       "exception": null,
@@ -589,15 +571,6 @@
       "path": "scripts/skippy-system-one-cases.py",
       "phase": 5,
       "replacement_owner": "tools/xtask qa and System One domain tests",
-      "required": false
-    },
-    {
-      "classification": "CI cache evidence summarizer",
-      "deletion_condition": "Port output schema and caller; preserve warm/cold semantics.",
-      "exception": null,
-      "path": "scripts/summarize-sccache-stats.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence",
       "required": false
     },
     {
@@ -796,15 +769,6 @@
       "path": "scripts/tests/test_cli_inventory_contract.py",
       "phase": 2,
       "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
-      "classification": "generic metrics evidence test",
-      "deletion_condition": "Schema-v3 reports and failures match in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_collect_ci_metrics.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence tests",
       "required": true
     },
     {
@@ -1258,15 +1222,6 @@
       "required": true
     },
     {
-      "classification": "generic cache evidence test",
-      "deletion_condition": "Stats parsing and cache floor semantics migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_sccache_evidence.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask automation evidence tests",
-      "required": true
-    },
-    {
       "classification": "generic benchmark test",
       "deletion_condition": "Generic CLI/process/report behavior ported.",
       "exception": null,
@@ -1620,7 +1575,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 164,
+  "tracked_file_count": 159,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -2292,5 +2247,57 @@
       "scope": "first seven owning filters only; later unrelated dispatch failure/global exit101 does not invalidate passed sections; no whole-suite green claim"
     },
     "activation_gate": "Requires successful activation of exact seven-file predecessor, root final guard verification and inventory/remaining-roster qualification. Do not apply directly to maintained174/core94. No shared helper/fallback roster/production owner removed."
+  },
+  "next_wave_semantic_composition": {
+    "status": "AUTHORED_UNRUN_UNAPPLIED; metrics40 retirement conditional on root final owner proof/checkpoint",
+    "source_composition_manifest": ".omo/evidence/resume-20261002/nextwave-semantic-composition/source-composition.json",
+    "metrics40_original_intent_map": ".omo/evidence/resume-20261002/metrics-sccache-forty-intent-retirement/intent-map.json",
+    "deleted_python_sources": [
+      "scripts/tests/test_collect_ci_metrics.py",
+      "scripts/collect-ci-metrics.py",
+      "scripts/tests/test_sccache_evidence.py",
+      "scripts/summarize-sccache-stats.py"
+    ],
+    "active_inventory_python_paths": 160,
+    "core_python_modules": 85,
+    "canonical_rust_contract_registry": 84,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "7b929f1e8f2a4c17753793066d6e378ab4c0669c59458c43eea38dbc6b7d0e1b",
+      "line": 24,
+      "normalized_fingerprint": "49deb46a6fd88b71",
+      "count": 85
+    },
+    "current_repair": {
+      "path": "scripts/llama-canary-agent-repair.sh",
+      "sha256": "d761059f9423953e970546bc4d5404c2974d6737836a109ff353f36d97582895",
+      "line_count": 1013,
+      "removed_dead_calls": 8,
+      "retained_wrapper_python_fallback_calls": 0,
+      "pinned_component": "uv/Jinja2==3.1.6 unchanged bytes"
+    },
+    "current_battery": {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "a57f820d6704613d7955059163fb7590b67f6a672336971cc0cc1f8436d5255f",
+      "removed_prerequisite": "require_cmd python3"
+    },
+    "test_tree": {
+      "sha256": "bae0427a912e63177c59800d52beaeac7f40e575cb9f2c044aec863aa1da9ce5",
+      "paths": 74
+    },
+    "new_proofs": "UNRUN: battery1,canary mode2,timeout CLI5/bin3/shared inherited,SDK/native6,GLIBC collector3groups14cases,performance6/shared hash2/schema3 replay regression; actual terminal root counts govern",
+    "preserved": "All prior histories/source witnesses/retirement records except explicit current snapshots; SDK/provider/platform/component/native/model gates and canonical84 unchanged"
+  },
+  "zip_helper_final_caller_retirement": {
+    "status": "CONDITIONAL_AFTER_ROOT_QUALIFIED_CHECKPOINT_AND_SOURCE_GUARDS",
+    "coverage": "ci/automation-migration/zip-helper-retirement-coverage.json",
+    "removed_path": "scripts/safe-extract-zip.py",
+    "current_python_paths": 159,
+    "current_core_modules": 85,
+    "canonical_rust_contract_targets": 84,
+    "original_test_retirement_history": "Preserved zip_extraction_test_retirement helper_retained field describes the earlier test-only retirement. This current closure supersedes only helper retention; no historical fields overwritten.",
+    "scope": "Existing typed artifact extract-zip original security/materialization owner; no executable/import/filesystem caller remains after final root hidden scan. Native/platform acceptance remains required separately.",
+    "qualification": "52-test migration_archives target passed on current unchanged artifact owner in corrected configured full suite; final deletion postimage inventory/policy and required union pending",
+    "coverage_sha256": "30302f6a7a0563d62c9578f7352ec7ae855709bc62d9eace1ba0e239eaed6ad1"
   }
 }

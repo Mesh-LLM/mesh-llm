@@ -881,7 +881,7 @@ to the exhaustive trusted-main batch containing `skippy-runtime`; PR jobs are
 restore-only and jobs for which central runner policy denies native GitHub
 cache access download and verify the immutable revision without publishing.
 
-`scripts/collect-ci-metrics.py` is the read-only timing evidence collector. Its
+`cargo xtool ci-ops collect-metrics` is the read-only timing evidence collector. Its
 schema-v3 report keeps workflow wall/queue, job runner queue, measured
 dependency wait, job execution, runner-minutes, cancelled runner-minutes and
 peak workers separate. It groups observations by provider, operating system,

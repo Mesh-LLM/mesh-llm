@@ -185,7 +185,15 @@ fn l4_sdk_manifest_passes_existing_consumer_when_library_alias_matches() {
     for library in ["libmeshllm_ffi.dylib", "libuniffi_mesh_ffi.dylib"] {
         fs::write(artifact.join("lib").join(library), b"abc").unwrap();
     }
-    let output = command(&sdk_args(&artifact));
+    let runner_build = root.path().join("runner private llama build");
+    fs::create_dir(&runner_build).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(sdk_args(&artifact))
+        .env_remove("MESH_LLM_NATIVE_RUNTIME_RANK")
+        .env("LLAMA_STAGE_BUILD_DIR", &runner_build)
+        .env("LLAMA_BUILD_DIR", &runner_build)
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -202,8 +210,22 @@ fn l4_sdk_manifest_passes_existing_consumer_when_library_alias_matches() {
         "{}",
         String::from_utf8_lossy(&consumer.stderr)
     );
-    let manifest: Value =
-        serde_json::from_slice(&fs::read(artifact.join("manifest.json")).unwrap()).unwrap();
+    let bytes = fs::read(artifact.join("manifest.json")).unwrap();
+    let manifest: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(manifest.get("llama_build_dir").is_none());
+    let local_root = root.path().to_string_lossy();
+    for emitted in [
+        bytes.as_slice(),
+        output.stdout.as_slice(),
+        output.stderr.as_slice(),
+    ] {
+        let text = String::from_utf8_lossy(emitted);
+        assert!(
+            !text.contains(local_root.as_ref()),
+            "writer leaked a runner-local path: {text}"
+        );
+        assert!(!text.contains("runner private llama build"));
+    }
     assert_eq!(
         manifest["library_sha256"],
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"

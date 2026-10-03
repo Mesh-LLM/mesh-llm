@@ -313,3 +313,7 @@ mod tests {
         assert!(super::embedded_floor().is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_package_linux/collector_tests.rs"]
+mod collector_tests;

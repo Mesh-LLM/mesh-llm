@@ -1,7 +1,7 @@
 use crate::command::DynResult;
 use sha2::{Digest, Sha256};
 
-pub(super) fn digest(value: &serde_json::Value) -> DynResult<String> {
+pub(crate) fn digest(value: &serde_json::Value) -> DynResult<String> {
     let mut encoded = String::new();
     encode(value, &mut encoded)?;
     Ok(hex::encode(Sha256::digest(encoded.as_bytes())))

@@ -48,6 +48,7 @@ mod evidence_timestamp;
 mod identity_text;
 pub(crate) mod json_access;
 pub(crate) mod json_decode;
+mod performance_history;
 mod registry_pulls;
 mod runner_cleanup;
 mod runner_identity;
@@ -86,6 +87,7 @@ pub(crate) enum CiOperationsCommand {
     SccacheStats,
     SccacheSummary,
     CollectMetrics,
+    PerformanceHistory,
     AuthorityAudit,
     RegistryPulls,
     ChatDisplay,
@@ -102,6 +104,7 @@ impl CiOperationsCommand {
             "sccache-stats" => Some(Self::SccacheStats),
             "sccache-summary" => Some(Self::SccacheSummary),
             "collect-metrics" => Some(Self::CollectMetrics),
+            "performance-history" => Some(Self::PerformanceHistory),
             "authority-audit" => Some(Self::AuthorityAudit),
             "registry-pulls" => Some(Self::RegistryPulls),
             "chat-display" => Some(Self::ChatDisplay),
@@ -146,6 +149,7 @@ pub(crate) fn run(
         CiOperationsCommand::SccacheStats => sccache_stats::run(args),
         CiOperationsCommand::SccacheSummary => sccache_summary::run(args),
         CiOperationsCommand::CollectMetrics => ci_metrics::run(args),
+        CiOperationsCommand::PerformanceHistory => performance_history::run(args),
         CiOperationsCommand::RunnerIdentity => {
             let mut failure = None;
             let report = runner_identity::run(args, || {

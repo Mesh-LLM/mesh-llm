@@ -162,7 +162,7 @@ fn actual_timeout_cli_itself_inherits_a_redirected_file() {
     )
     .unwrap();
     let input = root.path().join("input.json");
-    fs::write(&input,serde_json::to_vec(&serde_json::json!({"label":"stdin regression","seconds":2,"cwd":root.path(),"executable":"/bin/cat","arguments":[]})).unwrap()).unwrap();
+    fs::write(&input,serde_json::to_vec(&serde_json::json!({"label":"stdin regression","seconds":2,"cwd":root.path(),"executable":"/bin/cat","arguments":[],"stdin":"inherit"})).unwrap()).unwrap();
     let command = spec(
         "/bin/bash",
         vec![

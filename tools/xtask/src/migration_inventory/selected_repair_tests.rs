@@ -125,6 +125,10 @@ fn normal_repair_rejects_changed_omitted_or_expanded_callsite_authority() -> Dyn
             "if [[ \"$HARNESS_MODE\" == repair ]]; then\n    repair_source_inspection",
             "if [[ \"$HARNESS_MODE\" != repair ]]; then\n    repair_source_inspection",
         ),
+        (
+            "if [[ \"$HARNESS_MODE\" != repair && \"$HARNESS_MODE\" != verify ]]; then",
+            "if [[ \"$HARNESS_MODE\" != repair ]]; then",
+        ),
     ] {
         assert!(text.contains(old), "missing fixture mutation target {old}");
         let changed = text.replace(old, new);

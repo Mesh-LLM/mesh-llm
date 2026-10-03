@@ -83,7 +83,7 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         self.assertIn('run_for "agent developer task" "$seconds"', self.wrapper)
         self.assertIn("REPAIR_DEADLINE_AT", self.wrapper)
         self.assertIn("VERIFICATION_DEADLINE_AT", self.wrapper)
-        self.assertIn("scripts/run-command-with-timeout.py", self.wrapper)
+        self.assertIn("automation canary-timeout --input", self.wrapper)
 
         result = subprocess.run(
             [
@@ -197,7 +197,8 @@ run_candidate_gates() {
             self.wrapper.index("write_split_certification_roster() {")
         ]
         main = self.wrapper[self.wrapper.index('if ! check_family_cache; then') :]
-        self.assertIn("--check-cache", cache)
+        self.assertIn("automation canary-receipts preflight --input", cache)
+        self.assertIn("repair_family_plan 256", cache)
         self.assertIn("--gguf-constants", gates)
         self.assertLess(gates.index("run_prepare"), gates.index("--gguf-constants"))
         self.assertLess(gates.index("--gguf-constants"), gates.index("run_full_build"))
@@ -208,7 +209,8 @@ run_candidate_gates() {
         certify = self.wrapper[
             self.wrapper.index("run_certification() {") : self.wrapper.index("run_early_metal_certification() {")
         ]
-        self.assertIn("skippy-llama-parity.py --llama-src .deps/llama.cpp validate", certify)
+        self.assertIn("repair_source_inspection local-parity-inventory", certify)
+        self.assertIn("verification_source_inspection verification-parity-inventory", certify)
         self.assertNotIn("--cadence", certify)
         self.assertNotIn("--families", certify)
         self.assertNotIn("skippy-canary-live-matrix", certify)
@@ -384,7 +386,9 @@ run_candidate_gates() {
         self.assertIn("existing parity candidate rows changed or were reordered", policy)
         self.assertIn("classification metadata only", policy)
         self.assertIn("artifact selectors", policy.lower())
-        self.assertIn("scripts/validate-llama-canary-agent-manifests.py", self.wrapper)
+        self.assertIn("automation canary-receipts manifest-policy --input", self.wrapper)
+        self.assertIn("repair_source_inspection local-manifest-policy", self.wrapper)
+        self.assertIn("verification_source_inspection verification-manifest-policy", self.wrapper)
 
     def test_protected_status_detects_untracked_python_startup_hook(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -5987,5 +5987,60 @@
       "scope": "first seven owning filters only; later unrelated dispatch failure/global exit101 does not invalidate passed sections; no whole-suite green claim"
     },
     "activation_gate": "Requires successful activation of exact seven-file predecessor, root final guard verification and inventory/remaining-roster qualification. Do not apply directly to maintained174/core94. No shared helper/fallback roster/production owner removed."
+  },
+  "next_wave_semantic_composition": {
+    "status": "AUTHORED_UNRUN_UNAPPLIED; metrics40 retirement conditional on root final owner proof/checkpoint",
+    "source_composition_manifest": ".omo/evidence/resume-20261002/nextwave-semantic-composition/source-composition.json",
+    "metrics40_original_intent_map": ".omo/evidence/resume-20261002/metrics-sccache-forty-intent-retirement/intent-map.json",
+    "deleted_python_sources": [
+      "scripts/tests/test_collect_ci_metrics.py",
+      "scripts/collect-ci-metrics.py",
+      "scripts/tests/test_sccache_evidence.py",
+      "scripts/summarize-sccache-stats.py"
+    ],
+    "active_inventory_python_paths": 160,
+    "core_python_modules": 85,
+    "canonical_rust_contract_registry": 84,
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "7b929f1e8f2a4c17753793066d6e378ab4c0669c59458c43eea38dbc6b7d0e1b",
+      "line": 24,
+      "normalized_fingerprint": "49deb46a6fd88b71",
+      "count": 85
+    },
+    "current_repair": {
+      "path": "scripts/llama-canary-agent-repair.sh",
+      "sha256": "d761059f9423953e970546bc4d5404c2974d6737836a109ff353f36d97582895",
+      "line_count": 1013,
+      "removed_dead_calls": 8,
+      "retained_wrapper_python_fallback_calls": 0,
+      "pinned_component": "uv/Jinja2==3.1.6 unchanged bytes"
+    },
+    "current_battery": {
+      "path": "scripts/skippy-family-battery.sh",
+      "sha256": "a57f820d6704613d7955059163fb7590b67f6a672336971cc0cc1f8436d5255f",
+      "removed_prerequisite": "require_cmd python3"
+    },
+    "test_tree": {
+      "sha256": "bae0427a912e63177c59800d52beaeac7f40e575cb9f2c044aec863aa1da9ce5",
+      "paths": 74
+    },
+    "new_proofs": "UNRUN: battery1,canary mode2,timeout CLI5/bin3/shared inherited,SDK/native6,GLIBC collector3groups14cases,performance6/shared hash2/schema3 replay regression; actual terminal root counts govern",
+    "preserved": "All prior histories/source witnesses/retirement records except explicit current snapshots; SDK/provider/platform/component/native/model gates and canonical84 unchanged"
+  },
+  "parity_invocation_assertion_refresh": {
+    "scope": "Retained parity invocation assertion checks actual typed canary paths and rejects removed unreachable Python fallback; original helper CLI behavior remains tested separately.",
+    "file": "scripts/tests/test_llama_upstream_canary_contract.py",
+    "preimage_sha256": "83070b989a8052011a964feb224c21361b42657c721b622df548090c6dd4121f",
+    "postimage_sha256": "9e40f950a6e8eac669f3ac67dedc349bcd67792baae0786d93492108e7297bda",
+    "previous_observed_source_sha256": "bae0427a912e63177c59800d52beaeac7f40e575cb9f2c044aec863aa1da9ce5",
+    "current_observed_source_sha256": "05f89bad1fa1d8f979f30a9045c7c3fe910bd64384e577bcfe3e7a52d84c6de8",
+    "paths": 74,
+    "shifted_rows": 14,
+    "failed_normal_log": ".omo/evidence/resume-20261002/current159-ci-validate.log",
+    "failed_normal_log_sha256": "772f1d8ac3dd82988d83c7a4dbcc1955be48a492aefff696d649e13d4463331f",
+    "focused": "3 passed; current inventory/policy and complete normal requalification pending",
+    "historical_snapshots": "preserved",
+    "catalog_source_snapshot": "Original catalog sha retained; it already differs from the validated current159 preimage and is historical inventory provenance."
   }
 }
