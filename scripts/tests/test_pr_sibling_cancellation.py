@@ -407,6 +407,173 @@ return {error, polls, sleeps};
         self.assertEqual(1, result["polls"])
         self.assertEqual([20_000], result["sleeps"])
 
+    def test_monitor_steps_aside_for_a_newer_quality_run_of_the_same_epoch(self) -> None:
+        # An `edited` event right after `opened` starts a second PR · Quality
+        # run, whose concurrency group cancels the trigger. The newer run has
+        # its own monitor; the old one must not wait out its deadline.
+        result = self.run_node_async(
+            """
+const sha = "2".repeat(40);
+const trigger = {
+  createdAt: Date.parse("2026-10-03T14:05:04Z"),
+  headSha: sha,
+  pullNumber: 42,
+  triggerRunId: 901,
+};
+const base = {
+  event: "pull_request",
+  head_sha: sha,
+  created_at: "2026-10-03T14:05:04Z",
+  pull_requests: [{number: 42}],
+  status: "in_progress",
+};
+const runs = [
+  {...base, id: 901, name: "PR · Quality", status: "completed", conclusion: "cancelled"},
+  {...base, id: 902, name: "PR · Website"},
+  {...base, id: 903, name: "PR · Linux"},
+  {...base, id: 904, name: "PR · macOS"},
+  {...base, id: 905, name: "PR · Windows"},
+  {...base, id: 951, name: "PR · Quality", created_at: "2026-10-03T14:05:55Z"},
+];
+let clock = 0;
+let polls = 0;
+const cancelled = [];
+let outcome = null;
+let error = null;
+try {
+  outcome = await action.monitor({
+    api: {
+      listRuns: async () => { polls += 1; return runs; },
+      listJobs: async () => [],
+      cancelRun: async (runId) => { cancelled.push(runId); return true; },
+    },
+    trigger,
+    pollSeconds: 30,
+    maxMinutes: 10,
+    log: () => {},
+    now: () => clock,
+    sleepFn: async (milliseconds) => { clock += milliseconds; },
+  });
+} catch (caught) {
+  error = caught.message;
+}
+return {error, polls, cancelled, supersededBy: outcome ? outcome.supersededBy : null};
+"""
+        )
+        self.assertEqual(
+            {"error": None, "polls": 1, "cancelled": [], "supersededBy": 951},
+            result,
+        )
+
+    def test_monitor_ends_an_edit_only_quality_run_after_the_sibling_window(self) -> None:
+        # Only PR · Quality listens to `edited`, so an edit of an unchanged
+        # revision starts one lane. The monitor waits out the late-sibling
+        # window, then ends once the lanes of its own event epoch are done.
+        result = self.run_node_async(
+            """
+const sha = "3".repeat(40);
+const trigger = {
+  createdAt: Date.parse("2026-10-03T16:14:11Z"),
+  headSha: sha,
+  pullNumber: 42,
+  triggerRunId: 1001,
+};
+const quality = {
+  id: 1001,
+  name: "PR · Quality",
+  event: "pull_request",
+  head_sha: sha,
+  created_at: "2026-10-03T16:14:11Z",
+  pull_requests: [{number: 42}],
+  status: "in_progress",
+};
+const opened = ["PR · Website", "PR · Linux", "PR · macOS", "PR · Windows"].map((name, index) => ({
+  ...quality,
+  id: 990 + index,
+  name,
+  created_at: "2026-10-03T10:39:26Z",
+  status: "completed",
+}));
+let clock = 0;
+let polls = 0;
+let outcome = null;
+let error = null;
+try {
+  outcome = await action.monitor({
+    api: {
+      listRuns: async () => {
+        polls += 1;
+        return [...opened, {...quality, status: polls >= 3 ? "completed" : "in_progress"}];
+      },
+      listJobs: async () => [],
+      cancelRun: async () => true,
+    },
+    trigger,
+    pollSeconds: 30,
+    maxMinutes: 10,
+    log: () => {},
+    now: () => clock,
+    sleepFn: async (milliseconds) => { clock += milliseconds; },
+  });
+} catch (caught) {
+  error = caught.message;
+}
+return {error, polls, runIds: outcome ? outcome.runs.map((run) => run.id) : null};
+"""
+        )
+        self.assertEqual({"error": None, "polls": 5, "runIds": [1001]}, result)
+
+    def test_monitor_keeps_its_lanes_after_the_pull_request_closes(self) -> None:
+        # GitHub empties a run's pull_requests once the pull request is closed
+        # or merged; the exact SHA and event epoch still identify the lanes.
+        result = self.run_node_async(
+            """
+const sha = "4".repeat(40);
+const trigger = {
+  createdAt: Date.parse("2026-09-04T06:43:35Z"),
+  headSha: sha,
+  pullNumber: 42,
+  triggerRunId: 1101,
+};
+const base = {
+  event: "pull_request",
+  head_sha: sha,
+  created_at: "2026-09-04T06:43:35Z",
+  pull_requests: [{number: 42}],
+  status: "in_progress",
+};
+const lanes = action.TARGET_WORKFLOWS.map((name, index) => ({...base, id: 1101 + index, name}));
+let clock = 0;
+let polls = 0;
+let outcome = null;
+let error = null;
+try {
+  outcome = await action.monitor({
+    api: {
+      listRuns: async () => {
+        polls += 1;
+        return polls === 1
+          ? lanes
+          : lanes.map((run) => ({...run, pull_requests: [], status: "completed"}));
+      },
+      listJobs: async () => [],
+      cancelRun: async () => true,
+    },
+    trigger,
+    pollSeconds: 30,
+    maxMinutes: 10,
+    log: () => {},
+    now: () => clock,
+    sleepFn: async (milliseconds) => { clock += milliseconds; },
+  });
+} catch (caught) {
+  error = caught.message;
+}
+return {error, polls, runCount: outcome ? outcome.runs.length : null};
+"""
+        )
+        self.assertEqual({"error": None, "polls": 2, "runCount": 5}, result)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -809,7 +809,12 @@ run containing the first definitive failed job, and cancels its queued or
 in-progress siblings. It checks out only the default branch, owns the sole
 `actions: write` token for this operation, and never targets main, manual,
 release, deployment, cleanup, cache-warming, another PR event epoch, or a newer
-revision. PR-controlled workflows and executor jobs retain no Actions-write
+revision. It steps aside when a newer `PR · Quality` run of the same event
+epoch supersedes its trigger, and after the two-minute late-sibling window it
+ends once every lane of that epoch has completed, since an `edited` event
+starts only `PR · Quality`. A run whose pull request was closed or merged has
+an empty PR list on GitHub and still matches by exact SHA and event epoch.
+PR-controlled workflows and executor jobs retain no Actions-write
 permission.
 
 ## Providers and variables
