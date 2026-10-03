@@ -38,6 +38,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [dev-dependencies]
 glob = "=0.3.4"
 regex = "=1.13.1"
+semver = "=1.0.28"
 tar = "0.4"
 
 [[bin]]

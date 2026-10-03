@@ -11419,6 +11419,7 @@ dependencies = [
  "plist",
  "proc-macro2",
  "regex",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.0",
