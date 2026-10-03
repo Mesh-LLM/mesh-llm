@@ -187,6 +187,40 @@ selection. The chat guardrail wrapper does not screen System One requests.
 `usage.output_tokens` is zero because no text is generated. This is not full
 compute accounting or a production OpenJEV compatibility guarantee.
 
+## OpenAI Decisions preview shape
+
+`POST /v1/decisions` accepts the early Decisions wire shape observed in
+[RubyLLM's recorded exchange](https://github.com/crmne/ruby_llm/blob/a1a8513375e76562cbe6ab77dd3220e9e6180d4e/spec/fixtures/vcr_cassettes/providers_openai_with_the_decisions_api_judges_all_three_question_types_through_the_compact_dsl.yml).
+This is a Mesh compatibility endpoint over the same local System One models;
+it does not call OpenAI. The public OpenAI API reference has not published a
+Decisions contract, so treat this shape as provisional.
+
+```sh
+curl http://127.0.0.1:9337/v1/decisions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "YOUR_DISCOVERED_SYSTEM_ONE_MODEL_ID",
+    "input": "I was charged twice. Please refund me today.",
+    "questions": [
+      {"type": "predicate", "name": "urgent", "instructions": "Does this need action today?"},
+      {"type": "choice", "name": "team", "instructions": "Which team?",
+       "choices": [{"value": "billing", "description": "Payments and refunds"},
+                   {"value": "support", "description": "Technical help"}]},
+      {"type": "score", "name": "frustration", "instructions": "How frustrated?",
+       "levels": [{"label": "0", "description": "Calm"},
+                  {"label": "1", "description": "Frustrated"}]}
+    ]
+  }'
+```
+
+The response contains `model`, an `answers` array in question order, and
+`usage` with input, output, and total tokens. Predicate answers contain
+`probability`; choice answers contain `choice`, per-option `probabilities`, and
+`confidence`; score answers contain `score`, per-level `probabilities`, and
+`confidence`. The adapter accepts text `input` and string choice values.
+Use a model whose `/v1/models` entry advertises `system_one`; the same model
+bounds and runtime requirements listed above apply.
+
 For Laya, replace `YOUR_DISCOVERED_LAYA_ID` below with its exact ID from
 `/v1/models`. Do not assume the ID is the filename or download reference; it
 can be a canonical Hugging Face ID or a content-hash ID. Object-valued `state`

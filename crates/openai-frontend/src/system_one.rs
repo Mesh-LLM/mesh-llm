@@ -157,7 +157,7 @@ impl SystemOneJsonObject {
 
     /// Builds an object from entries in document order. A repeated key keeps
     /// its first position and its last value, as a Python `dict` would.
-    fn from_entries(entries: impl IntoIterator<Item = (String, SystemOneJson)>) -> Self {
+    pub(crate) fn from_entries(entries: impl IntoIterator<Item = (String, SystemOneJson)>) -> Self {
         let mut ordered: Vec<(String, SystemOneJson)> = Vec::new();
         let mut positions: HashMap<String, usize> = HashMap::new();
         for (key, value) in entries {

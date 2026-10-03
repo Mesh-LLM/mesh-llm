@@ -81,6 +81,7 @@ pub enum OpenAiFrontendRoute {
     ChatCompletions,
     Completions,
     Responses,
+    Decisions,
     Messages,
     MessagesCountTokens,
     SystemOne,

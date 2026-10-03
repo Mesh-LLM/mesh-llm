@@ -32,6 +32,7 @@ use crate::{
     chat::{CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest},
     common::{AgentSessionIdentity, AgentSessionSource, Usage},
     completions::CompletionRequest,
+    decisions::{DecisionsRequest, DecisionsResponse},
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
     errors::OpenAiError,
     lifecycle::{
@@ -283,6 +284,7 @@ pub fn router_for_with_config(
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
         .route("/v1/responses", post(responses))
+        .route("/v1/decisions", post(decisions))
         .route("/v1/messages", post(crate::anthropic::messages))
         .route(
             "/v1/messages/count_tokens",
@@ -364,6 +366,31 @@ async fn system_one(
         &Usage::new(response.usage.input_tokens, response.usage.output_tokens),
     );
     Ok(Json(response))
+}
+
+async fn decisions(
+    State(state): State<FrontendState>,
+    Extension(context): Extension<OpenAiLifecycleContext>,
+    payload: Result<Json<DecisionsRequest>, JsonRejection>,
+) -> Result<Json<DecisionsResponse>, OpenAiError> {
+    let Json(request) = json_payload(payload)?;
+    let response = call_backend(
+        state.config.lifecycle_observer.clone(),
+        &context,
+        OpenAiBackendOperation::SystemOne,
+        "decisions",
+        state.config.backend_timeout,
+        state.backend.system_one(request.to_system_one()?),
+    )
+    .await?;
+    let usage = response.usage;
+    let decisions_response = request.response(response)?;
+    state.response_completed(
+        &context,
+        OpenAiBackendOperation::SystemOne,
+        &Usage::new(usage.input_tokens, usage.output_tokens),
+    );
+    Ok(Json(decisions_response))
 }
 
 /// Validate embedding input and preserve cancellation, usage, and lifecycle identity.
@@ -1269,6 +1296,7 @@ fn lifecycle_route(uri: &Uri) -> OpenAiFrontendRoute {
         "/v1/chat/completions" => OpenAiFrontendRoute::ChatCompletions,
         "/v1/completions" => OpenAiFrontendRoute::Completions,
         "/v1/responses" => OpenAiFrontendRoute::Responses,
+        "/v1/decisions" => OpenAiFrontendRoute::Decisions,
         "/v1/messages/count_tokens" => OpenAiFrontendRoute::MessagesCountTokens,
         "/v1/messages" => OpenAiFrontendRoute::Messages,
         "/systemone" => OpenAiFrontendRoute::SystemOne,

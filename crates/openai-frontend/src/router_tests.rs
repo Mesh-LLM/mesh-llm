@@ -429,6 +429,48 @@ impl OpenAiBackend for FakeBackend {
     }
 
     async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+        if request.questions.contains_key("urgent") {
+            return Ok(SystemOneResponse {
+                model: request.model,
+                answers: [
+                    (
+                        "urgent".to_string(),
+                        crate::SystemOneAnswer::Noul { noul: 0.875 },
+                    ),
+                    (
+                        "department".to_string(),
+                        crate::SystemOneAnswer::Choice {
+                            choice: "billing".to_string(),
+                            probabilities: [
+                                ("billing".to_string(), 0.75),
+                                ("technical".to_string(), 0.25),
+                            ]
+                            .into(),
+                            confidence: 0.6,
+                        },
+                    ),
+                    (
+                        "frustration".to_string(),
+                        crate::SystemOneAnswer::Score {
+                            score: 1.25,
+                            legend: Default::default(),
+                            probabilities: [
+                                ("0".to_string(), 0.25),
+                                ("1".to_string(), 0.25),
+                                ("2".to_string(), 0.5),
+                            ]
+                            .into(),
+                            confidence: 0.4,
+                        },
+                    ),
+                ]
+                .into(),
+                usage: crate::SystemOneUsage {
+                    input_tokens: 12,
+                    output_tokens: 0,
+                },
+            });
+        }
         Ok(SystemOneResponse {
             model: request.model,
             answers: [(
@@ -882,6 +924,8 @@ async fn models_route_returns_model_list() {
     assert_eq!(body["data"][0]["id"], "org/repo:Q4_K_M");
 }
 
+#[path = "router_tests/decisions.rs"]
+mod decisions;
 #[path = "router_tests/non_chat.rs"]
 mod non_chat;
 #[path = "router_tests/system_one.rs"]

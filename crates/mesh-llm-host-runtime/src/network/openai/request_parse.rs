@@ -171,7 +171,11 @@ impl BufferedHttpRequest {
     /// A System One read renders `state` into every question's own bounded
     /// sequence, so its body size does not describe the context it needs.
     pub fn is_system_one_request(&self) -> bool {
-        self.method == "POST" && self.client_path.split('?').next() == Some("/systemone")
+        self.method == "POST"
+            && matches!(
+                self.client_path.split('?').next(),
+                Some("/systemone" | "/v1/decisions")
+            )
     }
 
     pub fn ensure_body_json(&mut self) {
