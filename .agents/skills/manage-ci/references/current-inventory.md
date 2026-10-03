@@ -802,7 +802,9 @@ warmer image and toolchain epoch. Native-runtime rows explicitly remain cold
 after three verified warm samples observed zero reuse. These four high-fanout families disable per-object GHA
 publication on every provider. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
 and Windows native ABI caches may publish into GitHub's isolated PR merge-ref
-scope for same-PR reruns. UI installs (`ui_quality`, `ui_e2e`, `ui_artifact`) point pnpm at the runner
+scope for same-PR reruns. The Linux static ABI key includes the prepared patched
+llama.cpp SHA, and restoration checks the archive stamp against that SHA before
+use. UI installs (`ui_quality`, `ui_e2e`, `ui_artifact`) point pnpm at the runner
 image's baked store instead of an Actions cache — there is no shared pnpm
 key or publisher to race. Trusted main owns shared publication.
 

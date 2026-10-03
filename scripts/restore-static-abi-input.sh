@@ -13,6 +13,7 @@ expected_target="$3"
 expected_backend="$4"
 expected_basename="build-stage-abi-static"
 expected_toolchain_epoch="${MESH_LLM_LLAMA_TOOLCHAIN_EPOCH:-}"
+prepared_sha_file="${LLAMA_WORKDIR:-$REPO_ROOT/.deps/llama.cpp}/.mesh-llm-patched-sha"
 
 if [[ -z "$expected_toolchain_epoch" ||
       ! "$expected_toolchain_epoch" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
@@ -151,6 +152,17 @@ python3 "$REPO_ROOT/scripts/verify-static-abi-build-stamp.py" \
     --link-mode static \
     --stamp-version 3 \
     --toolchain-epoch "$expected_toolchain_epoch"
+
+if [[ ! -s "$prepared_sha_file" ]]; then
+    echo "prepared llama.cpp patched SHA is missing: $prepared_sha_file" >&2
+    exit 1
+fi
+prepared_sha="$(tr -d '[:space:]' < "$prepared_sha_file")"
+if [[ ! "$prepared_sha" =~ ^[0-9a-f]{40}$ ]] ||
+   ! grep -Fxq "patched-sha=$prepared_sha" "$build_stamp"; then
+    echo "static ABI patched SHA does not match prepared llama.cpp" >&2
+    exit 1
+fi
 
 mkdir -p "$(dirname "$build_dir")"
 cp -a "$restored_dir" "$build_dir"

@@ -191,7 +191,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             "\n".join(
                 (
                     "stamp-version=3",
-                    "patched-sha=0123456789abcdef",
+                    "patched-sha=0123456789abcdef0123456789abcdef01234567",
                     "backend=cpu",
                     f"link-mode={link_mode}",
                     f"toolchain-epoch={toolchain_epoch}",
@@ -241,9 +241,18 @@ class StaticAbiArtifactTests(unittest.TestCase):
         self,
         download: Path,
         destination: Path,
+        *,
+        prepared_sha: str = "0123456789abcdef0123456789abcdef01234567",
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["MESH_LLM_LLAMA_TOOLCHAIN_EPOCH"] = TOOLCHAIN_EPOCH
+        prepared = download.parent / "prepared-llama"
+        prepared.mkdir(exist_ok=True)
+        (prepared / ".mesh-llm-patched-sha").write_text(
+            f"{prepared_sha}\n",
+            encoding="utf-8",
+        )
+        env["LLAMA_WORKDIR"] = str(prepared)
         return subprocess.run(
             [
                 bash_executable(),
@@ -328,6 +337,22 @@ class StaticAbiArtifactTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("target_triple mismatch", result.stderr)
+
+    def test_restore_rejects_stale_patched_llama(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            download = self.write_artifact(root)
+            destination = root / "restored" / "build-stage-abi-static"
+
+            result = self.restore(
+                download,
+                destination,
+                prepared_sha="abcdef0123456789abcdef0123456789abcdef01",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("patched SHA does not match", result.stderr)
+            self.assertFalse(destination.exists())
 
     def test_restore_rejects_non_static_build_stamp(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
