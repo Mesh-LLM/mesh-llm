@@ -60,3 +60,7 @@ mesh/sdk/swift/Generated/MeshLLMFFI.xcframework/
 /docs/crates/
 /docs/pagefind/
 /dist/openai-exchange-observer.tar.gz
+
+# Local UI build coordination and retained process logs.
+/mesh/crates/mesh-llm-ui/.mesh-llm-ui-build.lock
+/mesh/crates/mesh-llm-ui/.mesh-llm-ui-build-logs/
