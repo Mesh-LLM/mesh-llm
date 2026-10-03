@@ -16,8 +16,8 @@ skippy_stage_fused_ops_auto_deepseek4, runs it on the deepseek4-moe
 fixture, whose layers carry the HC fusions.
 ---
  src/CMakeLists.txt                      |   8 ++
- src/skippy/tests/graph_build_inputs.cpp | 100 +++++++++++++++++-------
- 2 files changed, 81 insertions(+), 27 deletions(-)
+ src/skippy/tests/graph_build_inputs.cpp | 141 ++++++++++++++++++++++++++------
+ 2 files changed, 124 insertions(+), 25 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index b4ee9bd87..6b0fb5098 100644
@@ -39,7 +39,7 @@ index b4ee9bd87..6b0fb5098 100644
          NAME skippy_noalloc_graph_planning_granite_hybrid
          COMMAND skippy-noalloc-graph-planning
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index e66224f9d..6d90d96e1 100644
+index e66224f9d..4b0b430ed 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
 @@ -16,6 +16,7 @@
@@ -81,7 +81,7 @@ index e66224f9d..6d90d96e1 100644
      llama_model * model = load_model(model_path);
      const int32_t n_layer = model == nullptr ? 0 : llama_model_n_layer(model);
      if (n_layer < 2) {
-@@ -622,20 +637,34 @@ static int check_stage_flash_attention_auto(const char * model_path) {
+@@ -622,20 +637,37 @@ static int check_stage_flash_attention_auto(const char * model_path) {
          return 40;
      }
  
@@ -97,10 +97,13 @@ index e66224f9d..6d90d96e1 100644
 +        {LLM_FUSED_OP_DSV4_HC_COMB, &llama_cparams::fused_dsv4_hc_comb},
 +        {LLM_FUSED_OP_DSV4_HC_POST, &llama_cparams::fused_dsv4_hc_post},
 +    };
-+    using fused_layers = std::map<llm_fused_op, std::set<int32_t>>;
++    // Per (op, layer) node counts, not a set of layers: DeepSeek V4 builds two
++    // HC nodes of the same op inside one layer (attention and FFN), so a stage
++    // that dropped one of them would still keep the layer in a set comparison.
++    using fused_node_counts = std::map<llm_fused_op, std::map<int32_t, size_t>>;
 +
 +    const auto resolve_auto = [model, &auto_ops](const skippy_graph_build_inputs & inputs,
-+            std::vector<llm_fused_op> & disabled, fused_layers & layers) {
++            std::vector<llm_fused_op> & disabled, fused_node_counts & counts) {
          llama_context_params params = make_context_params(1);
          params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
          llama_context * context = llama_init_from_model_with_graph_inputs(model, params, inputs);
@@ -117,38 +120,53 @@ index e66224f9d..6d90d96e1 100644
              }
          }
 +        for (const auto & node : context->get_gf_res_reserve()->get_fused_nodes()) {
-+            layers[node.op].insert(node.il);
++            ++counts[node.op][node.il];
 +        }
          llama_free(context);
          return true;
      };
-@@ -647,10 +676,11 @@ static int check_stage_flash_attention_auto(const char * model_path) {
+@@ -646,11 +678,26 @@ static int check_stage_flash_attention_auto(const char * model_path) {
+         }
          return layers;
      };
++    const auto counted_layers = [](const std::map<int32_t, size_t> & counts) {
++        std::set<int32_t> layers;
++        for (const auto & entry : counts) {
++            layers.insert(entry.first);
++        }
++        return layers;
++    };
++    const auto counted_nodes = [](const std::map<int32_t, size_t> & counts) {
++        size_t nodes = 0;
++        for (const auto & entry : counts) {
++            nodes += entry.second;
++        }
++        return nodes;
++    };
  
 -    bool whole_model_enabled = false;
 -    std::set<int32_t> whole_model_layers;
 -    if (!resolve_auto(skippy_graph_build_inputs(), whole_model_enabled, whole_model_layers) ||
 -            !whole_model_enabled || whole_model_layers != layer_range(0, n_layer)) {
 +    std::vector<llm_fused_op> whole_model_disabled;
-+    fused_layers whole_model_layers;
-+    if (!resolve_auto(skippy_graph_build_inputs(), whole_model_disabled, whole_model_layers) ||
++    fused_node_counts whole_model_counts;
++    if (!resolve_auto(skippy_graph_build_inputs(), whole_model_disabled, whole_model_counts) ||
 +            !whole_model_disabled.empty() ||
-+            whole_model_layers[LLM_FUSED_OP_FLASH_ATTN] != layer_range(0, n_layer)) {
++            counted_layers(whole_model_counts[LLM_FUSED_OP_FLASH_ATTN]) != layer_range(0, n_layer)) {
          llama_model_free(model);
          return 41;
      }
-@@ -658,24 +688,34 @@ static int check_stage_flash_attention_auto(const char * model_path) {
+@@ -658,22 +705,60 @@ static int check_stage_flash_attention_auto(const char * model_path) {
      const std::pair<int32_t, int32_t> stages[] = {{0, 1}, {1, n_layer}};
      for (const auto & [layer_start, layer_end] : stages) {
          skippy_graph_build_inputs inputs;
 -        bool enabled = false;
 -        std::set<int32_t> checked_layers;
 +        std::vector<llm_fused_op> disabled;
-+        fused_layers layers;
++        fused_node_counts counts;
          if (!make_stage_inputs(model, 1, layer_start, layer_end, inputs) ||
 -                !resolve_auto(inputs, enabled, checked_layers)) {
-+                !resolve_auto(inputs, disabled, layers)) {
++                !resolve_auto(inputs, disabled, counts)) {
              llama_model_free(model);
              return 42;
          }
@@ -166,25 +184,49 @@ index e66224f9d..6d90d96e1 100644
 -        if (checked_layers != layer_range(layer_start, layer_end)) {
 -            std::fprintf(stderr, "stage %d..%d kept flash attention nodes for %zu layers, expected %d\n",
 -                    layer_start, layer_end, checked_layers.size(), layer_end - layer_start);
--            llama_model_free(model);
--            return 44;
-+        for (const auto & [op, whole_model_op_layers] : whole_model_layers) {
-+            std::set<int32_t> expected;
-+            for (const int32_t il : whole_model_op_layers) {
++        // The whole-model counts restricted to this stage's layers are the exact
++        // baseline: the same ops, the same layers, and the same number of nodes
++        // per (op, layer).
++        fused_node_counts expected;
++        for (const auto & [op, op_counts] : whole_model_counts) {
++            for (const auto & [il, node_count] : op_counts) {
 +                if (il >= layer_start && il < layer_end) {
-+                    expected.insert(il);
++                    expected[op][il] = node_count;
 +                }
 +            }
-+            if (layers[op] != expected) {
-+                std::fprintf(stderr, "stage %d..%d kept %s nodes for %zu layers, expected %zu\n",
-+                        layer_start, layer_end, fused_op_name(op), layers[op].size(), expected.size());
++        }
++        // A stage is a slice of the whole-model graph, so it cannot introduce an
++        // op the whole model lacks; report one if that ever changes.
++        for (const auto & [op, op_counts] : counts) {
++            if (expected.count(op) == 0) {
++                std::fprintf(stderr, "stage %d..%d kept unexpected %s nodes (%zu)\n",
++                        layer_start, layer_end, fused_op_name(op), counted_nodes(op_counts));
 +                llama_model_free(model);
-+                return 44;
++                return 45;
 +            }
++        }
++        const std::map<int32_t, size_t> no_nodes;
++        for (const auto & [op, expected_counts] : expected) {
++            const auto stage_it = counts.find(op);
++            const std::map<int32_t, size_t> & stage_counts =
++                    stage_it == counts.end() ? no_nodes : stage_it->second;
++            if (stage_counts == expected_counts) {
++                continue;
++            }
++            const std::set<int32_t> stage_layers = counted_layers(stage_counts);
++            const std::set<int32_t> expected_layers = counted_layers(expected_counts);
++            if (stage_layers != expected_layers) {
++                std::fprintf(stderr, "stage %d..%d kept %s nodes for %zu layers, expected %zu\n",
++                        layer_start, layer_end, fused_op_name(op), stage_layers.size(), expected_layers.size());
++            } else {
++                std::fprintf(stderr, "stage %d..%d kept %zu %s nodes, expected %zu\n",
++                        layer_start, layer_end, counted_nodes(stage_counts), fused_op_name(op),
++                        counted_nodes(expected_counts));
++            }
+             llama_model_free(model);
+             return 44;
          }
-     }
- 
-@@ -1740,6 +1780,12 @@ int main(int argc, char ** argv) {
+@@ -1740,6 +1825,12 @@ int main(int argc, char ** argv) {
      if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
          return check_decode_input_width();
      }
@@ -197,7 +239,7 @@ index e66224f9d..6d90d96e1 100644
      const bool stage_program_only = argc == 4 && std::strcmp(argv[3], "--stage-program") == 0;
      if (argc != 3 && !stage_program_only) {
          return 64;
-@@ -1773,7 +1819,7 @@ int main(int argc, char ** argv) {
+@@ -1773,7 +1864,7 @@ int main(int argc, char ** argv) {
      }
  #endif
      if (rc == 0) rc = check_sched_reserve_and_memory_update(argv[1]);
