@@ -52,7 +52,7 @@ RECIPES_BY_FILE: Final = {
     },
     "just/mesh.just": {"bundle", "download-model", "mesh", "mesh-join", "mesh-worker"},
     "just/release-bundle.just": {
-        "check-env-mutation-contract", "check-release", "release-attestation",
+        "check-env-mutation-contract", "check-release", "release-attestation", "release-inventory",
         "release-bundle",
     },
     "just/website-ui.just": {

@@ -244,6 +244,9 @@ ci-automation-contracts:
         --test migration_xcframework_cli \
         --test openai_smoke_config \
         --test prepared_source \
+        --test release_inventory_evidence \
+        --test release_inventory_provenance \
+        --test release_inventory_publication \
         --test replay_acceptance_gates \
         --test replay_arm_pass \
         --test replay_build_arm \

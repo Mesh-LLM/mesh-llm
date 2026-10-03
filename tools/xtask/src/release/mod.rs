@@ -1,5 +1,6 @@
-//! `release`: Rust owners of the release-notes helper scripts. Each command
-//! keeps its legacy script's argv, streams, exit statuses and written files.
+//! `release`: typed owners of raw inventory and release notes. Inventory remains
+//! read-only evidence, with independent candidate/workspace identities and
+//! bounded children; it never classifies, builds or publishes a release.
 //!
 //! - `notes-base` replaces `scripts/select-release-notes-base.py`.
 //! - `notes-link` replaces `scripts/release-notes-link.py`; its `git` and `gh`
@@ -12,6 +13,7 @@ mod classify_argv;
 mod classify_rules;
 mod classify_subject;
 mod command_failure;
+mod inventory;
 mod link;
 mod link_argv;
 mod link_body;
@@ -37,6 +39,7 @@ use std::io::Read as _;
 /// A `release` subcommand.
 #[derive(Clone, Copy)]
 pub(crate) enum ReleaseCommand {
+    Inventory,
     Base,
     Link,
     Classify,
@@ -51,6 +54,7 @@ pub(crate) enum ReleaseCommand {
 impl ReleaseCommand {
     pub(crate) fn parse(name: &str) -> Option<Self> {
         match name {
+            "inventory" => Some(Self::Inventory),
             "notes-base" => Some(Self::Base),
             "notes-link" => Some(Self::Link),
             "notes-classify" => Some(Self::Classify),
@@ -67,6 +71,7 @@ impl ReleaseCommand {
 
 pub(crate) fn run(command: ReleaseCommand, args: &[String]) -> DynResult<()> {
     let report = match command {
+        ReleaseCommand::Inventory => return inventory::run(args).map_err(Into::into),
         ReleaseCommand::Base => notes_base::run(args, || {
             let mut bytes = Vec::new();
             std::io::stdin().read_to_end(&mut bytes).map(|_| bytes)

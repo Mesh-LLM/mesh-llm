@@ -25,3 +25,9 @@ check-env-mutation-contract:
 # Run one release-attestation xtask action through the repository toolchain.
 release-attestation *ARGS:
     @just with-lld cargo run -q -p xtask -- release-attestation {{ ARGS }}
+
+# Collect raw release evidence; Unix positional forwarding preserves every argument.
+[unix]
+[positional-arguments]
+release-inventory *ARGS:
+    @just automation-run release inventory "$@"

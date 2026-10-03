@@ -1461,7 +1461,7 @@
       "id": "boundary:quality-contracts:portable-contract-tests",
       "caller": "just:with-lld",
       "line": 0,
-      "source_block": "exec cargo test --locked -p xtask --bin xtask --test automation_selector --test canary_cache_configuration --test canary_controller_plan --test canary_result_gate --test ci_runner_cache_contract --test family_battery_environment --test family_battery_prepared_source --test lane_l12_build_llama --test lane_l2_authority --test lane_l3_abi_restore --test lane_l3_cache_metadata --test lane_l3_display_projection --test lane_l3_l2_dispatch --test lane_l7_logging_recovery --test lane_l7_plans --test local_ports --test migration_archives --test migration_bootstrap --test migration_canary_aggregate_cli --test migration_canary_receipts --test migration_canary_receipts_parity --test migration_cargo_metadata --test migration_cargo_packages_cli --test migration_ci_graph --test migration_ci_operations --test migration_ci_plan --test migration_cli --test migration_family_plan --test migration_hf_artifact_cli --test migration_hf_artifact_controls --test migration_hf_converted_artifact --test migration_lifecycle --test migration_models --test migration_native_fixtures --test migration_native_generator --test migration_native_policy --test migration_optional_isolation --test migration_package_source_version --test migration_patch_bytes --test migration_patch_shards --test migration_prepared_inputs --test migration_process --test migration_product --test migration_qualification_cli --test migration_release --test migration_report_contract --test migration_report_safety --test migration_repository --test migration_run_family --test migration_workload_oracle_cli --test migration_xcframework_cli --test openai_smoke_config --test prepared_source --test replay_acceptance_gates --test replay_arm_pass --test replay_build_arm --test replay_context_preflight --test replay_external_engines --test replay_external_run --test replay_history --test replay_history_hub --test replay_interruption --test replay_l3 --test replay_manifest_preflight --test replay_manual_profile --test replay_manual_resume_refs --test replay_model_preflight --test replay_pass_schedule --test replay_pooled_rows --test replay_progress --test replay_publication_prepare --test replay_report --test replay_retirement --test replay_run_execution --test replay_server_cell --test replay_session_evidence --test replay_trajectory_execution --test swift_api_checksum --test swift_privacy_adapter --test swift_producer_environment --test workload_certify_contract --test workload_oracle_producer_contract --test workload_smoke_config --test workload_start_retry -- --test-threads=1",
+      "source_block": "exec cargo test --locked -p xtask --bin xtask --test automation_selector --test canary_cache_configuration --test canary_controller_plan --test canary_result_gate --test ci_runner_cache_contract --test family_battery_environment --test family_battery_prepared_source --test lane_l12_build_llama --test lane_l2_authority --test lane_l3_abi_restore --test lane_l3_cache_metadata --test lane_l3_display_projection --test lane_l3_l2_dispatch --test lane_l7_logging_recovery --test lane_l7_plans --test local_ports --test migration_archives --test migration_bootstrap --test migration_canary_aggregate_cli --test migration_canary_receipts --test migration_canary_receipts_parity --test migration_cargo_metadata --test migration_cargo_packages_cli --test migration_ci_graph --test migration_ci_operations --test migration_ci_plan --test migration_cli --test migration_family_plan --test migration_hf_artifact_cli --test migration_hf_artifact_controls --test migration_hf_converted_artifact --test migration_lifecycle --test migration_models --test migration_native_fixtures --test migration_native_generator --test migration_native_policy --test migration_optional_isolation --test migration_package_source_version --test migration_patch_bytes --test migration_patch_shards --test migration_prepared_inputs --test migration_process --test migration_product --test migration_qualification_cli --test migration_release --test migration_report_contract --test migration_report_safety --test migration_repository --test migration_run_family --test migration_workload_oracle_cli --test migration_xcframework_cli --test openai_smoke_config --test prepared_source --test release_inventory_evidence --test release_inventory_provenance --test release_inventory_publication --test replay_acceptance_gates --test replay_arm_pass --test replay_build_arm --test replay_context_preflight --test replay_external_engines --test replay_external_run --test replay_history --test replay_history_hub --test replay_interruption --test replay_l3 --test replay_manifest_preflight --test replay_manual_profile --test replay_manual_resume_refs --test replay_model_preflight --test replay_pass_schedule --test replay_pooled_rows --test replay_progress --test replay_publication_prepare --test replay_report --test replay_retirement --test replay_run_execution --test replay_server_cell --test replay_session_evidence --test replay_trajectory_execution --test swift_api_checksum --test swift_privacy_adapter --test swift_producer_environment --test workload_certify_contract --test workload_oracle_producer_contract --test workload_smoke_config --test workload_start_retry -- --test-threads=1",
       "occurrence": 1,
       "candidate_id": null,
       "bound_child": null,
@@ -1469,10 +1469,55 @@
       "disposition": "platform_conditional",
       "selector": "Explicit private Unix with-lld body at just/build.just:16-26; Windows body at28-31. Visibility is not process admission. Literal current ci-automation-contracts argv is bound in full.",
       "rationale": "The graph walks the wrapper bodies and literal argv; unresolved status is platform selection, not an unknown interpreter or dynamic target. Both existing platform bodies remain explicitly source-bound; no scanner exemption or ecosystem exception.",
-      "reachable_bytes": "Same existing platform wrapper/probe, then exact literal locked Cargo test selecting owning xtask unit harness plus84 reviewed integration roots and serial unfiltered harness. Fixtures own temporary files/local Git/finite local HTTP and inert executable surrogates; source-selected real SDK/model/native qualification remains a separate gate. Global operator controller environment remains inherited.",
+      "reachable_bytes": "Same existing platform wrapper/probe, then exact literal locked Cargo test selecting owning xtask unit harness plus87 reviewed integration roots and serial unfiltered harness. Fixtures own temporary files/local Git/finite local HTTP and inert executable surrogates; source-selected real SDK/model/native qualification remains a separate gate. Global operator controller environment remains inherited.",
       "replacement_owner": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts.rs",
       "deletion_condition": "Remove only when required graph walks both platform bodies without an unresolved platform selector; changing argv or wrapper evidence requires a new exact source-backed binding.",
       "evidence": [
+        {
+          "path": "just/build.just",
+          "line": 16,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 17,
+          "text": "[unix]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 18,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 25,
+          "text": "scripts/cargo-linker --mesh-probe >/dev/null"
+        },
+        {
+          "path": "just/build.just",
+          "line": 26,
+          "text": "exec {{ COMMAND }}"
+        },
+        {
+          "path": "just/build.just",
+          "line": 28,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 29,
+          "text": "[windows]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 30,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 31,
+          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+        },
         {
           "path": "just/ci.just",
           "line": 186,
@@ -1746,207 +1791,177 @@
         {
           "path": "just/ci.just",
           "line": 240,
-          "text": "--test replay_acceptance_gates \\"
+          "text": "--test release_inventory_evidence \\"
         },
         {
           "path": "just/ci.just",
           "line": 241,
-          "text": "--test replay_arm_pass \\"
+          "text": "--test release_inventory_provenance \\"
         },
         {
           "path": "just/ci.just",
           "line": 242,
-          "text": "--test replay_build_arm \\"
+          "text": "--test release_inventory_publication \\"
         },
         {
           "path": "just/ci.just",
           "line": 243,
-          "text": "--test replay_context_preflight \\"
+          "text": "--test replay_acceptance_gates \\"
         },
         {
           "path": "just/ci.just",
           "line": 244,
-          "text": "--test replay_external_engines \\"
+          "text": "--test replay_arm_pass \\"
         },
         {
           "path": "just/ci.just",
           "line": 245,
-          "text": "--test replay_external_run \\"
+          "text": "--test replay_build_arm \\"
         },
         {
           "path": "just/ci.just",
           "line": 246,
-          "text": "--test replay_history \\"
+          "text": "--test replay_context_preflight \\"
         },
         {
           "path": "just/ci.just",
           "line": 247,
-          "text": "--test replay_history_hub \\"
+          "text": "--test replay_external_engines \\"
         },
         {
           "path": "just/ci.just",
           "line": 248,
-          "text": "--test replay_interruption \\"
+          "text": "--test replay_external_run \\"
         },
         {
           "path": "just/ci.just",
           "line": 249,
-          "text": "--test replay_l3 \\"
+          "text": "--test replay_history \\"
         },
         {
           "path": "just/ci.just",
           "line": 250,
-          "text": "--test replay_manifest_preflight \\"
+          "text": "--test replay_history_hub \\"
         },
         {
           "path": "just/ci.just",
           "line": 251,
-          "text": "--test replay_manual_profile \\"
+          "text": "--test replay_interruption \\"
         },
         {
           "path": "just/ci.just",
           "line": 252,
-          "text": "--test replay_manual_resume_refs \\"
+          "text": "--test replay_l3 \\"
         },
         {
           "path": "just/ci.just",
           "line": 253,
-          "text": "--test replay_model_preflight \\"
+          "text": "--test replay_manifest_preflight \\"
         },
         {
           "path": "just/ci.just",
           "line": 254,
-          "text": "--test replay_pass_schedule \\"
+          "text": "--test replay_manual_profile \\"
         },
         {
           "path": "just/ci.just",
           "line": 255,
-          "text": "--test replay_pooled_rows \\"
+          "text": "--test replay_manual_resume_refs \\"
         },
         {
           "path": "just/ci.just",
           "line": 256,
-          "text": "--test replay_progress \\"
+          "text": "--test replay_model_preflight \\"
         },
         {
           "path": "just/ci.just",
           "line": 257,
-          "text": "--test replay_publication_prepare \\"
+          "text": "--test replay_pass_schedule \\"
         },
         {
           "path": "just/ci.just",
           "line": 258,
-          "text": "--test replay_report \\"
+          "text": "--test replay_pooled_rows \\"
         },
         {
           "path": "just/ci.just",
           "line": 259,
-          "text": "--test replay_retirement \\"
+          "text": "--test replay_progress \\"
         },
         {
           "path": "just/ci.just",
           "line": 260,
-          "text": "--test replay_run_execution \\"
+          "text": "--test replay_publication_prepare \\"
         },
         {
           "path": "just/ci.just",
           "line": 261,
-          "text": "--test replay_server_cell \\"
+          "text": "--test replay_report \\"
         },
         {
           "path": "just/ci.just",
           "line": 262,
-          "text": "--test replay_session_evidence \\"
+          "text": "--test replay_retirement \\"
         },
         {
           "path": "just/ci.just",
           "line": 263,
-          "text": "--test replay_trajectory_execution \\"
+          "text": "--test replay_run_execution \\"
         },
         {
           "path": "just/ci.just",
           "line": 264,
-          "text": "--test swift_api_checksum \\"
+          "text": "--test replay_server_cell \\"
         },
         {
           "path": "just/ci.just",
           "line": 265,
-          "text": "--test swift_privacy_adapter \\"
+          "text": "--test replay_session_evidence \\"
         },
         {
           "path": "just/ci.just",
           "line": 266,
-          "text": "--test swift_producer_environment \\"
+          "text": "--test replay_trajectory_execution \\"
         },
         {
           "path": "just/ci.just",
           "line": 267,
-          "text": "--test workload_certify_contract \\"
+          "text": "--test swift_api_checksum \\"
         },
         {
           "path": "just/ci.just",
           "line": 268,
-          "text": "--test workload_oracle_producer_contract \\"
+          "text": "--test swift_privacy_adapter \\"
         },
         {
           "path": "just/ci.just",
           "line": 269,
-          "text": "--test workload_smoke_config \\"
+          "text": "--test swift_producer_environment \\"
         },
         {
           "path": "just/ci.just",
           "line": 270,
-          "text": "--test workload_start_retry \\"
+          "text": "--test workload_certify_contract \\"
         },
         {
           "path": "just/ci.just",
           "line": 271,
+          "text": "--test workload_oracle_producer_contract \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 272,
+          "text": "--test workload_smoke_config \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 273,
+          "text": "--test workload_start_retry \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 274,
           "text": "-- --test-threads=1"
-        },
-        {
-          "path": "just/build.just",
-          "line": 16,
-          "text": "[private]"
-        },
-        {
-          "path": "just/build.just",
-          "line": 17,
-          "text": "[unix]"
-        },
-        {
-          "path": "just/build.just",
-          "line": 18,
-          "text": "with-lld *COMMAND:"
-        },
-        {
-          "path": "just/build.just",
-          "line": 25,
-          "text": "scripts/cargo-linker --mesh-probe >/dev/null"
-        },
-        {
-          "path": "just/build.just",
-          "line": 26,
-          "text": "exec {{ COMMAND }}"
-        },
-        {
-          "path": "just/build.just",
-          "line": 28,
-          "text": "[private]"
-        },
-        {
-          "path": "just/build.just",
-          "line": 29,
-          "text": "[windows]"
-        },
-        {
-          "path": "just/build.just",
-          "line": 30,
-          "text": "with-lld *COMMAND:"
-        },
-        {
-          "path": "just/build.just",
-          "line": 31,
-          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
         }
       ]
     }
@@ -5150,6 +5165,655 @@
       "shift": 1,
       "entries": 87,
       "scope": "Current boundary_records evidence only; exact text checked and historical records preserved"
+    }
+  },
+  "release_inventory_public_cutover": {
+    "status": "LOCAL_QUALIFIED_COLLECTOR_RETAINED",
+    "active_quality_targets": 87,
+    "historical_canonical84_preserved": true,
+    "source_bindings": [
+      {
+        "path": "tools/xtask/src/release/mod.rs",
+        "sha256": "40eedcb872deb4ad03511732ee880f27d854e41139d00bf12e0c06d6eacb3683"
+      },
+      {
+        "path": "tools/xtask/src/cli.rs",
+        "sha256": "2504ed1c909a29c4eca7cda9ef4f8696d2fbdace49c117ad0b9dc2110fd0c6e5"
+      },
+      {
+        "path": "just/release-bundle.just",
+        "sha256": "9732edbef0800301436bcb6a222329a6769f5180ed061d2f690d0165d1680688"
+      },
+      {
+        "path": "just/ci.just",
+        "sha256": "d19dd59f864b0d850ece001d2091797c93c9d60a78c0bcc5562e984e194d25be"
+      },
+      {
+        "path": "ci/automation-migration/quality-rust-contract-targets.json",
+        "sha256": "a7764167c7ca56bc64bf44703e945d4a76d89df5856d433d7b2a449d6a453dbd"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/args.rs",
+        "sha256": "a3d23a3c5871cc1a2ce311222ca9841eb0c4d4f42996d3b8ab44112f77709198"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/dirty.rs",
+        "sha256": "43d2d19b7a8f0975ab7919eab8402229ced532fd542ac87986ef41af1ea1ca43"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/dirty_file.rs",
+        "sha256": "6dbf02a4123d5243e4ee3eaaa9e6ac47c52f36d844abc5f411468dc16238f74c"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/evidence.rs",
+        "sha256": "5aa6878b923716667f718e2e5519c3d5969c7f13a80083e8ba88d71d85d663dc"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/github.rs",
+        "sha256": "2a79a9b8c008e4aabe6b2e35a247b5f660744b982e5e6a2c3d4f36b91d77853a"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/mod.rs",
+        "sha256": "5545a1f2db45f94fc07afdbfbbb41d91b0d45c767fc77ed9d9c7285de51524f6"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/observation.rs",
+        "sha256": "874ec01ccff02c1e2d08d8559c177310e2b07ef3d733ab9228a26d653434c474"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/provenance.rs",
+        "sha256": "ae2e448902abedd1288de04c2ec11e3abc9509dc88428c1f83a4f65e4b5ee979"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/publication.rs",
+        "sha256": "58fff446c0a298a7df39a3d239bfd22d1778ee38a87b478e96c41bd95ebe29af"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/remotes.rs",
+        "sha256": "10a993d4063501b248b269b0dc3fd59613207d6ad5ab249ecbc06ceb01e765b7"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/report.rs",
+        "sha256": "9b362d41fe5c9ca9a567bb0f02e9b01af7656c5d7e1f1b9aaa9bff4e5eaf27a1"
+      },
+      {
+        "path": "tools/xtask/src/release/inventory/transport.rs",
+        "sha256": "cc8ed6775002a29fd3eaecce91583f8b8f25df2de9514e197266c86606e53211"
+      }
+    ],
+    "owning_groups": {
+      "provenance": 8,
+      "evidence": 12,
+      "publication": 17
+    },
+    "qualification_logs": [
+      "release-public-owning-provenance.log",
+      "release-public-owning-corrected-evidence.log",
+      "release-public-owning-publication-environment-corrected.log"
+    ],
+    "limits": "Finite local Git, fixture GitHub transport, actual public CLI and Unix Just argv qualified by full xtask and current normal CI. Collector retirement remains pending. No GitHub provider, Windows, native/model/SDK or release readiness qualification; documented same-inode/rename limitations preserved.",
+    "removed_live_instruction": {
+      "file": ".agents/skills/release-validation/SKILL.md",
+      "members": [
+        [
+          78,
+          "cb342bfab4e0c5ae",
+          1,
+          "instruction",
+          ".agents/skills/release-validation/scripts/collect-release-inventory.py",
+          "Run skill-local Python script for raw release inventory; exact --repo/--head/--release-tag/--output selected by operator, default output stdout; subprocess git/gh needs separate ownership"
+        ]
+      ]
+    },
+    "previous_portable_boundary": {
+      "id": "boundary:quality-contracts:portable-contract-tests",
+      "caller": "just:with-lld",
+      "line": 0,
+      "source_block": "exec cargo test --locked -p xtask --bin xtask --test automation_selector --test canary_cache_configuration --test canary_controller_plan --test canary_result_gate --test ci_runner_cache_contract --test family_battery_environment --test family_battery_prepared_source --test lane_l12_build_llama --test lane_l2_authority --test lane_l3_abi_restore --test lane_l3_cache_metadata --test lane_l3_display_projection --test lane_l3_l2_dispatch --test lane_l7_logging_recovery --test lane_l7_plans --test local_ports --test migration_archives --test migration_bootstrap --test migration_canary_aggregate_cli --test migration_canary_receipts --test migration_canary_receipts_parity --test migration_cargo_metadata --test migration_cargo_packages_cli --test migration_ci_graph --test migration_ci_operations --test migration_ci_plan --test migration_cli --test migration_family_plan --test migration_hf_artifact_cli --test migration_hf_artifact_controls --test migration_hf_converted_artifact --test migration_lifecycle --test migration_models --test migration_native_fixtures --test migration_native_generator --test migration_native_policy --test migration_optional_isolation --test migration_package_source_version --test migration_patch_bytes --test migration_patch_shards --test migration_prepared_inputs --test migration_process --test migration_product --test migration_qualification_cli --test migration_release --test migration_report_contract --test migration_report_safety --test migration_repository --test migration_run_family --test migration_workload_oracle_cli --test migration_xcframework_cli --test openai_smoke_config --test prepared_source --test replay_acceptance_gates --test replay_arm_pass --test replay_build_arm --test replay_context_preflight --test replay_external_engines --test replay_external_run --test replay_history --test replay_history_hub --test replay_interruption --test replay_l3 --test replay_manifest_preflight --test replay_manual_profile --test replay_manual_resume_refs --test replay_model_preflight --test replay_pass_schedule --test replay_pooled_rows --test replay_progress --test replay_publication_prepare --test replay_report --test replay_retirement --test replay_run_execution --test replay_server_cell --test replay_session_evidence --test replay_trajectory_execution --test swift_api_checksum --test swift_privacy_adapter --test swift_producer_environment --test workload_certify_contract --test workload_oracle_producer_contract --test workload_smoke_config --test workload_start_retry -- --test-threads=1",
+      "occurrence": 1,
+      "candidate_id": null,
+      "bound_child": null,
+      "child": null,
+      "disposition": "platform_conditional",
+      "selector": "Explicit private Unix with-lld body at just/build.just:16-26; Windows body at28-31. Visibility is not process admission. Literal current ci-automation-contracts argv is bound in full.",
+      "rationale": "The graph walks the wrapper bodies and literal argv; unresolved status is platform selection, not an unknown interpreter or dynamic target. Both existing platform bodies remain explicitly source-bound; no scanner exemption or ecosystem exception.",
+      "reachable_bytes": "Same existing platform wrapper/probe, then exact literal locked Cargo test selecting owning xtask unit harness plus84 reviewed integration roots and serial unfiltered harness. Fixtures own temporary files/local Git/finite local HTTP and inert executable surrogates; source-selected real SDK/model/native qualification remains a separate gate. Global operator controller environment remains inherited.",
+      "replacement_owner": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts.rs",
+      "deletion_condition": "Remove only when required graph walks both platform bodies without an unresolved platform selector; changing argv or wrapper evidence requires a new exact source-backed binding.",
+      "evidence": [
+        {
+          "path": "just/ci.just",
+          "line": 186,
+          "text": "just with-lld cargo test --locked -p xtask --bin xtask \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 187,
+          "text": "--test automation_selector \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 188,
+          "text": "--test canary_cache_configuration \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 189,
+          "text": "--test canary_controller_plan \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 190,
+          "text": "--test canary_result_gate \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 191,
+          "text": "--test ci_runner_cache_contract \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 192,
+          "text": "--test family_battery_environment \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 193,
+          "text": "--test family_battery_prepared_source \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 194,
+          "text": "--test lane_l12_build_llama \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 195,
+          "text": "--test lane_l2_authority \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 196,
+          "text": "--test lane_l3_abi_restore \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 197,
+          "text": "--test lane_l3_cache_metadata \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 198,
+          "text": "--test lane_l3_display_projection \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 199,
+          "text": "--test lane_l3_l2_dispatch \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 200,
+          "text": "--test lane_l7_logging_recovery \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 201,
+          "text": "--test lane_l7_plans \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 202,
+          "text": "--test local_ports \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 203,
+          "text": "--test migration_archives \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 204,
+          "text": "--test migration_bootstrap \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 205,
+          "text": "--test migration_canary_aggregate_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 206,
+          "text": "--test migration_canary_receipts \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 207,
+          "text": "--test migration_canary_receipts_parity \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 208,
+          "text": "--test migration_cargo_metadata \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 209,
+          "text": "--test migration_cargo_packages_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 210,
+          "text": "--test migration_ci_graph \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 211,
+          "text": "--test migration_ci_operations \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 212,
+          "text": "--test migration_ci_plan \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 213,
+          "text": "--test migration_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 214,
+          "text": "--test migration_family_plan \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 215,
+          "text": "--test migration_hf_artifact_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 216,
+          "text": "--test migration_hf_artifact_controls \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 217,
+          "text": "--test migration_hf_converted_artifact \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 218,
+          "text": "--test migration_lifecycle \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 219,
+          "text": "--test migration_models \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 220,
+          "text": "--test migration_native_fixtures \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 221,
+          "text": "--test migration_native_generator \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 222,
+          "text": "--test migration_native_policy \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 223,
+          "text": "--test migration_optional_isolation \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 224,
+          "text": "--test migration_package_source_version \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 225,
+          "text": "--test migration_patch_bytes \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 226,
+          "text": "--test migration_patch_shards \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 227,
+          "text": "--test migration_prepared_inputs \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 228,
+          "text": "--test migration_process \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 229,
+          "text": "--test migration_product \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 230,
+          "text": "--test migration_qualification_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 231,
+          "text": "--test migration_release \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 232,
+          "text": "--test migration_report_contract \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 233,
+          "text": "--test migration_report_safety \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 234,
+          "text": "--test migration_repository \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 235,
+          "text": "--test migration_run_family \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 236,
+          "text": "--test migration_workload_oracle_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 237,
+          "text": "--test migration_xcframework_cli \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 238,
+          "text": "--test openai_smoke_config \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 239,
+          "text": "--test prepared_source \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 240,
+          "text": "--test replay_acceptance_gates \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 241,
+          "text": "--test replay_arm_pass \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 242,
+          "text": "--test replay_build_arm \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 243,
+          "text": "--test replay_context_preflight \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 244,
+          "text": "--test replay_external_engines \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 245,
+          "text": "--test replay_external_run \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 246,
+          "text": "--test replay_history \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 247,
+          "text": "--test replay_history_hub \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 248,
+          "text": "--test replay_interruption \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 249,
+          "text": "--test replay_l3 \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 250,
+          "text": "--test replay_manifest_preflight \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 251,
+          "text": "--test replay_manual_profile \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 252,
+          "text": "--test replay_manual_resume_refs \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 253,
+          "text": "--test replay_model_preflight \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 254,
+          "text": "--test replay_pass_schedule \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 255,
+          "text": "--test replay_pooled_rows \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 256,
+          "text": "--test replay_progress \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 257,
+          "text": "--test replay_publication_prepare \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 258,
+          "text": "--test replay_report \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 259,
+          "text": "--test replay_retirement \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 260,
+          "text": "--test replay_run_execution \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 261,
+          "text": "--test replay_server_cell \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 262,
+          "text": "--test replay_session_evidence \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 263,
+          "text": "--test replay_trajectory_execution \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 264,
+          "text": "--test swift_api_checksum \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 265,
+          "text": "--test swift_privacy_adapter \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 266,
+          "text": "--test swift_producer_environment \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 267,
+          "text": "--test workload_certify_contract \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 268,
+          "text": "--test workload_oracle_producer_contract \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 269,
+          "text": "--test workload_smoke_config \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 270,
+          "text": "--test workload_start_retry \\"
+        },
+        {
+          "path": "just/ci.just",
+          "line": 271,
+          "text": "-- --test-threads=1"
+        },
+        {
+          "path": "just/build.just",
+          "line": 16,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 17,
+          "text": "[unix]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 18,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 25,
+          "text": "scripts/cargo-linker --mesh-probe >/dev/null"
+        },
+        {
+          "path": "just/build.just",
+          "line": 26,
+          "text": "exec {{ COMMAND }}"
+        },
+        {
+          "path": "just/build.just",
+          "line": 28,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 29,
+          "text": "[windows]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 30,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 31,
+          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+        }
+      ]
+    },
+    "current_portable_boundary": {
+      "id": "boundary:quality-contracts:portable-contract-tests",
+      "targets": 87
+    },
+    "previous_publication_qualification": {
+      "passed": 15,
+      "logs": [
+        "release-public-owning-provenance.log",
+        "release-public-owning-corrected-evidence.log",
+        "release-public-owning-publication-environment-corrected.log"
+      ]
+    },
+    "qualified_receipts": [
+      {
+        "name": "provenance",
+        "log": ".omo/evidence/resume-20261002/release-public-owning-provenance.log",
+        "sha256": "e09f5c62978061cb4083fc70d443c871e43028dcee7edf1240f61c40814b7d46",
+        "passed": 8,
+        "failed": 0
+      },
+      {
+        "name": "evidence",
+        "log": ".omo/evidence/resume-20261002/release-evidence-clippy-corrected-owning.log",
+        "sha256": "de11842ecef05e3f7441364bca1623221e7190df2cdef6ee7c522b21fbb678bd",
+        "passed": 12,
+        "failed": 0
+      },
+      {
+        "name": "publication",
+        "log": ".omo/evidence/resume-20261002/release-publication-identity-corrected-owning.log",
+        "sha256": "9c45a40b0a5fced460c9f37c5f3f5f5e40600bdcb7771ed439be06a94b4397dc",
+        "passed": 17,
+        "failed": 0
+      },
+      {
+        "name": "quality",
+        "log": ".omo/evidence/resume-20261002/release-current-corrected-quality.log",
+        "sha256": "878ce0b710663029c0c619131a04bbe11d96b0b51bab381229bc669bf85fc131",
+        "passed": 7,
+        "failed": 0
+      },
+      {
+        "name": "inventory",
+        "log": ".omo/evidence/resume-20261002/release-current-inventory-boundary-corrected.log",
+        "sha256": "7a0d44434a9406539b7a8e2dab579da392c7203af2ef226bb3ee7b4d4e4dd84a",
+        "passed": 166,
+        "failed": 0
+      }
+    ],
+    "publication_identity_correction": "3f9be103372c52590b5f37a62aff7c795ef53b3405964ad679928a3b5ba6f443",
+    "previous_focused_status": "CURRENT_FOCUSED_LOCAL_QUALIFIED_AGGREGATE_PENDING",
+    "aggregate_receipts": {
+      "full": ".omo/evidence/resume-20261002/release159-full-receipt.json",
+      "normal": ".omo/evidence/resume-20261002/release159-corrected-normal-receipt.json",
+      "full_log_sha256": "cae5759b5d7ebe2a3dcff62fe4dfee2f605ec280e09a21e496f272dfea0bbfa6",
+      "normal_log_sha256": "f540ad4ef0ffffdb702b732f4487689995e7f40cff42e9134dd2c3d65fd89a3b"
     }
   }
 }
