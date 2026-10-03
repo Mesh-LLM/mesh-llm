@@ -201,3 +201,6 @@ mod parity_download_owner;
 
 #[path = "migration_lifecycle/pr_sibling_cancellation.rs"]
 mod pr_sibling_cancellation;
+
+#[path = "migration_lifecycle/ui_package_contracts.rs"]
+mod ui_package_contracts;

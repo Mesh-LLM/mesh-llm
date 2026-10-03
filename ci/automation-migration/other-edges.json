@@ -10382,5 +10382,72 @@
       "path": "ci/automation-migration/sibling-cancellation-retirement-coverage.json",
       "sha256": "03c961f57cdc880ddabcb6ca126ce2a801990b44a509656e6337cdb9f1ea138f"
     }
+  },
+  "ui_package_component_fixture_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 139,
+    "core_modules_after": 67,
+    "required_targets": 108,
+    "durable_coverage": {
+      "path": "ci/automation-migration/ui-package-retirement-coverage.json",
+      "sha256": "6570c309e26aa12719770123966f4da71d60d62667b6ff5d47acf237e02b22f4"
+    },
+    "current_test_tree": {
+      "sha256": "6d8b1b593571da9fad192ac7b094a9d9d209a9992942fa2726b45566a9a2d4aa",
+      "paths": 60
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "3e1cb6a30c0d8bd76f5b031fe0f1dada9af204550bb86a419c8ebb7559a78823",
+      "roster_line": 24,
+      "count": 67
+    },
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/ui-package-focused-receipts.json",
+        "sha256": "95c1dc60204dd2d7c4fac5ee7ec8f6b3d9f1fdb2b607381370cac629dbf76fea"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/ui-package-retirement-postimage-receipts.json",
+        "sha256": "afd2911c78e206338d1db74f06aa679c641fe4477cacbe36c177faefc51b99fe"
+      },
+      "full": {
+        "name": "full",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/ui-package-retirement-postimage-full.log",
+        "sha256": "4d30c40e5bbacd17e4a0487f35fbcbc1dd88fcd2fff8dd8b2b710917fcbe85a1",
+        "targets": 109,
+        "passed": 4242,
+        "failed": 0,
+        "ignored": 2
+      },
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/ui-package-retirement-postimage-normal.log",
+        "sha256": "55d2b0170bd92bcea8f92de51d86a258fb3f1bdbf66efc295abd15d29fefa091",
+        "targets": 109,
+        "passed": 4242,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 991,
+          "passed": 977,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 369.61
+        }
+      },
+      "original_intent_scope": "All nine original Python groups passed before retirement; nine component-owned Rust groups exercise the actual product build script and Bash profile behavior plus parsed package and workflow policy.",
+      "limits": "Local Unix test-harness retirement only. Bash and PowerShell production orchestration still require typed Rust ownership. No real pnpm installation, UI product build, native Windows or hosted acceptance claimed."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/ui-package-retirement-coverage.json",
+      "sha256": "657ac12b687b01c623653f8c191883a8263c519ccc77c8b66eafdbd528675719"
+    }
   }
 }
