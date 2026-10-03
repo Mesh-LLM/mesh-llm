@@ -396,6 +396,77 @@ fn direct_prefill_wave_never_exceeds_configured_native_batch_tokens() {
 }
 
 #[test]
+fn direct_wave_packs_decode_rows_queued_behind_an_oversized_prefill_chunk() {
+    let mut queue = VecDeque::from([
+        direct_iteration("prefill-a", 384),
+        direct_iteration("prefill-b", 256),
+        direct_iteration("decode-a", 1),
+        direct_iteration("decode-b", 1),
+        direct_iteration("late-arrival", 1),
+    ]);
+
+    let batch = take_direct_iteration_batch(&mut queue, 4, 512);
+
+    assert_eq!(
+        batch
+            .iter()
+            .map(|request| request.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["prefill-a", "decode-a", "decode-b", "late-arrival"]
+    );
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue.front().unwrap().session_id, "prefill-b");
+}
+
+#[test]
+fn deferred_prefill_chunk_stays_ahead_of_requests_it_did_not_reach() {
+    let mut queue = VecDeque::from([
+        direct_iteration("prefill-a", 384),
+        direct_iteration("prefill-b", 256),
+        direct_iteration("decode-a", 1),
+        direct_iteration("decode-b", 1),
+    ]);
+
+    let batch = take_direct_iteration_batch(&mut queue, 2, 512);
+
+    assert_eq!(batch.len(), 2);
+    assert_eq!(
+        queue
+            .iter()
+            .map(|request| request.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["prefill-b", "decode-b"]
+    );
+}
+
+#[test]
+fn deferred_prefill_chunk_is_not_overtaken_by_its_own_session() {
+    let mut queue = VecDeque::from([
+        direct_iteration("prefill-a", 384),
+        direct_iteration("same", 256),
+        direct_iteration("same", 1),
+        direct_iteration("decode-a", 1),
+    ]);
+
+    let batch = take_direct_iteration_batch(&mut queue, 4, 512);
+
+    assert_eq!(
+        batch
+            .iter()
+            .map(|request| request.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["prefill-a", "decode-a"]
+    );
+    assert_eq!(
+        queue
+            .iter()
+            .map(|request| request.token_ids.len())
+            .collect::<Vec<_>>(),
+        [256, 1]
+    );
+}
+
+#[test]
 fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
     let (_commands, receiver) = std_mpsc::channel();

@@ -134,6 +134,11 @@ and verify that source against the selected pin and patch queue before lanes
 start; they cannot accidentally depend on a previous runner checkout.
 The agent supervisor terminates remaining process-group members after normal
 completion and waits for live members to stop before handing the workspace back.
+If the repair agent or trusted gates fail, the build evidence retains an
+unverified `recovery/` source snapshot (`tracked.patch`, `untracked.tar.gz`,
+and `manifest.json`), including the prepared `.deps/llama.cpp` checkout when
+present. A reviewer can reapply it at the recorded base commits;
+it is never accepted as a certified candidate or sent to family workers.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.
@@ -349,7 +354,8 @@ main.
 If crates.io accepts only a prefix of the stable package chain,
 `resume-crates-release.yml` resumes publication from the existing immutable
 release tag. The operator supplies both the stable tag and its exact peeled
-commit SHA. The workflow runs only from the default branch, verifies those two
+commit SHA. The workflow has `packages: read` to pull its pinned GHCR runner
+image. It runs only from the default branch, verifies those two
 identities against the remote tag and checkout, and uses the trusted
 default-branch `publish-crates.sh` controller against the tagged source. Resume
 mode skips versions that crates.io confirms are already published and falls
@@ -1264,7 +1270,7 @@ both domains until the later catalog cleanup; existing main routing is unchanged
 
 The protected executor workflows pin `resolve-source-layout` to commit
 `38d63b2f6e27998034fdf0452150c7cc081fe921` and `resolve-cargo-packages` to
-`196eba4c21f9b445d0bf11f7938f87e799dd7c8c` (which passes planned packages
+`5c8fb4d472bc57058c8153761c561daa77dd5b94` (which passes planned packages
 absent from the candidate through to the checked-out-workspace filter, so a PR
 that deletes a crate is not rejected), so older PR source checkouts do not need
 the new helper files. The package resolver loads its Python implementation

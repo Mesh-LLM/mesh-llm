@@ -19,7 +19,10 @@ import tempfile
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-PIN_PATH = "third_party/llama.cpp/upstream.txt"
+PIN_PATHS = (
+    "third_party/llama.cpp/upstream.txt",
+    "skippy/llama_cpp/upstream.txt",
+)
 DEFAULT_UPSTREAM_URL = "https://github.com/ggml-org/llama.cpp.git"
 UPSTREAM_FETCH_TIMEOUT_SECONDS = 300
 
@@ -61,28 +64,28 @@ def validate_revision(value: str, label: str) -> str:
 
 
 def read_pin(repo: Path, revision: str, label: str) -> str:
-    tree = git(repo, "ls-tree", "-z", revision, "--", PIN_PATH)
+    tree = git(repo, "ls-tree", "-z", revision, "--", *PIN_PATHS)
     entries = [entry for entry in tree.stdout.split("\0") if entry]
     if len(entries) != 1:
         raise PinGuardError(
-            f"{label} commit {revision} must contain exactly one {PIN_PATH} entry"
+            f"{label} commit {revision} must contain exactly one llama.cpp upstream pin entry from {PIN_PATHS}"
         )
     metadata, path = entries[0].split("\t", 1)
     metadata_parts = metadata.split()
     if (
-        path != PIN_PATH
+        path not in PIN_PATHS
         or len(metadata_parts) != 3
         or metadata_parts[0] != "100644"
         or metadata_parts[1] != "blob"
     ):
         raise PinGuardError(
-            f"{label} commit {revision} {PIN_PATH} must be a regular 100644 blob"
+            f"{label} commit {revision} {path} must be a regular 100644 blob"
         )
-    result = git(repo, "show", f"{revision}:{PIN_PATH}")
+    result = git(repo, "show", f"{revision}:{path}")
     pin = result.stdout.strip()
     if not SHA_RE.fullmatch(pin):
         raise PinGuardError(
-            f"{label} commit {revision} has an invalid {PIN_PATH} value: {pin!r}"
+            f"{label} commit {revision} has an invalid {path} value: {pin!r}"
         )
     return pin
 
@@ -210,7 +213,7 @@ def check_pin(repository: Path, base_revision: str, head_revision: str, upstream
         )
         if proposed_ancestor.returncode == 0:
             raise PinGuardError(
-                "PR moves third_party/llama.cpp/upstream.txt backward: "
+                "PR moves the llama.cpp upstream pin backward: "
                 f"{proposed_pin} is an ancestor of the base pin {base_pin}"
             )
         if proposed_ancestor.returncode != 1:
