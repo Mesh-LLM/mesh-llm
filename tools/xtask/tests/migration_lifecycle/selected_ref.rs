@@ -255,7 +255,7 @@ fn relocated_pin_is_admitted_but_bad_ambiguous_and_missing_pin_fail_before_publi
     let primary = fixture.origin.join("third_party/llama.cpp/upstream.txt");
     let relocated = fixture
         .origin
-        .join("skippy/third_party/llama.cpp/upstream.txt");
+        .join("skippy/llama_cpp/upstream.txt");
     fs::create_dir_all(relocated.parent().unwrap()).unwrap();
     fs::rename(&primary, &relocated).unwrap();
     fixture.commit("relocate");

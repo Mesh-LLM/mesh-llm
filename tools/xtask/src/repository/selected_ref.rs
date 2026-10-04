@@ -11,7 +11,7 @@ use std::{
 };
 const PINS: [&str; 2] = [
     "third_party/llama.cpp/upstream.txt",
-    "skippy/third_party/llama.cpp/upstream.txt",
+    "skippy/llama_cpp/upstream.txt",
 ];
 const GRAMMAR: Grammar = Grammar {
     usage: "repository selected-ref --ref REF --expected-origin URL --event workflow_dispatch [--repository PATH] [--upstream SHA] [--github-output PATH --summary PATH] [--timeout-secs SECONDS]",
