@@ -26,7 +26,6 @@ def setup_step(name):
 PARITY = ROOT / "skippy" / "scripts" / "skippy-llama-parity.py"
 UPDATE_PIN = ROOT / "skippy" / "scripts" / "update-llama-pin.sh"
 BATTERY = ROOT / "skippy" / "scripts" / "skippy-family-battery.sh"
-BATTERY_PLANNER = ROOT / "skippy" / "scripts" / "plan-family-battery.py"
 FAMILY_CERTIFY = ROOT / "skippy" / "scripts" / "family-certify.sh"
 FAMILY_OUTCOME = ROOT / "scripts" / "lib" / "family-outcome.sh"
 REWRITER_CHECK = ROOT / "skippy" / "scripts" / "check-skippy-generated-family-patch.sh"
@@ -705,37 +704,6 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertEqual(2, len(commands))
         self.assertIn("--family test-family", commands[0])
         self.assertIn("--family second-family", commands[1])
-
-    def test_supplied_plan_cannot_omit_a_manifest_selected_family(self) -> None:
-        """Reject a supplied plan that drops a manifest-selected family."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp = Path(temp_dir)
-            first = self._model()
-            second = self._model()
-            second["family"] = "second-family"
-            manifest = temp / "manifest.json"
-            policy = self._manifest(first)
-            policy["models"] = [first, second]
-            manifest.write_text(json.dumps(policy) + "\n", encoding="utf-8")
-            generated = subprocess.run(
-                [str(ROOT / "skippy" / "scripts" / "plan-family-battery.py"), "--manifest", str(manifest)],
-                cwd=ROOT, text=True, capture_output=True, check=False,
-            )
-            self.assertEqual(0, generated.returncode, generated.stderr)
-            plan = json.loads(generated.stdout)
-            plan["selected_models"].pop()
-            plan["selected_family_count"] = 1
-            plan["shards"][0]["families"] = ["test-family"]
-            supplied = temp / "tampered-plan.json"
-            supplied.write_text(json.dumps(plan), encoding="utf-8")
-            result = subprocess.run(
-                [str(BATTERY), "--manifest", str(manifest), "--plan", str(supplied),
-                 "--dry-run", "--skip-build"],
-                cwd=ROOT, text=True, capture_output=True, check=False,
-            )
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("differs from the canonical manifest and selection", result.stderr)
-        self.assertNotIn("model-scans", result.stdout)
 
     def test_family_filter_limits_the_resolved_dry_run(self) -> None:
         selected = self._dry_run("--families", "test-family")

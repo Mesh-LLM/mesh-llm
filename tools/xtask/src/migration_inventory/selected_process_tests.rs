@@ -77,10 +77,6 @@ fn selected_process_rejects_new_tokenless_call() -> DynResult<()> {
             "{source}\nPLANNER=\"$ROOT/scripts/plan-family-battery.py\"\n\"$PLANNER\" --verify-plan extra.json\n"
         ),
     )?;
-    fs::copy(
-        repo.join("scripts/plan-family-battery.py"),
-        root.join("scripts/plan-family-battery.py"),
-    )?;
     let mut records = MigrationLedgers::load(&repo)?
         .invocations
         .selected_process_calls;
@@ -108,10 +104,6 @@ fn selected_process_rejects_changed_planner_target() -> DynResult<()> {
         format!(
             "{text}\nPLANNER=\"$ROOT/scripts/other.py\"\n\"$PLANNER\" --verify-plan extra.json\n"
         ),
-    )?;
-    fs::copy(
-        repo.join("scripts/plan-family-battery.py"),
-        root.join("scripts/plan-family-battery.py"),
     )?;
     let mut records = MigrationLedgers::load(&repo)?
         .invocations
