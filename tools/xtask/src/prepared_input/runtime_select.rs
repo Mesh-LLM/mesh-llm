@@ -1,162 +1,141 @@
-//! `sdk-runtime-select RUNTIME_ROOT BACKEND REPORT SKIPPY_ABI`: the consumer
-//! of `mesh-llm runtime list --available --json` in
-//! `scripts/ci-prepare-native-runtime.sh` (see
-//! `tools/xtask/tests/migration_lifecycle/sdk_json_consumer/`). It selects exactly one
-//! prepared adjacent runtime, binds it to the expected Skippy ABI, and prints
-//! its directory. A malformed or ambiguous report is rejected; nothing is
-//! built as a fallback.
-
-use super::{Checked, Rejected, json_bytes, positional, value_format};
-use crate::ci_plan::document::Json;
+//! Select one adjacent runtime from the typed `runtime list --available --json` report.
+use super::{Checked, Rejected, positional};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
+mod input;
 
-const MALFORMED: &str =
-    "native runtime compatibility output must be a JSON list or an object with a runtimes list";
+#[derive(Deserialize)]
+struct RuntimeRow {
+    id: String,
+    backend: String,
+    supported: bool,
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RuntimeReport {
+    Rows(Vec<RuntimeRow>),
+    Catalog { runtimes: Vec<RuntimeRow> },
+}
+#[derive(Deserialize)]
+struct PackageManifest {
+    runtime: PackageRuntime,
+}
+#[derive(Deserialize)]
+struct PackageRuntime {
+    id: String,
+    skippy_abi: String,
+}
 
 pub(super) fn run(args: &[String]) -> Checked<String> {
     let [root, backend, report, abi] = positional(args, "RUNTIME_ROOT BACKEND REPORT SKIPPY_ABI")?;
-    let root = absolute(Path::new(root))?;
+    let root = Path::new(root)
+        .canonicalize()
+        .map_err(|error| format!("adjacent runtime root is unavailable: {error}"))?;
     let backend = match backend {
         "cuda-blackwell" => "cuda",
         "hip" => "rocm",
         other => other,
     };
-    let report = json_bytes::load(Path::new(report)).map_err(|error| {
-        format!("native runtime compatibility output is not valid JSON: {error}")
+    let report: RuntimeReport = read_json(Path::new(report)).map_err(|error| {
+        format!(
+            "native runtime compatibility output must be a JSON list or an object \
+             with a runtimes list containing typed runtime rows: {}",
+            error.0
+        )
     })?;
-    let runtime_id = selected_id(&report, backend)?;
-    let directory = adjacent_directory(&root, &runtime_id, abi)?;
+    let rows = match report {
+        RuntimeReport::Rows(rows) | RuntimeReport::Catalog { runtimes: rows } => rows,
+    };
+    let id = selected_id(&rows, backend)?;
+    let directory = adjacent_directory(&root, id, abi)?;
     Ok(format!("{}\n", directory.display()))
 }
-
-fn selected_id(report: &Json, backend: &str) -> Checked<String> {
-    let rows = match report {
-        Json::Object(_) => report.get("runtimes"),
-        other => Some(other),
-    };
-    let Some(rows) = rows.and_then(Json::as_array) else {
-        return Err(MALFORMED.into());
-    };
-    if rows.iter().any(|row| row.as_object().is_none()) {
-        return Err("native runtime compatibility rows must be JSON objects".into());
-    }
-    let supported: Vec<&Json> = rows
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Checked<T> {
+    let bytes = input::read(path)?;
+    serde_json::from_slice(&bytes).map_err(|error| Rejected(error.to_string()))
+}
+fn selected_id<'a>(rows: &'a [RuntimeRow], backend: &str) -> Checked<&'a str> {
+    if rows
         .iter()
-        .filter(|row| row.get("supported") == Some(&Json::Bool(true)))
-        .collect();
-    let preferred: Vec<&Json> = supported
+        .any(|row| row.id.trim().is_empty() || row.backend.trim().is_empty())
+    {
+        return Err(
+            "native runtime compatibility rows require nonempty id and backend strings".into(),
+        );
+    }
+    let supported: Vec<_> = rows.iter().filter(|row| row.supported).collect();
+    let preferred: Vec<_> = supported
         .iter()
         .copied()
-        .filter(|row| row.get("backend").and_then(Json::as_str) == Some(backend))
+        .filter(|row| row.backend == backend)
         .collect();
-    let selected = match (preferred.as_slice(), supported.as_slice()) {
-        ([row], _) | (_, [row]) => *row,
+    match (preferred.as_slice(), supported.as_slice()) {
+        ([row], _) | (_, [row]) => Ok(&row.id),
         _ => {
-            let rendered: Vec<String> = supported.iter().map(|row| label(row)).collect();
-            let rendered = if rendered.is_empty() {
+            let found = if supported.is_empty() {
                 "none".to_owned()
             } else {
-                rendered.join(", ")
+                supported
+                    .iter()
+                    .map(|row| format!("{}:{}", row.id, row.backend))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             };
-            return Err(Rejected(format!(
-                "expected exactly one compatible adjacent native runtime \
-                 (preferred backend {backend}); found {rendered}"
-            )));
+            Err(Rejected(format!(
+                "expected exactly one compatible adjacent native runtime (preferred backend {backend}); found {found}"
+            )))
         }
-    };
-    match selected.get("id").and_then(Json::as_str) {
-        Some(id) if !crate::repository::text::strip(id).is_empty() => Ok(id.to_owned()),
-        _ => Err("compatible native runtime is missing its id".into()),
     }
 }
-
-/// `f"{row.get('id', '<missing-id>')}:{row.get('backend', '<missing-backend>')}"`.
-fn label(row: &Json) -> String {
-    let part = |key: &str, missing: &str| match row.get(key) {
-        Some(value) => value_format::display(Some(value)),
-        None => missing.to_owned(),
-    };
-    format!(
-        "{}:{}",
-        part("id", "<missing-id>"),
-        part("backend", "<missing-backend>")
-    )
-}
-
-/// Manifests at the bundle root and one level below, sorted like `glob`.
-fn manifest_paths(root: &Path) -> Vec<PathBuf> {
+fn manifest_paths(root: &Path) -> Checked<Vec<PathBuf>> {
     let mut paths = Vec::new();
     if root.join("manifest.json").is_file() {
         paths.push(root.join("manifest.json"));
     }
-    let mut nested: Vec<PathBuf> = std::fs::read_dir(root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path().join("manifest.json"))
-        .filter(|path| path.exists())
-        .collect();
-    nested.sort();
-    paths.extend(nested);
-    paths
+    for entry in std::fs::read_dir(root).map_err(|error| error.to_string())? {
+        let manifest = entry
+            .map_err(|error| error.to_string())?
+            .path()
+            .join("manifest.json");
+        if manifest.exists() {
+            paths.push(manifest);
+        }
+    }
+    paths.sort();
+    Ok(paths)
 }
-
 fn adjacent_directory(root: &Path, runtime_id: &str, abi: &str) -> Checked<PathBuf> {
     let mut matches = Vec::new();
-    for manifest_path in manifest_paths(root) {
-        let manifest = json_bytes::load(&manifest_path)
-            .map_err(|error| format!("native runtime manifest is not valid JSON: {error}"))?;
-        let runtime = manifest.get("runtime").filter(|value| truthy(value));
-        let field = |key| runtime.and_then(|runtime| runtime.get(key));
-        if field("id").and_then(Json::as_str) != Some(runtime_id) {
+    for path in manifest_paths(root)? {
+        let manifest: PackageManifest = read_json(&path)
+            .map_err(|error| format!("native runtime manifest is invalid: {}", error.0))?;
+        if manifest.runtime.id != runtime_id {
             continue;
         }
-        if field("skippy_abi").and_then(Json::as_str) != Some(abi) {
+        if manifest.runtime.skippy_abi != abi {
             return Err(Rejected(format!(
                 "adjacent native runtime {runtime_id} has Skippy ABI {}, expected {abi}",
-                value_format::display(Some(field("skippy_abi").unwrap_or(&Json::Null)))
+                manifest.runtime.skippy_abi
             )));
         }
-        let parent = manifest_path.parent().unwrap_or(root);
-        matches.push(
-            parent
-                .canonicalize()
-                .unwrap_or_else(|_| parent.to_path_buf()),
-        );
+        let directory = path
+            .parent()
+            .ok_or("runtime manifest has no parent")?
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if !directory.starts_with(root) {
+            return Err(Rejected(format!(
+                "selected native runtime escapes adjacent bundle root: {}",
+                directory.display()
+            )));
+        }
+        matches.push(directory);
     }
-    let [selected] = matches.as_slice() else {
-        let rendered: Vec<String> = matches
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect();
-        let rendered = if rendered.is_empty() {
-            "none".to_owned()
-        } else {
-            rendered.join(", ")
-        };
-        return Err(Rejected(format!(
-            "expected one adjacent artifact directory for runtime {runtime_id}; found {rendered}"
-        )));
-    };
-    if !selected.starts_with(root) {
-        return Err(Rejected(format!(
-            "selected native runtime escapes adjacent bundle root: {}",
-            selected.display()
-        )));
-    }
-    Ok(selected.clone())
-}
-
-fn truthy(value: &Json) -> bool {
-    !matches!(value, Json::Null | Json::Bool(false))
-        && value.as_object().is_none_or(|entries| !entries.is_empty())
-}
-
-/// `Path(root).resolve()`: canonical when the root exists.
-fn absolute(root: &Path) -> Checked<PathBuf> {
-    match root.canonicalize() {
-        Ok(path) => Ok(path),
-        Err(_) => std::path::absolute(root)
-            .map_err(|error| Rejected(super::text_io::os_error(root, &error))),
+    match matches.as_slice() {
+        [selected] => Ok(selected.clone()),
+        _ => Err(Rejected(format!(
+            "expected one adjacent artifact directory for runtime {runtime_id}; found {}",
+            matches.len()
+        ))),
     }
 }

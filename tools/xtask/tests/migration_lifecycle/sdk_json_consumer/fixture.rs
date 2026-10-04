@@ -35,11 +35,12 @@ impl Fixture {
             .join("workspace with spaces");
         for dir in [
             "scripts/lib",
+            "skippy/scripts",
             "bin",
             "tmp",
             "host-input",
             "runtime-input/runtime/lib",
-            "crates/skippy-ffi/src",
+            "skippy/crates/skippy-ffi/src",
         ] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
@@ -47,8 +48,9 @@ impl Fixture {
             "scripts/ci-compose-product-input.sh",
             "scripts/ci-prepare-native-runtime.sh",
             "scripts/verify-native-runtime-package.sh",
+            "skippy/scripts/verify-native-runtime-package.sh",
             "scripts/lib/automation.sh",
-            "crates/skippy-ffi/src/lib.rs",
+            "skippy/crates/skippy-ffi/src/lib.rs",
         ] {
             fs::copy(repository().join(file), root.join(file)).unwrap();
         }
@@ -69,21 +71,8 @@ impl Fixture {
                 "touch \"$GITHUB_WORKSPACE/forbidden\"; exit 98",
             );
         }
-        let host = "#!/bin/bash\nset -euo pipefail\nif [[ \" $* \" == *' --available '* ]]; then\n  [[ \" $* \" == *' --json '* && \" $* \" == *' --log-format json '* ]] || exit 97\n  [[ \"$MESH_SDK_NATIVE_RUNTIME_BUILD_FALLBACK\" == 0 ]] || exit 97\n  [[ -z \"${MESH_LLM_CONFIG+x}\" && -z \"${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR+x}\" && -z \"${MESH_LLM_NATIVE_RUNTIME_CACHE_DIR+x}\" ]] || exit 97\n  [[ \"$HOME\" != \"$GITHUB_WORKSPACE/ambient-home\" ]] || exit 97\n  touch \"$GITHUB_WORKSPACE/sdk-reader-ran\"\n  printf 'sdk\\n' >> \"$GITHUB_WORKSPACE/events\"\n  cat \"$GITHUB_WORKSPACE/report.json\"\nelse\n  printf 'mesh-llm 1.0.0\\n'\nfi\n";
-        fs::write(root.join("host-input/mesh-llm"), host).unwrap();
-        fs::write(
-            root.join("host-input/mesh-llm.sha256"),
-            format!(
-                "{}  mesh-llm\n",
-                hex::encode(Sha256::digest(host.as_bytes()))
-            ),
-        )
-        .unwrap();
-        fs::write(root.join("host-input/host-imports.json"), "{}").unwrap();
-        let library = b"inert runtime fixture";
-        fs::write(root.join("runtime-input/runtime/lib/runtime.bin"), library).unwrap();
-        let digest = hex::encode(Sha256::digest(library));
-        let ffi = fs::read_to_string(repository().join("crates/skippy-ffi/src/lib.rs")).unwrap();
+        let ffi =
+            fs::read_to_string(repository().join("skippy/crates/skippy-ffi/src/lib.rs")).unwrap();
         let abi = ["MAJOR", "MINOR", "PATCH"]
             .map(|part| {
                 let line = ffi
@@ -98,8 +87,22 @@ impl Fixture {
                     .to_owned()
             })
             .join(".");
+        let host = "#!/bin/bash\nset -euo pipefail\nif [[ \"$*\" == '--log-format json --print-build-contract' ]]; then\n  printf '%s\\n' '{\"schema_version\":1,\"product_version\":\"1.0.0\",\"runtime_release\":\"9.0.0\",\"skippy_abi\":\"$FIXTURE_ABI\"}'\n  exit 0\nfi\nif [[ \" $* \" == *' --available '* ]]; then\n  [[ \" $* \" == *' --json '* && \" $* \" == *' --log-format json '* ]] || exit 97\n  [[ \"$MESH_SDK_NATIVE_RUNTIME_BUILD_FALLBACK\" == 0 ]] || exit 97\n  [[ -z \"${MESH_LLM_CONFIG+x}\" && -z \"${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR+x}\" && -z \"${MESH_LLM_NATIVE_RUNTIME_CACHE_DIR+x}\" ]] || exit 97\n  [[ \"$HOME\" != \"$GITHUB_WORKSPACE/ambient-home\" ]] || exit 97\n  touch \"$GITHUB_WORKSPACE/sdk-reader-ran\"\n  printf 'sdk\\n' >> \"$GITHUB_WORKSPACE/events\"\n  cat \"$GITHUB_WORKSPACE/report.json\"\nelse\n  printf 'mesh-llm 1.0.0\\n'\nfi\n".replace("$FIXTURE_ABI", &abi);
+        fs::write(root.join("host-input/mesh-llm"), &host).unwrap();
+        fs::write(
+            root.join("host-input/mesh-llm.sha256"),
+            format!(
+                "{}  mesh-llm\n",
+                hex::encode(Sha256::digest(host.as_bytes()))
+            ),
+        )
+        .unwrap();
+        fs::write(root.join("host-input/host-imports.json"), "{}").unwrap();
+        let library = b"inert runtime fixture";
+        fs::write(root.join("runtime-input/runtime/lib/runtime.bin"), library).unwrap();
+        let digest = hex::encode(Sha256::digest(library));
         fs::write(root.join("runtime-input/runtime/manifest.json"), serde_json::to_vec(&json!({
-            "runtime":{"id":"runtime","mesh_version":"1.0.0","skippy_abi":abi,
+            "schema_version":2,"runtime":{"id":"runtime","release_version":"9.0.0","skippy_abi":abi,
             "platform":{"os":"linux","arch":"x86_64","target":"x86_64-unknown-linux-gnu"},
             "backend":{"kind":"cpu"},"libraries":["lib/runtime.bin"],"files":{"lib/runtime.bin":digest},"tools":{}},
             "build":{"backend":"cpu","primary_library":"lib/runtime.bin","library_sha256":digest}

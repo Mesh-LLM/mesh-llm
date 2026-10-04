@@ -1,0 +1,303 @@
+{
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "source_head": "358791b0c83f76796200b6c949f00a94a2aeda52",
+  "current_original_intents": 11,
+  "method_maps": [
+    {
+      "method": "test_reuses_compatible_runtime_beside_binary",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_reuses_flat_wrapped_and_sole_accelerated_reports"
+      ]
+    },
+    {
+      "method": "test_reuses_runtime_from_catalog_wrapped_report",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_reuses_flat_wrapped_and_sole_accelerated_reports"
+      ]
+    },
+    {
+      "method": "test_catalog_wrapped_report_preserves_runtime_rejection",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_rejects_malformed_ambiguous_and_incompatible_reports_without_building",
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_wrong_abi_cannot_enable_fallback"
+      ]
+    },
+    {
+      "method": "test_rejects_malformed_runtime_reports_without_building",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_rejects_malformed_ambiguous_and_incompatible_reports_without_building"
+      ]
+    },
+    {
+      "method": "test_rejects_ambiguous_catalog_wrapped_report_without_building",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_rejects_malformed_ambiguous_and_incompatible_reports_without_building",
+        "sdk_runtime_report::migration_prepared_inputs_sdk_runtime_requires_exactly_one_supported_row"
+      ]
+    },
+    {
+      "method": "test_reuses_sole_compatible_product_backend_before_cpu_fallback",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_reuses_flat_wrapped_and_sole_accelerated_reports"
+      ]
+    },
+    {
+      "method": "test_rejects_incompatible_staged_runtime_without_building",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_rejects_malformed_ambiguous_and_incompatible_reports_without_building"
+      ]
+    },
+    {
+      "method": "test_rejects_staged_runtime_with_wrong_sdk_abi",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_wrong_abi_cannot_enable_fallback"
+      ]
+    },
+    {
+      "method": "test_ci_requires_adjacent_runtime_without_explicit_fallback",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_requires_bundle_in_ci_and_preserves_existing_output"
+      ]
+    },
+    {
+      "method": "test_explicit_ci_fallback_preserves_standalone_build_path",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_runtime_preparation_explicit_fallback_preserves_native_primitive_arguments"
+      ]
+    },
+    {
+      "method": "test_all_sdk_smokes_prefer_the_binary_runtime",
+      "native_owners": [
+        "sdk_json_consumer::runtime_prepare::actual_sdk_smoke_callers_bind_reuse_to_the_selected_binary"
+      ]
+    }
+  ],
+  "retired_sources": [
+    {
+      "path": "scripts/tests/test_ci_prepare_native_runtime.py",
+      "sha256": "0fa59c9113da8ae870ff7b45272ed9181a0172dab3ad8049e0372b58029ce020"
+    }
+  ],
+  "retired_inventory": [
+    {
+      "classification": "generic artifact consumer test",
+      "deletion_condition": "SDK runtime reader contract and failure cases moved to Rust.",
+      "exception": null,
+      "path": "scripts/tests/test_ci_prepare_native_runtime.py",
+      "phase": 2,
+      "replacement_owner": "tools/xtask artifact tests",
+      "required": true
+    }
+  ],
+  "retired_historical_ownership": [
+    {
+      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
+      "gate": "Legacy just ci-validate and relevant workflow/platform lane",
+      "module": "scripts/tests/test_ci_prepare_native_runtime.py",
+      "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
+      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "sha256": "5ef141a9bc499d9d0dc1d5ebf621c4943485ef9aeac40cf219c9d47e580d3961",
+      "test_method_count": 11,
+      "test_methods": [
+        "test_all_sdk_smokes_prefer_the_binary_runtime",
+        "test_catalog_wrapped_report_preserves_runtime_rejection",
+        "test_ci_requires_adjacent_runtime_without_explicit_fallback",
+        "test_explicit_ci_fallback_preserves_standalone_build_path",
+        "test_rejects_ambiguous_catalog_wrapped_report_without_building",
+        "test_rejects_incompatible_staged_runtime_without_building",
+        "test_rejects_malformed_runtime_reports_without_building",
+        "test_rejects_staged_runtime_with_wrong_sdk_abi",
+        "test_reuses_compatible_runtime_beside_binary",
+        "test_reuses_runtime_from_catalog_wrapped_report",
+        "test_reuses_sole_compatible_product_backend_before_cpu_fallback"
+      ]
+    }
+  ],
+  "retired_process_edges": [
+    [
+      "scripts/tests/test_ci_prepare_native_runtime.py",
+      [
+        [
+          "fixture",
+          "scripts/ci-prepare-native-runtime.sh",
+          "run_script helper with fake binary and fixture runtime catalog/report; caller cases test ABI and invalid reports",
+          [
+            174
+          ]
+        ],
+        [
+          "fixture",
+          "copied scripts/ci-prepare-native-runtime.sh",
+          "direct caller runs copied helper in temporary repo with stub package/verify scripts; explicit CI fallback tests local fixture output, not a native build",
+          [
+            416
+          ]
+        ]
+      ]
+    ]
+  ],
+  "historical_reconciliation": "Historical eleven-method ownership row is archived unchanged, including its older source hash. Current source hash and exact executed methods are bound independently.",
+  "focused_receipts": {
+    "status": "PASS_NATIVE_AND_UNCHANGED_ORIGINAL",
+    "head": "358791b0c83f76796200b6c949f00a94a2aeda52",
+    "bin_groups": 2,
+    "prepared_groups": 6,
+    "lifecycle_groups": 10,
+    "original_methods": 11,
+    "clippy": "PASS_ALL_TARGETS_DENY_WARNINGS",
+    "logs": [
+      {
+        "kind": "input",
+        "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v2-input.log",
+        "sha256": "11987c7bbf7eb46049f3ea09adeba1877f7e64e095e3d3db6e1bf01d29168011",
+        "exit_code": 0
+      },
+      {
+        "kind": "report",
+        "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v2-report.log",
+        "sha256": "9b5c55cdc506c56973708659c2aedadf90f9ad8e4676e1e1344fe8a506272315",
+        "exit_code": 0
+      },
+      {
+        "kind": "wrapper",
+        "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v3-wrapper.log",
+        "sha256": "d7d4c77334bcb29a54fde70a4ccd63b8ac3f2d84b77fdfb340576712ed0d71a3",
+        "exit_code": 0
+      },
+      {
+        "kind": "clippy",
+        "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v3-clippy.log",
+        "sha256": "129d15de6bc31f2252d6030f2b44e530cdc237701adccc07c00d2839ed5d92f1",
+        "exit_code": 0
+      },
+      {
+        "kind": "original",
+        "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v3-original.log",
+        "sha256": "a493f478ee181000a92331fd35ec79bd64cd04dcee8bb1d06c64bf00f278d66a",
+        "exit_code": 0
+      },
+      {
+        "kind": "fmt",
+        "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v3-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    ],
+    "files": [
+      {
+        "path": "tools/xtask/src/prepared_input/runtime_select.rs",
+        "sha256": "79a7f0f14943167a79b187b71eb92689a0f94b64843a94f3546ce8da0d3ecc4a",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/prepared_input/runtime_select/input.rs",
+        "sha256": "2166dc834940c3c67fc142160b14e34772897f4d0b458664e09453dea993ccb0",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_prepared_inputs/sdk_runtime_report.rs",
+        "sha256": "ee85dcd1aa2108f1525f7907649502f980a85764e2b85f8cb789c225dbb53bdc",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/sdk_json_consumer/runtime_prepare.rs",
+        "sha256": "2b2a23a7b9cbf94fdc9bc5867d4ab2be1bfbcb307e0774c0a24f3d368d3ece85",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/sdk_json_consumer/mod.rs",
+        "sha256": "aea21fc831d7be683e4e3fecea4854f696d8c0595751bcc3a633e2b2206f0f98",
+        "mode": 420
+      }
+    ],
+    "witnesses": [
+      {
+        "path": "scripts/ci-prepare-native-runtime.sh",
+        "sha256": "fad0262a4da37e367f08283d6a2dd48abe31747bc22aeb5c88f9189fa96bc434",
+        "mode": 493
+      },
+      {
+        "path": "scripts/tests/test_ci_prepare_native_runtime.py",
+        "sha256": "0fa59c9113da8ae870ff7b45272ed9181a0172dab3ad8049e0372b58029ce020",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/sdk_json_consumer/fixture.rs",
+        "sha256": "acde7702b0ac9d83cfa78e55016a03865e85b9522d80aa51021f923e28ddce6b",
+        "mode": 420
+      },
+      {
+        "path": "crates/mesh-llm-commands/src/runtime_native/formatters.rs",
+        "sha256": "2ff0555794fb8cd83b65cea8db9b78e882efd2e50fefdbdb2938852652a1bc81",
+        "mode": 420
+      },
+      {
+        "path": "scripts/verify-native-runtime-package.sh",
+        "sha256": "b19965c867128d81e7ad73b195d30e62bbaa769994f1d4bce07e8186446e3cf5",
+        "mode": 493
+      },
+      {
+        "path": "scripts/ci-rust-sdk-smoke.sh",
+        "sha256": "193b6ef7b748127547ad702354842b6971e7e7426f63f268b9246fa218799a48",
+        "mode": 493
+      },
+      {
+        "path": "scripts/ci-kotlin-sdk-smoke.sh",
+        "sha256": "78a0db1d0891d182a1432529f4db9beeb52727220094c32cae0b706e9f870104",
+        "mode": 493
+      },
+      {
+        "path": "scripts/ci-swift-sdk-smoke.sh",
+        "sha256": "b986fa957293f0dd1290a2ae36a55c5fe34e77e54913e34761a61bc0cc21997a",
+        "mode": 493
+      },
+      {
+        "path": "tools/xtask/src/prepared_input/value_format.rs",
+        "sha256": "8f854d2ea669df24ea43150d115ef7cfe3239fb351c52f35bb010dad75ea38a6",
+        "mode": 420
+      }
+    ],
+    "limits": "Focused local typed input/report and actual preparation fixtures only. No native build, supported platform/backend product, SDK client, model or hosted rollout acceptance."
+  },
+  "required_owners": {
+    "bin": "prepared_input::runtime_select::input",
+    "integration_targets": [
+      "migration_prepared_inputs",
+      "migration_lifecycle"
+    ],
+    "normal_recipe": "ci-automation-contracts"
+  },
+  "limits": [
+    "Actual preparation adapter and native runtime verifier run over inert runtime bytes; fallback package/verifier observers prove argument binding and order only.",
+    "No native build, driver, model, SDK client, supported platform/backend product or protected hosted rollout acceptance."
+  ],
+  "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+  "qualification": {
+    "source_head": "358791b0c83f76796200b6c949f00a94a2aeda52",
+    "normal": {
+      "rust": {
+        "targets": 112,
+        "passed": 4508,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 769,
+        "passed": 755,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 300.159
+      },
+      "log": ".omo/evidence/resume-20261002/native-runtime-prepare-v1-normal.log",
+      "sha256": "5e5640ad6cc1323b2e3c7e1bd734a1e7750f3b7017a72a9bcc4539cc215ee8b2",
+      "exit_code": 0,
+      "counting": "Last terminal Rust summary per Cargo Running heading; nested child summaries excluded."
+    },
+    "receipts": {
+      "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v1-receipts.json",
+      "sha256": "eecd2a16709aa8a5758b2a7a531da47ea4cc532dcccf4333f0d1e8d84db2b98a"
+    },
+    "limits": "Local typed runtime report/manifest and bounded input contracts, actual preparation adapter and verifier over inert runtime bytes. Explicit fallback package/verifier observers bind arguments and order only. No native build, supported platform/backend products, SDK clients, models or protected hosted rollout acceptance."
+  }
+}
