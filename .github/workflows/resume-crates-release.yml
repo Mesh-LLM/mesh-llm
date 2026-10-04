@@ -35,6 +35,7 @@ jobs:
       - name: Check out trusted recovery controller
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           path: controller
 
@@ -79,7 +80,7 @@ jobs:
             printf '%s\n' "$remote_refs" | awk -v tag="refs/tags/${RELEASE_TAG}" '
               $2 == tag { direct = $1 }
               $2 == tag "^{}" { peeled = $1 }
-              END { print peeled != "" ? peeled : direct }
+              END { print (peeled != "" ? peeled : direct) }
             '
           )"
           checked_out_sha="$(git -C release-source rev-parse HEAD)"
@@ -96,7 +97,12 @@ jobs:
 
       - name: Check crates.io publish-chain consistency
         working-directory: release-source
-        run: cargo xtool repo-consistency publish-crates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version 1 --no-deps --locked \
+            | just --justfile ../controller/Justfile automation-run \
+                repository publish-order --selected-script "$PWD/scripts/publish-crates.sh" --source-root "$PWD"
 
       - name: Restore verified release runtime libraries
         id: runtime

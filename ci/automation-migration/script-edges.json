@@ -411,11 +411,11 @@
       "members": [
         [
           24,
-          "caad2bc918816e0e",
+          "7b42f0c7cf064004",
           1,
           "environment",
-          "explicit surviving53 scripts.tests modules",
-          "Required native KV CLI and workflow guards own retired KV intentions; 53 transitional modules remain selected."
+          "explicit surviving52 scripts.tests modules",
+          "Required native recovery workflow-step and publisher fixtures own retired recovery intentions; 52 transitional modules remain selected."
         ]
       ]
     },
@@ -10288,6 +10288,32 @@
         "sha256": "764fabfc459fe24c13ba18b7f5a2e381aa855e54c33d9b68584869090eca9ed4"
       },
       "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. Optional OpenCode Python closure remains open. Prior inherited cleanup failure cause remains unproven; diagnostics preserve deadlines/assertions; full prepared_source and ten exact repeats passed before this full postimage gate."
+    }
+  },
+  "crates_recovery_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 112,
+    "core_modules_after": 52,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/crates-recovery-retirement-coverage.json",
+      "sha256": "bd4d56c0c9e995aa39c535bedfe89f58879722c161749ce2c661dfe5ed01254b"
+    },
+    "current_test_tree": {
+      "sha256": "f15a213e9cc9fc6bb8eb25230584e065fc2d1c8988d156276a0794d6c383b458",
+      "paths": 47
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "2d7c65f04a31465d863adb7a5b29e3527f85f419a29b05bcbcff81f2434d3295",
+      "roster_line": 24,
+      "count": 52
+    },
+    "supersedes": "Historical Python recovery ownership remains archived; native workflow-step and actual publisher fixtures preserve the intentions.",
+    "qualification": {
+      "path": ".omo/evidence/resume-20261002/crates-recovery-retirement-v1-receipts.json",
+      "sha256": "6d91476d822dee671174c36fc0e4eff9dd5a6a0523e1c22faa65546ce154c433"
     }
   }
 }

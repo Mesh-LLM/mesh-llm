@@ -4,6 +4,182 @@ use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::Path, t
 const SCRIPT: &str = include_str!("../../../../scripts/publish-crates.sh");
 const SELECTOR: &str = include_str!("../../../../scripts/lib/automation.sh");
 
+fn historical_fixture() -> (Fixture, std::path::PathBuf, Vec<String>) {
+    let fixture = Fixture::publishing();
+    let root = fixture.temporary.path();
+    let historical = root.join("release source");
+    fs::create_dir_all(historical.join("scripts")).unwrap();
+    fs::write(
+        historical.join("Cargo.toml"),
+        "[workspace.package]\nversion = \"0.76.1\"\n",
+    )
+    .unwrap();
+    let data: serde_json::Value = serde_json::from_str(include_str!(
+        "../fixtures/crates_recovery/v0761-roster.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        data["source_sha"],
+        "ff18c0b5a74c0317d943bb6611a1ce4836b35d61"
+    );
+    let roster: Vec<String> = data["roster"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(roster.len(), 50);
+    assert_eq!(fixture.order.len(), 56);
+    let script = format!(
+        "printf executed > \"$PWD/historical-executed\"\nexit 97\npublish_crates=(\n{}\n)\n",
+        roster.join("\n")
+    );
+    fs::write(historical.join("scripts/publish-crates.sh"), script).unwrap();
+
+    // Package metadata is a finite fixture, relocated to the historical source.
+    // It proves caller behavior, not Cargo execution against the real release.
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("metadata.json")).unwrap()).unwrap();
+    let packages = metadata["packages"].as_array_mut().unwrap();
+    packages.retain(|package| roster.iter().any(|name| package["name"] == *name));
+    for package in packages {
+        let name = package["name"].as_str().unwrap();
+        let package_dir = historical.join("crates").join(name);
+        fs::create_dir_all(&package_dir).unwrap();
+        fs::write(package_dir.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(
+            package_dir.join("README.md"),
+            "historical package documentation\n",
+        )
+        .unwrap();
+        package["manifest_path"] = serde_json::json!(package_dir.join("Cargo.toml"));
+        package["version"] = serde_json::json!("0.76.1");
+        for dependency in package["dependencies"].as_array_mut().unwrap() {
+            if let Some(path) = dependency["path"].as_str() {
+                let name = Path::new(path).file_name().unwrap();
+                dependency["path"] = serde_json::json!(historical.join("crates").join(name));
+                dependency["req"] = serde_json::json!("^0.76.1");
+            }
+        }
+    }
+    fs::create_dir_all(historical.join("tools/xtask")).unwrap();
+    fs::write(
+        historical.join("tools/xtask/Cargo.toml"),
+        "never build historical automation\n",
+    )
+    .unwrap();
+    for relative in [
+        "crates/mesh-client/src/models/catalog.json",
+        "crates/mesh-llm-node/src/catalog.json",
+    ] {
+        let path = historical.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "{}\n").unwrap();
+    }
+    metadata["workspace_members"] = serde_json::json!(roster);
+    fs::write(
+        root.join("metadata.json"),
+        serde_json::to_vec(&metadata).unwrap(),
+    )
+    .unwrap();
+    let cargo = root.join("bin/cargo");
+    let source = fs::read_to_string(&cargo)
+        .unwrap()
+        .replace("set -eu\n", "set -eu\npwd >> \"$FIXTURE/cargo-cwd.log\"\n");
+    fs::write(cargo, source).unwrap();
+    let curl = root.join("bin/curl");
+    let source = fs::read_to_string(&curl)
+        .unwrap()
+        .replace("/0.68.0", "/0.76.1");
+    fs::write(curl, source).unwrap();
+    (fixture, historical, roster)
+}
+
+#[test]
+fn actual_controller_resume_uses_historical_roster_version_and_cargo_directory() {
+    let (fixture, historical, roster) = historical_fixture();
+    let report = fixture.invoke_from(
+        &historical,
+        &["--resume"],
+        &[
+            ("CARGO_REGISTRY_TOKEN", "fixture-secret-token"),
+            ("CRATES_IO_PUBLISH_SETTLE_SECONDS", "0"),
+            ("PROVIDER_STATUS", "200"),
+        ],
+    );
+    assert!(report.process.success(), "{report:?}");
+    let expected: Vec<_> = roster
+        .iter()
+        .filter(|name| name.as_str() != "model-ref")
+        .cloned()
+        .collect();
+    assert_eq!(fixture.published(), expected);
+    assert!(!historical.join("historical-executed").exists());
+    let stdout = String::from_utf8_lossy(report.stdout.as_ref().unwrap().as_bytes());
+    assert!(stdout.contains("model-ref@0.76.1 already published; skipping"));
+    assert!(!stdout.contains("@0.68.0"));
+    assert_eq!(
+        fixture.log("metadata.log"),
+        "metadata --format-version 1 --no-deps --locked\n"
+    );
+    assert_eq!(
+        fixture.log("cargo-cwd.log").lines().count(),
+        expected.len() + 1
+    );
+    assert!(fixture.log("cargo-cwd.log").lines().all(|cwd| Path::new(cwd).canonicalize().unwrap() == historical.canonicalize().unwrap()));
+    assert_eq!(fixture.log("curl.log").lines().count(), roster.len());
+    assert!(
+        fixture
+            .log("curl.log")
+            .lines()
+            .all(|url| url.ends_with("/0.76.1"))
+    );
+    assert!(fixture.log("sleep.log").is_empty());
+}
+
+#[test]
+fn actual_controller_rejects_invalid_historical_roster_before_registry_or_publish() {
+    for invalid in [
+        "publish_crates=(\n controller-only-unknown\n)",
+        "publish_crates=(\n model-artifact\n model-ref\n)",
+        "publish_crates=(\n model-ref\n model-ref\n)",
+        "publish_crates=(\n $(touch historical-executed)\n)",
+    ] {
+        let (fixture, historical, _) = historical_fixture();
+        fs::write(historical.join("scripts/publish-crates.sh"), invalid).unwrap();
+        let report = fixture.invoke_from(
+            &historical,
+            &["--resume"],
+            &[
+                ("CARGO_REGISTRY_TOKEN", "fixture-secret-token"),
+                ("CRATES_IO_PUBLISH_SETTLE_SECONDS", "0"),
+            ],
+        );
+        assert!(!report.process.success(), "{report:?}");
+        assert!(fixture.published().is_empty());
+        assert!(fixture.log("curl.log").is_empty());
+        assert!(!historical.join("historical-executed").exists());
+    }
+}
+
+#[test]
+fn actual_controller_metadata_failure_prevents_registry_and_publication() {
+    let (fixture, historical, _) = historical_fixture();
+    executable(fixture.temporary.path(), "cargo", "#!/bin/sh\nexit 91\n");
+    let report = fixture.invoke_from(
+        &historical,
+        &["--resume"],
+        &[
+            ("CARGO_REGISTRY_TOKEN", "fixture-secret-token"),
+            ("CRATES_IO_PUBLISH_SETTLE_SECONDS", "0"),
+        ],
+    );
+    assert!(!report.process.success(), "{report:?}");
+    assert!(fixture.published().is_empty());
+    assert!(fixture.log("curl.log").is_empty());
+    assert!(!historical.join("historical-executed").exists());
+}
+
 fn executable(root: &Path, name: &str, source: &str) {
     let path = root.join("bin").join(name);
     fs::write(&path, source).unwrap();
@@ -49,11 +225,31 @@ impl Fixture {
         let order = declared_crates();
         assert!(order.iter().any(|name| name == consumer));
         assert!(order.iter().any(|name| name == provider));
+        fs::create_dir_all(root.join("tools/xtask")).unwrap();
+        fs::write(
+            root.join("tools/xtask/Cargo.toml"),
+            "historical automation marker\n",
+        )
+        .unwrap();
+        for name in &order {
+            let package = root.join("crates").join(name);
+            fs::create_dir_all(&package).unwrap();
+            fs::write(package.join("Cargo.toml"), "[package]\n").unwrap();
+            fs::write(package.join("README.md"), "publication fixture\n").unwrap();
+        }
+        for relative in [
+            "crates/mesh-client/src/models/catalog.json",
+            "crates/mesh-llm-node/src/catalog.json",
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "{}\n").unwrap();
+        }
         let packages: Vec<_> = order.iter().map(|name| {
             let dependencies = if name == consumer {
-                vec![serde_json::json!({"name":provider,"kind":null,"path":root.join("crates").join(provider),"optional":true})]
+                vec![serde_json::json!({"name":provider,"req":"^0.68.0","kind":null,"path":root.join("crates").join(provider),"optional":true})]
             } else { Vec::new() };
-            serde_json::json!({"id":name,"name":name,"manifest_path":root.join("crates").join(name).join("Cargo.toml"),"publish":null,"dependencies":dependencies})
+            serde_json::json!({"id":name,"name":name,"version":"0.68.0","description":"publication fixture","license":"MIT","license_file":null,"repository":"https://example.invalid/repository","readme":"README.md","manifest_path":root.join("crates").join(name).join("Cargo.toml"),"publish":null,"dependencies":dependencies})
         }).collect();
         fs::write(
             root.join("metadata.json"),
@@ -111,13 +307,23 @@ esac
     }
 
     fn invoke(&self, args: &[&str], extra: &[(&str, &str)]) -> process::RawProcessReport {
+        self.invoke_from(self.temporary.path(), args, extra)
+    }
+
+    fn invoke_from(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        extra: &[(&str, &str)],
+    ) -> process::RawProcessReport {
         let root = self.temporary.path();
+        let script = root.join("scripts/publish-crates.sh");
         let mut spec = ProcessSpec {
             executable: "/bin/bash".into(),
-            cwd: root.into(),
-            arguments: std::iter::once("scripts/publish-crates.sh")
-                .chain(args.iter().copied())
-                .map(|value| Value::Public(value.into()))
+            cwd: cwd.into(),
+            arguments: std::iter::once(script.into_os_string())
+                .chain(args.iter().map(std::ffi::OsString::from))
+                .map(Value::Public)
                 .collect(),
             environment: BTreeMap::from([
                 (
@@ -192,7 +398,7 @@ esac
         }
         assert_eq!(
             fs::read_to_string(root.join("metadata.log")).unwrap(),
-            "metadata --format-version 1 --no-deps\n"
+            "metadata --format-version 1 --no-deps --locked\n"
         );
         assert_eq!(
             fs::read_to_string(root.join("curl.log")).unwrap(),

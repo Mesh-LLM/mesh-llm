@@ -10,6 +10,7 @@ mod canary_execution;
 mod canary_graph;
 mod claude_clients;
 mod compute_changes_budget;
+mod crates_recovery;
 mod handoffs;
 mod laya;
 mod nightly_stability;
@@ -61,6 +62,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     replay_admission::check(root, &workflows)?;
     replay_environment::check(&workflows)?;
     nightly_stability::check(&workflows)?;
+    crates_recovery::check(&workflows)?;
     canary_graph::check(&workflows)?;
     canary_build::check(&workflows)?;
     laya::check(root, &workflows)?;

@@ -14,5 +14,7 @@ mod conventional_commit;
 mod env_mutation_census;
 #[path = "migration_repository/publish_order.rs"]
 mod publish_order;
+#[path = "migration_repository/source_validation.rs"]
+mod source_validation;
 #[path = "migration_repository/upstream_pin.rs"]
 mod upstream_pin;

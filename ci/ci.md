@@ -456,12 +456,25 @@ release tag. The operator supplies both the stable tag and its exact peeled
 commit SHA. The workflow has `packages: read` to pull its pinned GHCR runner
 image. It runs only from the default branch, verifies those two
 identities against the remote tag and checkout, and uses the trusted
-default-branch `publish-crates.sh` controller against the tagged source. Resume
+default-branch `publish-crates.sh` controller against the tagged source. The
+controller checkout is pinned to the workflow commit. Current Rust automation
+consumes locked Cargo metadata and the tagged source's literal publication
+roster, checking package metadata, dependency versions and order, packaged
+includes, and catalog consistency. It does not require a Cargo automation alias
+or execute automation from the historical checkout. The publisher uses that
+validated historical roster while Cargo runs from the tagged source. Resume
 mode skips versions that crates.io confirms are already published and falls
 back to Cargo for unknown registry responses. Cargo verification links against
 the checksummed CPU runtime libraries from that same GitHub release, preserving
 isolated binary-crate verification without rebuilding native inputs. The
 workflow does not move or recreate the release tag.
+
+The recovery Python workflow test module is retired with its core roster entry.
+Required Rust tests execute the source-admission and runtime-restore steps using
+owned data, reject corrupt archives and missing libraries, and invoke the current
+publisher from a historical source directory. Typed workflow guards retain the
+controller, token and cache boundaries. These local fixtures do not establish a
+hosted recovery run or actual crates.io publication.
 
 Release efficiency TODOs:
 
