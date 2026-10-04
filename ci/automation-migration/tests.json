@@ -1462,25 +1462,6 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_generate_split_certified.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "a70abb1822d46ca5d6da5f0a17dadc0f29944c07a2deeb039df1bc0615ce1ba0",
-      "test_method_count": 7,
-      "test_methods": [
-        "test_check_rejects_stale_output",
-        "test_checked_in_roster_is_deterministic_and_current",
-        "test_invalid_workload_class_or_profile_cannot_grant_split_admission",
-        "test_non_chat_workload_evidence_never_grants_split_admission",
-        "test_patch_identity_covers_all_three_queue_lanes_in_order",
-        "test_roster_contains_unique_tested_architectures",
-        "test_workload_evidence_cannot_supply_the_only_split_architecture"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
       "gate": "Legacy just ci-validate plus owning build/install/platform gate",
       "module": "scripts/tests/test_hf_skippy_convert_job.py",
@@ -1508,21 +1489,6 @@
         "test_copy_rejects_body_over_limit",
         "test_rejects_private_resolution_for_trusted_host",
         "test_rejects_untrusted_projector_host"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
-      "gate": "Legacy just ci-validate plus owning build/install/platform gate",
-      "module": "scripts/tests/test_hf_xet_portability_smoke.py",
-      "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "42181647b78d5b31a5b7df37f400c2c6bb0d19b432b12df85542c7de7fd546f9",
-      "test_method_count": 3,
-      "test_methods": [
-        "test_missing_timeout_is_an_advisory_skip",
-        "test_sigill_remains_a_hard_failure",
-        "test_transient_download_failures_are_retried"
       ]
     },
     {
@@ -13635,5 +13601,47 @@
       "sha256": "efb8e7466f0ff977755d1d2f5180d59da026c57d2adc9469a357b5e8386176be"
     },
     "current_test_tree": "17385f5c8cf0abf9cd9dcab98960121a4ab16d12b1e6d0a463a05af0c0c338be"
+  },
+  "split_roster_generator_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 104,
+    "core_modules_after": 45,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/split-roster-retirement-coverage.json",
+      "sha256": "2b242602faf4953caeb4427da9611fa991e055337b782ae44a4bec2bc1760acc"
+    },
+    "current_test_tree": {
+      "sha256": "d07e00b0c005e59727e8c8d0dc2f5a99cefe74d259f4a74f11755ab67407c2e6",
+      "paths": 41
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "95bf022cea8b07ff2acdefb31505ceaee56d63d7a3150938870f3b2d8784ba22",
+      "roster_line": 24,
+      "count": 45
+    }
+  },
+  "hf_xet_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 103,
+    "core_modules_after": 44,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/hf-xet-test-retirement-coverage.json",
+      "sha256": "ab9b1c9154c09f268684396390854d2604fa8e412f6b69f6493746d41733d10a"
+    },
+    "current_test_tree": {
+      "sha256": "8964f5e5fc5ba138598bd7afd540c24b5ee4bade2620717933ec1ed0ab4f4f45",
+      "paths": 40
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "37867767c423b8bae4fe19ebc5a87d39aae682663f3699813b23eede63ee24c6",
+      "roster_line": 24,
+      "count": 44
+    }
   }
 }

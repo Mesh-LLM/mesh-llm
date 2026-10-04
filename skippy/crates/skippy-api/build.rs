@@ -36,7 +36,7 @@ fn bundled_recipe(crate_dir: &std::path::Path) -> (String, String) {
 
 fn series_patches(patch_dir: &Path, subdir: &str) -> Vec<(String, PathBuf)> {
     // Keep this series validation and ordering contract in lockstep with
-    // scripts/generate-split-certified.py::_series_patches. Together they
+    // tools/xtask source::ordered_patch_members and split_roster::queue. Together they
     // define the v2 patch_queue_sha256 consumed below.
     let directory = patch_dir.join(subdir);
     if !directory.exists() {
