@@ -74,17 +74,26 @@ pub async fn run_plugin_command(
     Ok(true)
 }
 
+/// The plugins the operator runs from config: an entry that says how to start
+/// the plugin (`command` or `url`). The console writes a bare `[[plugin]]`
+/// entry (a name and its settings) when an operator saves a plugin setting;
+/// such an entry configures the installed plugin and does not take it out of
+/// default management, so its reviewed pin still moves on update.
+fn operator_run_plugins(entries: &[mesh_llm_config::PluginConfigEntry]) -> BTreeSet<String> {
+    entries
+        .iter()
+        .filter(|entry| entry.command.is_some() || entry.url.is_some())
+        .map(|entry| entry.name.clone())
+        .collect()
+}
+
 async fn install_defaults() -> Result<()> {
     if default_plugins_opted_out() || DEFAULT_PLUGINS.is_empty() {
         return Ok(());
     }
     let options = PluginInstallOptions::from_env()?;
     let config = mesh_llm_config::load_config(None)?;
-    let configured: BTreeSet<String> = config
-        .plugins
-        .iter()
-        .map(|plugin| plugin.name.clone())
-        .collect();
+    let configured = operator_run_plugins(&config.plugins);
     let mut progress = CliPluginProgress::default();
     let outcomes =
         install_default_plugins(DEFAULT_PLUGINS, &configured, &options, &mut progress).await;
@@ -468,5 +477,34 @@ mod tests {
                 "error\tcommand not found".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn a_console_saved_setting_does_not_take_a_default_out_of_default_management() {
+        #[derive(serde::Deserialize)]
+        struct Config {
+            plugin: Vec<mesh_llm_config::PluginConfigEntry>,
+        }
+        let config: Config = toml::from_str(
+            r#"
+[[plugin]]
+name = "capsule-emit-mesh"
+[plugin.settings]
+share_history_segments = "off"
+
+[[plugin]]
+name = "operator-run"
+command = "/opt/plugins/operator-run"
+
+[[plugin]]
+name = "remote"
+url = "unix:///run/remote.sock"
+"#,
+        )
+        .unwrap();
+        let configured = operator_run_plugins(&config.plugin);
+        assert!(!configured.contains("capsule-emit-mesh"));
+        assert!(configured.contains("operator-run"));
+        assert!(configured.contains("remote"));
     }
 }

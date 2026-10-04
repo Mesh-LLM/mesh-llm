@@ -553,7 +553,10 @@ skip default provisioning for that invocation.
 `plugin-install.json` records whether an installation is default managed. A
 later installer or update moves enabled default-managed plugins to the newly
 reviewed pin. An operator-installed plugin with the same name is left alone;
-an explicit `[[plugin]]` entry with that name is also left alone;
+so is one the operator runs from a `[[plugin]]` entry that sets `command` or
+`url`. A `[[plugin]]` entry that only holds settings, as the console writes
+when an operator saves one, configures the installed default and leaves it
+default managed;
 `mesh-llm plugins update` also follows the compiled pin for default-managed
 plugins. Disabling a default preserves the installed record and prevents an
 automatic upgrade. Deleting it removes that record, so the next installer or
