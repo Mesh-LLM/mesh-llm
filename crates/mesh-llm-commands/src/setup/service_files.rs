@@ -1,6 +1,4 @@
 use super::service_templates::{render_service_env_file, render_service_runner};
-#[cfg(unix)]
-use anyhow::bail;
 use anyhow::{Result, anyhow};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -29,11 +27,11 @@ pub(crate) fn ensure_service_env_file(service_env_file: &Path) -> Result<()> {
     options.mode(0o600);
     match options.open(service_env_file) {
         Ok(mut file) => {
-            restrict_service_env_file(service_env_file)?;
+            restrict_open_service_env_file(&file)?;
             file.write_all(render_service_env_file().as_bytes())?;
         }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            restrict_service_env_file(service_env_file)?;
+            restrict_existing_service_env_file(service_env_file)?;
         }
         Err(error) => return Err(error.into()),
     }
@@ -47,19 +45,43 @@ fn restrict_service_dir(service_config_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+// The mode passed to open() is masked by the umask; set it explicitly, through
+// the descriptor that was just created.
 #[cfg_attr(not(unix), allow(unused_variables))]
-fn restrict_service_env_file(service_env_file: &Path) -> Result<()> {
+fn restrict_open_service_env_file(file: &fs::File) -> Result<()> {
+    #[cfg(unix)]
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+// Reopen an existing env file without following a link (O_NOFOLLOW) and
+// without blocking on a FIFO, check what was opened, and set the mode through
+// that descriptor, so a path swapped after a check cannot redirect the chmod.
+#[cfg_attr(not(unix), allow(unused_variables))]
+fn restrict_existing_service_env_file(service_env_file: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        let metadata = fs::symlink_metadata(service_env_file)?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            bail!(
-                "service env file must be a regular file, not a link: {}",
+        let not_regular = || {
+            anyhow!(
+                "service env file must be a regular file, not a link or a special file: {}",
                 service_env_file.display()
-            );
+            )
+        };
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(service_env_file)
+            .map_err(|error| {
+                if error.raw_os_error() == Some(libc::ELOOP) {
+                    not_regular()
+                } else {
+                    error.into()
+                }
+            })?;
+        if !file.metadata()?.is_file() {
+            return Err(not_regular());
         }
-        // The mode passed to open() is masked by the umask; set it explicitly.
-        fs::set_permissions(service_env_file, fs::Permissions::from_mode(0o600))?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }

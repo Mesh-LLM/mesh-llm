@@ -4591,6 +4591,7 @@ dependencies = [
  "hex",
  "iroh",
  "json5",
+ "libc",
  "mesh-llm-analytics",
  "mesh-llm-build-info",
  "mesh-llm-cli",
