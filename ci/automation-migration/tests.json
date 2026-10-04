@@ -2692,36 +2692,6 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
-      "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
-      "module": "scripts/tests/test_qa_kv_tool_loop_stability.py",
-      "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "a0c3c4bfa70e4956cebb8bb0506d9cfe7f1a7584ca29ab39a482d21e4de1cd34",
-      "test_method_count": 18,
-      "test_methods": [
-        "test_cache_metrics_extract_openai_usage_tokens",
-        "test_cache_probe_fails_wrong_completion_even_with_cached_tokens",
-        "test_cache_threshold_reports_shortfall",
-        "test_log_scan_detects_memory_slot_and_eviction_errors",
-        "test_native_log_scan_ignores_preexisting_failures_after_checkpoint",
-        "test_native_log_scan_preserves_file_line_number_after_checkpoint",
-        "test_native_log_scan_reports_failures_appended_after_checkpoint",
-        "test_native_log_scan_reports_new_log_created_after_checkpoint",
-        "test_native_log_scan_rescans_truncated_log_after_checkpoint",
-        "test_overlap_requests_keep_same_prefix_and_distinct_tails",
-        "test_overlap_tool_loop_probe_runs_parallel_requests_and_cache_check",
-        "test_parse_native_logs_dedupes_env_and_cli_paths",
-        "test_plan_declares_tool_loop_cache_and_log_scan",
-        "test_prepare_transcript_dir_removes_stale_attempt_files",
-        "test_record_transcript_appends_within_attempt",
-        "test_run_certification_resets_transcripts_before_writing",
-        "test_tool_loop_requests_keep_stable_prefix_and_vary_tail",
-        "test_write_evidence_outputs_manifest_results_and_summary"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "cutover_status": "deleted; Rust logging recovery narrative and side-effect-free plan tests replace duplicate shell tests",
       "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
       "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
@@ -13517,6 +13487,57 @@
         "sha256": "098d38f629f5e60818fda5bf7657cd6fccd543afd7d22c0a984d604be043ab67"
       },
       "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. KV tool-loop helper and optional OpenCode Python closure remain open."
+    }
+  },
+  "kv_tool_loop_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 113,
+    "core_modules_after": 53,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/kv-tool-loop-retirement-coverage.json",
+      "sha256": "45dfd3d64d74a9a29a22b87ddb7966afaa9cc3864f4f531b176ac9abe775d0f7"
+    },
+    "current_test_tree": {
+      "sha256": "f15a213e9cc9fc6bb8eb25230584e065fc2d1c8988d156276a0794d6c383b458",
+      "paths": 47
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "roster_line": 24,
+      "count": 53
+    },
+    "supersedes": "Legacy KV source and tests retired after native caller qualification; historical records retained.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "qualification": {
+      "source_head": "2c8acd66fdc237b32c52217a81679cbe48ba9a30",
+      "receipts": {
+        "path": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-receipts.json",
+        "sha256": "8df1e27cc3e787c8d17ef3ac0ff6dd1170a46cc05dce6ffee9014ab6b0b71804"
+      },
+      "normal": {
+        "targets": 112,
+        "passed": 4474,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 801,
+          "passed": 787,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 404.844
+        },
+        "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-normal.log",
+        "sha256": "078198d29f32ec79d549dffcd55fcd8d49752d8b36174d8efd407a7b7baf2698"
+      },
+      "focused": {
+        "units": 42,
+        "actual_cli": 28,
+        "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-native.log",
+        "sha256": "764fabfc459fe24c13ba18b7f5a2e381aa855e54c33d9b68584869090eca9ed4"
+      },
+      "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. Optional OpenCode Python closure remains open. Prior inherited cleanup failure cause remains unproven; diagnostics preserve deadlines/assertions; full prepared_source and ten exact repeats passed before this full postimage gate."
     }
   }
 }

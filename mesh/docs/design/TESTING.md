@@ -261,7 +261,7 @@ repository content. It is intentionally evidence-producing and non-required:
 failed nightlies should guide stabilization work, not block unrelated pull
 requests.
 
-The reusable run also invokes `qa-kv-tool-loop-stability.py` by default. Use
+The reusable run also invokes `cargo xtool automation stability kv-tool-loop` by default. Use
 `MESH_NIGHTLY_KV_MODELS` to select the direct model IDs and the bounded
 `MESH_NIGHTLY_KV_{ATTEMPTS,PRESSURE_TURNS,OVERLAP_REQUESTS,MIN_CACHED_TOKENS,SUFFIX_PREFILL_LIMIT}`
 variables to tune the live probe. A manual run may set `skip_kv_tool_loop` for
@@ -277,7 +277,7 @@ issues where repeated tool calls eventually hit `llama_decode failed` or low
 same-prefix cache reuse.
 
 ```bash
-scripts/qa-kv-tool-loop-stability.py \
+cargo xtool automation stability kv-tool-loop \
   --base-url http://127.0.0.1:9337/v1 \
   --models Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m \
   --attempts 5 \

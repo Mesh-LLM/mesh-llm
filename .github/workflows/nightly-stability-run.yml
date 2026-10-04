@@ -178,7 +178,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scripts/qa-kv-tool-loop-stability.py \
+          "${MESH_LLM_AUTOMATION_BIN:?automation preparation required}" automation stability kv-tool-loop \
             --base-url "$MESH_STABILITY_BASE_URL" \
             --models "$MESH_KV_MODELS" \
             --attempts "$MESH_KV_ATTEMPTS" \

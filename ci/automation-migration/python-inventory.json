@@ -412,15 +412,6 @@
       "required": false
     },
     {
-      "classification": "QA stability harness",
-      "deletion_condition": "Port generic orchestration; preserve exact recurrence/cache coverage and caller boundary.",
-      "exception": null,
-      "path": "scripts/qa-kv-tool-loop-stability.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa/process",
-      "required": false
-    },
-    {
       "classification": "optional mixed-version Lightning compatibility QA",
       "deletion_condition": "Port generic peer launch/evidence logic while preserving selected current/released binaries and isolated fixture config.",
       "exception": null,
@@ -799,15 +790,6 @@
       "required": true
     },
     {
-      "classification": "generic QA test",
-      "deletion_condition": "KV tool-loop contract tests remain required in replacement suite.",
-      "exception": null,
-      "path": "scripts/tests/test_qa_kv_tool_loop_stability.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask qa tests",
-      "required": true
-    },
-    {
       "classification": "generic release version test",
       "deletion_condition": "Version contract test migrated with no implicit version mutation.",
       "exception": null,
@@ -1179,7 +1161,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 115,
+  "tracked_file_count": 113,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -9757,6 +9739,57 @@
         "sha256": "098d38f629f5e60818fda5bf7657cd6fccd543afd7d22c0a984d604be043ab67"
       },
       "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. KV tool-loop helper and optional OpenCode Python closure remain open."
+    }
+  },
+  "kv_tool_loop_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 113,
+    "core_modules_after": 53,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/kv-tool-loop-retirement-coverage.json",
+      "sha256": "45dfd3d64d74a9a29a22b87ddb7966afaa9cc3864f4f531b176ac9abe775d0f7"
+    },
+    "current_test_tree": {
+      "sha256": "f15a213e9cc9fc6bb8eb25230584e065fc2d1c8988d156276a0794d6c383b458",
+      "paths": 47
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "roster_line": 24,
+      "count": 53
+    },
+    "supersedes": "Legacy KV source and tests retired after native caller qualification; historical records retained.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "qualification": {
+      "source_head": "2c8acd66fdc237b32c52217a81679cbe48ba9a30",
+      "receipts": {
+        "path": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-receipts.json",
+        "sha256": "8df1e27cc3e787c8d17ef3ac0ff6dd1170a46cc05dce6ffee9014ab6b0b71804"
+      },
+      "normal": {
+        "targets": 112,
+        "passed": 4474,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 801,
+          "passed": 787,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 404.844
+        },
+        "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-normal.log",
+        "sha256": "078198d29f32ec79d549dffcd55fcd8d49752d8b36174d8efd407a7b7baf2698"
+      },
+      "focused": {
+        "units": 42,
+        "actual_cli": 28,
+        "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-native.log",
+        "sha256": "764fabfc459fe24c13ba18b7f5a2e381aa855e54c33d9b68584869090eca9ed4"
+      },
+      "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. Optional OpenCode Python closure remains open. Prior inherited cleanup failure cause remains unproven; diagnostics preserve deadlines/assertions; full prepared_source and ten exact repeats passed before this full postimage gate."
     }
   }
 }
