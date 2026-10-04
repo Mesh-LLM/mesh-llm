@@ -1,4 +1,5 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
+use super::default_plugins::resolve_after_defaults;
 use super::join_sources;
 use super::plugin_host_role;
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
@@ -1711,7 +1712,7 @@ async fn run_auto_inner(
     // legacy/profile-unaware request cannot bypass local-required policy in
     // that window. False entries deliberately clear stale in-process policy.
     register_pre_accept_local_source_policies(&config, &startup_specs);
-    let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
+    let resolved_plugins = resolve_after_defaults(&config, &options).await?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(
         mesh_requirements = ?runtime_startup_requirements(&startup_mesh_creation_state),

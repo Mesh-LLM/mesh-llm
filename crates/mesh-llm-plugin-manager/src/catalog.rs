@@ -83,7 +83,7 @@ impl CatalogEntry {
     }
 }
 
-fn is_sha256_hex(digest: &str) -> bool {
+pub(crate) fn is_sha256_hex(digest: &str) -> bool {
     digest.len() == 64
         && digest
             .chars()

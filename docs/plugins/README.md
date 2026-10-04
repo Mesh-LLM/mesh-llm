@@ -531,6 +531,46 @@ only when a newer compatible version exists.
 plugin installed but prevents host startup from launching it. `delete` removes
 the installed archive, extracted files, and local plugin metadata.
 
+## Default Plugins
+
+A fresh node installs a short list of default plugins once, on first run
+(`mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`). The list starts empty;
+each entry is added by its own change. Payment and wallet plugins are never on
+it: a node pays or gets paid only through a plugin its operator chose. A
+default installs as an ordinary package, so it can serve a web UI like any
+installed plugin.
+
+Each entry is pinned in the list itself: an exact release version and the
+SHA-256 of that release's archive for each platform (macOS arm64, Linux x86_64,
+Linux arm64). The catalog says where the plugin lives; if its entry also pins
+this platform (`version` and `sha256`), the two pins must agree. The download
+must match the pin as well as GitHub's reported digest. A platform without a
+pin, a disagreement, a mismatch, or no network means the plugin is not
+installed and the node starts normally; the install is tried again on the next
+start, bounded to 30 seconds. Bumping a default is one entry in the list per
+release.
+
+The node says what it did: one line when a default is installed, naming the
+version and how to remove it, and one warning when it couldn't be. After that a
+default is silent: later starts don't look it up, download it, or log about it.
+
+Opting out:
+
+| How | Effect |
+| --- | ------ |
+| `mesh-llm serve --no-default-plugins` | This start offers no defaults. |
+| `MESH_LLM_NO_DEFAULT_PLUGINS=1` | Same, from the environment. |
+| `[[plugin]]` with the plugin's `name` and `enabled = false` in the config | The operator has chosen: the default is recorded as offered and never installed. |
+| `mesh-llm plugins disable <name>` | Keeps it installed but not launched. |
+| `mesh-llm plugins delete <name>` | Removes it; it is not reinstalled. |
+
+Once installed, a default is an ordinary installed plugin. Each default is
+offered once (recorded in `defaults-offered.json` in the plugin store), so a
+removed default is never reinstalled, and a plugin the operator already
+installed or lists in their config is left alone. If that record exists but
+can't be read, no default is offered until it is fixed or removed, so a removed
+default never comes back through a damaged file.
+
 ## Hugging Face Plugin Catalog
 
 `mesh-llm` may use a simple Hugging Face Dataset as the public plugin catalog.
@@ -584,13 +624,12 @@ Optional pin fields:
 }
 ```
 
-An ordinary `mesh-llm plugins install` ignores the pin fields. A default install
-(a plugin installed without the operator naming it) requires them: the entry
-must pin a version and a digest for this platform, and the downloaded archive
-must match that digest as well as GitHub's reported one before it is extracted.
-A missing pin or a mismatch is an error and nothing is installed, so a release
-asset replaced after it was pinned is refused. Bumping a pin is one line in
-`plugins.jsonl`.
+An ordinary `mesh-llm plugins install` ignores the pin fields. A default plugin
+(see [Default Plugins](#default-plugins)) is pinned in the default list itself;
+if its catalog entry also pins this platform, the two pins must agree, and the
+downloaded archive must match the pin as well as GitHub's reported digest
+before it is extracted. A disagreement or a mismatch is an error and nothing is
+installed, so a release asset replaced after it was pinned is refused.
 
 Catalog rules:
 
