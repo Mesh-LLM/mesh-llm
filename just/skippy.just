@@ -47,7 +47,10 @@ metrics-server-build:
 # Build the binaries copied into the Skippy WAN Docker lab image.
 [linux]
 skippy-wan-lab-build-bins:
-    cargo build --release --locked -p skippy-cli -p metrics-server -p skippy-package-builder
+    just release-runtime-build cpu
+    just skippy-cli-release-build
+    python3 scripts/verify-host-dependencies.py target/release/skippy --report dist/skippy-host-imports.json
+    just with-lld cargo build --release --locked -p metrics-server
 
 # Build the resumable GGUF conversion/quantization replacement CLI.
 [unix]
