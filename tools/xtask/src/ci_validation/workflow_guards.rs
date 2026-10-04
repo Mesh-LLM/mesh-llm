@@ -17,6 +17,7 @@ mod nightly_stability;
 mod permissions;
 mod pr_canary;
 mod quality_contracts;
+mod registry_canary;
 mod replay;
 mod replay_admission;
 mod replay_environment;
@@ -63,6 +64,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     replay_environment::check(&workflows)?;
     nightly_stability::check(&workflows)?;
     crates_recovery::check(&workflows)?;
+    registry_canary::check(&workflows)?;
     canary_graph::check(&workflows)?;
     canary_build::check(&workflows)?;
     laya::check(root, &workflows)?;

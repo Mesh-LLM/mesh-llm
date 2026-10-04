@@ -11032,5 +11032,31 @@
       "path": ".omo/evidence/resume-20261002/crates-recovery-retirement-v1-receipts.json",
       "sha256": "6d91476d822dee671174c36fc0e4eff9dd5a6a0523e1c22faa65546ce154c433"
     }
+  },
+  "registry_canary_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 111,
+    "core_modules_after": 51,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/registry-canary-retirement-coverage.json",
+      "sha256": "60d145237e7b08c5de02066e45769d66433d9c0d5f0d9d10cbe80ba9a4a62875"
+    },
+    "current_test_tree": {
+      "sha256": "f15a213e9cc9fc6bb8eb25230584e065fc2d1c8988d156276a0794d6c383b458",
+      "paths": 47
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "fff582fc6879574d4a3c52bf7213e25c6d9e68e1560c91eee883522c6daae018",
+      "roster_line": 24,
+      "count": 51
+    },
+    "supersedes": "Historical Python registry ownership remains archived; structured workflow guards and actual step fixtures preserve the intentions.",
+    "qualification": {
+      "path": ".omo/evidence/resume-20261002/registry-canary-retirement-v1-receipts.json",
+      "sha256": "1e62b665d4d409a08ccb78f935a804238fb9b5af81d51d308fa630ca3061ee39"
+    }
   }
 }
