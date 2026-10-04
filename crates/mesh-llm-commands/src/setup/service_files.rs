@@ -1,11 +1,16 @@
 use super::service_templates::{render_service_env_file, render_service_runner};
+#[cfg(unix)]
+use anyhow::bail;
 use anyhow::{Result, anyhow};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
+// The env file is where an operator puts a private mesh token or invite, so it
+// is created owner-only and an existing one is tightened. The directory is
+// made owner-only only when setup creates it.
 pub(crate) fn ensure_service_env_file(service_env_file: &Path) -> Result<()> {
     let parent = service_env_file.parent().ok_or_else(|| {
         anyhow!(
@@ -13,15 +18,48 @@ pub(crate) fn ensure_service_env_file(service_env_file: &Path) -> Result<()> {
             service_env_file.display()
         )
     })?;
+    let parent_existed = parent.exists();
     fs::create_dir_all(parent)?;
-    match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(service_env_file)
-    {
-        Ok(mut file) => file.write_all(render_service_env_file().as_bytes())?,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+    if !parent_existed {
+        restrict_service_dir(parent)?;
+    }
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    match options.open(service_env_file) {
+        Ok(mut file) => {
+            restrict_service_env_file(service_env_file)?;
+            file.write_all(render_service_env_file().as_bytes())?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            restrict_service_env_file(service_env_file)?;
+        }
         Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+#[cfg_attr(not(unix), allow(unused_variables))]
+fn restrict_service_dir(service_config_dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    fs::set_permissions(service_config_dir, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg_attr(not(unix), allow(unused_variables))]
+fn restrict_service_env_file(service_env_file: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let metadata = fs::symlink_metadata(service_env_file)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            bail!(
+                "service env file must be a regular file, not a link: {}",
+                service_env_file.display()
+            );
+        }
+        // The mode passed to open() is masked by the umask; set it explicitly.
+        fs::set_permissions(service_env_file, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }

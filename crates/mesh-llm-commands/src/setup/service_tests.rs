@@ -283,3 +283,56 @@ fn macos_service_command_failure_is_a_setup_failure_when_starting_service() {
         "{error:#}"
     );
 }
+
+#[cfg(unix)]
+fn unix_mode(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).expect("metadata").permissions().mode() & 0o777
+}
+
+#[cfg(unix)]
+#[test]
+fn service_env_file_and_new_directory_are_owner_only() {
+    let temp = tempfile::tempdir().expect("tempdir should exist");
+    let env_file = temp.path().join("mesh-llm").join("service.env");
+    super::service_files::ensure_service_env_file(&env_file).expect("env file");
+    assert_eq!(unix_mode(&env_file), 0o600);
+    assert_eq!(unix_mode(&temp.path().join("mesh-llm")), 0o700);
+    assert_eq!(
+        fs::read_to_string(&env_file).expect("env file contents"),
+        render_service_env_file()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_existing_service_env_file_is_tightened_and_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().expect("tempdir should exist");
+    let env_file = temp.path().join("service.env");
+    fs::write(&env_file, "MESH_LLM_JOIN=secret\n").expect("seed env file");
+    fs::set_permissions(&env_file, fs::Permissions::from_mode(0o644)).expect("chmod");
+    super::service_files::ensure_service_env_file(&env_file).expect("env file");
+    assert_eq!(unix_mode(&env_file), 0o600);
+    assert_eq!(
+        fs::read_to_string(&env_file).expect("env file contents"),
+        "MESH_LLM_JOIN=secret\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_service_env_file_is_rejected() {
+    let temp = tempfile::tempdir().expect("tempdir should exist");
+    let elsewhere = temp.path().join("elsewhere.env");
+    fs::write(&elsewhere, "UNTOUCHED=1\n").expect("seed target");
+    let before = unix_mode(&elsewhere);
+    let env_file = temp.path().join("service.env");
+    std::os::unix::fs::symlink(&elsewhere, &env_file).expect("symlink");
+    assert!(super::service_files::ensure_service_env_file(&env_file).is_err());
+    assert_eq!(unix_mode(&elsewhere), before);
+    assert_eq!(
+        fs::read_to_string(&elsewhere).expect("target contents"),
+        "UNTOUCHED=1\n"
+    );
+}
