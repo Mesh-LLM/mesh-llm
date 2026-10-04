@@ -2,15 +2,14 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
-    fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
-        Arc, LazyLock, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak,
+        Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
         atomic::{AtomicU64, Ordering},
     },
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use serde::Serialize;
 
 use crate::{
@@ -22,8 +21,8 @@ use crate::{
     tier::L3Tier,
 };
 
-static ROOT_MANAGERS: LazyLock<Mutex<BTreeMap<PathBuf, Weak<L3ManagerInner>>>> =
-    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+mod acquisition;
+
 const MAX_PENDING_STATE_TRANSITIONS: usize = 64;
 
 /// What every stage attached to the node's L3 root has done since open.
@@ -193,46 +192,15 @@ impl L3CacheManager {
     /// Acquire the manager for `root`, reusing the live node owner when one
     /// exists. A second process is rejected by the store's root lock.
     pub fn acquire(root: impl AsRef<Path>, limits: StoreLimits) -> Result<Self> {
-        let root = canonical_cache_root(root.as_ref())?;
-        let mut managers = ROOT_MANAGERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // An entry whose strong count has reached zero is not necessarily gone:
-        // the owning thread decrements the count before dropping the inner
-        // value, and the store's root `flock` is only released by that drop.
-        let expiring_owner = managers
-            .get(&root)
-            .is_some_and(|manager| manager.strong_count() == 0);
-        managers.retain(|_, manager| manager.strong_count() > 0);
-        if let Some(inner) = managers.get(&root).and_then(Weak::upgrade) {
-            if inner.store.limits() != limits {
-                bail!(
-                    "cache root {} is already open with different limits",
-                    root.display()
-                );
-            }
-            return Ok(Self { inner });
-        }
+        acquisition::acquire(root.as_ref(), limits)
+    }
 
-        // Taking the root lock while the previous in-process owner is still
-        // unwinding would report the root as owned by another manager, which
-        // is a false answer: no other process holds it. Give that drop a
-        // bounded moment to finish rather than failing the caller.
-        let store = Arc::new(open_store_for_acquire(&root, limits, expiring_owner)?);
-        let reconciliation = store.reconcile_startup()?;
-        let inner = Arc::new(L3ManagerInner {
-            store,
-            activity: Arc::new(L3Activity::default()),
-            fill_claims: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
-            record_claims: Mutex::new(BTreeMap::new()),
-            effective: Mutex::new(L3EffectiveStatus::default()),
-            transitions: Mutex::new(VecDeque::new()),
-            operations: RwLock::new(()),
-            reconciliation,
-            benefit_admission: Mutex::new(L3BenefitAdmission::default()),
-        });
-        managers.insert(root, Arc::downgrade(&inner));
-        Ok(Self { inner })
+    /// Reuse the live owner's budget, estimating capacity only for a new root owner.
+    pub(crate) fn acquire_auto(
+        root: impl AsRef<Path>,
+        minimum_free_bytes: u64,
+    ) -> Result<Option<Self>> {
+        acquisition::acquire_auto(root.as_ref(), minimum_free_bytes)
     }
 
     pub(crate) fn benefit_tracks(&self, key: EntryKey) -> bool {
@@ -682,49 +650,13 @@ impl L3CacheManager {
     }
 }
 
-/// Open the store, retrying briefly when the previous in-process owner for
-/// this root is still being dropped.
-///
-/// Only the handoff window is retried. A root genuinely held by another
-/// process fails with the same error it always did, one short delay later.
-fn open_store_for_acquire(
-    root: &Path,
-    limits: StoreLimits,
-    expiring_owner: bool,
-) -> Result<HandoffSegmentStore> {
-    const HANDOFF_ATTEMPTS: u32 = 20;
-    const HANDOFF_BACKOFF: std::time::Duration = std::time::Duration::from_millis(5);
-
-    let attempts = if expiring_owner { HANDOFF_ATTEMPTS } else { 1 };
-    let mut last = None;
-    for attempt in 0..attempts {
-        match HandoffSegmentStore::open_unreconciled_with_limits(root, limits) {
-            Ok(store) => return Ok(store),
-            Err(error) => {
-                last = Some(error);
-                if attempt + 1 < attempts {
-                    std::thread::sleep(HANDOFF_BACKOFF);
-                }
-            }
-        }
-    }
-    Err(last.expect("at least one attempt was made"))
-}
-
-fn canonical_cache_root(root: &Path) -> Result<PathBuf> {
-    if !root.is_absolute() {
-        bail!("cache root must be absolute: {}", root.display());
-    }
-    crate::fsinfo::refuse_symlink(root)?;
-    fs::create_dir_all(root)
-        .with_context(|| format!("failed to create cache root {}", root.display()))?;
-    fs::canonicalize(root)
-        .with_context(|| format!("failed to resolve cache root {}", root.display()))
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Barrier};
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{Arc, Barrier},
+    };
 
     use super::*;
     use crate::ExactStatePayload;
@@ -740,21 +672,6 @@ mod tests {
             ));
         let _ = fs::remove_dir_all(&root);
         root
-    }
-
-    #[test]
-    fn one_live_manager_owns_each_root() {
-        let root = temp_root("shared-owner");
-        let limits = StoreLimits::new(1_000_000, 0);
-        let first = L3CacheManager::acquire(&root, limits).expect("first manager");
-        let second = L3CacheManager::acquire(&root, limits).expect("shared manager");
-
-        assert!(first.shares_root_with(&second));
-        assert_eq!(first.root(), second.root());
-        assert!(
-            L3CacheManager::acquire(&root, StoreLimits::new(2_000_000, 0)).is_err(),
-            "one root accepted contradictory budgets"
-        );
     }
 
     #[test]
