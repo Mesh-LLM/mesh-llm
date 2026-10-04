@@ -1,3 +1,4 @@
+mod action;
 mod fixture;
 mod models;
 use fixture::Fixture;
