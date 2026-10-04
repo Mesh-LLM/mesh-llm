@@ -112,6 +112,15 @@ impl TranslationRequest {
                 .flatten();
             let candidates = match successors {
                 Some((_, owners)) => {
+                    let owners = if name.as_str() == "openai-frontend"
+                        && available
+                            .iter()
+                            .any(|owner| owner.as_str() == "skippy-inference-api")
+                    {
+                        &["skippy-inference-api"][..]
+                    } else {
+                        *owners
+                    };
                     let candidates = owners
                         .iter()
                         .map(|owner| PackageName::try_from((*owner).to_owned()))

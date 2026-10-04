@@ -135,8 +135,8 @@ impl Fixture {
             100,
         );
         for name in [
-            "cargo/debug/skippy-server",
-            "cargo/debug/skippy-model-package",
+            "cargo/debug/skippy",
+            "cargo/debug/skippy-package-builder",
             "cargo/debug/skippy-correctness",
             "cargo/debug/skippy-topology-plan",
             "native/bin/llama-server",
@@ -183,7 +183,7 @@ impl Fixture {
         self.run(
             "verify",
             &[
-                &self.closure.join("cargo/debug/skippy-server"),
+                &self.closure.join("cargo/debug/skippy"),
                 &self.closure.join("native"),
                 &self.closure.join("producer.json"),
             ],
@@ -206,13 +206,41 @@ fn actual_dirty_source_producer_verifies_relocated_files_and_rejects_source_and_
     fs::write(f.root.join("new.rs"), "changed source\n").unwrap();
     assert!(!f.verify().success());
     fs::write(f.root.join("new.rs"), "new source\n").unwrap();
-    let binary = f.closure.join("cargo/debug/skippy-server");
+    let binary = f.closure.join("cargo/debug/skippy");
     let mut bytes = fs::read(&binary).unwrap();
     bytes[0] = b'X';
     fs::write(binary, bytes).unwrap();
     assert!(!f.verify().success());
     assert_eq!(fs::read(f.closure.join("producer.json")).unwrap(), original);
 }
+#[test]
+fn actual_producer_rejects_changed_checkout_head_before_verification_or_publication() {
+    let f = Fixture::new();
+    f.snapshot();
+    assert!(f.produce().success());
+    assert!(f.verify().success());
+    let manifest_path = f.closure.join("producer.json");
+    let admitted = fs::read(&manifest_path).unwrap();
+    let previous = git(&f.root, &["rev-parse", "HEAD"]);
+    git(
+        &f.root,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "advance producer source",
+        ],
+    );
+    assert_ne!(git(&f.root, &["rev-parse", "HEAD"]), previous);
+    assert!(!f.verify().success());
+    assert!(!f.produce().success());
+    assert_eq!(fs::read(manifest_path).unwrap(), admitted);
+}
+
 #[test]
 fn actual_producer_rejects_changed_prebuild_snapshot_stale_test_wrong_stamp_and_escape() {
     let f = Fixture::new();
@@ -239,7 +267,7 @@ fn actual_producer_rejects_changed_prebuild_snapshot_stale_test_wrong_stamp_and_
     assert!(!f.produce().success());
     let f = Fixture::new();
     f.snapshot();
-    let binary = f.closure.join("cargo/debug/skippy-server");
+    let binary = f.closure.join("cargo/debug/skippy");
     fs::remove_file(&binary).unwrap();
     std::os::unix::fs::symlink(&f.test, binary).unwrap();
     assert!(!f.produce().success());
@@ -247,7 +275,7 @@ fn actual_producer_rejects_changed_prebuild_snapshot_stale_test_wrong_stamp_and_
 #[test]
 fn actual_local_freshness_preserves_platform_neutral_executable_and_strict_native_mtime() {
     let f = Fixture::new();
-    let binary = f.closure.join("cargo/debug/skippy-server");
+    let binary = f.closure.join("cargo/debug/skippy");
     let native = f.closure.join("native");
     assert!(f.run("fresh", &[&binary, &native]).success());
     write(&binary, b"freshness equal", 100);
@@ -353,7 +381,7 @@ fn actual_producer_rejects_every_admitted_member_mutation_and_missing_file_witho
 fn actual_freshness_rejects_older_missing_inputs_and_wrong_cpu_static_native_identity() {
     for seconds in [99, 100] {
         let f = Fixture::new();
-        let binary = f.closure.join("cargo/debug/skippy-server");
+        let binary = f.closure.join("cargo/debug/skippy");
         let native = f.closure.join("native");
         write(&binary, b"existing executable", seconds);
         assert!(
@@ -361,14 +389,14 @@ fn actual_freshness_rejects_older_missing_inputs_and_wrong_cpu_static_native_ide
             "accepted mtime={seconds}"
         );
     }
-    for missing in ["cargo/debug/skippy-server", "native/.mesh-llm-build-stamp"] {
+    for missing in ["cargo/debug/skippy", "native/.mesh-llm-build-stamp"] {
         let f = Fixture::new();
         fs::remove_file(f.closure.join(missing)).unwrap();
         assert!(
             !f.run(
                 "fresh",
                 &[
-                    &f.closure.join("cargo/debug/skippy-server"),
+                    &f.closure.join("cargo/debug/skippy"),
                     &f.closure.join("native")
                 ]
             )
@@ -399,7 +427,7 @@ fn actual_freshness_rejects_older_missing_inputs_and_wrong_cpu_static_native_ide
             !f.run(
                 "fresh",
                 &[
-                    &f.closure.join("cargo/debug/skippy-server"),
+                    &f.closure.join("cargo/debug/skippy"),
                     &f.closure.join("native")
                 ]
             )
@@ -667,7 +695,7 @@ fn legacy_repair_snapshot_rejects_mutated_source_closure_and_freshness_before_gi
                 fs::write(stamp, bytes).unwrap();
             }
             "binary" => fs::write(
-                fixture.closure.join("cargo/debug/skippy-server"),
+                fixture.closure.join("cargo/debug/skippy"),
                 "replacement executable\n",
             )
             .unwrap(),

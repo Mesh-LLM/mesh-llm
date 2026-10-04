@@ -92,7 +92,10 @@ pub(super) fn label(value: Option<&Json>, field: &str) -> PlanResult<String> {
     if let Some(scalar) = text.scalar_text().filter(|text| valid_label(text)) {
         Ok(scalar)
     } else {
-        Err(format!("{field} has an invalid label: {}", text.repr()))
+        Err(format!(
+            "{field} has an invalid label: {}",
+            text.diagnostic()
+        ))
     }
 }
 

@@ -1,0 +1,830 @@
+{
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "source_head": "32a6cf92367f86c6f8c6ac37fb5b43fb12c35fad",
+  "original_intents": 17,
+  "historical_method_maps": [
+    {
+      "module": "scripts/tests/test_llama_oracle_source.py",
+      "original_sha256": "a5c89c7bc1b0d85dd236773160aad4689218de25f8834156590bd715a7b3ca78",
+      "original_method_count": 4,
+      "methods": [
+        {
+          "legacy_method": "test_oracle_and_prepare_require_the_same_schema",
+          "line": 20,
+          "intent": "Actual preparation schema producer and typed prepared source verifier must agree",
+          "owners": [
+            {
+              "path": "tools/xtask/tests/prepared_source.rs",
+              "symbol": "prepared_source_verifier_accepts_the_actual_producer_schema_marker_and_rejects_other_versions",
+              "line": 411,
+              "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "historical_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "current_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_model_support_series_rejects_incomplete_or_unsafe_inputs",
+          "line": 27,
+          "intent": "Fail closed on missing/empty/unsafe/out-of-sequence/duplicate/orphan lane metadata",
+          "owners": [
+            {
+              "path": "tools/xtask/tests/prepared_source.rs",
+              "symbol": "prepared_source_cli_rejects_unsafe_or_incomplete_lane_and_symlinked_patch",
+              "line": 173,
+              "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "historical_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "current_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_digest_includes_generated_series_in_prepare_order",
+          "line": 41,
+          "intent": "Independent three-lane digest in preparation order with CRLF series; reject unsafe renamed generated sequence",
+          "owners": [
+            {
+              "path": "tools/xtask/tests/prepared_source.rs",
+              "symbol": "prepared_source_cli_reuses_three_lane_recipe_and_prints_only_clean_head",
+              "line": 112,
+              "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "historical_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "current_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "symbol_present": true
+            },
+            {
+              "path": "tools/xtask/tests/prepared_source.rs",
+              "symbol": "prepared_source_cli_rejects_unsafe_or_incomplete_lane_and_symlinked_patch",
+              "line": 173,
+              "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "historical_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "current_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_prepared_checkout_rejects_patch_queue_drift",
+          "line": 68,
+          "intent": "Current marker/schema/pinned upstream/head/digest and dirty selected checkout fail closed",
+          "owners": [
+            {
+              "path": "tools/xtask/tests/prepared_source.rs",
+              "symbol": "prepared_source_cli_rejects_markers_upstream_head_and_dirty_checkout",
+              "line": 139,
+              "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "historical_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "current_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "symbol_present": true
+            },
+            {
+              "path": "tools/xtask/tests/prepared_source.rs",
+              "symbol": "prepared_source_cli_reuses_three_lane_recipe_and_prints_only_clean_head",
+              "line": 112,
+              "sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "historical_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "current_sha256": "47316c2dfbaa8d4fc96e5391893649e366a68c13bf4a78bdf0383c975973e1dd",
+              "symbol_present": true
+            }
+          ]
+        }
+      ],
+      "historical_receipts": [
+        {
+          "path": ".omo/evidence/resume-20261002/next-wave-prepared-corrected.log",
+          "sha256": "8ea9d6a348d4931a2b99c15fdf41fdc38fee6dd19b291baf662e97f3c82238b5",
+          "terminal": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 66 filtered out; finished in 2.21s"
+        }
+      ]
+    },
+    {
+      "module": "scripts/tests/test_ci_cargo_packages.py",
+      "original_sha256": "60990a0236b12a30d0c76452196b6088d70bf1ec1c240fe2d25d084c3eb3b1a2",
+      "original_method_count": 9,
+      "methods": [
+        {
+          "legacy_method": "test_each_extracted_workspace_member_retains_exactly_one_legacy_batch",
+          "line": 24,
+          "owners": [
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "extracted_members_have_one_owner_when_legacy_batches_are_separate",
+              "line": 22,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_unchanged_old_and_new_plans_preserve_their_batches",
+          "line": 32,
+          "owners": [
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "batches_are_preserved_when_source_and_plan_generation_match",
+              "line": 42,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_reused_package_name_preserves_both_different_owners",
+          "line": 37,
+          "owners": [
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "reused_names_resolve_by_declared_generation_when_plan_is_partial",
+              "line": 55,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_partial_plan_with_reused_name_has_explicit_generation",
+          "line": 42,
+          "owners": [
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "reused_names_resolve_by_declared_generation_when_plan_is_partial",
+              "line": 55,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            },
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "generation_fails_when_selector_is_not_explicitly_supported",
+              "line": 204,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_missing_successor_is_an_error_not_a_skipped_test",
+          "line": 47,
+          "owners": [
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "mapped_missing_owner_fails_when_extraction_is_incomplete",
+              "line": 79,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_unmapped_planned_package_defers_to_the_workspace_filter",
+          "line": 52,
+          "owners": [
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "unmapped_absent_names_pass_through_when_membership_filter_runs_later",
+              "line": 92,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            },
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "migration_stays_inactive_when_builder_is_absent",
+              "line": 102,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_batch_cannot_add_a_package_outside_its_plan",
+          "line": 71,
+          "owners": [
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "request_fails_when_name_is_outside_complete_plan",
+              "line": 131,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_invalid_duplicate_or_shell_shaped_names_are_rejected",
+          "line": 75,
+          "owners": [
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "package_boundary_rejects_invalid_names_shapes_and_duplicates",
+              "line": 160,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            },
+            {
+              "path": "tools/xtask/src/repository/cargo_packages/tests.rs",
+              "symbol": "complete_matrix_rejects_bad_rows_and_cross_batch_duplicates",
+              "line": 186,
+              "sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "historical_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "current_sha256": "97b1e10714147863bd93530967b712a42f8dd6c743ad681500d702267ba87d0a",
+              "symbol_present": true
+            }
+          ]
+        },
+        {
+          "legacy_method": "test_safetensors_step_compiles_selected_owner_once_and_requires_exact_test",
+          "line": 81,
+          "owners": [
+            {
+              "path": "tools/xtask/tests/migration_lifecycle/safetensors_workflow.rs",
+              "symbol": "actual_safetensors_step_compiles_selected_owner_once_and_requires_exact_ignored_test",
+              "line": 186,
+              "sha256": "7169ca33e5d6f96bcc750b2b832787430b5805c2a5ae6be1b1d83ae9b23d9bef",
+              "historical_sha256": "7169ca33e5d6f96bcc750b2b832787430b5805c2a5ae6be1b1d83ae9b23d9bef",
+              "current_sha256": "7169ca33e5d6f96bcc750b2b832787430b5805c2a5ae6be1b1d83ae9b23d9bef",
+              "symbol_present": true
+            }
+          ]
+        }
+      ],
+      "historical_receipts": [
+        {
+          "path": ".omo/evidence/resume-20261002/next-wave-safetensors-tests.log",
+          "sha256": "38c8cade42de7d16414d5fe08205522604f4a25658fececa405c4bd19d0ff358",
+          "terminal": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 503 filtered out; finished in 0.64s"
+        },
+        {
+          "path": ".omo/evidence/resume-20261002/next-full-xtask-corrected4.log",
+          "sha256": "fff4143c5afaf1bea549dd49f3a1d776431019df4d03320a6723ce8d9026451a",
+          "terminal": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s",
+          "qualification": "Checkpoint e767ddc2a parent3231/0; use existing repository cargo unit and migration_cargo_metadata/CLI target summaries, not only final aggregate line."
+        }
+      ]
+    }
+  ],
+  "candidate_method_maps": [
+    [
+      "test_producer_binds_source_native_stamp_and_every_executable",
+      [
+        "actual_dirty_source_producer_verifies_relocated_files_and_rejects_source_and_digest_changes",
+        "actual_producer_rejects_every_admitted_member_mutation_and_missing_file_without_republishing",
+        "actual_producer_rejects_changed_prebuild_snapshot_stale_test_wrong_stamp_and_escape",
+        "actual_producer_rejects_changed_checkout_head_before_verification_or_publication"
+      ]
+    ],
+    [
+      "test_accepts_binary_linked_after_stamped_native_build",
+      [
+        "actual_local_freshness_preserves_platform_neutral_executable_and_strict_native_mtime"
+      ]
+    ],
+    [
+      "test_rejects_binary_older_than_or_equal_to_native_stamp",
+      [
+        "actual_freshness_rejects_older_missing_inputs_and_wrong_cpu_static_native_identity"
+      ]
+    ],
+    [
+      "test_rejects_missing_executable_or_stamp",
+      [
+        "actual_freshness_rejects_older_missing_inputs_and_wrong_cpu_static_native_identity"
+      ]
+    ]
+  ],
+  "candidate_original_receipt": {
+    "name": "original-intents",
+    "status": "PASS",
+    "head": "32a6cf92367f86c6f8c6ac37fb5b43fb12c35fad",
+    "argv": [
+      "just",
+      "with-lld",
+      "python3",
+      "-m",
+      "unittest",
+      "-v",
+      "scripts.tests.test_check_skippy_workload_candidate"
+    ],
+    "exit_code": 0,
+    "log": ".omo/evidence/resume-20261002/workload-candidate-original-intents.log",
+    "sha256": "e07a5546af604dec16765d5aa5e9e263937d1228209ed39b5ece640128eeedc0",
+    "passed": 4
+  },
+  "focused_receipts": {
+    "path": ".omo/evidence/resume-20261002/oracle-cargo-helper-focused-receipts.json",
+    "sha256": "08d367d833d9646377cef9cdf60daaadc59c3720d5ecfdd323c0f5eab0580070",
+    "receipts": [
+      {
+        "name": "prepared-source",
+        "status": "PASS",
+        "argv": [
+          "just",
+          "with-lld",
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "xtask",
+          "--test",
+          "prepared_source",
+          "prepared_source_",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "passed": 7,
+        "expected": 7,
+        "log": ".omo/evidence/resume-20261002/oracle-cargo-helper-focused-prepared-source.log",
+        "sha256": "f59c31ed84b4b8b7d3574beab902803b724f6496e743b4ad88faab9764edc5b0"
+      },
+      {
+        "name": "cargo-owner",
+        "status": "PASS",
+        "argv": [
+          "just",
+          "with-lld",
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "xtask",
+          "--bin",
+          "xtask",
+          "repository::cargo_packages::tests::",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "passed": 14,
+        "expected": 14,
+        "log": ".omo/evidence/resume-20261002/oracle-cargo-helper-focused-cargo-owner.log",
+        "sha256": "67f2bd201385cdbd396072029a52e0f1a062a19e2ac40f6e11fabebf80b05f0e"
+      },
+      {
+        "name": "metadata",
+        "status": "PASS",
+        "argv": [
+          "just",
+          "with-lld",
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "xtask",
+          "--test",
+          "migration_cargo_metadata",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "passed": 10,
+        "expected": 10,
+        "log": ".omo/evidence/resume-20261002/oracle-cargo-helper-focused-metadata.log",
+        "sha256": "ef40dca17dc76a8604ab4bcb07b4efbe63641ed5aed756a3b7adb38f3462dc2a"
+      },
+      {
+        "name": "cargo-cli",
+        "status": "PASS",
+        "argv": [
+          "just",
+          "with-lld",
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "xtask",
+          "--test",
+          "migration_cargo_packages_cli",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "passed": 3,
+        "expected": 3,
+        "log": ".omo/evidence/resume-20261002/oracle-cargo-helper-focused-cargo-cli.log",
+        "sha256": "2365bfaf1f2cbe29823f6218007e4505c45655ed2e2f7c75cb9c80a274e3cdde"
+      },
+      {
+        "name": "actual-action",
+        "status": "PASS",
+        "argv": [
+          "just",
+          "with-lld",
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "xtask",
+          "--test",
+          "migration_lifecycle",
+          "ci_batch_filter::",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "passed": 5,
+        "expected": 5,
+        "log": ".omo/evidence/resume-20261002/oracle-cargo-helper-focused-actual-action.log",
+        "sha256": "da9727ab4f17a63031f4bcb493a91aeec6b5ab7c673dab1e5fa924210528e643"
+      },
+      {
+        "name": "safetensors",
+        "status": "PASS",
+        "argv": [
+          "just",
+          "with-lld",
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "xtask",
+          "--test",
+          "migration_lifecycle",
+          "actual_safetensors_step_compiles_selected_owner_once_and_requires_exact_ignored_test",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "passed": 1,
+        "expected": 1,
+        "log": ".omo/evidence/resume-20261002/oracle-cargo-helper-focused-safetensors.log",
+        "sha256": "f142f752df8e7cd7eb71ad1ea20633fc50a3bd1bb5fab3848a9e4ae581427d12"
+      }
+    ]
+  },
+  "native_receipts": {
+    "path": ".omo/evidence/resume-20261002/workload-candidate-native-proof-receipts.json",
+    "sha256": "b105292bc83fafb20da979e4732f06c7c94db7501e0348af3249591b456aefa2",
+    "receipts": [
+      {
+        "name": "native-proof-fmt",
+        "status": "PASS",
+        "head": "32a6cf92367f86c6f8c6ac37fb5b43fb12c35fad",
+        "argv": [
+          "just",
+          "with-lld",
+          "cargo",
+          "fmt",
+          "--all"
+        ],
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/workload-candidate-native-proof-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "native-proof-clippy",
+        "status": "PASS",
+        "head": "32a6cf92367f86c6f8c6ac37fb5b43fb12c35fad",
+        "argv": [
+          "just",
+          "with-lld",
+          "cargo",
+          "clippy",
+          "--offline",
+          "--locked",
+          "-p",
+          "xtask",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/workload-candidate-native-proof-clippy.log",
+        "sha256": "c2fa0bbc8841ffc55ba26f5613859a2d41459a96ce60a9797af9dffcb17cccdf"
+      },
+      {
+        "name": "native-proof-cli",
+        "status": "PASS",
+        "head": "32a6cf92367f86c6f8c6ac37fb5b43fb12c35fad",
+        "argv": [
+          "just",
+          "with-lld",
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "xtask",
+          "--test",
+          "migration_lifecycle",
+          "workload_provenance_cli::",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/workload-candidate-native-proof-cli.log",
+        "sha256": "9f4559349e80b3cac787cb96b93604ff960c0ed240943c7e014613c0c135de58"
+      }
+    ]
+  },
+  "retired_sources": [
+    {
+      "path": "scripts/llama-oracle-source.py",
+      "sha256": "711254e94c81f6640b5adba155eab8fffe4028263d8c38985e38bf69459635ad",
+      "mode": 420
+    },
+    {
+      "path": "scripts/ci-cargo-packages.py",
+      "sha256": "9f15bd3e32bd9263dfec4d1b6f7f5744680a196e79c0f387ade538341f1ecb36",
+      "mode": 420
+    },
+    {
+      "path": "scripts/tests/test_check_skippy_workload_candidate.py",
+      "sha256": "0ab8d6af2b55fac11680b826b7ab8729ebe3943b490581b8111af88b105331b2"
+    },
+    {
+      "path": "scripts/check-skippy-workload-candidate.py",
+      "sha256": "b1e11aaf123a19feeacea8cdbd3b51c0edd7cf33e829f877020bb30e49127539"
+    }
+  ],
+  "retired_inventory_rows": [
+    {
+      "classification": "workload/canary identity validation",
+      "deletion_condition": "Map all canary/workload callers and port generic identity checks before deleting.",
+      "exception": null,
+      "path": "scripts/check-skippy-workload-candidate.py",
+      "phase": 5,
+      "replacement_owner": "tools/xtask automation evidence",
+      "required": false
+    },
+    {
+      "classification": "required protected CI package compatibility helper",
+      "deletion_condition": "Protected action uses typed Rust package translation with legacy/current plan parity and no Python dependency.",
+      "exception": null,
+      "path": "scripts/ci-cargo-packages.py",
+      "phase": 2,
+      "replacement_owner": "tools/xtask ci_plan package batch translation",
+      "required": true
+    },
+    {
+      "classification": "native oracle provenance helper",
+      "deletion_condition": "Port provenance identity and verify callers before removal.",
+      "exception": null,
+      "path": "scripts/llama-oracle-source.py",
+      "phase": 5,
+      "replacement_owner": "tools/xtask artifact/evidence",
+      "required": false
+    },
+    {
+      "classification": "generic identity policy test",
+      "deletion_condition": "Candidate identity checks pass in Rust tests.",
+      "exception": null,
+      "path": "scripts/tests/test_check_skippy_workload_candidate.py",
+      "phase": 2,
+      "replacement_owner": "tools/xtask artifact/evidence tests",
+      "required": true
+    }
+  ],
+  "corrected_required_flags": [
+    {
+      "path": "scripts/tests/test_install_sh.py",
+      "previous_required": false,
+      "reason": "Still selected by normal ci-validate transitional core roster; no isolation qualification."
+    },
+    {
+      "path": "scripts/tests/test_install_ps1.py",
+      "previous_required": false,
+      "reason": "Still selected by normal ci-validate transitional core roster; no isolation qualification."
+    },
+    {
+      "path": "scripts/tests/test_kv_restart_replay.py",
+      "previous_required": false,
+      "reason": "Still selected by normal ci-validate transitional core roster; no isolation qualification."
+    }
+  ],
+  "retired_helper_rows": {
+    "python_implementation_groups": [
+      {
+        "boundary": "--generation, --crates and optional --batches come from protected action; Cargo discovers candidate workspace membership",
+        "file": "scripts/ci-cargo-packages.py",
+        "members": [
+          [
+            97,
+            "e507857cf58e28bf",
+            1,
+            "subprocess-or-interpreter",
+            "execution",
+            "cargo metadata --locked --no-deps --format-version=1",
+            "main reads JSON stdout to resolve only present candidate workspace package owners; nonzero raises and fails the protected batch; no source write"
+          ]
+        ],
+        "root": "candidate executor protected package batch translation"
+      },
+      {
+        "boundary": "source root from CLI; --write-source-snapshot is an explicit file output, not child launch",
+        "file": "scripts/check-skippy-workload-candidate.py",
+        "members": [
+          [
+            29,
+            "82bcd0144272b94c",
+            1,
+            "subprocess-or-interpreter",
+            "execution",
+            "git -C <root> <args>",
+            "source_identity runs diff --binary HEAD, ls-files --others --exclude-standard -z and rev-parse HEAD; check_output captures bytes, nonzero raises; reads source state"
+          ]
+        ],
+        "root": "optional canary candidate source verification"
+      },
+      {
+        "boundary": "checkout derived from selected source .deps/llama.cpp; no inferred global pin",
+        "file": "scripts/llama-oracle-source.py",
+        "members": [
+          [
+            67,
+            "ecc65f5e67215e99",
+            1,
+            "subprocess-or-interpreter",
+            "execution",
+            "git -C <checkout> rev-parse HEAD",
+            "verifier reads HEAD via subprocess.run; checked status and stdout, rejects bad identity; no write"
+          ],
+          [
+            73,
+            "2e06741c731456c7",
+            1,
+            "subprocess-or-interpreter",
+            "execution",
+            "git -C <checkout> diff-index --quiet HEAD --",
+            "verifier requires clean tracked tree; check=True raises on nonzero; no stdout and no write"
+          ]
+        ],
+        "root": "optional canary prepared llama source verification"
+      }
+    ],
+    "python_implementation_sources": [
+      [
+        "scripts/check-skippy-workload-candidate.py",
+        "b1e11aaf123a19feeacea8cdbd3b51c0edd7cf33e829f877020bb30e49127539",
+        138
+      ],
+      [
+        "scripts/ci-cargo-packages.py",
+        "9f15bd3e32bd9263dfec4d1b6f7f5744680a196e79c0f387ade538341f1ecb36",
+        111
+      ],
+      [
+        "scripts/llama-oracle-source.py",
+        "711254e94c81f6640b5adba155eab8fffe4028263d8c38985e38bf69459635ad",
+        89
+      ]
+    ]
+  },
+  "retired_test_rows": [
+    {
+      "file": "scripts/tests/test_check_skippy_workload_candidate.py",
+      "members": [
+        [
+          16,
+          "8d09d1097f25fdce",
+          1,
+          "dynamic-import",
+          "import",
+          "scripts/check-skippy-workload-candidate.py",
+          "CHECK constant is fixed; loader executes module in-process"
+        ]
+      ]
+    }
+  ],
+  "retired_additional_rows": [
+    [
+      "scripts/tests/test_check_skippy_workload_candidate.py",
+      [
+        [
+          "launch",
+          "scripts/check-skippy-workload-candidate.py",
+          "_check launches fixed checker via sys.executable with isolated binary/build fixture; continuation is same process",
+          [
+            60
+          ]
+        ],
+        [
+          "assembly",
+          "scripts/check-skippy-workload-candidate.py argv[0]",
+          "sys.executable is argv continuation of _check at line 60, not a second launch",
+          [
+            62
+          ]
+        ]
+      ]
+    ]
+  ],
+  "retired_prose_rows": [
+    [
+      1125,
+      "b7a562e2b1d3673f",
+      1,
+      "prose",
+      "CI ownership or retained HF conversion environment description",
+      "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
+    ],
+    [
+      1166,
+      "0934d1ce8f661df3",
+      1,
+      "prose",
+      "CI ownership or retained HF conversion environment description",
+      "Instruction inventory records descriptions only; actual executable callers remain independently classified in script and workflow shards"
+    ]
+  ],
+  "retired_module_ownership": [
+    {
+      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
+      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
+      "module": "scripts/tests/test_check_skippy_workload_candidate.py",
+      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
+      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "sha256": "0ab8d6af2b55fac11680b826b7ab8729ebe3943b490581b8111af88b105331b2",
+      "test_method_count": 4,
+      "test_methods": [
+        "test_accepts_binary_linked_after_stamped_native_build",
+        "test_producer_binds_source_native_stamp_and_every_executable",
+        "test_rejects_binary_older_than_or_equal_to_native_stamp",
+        "test_rejects_missing_executable_or_stamp"
+      ]
+    }
+  ],
+  "caller_closure": {
+    "before": {
+      "scripts/llama-oracle-source.py": [],
+      "scripts/ci-cargo-packages.py": [
+        ".agents/skills/manage-ci/references/current-inventory.md",
+        "tools/xtask/src/migration_inventory/tests.rs"
+      ],
+      "scripts/check-skippy-workload-candidate.py": [
+        "scripts/tests/test_check_skippy_workload_candidate.py"
+      ]
+    },
+    "remaining": "Cargo helper filename is an inert scanner fixture only. External pinned action has its own old helper checkout; candidate copy retirement does not complete external rollout."
+  },
+  "semantic_review": {
+    "provenance": "Three-lane canonical digest, actual producer marker schema, clean HEAD and safe membership are owned by prepared-source Rust CLI.",
+    "cargo": "Generation-aware typed translation retains ordered owners, matrix membership and strict validation, with actual maintained action/filter and owned cleanup tests.",
+    "candidate": "Actual Rust source snapshot and manifest bind current Git HEAD/worktree and all nine artifacts; freshness admits only executable bytes newer than a valid CPU/static native stamp. New actual empty-commit proof rejects changed HEAD before verification or publication."
+  },
+  "limits": [
+    "Finite local CLI/process fixtures only. Inert native artifact bytes are never executed.",
+    "Protected executor rollout, native Windows, cross-platform product/model/live SDK and remaining generic Python migration remain incomplete.",
+    "Historical method ownership and prior receipts are preserved, not claimed as newly executed originals."
+  ],
+  "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+  "root_postimage_qualification": {
+    "status": "PASS_LOCAL_POSTIMAGE",
+    "head": "32a6cf92367f86c6f8c6ac37fb5b43fb12c35fad",
+    "focused_receipts": {
+      "path": ".omo/evidence/resume-20261002/provenance-helper-retirement-postimage-focused-receipts.json",
+      "sha256": "a12b397d434bfe16e2aa9df204d2d05bcb09b16d0364775280e96c4b5e411a72"
+    },
+    "aggregate_receipts": {
+      "path": ".omo/evidence/resume-20261002/provenance-helper-retirement-postimage-receipts.json",
+      "sha256": "f623d94994aaeb6bc8c2632f20e10c9bfe50c7948f47e73483aca3df85e4b78f"
+    },
+    "normal": {
+      "name": "normal",
+      "status": "PASS",
+      "exit_code": 0,
+      "log": ".omo/evidence/resume-20261002/provenance-helper-retirement-postimage-normal.log",
+      "sha256": "1672f951b7729d83e96f1d79acf97324a881f80fe48f09872c84ca4d0c0cb1b2",
+      "targets": 109,
+      "passed": 4293,
+      "failed": 0,
+      "ignored": 2,
+      "legacy": {
+        "run": 906,
+        "passed": 892,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 352.438
+      }
+    },
+    "intent_scope": "Forty focused native helper checks, four unchanged candidate originals and fifteen workload CLI groups passed before helper retirement. Standard JSON diagnostic quoting and complete current roster/domain refusal proofs passed with all existing family-plan owners. Unreferenced parser-emulation fixture files were not compiled by the predecessor target.",
+    "limits": "Local CLI/process and finite inert artifact proof only. Protected executor rollout, platform/model/product/live SDK and remaining generic Python closure remain incomplete."
+  }
+}

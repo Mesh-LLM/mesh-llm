@@ -1,6 +1,5 @@
-//! Planner diagnostics in the legacy `PlanError` wording, and the typed field
-//! readers that produce them. Messages embed Python `repr` for names and
-//! lists because callers and reviewers match the legacy text.
+//! Planner diagnostics and typed field readers. Names use Rust debug quoting
+//! to keep control characters escaped; lists preserve deterministic order.
 
 use crate::ci_plan::document::Json;
 use crate::repository::text;
@@ -23,12 +22,12 @@ pub(super) fn fail<T>(message: impl Into<String>) -> PlanResult<T> {
     Err(PlanError(message.into()))
 }
 
-/// Python `repr(str)`.
+/// Quote a diagnostic name with Rust debug formatting.
 pub(super) fn repr(text: &str) -> String {
     text::repr(text)
 }
 
-/// Python `repr(list[str])`, e.g. `['a', 'b']`.
+/// Render an ordered list of quoted diagnostic names.
 pub(super) fn repr_list<S: AsRef<str>>(items: &[S]) -> String {
     let rendered = items
         .iter()
@@ -38,7 +37,7 @@ pub(super) fn repr_list<S: AsRef<str>>(items: &[S]) -> String {
     format!("[{rendered}]")
 }
 
-/// `sorted(set(selected) - known)`.
+/// Sort unknown selections and remove duplicates.
 pub(super) fn sorted_unknown(selected: &[String], known: &BTreeSet<&str>) -> Vec<String> {
     selected
         .iter()
@@ -49,7 +48,7 @@ pub(super) fn sorted_unknown(selected: &[String], known: &BTreeSet<&str>) -> Vec
         .collect()
 }
 
-/// `_nonempty_string`: a string with at least one character.
+/// Read a string with at least one character.
 pub(super) fn nonempty_string(value: Option<&Json>, field: &str) -> PlanResult<String> {
     match value.and_then(Json::as_str) {
         Some(text) if !text.is_empty() => Ok(text.to_owned()),
@@ -57,7 +56,7 @@ pub(super) fn nonempty_string(value: Option<&Json>, field: &str) -> PlanResult<S
     }
 }
 
-/// `_string_list`: an array of non-empty, unique strings.
+/// Read an array of non-empty, unique strings.
 pub(super) fn string_list(value: Option<&Json>, field: &str) -> PlanResult<Vec<String>> {
     let items = value
         .and_then(Json::as_array)
@@ -75,7 +74,7 @@ pub(super) fn string_list(value: Option<&Json>, field: &str) -> PlanResult<Vec<S
     Ok(items.into_iter().map(str::to_owned).collect())
 }
 
-/// `type(value) is int and value >= 1`.
+/// Read a positive integral JSON number.
 pub(super) fn positive_int(value: Option<&Json>) -> Option<i128> {
     value.and_then(Json::as_int).filter(|number| *number >= 1)
 }
@@ -85,7 +84,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn migration_ci_plan_repr_list_matches_python() {
+    fn migration_ci_plan_diagnostic_list_quotes_names_and_handles_empty() {
         assert_eq!(repr_list(&["a", "it's"]), "[\"a\", \"it's\"]");
         assert_eq!(repr_list::<&str>(&[]), "[]");
     }

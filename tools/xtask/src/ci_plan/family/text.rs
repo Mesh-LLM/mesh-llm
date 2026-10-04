@@ -29,44 +29,10 @@ impl FamilyString {
     }
 
     pub(super) fn diagnostic(&self) -> String {
-        let mut text = String::new();
-        for &code in &self.0 {
-            match char::from_u32(code) {
-                Some(character) => text.push(character),
-                None => text.push_str(&format!("\\u{code:04x}")),
-            }
-        }
-        text
-    }
-
-    pub(super) fn repr(&self) -> String {
-        let quote = if self.0.contains(&u32::from('\'')) && !self.0.contains(&u32::from('"')) {
-            '"'
-        } else {
-            '\''
-        };
-        let mut output = String::from(quote);
-        for &code in &self.0 {
-            match char::from_u32(code) {
-                None => output.push_str(&format!("\\u{code:04x}")),
-                Some('\\') => output.push_str("\\\\"),
-                Some('\n') => output.push_str("\\n"),
-                Some('\r') => output.push_str("\\r"),
-                Some('\t') => output.push_str("\\t"),
-                Some(character) if character == quote => {
-                    output.push('\\');
-                    output.push(character);
-                }
-                Some(character)
-                    if character < ' ' || ('\u{7f}'..='\u{a0}').contains(&character) =>
-                {
-                    output.push_str(&format!("\\x{code:02x}"));
-                }
-                Some(character) => output.push(character),
-            }
-        }
-        output.push(quote);
-        output
+        let text = self
+            .scalar_text()
+            .expect("JSON input strings contain Unicode scalars");
+        serde_json::to_string(&text).expect("JSON strings serialize")
     }
 
     pub(super) fn write_json(&self, output: &mut String) {

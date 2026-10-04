@@ -204,3 +204,24 @@ fn complete_matrix_rejects_bad_rows_and_cross_batch_duplicates() {
 fn generation_fails_when_selector_is_not_explicitly_supported() {
     assert!(Generation::parse("auto").is_err());
 }
+
+#[test]
+fn legacy_frontend_prefers_current_inference_owner_and_retains_historical_fallback() {
+    let request =
+        TranslationRequest::parse("[\"openai-frontend\"]", None, Generation::Legacy).unwrap();
+    let historical = available(EXTRACTED);
+    assert_eq!(
+        request.resolve(&historical).unwrap().names()[0].as_str(),
+        "skippy-openai-frontend"
+    );
+    for retain_old in [false, true] {
+        let mut current = historical.clone();
+        if !retain_old {
+            current.retain(|name| name.as_str() != "skippy-openai-frontend");
+        }
+        current.insert(PackageName::try_from("skippy-inference-api".to_owned()).unwrap());
+        let resolved = request.resolve(&current).unwrap();
+        assert_eq!(resolved.names().len(), 1);
+        assert_eq!(resolved.names()[0].as_str(), "skippy-inference-api");
+    }
+}

@@ -1299,14 +1299,14 @@ same resolved directory; native ABI cache recipes include both native source
 locations. Workspace CI script entrypoints remain at `scripts/`.
 
 The protected planner still uses its own Cargo metadata and byte-identical
-catalogs. `scripts/ci-cargo-packages.py` runs only in candidate executors and
+catalogs. `cargo xtool repository cargo-packages` in current candidate actions
 translates a pre-extraction batch to its fixed successor owners when the
 protected executor declares `--generation legacy` and the candidate contains
 the extracted package builder. Explicit generation disambiguates the reused
 package name even in a one-package plan. Matrix executors must switch to
-`--generation current` in the same commit that migrates the protected workspace
-package names; the fixed platform owner requests remain legacy selectors. It checks
-successors against candidate Cargo workspace metadata, rejects unknown/missing
+package name even in a one-package plan. Older pinned actions retain their own
+Python helper in the action checkout. Matrix executors must switch to current
+generation when protected workspace names migrate; fixed platform selectors remain legacy. It checks
 owners and preserves new-plan batches unchanged. The frozen old/new workspace
 censuses verify all 75 extracted members have exactly one predecessor batch,
 including the reused `skippy-model-package` name. This adds no matrix workers,
@@ -1360,7 +1360,7 @@ a root `website/`. Neither change expands runner or cache authority.
 Relocated runtime owners keep their consumers: the SDK-smoke and
 inference-artifact selectors name `skippy-native-runtime` beside
 `mesh-llm-native-runtime`, and a planner-level assertion locks every successor in
-`scripts/ci-cargo-packages.py` to its predecessor's semantic domains. Three
+`repository::cargo_packages::successors::SUCCESSORS` to its predecessor's semantic domains. Three
 successors (`skippy-hf-hub`, `skippy-api`, `skippy-events`) have no
 `crate_rules` entry yet; the assertion records that exact set instead of hiding
 it. `ci/ownership.yml` can only change on the protected branch, because the PR
