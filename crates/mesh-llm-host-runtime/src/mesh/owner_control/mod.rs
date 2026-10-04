@@ -836,7 +836,7 @@ impl Node {
                 | ApplyResult::AppliedWithRestartRequired { .. }
                 | ApplyResult::PersistedWithRevisionTrackingError { .. }
         ) {
-            self.refresh_plugin_exchange_grants().await;
+            self.refresh_plugin_exchange_grants().await?;
         }
         let envelope = match result {
             ApplyResult::Applied {
