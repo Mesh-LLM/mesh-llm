@@ -194,7 +194,8 @@ pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeRes
     let slots_auto = input.parallel_override.is_none();
     let slots = input
         .parallel_override
-        .unwrap_or_else(planned_parallel_slots);
+        .unwrap_or_else(planned_parallel_slots)
+        .max(1);
     let estimated_kv_bytes_per_token = input
         .metadata
         .and_then(|metadata| {

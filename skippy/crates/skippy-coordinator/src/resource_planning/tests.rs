@@ -38,6 +38,40 @@ fn explicit_overrides_are_preserved() {
 }
 
 #[test]
+fn zero_parallel_override_produces_valid_automatic_and_explicit_plans() {
+    let metadata = gqa_metadata(131_072);
+    // Check both paths even if the automatic planner panics, so the explicit
+    // path must also demonstrate a nonzero, chargeable lane allocation.
+    let valid_plans = [None, Some(8192)].map(|ctx_size_override| {
+        std::panic::catch_unwind(|| {
+            let plan = plan_runtime_resources(RuntimeResourcePlanInput {
+                ctx_size_override,
+                parallel_override: Some(0),
+                model_bytes: 3 * 1024 * 1024 * 1024,
+                projector_bytes: 0,
+                vram_bytes: 16 * 1024 * 1024 * 1024,
+                metadata: Some(&metadata),
+                kv_cache_quant: GgufKvCacheQuant::F16,
+                local_layer_fraction: None,
+                planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+                measured_buffers: None,
+            });
+            assert!(plan.slots > 0, "zero-lane plan for {ctx_size_override:?}");
+            assert!(plan.context_length > 0);
+            let breakdown = plan.breakdown.unwrap();
+            assert!(!breakdown.slots_auto, "zero was an explicit override");
+            assert!(breakdown.planned_kv_bytes > 0);
+            assert_eq!(breakdown.slots, plan.slots);
+            if let Some(explicit_context) = ctx_size_override {
+                assert_eq!(plan.context_length, explicit_context);
+            }
+        })
+        .is_ok()
+    });
+    assert_eq!(valid_plans, [true, true]);
+}
+
+#[test]
 fn auto_context_clamped_to_native() {
     let metadata = gqa_metadata(16_384);
     let plan = plan_runtime_resources(RuntimeResourcePlanInput {
