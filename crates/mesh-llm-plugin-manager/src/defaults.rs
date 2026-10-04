@@ -51,19 +51,19 @@ impl DefaultPlugin {
 /// plugin its operator chose.
 pub const DEFAULT_PLUGINS: &[DefaultPlugin] = &[DefaultPlugin {
     name: "capsule-emit-mesh",
-    version: "0.1.1",
+    version: "0.1.2",
     sha256: &[
         (
             "aarch64-apple-darwin",
-            "4391a8cca80cafa67ed2e7185d57d4c0ccd4627fa0e8bbe7d820c55d1f9582f3",
+            "593566c4f0bcb9edc804fb2face0b07e7508a0d5891f7962c14b6c06578b09a6",
         ),
         (
             "x86_64-unknown-linux-gnu",
-            "412e768c4fe867211592aee8876ec191cbd388eae834b5a29809d3975a1dad91",
+            "696c60023f4d0868f94e1fdee4799616c6a6ad75a3a067337a0e098f698414fc",
         ),
         (
             "aarch64-unknown-linux-gnu",
-            "bbeef683d1b569efa27bbcec39f22f5f4dd5438166ff66983dccf2ceb0638d60",
+            "578c89497a61591907bd065d1b751a2c2cc2c545b62c105ce1aab96e3db647ac",
         ),
     ],
 }];

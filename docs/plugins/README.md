@@ -535,7 +535,7 @@ the installed archive, extracted files, and local plugin metadata.
 ## Default Plugins
 
 The reviewed default list is `mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`.
-Today it contains `capsule-emit-mesh` 0.1.1. Each entry pins a release version
+Today it contains `capsule-emit-mesh` 0.1.2. Each entry pins a release version
 and an archive SHA-256 per supported platform. The catalog locates the plugin;
 if it also pins that platform, the pins must agree. GitHub's digest and the
 compiled digest must both match the download. Payment and wallet plugins are
