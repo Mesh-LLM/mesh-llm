@@ -203,10 +203,29 @@ fn set_enabled(name: &str, enabled: bool) -> Result<()> {
 
 fn delete(name: &str) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
+    // A record that cannot be read still deletes; it just gets no note.
+    let default_managed = store
+        .load_optional(name)
+        .ok()
+        .flatten()
+        .is_some_and(|metadata| metadata.default_managed);
     store.delete(name)?;
     let mut err = mesh_llm_events::console_err();
     writeln!(err, "🗑️  Deleted {name}")?;
+    if let Some(note) = deleted_default_note(name, default_managed) {
+        writeln!(err, "{note}")?;
+    }
     Ok(())
+}
+
+/// What a deleted default plugin's operator should know: it comes back.
+fn deleted_default_note(name: &str, default_managed: bool) -> Option<String> {
+    default_managed.then(|| {
+        format!(
+            "{name} is a default plugin: the next installer or mesh-llm update run installs it again. \
+             To keep it off, run mesh-llm plugins disable {name}."
+        )
+    })
 }
 
 /// One line for a default that provisioning left alone; none for one already current.
@@ -550,6 +569,18 @@ url = "unix:///run/remote.sock"
         assert!(!configured.contains("capsule-emit-mesh"));
         assert!(configured.contains("operator-run"));
         assert!(configured.contains("remote"));
+    }
+
+    #[test]
+    fn deleting_a_default_says_it_comes_back_and_how_to_keep_it_off() {
+        assert_eq!(
+            deleted_default_note("capsules", true).as_deref(),
+            Some(
+                "capsules is a default plugin: the next installer or mesh-llm update run \
+                 installs it again. To keep it off, run mesh-llm plugins disable capsules."
+            )
+        );
+        assert!(deleted_default_note("mine", false).is_none());
     }
 
     #[test]
