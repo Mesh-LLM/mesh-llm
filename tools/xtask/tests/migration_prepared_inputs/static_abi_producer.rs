@@ -69,7 +69,7 @@ fn migration_prepared_inputs_abi_scan_cli_rejects_when_binary_contains_forbidden
 }
 
 #[test]
-fn migration_prepared_inputs_abi_scan_cli_accepts_when_stage_is_missing() -> TestResult {
+fn migration_prepared_inputs_abi_scan_cli_refuses_when_stage_is_missing() -> TestResult {
     let scratch = Scratch::new("abi-scan-missing")?;
     let case = Case::same(
         &["static-abi-path-scan"],
@@ -79,6 +79,31 @@ fn migration_prepared_inputs_abi_scan_cli_accepts_when_stage_is_missing() -> Tes
 
     let output = case.run(scratch.path())?;
 
-    assert_output(&output, 0, "", "");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("could not read static ABI stage directory")
+    );
+    Ok(())
+}
+
+#[test]
+fn migration_prepared_inputs_abi_scan_cli_refuses_stage_file_without_mutation() -> TestResult {
+    let scratch = Scratch::new("abi-scan-file")?;
+    scratch.write("stage", b"/producer")?;
+    let case = Case::same(
+        &["static-abi-path-scan"],
+        &["stage", "/producer"],
+        Legacy::Heredoc(ACTION, 3),
+    );
+    let output = case.run(scratch.path())?;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("could not read static ABI stage directory")
+    );
+    assert_eq!(fs::read(scratch.join("stage"))?, b"/producer");
     Ok(())
 }

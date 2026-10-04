@@ -1,3 +1,4 @@
+mod action_pins;
 mod cache_authority;
 mod cache_boundaries;
 mod cache_callers;
@@ -8,6 +9,7 @@ mod cache_predicate;
 mod canary_build;
 mod canary_execution;
 mod canary_graph;
+mod cancellation;
 mod claude_clients;
 mod compute_changes_budget;
 mod crates_recovery;
@@ -33,6 +35,7 @@ use std::path::Path;
 
 pub(super) fn check(root: &Path) -> DynResult<()> {
     compute_changes_budget::check(root)?;
+    action_pins::check(root)?;
     let mut workflows = BTreeMap::new();
     for entry in std::fs::read_dir(root.join(".github/workflows"))? {
         let path = entry?.path();
@@ -53,6 +56,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
         shell::check_containers(&document).map_err(|error| format!("{name}: {error}"))?;
         workflows.insert(name, document);
     }
+    cancellation::check(&workflows)?;
     quality_contracts::check(root, &workflows)?;
     selected_ref::check(&workflows)?;
     claude_clients::check(&workflows)?;

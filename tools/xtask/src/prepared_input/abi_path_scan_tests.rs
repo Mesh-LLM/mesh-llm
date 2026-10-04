@@ -55,8 +55,7 @@ fn migration_prepared_inputs_path_scan_keeps_argument_priority_when_empty_and_du
 }
 
 #[test]
-fn migration_prepared_inputs_path_scan_formats_python_repr_when_forbidden_path_has_quotes_and_controls()
- {
+fn migration_prepared_inputs_path_scan_escapes_forbidden_path_quotes_and_controls() {
     let directory = tempfile::tempdir().expect("scratch");
     std::fs::write(directory.path().join("file"), b"/it's\n\t\\\x01").expect("binary");
     let args = arguments(directory.path(), &["/it's\n\t\\\u{1}"]);
@@ -81,17 +80,22 @@ fn migration_prepared_inputs_path_scan_accepts_arbitrary_binary_when_no_forbidde
 }
 
 #[test]
-fn migration_prepared_inputs_path_scan_accepts_when_stage_is_missing() {
+fn migration_prepared_inputs_path_scan_refuses_when_stage_is_missing() {
     let directory = tempfile::tempdir().expect("scratch");
     let args = arguments(&directory.path().join("missing"), &["/producer"]);
 
     let result = run(&args);
 
-    assert_eq!(result.ok(), Some(String::new()));
+    assert!(
+        result
+            .expect_err("missing stage must not qualify")
+            .0
+            .contains("could not read static ABI stage directory")
+    );
 }
 
 #[test]
-fn migration_prepared_inputs_path_scan_accepts_when_stage_is_a_file() {
+fn migration_prepared_inputs_path_scan_refuses_when_stage_is_a_file() {
     let directory = tempfile::tempdir().expect("scratch");
     let file = directory.path().join("file");
     std::fs::write(&file, b"/producer").expect("file");
@@ -99,7 +103,13 @@ fn migration_prepared_inputs_path_scan_accepts_when_stage_is_a_file() {
 
     let result = run(&args);
 
-    assert_eq!(result.ok(), Some(String::new()));
+    assert!(
+        result
+            .expect_err("stage file must not qualify")
+            .0
+            .contains("could not read static ABI stage directory")
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), b"/producer");
 }
 
 #[test]
