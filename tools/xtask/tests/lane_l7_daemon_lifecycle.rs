@@ -1,7 +1,7 @@
-use std::{
-    net::{Ipv4Addr, TcpListener},
-    path::Path,
-};
+use std::path::Path;
+
+#[path = "lane_l7_daemon_lifecycle/port_reservation.rs"]
+mod port_reservation;
 
 // Each narrative releases a reserved port range before its child binds it.
 // Keep this target's narratives exclusive across that handoff window.
@@ -16,20 +16,9 @@ fn run(marker: Option<&str>) -> (tempfile::TempDir, std::process::Output) {
     if let Some(marker) = marker {
         std::fs::write(location.join(marker), b"fixture").unwrap();
     }
-    let (base, listeners) = loop {
-        let first = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let base = first.local_addr().unwrap().port();
-        if base > 65500 {
-            continue;
-        }
-        let rest: Result<Vec<_>, _> = (1..20)
-            .map(|index| TcpListener::bind((Ipv4Addr::LOCALHOST, base + index)))
-            .collect();
-        if let Ok(mut rest) = rest {
-            rest.push(first);
-            break (base, rest);
-        }
-    };
+    // Automatic outbound HTTP ports must not claim a later daemon's listener
+    // between reservation and launch, or leave that service port in TIME_WAIT.
+    let (base, listeners) = port_reservation::reserve();
     drop(listeners);
     let fixture = Path::new(env!("CARGO_BIN_EXE_xtask"))
         .parent()
@@ -68,16 +57,34 @@ fn evidence(root: &Path) -> std::path::PathBuf {
         .unwrap()
         .path()
 }
+fn assert_success(output: &std::process::Output, directory: &Path) {
+    if output.status.success() {
+        return;
+    }
+    let mut diagnostic = String::from_utf8_lossy(&output.stderr).into_owned();
+    for name in ["session.json", "processes.json", "manifest.json"] {
+        diagnostic.push_str(&format!(
+            "\n{name}: {}",
+            std::fs::read_to_string(directory.join(name)).unwrap_or_default()
+        ));
+    }
+    for entry in std::fs::read_dir(directory.join("logs")).unwrap().flatten() {
+        let path = entry.path();
+        if path.to_string_lossy().ends_with(".stderr.log") {
+            diagnostic.push_str(&format!(
+                "\n{}: {}",
+                entry.file_name().to_string_lossy(),
+                std::fs::read_to_string(path).unwrap_or_default()
+            ));
+        }
+    }
+    panic!("{diagnostic}");
+}
 #[test]
 fn lifecycle_keeps_daemon_alive_across_expected_fail_fast_and_correlated_intents() {
     let (root, output) = run(None);
     let directory = evidence(root.path());
-    assert!(
-        output.status.success(),
-        "{}; {}",
-        String::from_utf8_lossy(&output.stderr),
-        std::fs::read_to_string(directory.join("session.json")).unwrap_or_default()
-    );
+    assert_success(&output, &directory);
     let receipts: Vec<serde_json::Value> =
         serde_json::from_slice(&std::fs::read(directory.join("processes.json")).unwrap()).unwrap();
     assert!(
@@ -118,11 +125,7 @@ fn activity_private_field_cannot_pass_coarse_privacy_contract() {
 #[test]
 fn owner_identity_failure_is_prerequisite_and_keeps_other_checks_running() {
     let (root, output) = run(Some("owner-unavailable"));
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output, &evidence(root.path()));
     let summary: serde_json::Value =
         serde_json::from_slice(&std::fs::read(evidence(root.path()).join("summary.json")).unwrap())
             .unwrap();
@@ -144,11 +147,7 @@ fn owner_identity_failure_is_prerequisite_and_keeps_other_checks_running() {
 #[test]
 fn on_demand_usage_exit_is_prerequisite_instead_of_aborting_session() {
     let (root, output) = run(Some("on-demand-usage"));
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output, &evidence(root.path()));
     let summary: serde_json::Value =
         serde_json::from_slice(&std::fs::read(evidence(root.path()).join("summary.json")).unwrap())
             .unwrap();

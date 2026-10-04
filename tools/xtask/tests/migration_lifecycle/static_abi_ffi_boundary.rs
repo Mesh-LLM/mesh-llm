@@ -295,3 +295,6 @@ fn static_abi_ffi_actual_boundary_contracts() {
             .any(|line| line.starts_with("cargo:rustc-link-lib="))
     );
 }
+
+#[path = "static_abi_ffi_boundary/dynamic_link.rs"]
+mod dynamic_link;

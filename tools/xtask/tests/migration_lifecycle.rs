@@ -219,3 +219,6 @@ mod just_layout_contracts;
 
 #[path = "migration_lifecycle/canary_agent_control.rs"]
 mod canary_agent_control;
+
+#[path = "migration_lifecycle/hf_xet_adapter.rs"]
+mod hf_xet_adapter;

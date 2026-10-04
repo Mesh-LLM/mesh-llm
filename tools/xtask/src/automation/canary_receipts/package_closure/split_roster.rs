@@ -48,8 +48,7 @@ pub(super) fn admit(root: &Path, check: bool) -> DynResult<Value> {
         &root,
         &policy_document::read(&root, "ci/llama-canary/family-certified.json")?,
     )?;
-    let output_path =
-        root.join("crates/mesh-llm-host-runtime/src/inference/skippy/split-certified.json");
+    let output_path = root.join("skippy/crates/skippy-api/src/split-certified.json");
     let parent = output_path
         .parent()
         .ok_or("roster output has no parent")?
@@ -73,26 +72,34 @@ fn frame(hash: &mut Sha256, bytes: &[u8]) -> DynResult<()> {
     Ok(())
 }
 fn queue(root: &Path) -> DynResult<Digest> {
-    let (root, members) =
-        source::ordered_patch_members(&root.join("third_party/llama.cpp/patches"))?;
+    let (root, members) = source::ordered_patch_members(&root.join("skippy/llama_cpp/patches"))?;
     let mut hash = Sha256::new();
     hash.update(b"mesh-llm-skippy-patch-queue-v2\0");
     hash.update(u64::try_from(members.len())?.to_le_bytes());
     for path in members {
         process::check()?;
-        frame(
-            &mut hash,
-            path.strip_prefix(&root)?
-                .to_str()
-                .ok_or("non-UTF8 patch name")?
-                .as_bytes(),
-        )?;
+        let name = patch_identity_name(path.strip_prefix(&root)?)?;
+        frame(&mut hash, name.as_bytes())?;
         frame(&mut hash, &fs::read(path)?)?;
     }
     Ok(Digest::try_from(hex::encode(hash.finalize()))?)
 }
+/// Patch recipe identities always use slash separators on every host platform.
+fn patch_identity_name(path: &Path) -> DynResult<String> {
+    path.components()
+        .map(|component| match component {
+            std::path::Component::Normal(name) => name
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "non-UTF8 patch name".into()),
+            _ => Err("patch identity must be relative normal components".into()),
+        })
+        .collect::<DynResult<Vec<_>>>()
+        .map(|components| components.join("/"))
+}
+
 fn abi(root: &Path) -> DynResult<String> {
-    let text = fs::read_to_string(root.join("crates/skippy-ffi/src/lib.rs"))?;
+    let text = fs::read_to_string(root.join("skippy/crates/skippy-ffi/src/lib.rs"))?;
     let mut versions = BTreeMap::new();
     for line in text.lines() {
         for name in ["MAJOR", "MINOR", "PATCH"] {
@@ -175,7 +182,7 @@ fn architectures(manifest: &Value) -> DynResult<Vec<String>> {
     Ok(result.into_iter().collect())
 }
 fn render(root: &Path, manifest: &[u8]) -> DynResult<Vec<u8>> {
-    let pin = fs::read_to_string(root.join("third_party/llama.cpp/upstream.txt"))?;
+    let pin = fs::read_to_string(root.join("skippy/llama_cpp/upstream.txt"))?;
     source::revision(pin.trim())?;
     let roster = Roster {
         schema_version: 2,

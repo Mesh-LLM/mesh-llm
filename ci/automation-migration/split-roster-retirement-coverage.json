@@ -1,0 +1,229 @@
+{
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "source_head": "a82de612c33c55d98fc7e95d2b154f6c563fb89b",
+  "method_maps": [
+    {
+      "method": "test_check_rejects_stale_output",
+      "native_owners": [
+        "automation::canary_package_closure::local_inspection::tests::local_authority_composes_dirty_manifest_parity_and_split_write_check_without_workflow_identity"
+      ]
+    },
+    {
+      "method": "test_checked_in_roster_is_deterministic_and_current",
+      "native_owners": [
+        "automation::canary_package_closure::split_roster::tests::repository_roster_matches_native_recipe_and_ignores_every_nonchat_architecture"
+      ]
+    },
+    {
+      "method": "test_invalid_workload_class_or_profile_cannot_grant_split_admission",
+      "native_owners": [
+        "automation::canary_package_closure::split_roster::tests::missing_unknown_and_misclassified_workloads_fail_before_admission"
+      ]
+    },
+    {
+      "method": "test_non_chat_workload_evidence_never_grants_split_admission",
+      "native_owners": [
+        "automation::canary_package_closure::split_roster::tests::repository_roster_matches_native_recipe_and_ignores_every_nonchat_architecture"
+      ]
+    },
+    {
+      "method": "test_patch_identity_covers_all_three_queue_lanes_in_order",
+      "native_owners": [
+        "automation::canary_package_closure::split_roster::tests::roster_bytes_bind_independent_v2_patch_frames_pin_and_all_abi_components",
+        "automation::canary_package_closure::split_roster::tests::patch_recipe_names_are_portable_and_reject_nonrelative_components"
+      ]
+    },
+    {
+      "method": "test_roster_contains_unique_tested_architectures",
+      "native_owners": [
+        "automation::canary_package_closure::split_roster::tests::roster_requires_causal_certified_core_lanes_and_excludes_nonchat_profiles",
+        "automation::canary_package_closure::split_roster::tests::repository_roster_matches_native_recipe_and_ignores_every_nonchat_architecture"
+      ]
+    },
+    {
+      "method": "test_workload_evidence_cannot_supply_the_only_split_architecture",
+      "native_owners": [
+        "automation::canary_package_closure::split_roster::tests::no_nonchat_workload_can_supply_the_only_split_architecture"
+      ]
+    }
+  ],
+  "retired_sources": [
+    {
+      "path": "scripts/tests/test_generate_split_certified.py",
+      "sha256": "c858e7646ada5f00a9dbe921c28348ad465f01af7d89f20d57fa23e73af00559"
+    },
+    {
+      "path": "scripts/generate-split-certified.py",
+      "sha256": "1e377f83006f3e0913c0b36c4ada597ee308626dd0faa17fdf1aa84af8430dd8"
+    }
+  ],
+  "retired_inventory": [
+    {
+      "classification": "generated model family policy",
+      "deletion_condition": "Map canary/model callers and port generic generator before removal.",
+      "exception": null,
+      "path": "scripts/generate-split-certified.py",
+      "phase": 5,
+      "replacement_owner": "tools/xtask family evidence",
+      "required": false
+    },
+    {
+      "classification": "generic model policy test",
+      "deletion_condition": "Generator and catalog parity tests moved to Rust.",
+      "exception": null,
+      "path": "scripts/tests/test_generate_split_certified.py",
+      "phase": 2,
+      "replacement_owner": "tools/xtask family evidence tests",
+      "required": true
+    }
+  ],
+  "retired_historical_ownership": [
+    {
+      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
+      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
+      "module": "scripts/tests/test_generate_split_certified.py",
+      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
+      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "sha256": "a70abb1822d46ca5d6da5f0a17dadc0f29944c07a2deeb039df1bc0615ce1ba0",
+      "test_method_count": 7,
+      "test_methods": [
+        "test_check_rejects_stale_output",
+        "test_checked_in_roster_is_deterministic_and_current",
+        "test_invalid_workload_class_or_profile_cannot_grant_split_admission",
+        "test_non_chat_workload_evidence_never_grants_split_admission",
+        "test_patch_identity_covers_all_three_queue_lanes_in_order",
+        "test_roster_contains_unique_tested_architectures",
+        "test_workload_evidence_cannot_supply_the_only_split_architecture"
+      ]
+    }
+  ],
+  "retired_process_edges": {
+    "groups": [
+      {
+        "file": "scripts/tests/test_generate_split_certified.py",
+        "members": [
+          [
+            16,
+            "6ce4f98fb2544ab8",
+            1,
+            "dynamic-import",
+            "import",
+            "scripts/generate-split-certified.py",
+            "fixed SCRIPT for certification fixture"
+          ]
+        ]
+      }
+    ],
+    "additional": [
+      [
+        "scripts/tests/test_generate_split_certified.py",
+        [
+          [
+            "launch",
+            "scripts/generate-split-certified.py",
+            "fixed generator --check or malformed output fixture; callers assert current roster and rejection",
+            [
+              103,
+              116
+            ]
+          ],
+          [
+            "assembly",
+            "scripts/generate-split-certified.py argv",
+            "sys.executable argv continuation of each preceding generator run, not extra executions",
+            [
+              104,
+              118
+            ]
+          ]
+        ]
+      ]
+    ]
+  },
+  "focused_receipts": {
+    "status": "PASS_FOCUSED_NATIVE_AND_LOCAL_CLI",
+    "head": "a82de612c33c55d98fc7e95d2b154f6c563fb89b",
+    "files": [
+      {
+        "path": "tools/xtask/src/automation/canary_receipts/package_closure/split_roster.rs",
+        "sha256": "25786601f429a5b6a15dba526c98d8cf98941654b4159fc74cbfa3f6d9b84e41"
+      },
+      {
+        "path": "tools/xtask/src/automation/canary_receipts/package_closure/split_roster_tests.rs",
+        "sha256": "8d3cd501678533883b7d815d47732f8ed6b3357a8eb59cc7e260f207e1a17f65"
+      }
+    ],
+    "logs": [
+      {
+        "path": ".omo/evidence/resume-20261002/split-roster-native-v1-focused.log",
+        "exit_code": 0,
+        "sha256": "d4970c4b92a77d1d1d2f05e6dee5576bab920ea8f52945c6175997488e513139"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/split-roster-native-v1-local-check.log",
+        "exit_code": 0,
+        "sha256": "90e57e3629d20497887c16a4f3a9ab76969042633b60342b5477ef3ee1d5c63f"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/split-roster-native-v1-fmt.log",
+        "exit_code": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/split-roster-native-v1-clippy.log",
+        "exit_code": 0,
+        "sha256": "56403b492aa46947d358d89396107e627aef43b42d4b244e394675ead667bfaa"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/split-roster-native-v1-build-automation.log",
+        "exit_code": 0,
+        "sha256": "59d92ced1ebfbd4384b171e3346aa3c363bc3665a4d314b1352f3d1f69a08773"
+      },
+      {
+        "path": ".omo/evidence/resume-20261002/split-roster-native-v1-actual-cli.log",
+        "exit_code": 0,
+        "sha256": "fc7cea7ec795993ac3d5914fa00586f842607fccb396c841ab457c77f69032e6"
+      }
+    ],
+    "original_receipt": {
+      "exit_code": 0,
+      "methods": 7,
+      "log": ".omo/evidence/resume-20261002/split-roster-original-v1.log",
+      "sha256": "a6dc9f981ea95d611b1562f87618777a65b0e757079f5114f65df9a2dad2a6d0"
+    },
+    "limits": "Native recipe and workload roster only; not live model/native/runtime certification."
+  },
+  "limits": [
+    "Source-owned roster projection and native recipe identity; no live model or native runtime certification.",
+    "Portable path identity tests compile on host; Windows execution remains unqualified.",
+    "Full normal postimage gate required before checkpoint."
+  ],
+  "postimage_qualification": {
+    "exit_code": 0,
+    "session_id": 2620,
+    "log": ".omo/evidence/resume-20261002/roster-link-xet-v7-normal.log",
+    "sha256": "e60d00d954816dd6954a707e16b077d9ed84cca3f797736375c4d46cd8e76cb3",
+    "rust": {
+      "targets": 112,
+      "passed": 4637,
+      "failed": 0,
+      "ignored": 2
+    },
+    "legacy": {
+      "run": 710,
+      "skipped": 14,
+      "seconds": 123.019
+    },
+    "environment": {
+      "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/sbin",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_BUILD_JOBS": "1",
+      "GIT_MASTER": "1",
+      "GIT_OPTIONAL_LOCKS": "0",
+      "MIGRATION_TEST_GIT": "/usr/bin/git",
+      "SPV_ADAPTER_FIXTURE": "target/debug/examples/swift_privacy_lint_fixture"
+    }
+  },
+  "qualification_scope": "Full normal gate on frozen source/test/roster files. Subsequent nine-file metadata delta records qualification status and coverage digests; owning inventory and policy checks required before commit."
+}
