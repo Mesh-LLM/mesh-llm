@@ -47,7 +47,6 @@ mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.78
 mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.78.0", optional = true }
 bytes = "1"
 mesh-llm-build-info.workspace = true
-mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.78.0"  }
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.78.0"  }
 mesh-llm-runtime-event-contracts = { path = "../mesh-llm-runtime-event-contracts", version = "0.78.0" }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0"  }

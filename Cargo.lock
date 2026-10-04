@@ -4543,7 +4543,6 @@ name = "mesh-llm-client"
 version = "0.78.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "base64 0.23.1",
  "hex",
  "httparse",
@@ -4741,7 +4740,6 @@ dependencies = [
  "mesh-llm-types",
  "mesh-llm-ui",
  "mesh-llm-wallet",
- "mesh-mixture-of-agents",
  "mesh-native-serving-plugin-host",
  "nostr-sdk",
  "opentelemetry",
