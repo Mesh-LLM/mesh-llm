@@ -944,10 +944,14 @@ pub(super) async fn start_run_auto_node_and_plugins(
         .iter()
         .any(|spec| spec.name == plugin::MOA_PLUGIN_ID)
     {
-        anyhow::bail!(
-            "Plugin name '{}' is reserved for the built-in MoA virtual model",
-            plugin::MOA_PLUGIN_ID
-        );
+        return Err(cleanup_failed_node_start(
+            &node,
+            anyhow::anyhow!(
+                "Plugin name '{}' is reserved for the built-in MoA virtual model",
+                plugin::MOA_PLUGIN_ID
+            ),
+        )
+        .await);
     }
     let mut moa_spec = plugin::in_process_builtin_spec(plugin::MOA_PLUGIN_ID);
     moa_spec.startup.optional = false;

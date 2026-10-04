@@ -149,6 +149,10 @@ async function startupControls(hostEnv, endpointConfig) {
   const nonInferenceLog = await failureControl('non-inference-endpoint', nonInference, hostEnv, [], /no enabled plugin completed a compatible inference endpoint handshake/);
   assert.match(nonInferenceLog, /fixture protocol-3 non-inference initialize response sent/);
   assert.doesNotMatch(nonInferenceLog, /identified itself as|uses protocol|failed initialize|invalid server_info_json/);
+  const reservedConfig = endpointConfig.replace('name = "openai-endpoint"', 'name = "mesh-moa"')
+    + 'command = ' + JSON.stringify(process.execPath.replaceAll('\\', '/')) + '\nargs = ["-e", "process.exit(0)"]\n';
+  const reservedLog = await failureControl('reserved-moa-name', reservedConfig, hostEnv, [], /reserved for the built-in MoA/);
+  assert.doesNotMatch(reservedLog, /Serving external plugin inference without a native runtime/);
   await failureControl('blank-endpoint', endpointConfig.replace(/url = .*\n/, 'url = " "\n'), hostEnv, [], /url.*http|url.*absolute|invalid.*url/i);
   for (const [name, args] of [
     ['explicit-model', ['--model', local]],
