@@ -207,7 +207,7 @@ fn unknown_backend_selection_remains_explicit_and_cannot_fallback() {
 
 #[cfg(feature = "dynamic-native-runtime")]
 #[tokio::test]
-async fn unavailable_manifest_connection_is_recoverable_but_invalid_url_is_not() {
+async fn unavailable_manifest_transport_is_recoverable_but_invalid_url_is_not() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
@@ -221,7 +221,11 @@ async fn unavailable_manifest_connection_is_recoverable_but_invalid_url_is_not()
         .send()
         .await
         .unwrap_err();
-    assert!(connection.is_connect());
+    // The request deadline can expire before the OS reports connection refusal.
+    assert!(
+        connection.is_connect() || connection.is_timeout(),
+        "unexpected unavailable-manifest error: {connection:?}"
+    );
     assert!(is_runtime_availability_error(&connection.into()));
     let invalid_url = client.get("http://[").build().unwrap_err();
     assert!(!is_runtime_availability_error(&invalid_url.into()));
