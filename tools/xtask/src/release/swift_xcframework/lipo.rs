@@ -75,21 +75,57 @@ impl NativeLipo {
             }
         };
         let text = std::str::from_utf8(stdout.as_bytes())?;
-        let architectures: BTreeSet<String> = text
-            .split(python_whitespace)
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned)
-            .collect();
-        if architectures.is_empty() {
-            return Err(Error::Contract(format!(
-                "lipo reported no architectures for XCFramework binary: {}",
-                binary.display()
-            )));
-        }
-        Ok(architectures)
+        architectures(text)
     }
 }
 
-fn python_whitespace(character: char) -> bool {
-    character.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
+fn architectures(text: &str) -> Result<BTreeSet<String>, Error> {
+    let names: BTreeSet<String> = text.split_ascii_whitespace().map(str::to_owned).collect();
+    if names.is_empty() {
+        return Err(Error::Contract("lipo reported no architectures".into()));
+    }
+    if names.iter().any(|name| {
+        !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    }) {
+        return Err(Error::Contract(
+            "lipo reported a malformed architecture name".into(),
+        ));
+    }
+    Ok(names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::architectures;
+
+    #[test]
+    fn native_architecture_names_accept_ascii_spacing_and_deduplicate() {
+        let actual = architectures("arm64\tx86_64\r\narm64 ").unwrap();
+        assert_eq!(
+            actual,
+            ["arm64", "x86_64"].into_iter().map(str::to_owned).collect()
+        );
+    }
+
+    #[test]
+    fn native_architecture_names_reject_control_and_unicode_separators() {
+        for separator in ['\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}', '\u{a0}', '\u{2003}'] {
+            assert!(architectures(&format!("arm64{separator}x86_64")).is_err());
+        }
+    }
+
+    #[test]
+    fn native_architecture_names_reject_empty_or_malformed_output_without_echoing_payload() {
+        for text in [
+            "",
+            " \t\r\n",
+            "arm64;private-payload",
+            "arm64/private-payload",
+        ] {
+            let error = architectures(text).unwrap_err().to_string();
+            assert!(!error.contains("private-payload"));
+        }
+    }
 }

@@ -45,9 +45,7 @@ fn inspect(binary: &Path) -> Result<u8, Box<dyn std::error::Error>> {
             stderr.write_all(b"private-error-sentinel\n")?;
             return Ok(7);
         }
-        b"!raw" => {
-            stdout.write_all(b"token\x1cpassword\x1dsecret\x1eauthorization\x1finvite\r\n")?
-        }
+        b"!raw" => stdout.write_all(b"token\tpassword secret\nauthorization invite\r\n")?,
         b"!overflow" => stdout.write_all(&vec![b'x'; 8192])?,
         b"!tree" => {
             let sentinel =

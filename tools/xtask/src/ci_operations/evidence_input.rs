@@ -1,7 +1,7 @@
 //! Bounded evidence input from `scripts/runner-image-evidence.py`: strict
 //! JSON decoding, bounded regular-file reads, the evidence path layout and
 //! the scalar checks shared by provenance and cohort validation. Every
-//! failure is the legacy `runner evidence: ...` text.
+//! failure identifies the rejected evidence contract.
 
 use crate::ci_operations::json_access::{Outcome, type_name};
 use crate::ci_operations::json_decode::{self, DecodeError, Hooks};
@@ -79,20 +79,8 @@ fn pairs(items: Vec<(String, Json)>) -> Result<Json, String> {
 /// `decode(raw)`: strict JSON within the size, depth and integer bounds.
 pub(crate) fn decode(raw: &[u8]) -> Outcome<Json> {
     require(raw.len() as u64 <= MAX_BYTES, "JSON exceeds 32 MiB")?;
-    // Nesting up to CPython's scanner limit recurses deeper than the main
-    // thread's stack allows, so decoding (and dropping a rejected deep
-    // value) happens on a thread sized for it.
-    let owned = raw.to_vec();
-    let worker = std::thread::Builder::new()
-        .stack_size(DECODE_STACK_BYTES)
-        .spawn(move || decode_bounded(&owned))
-        .map_err(|error| error.to_string())?;
-    worker
-        .join()
-        .unwrap_or_else(|_| Err("runner evidence: JSON decoder failed".to_owned()))
+    decode_bounded(raw)
 }
-
-const DECODE_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 fn decode_bounded(raw: &[u8]) -> Outcome<Json> {
     let hooks = Hooks { pairs };
@@ -193,6 +181,26 @@ mod tests {
         file.set_len(MAX_BYTES + 1).expect("length");
         assert!(read_bytes(&input).is_err());
         assert!(decode(&vec![b' '; usize::try_from(MAX_BYTES + 1).expect("bound")]).is_err());
+    }
+
+    #[test]
+    fn native_evidence_decoder_accepts_exact_depth_boundary_and_refuses_next_level() {
+        let nested = |depth| format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+        assert!(decode(nested(64).as_bytes()).is_ok());
+        assert_eq!(
+            decode(nested(65).as_bytes()).unwrap_err(),
+            "runner evidence: JSON nesting exceeds 64 levels"
+        );
+    }
+
+    #[test]
+    fn native_evidence_decoder_refuses_deep_and_truncated_input_without_panicking() {
+        let deeply_nested = format!("{}0{}", "[".repeat(10000), "]".repeat(10000));
+        assert_eq!(
+            decode(deeply_nested.as_bytes()).unwrap_err(),
+            "runner evidence: JSON nesting exceeds parser limit"
+        );
+        assert!(!decode(&[b'['; 10000]).unwrap_err().is_empty());
     }
 
     #[test]
