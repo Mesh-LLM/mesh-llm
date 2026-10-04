@@ -889,7 +889,7 @@
       "file": "scripts/tests/test_ci_artifact_actions.py",
       "members": [
         [
-          195,
+          123,
           "0bb8fafe2022eacf",
           1,
           "subprocess-or-interpreter",
@@ -898,7 +898,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          276,
+          204,
           "0bb8fafe2022eacf",
           2,
           "subprocess-or-interpreter",
@@ -907,7 +907,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          755,
+          683,
           "0bb8fafe2022eacf",
           3,
           "subprocess-or-interpreter",
@@ -916,7 +916,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          772,
+          700,
           "0bb8fafe2022eacf",
           4,
           "subprocess-or-interpreter",
@@ -925,7 +925,7 @@
           "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
         ],
         [
-          2324,
+          2252,
           "0bb8fafe2022eacf",
           5,
           "subprocess-or-interpreter",
@@ -1050,7 +1050,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "6e41fce871542e73c075371e150e22ab7cf2ac9b63e3b76d075c7a6caf12698a",
+  "observed_source_sha256": "17385f5c8cf0abf9cd9dcab98960121a4ab16d12b1e6d0a463a05af0c0c338be",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9967,5 +9967,15 @@
       "sha256": "1e6f2463a3e19eb0d702546787a6f52f6fceadd8d5f114eb3cff83c41d8c963f"
     },
     "current_test_tree": "6e41fce871542e73c075371e150e22ab7cf2ac9b63e3b76d075c7a6caf12698a"
+  },
+  "workflow_native_policy_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 106,
+    "core_modules_after": 46,
+    "durable_coverage": {
+      "path": "ci/automation-migration/workflow-native-policy-retirement-coverage.json",
+      "sha256": "efb8e7466f0ff977755d1d2f5180d59da026c57d2adc9469a357b5e8386176be"
+    },
+    "current_test_tree": "17385f5c8cf0abf9cd9dcab98960121a4ab16d12b1e6d0a463a05af0c0c338be"
   }
 }

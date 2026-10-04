@@ -26,7 +26,7 @@ pub(super) fn run(args: &[String]) -> Checked<String> {
 
 fn scan(operands: &ScanOperands<'_>) -> Checked<()> {
     let mut entries = Vec::new();
-    collect(&operands.stage, Path::new(""), &mut entries);
+    collect(&operands.stage, Path::new(""), &mut entries)?;
     entries.sort();
     for relative in entries {
         let path = operands.stage.join(&relative);
@@ -50,17 +50,25 @@ fn scan(operands: &ScanOperands<'_>) -> Checked<()> {
     Ok(())
 }
 
-fn collect(directory: &Path, prefix: &Path, entries: &mut Vec<PathBuf>) {
-    let Ok(children) = std::fs::read_dir(directory) else {
-        return;
-    };
-    for child in children.flatten() {
+fn collect(directory: &Path, prefix: &Path, entries: &mut Vec<PathBuf>) -> Checked<()> {
+    let children = std::fs::read_dir(directory).map_err(|error| {
+        Rejected(format!(
+            "could not read static ABI stage directory {}: {error}",
+            directory.display()
+        ))
+    })?;
+    for child in children {
+        let child = child.map_err(|error| text_io::os_error(directory, &error))?;
         let relative = prefix.join(child.file_name());
         entries.push(relative.clone());
-        if child.file_type().is_ok_and(|kind| kind.is_dir()) {
-            collect(&child.path(), &relative, entries);
+        let kind = child
+            .file_type()
+            .map_err(|error| text_io::os_error(&child.path(), &error))?;
+        if kind.is_dir() {
+            collect(&child.path(), &relative, entries)?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,0 +1,487 @@
+{
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "source_head": "e9b9076af841e34f866729ea245efaeec55edd0e",
+  "retired_methods": [
+    {
+      "name": "test_external_actions_have_sha_and_release_provenance",
+      "sha256": "c0e05f68b78598b7753ed1b2aa07eb3ce826fac2a8d3fa1fdd560f733b47f620"
+    },
+    {
+      "name": "test_workflow_status_gates_do_not_resist_cancellation",
+      "sha256": "c55053ca06c5927807e9dc62bdc67b674118a0ede39893ddc980ada85b41c7aa"
+    }
+  ],
+  "retained_methods": [
+    {
+      "name": "test_quality_slice_requires_ci_contract_validation",
+      "sha256": "d6e20ba9a09977194e9a3b5698e32a7d496ce7628735ea51412ada5f61b144a8"
+    },
+    {
+      "name": "test_actionlint_installer_verifies_pinned_release_archives",
+      "sha256": "bdb1dee9fd2c4cd21cad6f398997e25ef6a2c79ab26ca4e967af1687e7968074"
+    },
+    {
+      "name": "test_host_action_uses_canonical_dynamic_host_builder",
+      "sha256": "051552e622fe2b21d64c0a57384b46725f42fff95a90628d6b17c3025c4b3fb8"
+    },
+    {
+      "name": "test_windows_host_action_owns_the_neutral_host_integrity_contract",
+      "sha256": "8802eae8b5187311b68fc1dfa5e107e1f393249464fe10660568d8ab61cb747e"
+    },
+    {
+      "name": "test_release_stamps_refuse_to_guess_the_source_commit",
+      "sha256": "bc72f4dceea997419d53cef93c37a47435e8389a8acb4354a8225786bff8d38e"
+    },
+    {
+      "name": "test_release_workflow_stamps_the_immutable_source_revision",
+      "sha256": "163f054a3d931460c3868f74f0b6d542518a138bd2e32880042d8d9ed2e73fe1"
+    },
+    {
+      "name": "test_windows_attestation_verifier_stays_native_abi_free",
+      "sha256": "bd6169edb4a44e4ce22b04506ec6b0d77ff39b261470f51619cce37bd9d1fbfb"
+    },
+    {
+      "name": "test_windows_debug_host_uses_the_package_version_for_composition",
+      "sha256": "b06acb41fcbb45fc8ba0b8950d911cccdfe05763266b37b607d106df72f08fae"
+    },
+    {
+      "name": "test_windows_routes_cover_every_shared_product_primitive",
+      "sha256": "19dbbe2dbf36ef4ada18170e8115c5c946abbe6c47f76b2b04115d23a726f64f"
+    },
+    {
+      "name": "test_windows_abi_cache_action_keys_every_compatibility_boundary",
+      "sha256": "8eb994601895f09335febd0b0f48ac654f018ba744f03fd734c2d12bedc7db24"
+    },
+    {
+      "name": "test_exact_cache_publication_retries_after_service_cooldown",
+      "sha256": "cdc4e431627be1adb1b746ed328d27e8a7ac273d558604490e7dbae131d45bf7"
+    },
+    {
+      "name": "test_windows_native_cache_inputs_fail_closed_and_callers_opt_in",
+      "sha256": "dcb793abf926b81787b63b77a72d44cefdf7e9e94d2c2b27517ac9fc4999c2a3"
+    },
+    {
+      "name": "test_native_toolchain_epoch_is_exact_and_shared_with_build_stamp",
+      "sha256": "91aef7d85d09c256d030f1d3ec909f6d877f50e7c22b976cb8b411e33441b9f1"
+    },
+    {
+      "name": "test_native_toolchain_epoch_fingerprints_depot_macos_without_image_vars",
+      "sha256": "470b8e7ac8f5f3b4365c775c0ce4ed10003d0a5ae8869b3bf23e060e0d9ba48d"
+    },
+    {
+      "name": "test_push_routing_diffs_the_complete_event_range",
+      "sha256": "53834e7a440c5aed47923bb1d6c879b9c47ded5b0f5abd2898c53834bf8d5fd9"
+    },
+    {
+      "name": "test_runner_contract_routing_covers_cache_evidence_actions",
+      "sha256": "5f93e91c2161f844ecf54e21d09b2c6f7316c5380c2d16712a5021a4e62d667d"
+    },
+    {
+      "name": "test_justfile_release_primitives_route_backend_builds",
+      "sha256": "70bccdd900b4f12b76e8b59e4a4bb5a19c156d5d70ce2fccd547e6284d239c23"
+    },
+    {
+      "name": "test_imported_justfile_sources_are_classified_on_both_diff_sides",
+      "sha256": "1054a455355b9d5b486dfde7a968bb3c97bc56d7ae95378e57cbd6bf7476e500"
+    },
+    {
+      "name": "test_top_level_justfile_inputs_of_backend_recipes_route_backend_builds",
+      "sha256": "3cd31168c4e085f62db27df8bde7ebb79e146610e36d69b2de6d223a83847877"
+    },
+    {
+      "name": "test_backend_recipe_attributes_route_backend_builds",
+      "sha256": "00c0f1094795a3913497a8790e4869ba63ead23ca86b98f2eb64cb57beae3c1d"
+    },
+    {
+      "name": "test_sccache_seed_keys_include_imported_just_sources",
+      "sha256": "c1803fa399e7e52619f50bee601790b8a0ee9a8d7ab528fc11848f97761c139c"
+    },
+    {
+      "name": "test_root_justfile_import_graph_changes_fail_open_to_backend_builds",
+      "sha256": "3747c0955f67cf35c0508570e309790b08f1c4c744b99a9b1aa81435b43508db"
+    },
+    {
+      "name": "test_sdk_routing_covers_every_direct_smoke_script",
+      "sha256": "d6834241721b361e2b145459d0086f506065a3e58c2560f8bee9d8f552bef97a"
+    },
+    {
+      "name": "test_native_sdk_build_is_a_shared_immutable_producer",
+      "sha256": "449ccbbbba4f71716a9bd833ed1c4ca581507cf1d53f045f4b7b2ba978482b82"
+    },
+    {
+      "name": "test_static_abi_artifact_is_typed_and_safely_reused",
+      "sha256": "99e834b43f175b04e40b8e7fb25b9481e94093ca0835d2535e41146860163b61"
+    },
+    {
+      "name": "test_protected_reusable_producers_own_runner_and_cache_policy",
+      "sha256": "904cf32cb2b8abc47f2cc76b881483357647637035cf5d23862192bafc53f834"
+    },
+    {
+      "name": "test_protected_reusable_runner_policy_is_fail_closed",
+      "sha256": "e3810fd6a0df4bc040cb9a05ad44844c9a5608768745db4a31a0ec1d5b4c7ca5"
+    },
+    {
+      "name": "test_swift_sdk_build_is_a_shared_immutable_producer",
+      "sha256": "2ba88c4cbaf0867ff881117feee4558b3749e994990182a2c78483037eb36279"
+    },
+    {
+      "name": "test_swift_sdk_cache_is_mode_independent_and_target_specific",
+      "sha256": "ed34535d6de0075ff1dfe40f112b397a32a3271eb1c604cf7ce88377a183735c"
+    },
+    {
+      "name": "test_runtime_action_never_builds_the_host",
+      "sha256": "489191bc46b61f3e03e55489eabc839346a534a3ec5774af5a3b43e03830a604"
+    },
+    {
+      "name": "test_sccache_prefers_depot_webdav_with_disk_fallback",
+      "sha256": "d2f78c325f854a23fd4152eea126f049f88cf0a886cab99989ca666bb1767bf8"
+    },
+    {
+      "name": "test_runner_selection_uses_event_repository_and_ref_policy",
+      "sha256": "328f0f515c2a424f7647c56c808fa1fe180d56ee7d363f2271dd9035dfdc9f37"
+    },
+    {
+      "name": "test_dispatched_pr_cache_writes_remain_blocked_with_depot",
+      "sha256": "ab4ed9baaa9bcf1d5a56ba6103e7e560849d016f7db1407603fb45182396504c"
+    },
+    {
+      "name": "test_depot_pr_native_cache_consumers_obey_central_policy",
+      "sha256": "ea09e28b2549af24ad1d3d701e092f3ebba45ef39ab9fb2e2226cb67caa32cdb"
+    },
+    {
+      "name": "test_authority_sentinel_is_explicit_cache_gate_exemption",
+      "sha256": "d092ae3768027160cfb5f6f8a6315a2c3b1dbb9d3e0e0aefceee811d51297892"
+    },
+    {
+      "name": "test_depot_sccache_consumers_receive_both_central_cache_outputs",
+      "sha256": "7646d92bd1aaf04dd29d3918f4afd82a49ed4d780549a3e0dee567805982c762"
+    }
+  ],
+  "current_source": {
+    "path": "scripts/tests/test_ci_artifact_actions.py",
+    "sha256": "df8bcf1b8932294dea340a159319513b7ba0cdc45a32104ea8c01a7939213067"
+  },
+  "historical_ownership": {
+    "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+    "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
+    "gate": "Legacy just ci-validate and relevant workflow/platform lane",
+    "module": "scripts/tests/test_ci_artifact_actions.py",
+    "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
+    "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+    "sha256": "8a199eb235d327f6b92bee0975c217b79d79d465a130898257c846e80506eb77",
+    "test_method_count": 55,
+    "test_methods": [
+      "test_actionlint_installer_verifies_pinned_release_archives",
+      "test_authority_sentinel_is_explicit_cache_gate_exemption",
+      "test_backend_recipe_attributes_route_backend_builds",
+      "test_depot_pr_native_cache_consumers_obey_central_policy",
+      "test_depot_sccache_consumers_receive_both_central_cache_outputs",
+      "test_dispatched_pr_cache_writes_remain_blocked_with_depot",
+      "test_exact_cache_publication_retries_after_service_cooldown",
+      "test_external_actions_have_sha_and_release_provenance",
+      "test_host_action_uses_canonical_dynamic_host_builder",
+      "test_imported_justfile_sources_are_classified_on_both_diff_sides",
+      "test_justfile_release_primitives_route_backend_builds",
+      "test_native_sdk_build_is_a_shared_immutable_producer",
+      "test_native_toolchain_epoch_fingerprints_depot_macos_without_image_vars",
+      "test_native_toolchain_epoch_is_exact_and_shared_with_build_stamp",
+      "test_product_action_only_composes_verified_inputs",
+      "test_product_action_rejects_destructive_output_paths",
+      "test_product_archive_preserves_verified_executable_modes",
+      "test_product_composer_accepts_host_build_metadata",
+      "test_product_composer_accepts_one_checksums_runtime_archive",
+      "test_product_composer_normalizes_windows_shell_boundaries",
+      "test_product_composer_rejects_corrupt_runtime_archive_sidecar",
+      "test_product_composer_rejects_drift_despite_build_metadata",
+      "test_product_composer_rejects_host_version_drift",
+      "test_product_composer_rejects_noncanonical_host_sidecar",
+      "test_product_composer_rejects_noncanonical_verifier_sidecar",
+      "test_product_composer_requires_exact_runtime_archive_sidecar",
+      "test_protected_reusable_producers_own_runner_and_cache_policy",
+      "test_protected_reusable_runner_policy_is_fail_closed",
+      "test_push_routing_diffs_the_complete_event_range",
+      "test_quality_slice_requires_ci_contract_validation",
+      "test_release_attestation_is_verified_without_compiling_in_composer",
+      "test_release_stamps_refuse_to_guess_the_source_commit",
+      "test_release_workflow_stamps_the_immutable_source_revision",
+      "test_root_justfile_import_graph_changes_fail_open_to_backend_builds",
+      "test_runner_contract_routing_covers_cache_evidence_actions",
+      "test_runner_selection_uses_event_repository_and_ref_policy",
+      "test_runtime_action_never_builds_the_host",
+      "test_sccache_prefers_depot_webdav_with_disk_fallback",
+      "test_sccache_seed_keys_include_imported_just_sources",
+      "test_sdk_routing_covers_every_direct_smoke_script",
+      "test_smoke_restore_delegates_model_restore_to_the_shared_action",
+      "test_smoke_restore_rechecks_the_archived_product",
+      "test_static_abi_artifact_is_typed_and_safely_reused",
+      "test_swift_sdk_build_is_a_shared_immutable_producer",
+      "test_swift_sdk_cache_is_mode_independent_and_target_specific",
+      "test_test_model_restore_is_optional_and_verified",
+      "test_test_model_restore_selects_one_artifact_from_a_multi_artifact_manifest",
+      "test_top_level_justfile_inputs_of_backend_recipes_route_backend_builds",
+      "test_windows_abi_cache_action_keys_every_compatibility_boundary",
+      "test_windows_attestation_verifier_stays_native_abi_free",
+      "test_windows_debug_host_uses_the_package_version_for_composition",
+      "test_windows_host_action_owns_the_neutral_host_integrity_contract",
+      "test_windows_native_cache_inputs_fail_closed_and_callers_opt_in",
+      "test_windows_routes_cover_every_shared_product_primitive",
+      "test_workflow_status_gates_do_not_resist_cancellation"
+    ],
+    "current_source_sha256": "511203e1f0a25f3634a336375e514f24c17c5732e86481b8a1f41a85e3600811",
+    "current_test_method_count": 38,
+    "current_test_methods": [
+      "test_actionlint_installer_verifies_pinned_release_archives",
+      "test_authority_sentinel_is_explicit_cache_gate_exemption",
+      "test_backend_recipe_attributes_route_backend_builds",
+      "test_depot_pr_native_cache_consumers_obey_central_policy",
+      "test_depot_sccache_consumers_receive_both_central_cache_outputs",
+      "test_dispatched_pr_cache_writes_remain_blocked_with_depot",
+      "test_exact_cache_publication_retries_after_service_cooldown",
+      "test_external_actions_have_sha_and_release_provenance",
+      "test_host_action_uses_canonical_dynamic_host_builder",
+      "test_imported_justfile_sources_are_classified_on_both_diff_sides",
+      "test_justfile_release_primitives_route_backend_builds",
+      "test_native_sdk_build_is_a_shared_immutable_producer",
+      "test_native_toolchain_epoch_fingerprints_depot_macos_without_image_vars",
+      "test_native_toolchain_epoch_is_exact_and_shared_with_build_stamp",
+      "test_protected_reusable_producers_own_runner_and_cache_policy",
+      "test_protected_reusable_runner_policy_is_fail_closed",
+      "test_push_routing_diffs_the_complete_event_range",
+      "test_quality_slice_requires_ci_contract_validation",
+      "test_release_stamps_refuse_to_guess_the_source_commit",
+      "test_release_workflow_stamps_the_immutable_source_revision",
+      "test_root_justfile_import_graph_changes_fail_open_to_backend_builds",
+      "test_runner_contract_routing_covers_cache_evidence_actions",
+      "test_runner_selection_uses_event_repository_and_ref_policy",
+      "test_runtime_action_never_builds_the_host",
+      "test_sccache_prefers_depot_webdav_with_disk_fallback",
+      "test_sccache_seed_keys_include_imported_just_sources",
+      "test_sdk_routing_covers_every_direct_smoke_script",
+      "test_static_abi_artifact_is_typed_and_safely_reused",
+      "test_swift_sdk_build_is_a_shared_immutable_producer",
+      "test_swift_sdk_cache_is_mode_independent_and_target_specific",
+      "test_top_level_justfile_inputs_of_backend_recipes_route_backend_builds",
+      "test_windows_abi_cache_action_keys_every_compatibility_boundary",
+      "test_windows_attestation_verifier_stays_native_abi_free",
+      "test_windows_debug_host_uses_the_package_version_for_composition",
+      "test_windows_host_action_owns_the_neutral_host_integrity_contract",
+      "test_windows_native_cache_inputs_fail_closed_and_callers_opt_in",
+      "test_windows_routes_cover_every_shared_product_primitive",
+      "test_workflow_status_gates_do_not_resist_cancellation"
+    ],
+    "baseline_inventory_preserved": "Historical sha256, test_method_count and test_methods remain unchanged; current_* fields bind the retained 38 methods.",
+    "partial_retirement": {
+      "coverage": "ci/automation-migration/artifact-product-duplicate-retirement-coverage.json",
+      "retired_methods": 17,
+      "status": "Product duplicate methods retired; other 38 methods remain required."
+    }
+  },
+  "process_edge_rebase": {
+    "before": {
+      "file": "scripts/tests/test_ci_artifact_actions.py",
+      "members": [
+        [
+          195,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          276,
+          "0bb8fafe2022eacf",
+          2,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          755,
+          "0bb8fafe2022eacf",
+          3,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          772,
+          "0bb8fafe2022eacf",
+          4,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          2324,
+          "0bb8fafe2022eacf",
+          5,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ]
+      ]
+    },
+    "after": {
+      "file": "scripts/tests/test_ci_artifact_actions.py",
+      "members": [
+        [
+          123,
+          "0bb8fafe2022eacf",
+          1,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          204,
+          "0bb8fafe2022eacf",
+          2,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          683,
+          "0bb8fafe2022eacf",
+          3,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          700,
+          "0bb8fafe2022eacf",
+          4,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ],
+        [
+          2252,
+          "0bb8fafe2022eacf",
+          5,
+          "subprocess-or-interpreter",
+          "conditional",
+          "fixture-selected Rust automation or shell adapter argv",
+          "L3/L5/L8 retained mixed adapter tests run real Rust or fixture-owned shell commands; no deleted Python implementation is authorized by this binding"
+        ]
+      ]
+    }
+  },
+  "original_receipt": {
+    "exit_code": 0,
+    "run": 2,
+    "log": ".omo/evidence/resume-20261002/workflow-policy-original-v1.log",
+    "sha256": "e84af6fb3183f2e6c929d3188feaa38c20151c825192a5117c1911fec8992ee5",
+    "scope": "Existing unchanged methods, source-only policy tests; no Python oracle or new Python tooling"
+  },
+  "native_qualification": {
+    "focused": {
+      "session_id": 66798,
+      "test_groups": 221,
+      "checks": [
+        144,
+        13,
+        64
+      ],
+      "tests_exit_codes": [
+        0,
+        0,
+        0
+      ],
+      "pipeline_exit_code": 1,
+      "exit_status_source": "Three successful test commands precede erroneous follow-up through shell &&; pipeline exit 1 was a nonexistent repository command, corrected separately.",
+      "log": ".omo/evidence/resume-20261002/workflow-policy-abi-v1-focused.log",
+      "sha256": "aa3d2cb6dd239f652c28d7a655f98b9a9856fe62953b6e5189a2b0a3666104c4"
+    },
+    "repository": {
+      "session_id": 28053,
+      "exit_code": 0,
+      "checks": [
+        "release-targets including actual CI policy census",
+        "format",
+        "all-target Clippy"
+      ],
+      "log": ".omo/evidence/resume-20261002/workflow-policy-abi-v1-repository-check.log",
+      "sha256": "15e4ca8ed5e69f7fd37cd677b1abfbeaeea9f2cb2817c38c2b14060d7fb53fb7"
+    },
+    "files": [
+      {
+        "path": "tools/xtask/src/ci_validation/lane_results/workflow_yaml.rs",
+        "sha256": "a8a1225bbf75e5e756ee8eb161ddf70e30b95a6579d66495bb68260a658cb064",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/lane_results/workflow_action_reference_tests.rs",
+        "sha256": "5ea5119b1d9a1bc0ffc4d5f0b056a6561a761868672c20b356149d158232ecb2",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards/action_pins.rs",
+        "sha256": "34dd65f1576c19690bf0b0a3ca7d42af7cd910ef478e4098340676b671541a04",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards/action_pins_tests.rs",
+        "sha256": "f06c6f661cab5df5e407d4cd67620229289b1d972c6dd4c60e246217a106971d",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards/cancellation.rs",
+        "sha256": "706f78d05fcb5b8b19f8adfb43df102cbd2ab2fc18a71fb58110c98e57cb654f",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/ci_validation/workflow_guards.rs",
+        "sha256": "2acdc51f56b803a55d458a7d19a6aa5e5402c909dc9593f65a32e789c04a06cb",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/prepared_input/abi_path_scan.rs",
+        "sha256": "427029f0fc06b3c5d306256960e9d525b353b677d7cf3394fece3f6ca160c44d",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/prepared_input/abi_path_scan_tests.rs",
+        "sha256": "e3aae112b32616593bf3ce772720bf695e9b6080ec518070673d593a8f2bcb1a",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_prepared_inputs/static_abi_producer.rs",
+        "sha256": "182ecce12ed91ebffdcf18c368d6bbe8693f173306ba281a3c44af0b1fb9d360",
+        "mode": 420
+      }
+    ]
+  },
+  "limits": "Partial native policy retirement only. Thirty-six artifact methods and all forty-six core modules remain required. Hosted, platform, model and SDK acceptance remain separate.",
+  "postimage_qualification": {
+    "session_id": 50711,
+    "exit_code": 0,
+    "exit_status_source": "shell captured actual Just exit status",
+    "rust": {
+      "targets": 112,
+      "passed": 4618,
+      "failed": 0,
+      "ignored": 2
+    },
+    "legacy": {
+      "run": 720,
+      "passed": 706,
+      "skipped": 14,
+      "seconds": 141.571
+    },
+    "log": ".omo/evidence/resume-20261002/workflow-policy-abi-v1-normal.log",
+    "sha256": "87cb5d3585c31a29926aa96e164f226bfe9742fa6feffdd75ac3bf9351e210c6"
+  },
+  "qualification_scope": "Full normal gate on frozen implementation/test/census files. Subsequent eight-file metadata delta only records qualification status and coverage digest; post-metadata inventory/policy checks required before commit."
+}

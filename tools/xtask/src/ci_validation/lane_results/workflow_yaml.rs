@@ -51,19 +51,35 @@ struct Line<'a> {
 struct Reader<'a> {
     raw: Vec<&'a str>,
     at: usize,
+    path: Vec<String>,
+    actions: Vec<ActionReference>,
+}
+
+/// Source evidence for a real job or step action reference, excluding shell data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActionReference {
+    pub(crate) reference: String,
+    pub(crate) provenance: Option<String>,
+    pub(crate) line: usize,
 }
 
 pub(crate) fn parse(source: &str) -> Result<Node, String> {
+    parse_with_actions(source).map(|(document, _)| document)
+}
+
+pub(crate) fn parse_with_actions(source: &str) -> Result<(Node, Vec<ActionReference>), String> {
     let mut reader = Reader {
         raw: source.lines().collect(),
         at: 0,
+        path: Vec::new(),
+        actions: Vec::new(),
     };
     let Some(first) = reader.peek() else {
-        return Ok(Node::Map(Vec::new()));
+        return Ok((Node::Map(Vec::new()), Vec::new()));
     };
     let node = reader.block(first.indent)?;
     match reader.peek() {
-        None => Ok(node),
+        None => Ok((node, reader.actions)),
         Some(_) => Err(format!("unexpected indentation at line {}", reader.at + 1)),
     }
 }
@@ -100,6 +116,7 @@ impl<'a> Reader<'a> {
         {
             let rest = line.body[1..].trim_start();
             let inner = indent + (line.body.len() - rest.len());
+            self.path.push(items.len().to_string());
             if rest.is_empty() {
                 self.at += 1;
                 items.push(self.nested(indent)?);
@@ -109,6 +126,7 @@ impl<'a> Reader<'a> {
                 self.at += 1;
                 items.push(inline(rest));
             }
+            self.path.pop();
         }
         Ok(Node::Seq(items))
     }
@@ -136,8 +154,26 @@ impl<'a> Reader<'a> {
                     self.at + 1
                 ));
             }
+            let line = self.at + 1;
             self.at += 1;
-            entries.push((key.to_owned(), self.value(indent, value)?));
+            self.path.push(key.to_owned());
+            let node = self.value(indent, value)?;
+            if action_path(&self.path) {
+                let reference = node.text().ok_or("action reference must be scalar")?;
+                let provenance = value[strip_comment(value).len()..]
+                    .trim_start()
+                    .strip_prefix('#')
+                    .map(str::trim)
+                    .filter(|comment| !comment.is_empty())
+                    .map(str::to_owned);
+                self.actions.push(ActionReference {
+                    reference: reference.to_owned(),
+                    provenance,
+                    line,
+                });
+            }
+            self.path.pop();
+            entries.push((key.to_owned(), node));
         }
         Ok(Node::Map(entries))
     }
@@ -184,6 +220,17 @@ impl<'a> Reader<'a> {
             .map(|line| line.get(margin..).unwrap_or("").trim_end())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+fn action_path(path: &[String]) -> bool {
+    let components: Vec<_> = path.iter().map(String::as_str).collect();
+    match components.as_slice() {
+        ["jobs", _, "uses"] => true,
+        ["jobs", _, "steps", index, "uses"] | ["runs", "steps", index, "uses"] => {
+            index.parse::<usize>().is_ok()
+        }
+        _ => false,
     }
 }
 
@@ -252,3 +299,7 @@ fn unquote(value: &str) -> String {
 #[cfg(test)]
 #[path = "workflow_yaml_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "workflow_action_reference_tests.rs"]
+mod action_reference_tests;
