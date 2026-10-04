@@ -910,12 +910,15 @@ this cache. The release producers remain independent of this CI cache.
 
 Skippy and MeshLLM are separate products in the shared source tree. Each
 platform host slice first builds one backend-neutral standalone Skippy CLI and
-uploads `ci-skippy-cli-<platform>-<architecture>` with a checksum, then builds
-the MeshLLM host. Native-runtime slices build or restore one Skippy llama.cpp
+uploads `ci-skippy-cli-<platform>-<architecture>` with a checksum and
+`host-imports.json` after verifying host imports, then builds the MeshLLM host.
+Native-runtime slices build or restore one Skippy llama.cpp
 runtime per selected backend; product composition and downstream tests consume
 the platform host/runtime graph, not per-test rebuilds. Release host jobs use
 the same Skippy CLI producer and publish separate versioned CLI archives while
-MeshLLM continues to package its own host, console and selected runtime.
+MeshLLM continues to package its own host, console and selected runtime. The
+standalone CLI archiver checks the report against the executable SHA-256 and
+includes it in the archive.
 
 The admin-verified organization switches have a narrower meaning than that
 consumer policy: disabling automatic Depot Cache and Registry Actions

@@ -736,7 +736,10 @@ boundary.
 - `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
   checksum per platform host slice, built before the MeshLLM host. PR/main CI
   publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;
-  release publishes separate versioned CLI archives from the same producer.
+  Unix and Windows producers verify host imports before checksumming and retain
+  `host-imports.json`; release publishes separate versioned CLI archives from the
+  same producer, verifies the report matches the executable SHA-256, and includes
+  it in the archive.
 - `prepare-native-runtime-input`: one verified native runtime archive and
   manifest. Non-Windows artifacts include the checksum-bound
   `skippy-package-builder` tool used by split-serving consumers to prepare
