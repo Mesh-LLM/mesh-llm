@@ -2008,8 +2008,8 @@
         "test_workflow_runs_only_daily_or_by_manual_dispatch",
         "test_workload_dry_run_needs_no_oracle_and_forwards_startup_deadline"
       ],
-      "current_source_sha256": "741f7fd3bf034604fcd81057a0eb55814a9596040a0e0f607e8bb20498b4cc4e",
-      "current_test_method_count": 38,
+      "current_source_sha256": "e407a67d0d2404eff95dc1a4a0f2b63f8307259d701407927d78da1e1c8fca90",
+      "current_test_method_count": 34,
       "current_test_methods": [
         "test_battery_builds_once_then_skips_build_in_each_lane",
         "test_build_and_workers_load_runner_cache_configuration",
@@ -2033,14 +2033,10 @@
         "test_outcome_classifier_uses_terminal_evidence_not_option_names",
         "test_persistent_runner_executes_goose_preflight",
         "test_persistent_runner_executes_only_trusted_main_with_read_access",
-        "test_portable_timeout_runner_bounds_the_process_group",
         "test_post_green_modifying_review_is_removed",
         "test_preflight_pins_snapshot_and_records_native_mtp_models",
         "test_rewriter_check_reexecs_and_pins_native_architecture",
         "test_skip_build_omits_the_one_time_build",
-        "test_supplied_plan_cannot_omit_a_manifest_selected_family",
-        "test_timeout_runner_cleans_process_group_when_signalled",
-        "test_timeout_runner_closes_manifest_stdin_for_children",
         "test_trusted_canary_owns_split_roster_promotion",
         "test_two_scheduled_failures_raise_one_reconciled_issue",
         "test_update_pin_script_writes_pin_and_rejects_invalid_sha",
@@ -2051,7 +2047,7 @@
         "test_workload_dry_run_needs_no_oracle_and_forwards_startup_deadline"
       ],
       "baseline_inventory_preserved": "sha256, test_method_count and test_methods retain historical Task2 baseline; current_* fields bind the present partial-retirement source.",
-      "current_change": "Two rejection assertions use nonzero status, preserving diagnostics and no model scans; source method count and required native gates unchanged."
+      "current_change": "Deletion-only retirement of selected-family omission method; 34 unchanged methods remain selected by required transitional CI. Historical baseline fields preserved."
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -2397,51 +2393,6 @@
         "test_unknown_paths_and_unknown_input_fields_fail_closed",
         "test_website_owned_generated_path_is_not_docs_only",
         "test_workspace_operations_remain_rooted_at_workspace_root"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
-      "gate": "Legacy just ci-validate and relevant workflow/platform lane",
-      "module": "scripts/tests/test_plan_family_battery.py",
-      "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "6e65d919c69187390ab38b333b14a56209b24219c87c37f109749ed30dd07739",
-      "test_method_count": 33,
-      "test_methods": [
-        "test_cache_gate_accepts_payload_only_secondary_shard",
-        "test_cache_gate_checks_secondary_shard_metadata_and_blob_identity",
-        "test_cache_gate_derives_dflash_hyper_connected_activation_width",
-        "test_cache_gate_derives_qwen4exp_hyper_connected_activation_width",
-        "test_cache_gate_rejects_activation_width_drift_before_build",
-        "test_cache_gate_rejects_architecture_drift_before_build",
-        "test_cache_gate_rejects_qwen4exp_activation_width_overflow",
-        "test_cache_gate_rejects_qwen4exp_output_width_drift",
-        "test_cache_gate_rejects_runtime_range_drift_before_build",
-        "test_cache_gate_requires_dimensions_in_at_least_one_shard",
-        "test_cache_gate_requires_every_exact_revision_file",
-        "test_cache_gate_requires_qwen4exp_hyper_connection_count",
-        "test_cadence_selection_is_removed",
-        "test_canary_matrix_submits_smallest_models_first",
-        "test_certified_model_requires_an_explicit_activation_width",
-        "test_certified_profile_cannot_add_or_reorder_core_lanes",
-        "test_certified_profile_cannot_drop_a_core_lane",
-        "test_certified_workload_requires_fixture_and_comparison_evidence",
-        "test_checked_in_policy_resolves_all_certified_models",
-        "test_duplicate_family_is_rejected",
-        "test_inspect_gguf_reports_canonical_dimensions_without_a_manifest",
-        "test_mmproj_artifacts_resolve_and_cover_the_vision_families",
-        "test_model_class_is_required_and_selects_class_specific_lanes",
-        "test_non_causal_classes_reject_split_and_speculative_policy",
-        "test_non_chat_cache_gate_checks_architecture_without_changing_workload_lanes",
-        "test_non_chat_model_cannot_claim_the_certified_full_profile",
-        "test_projector_classes_require_an_explicit_projector_artifact",
-        "test_shards_are_deterministic_and_preserve_every_family_once",
-        "test_supplied_plan_rejects_inflated_oracle_status",
-        "test_supplied_plan_rejects_tampered_selected_model_rows",
-        "test_unknown_model_class_is_rejected",
-        "test_workload_oracle_profile_cannot_drop_the_oracle_lane",
-        "test_workload_smoke_profile_cannot_claim_an_oracle"
       ]
     },
     {
@@ -13448,6 +13399,63 @@
     "additional_diagnostic_coverage": {
       "path": "ci/automation-migration/family-planner-diagnostic-coverage.json",
       "sha256": "559aa3f84e1e3889fd5d95b17241ecdf87c694e55c6bea82cfee9657c35bef92"
+    }
+  },
+  "family_planner_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 123,
+    "core_modules_after": 59,
+    "required_targets": 108,
+    "durable_coverage": {
+      "path": "ci/automation-migration/family-planner-retirement-coverage.json",
+      "sha256": "fc3c8bad343efea3402b430a3871b8e57e9a97d7feba503f1d77a363b7a7fcf0"
+    },
+    "current_test_tree": {
+      "sha256": "f8e637e028fd93b8f496f02e1caa9dbbd13a98331652e420a9f659dcc3a27992",
+      "paths": 52
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "4431b170bda1e8dd9cb51cd0b6812c8d99bb783d75710a12c24f60fef5d96b85",
+      "roster_line": 24,
+      "count": 59
+    },
+    "supersedes": "Prior Python planner ownership and roster snapshots are historical; current Rust behavior owners preserve intent.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "source_head": "d13dd5943f9399b89ae2b3a013c9995200c7ec64",
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/family-planner-retirement-postimage-normal.log",
+        "sha256": "2d2a8716d2cc1ab72c818c4d78b648875d75f9deecbb271c1a308baf46f860fc",
+        "targets": 109,
+        "passed": 4298,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 870,
+          "passed": 856,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 365.867
+        }
+      },
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/family-planner-retirement-focused-receipts.json",
+        "sha256": "ac565b7e8ceeace152a8792c737fb3eb7c0bf26ab87db61803576994e1d688ad"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/family-planner-retirement-postimage-receipts.json",
+        "sha256": "d4ab9161da8b8604a5d84da4997e3dad82ed51f3568c647b75ff5a0fd730b4db"
+      },
+      "limits": "Local CLI, immutable finite cache and process proof only. Required Python closure, actual native platforms/models/live SDK and protected executor rollout remain incomplete."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/family-planner-retirement-coverage.json",
+      "sha256": "ed57a0f8701eafdbe65cdecdec924c0d15e8e78b91992db1ef12e49391a6c511"
     }
   }
 }

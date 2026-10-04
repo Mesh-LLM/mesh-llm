@@ -249,3 +249,17 @@ fn actual_battery_prepare_uses_current_owner_and_preserves_supplied_plan_bytes()
         assert_eq!(fs::read(&destination).unwrap(), before);
     }
 }
+
+#[test]
+fn actual_cache_requires_the_declared_file_in_the_exact_pinned_snapshot() {
+    let fixture = Fixture::new(16);
+    let plan = fs::read(&fixture.plan).expect("plan");
+    assert!(fixture.cache(&fixture.hub).success());
+    fs::remove_file(&fixture.snapshot).expect("remove declared snapshot file");
+    assert!(
+        fixture.blob.is_file(),
+        "blob existence alone cannot admit a snapshot"
+    );
+    assert!(!fixture.cache(&fixture.hub).success());
+    assert_eq!(fs::read(&fixture.plan).expect("unchanged plan"), plan);
+}

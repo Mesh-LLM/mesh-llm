@@ -223,7 +223,7 @@ pass and emits automatic-repair input only when the remaining failures are
 proved candidate-class; it binds that evidence to the producer identity and
 exact candidate package.
 
-`scripts/plan-family-battery.py` validates the versioned JSON family policy
+`cargo xtool automation family-battery-policy` validates the versioned JSON family policy
 before native compilation: the three core parity lanes for certified causal
 rows, and a class-specific smoke plus independent local-monolithic oracle pair
 for each of the six registry-generated non-chat rows (`embedding`, `rerank`,

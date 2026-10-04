@@ -333,3 +333,90 @@ fn current_manifest_preserves_every_family_class_projector_and_native_head() {
         families
     );
 }
+
+#[test]
+fn current_supplied_plan_rejects_coordinated_omission_and_oracle_promotion() {
+    for omission in [true, false] {
+        let output = if omission {
+            run(&["--shard-count", "4"])
+        } else {
+            run(&["--families", "nomic-bert-embedding"])
+        };
+        assert!(output.status.success(), "{:?}", output.stderr);
+        let mut plan: Value = serde_json::from_slice(&output.stdout).expect("generated plan");
+        if omission {
+            let removed = plan["selected_models"]
+                .as_array_mut()
+                .expect("models")
+                .pop()
+                .expect("row");
+            plan["selected_family_count"] =
+                json!(plan["selected_models"].as_array().expect("models").len());
+            for shard in plan["shards"].as_array_mut().expect("shards") {
+                shard["families"]
+                    .as_array_mut()
+                    .expect("families")
+                    .retain(|family| family != &removed["family"]);
+            }
+        } else {
+            plan["selected_models"][0]["oracle"] = json!("none");
+        }
+        let path = temp_path("current-tampered-plan.json");
+        fs::write(&path, serde_json::to_vec(&plan).expect("JSON")).expect("write plan");
+        let rejected = run(&["--verify-plan", path.to_str().expect("UTF-8")]);
+        assert_eq!(rejected.status.code(), Some(2), "{:?}", rejected.stderr);
+        assert!(rejected.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr)
+                .contains("differs from the canonical manifest and selection")
+        );
+        fs::remove_file(path).expect("cleanup");
+    }
+}
+
+#[test]
+fn current_matrix_orders_smallest_first_and_sharding_is_reproducible() {
+    let first = run(&["--shard-count", "4"]);
+    let second = run(&["--shard-count", "4"]);
+    assert!(first.status.success(), "{:?}", first.stderr);
+    assert!(second.status.success(), "{:?}", second.stderr);
+    assert_eq!(first.stdout, second.stdout);
+    let output = run(&["--shard-count", "256"]);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let plan: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let mut selected = plan["selected_models"]
+        .as_array()
+        .expect("models")
+        .iter()
+        .collect::<Vec<_>>();
+    selected.sort_by_key(|model| {
+        (
+            model["resources"]["estimated_model_bytes"]
+                .as_u64()
+                .expect("bytes"),
+            model["family"].as_str().expect("family"),
+        )
+    });
+    let rows = plan["github_matrix"]["include"].as_array().expect("matrix");
+    assert_eq!(rows.len(), selected.len());
+    let mut indices = std::collections::BTreeSet::new();
+    for (row, expected) in rows.iter().zip(selected) {
+        assert_eq!(row["families"], expected["family"]);
+        assert!(indices.insert(row["shard_index"].as_u64().expect("index")));
+        let shard = plan["shards"]
+            .as_array()
+            .expect("shards")
+            .iter()
+            .find(|shard| shard["shard_index"] == row["shard_index"])
+            .expect("matching shard");
+        assert_eq!(shard["families"], json!([expected["family"]]));
+    }
+}
+
+#[test]
+fn obsolete_cadence_selection_is_rejected_without_emitting_a_plan() {
+    let output = run(&["--cadence", "nightly"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(!output.stderr.is_empty());
+}
