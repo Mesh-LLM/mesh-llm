@@ -114,11 +114,20 @@ fn actual_publication_cli_requires_independent_verified_bundle_and_retains_summa
 }
 #[test]
 fn actual_handoff_rejects_foreign_run_and_corrupt_artifact_before_output() {
-    for corrupt in [false, true] {
+    for corrupt in [
+        None,
+        Some("binaries.tar"),
+        Some("workload-oracles.tar"),
+        Some("llama-source.bundle"),
+        Some("llama-source.json"),
+        Some("plan.json"),
+        Some("candidate.bundle"),
+        Some("upstream-summary.md"),
+    ] {
         let (fixture, mut input) = package("verify-1", true);
         input["repository"] = json!("Mesh-LLM/mesh-llm");
-        if corrupt {
-            fs::write(fixture.0.join("package/binaries.tar"), b"changed").unwrap();
+        if let Some(artifact) = corrupt {
+            fs::write(fixture.0.join("package").join(artifact), b"changed").unwrap();
         } else {
             input["run_id"] = json!("999");
         }

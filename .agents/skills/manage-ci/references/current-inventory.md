@@ -1386,7 +1386,7 @@ promote an estimate-selected row but cannot demote it; plans without the field
 remain estimate-only. GLM-4.5-Air, Qwen4exp and Llama4 currently require the
 256-plus tier through this policy.
 
-`scripts/lib/canary_family_memory.py` uses the greater of pinned file sizes and
+The Rust canary source-plan placement owner uses the greater of pinned file sizes and
 the model estimate, including projector/draft artifacts. Causal parity releases
 the monolithic oracle before partitioned execution and releases state source
 before restore: one aggregate weight copy plus a 25% tensor/KV/state/scratch

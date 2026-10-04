@@ -71,7 +71,6 @@ fn fixture(root: &Path) -> DynResult<(Vec<String>, MigrationLedgers)> {
             github_source_records: vec![],
             selected_process_calls: vec![],
             runner_image_planner_loader: None,
-            family_canary_loaders: vec![],
             reproducible_candidate_census: CandidateCensus { acceptance: true },
         },
         instructions: InstructionLedger {

@@ -2108,18 +2108,6 @@
       "target": "scripts/plan-ci.py"
     },
     {
-      "caller": "scripts/llama-canary-family-evidence.py:20-23",
-      "closure_note": "Target loaded at module initialization; canary family memory tests import evidence module, and trusted canary scripts/workflow invoke its CLI. Target launches child processes through subprocess.",
-      "expression": "Path(__file__).resolve().parent / 'lib/canary_family_memory.py'",
-      "target": "scripts/lib/canary_family_memory.py"
-    },
-    {
-      "caller": "scripts/llama-canary-family-evidence.py:72-76",
-      "closure_note": "Target dynamically loaded by load_planner; workflow and shell caller invoke evidence commands that reach this loader. Full optional oracle/tool subprocess closure depends on selected command and remains incomplete.",
-      "expression": "root / 'scripts/plan-family-battery.py'",
-      "target": "scripts/plan-family-battery.py"
-    },
-    {
       "caller": "scripts/release-notes-classify.py:29",
       "closure_note": "Dynamic import used by release-note classifier; caller scripts/release-notes-generate.sh; exact command flags vary by fallback path.",
       "expression": "_CHECKER_PATH",
@@ -2170,36 +2158,7 @@
     "owner": "task 5 migration_inventory regression tests",
     "relationship_to_task_2": "Specification only. Do not create/edit tools/xtask/tests/fixtures or any task-2 fixture ledger in task 1."
   },
-  "family_canary_loaders": [
-    {
-      "caller": "scripts/llama-canary-family-evidence.py",
-      "deletion_condition": "Replace the eager memory import and preserve source-relative controller identity, scheduling estimate, host admission, memory evidence, process-group cleanup, status and all invoking subcommands before removing this loader. Required unittest coverage must have an equivalent owner first.",
-      "deletion_phase": 5,
-      "descendant_processes": "No subprocess on import. certify(args) calls MEMORY.guarded_run at evidence:122-134 with command arch -arm64 <args.root.resolve()>/scripts/skippy-family-battery.sh --skip-build --plan <package>/plan.json --shard-index <n>, cwd=args.root.resolve(); guarded_run creates evidence/memory-admission.json and a per-user lock, then sysctl -n hw.memsize, vm_stat and ps -axo pgid=,stat= for admission/polling and starts the battery with Popen(start_new_session=True). It inherits child streams, returns the child exit status, and terminates/waits on its process group on failure/exit. The battery invokes its own selected-root planner at skippy-family-battery.sh:190,193,395 and further native/oracle processes. MEMORY.placement in scheduling_matrix is pure arithmetic; no host probes until guarded_run.",
-      "edge_id": "scripts/llama-canary-family-evidence.py#dynamic-import:3c2c97de0b0aba79:1",
-      "invocation": "All evidence CLI subcommands and imports execute lines 20-23 (spec_from_file_location, module_from_spec, exec_module) before dispatch; no argv or stdin is passed to the memory module. Direct workflow entrypoints: .github/workflows/llama-canary-family-pass.yml build, restore, certify, receipt, aggregate; .github/workflows/llama-upstream-canary.yml publication. scripts/llama-canary-agent-repair.sh invokes the trusted-root controller with pack --root selected ROOT plus output/candidate/base/branch/pass-id/test-build/bundle/summary/workload-oracles. Required just/ci.just:15 and ci-quality-slice.yml:186 unittest discovery imports test_llama_canary_family_evidence.py, test_llama_canary_handoff_contract.py and test_canary_family_memory.py, which dynamically import this controller. Workflow modes are trusted-main scheduled/dispatch and explicitly trusted selected mesh_ref; no direct Just recipe invokes this controller.",
-      "replacement_owner": "tools/xtask family-canary admission and process ownership (task 24, with bounded process supervision in task 19)",
-      "resolution": "At evidence module initialization Path(__file__).resolve().parent / lib/canary_family_memory.py resolves the fixed sibling relative filename. The controller script's own checkout chooses these bytes; --root/CANARY_SOURCE_ROOT does not redirect the memory import. Module name canary_family_memory is not a runtime selector. This SHA-256 pins the current checkout only, not a historical or selected checkout.",
-      "source_block": "_MEMORY_SPEC = importlib.util.spec_from_file_location(",
-      "status_streams_effects": "Import runs stdlib imports, defines constants/functions, and executes memory module top-level imports/constants; no child process, stdout, stderr, manifest read or intended write. Import exceptions propagate (CLI uncaught traceback/nonzero; unittest import fails discovery). Python may write __pycache__ absent PYTHONDONTWRITEBYTECODE. CLI status/streams/effects depend on the named subcommand: build preflights and launches repair; pack writes handoff and GITHUB_OUTPUT matrix/identity; restore extracts to selected root and writes GITHUB_OUTPUT candidate; certify writes memory evidence and propagates battery failure; receipt writes receipt.json; aggregate prints summary, optionally appends GITHUB_STEP_SUMMARY, fails on invalid receipts; publication writes pr-body.md. These effects are call-time only.",
-      "target": "scripts/lib/canary_family_memory.py",
-      "target_sha256": "371ef5c3c4a9b77cb0e9912a4b7d2a868c9a312ef1c5a956d483b68b32ea41fa"
-    },
-    {
-      "caller": "scripts/llama-canary-family-evidence.py",
-      "deletion_condition": "Preserve fixed relative filename with source-selected bytes, test-only load_planner behavior, direct selected-source CLI plan generation/verification and battery callers including argv, status, output and cache identity before removing the loader or planner. Keep the currently required Python unittest path transitional until replacement parity is tested.",
-      "deletion_phase": 5,
-      "descendant_processes": "No child on import or load_planner. source_plan launches two Python children at evidence:107-108; preflight_battery then launches bash root/scripts/skippy-family-battery.sh --skip-build --dry-run --plan <temporary>/plan.json with stdout discarded and inherited stderr, cwd=root, timeout=120. certify starts the same selected-root battery through MEMORY.guarded_run (separate memory record); battery shell invokes its selected-root planner and may invoke further native/oracle commands, not at planner import time. plan-family-battery.py contains no subprocess call; its main executes only under __main__.",
-      "edge_id": "scripts/llama-canary-family-evidence.py#dynamic-import:e9b2f3ad7f9e3b53:1",
-      "invocation": "scripts/llama-canary-family-evidence.py:72-76 defines load_planner(root); direct test calls include scripts/tests/test_llama_canary_family_evidence.py and test_llama_canary_handoff_contract.py. No production evidence subcommand calls load_planner in the current source. Production build preflight (:137-152) and pack (:309-313) instead call source_plan(root,destination): sys.executable root/scripts/plan-family-battery.py --manifest root/ci/llama-canary/family-certified.json --shard-count 256 --output destination [--check-cache --cache-root $HF_CACHE for pack], cwd=root, then the same argv prefix with --verify-plan destination. build picks root from CANARY_SOURCE_ROOT or cwd; pack takes --root, with trusted controller in scripts/llama-canary-agent-repair.sh and selected source root passed separately. The battery shell, repair shell and workload-certify shell also invoke the planner directly (skippy-family-battery.sh:190,193,395; llama-canary-agent-repair.sh:452-466,487-490; skippy-workload-certify.sh:157-159). Required unittest discovery reaches test imports and test function calls, not an automatic production load_planner call.",
-      "replacement_owner": "tools/xtask selected-source family battery planning and canary evidence (task 24)",
-      "resolution": "load_planner(root) forms root/scripts/plan-family-battery.py with a fixed relative filename; root is supplied by its caller and may be a separately checked-out, explicitly trusted CANARY_SOURCE_ROOT. The SHA-256 identifies only current checkout bytes; a different selected root must be bound to its verified source revision and cannot be inferred from this digest. Planner import sets ROOT from the selected file's __file__ and DEFAULT_MANIFEST from ROOT/ci/llama-canary/family-certified.json; no manifest is read on import.",
-      "source_block": "spec = importlib.util.spec_from_file_location(\"family_planner\", root / \"scripts/plan-family-battery.py\")",
-      "status_streams_effects": "load_planner import executes planner top-level constant and function/class definitions, returns module, prints nothing and makes no intended write or subprocess; import exceptions propagate and Python may write __pycache__. source_plan's generation and verification are distinct child processes with inherited streams, cwd=root, check=True and timeouts of 600s/60s; failure/timeout raises, direct CLI PlanError prints stderr and exits 2, unexpected errors can traceback. Generation writes destination plan JSON and optional cache checking reads pinned files; verification reads and checks the canonical plan, then source_plan reads and validates it. Planner direct --inspect-gguf prints JSON with layer_count/activation_width, --output writes plan and --github-output appends action fields when requested; no planner subprocess exists in planner source.",
-      "target": "scripts/plan-family-battery.py",
-      "target_sha256": "24f383830e7231f1506647b7a9f3537f0fe45dbb96620b0b44916f91a66ef470"
-    }
-  ],
+  "family_canary_loaders": [],
   "github_edge_reconciliation": {
     "actual_github_uncovered_count": "unknown; not derivable from regex matches; per-callsite reconciliation remains incomplete",
     "candidate_false_positives": [
@@ -3666,20 +3625,6 @@
       "reason": "Second inline ipaddress check gates later provider probe",
       "replacement_task": 12,
       "target": "inline ipaddress code"
-    },
-    {
-      "id": "scripts/llama-canary-family-evidence.py#dynamic-import:3c2c97de0b0aba79:1",
-      "owner": "family canary memory loader",
-      "reason": "Multiline spec call loads sibling lib/canary_family_memory.py",
-      "replacement_task": 24,
-      "target": "scripts/lib/canary_family_memory.py"
-    },
-    {
-      "id": "scripts/llama-canary-family-evidence.py#dynamic-import:e9b2f3ad7f9e3b53:1",
-      "owner": "family canary planner loader",
-      "reason": "Loads plan-family-battery.py relative to selected root",
-      "replacement_task": 24,
-      "target": "scripts/plan-family-battery.py"
     }
   ],
   "source_verified_scope": "Nine original source-reviewed edges and separate GitHub source records. Selected process and bounded Just recipe calls are separately bound; full transitive scope remains incomplete.",
@@ -14554,6 +14499,63 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/manifest-policy-retirement-coverage.json",
       "sha256": "d02bb2db824afa80a1093fc998916329020e14851707a582b024ebbe3463d1ef"
+    }
+  },
+  "family_helper_memory_and_handoff_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 129,
+    "core_modules_after": 61,
+    "required_targets": 108,
+    "durable_coverage": {
+      "path": "ci/automation-migration/family-helper-retirement-coverage.json",
+      "sha256": "6faaedc0b2f3546f26254eb03f0b0dc6074a831d11919061dbe5a882fb245891"
+    },
+    "current_test_tree": {
+      "sha256": "619a01fd5aafa5f52a51d71655a31372070630b95902f0a00cb4b52d1241fbf1",
+      "paths": 54
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "fcc0f4e4368c295cdf1435de99e01df3014b8ff10bc0a7db604ede23eadea034",
+      "roster_line": 24,
+      "count": 61
+    },
+    "supersedes": "Earlier retained family/memory loader and three test module snapshots are historical after this activation.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/family-helper-retirement-postimage-focused-receipts.json",
+        "sha256": "8a0956e9599283c42dd1a3b2586adeb807f648f8e122a272387148ebc28d265b"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/family-helper-retirement-postimage-receipts.json",
+        "sha256": "1e86ee6da308d120016b7cedc8311c630ee6cda7a661e5eda5004a1fa1c1cb0b"
+      },
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/family-helper-retirement-postimage-normal.log",
+        "sha256": "b29d18a48ba6a2cb1d78cc956a6053e9c7d1ac8414391175c0c2055f1d6c5536",
+        "targets": 109,
+        "passed": 4289,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 910,
+          "passed": 896,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 361.404
+        }
+      },
+      "original_intent_scope": "All 42 family, 18 memory and two handoff original methods passed before retirement. Current named native owners cover those intents; actual admission-before-child and extended actual CLI native bundle/provenance corruption proof both passed before retirement. The deleted helper-specific inventory schema/check and two tests are obsolete; runner-image loader checks remain.",
+      "limits": "Family/memory helpers and three complete legacy test modules retired through actual local typed/native fixture proof. Windows native selection, other-platform/model/product/live SDK/hosted/protected acceptance and remaining generic Python closure are still open."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/family-helper-retirement-coverage.json",
+      "sha256": "e5be2956bbbe3116d9d7ee83c43b88eb670e8df93aeb52f78852e25f83256f95"
     }
   }
 }

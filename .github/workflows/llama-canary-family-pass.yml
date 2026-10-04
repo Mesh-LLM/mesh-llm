@@ -268,7 +268,7 @@ jobs:
       FAMILY_BATTERY_MM_TEST_BIN: ${{ github.workspace }}/canary-source/target/debug/skippy-mm-test
       PACKAGE: ${{ github.workspace }}/.deps/canary-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
       IDENTITY: ${{ needs.build.outputs.identity }}
-      # Restored workload oracle closure (llama-canary-family-evidence.py
+      # Restored workload oracle closure (Rust canary-receipts
       # restore). The battery's non-chat lanes consume the CPU candidate and
       # native oracle executables from this immutable handoff instead of
       # compiling on the worker.

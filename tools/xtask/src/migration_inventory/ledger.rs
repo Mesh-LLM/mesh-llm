@@ -57,8 +57,6 @@ pub(super) struct InvocationLedger {
     pub(super) selected_process_calls: Vec<SelectedProcessCall>,
     #[serde(default)]
     pub(super) runner_image_planner_loader: Option<PlannerLoader>,
-    #[serde(default)]
-    pub(super) family_canary_loaders: Vec<FamilyLoader>,
     pub(super) reproducible_candidate_census: CandidateCensus,
 }
 
@@ -117,22 +115,6 @@ pub(super) struct PlannerLoader {
     pub(super) target_sha256: String,
     pub(super) invocation: String,
     pub(super) status_streams_effects: String,
-    pub(super) replacement_owner: String,
-    pub(super) deletion_phase: u32,
-    pub(super) deletion_condition: String,
-}
-
-#[derive(Clone, Deserialize)]
-pub(super) struct FamilyLoader {
-    pub(super) edge_id: String,
-    pub(super) caller: String,
-    pub(super) source_block: String,
-    pub(super) target: String,
-    pub(super) target_sha256: String,
-    pub(super) resolution: String,
-    pub(super) invocation: String,
-    pub(super) status_streams_effects: String,
-    pub(super) descendant_processes: String,
     pub(super) replacement_owner: String,
     pub(super) deletion_phase: u32,
     pub(super) deletion_condition: String,

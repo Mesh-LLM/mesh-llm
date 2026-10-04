@@ -122,12 +122,6 @@ fn check_edges(
     {
         loader_closure::check_runner_image_planner_loader(root, &ledgers.invocations)?;
     }
-    if paths
-        .iter()
-        .any(|path| path == "scripts/llama-canary-family-evidence.py")
-    {
-        loader_closure::check_family_canary_loaders(root, &ledgers.invocations)?;
-    }
     Ok(())
 }
 

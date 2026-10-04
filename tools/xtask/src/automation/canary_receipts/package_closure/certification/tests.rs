@@ -170,3 +170,63 @@ fn actual_certification_wrong_tier_refuses_before_consumer_native_lock_or_child_
             .exists()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn actual_battery_admission_refuses_insufficient_host_before_child_or_output_files() {
+    use crate::process::{ProcessSpec, Value};
+    use serde_json::json;
+    use std::{
+        collections::BTreeMap,
+        time::{Duration, Instant},
+    };
+    for (host, peak) in [
+        (
+            Host {
+                total: 1000,
+                available: 899,
+            },
+            800,
+        ),
+        (
+            Host {
+                total: 1000,
+                available: 1000,
+            },
+            901,
+        ),
+        (
+            Host {
+                total: 0,
+                available: 0,
+            },
+            1,
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("child-started");
+        let spec = ProcessSpec {
+            executable: "/bin/sh".into(),
+            arguments: ["-c", "printf started > child-started"]
+                .into_iter()
+                .map(|v| Value::Public(v.into()))
+                .collect(),
+            cwd: directory.path().to_owned(),
+            environment: BTreeMap::new(),
+        };
+        let mut report = json!({"status":"failed"});
+        let result = super::run_admitted_battery(
+            &spec,
+            Instant::now() + Duration::from_secs(2),
+            host,
+            peak,
+            &mut report,
+            directory.path(),
+        );
+        assert!(result.is_err(), "insufficient host admitted");
+        assert!(!marker.exists(), "battery started before host admission");
+        assert!(!directory.path().join("certify.stdout.log").exists());
+        assert!(!directory.path().join("certify.stderr.log").exists());
+        assert_eq!(report["status"], "failed");
+    }
+}

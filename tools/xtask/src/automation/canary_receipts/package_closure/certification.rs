@@ -143,11 +143,6 @@ fn execute_bound(
     let peak = row["estimated_peak_bytes"]
         .as_u64()
         .ok_or("missing family peak memory")?;
-    let reserve = observation::admission(initial, peak)?;
-    report["physical_bytes"] = json!(initial.total);
-    report["initial_available_bytes"] = json!(initial.available);
-    report["reserve_bytes"] = json!(reserve);
-    report["minimum_available_bytes"] = json!(initial.available);
     let spec = ProcessSpec {
         executable: "/usr/bin/arch".into(),
         arguments: [
@@ -165,17 +160,7 @@ fn execute_bound(
         cwd: root.to_owned(),
         environment: environment(),
     };
-    let observed = guard::run(
-        &spec,
-        deadline,
-        &process::cancellation(),
-        initial,
-        reserve,
-        OutputFiles {
-            stdout: Some(evidence.join("certify.stdout.log")),
-            stderr: Some(evidence.join("certify.stderr.log")),
-        },
-    )?;
+    let observed = run_admitted_battery(&spec, deadline, initial, peak, report, evidence)?;
     report["minimum_available_bytes"] = json!(observed.minimum);
     report["exit_code"] = json!(observed.process.status.and_then(|status| status.code()));
     report["supervisor_outcome"] = json!(format!("{:?}", observed.process.outcome));
@@ -203,6 +188,32 @@ fn execute_bound(
         json!({"status":"passed","family":family,"shard_index":input.shard_index,"identity_sha256":input.identity_sha256}),
     )
 }
+fn run_admitted_battery(
+    spec: &ProcessSpec,
+    deadline: Instant,
+    initial: observation::Host,
+    peak: u64,
+    report: &mut Json,
+    evidence: &std::path::Path,
+) -> DynResult<guard::Monitored> {
+    let reserve = observation::admission(initial, peak)?;
+    report["physical_bytes"] = json!(initial.total);
+    report["initial_available_bytes"] = json!(initial.available);
+    report["reserve_bytes"] = json!(reserve);
+    report["minimum_available_bytes"] = json!(initial.available);
+    guard::run(
+        spec,
+        deadline,
+        &process::cancellation(),
+        initial,
+        reserve,
+        OutputFiles {
+            stdout: Some(evidence.join("certify.stdout.log")),
+            stderr: Some(evidence.join("certify.stderr.log")),
+        },
+    )
+}
+
 fn environment() -> BTreeMap<std::ffi::OsString, Value> {
     std::env::vars_os()
         .filter(|(key, _)| {
