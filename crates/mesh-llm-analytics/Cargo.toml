@@ -23,7 +23,7 @@ anyhow.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6.0.0"
 mesh-llm-build-info.workspace = true
-mesh-llm-events = { path = "../mesh-llm-events", version = "0.77.0" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0" }
 reqwest = { version = "0.13", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
