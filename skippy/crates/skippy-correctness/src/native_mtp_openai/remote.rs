@@ -120,7 +120,7 @@ fn remote_stage_command(args: RemoteStageCommand<'_>) -> String {
     }
     command.push_str("nohup ");
     command.push_str(&shell_quote(args.remote_bin));
-    command.push_str(" serve-binary --config ");
+    command.push_str(" serve --stage-transport binary --worker-only --config ");
     command.push_str(&shell_quote(args.remote_config));
     command.push_str(" --topology ");
     command.push_str(&shell_quote(args.remote_topology));
@@ -257,7 +257,9 @@ mod tests {
         assert!(command.contains("cd '/tmp/work dir' && "));
         assert!(command.contains("SKIPPY_NATIVE_MTP_ENABLED=1"));
         assert!(command.contains("SKIPPY_NATIVE_MTP_BATCHED_VERIFY=0"));
-        assert!(command.contains("'target/debug/skippy' serve-binary"));
+        assert!(command.contains(
+            "'target/debug/skippy' serve --stage-transport binary --worker-only --config"
+        ));
         assert!(command.contains("'/tmp/run/stage'\"'\"'1.json'"));
 
         let batched_command = remote_stage_command(RemoteStageCommand {

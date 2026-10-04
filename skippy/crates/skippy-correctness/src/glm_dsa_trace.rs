@@ -707,7 +707,10 @@ fn start_stage0(
     let mut command = Command::new(&args.server.stage_server_bin);
     command
         .args([
-            "serve-binary",
+            "serve",
+            "--stage-transport",
+            "binary",
+            "--worker-only",
             "--config",
             path_str(config_path)?,
             // The deterministic driver sends one prefill followed by Stop, so

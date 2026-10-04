@@ -539,7 +539,10 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
 
     let mut source_command = Command::new(&args.stage_server_bin);
     source_command.args([
-        "serve-binary",
+        "serve",
+        "--stage-transport",
+        "binary",
+        "--worker-only",
         "--config",
         source_config_path
             .to_str()
@@ -586,7 +589,10 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
 
     let mut restore_command = Command::new(&args.stage_server_bin);
     restore_command.args([
-        "serve-binary",
+        "serve",
+        "--stage-transport",
+        "binary",
+        "--worker-only",
         "--config",
         restore_config_path
             .to_str()

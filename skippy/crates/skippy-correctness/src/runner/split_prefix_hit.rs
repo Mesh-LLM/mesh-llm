@@ -336,7 +336,9 @@ fn spawn_prefix_hit_stage(
         .with_context(|| format!("failed to create {}", log_path.display()))?;
     let mut command = Command::new(&args.server.stage_server_bin);
     command.args([
-        "serve-binary",
+        "serve",
+        "--stage-transport",
+        "binary",
         "--config",
         config_path
             .to_str()
@@ -352,6 +354,8 @@ fn spawn_prefix_hit_stage(
         command.args(["--bind-addr", &openai_bind_addr.to_string()]);
         command.args(["--prefill-chunk-policy", "fixed"]);
         command.args(["--prefill-chunk-size", "4096"]);
+    } else {
+        command.arg("--worker-only");
     }
     command.env("SKIPPY_TELEMETRY_STDERR", "1");
     if cache_enabled {

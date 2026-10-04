@@ -352,7 +352,10 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
 
     let mut stage_command = Command::new(&args.stage_server_bin);
     stage_command.args([
-        "serve-binary",
+        "serve",
+        "--stage-transport",
+        "binary",
+        "--worker-only",
         "--config",
         config_path
             .to_str()

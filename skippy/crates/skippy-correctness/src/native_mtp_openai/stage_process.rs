@@ -116,7 +116,9 @@ pub(super) fn spawn_stage(
         .with_context(|| format!("failed to create {}", log_path.display()))?;
     let mut command = Command::new(&args.server.stage_server_bin);
     command.args([
-        "serve-binary",
+        "serve",
+        "--stage-transport",
+        "binary",
         "--config",
         config_path
             .to_str()
@@ -130,6 +132,8 @@ pub(super) fn spawn_stage(
     ]);
     if let Some(openai_bind_addr) = openai_bind_addr {
         command.args(["--bind-addr", &openai_bind_addr.to_string()]);
+    } else {
+        command.arg("--worker-only");
     }
     command.env("SKIPPY_TELEMETRY_STDERR", "1");
     if native_mtp_enabled {
