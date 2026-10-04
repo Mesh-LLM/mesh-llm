@@ -171,11 +171,13 @@ pub struct RuntimeResourcePlanInput<'a> {
 pub struct MeasuredBufferFootprint {
     /// Compute-graph buffer(s) at context init, bytes.
     pub compute_bytes: u64,
-    /// KV buffer at `context_length`, bytes.
+    /// Total KV buffer for `lane_count` lanes at `context_length` per lane, bytes.
     pub kv_bytes: u64,
-    /// The context length the KV buffer was measured at.
+    /// Per-lane context length the KV buffer was measured at.
     pub context_length: u32,
-    /// Lane count the buffers were measured at. Compute buffers scale
+    /// Realized lane count the buffers were measured at, rather than a requested
+    /// count that the native workload may have clamped. Omit the footprint when
+    /// that allocation cannot be established. Compute buffers scale
     /// ~linearly with lanes (measured 399/783/1551 MiB at 2/4/8 lanes on the
     /// 5080 for granite), so a plan resolving a different lane count scales
     /// the compute charge by the lane ratio.
@@ -400,8 +402,8 @@ const DEFAULT_UTILIZATION_TARGET_DENOMINATOR: u64 = 100;
 /// Model: `budget = (vram - model) × utilization - measured_compute`, then
 /// solve for the deepest context whose *scaled* KV cost fits the budget. KV
 /// scales linearly with per-lane context (unified pool of `n_ctx` cells), so the
-/// measured KV bytes at `measured_ctx` give `kv_bytes_per_token_measured =
-/// kv_bytes / measured_ctx`, and the deepest affordable context is
+/// total measured KV bytes give `kv_bytes_per_token_measured =
+/// kv_bytes / (measured_ctx × measured_lanes)`, and the deepest affordable context is
 /// `budget / (kv_bytes_per_token_measured × resolved_lanes)`.
 ///
 /// Returns `None` only when the measurement is structurally unusable (zero
@@ -449,8 +451,8 @@ fn measured_context_plan(
     let lane_ratio_den = u128::from(measured.lane_count);
     let compute_charge = u128::from(measured.compute_bytes) * lane_ratio_num / lane_ratio_den;
     let budget = utilised.saturating_sub(compute_charge);
-    let measured_context = u128::from(measured.context_length);
-    let kv_per_token = u128::from(measured.kv_bytes).div_ceil(measured_context);
+    let measured_cells = u128::from(measured.context_length) * u128::from(measured.lane_count);
+    let kv_per_token = u128::from(measured.kv_bytes).div_ceil(measured_cells);
     if kv_per_token == 0 {
         return None;
     }

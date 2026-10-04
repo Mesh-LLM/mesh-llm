@@ -74,7 +74,11 @@ fn completed_measurement_snapshot(
     key: &MemoryPlanMeasurementKey,
     breakdown: &RuntimeResourcePlanBreakdown,
     measured: Option<skippy_runtime::MeasuredNativeBuffers>,
+    reusable_workload: bool,
 ) -> Option<MeasuredPlanSnapshot> {
+    if !reusable_workload {
+        return None;
+    }
     let measured = measured?;
     if measured.host_memory_observed {
         return None;
@@ -155,22 +159,21 @@ pub(super) fn emit_measured_memory_reconciliation(
     model_name: &str,
     measurement_key: &MemoryPlanMeasurementKey,
     plan: &RuntimeResourcePlan,
+    reusable_workload: bool,
 ) {
     let Some(breakdown) = plan.breakdown.as_ref() else {
         return;
     };
     let measured = skippy_runtime::measured_native_buffers();
     let reconciliation = reconcile_memory_plan_with_measurements(breakdown, measured);
+    let completed_snapshot =
+        completed_measurement_snapshot(measurement_key, breakdown, measured, reusable_workload);
+    let measurement_reusable = completed_snapshot.is_some();
     if let Ok(mut snapshot) = MEASURED_PLAN_SNAPSHOT.lock() {
-        *snapshot = completed_measurement_snapshot(measurement_key, breakdown, measured);
+        *snapshot = completed_snapshot;
     }
     let memory_plan_measured =
         measured.is_some_and(|m| m.compute_mib.is_some() || m.kv_mib.is_some());
-    let measurement_reusable = measured.is_some_and(|measurement| {
-        !measurement.host_memory_observed
-            && measurement.compute_mib.is_some()
-            && measurement.kv_mib.is_some()
-    });
     tracing::info!(
         model = model_name,
         memory_plan.measured_available = memory_plan_measured,
@@ -273,7 +276,10 @@ mod tests {
             kv_mib: Some(2.0),
             host_memory_observed: false,
         };
-        assert!(completed_measurement_snapshot(&key, &breakdown, Some(measured)).is_some());
+        assert!(completed_measurement_snapshot(&key, &breakdown, Some(measured), true).is_some());
+        // A complete four-requested-lane device measurement remains ineligible
+        // when native workload metadata is unknown or clamps the actual lanes.
+        assert!(completed_measurement_snapshot(&key, &breakdown, Some(measured), false).is_none());
         assert!(
             completed_measurement_snapshot(
                 &key,
@@ -281,7 +287,8 @@ mod tests {
                 Some(skippy_runtime::MeasuredNativeBuffers {
                     host_memory_observed: true,
                     ..measured
-                })
+                }),
+                true
             )
             .is_none()
         );
@@ -292,7 +299,8 @@ mod tests {
                 Some(skippy_runtime::MeasuredNativeBuffers {
                     kv_mib: None,
                     ..measured
-                })
+                }),
+                true
             )
             .is_none()
         );

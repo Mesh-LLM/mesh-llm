@@ -1174,7 +1174,12 @@ async fn start_local_skippy_model(
     })
     .await
     .context("join load skippy direct GGUF task")??;
-    emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
+    emit_measured_memory_reconciliation(
+        &model_name,
+        &measurement_key,
+        &plan,
+        skippy_model.permits_memory_measurement_reuse(),
+    );
     if skippy_model.supports_system_one() {
         capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
     }
@@ -1352,7 +1357,12 @@ async fn start_local_package_v2_model(
     })
     .await
     .context("join load skippy package-v2 task")??;
-    emit_measured_memory_reconciliation(&model_name, &measurement_key, &plan);
+    emit_measured_memory_reconciliation(
+        &model_name,
+        &measurement_key,
+        &plan,
+        handle.permits_memory_measurement_reuse(),
+    );
     if handle.supports_system_one() {
         capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
     }

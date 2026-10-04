@@ -456,11 +456,102 @@ fn lane_count_is_independent_of_kv_quant() {
 }
 
 #[test]
+fn measured_total_kv_matches_equivalent_static_plan() {
+    // One layer and one 64-element K/V head with F16 storage cost 256 bytes
+    // per token per lane. Four 8192-token lanes allocate 8 MiB in total.
+    let metadata = GgufCompactMeta {
+        context_length: 131_072,
+        head_count: 1,
+        kv_head_count: 1,
+        layer_count: 1,
+        key_length: 64,
+        value_length: 64,
+        ..Default::default()
+    };
+    let input = RuntimeResourcePlanInput {
+        ctx_size_override: None,
+        parallel_override: Some(4),
+        model_bytes: 0,
+        projector_bytes: 0,
+        vram_bytes: 10 * 1024 * 1024,
+        metadata: Some(&metadata),
+        kv_cache_quant: GgufKvCacheQuant::F16,
+        local_layer_fraction: None,
+        planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+        measured_buffers: None,
+    };
+    let static_plan = plan_runtime_resources(input);
+    let measured_plan = plan_runtime_resources(RuntimeResourcePlanInput {
+        measured_buffers: Some(MeasuredBufferFootprint {
+            compute_bytes: 0,
+            kv_bytes: 8 * 1024 * 1024,
+            context_length: 8192,
+            lane_count: 4,
+        }),
+        ..input
+    });
+
+    // The 85% static and 88% measured budgets both fit 8192 tokens per lane.
+    assert_eq!(static_plan.context_length, 8192);
+    assert_eq!(measured_plan.context_length, static_plan.context_length);
+    let breakdown = measured_plan.breakdown.unwrap();
+    assert_eq!(breakdown.kv_bytes_per_token, 256);
+    assert_eq!(breakdown.planned_kv_bytes, 8 * 1024 * 1024);
+    assert_eq!(breakdown.measured_fit, Some(true));
+}
+
+#[test]
+fn measured_total_kv_replans_for_requested_lanes() {
+    let metadata = GgufCompactMeta {
+        context_length: 131_072,
+        head_count: 1,
+        kv_head_count: 1,
+        layer_count: 1,
+        key_length: 64,
+        value_length: 64,
+        ..Default::default()
+    };
+    // These historical allocations all contain 32768 token cells and cost
+    // 8 MiB. Their per-lane depths vary with the measured lane count.
+    for measured_lanes in [1, 2, 4, 8] {
+        let footprint = MeasuredBufferFootprint {
+            compute_bytes: 0,
+            kv_bytes: 8 * 1024 * 1024,
+            context_length: 32_768 / measured_lanes,
+            lane_count: measured_lanes,
+        };
+        for (requested_lanes, expected_context) in [(1, 32_768), (2, 16_384), (4, 8192), (8, 4096)]
+        {
+            let plan = plan_runtime_resources(RuntimeResourcePlanInput {
+                ctx_size_override: None,
+                parallel_override: Some(requested_lanes),
+                model_bytes: 0,
+                projector_bytes: 0,
+                vram_bytes: 10 * 1024 * 1024,
+                metadata: Some(&metadata),
+                kv_cache_quant: GgufKvCacheQuant::F16,
+                local_layer_fraction: None,
+                planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+                measured_buffers: Some(footprint),
+            });
+            assert_eq!(
+                plan.context_length, expected_context,
+                "measured {measured_lanes} lanes, requested {requested_lanes} lanes"
+            );
+            assert_eq!(plan.slots, requested_lanes);
+            let breakdown = plan.breakdown.unwrap();
+            assert_eq!(breakdown.kv_bytes_per_token, 256);
+            assert_eq!(breakdown.planned_kv_bytes, 8 * 1024 * 1024);
+            assert_eq!(breakdown.measured_fit, Some(true));
+        }
+    }
+}
+
+#[test]
 fn budget_driven_context_uses_measured_kv_and_compute() {
-    // Roomy node: 16 GiB VRAM, 3 GiB weights. Here the measured KV
-    // per-token cost (2 GiB / 16_384 = 131_072 B) is twice the q8
-    // estimate (~69_632 B) the ladder assumes. Four lane reservations
-    // bring the measured plan to 16_384 per lane.
+    // Roomy node: 16 GiB VRAM, 3 GiB weights. The 2 GiB measurement is the
+    // total for four 16384-token lanes, giving 32768 bytes/token/lane.
+    // With measured compute charged, four lanes can each reach 65536 tokens.
     let metadata = gqa_metadata(131_072);
     let plan = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: None,
@@ -479,21 +570,21 @@ fn budget_driven_context_uses_measured_kv_and_compute() {
             lane_count: 4,
         }),
     });
-    assert_eq!(plan.context_length, 16_384);
+    assert_eq!(plan.context_length, 65_536);
     let measured_breakdown = plan.breakdown.expect("measured planner breakdown");
     assert_eq!(
         measured_breakdown.planning_source,
         RuntimeResourcePlanSource::MeasuredFootprint
     );
-    assert_eq!(measured_breakdown.kv_bytes_per_token, 131_072);
+    assert_eq!(measured_breakdown.kv_bytes_per_token, 32_768);
     assert_eq!(measured_breakdown.compute_charge_bytes, 512 * 1024 * 1024);
     assert_eq!(measured_breakdown.measured_fit, Some(true));
-    assert_eq!(measured_breakdown.planned_kv_bytes, 16_384 * 131_072 * 4);
+    assert_eq!(measured_breakdown.planned_kv_bytes, 65_536 * 32_768 * 4);
 
     // Tight node where the ladder's estimate binds: 5 GiB free, the q8
-    // estimate (65,536 B/tok for these dims) caps the ladder at 16_384
-    // per lane, while a measured KV cost half the estimate (32,768 B/tok)
-    // lets the measured plan reach 32_768 per lane.
+    // estimate (~69632 B/token/lane) caps the ladder at 16384 per lane.
+    // Total measured KV of 512 MiB at 16384 tokens across four lanes costs
+    // 8192 bytes/token/lane, permitting the native 131072-token window.
     let tight = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: None,
         parallel_override: None,
@@ -511,7 +602,7 @@ fn budget_driven_context_uses_measured_kv_and_compute() {
             lane_count: 4,
         }),
     });
-    assert_eq!(tight.context_length, 32_768);
+    assert_eq!(tight.context_length, 131_072);
 
     let tight_ladder = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: None,
@@ -644,7 +735,7 @@ fn budget_driven_compute_charge_scales_with_lane_count() {
     // At the measured lane count the charge is exactly the measured value,
     // so this matches the roomy-node case of
     // budget_driven_context_uses_measured_kv_and_compute.
-    assert_eq!(at4, 16_384);
+    assert_eq!(at4, 65_536);
 }
 
 fn projector_input(vram_bytes: u64, projector_bytes: u64) -> RuntimeResourcePlanInput<'static> {
