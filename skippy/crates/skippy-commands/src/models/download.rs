@@ -99,12 +99,7 @@ async fn download_model_with_policy(
         skippy_model_hf::remote_catalog::matching_model_for_huggingface(repo, revision, file)
     });
     if let Some(asset) = catalog.and_then(|model| model.mmproj) {
-        let revision = asset
-            .revision
-            .as_deref()
-            .map(|revision| format!("@{revision}"))
-            .unwrap_or_default();
-        let projector_ref = format!("{}{}/{}", asset.repo, revision, asset.source_file);
+        let projector_ref = asset.download_ref();
         let projector =
             download_primary_model(cache, &projector_ref, None, None, false, progress).await?;
         downloaded.report["projector_path"] = serde_json::json!(projector.primary_path);
@@ -146,12 +141,11 @@ async fn download_primary_model(
                     .then(|| skippy_model_hf::remote_catalog::resolve_model_download(model_ref))
                     .flatten()
                     .map(|model| {
-                        let revision = model
-                            .revision
-                            .as_deref()
-                            .map(|revision| format!("@{revision}"))
-                            .unwrap_or_default();
-                        format!("{}{}/{}", model.repo, revision, model.file)
+                        skippy_model_ref::format_model_ref(
+                            &model.repo,
+                            model.revision.as_deref(),
+                            Some(&model.file),
+                        )
                     })
             })
             .unwrap_or_else(|| model_ref.to_string())

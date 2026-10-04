@@ -65,12 +65,7 @@ pub async fn run(mut args: ServeCommandArgs) -> Result<()> {
         if args.public.mmproj.is_none()
             && let Some(asset) = catalog_model.and_then(|entry| entry.mmproj)
         {
-            let revision = asset
-                .revision
-                .as_deref()
-                .map(|revision| format!("@{revision}"))
-                .unwrap_or_default();
-            let projector_ref = format!("{}{}/{}", asset.repo, revision, asset.source_file);
+            let projector_ref = asset.download_ref();
             let cache = skippy_commands::models::model_cache_dir();
             args.public.mmproj = Some(
                 skippy_commands::models::download_model(&cache, &projector_ref, None, None)

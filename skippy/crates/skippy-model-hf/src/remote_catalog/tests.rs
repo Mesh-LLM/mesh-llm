@@ -122,6 +122,58 @@ fn test_variant(curated_name: &str, repo: &str, package_repos: &[&str]) -> Catal
 }
 
 #[test]
+fn asset_download_refs_preserve_revision_and_exact_source_file() {
+    for revision in [None, Some("main"), Some("abc123")] {
+        for source_file in ["mmproj-BF16.gguf", "vision/projectors/mmproj-F16.gguf"] {
+            let asset = RemoteCatalogAsset {
+                file: "display-projector.gguf".to_string(),
+                repo: "example/vision-model".to_string(),
+                revision: revision.map(str::to_string),
+                source_file: source_file.to_string(),
+            };
+            let download_ref = asset.download_ref();
+            let parsed = skippy_model_ref::ModelRef::parse(&download_ref)
+                .expect("catalog asset download ref must select an exact file");
+            assert_eq!(
+                (parsed.repo, parsed.revision, parsed.selector.unwrap()),
+                (
+                    asset.repo.clone(),
+                    asset.revision.clone(),
+                    asset.source_file.clone(),
+                ),
+                "download ref {download_ref}"
+            );
+        }
+    }
+}
+
+#[test]
+fn catalog_model_exact_ref_retains_quant_selector() {
+    for (revision, expected_ref) in [
+        (None, "example/vision-model:Q4_K_M"),
+        (Some("abc123"), "example/vision-model@abc123:Q4_K_M"),
+    ] {
+        let model = RemoteCatalogModel {
+            name: "Vision Q4".to_string(),
+            file: "vision-Q4_K_M.gguf".to_string(),
+            repo: "example/vision-model".to_string(),
+            revision: revision.map(str::to_string),
+            source_file: "vision-Q4_K_M.gguf".to_string(),
+            size: None,
+            description: None,
+            draft: None,
+            extra_files: Vec::new(),
+            mmproj: None,
+        };
+        assert_eq!(model.exact_ref(), expected_ref);
+        let asset_ref = model.source_asset().download_ref();
+        let parsed = skippy_model_ref::ModelRef::parse(&asset_ref).unwrap();
+        assert_eq!(parsed.revision.as_deref(), revision);
+        assert_eq!(parsed.selector.as_deref(), Some(model.source_file.as_str()));
+    }
+}
+
+#[test]
 fn remote_models_preserve_draft_and_structured_mmproj() {
     let mut variant = test_variant("Vision Draft", "example/vision-source", &[]);
     variant.curated.draft = Some("Vision-Draft-Q4_K_M".to_string());

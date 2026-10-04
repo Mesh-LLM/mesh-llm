@@ -440,6 +440,17 @@ pub struct RemoteCatalogAsset {
     pub source_file: String,
 }
 
+impl RemoteCatalogAsset {
+    /// Download this exact source filename, preserving its repository revision.
+    pub fn download_ref(&self) -> String {
+        skippy_model_ref::format_model_ref(
+            &self.repo,
+            self.revision.as_deref(),
+            Some(&self.source_file),
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteCatalogModel {
     pub name: String,
