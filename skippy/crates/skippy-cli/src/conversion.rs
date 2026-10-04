@@ -72,6 +72,8 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         args.openai_draft_model_path.is_some() || defaults.draft_model_path.is_some(),
     )?;
     openai_speculative.validate()?;
+    let speculation_disabled = args.settings.has_speculative_overrides()
+        && openai_speculative.effective_strategy == "disabled";
     config.native_mtp_enabled = openai_speculative.native_mtp.enabled;
     if openai_speculative.ngram_fallback_draft && args.openai_draft_model_path.is_none() {
         bail!("ngram_fallback_draft requires --draft-model-path");
@@ -107,13 +109,17 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         prefill_adaptive_step: args.openai_prefill_adaptive_step,
         prefill_adaptive_max: args.openai_prefill_adaptive_max,
         prefill_adaptive_target_ms: args.openai_prefill_adaptive_target_ms,
-        draft_model_path: args.openai_draft_model_path.or(defaults.draft_model_path),
+        draft_model_path: args
+            .openai_draft_model_path
+            .or(defaults.draft_model_path)
+            .filter(|_| !speculation_disabled),
         speculative_window: args.openai_speculative_window,
         adaptive_speculative_window,
         draft_n_gpu_layers: args.openai_draft_n_gpu_layers,
         native_mtp_draft_model_path: args
             .openai_native_mtp_draft_model_path
-            .or(defaults.native_mtp_draft_model_path),
+            .or(defaults.native_mtp_draft_model_path)
+            .filter(|_| !speculation_disabled),
         native_mtp_max_tokens: openai_speculative.native_mtp.max_draft_tokens,
         native_mtp_min_tokens: openai_speculative.native_mtp.min_draft_tokens,
         speculative: openai_speculative,
@@ -236,6 +242,10 @@ pub fn local_openai_options(
     };
     if let Some(plan) = speculative.as_ref() {
         config.native_mtp_enabled = plan.native_mtp.enabled;
+        if args.settings.has_speculative_overrides() && plan.effective_strategy == "disabled" {
+            tuning.draft_model_path = None;
+            tuning.native_mtp_draft_model_path = None;
+        }
     }
 
     let disk_cache = crate::disk_cache::from_public_settings(

@@ -265,6 +265,322 @@ fn local_explicit_draft_controls_and_speculative_plan_are_consumed() {
 }
 
 #[test]
+fn disabled_speculation_suppresses_configured_draft_model_path() {
+    assert_disabled_speculation_suppresses_draft_path("--draft-model-path");
+}
+
+#[test]
+fn disabled_speculation_suppresses_configured_native_mtp_draft_model_path() {
+    assert_disabled_speculation_suppresses_draft_path("--native-mtp-draft-model-path");
+}
+
+fn assert_disabled_speculation_suppresses_draft_path(draft_flag: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = stage_file(dir.path());
+    let missing_draft = dir.path().join("unavailable-draft.gguf");
+    assert!(!missing_draft.exists());
+    let Command::Serve(args) = parse_test(&[
+        "skippy",
+        "serve",
+        "--config",
+        path.to_str().unwrap(),
+        draft_flag,
+        missing_draft.to_str().unwrap(),
+        "--speculative-strategy",
+        "disabled",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!()
+    };
+    let local = crate::conversion::local_openai_options(args.public).unwrap();
+    assert_eq!(local.tuning.draft_model_path, None);
+    assert_eq!(local.tuning.native_mtp_draft_model_path, None);
+    let frontend = local.resolved_openai_options().unwrap();
+    assert_eq!(frontend.speculative.effective_strategy, "disabled");
+    assert_eq!(frontend.draft_model_path, None);
+    assert_eq!(frontend.native_mtp_draft_model_path, None);
+    assert!(!frontend.native_mtp_enabled);
+}
+
+#[test]
+fn disabled_speculation_suppresses_binary_configured_draft_model_path() {
+    assert_binary_disabled_speculation_suppresses_draft_path("--draft-model-path");
+}
+
+#[test]
+fn disabled_speculation_suppresses_binary_configured_native_mtp_draft_model_path() {
+    assert_binary_disabled_speculation_suppresses_draft_path("--native-mtp-draft-model-path");
+}
+
+fn binary_test_options(argv: &[&str]) -> skippy_serving::binary_transport::BinaryStageOptions {
+    let Command::Serve(mut args) = parse_test(argv).unwrap().command else {
+        panic!()
+    };
+    crate::serve::apply_public_frontend_tuning(&args.public, &mut args.stage);
+    args.stage.settings = args.public.settings;
+    args.stage.config = args.public.config.unwrap();
+    args.stage.api_bind_addr = Some("127.0.0.1:9337".parse().unwrap());
+    crate::conversion::binary_stage_options(args.stage).unwrap()
+}
+
+fn assert_binary_disabled_speculation_suppresses_draft_path(draft_flag: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = stage_file(dir.path());
+    let missing_draft = dir.path().join("unavailable-draft.gguf");
+    assert!(!missing_draft.exists());
+    let binary = binary_test_options(&[
+        "skippy",
+        "serve",
+        "--config",
+        path.to_str().unwrap(),
+        "--stage-transport",
+        "binary",
+        draft_flag,
+        missing_draft.to_str().unwrap(),
+        "--speculative-strategy",
+        "disabled",
+    ]);
+    let frontend = binary.openai.unwrap();
+    assert_eq!(frontend.speculative.effective_strategy, "disabled");
+    assert_eq!(frontend.draft_model_path, None);
+    assert_eq!(frontend.native_mtp_draft_model_path, None);
+    assert!(!binary.native_mtp_enabled);
+}
+
+fn stage_file_with_discoverable_sibling_draft(dir: &Path, native_mtp: bool) -> std::path::PathBuf {
+    // Only the architecture header is needed for automatic pairing; no weights are loaded.
+    let mut metadata = b"GGUF".to_vec();
+    metadata.extend_from_slice(&3_u32.to_le_bytes());
+    metadata.extend_from_slice(&0_u64.to_le_bytes());
+    metadata.extend_from_slice(&1_u64.to_le_bytes());
+    let key = "general.architecture";
+    metadata.extend_from_slice(&(key.len() as u64).to_le_bytes());
+    metadata.extend_from_slice(key.as_bytes());
+    metadata.extend_from_slice(&8_u32.to_le_bytes());
+    metadata.extend_from_slice(&5_u64.to_le_bytes());
+    metadata.extend_from_slice(b"llama");
+    let target = dir.join("target.gguf");
+    let draft = dir.join("sibling-draft.gguf");
+    std::fs::write(&target, &metadata).unwrap();
+    std::fs::write(&draft, &metadata).unwrap();
+    let mut automatic = skippy_api::serving::OpenAiOptions::direct_single_stage_defaults(
+        "test-model".into(),
+        32,
+        1,
+        native_mtp,
+    );
+    skippy_api::speculative::apply_auto_speculation(&mut automatic, &target);
+    if native_mtp {
+        assert_eq!(automatic.native_mtp_draft_model_path, Some(draft));
+    } else {
+        assert_eq!(automatic.draft_model_path, Some(draft));
+    }
+    let mut config = skippy_config::example_config();
+    config["model_path"] = serde_json::json!(target);
+    config["native_mtp_enabled"] = serde_json::json!(native_mtp);
+    let path = dir.join("stage.json");
+    std::fs::write(&path, config.to_string()).unwrap();
+    path
+}
+
+#[test]
+fn disabled_speculation_suppresses_local_automatically_discovered_draft_paths() {
+    for native_mtp in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = stage_file_with_discoverable_sibling_draft(dir.path(), native_mtp);
+        let Command::Serve(args) = parse_test(&[
+            "skippy",
+            "serve",
+            "--config",
+            path.to_str().unwrap(),
+            "--speculative-strategy",
+            "disabled",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!()
+        };
+        let local = crate::conversion::local_openai_options(args.public).unwrap();
+        let frontend = local.resolved_openai_options().unwrap();
+        assert_eq!(frontend.speculative.effective_strategy, "disabled");
+        assert_eq!(frontend.draft_model_path, None, "native_mtp={native_mtp}");
+        assert_eq!(
+            frontend.native_mtp_draft_model_path, None,
+            "native_mtp={native_mtp}"
+        );
+        assert!(!frontend.native_mtp_enabled);
+    }
+}
+
+#[test]
+fn disabled_speculation_suppresses_binary_automatically_discovered_draft_paths() {
+    for native_mtp in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = stage_file_with_discoverable_sibling_draft(dir.path(), native_mtp);
+        let binary = binary_test_options(&[
+            "skippy",
+            "serve",
+            "--config",
+            path.to_str().unwrap(),
+            "--stage-transport",
+            "binary",
+            "--speculative-strategy",
+            "disabled",
+        ]);
+        let frontend = binary.openai.unwrap();
+        assert_eq!(frontend.speculative.effective_strategy, "disabled");
+        assert_eq!(frontend.draft_model_path, None, "native_mtp={native_mtp}");
+        assert_eq!(
+            frontend.native_mtp_draft_model_path, None,
+            "native_mtp={native_mtp}"
+        );
+        assert!(!binary.native_mtp_enabled);
+    }
+}
+
+#[test]
+fn auto_speculation_preserves_local_and_binary_discovered_draft_paths() {
+    for native_mtp in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = stage_file_with_discoverable_sibling_draft(dir.path(), native_mtp);
+        let expected_draft = dir.path().join("sibling-draft.gguf");
+        let argv = [
+            "skippy",
+            "serve",
+            "--config",
+            path.to_str().unwrap(),
+            "--speculative-strategy",
+            "auto",
+        ];
+        let Command::Serve(args) = parse_test(&argv).unwrap().command else {
+            panic!()
+        };
+        let local = crate::conversion::local_openai_options(args.public).unwrap();
+        let frontend = local.resolved_openai_options().unwrap();
+        let binary = binary_test_options(&argv);
+        let binary_frontend = binary.openai.unwrap();
+        if native_mtp {
+            assert_eq!(
+                frontend.native_mtp_draft_model_path,
+                Some(expected_draft.clone())
+            );
+            assert_eq!(
+                binary_frontend.native_mtp_draft_model_path,
+                Some(expected_draft)
+            );
+        } else {
+            assert_eq!(frontend.draft_model_path, Some(expected_draft.clone()));
+            assert_eq!(binary_frontend.draft_model_path, Some(expected_draft));
+        }
+    }
+}
+
+#[test]
+fn binary_default_strategy_preserves_explicit_draft_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = stage_file(dir.path());
+    for draft_flag in ["--draft-model-path", "--native-mtp-draft-model-path"] {
+        let draft = dir.path().join("configured-draft.gguf");
+        let binary = binary_test_options(&[
+            "skippy",
+            "serve",
+            "--config",
+            path.to_str().unwrap(),
+            "--stage-transport",
+            "binary",
+            draft_flag,
+            draft.to_str().unwrap(),
+        ]);
+        let frontend = binary.openai.unwrap();
+        if draft_flag == "--draft-model-path" {
+            assert_eq!(frontend.draft_model_path, Some(draft));
+        } else {
+            assert_eq!(frontend.native_mtp_draft_model_path, Some(draft));
+        }
+    }
+}
+
+#[test]
+fn other_speculative_strategies_preserve_configured_draft_paths() {
+    for strategy in ["auto", "draft-model", "native-mtp", "ngram", "mtp-ngram"] {
+        let Command::Serve(args) = parse_test(&[
+            "skippy",
+            "serve",
+            "--model",
+            "missing.gguf",
+            "--draft-model-path",
+            "draft.gguf",
+            "--native-mtp-draft-model-path",
+            "mtp-draft.gguf",
+            "--speculative-strategy",
+            strategy,
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!()
+        };
+        let tuning = args
+            .public
+            .settings
+            .tuning(args.public.openai_guardrails)
+            .unwrap();
+        assert_eq!(
+            tuning.draft_model_path.as_deref(),
+            Some(Path::new("draft.gguf")),
+            "{strategy}"
+        );
+        assert_eq!(
+            tuning.native_mtp_draft_model_path.as_deref(),
+            Some(Path::new("mtp-draft.gguf")),
+            "{strategy}"
+        );
+    }
+}
+
+#[test]
+fn speculative_strategy_native_mtp_conflicts_are_rejected() {
+    for (strategy, native_mtp) in [
+        ("disabled", "--native-mtp=true"),
+        ("draft-model", "--native-mtp=true"),
+        ("ngram", "--native-mtp=true"),
+        ("native-mtp", "--native-mtp=false"),
+        ("mtp-ngram", "--native-mtp=false"),
+    ] {
+        let Command::Serve(args) = parse_test(&[
+            "skippy",
+            "serve",
+            "--model",
+            "missing.gguf",
+            "--draft-model-path",
+            "draft.gguf",
+            "--native-mtp-draft-model-path",
+            "mtp-draft.gguf",
+            "--speculative-strategy",
+            strategy,
+            native_mtp,
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!()
+        };
+        let error = args
+            .public
+            .settings
+            .speculative(skippy_serving::SpeculativeDecodeConfig::default(), true)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("conflicts"),
+            "{strategy}: {error}"
+        );
+    }
+}
+
+#[test]
 fn invalid_controls_fail_before_loading_models() {
     for (flags, message) in [
         (vec!["--threads", "0"], "threads"),

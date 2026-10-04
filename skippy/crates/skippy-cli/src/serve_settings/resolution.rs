@@ -161,9 +161,11 @@ impl ServeSettings {
         tuning.n_threads_batch = self.number("threads-batch")?;
         tuning.pipeline_decode_groups = self.number("pipeline-decode-groups")?;
         tuning.continuous_batching = self.boolean("continuous-batching")?;
-        tuning.draft_model_path = self.text("draft-model-path").map(Into::into);
-        tuning.native_mtp_draft_model_path =
-            self.text("native-mtp-draft-model-path").map(Into::into);
+        if self.text("speculative-strategy") != Some("disabled") {
+            tuning.draft_model_path = self.text("draft-model-path").map(Into::into);
+            tuning.native_mtp_draft_model_path =
+                self.text("native-mtp-draft-model-path").map(Into::into);
+        }
         tuning.speculative_window = self.number("speculative-window")?;
         tuning.adaptive_speculative_window = self.boolean("adaptive-speculative-window")?;
         tuning.draft_n_gpu_layers = self.number("draft-n-gpu-layers")?;
