@@ -13,6 +13,8 @@ mod macos_deployment_target;
 mod package_release_adapter;
 #[path = "migration_lifecycle/pr_canary_catalog.rs"]
 mod pr_canary_catalog;
+#[path = "migration_lifecycle/precheckout_docker_audit.rs"]
+mod precheckout_docker_audit;
 #[path = "migration_lifecycle/registry_canary_steps.rs"]
 mod registry_canary_steps;
 #[path = "migration_lifecycle/replay_repair_step.rs"]
