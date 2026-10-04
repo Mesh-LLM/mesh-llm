@@ -1046,6 +1046,7 @@ pub(crate) fn direct_gguf_planning_manifest_from_identity(
     model_id: &str,
     identity: &SkippyPackageIdentity,
 ) -> Result<(PackageManifestV2, Vec<PathBuf>)> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let shard_paths = identity
         .source_files
         .iter()

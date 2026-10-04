@@ -14,6 +14,7 @@ mod plugin_tests;
 mod plugins;
 mod processes;
 mod producers;
+mod runtime_status;
 mod snapshots;
 mod subscriptions;
 
@@ -391,6 +392,7 @@ pub(crate) mod tests {
             is_host: false,
             is_client: false,
             llama_ready: false,
+            external_inference_ready: false,
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
             available_models: vec!["Qwen-Test".into()],
@@ -587,6 +589,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],
@@ -732,6 +735,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],
@@ -873,6 +877,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],

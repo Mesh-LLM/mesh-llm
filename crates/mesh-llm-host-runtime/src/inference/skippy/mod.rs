@@ -519,6 +519,9 @@ pub(crate) struct SkippyOpenAiGuardrailOptions {
 pub(crate) type NativeModelOpenEventReporter = Box<dyn FnMut(skippy_runtime::RuntimeEvent) + Send>;
 pub(crate) use model_open_drain::{ModelOpenObservation, ModelOpenReturn, NativeModelOpenEvents};
 
+#[cfg(all(test, feature = "dynamic-native-runtime"))]
+mod native_unavailable_tests;
+
 impl SkippyOpenAiGuardrailOptions {
     pub(crate) fn new(
         config: Option<OpenAiGuardrailsConfig>,
@@ -535,6 +538,7 @@ pub(crate) fn load_laya_model(
     path: &Path,
     device: Option<&str>,
 ) -> Result<Arc<skippy_runtime::LayaModel>> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let threads = std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(4);
@@ -735,6 +739,7 @@ impl SkippyModelHandle {
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
+        crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         let stage_config = single_stage_config(&options)?;
         let mtp_source = Self::resolved_mtp_source(
@@ -819,6 +824,7 @@ impl SkippyModelHandle {
         model_open_events: Option<NativeModelOpenEvents>,
         guardrail_telemetry: survey::SurveyTelemetry,
     ) -> Result<Self> {
+        crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         let stage_config = single_stage_config(&options)?;
         let mtp_source = Self::resolved_mtp_source(
@@ -982,6 +988,7 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
+        crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
@@ -1069,6 +1076,7 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
         serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     ) -> Result<Self> {
+        crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
         let mut lifecycle_audit = NativeSkippyStartupAudit::new();
         configure_materialized_stage_cache();
         let config = &mut runtime_options.config;
@@ -1490,6 +1498,7 @@ impl From<StageDevice> for SkippyDeviceDescriptor {
 }
 
 pub(crate) fn infer_layer_count(path: &Path) -> Result<u32> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let info =
         ModelInfo::open(path).with_context(|| format!("open model metadata {}", path.display()))?;
     let layer_count = info

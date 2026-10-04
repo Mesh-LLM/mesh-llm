@@ -443,6 +443,7 @@ pub(crate) async fn run_auto_load_runtime_model(
     config_model_id: Option<String>,
     profile: String,
 ) -> Result<api::RuntimeLoadResponse> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let (spec, profile) = normalize_runtime_model_request_for_config(
         ctx.config,
         config_model_id.as_deref(),
