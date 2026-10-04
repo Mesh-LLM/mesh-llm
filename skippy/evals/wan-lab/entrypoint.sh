@@ -468,49 +468,50 @@ apply_linux_wan() {
 }
 
 write_stage_config() {
+  if [[ -n "${CONFIG_PATH:-}" && -f "$CONFIG_PATH" ]]; then
+    printf '%s\n' "$CONFIG_PATH"
+    return 0
+  fi
+
   require_env MODEL_PATH
+  if [[ ! -f "$MODEL_PATH" ]]; then
+    log "automatic admission requires a direct GGUF; supply CONFIG_PATH with an admitted config for a layer package"
+    exit 65
+  fi
   local stage_index="${STAGE_INDEX:?STAGE_INDEX is required}"
   local stage_count="${STAGE_COUNT:-4}"
-  local layer_count="${LAYER_COUNT:-}"
-  local activation_width="${ACTIVATION_WIDTH:-}"
-
-  if [[ -z "$layer_count" ]]; then
-    layer_count="$(infer_layer_count "$MODEL_PATH")"
+  if [[ ! "$stage_index" =~ ^[0-9]+$ || ! "$stage_count" =~ ^[0-9]+$ ]] ||
+    (( stage_count < 2 || stage_count > 10000 || stage_index >= stage_count )); then
+    log "STAGE_COUNT must be at least two and STAGE_INDEX must identify one of its stages"
+    exit 64
   fi
-  if [[ -z "$activation_width" ]]; then
-    activation_width="$(infer_activation_width "$MODEL_PATH")"
-  fi
-  if [[ -z "$layer_count" || "$layer_count" == "null" || "$layer_count" -lt 1 ]]; then
-    log "could not infer a positive layer count; set LAYER_COUNT"
-    exit 65
-  fi
-  if [[ -z "$activation_width" || "$activation_width" == "null" || "$activation_width" -lt 1 ]]; then
-    log "could not infer a positive activation width; set ACTIVATION_WIDTH"
-    exit 65
-  fi
-
-  read -r layer_start layer_end < <(even_stage_range "$stage_index" "$stage_count" "$layer_count")
 
   local config_dir="${CONFIG_DIR:-/run/skippy-wan-lab}"
   local config_path="${CONFIG_PATH:-${config_dir}/stage-${stage_index}.json}"
   mkdir -p "$config_dir"
+  local plan_root
+  plan_root="$(mktemp -d "${config_dir}/admission.XXXXXX")"
+  local args=(plan-split --model-path "$MODEL_PATH"
+    --model-id "${MODEL_ID:-skippy-wan-lab/model}"
+    --ctx-size "${CTX_SIZE:-512}" --lanes "${STAGE_LANES:-1}"
+    --n-gpu-layers 0 --output-dir "${plan_root}/plan")
+  local index
+  for (( index = 0; index < stage_count; index++ )); do
+    args+=(--worker "127.0.0.1:$((20000 + index))")
+  done
+  # Admission owns tensor closures, contracts and graph frontiers. Placeholder
+  # addresses avoid requiring every container to be up while the plan is built.
+  skippy "${args[@]}" >&2
 
-  python3 - "$config_path" <<'PY'
+  python3 - "${plan_root}/plan/stage-${stage_index}.json" "$config_path" <<'PYCONFIG'
 import json
 import os
 import sys
 
-path = sys.argv[1]
+with open(sys.argv[1], encoding="utf-8") as handle:
+    config = json.load(handle)
 stage_index = int(os.environ["STAGE_INDEX"])
 stage_count = int(os.environ.get("STAGE_COUNT", "4"))
-stage_id = f"stage-{stage_index}"
-model_path = os.environ["MODEL_PATH"]
-model_id = os.environ.get("MODEL_ID", "skippy-wan-lab/model")
-run_id = os.environ.get("RUN_ID", "skippy-docker-wan")
-layer_start = int(os.environ["LAYER_START"])
-layer_end = int(os.environ["LAYER_END"])
-ctx_size = int(os.environ.get("CTX_SIZE", "512"))
-lane_count = int(os.environ.get("STAGE_LANES", "1"))
 bind_port = int(os.environ.get("STAGE_BIND_PORT", "19000"))
 
 def peer(index):
@@ -520,37 +521,24 @@ def peer(index):
         "endpoint": f"tcp://stage{index}:{bind_port}",
     }
 
-config = {
-    "run_id": run_id,
+# Only deployment identity, transport and ordinary runtime controls change.
+# Keep the admitted source, tensor, execution-contract and frontier fields.
+config.update({
+    "run_id": os.environ.get("RUN_ID", "skippy-docker-wan"),
     "topology_id": os.environ.get("TOPOLOGY_ID", "docker-wan-four-stage"),
-    "model_id": model_id,
-    "source_model_path": model_path,
-    "model_path": model_path,
-    "projector_path": None,
-    "stage_id": stage_id,
-    "stage_index": stage_index,
-    "layer_start": layer_start,
-    "layer_end": layer_end,
-    "ctx_size": ctx_size,
-    "lane_count": lane_count,
-    "n_batch": int(os.environ["N_BATCH"]) if os.environ.get("N_BATCH") else None,
-    "n_ubatch": int(os.environ["N_UBATCH"]) if os.environ.get("N_UBATCH") else None,
-    "n_gpu_layers": 0,
-    "cache_type_k": os.environ.get("CACHE_TYPE_K", "f16"),
-    "cache_type_v": os.environ.get("CACHE_TYPE_V", "f16"),
-    "flash_attn_type": os.environ.get("FLASH_ATTN_TYPE", "disabled"),
-    "selected_device": None,
-    "kv_cache": None,
-    "load_mode": os.environ.get("LOAD_MODE", "runtime-slice"),
     "bind_addr": f"0.0.0.0:{bind_port}",
     "upstream": None if stage_index == 0 else peer(stage_index - 1),
     "downstream": None if stage_index + 1 >= stage_count else peer(stage_index + 1),
-}
-
-with open(path, "w", encoding="utf-8") as handle:
+    "n_batch": int(os.environ["N_BATCH"]) if os.environ.get("N_BATCH") else None,
+    "n_ubatch": int(os.environ["N_UBATCH"]) if os.environ.get("N_UBATCH") else None,
+    "cache_type_k": os.environ.get("CACHE_TYPE_K", "f16"),
+    "cache_type_v": os.environ.get("CACHE_TYPE_V", "f16"),
+    "flash_attn_type": os.environ.get("FLASH_ATTN_TYPE", "disabled"),
+})
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
     json.dump(config, handle, indent=2)
     handle.write("\n")
-PY
+PYCONFIG
 
   printf '%s\n' "$config_path"
 }
@@ -567,7 +555,10 @@ run_stage() {
 
   local stage_index="$STAGE_INDEX"
   local stage_count="${STAGE_COUNT:-4}"
-  if [[ -n "${MODEL_PACKAGE_REF:-}" ]]; then
+  if [[ -n "${CONFIG_PATH:-}" && -f "$CONFIG_PATH" ]]; then
+    export MODEL_ID="${MODEL_ID:-$(jq -er '.model_id' "$CONFIG_PATH")}"
+    export STAGE_LANES="${STAGE_LANES:-$(jq -er '.lane_count' "$CONFIG_PATH")}"
+  elif [[ -n "${MODEL_PACKAGE_REF:-}" ]]; then
     prepare_hf_layer_package "$MODEL_PACKAGE_REF" "$stage_index" "$stage_count"
   else
     require_env MODEL_PATH
@@ -580,29 +571,32 @@ run_stage() {
   fi
   apply_linux_wan
 
-  local layer_count="${LAYER_COUNT:-}"
-  local activation_width="${ACTIVATION_WIDTH:-}"
-  if [[ -z "$layer_count" ]]; then
-    layer_count="$(infer_layer_count "$MODEL_PATH")"
-  fi
-  if [[ -z "$activation_width" ]]; then
-    activation_width="$(infer_activation_width "$MODEL_PATH")"
-  fi
-  read -r layer_start layer_end < <(even_stage_range "$stage_index" "$stage_count" "$layer_count")
-  export LAYER_COUNT="$layer_count"
-  export ACTIVATION_WIDTH="$activation_width"
-  export LAYER_START="$layer_start"
-  export LAYER_END="$layer_end"
-
   local config_path
   config_path="$(write_stage_config)"
-  log "stage ${stage_index}/${stage_count}: layers ${layer_start}..${layer_end}, activation_width=${activation_width}, config=${config_path}"
+  local layer_start layer_end
+  layer_start="$(jq -er '.layer_start' "$config_path")"
+  layer_end="$(jq -er '.layer_end' "$config_path")"
+  log "stage ${stage_index}/${stage_count}: layers ${layer_start}..${layer_end}, config=${config_path}"
+
+  local activation_codec
+  if [[ -n "${CONFIG_PATH:-}" && -f "$CONFIG_PATH" && -z "${ACTIVATION_WIRE_DTYPE:-}" ]]; then
+    activation_codec="$(jq -r '.activation_codec // "raw-f32-v1"' "$config_path")"
+  else
+    case "${ACTIVATION_WIRE_DTYPE:-f16}" in
+      f32) activation_codec=raw-f32-v1 ;;
+      f16) activation_codec=f16-rne-v1 ;;
+      bf16) activation_codec=bf16-rne-v1 ;;
+      *)
+        log "unsupported ACTIVATION_WIRE_DTYPE: ${ACTIVATION_WIRE_DTYPE}"
+        exit 64
+        ;;
+    esac
+  fi
 
   local args=(
-    serve-binary
+    serve --stage-transport binary
     --config "$config_path"
-    --activation-width "$activation_width"
-    --activation-wire-dtype "${ACTIVATION_WIRE_DTYPE:-f16}"
+    --activation-codec "$activation_codec"
     --metrics-otlp-grpc "${METRICS_OTLP_GRPC:-http://metrics:14317}"
     --telemetry-queue-capacity "${TELEMETRY_QUEUE_CAPACITY:-4096}"
     --telemetry-level "${TELEMETRY_LEVEL:-debug}"
@@ -627,6 +621,8 @@ run_stage() {
       --prefill-adaptive-step "${OPENAI_PREFILL_ADAPTIVE_STEP:-128}"
       --prefill-adaptive-max "${OPENAI_PREFILL_ADAPTIVE_MAX:-512}"
     )
+  else
+    args+=(--worker-only)
   fi
 
   exec skippy "${args[@]}"
