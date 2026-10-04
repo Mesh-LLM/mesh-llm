@@ -961,10 +961,10 @@ pub(super) async fn start_run_auto_node_and_plugins(
         in_process,
     )
     .await?;
-    plugin_manager.apply_exchange_grants(config).await;
     crate::network::openai::virtual_model::install_inference_bridge(&plugin_manager, options.port)
         .await;
-    node.set_plugin_manager(plugin_manager.clone()).await;
+    node.install_plugin_manager_with_exchange_grants(plugin_manager.clone())
+        .await?;
     #[cfg(feature = "payments")]
     crate::network::payments::spawn_payment_recovery(&node).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);

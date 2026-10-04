@@ -34,7 +34,11 @@ The resource fields are `deadline_ms` (1–30000), `max_body_bytes` (1–16 MiB)
 `signing_scopes` and `max_delegation_ttl_secs` (1–86400 when enabled).
 
 A successful persisted owner apply refreshes grants immediately, disconnects
-copies whose grants changed, and invalidates affected delegations. Configuration
+copies whose grants changed, and invalidates affected delegations. Committed
+applies reconcile grants even after command cancellation. Startup seeds current
+persisted grants and installs the manager under the same apply serialization;
+an apply that began before installation resolves the current manager after
+commit. Configuration
 schema leaves advertise dynamic apply. Editing a file alone requires the normal
 configuration reload or restart. Grants never originate from plugin config
 schema or a peer manifest.

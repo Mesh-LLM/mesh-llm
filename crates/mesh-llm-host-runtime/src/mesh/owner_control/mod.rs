@@ -800,7 +800,7 @@ impl Node {
                 }
             };
         let config_state = Arc::clone(&self.config_state);
-        let plugin_manager = self.plugin_manager().await;
+        let node = self.clone();
         let runtime = tokio::runtime::Handle::current();
         let expected_revision = apply.expected_revision;
         let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
@@ -810,8 +810,8 @@ impl Node {
                 mesh_config,
                 expected_revision,
                 crate::runtime::config_state::PendingConfigApply::persist,
-                plugin_manager,
-                runtime,
+                || runtime.block_on(node.plugin_manager()),
+                runtime.clone(),
             ))
         })
         .await

@@ -14,7 +14,7 @@ pub(super) fn apply_with_exchange_grants(
     config: MeshConfig,
     expected_revision: u64,
     persist: impl FnOnce(&PendingConfigApply) -> ConfigPersistence,
-    manager: Option<PluginManager>,
+    manager_provider: impl FnOnce() -> Option<PluginManager>,
     runtime: tokio::runtime::Handle,
 ) -> (ApplyResult, u64, [u8; 32]) {
     let result = super::apply_owner_control_config_with_persistence(
@@ -28,11 +28,37 @@ pub(super) fn apply_with_exchange_grants(
         ApplyResult::Applied { .. }
             | ApplyResult::AppliedWithRestartRequired { .. }
             | ApplyResult::PersistedWithRevisionTrackingError { .. }
-    ) && let Some(manager) = manager
-    {
-        publish_exchange_grants(config_state, manager, runtime, || {});
+    ) {
+        with_serialized_config(config_state, |config| {
+            if let Some(manager) = manager_provider() {
+                runtime.block_on(manager.apply_exchange_grants(&config));
+            }
+        });
     }
     result
+}
+
+impl super::Node {
+    /// Production startup publishes the latest persisted grants and installs
+    /// the manager atomically relative to owner applies and grant refreshes.
+    pub(crate) async fn install_plugin_manager_with_exchange_grants(
+        &self,
+        manager: PluginManager,
+    ) -> anyhow::Result<()> {
+        let node = self.clone();
+        let config_state = Arc::clone(&self.config_state);
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            with_serialized_config(config_state, |config| {
+                runtime.block_on(async {
+                    manager.apply_exchange_grants(&config).await;
+                    node.set_plugin_manager(manager).await;
+                });
+            });
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("plugin manager installation task panicked: {error}"))
+    }
 }
 
 #[cfg(test)]
@@ -50,12 +76,20 @@ async fn refresh_exchange_grants(
     .map_err(|error| anyhow::anyhow!("plugin grant refresh task panicked: {error}"))
 }
 
+#[cfg(test)]
 fn publish_exchange_grants(
     config_state: Arc<Mutex<ConfigState>>,
     manager: PluginManager,
     runtime: tokio::runtime::Handle,
     after_snapshot: impl FnOnce(),
 ) {
+    with_serialized_config(config_state, |config| {
+        after_snapshot();
+        runtime.block_on(manager.apply_exchange_grants(&config));
+    });
+}
+
+fn with_serialized_config(config_state: Arc<Mutex<ConfigState>>, publish: impl FnOnce(MeshConfig)) {
     let apply_lock = config_state.blocking_lock().apply_serialization_lock();
     let _apply_guard = apply_lock
         .lock()
@@ -63,8 +97,7 @@ fn publish_exchange_grants(
     let config = config_state.blocking_lock().config().clone();
     // Lock order matches owner/config mutation: apply serialization, then a
     // short config snapshot. No config guard survives manager publication.
-    after_snapshot();
-    runtime.block_on(manager.apply_exchange_grants(&config));
+    publish(config);
 }
 
 #[cfg(test)]
@@ -198,7 +231,7 @@ mod tests {
                         release_rx.recv().unwrap();
                         persistence
                     },
-                    Some(apply_manager),
+                    || Some(apply_manager),
                     runtime,
                 );
                 published_tx.send(result).unwrap();
@@ -221,6 +254,86 @@ mod tests {
         );
         let persisted = ConfigState::load(&directory.join("config.toml")).unwrap();
         assert!(persisted.config().plugins.is_empty());
+        manager.shutdown().await;
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    async fn startup_fixture() -> (std::path::PathBuf, super::super::Node, PluginManager) {
+        let (directory, state, manager) = granted_fixture().await;
+        let mut node = super::super::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        node.config_state = state;
+        assert!(node.plugin_manager().await.is_none());
+        (directory, node, manager)
+    }
+
+    #[tokio::test]
+    async fn startup_install_uses_revocation_persisted_before_manager_exists() {
+        let (directory, node, manager) = startup_fixture().await;
+        let state = Arc::clone(&node.config_state);
+        let provider = node.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let (result, _, _) = tokio::task::spawn_blocking(move || {
+            apply_with_exchange_grants(
+                state,
+                MeshConfig::default(),
+                0,
+                PendingConfigApply::persist,
+                || runtime.block_on(provider.plugin_manager()),
+                runtime.clone(),
+            )
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result, ApplyResult::Applied { .. }));
+        // This detached startup manager still has the original grant snapshot.
+        assert!(manager.effective_exchange_grant("observer").is_some());
+        node.install_plugin_manager_with_exchange_grants(manager.clone())
+            .await
+            .unwrap();
+        assert!(manager.effective_exchange_grant("observer").is_none());
+        assert!(
+            node.plugin_manager()
+                .await
+                .unwrap()
+                .effective_exchange_grant("observer")
+                .is_none()
+        );
+        manager.shutdown().await;
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[tokio::test]
+    async fn owner_command_started_without_manager_revokes_manager_installed_before_commit() {
+        let (directory, node, manager) = startup_fixture().await;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let command_node = node.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let command = tokio::task::spawn_blocking(move || {
+            assert!(runtime.block_on(command_node.plugin_manager()).is_none());
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            apply_with_exchange_grants(
+                Arc::clone(&command_node.config_state),
+                MeshConfig::default(),
+                0,
+                PendingConfigApply::persist,
+                || runtime.block_on(command_node.plugin_manager()),
+                runtime.clone(),
+            )
+        });
+        started_rx.await.unwrap();
+        node.install_plugin_manager_with_exchange_grants(manager.clone())
+            .await
+            .unwrap();
+        assert!(manager.effective_exchange_grant("observer").is_some());
+        release_tx.send(()).unwrap();
+        let (result, revision, _) = command.await.unwrap();
+        assert!(matches!(result, ApplyResult::Applied { .. }));
+        assert_eq!(revision, 1);
+        assert!(manager.effective_exchange_grant("observer").is_none());
         manager.shutdown().await;
         std::fs::remove_dir_all(directory).ok();
     }
