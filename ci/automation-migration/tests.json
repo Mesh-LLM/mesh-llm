@@ -977,31 +977,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
       "gate": "Legacy just ci-validate and relevant workflow/platform lane",
-      "module": "scripts/tests/test_ci_two_node_split_smoke.py",
-      "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "d62c29b49acd0e3cdd5f6745cd4edefdbf14993844b6dd1ed4e1a309e30f8f38",
-      "test_method_count": 13,
-      "test_methods": [
-        "test_existing_package_v2_is_passed_through",
-        "test_external_work_dir_is_created_before_logs_are_opened",
-        "test_hung_snapshot_endpoints_obey_wall_clock_deadline",
-        "test_package_tool_checksum_is_verified_before_use",
-        "test_package_tool_has_no_consumer_build_fallback",
-        "test_package_tool_is_resolved_from_verified_runtime_bundle",
-        "test_package_tool_must_be_declared_at_exact_manifest_path",
-        "test_package_tool_rejects_ambiguous_runtime_manifests",
-        "test_prefix_validator_exit_behavior",
-        "test_raw_gguf_is_prepared_as_verified_package_v2",
-        "test_readiness_reconciles_persisted_snapshots_from_both_observers",
-        "test_status_snapshot_is_strict_identity_whitelist",
-        "test_uncertified_override_is_explicit_and_bounded"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
-      "gate": "Legacy just ci-validate and relevant workflow/platform lane",
       "module": "scripts/tests/test_ci_windows_composition.py",
       "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -13566,6 +13541,31 @@
     "qualification": {
       "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v1-receipts.json",
       "sha256": "eecd2a16709aa8a5758b2a7a531da47ea4cc532dcccf4333f0d1e8d84db2b98a"
+    }
+  },
+  "two_node_split_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 107,
+    "core_modules_after": 47,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/two-node-split-retirement-coverage.json",
+      "sha256": "6922aee137c3b8af51894fa3538334db641a003f92b1fffdb713a49a32295451"
+    },
+    "current_test_tree": {
+      "sha256": "636ab38e0296957a2a4c21108e90921bb72a9c75b19fc4c984686c0400ef07d3",
+      "paths": 43
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "458680e5f14771a14f7c058583e9ea71ed81998078f5adcb46b660b550c147e8",
+      "roster_line": 24,
+      "count": 47
+    },
+    "qualification": {
+      "path": ".omo/evidence/resume-20261002/two-node-split-v1-receipts.json",
+      "sha256": "dd32e94f012cdce3419d3f97868672dcffb4638cd9ddbb6d5744883d7cc946c5"
     }
   }
 }

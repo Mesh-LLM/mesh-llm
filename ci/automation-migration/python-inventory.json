@@ -565,15 +565,6 @@
       "required": true
     },
     {
-      "classification": "generic required smoke test",
-      "deletion_condition": "Strict split evidence and failure cases pass in Rust tests.",
-      "exception": null,
-      "path": "scripts/tests/test_ci_two_node_split_smoke.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask qa/evidence tests",
-      "required": true
-    },
-    {
       "classification": "generic Windows artifact test",
       "deletion_condition": "Native Windows composition cases execute on Windows after migration.",
       "exception": null,
@@ -1116,7 +1107,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 108,
+  "tracked_file_count": 107,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -9847,6 +9838,31 @@
     "qualification": {
       "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v1-receipts.json",
       "sha256": "eecd2a16709aa8a5758b2a7a531da47ea4cc532dcccf4333f0d1e8d84db2b98a"
+    }
+  },
+  "two_node_split_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 107,
+    "core_modules_after": 47,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/two-node-split-retirement-coverage.json",
+      "sha256": "6922aee137c3b8af51894fa3538334db641a003f92b1fffdb713a49a32295451"
+    },
+    "current_test_tree": {
+      "sha256": "636ab38e0296957a2a4c21108e90921bb72a9c75b19fc4c984686c0400ef07d3",
+      "paths": 43
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "458680e5f14771a14f7c058583e9ea71ed81998078f5adcb46b660b550c147e8",
+      "roster_line": 24,
+      "count": 47
+    },
+    "qualification": {
+      "path": ".omo/evidence/resume-20261002/two-node-split-v1-receipts.json",
+      "sha256": "dd32e94f012cdce3419d3f97868672dcffb4638cd9ddbb6d5744883d7cc946c5"
     }
   }
 }

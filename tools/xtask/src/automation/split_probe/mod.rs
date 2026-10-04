@@ -18,7 +18,12 @@ struct Peer {
 struct Evidence {
     model_id: String,
     topology: Topology,
-    observers: std::collections::BTreeMap<String, Observer>,
+    observers: Observers,
+}
+#[derive(Deserialize)]
+struct Observers {
+    seed: Observer,
+    worker: Observer,
 }
 #[derive(Deserialize)]
 struct Topology {
@@ -201,11 +206,15 @@ fn execute(args: &[String]) -> DynResult<String> {
                 .iter()
                 .find(|stage| stage.stage_index == 0)
                 .ok_or("missing stage zero")?;
-            let observers: Vec<_> = evidence
-                .observers
-                .iter()
-                .filter(|(_, observer)| stage.node_id.starts_with(&observer.node_id))
-                .collect();
+            let observers: Vec<_> = [
+                ("seed", &evidence.observers.seed),
+                ("worker", &evidence.observers.worker),
+            ]
+            .into_iter()
+            .filter(|(_, observer)| {
+                !observer.node_id.is_empty() && stage.node_id.starts_with(&observer.node_id)
+            })
+            .collect();
             let [(label, _)] = observers.as_slice() else {
                 return Err("stage zero must match exactly one observer".into());
             };
@@ -287,6 +296,53 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn driver_reads_named_observers_alongside_reconciler_mesh_metadata() -> DynResult<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("evidence.json");
+        for (node, label) in [("seed-node-0001", "seed"), ("worker-node-0002", "worker")] {
+            fs::write(
+                &path,
+                serde_json::to_vec(&serde_json::json!({
+                    "model_id":"model-a",
+                    "topology":{"stages":[{"stage_index":0,"node_id":node}]},
+                    "observers":{"mesh_id":"mesh-a","seed":{"node_id":"seed-node"},"worker":{"node_id":"worker-node"}}
+                }))?,
+            )?;
+            assert_eq!(
+                execute(&["driver".into(), path.to_str().ok_or("path")?.into()])?,
+                format!("{label}\n")
+            );
+            assert_eq!(
+                execute(&["model".into(), path.to_str().ok_or("path")?.into()])?,
+                "model-a\n"
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn driver_rejects_invalid_or_ambiguous_named_observers() -> DynResult<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("evidence.json");
+        for observers in [
+            serde_json::json!({"mesh_id":"mesh-a","seed":{"node_id":"seed-node"}}),
+            serde_json::json!({"seed":"seed-node","worker":{"node_id":"worker-node"}}),
+            serde_json::json!({"seed":{"node_id":"seed"},"worker":{"node_id":"seed-node"}}),
+            serde_json::json!({"seed":{"node_id":""},"worker":{"node_id":"worker-node"}}),
+            serde_json::json!({"seed":{"node_id":"other"},"worker":{"node_id":"worker-node"}}),
+        ] {
+            fs::write(
+                &path,
+                serde_json::to_vec(&serde_json::json!({
+                    "model_id":"model-a",
+                    "topology":{"stages":[{"stage_index":0,"node_id":"seed-node-0001"}]},
+                    "observers":observers
+                }))?,
+            )?;
+            assert!(execute(&["driver".into(), path.to_str().ok_or("path")?.into()]).is_err());
+        }
+        Ok(())
+    }
     #[test]
     fn quant_selects_last_named_format() {
         assert_eq!(
