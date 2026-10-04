@@ -1418,6 +1418,7 @@ fn split_recovery_candidate_participants_excludes_unavailable_stage_nodes() {
 }
 
 #[test]
+#[serial_test::serial(runtime_event_engine_state)]
 fn load_split_runtime_generation_stops_candidate_stages_after_partial_load_failure() {
     std::thread::Builder::new()
         .name("local-split-test".to_owned())
