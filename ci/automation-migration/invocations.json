@@ -15164,5 +15164,15 @@
       "path": ".omo/evidence/resume-20261002/product-composer-v1-receipts.json",
       "sha256": "e3ed663556047e8356fe61c9383f4d48c17fad86d8ffa613f35c8541454c4ea7"
     }
+  },
+  "artifact_product_duplicate_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 106,
+    "core_modules_after": 46,
+    "durable_coverage": {
+      "path": "ci/automation-migration/artifact-product-duplicate-retirement-coverage.json",
+      "sha256": "1e6f2463a3e19eb0d702546787a6f52f6fceadd8d5f114eb3cff83c41d8c963f"
+    },
+    "current_test_tree": "6e41fce871542e73c075371e150e22ab7cf2ac9b63e3b76d075c7a6caf12698a"
   }
 }

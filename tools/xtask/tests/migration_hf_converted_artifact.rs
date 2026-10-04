@@ -125,7 +125,7 @@ fn rejects_false_split_count_as_invalid() {
 }
 
 #[test]
-fn accepts_true_split_count_as_single_file_like_python_int() {
+fn rejects_true_split_count_even_when_single_shard_exists() {
     let temp = TempDir::new().unwrap();
     write_manifest(
         temp.path(),
@@ -135,7 +135,12 @@ fn accepts_true_split_count_as_single_file_like_python_int() {
 
     let result = validate_converted_artifact(temp.path());
 
-    assert!(result.is_ok());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("invalid expected_splits in ")
+    );
 }
 
 #[test]
@@ -197,4 +202,34 @@ fn rejects_directory_in_place_of_shard() {
         error.to_string(),
         "converted artifact is incomplete: missing Inkling-BF16.gguf"
     );
+}
+
+#[test]
+fn rejects_noninteger_split_counts_without_mutating_existing_artifact() {
+    for count in [
+        serde_json::json!(true),
+        serde_json::json!(false),
+        serde_json::json!(null),
+        serde_json::json!("1"),
+        serde_json::json!(1.0),
+        serde_json::json!(-1),
+    ] {
+        let temp = TempDir::new().unwrap();
+        let manifest =
+            serde_json::json!({"expected_splits":count,"output_basename":"Inkling-BF16"});
+        write_manifest(temp.path(), &serde_json::to_string(&manifest).unwrap());
+        let shard = temp.path().join("Inkling-BF16.gguf");
+        fs::write(&shard, b"existing verified producer bytes").unwrap();
+        let before = fs::read(temp.path().join("skippy-convert-manifest.json")).unwrap();
+        let error = validate_converted_artifact(temp.path()).unwrap_err();
+        assert!(error.to_string().starts_with("invalid expected_splits in "));
+        assert_eq!(
+            fs::read(&shard).unwrap(),
+            b"existing verified producer bytes"
+        );
+        assert_eq!(
+            fs::read(temp.path().join("skippy-convert-manifest.json")).unwrap(),
+            before
+        );
+    }
 }
