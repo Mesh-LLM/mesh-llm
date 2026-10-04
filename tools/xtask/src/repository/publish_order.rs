@@ -94,7 +94,7 @@ fn projection(input: &[u8], pairs: bool) -> DynResult<String> {
     Ok(output)
 }
 
-fn selected_projection(input: &[u8], script: &str) -> DynResult<String> {
+fn selected_roster(input: &[u8], script: &str) -> DynResult<Vec<String>> {
     let metadata: Metadata = serde_json::from_slice(input)?;
     let roster = super::publish_roster::parse(script)?;
     let members: BTreeSet<_> = metadata.workspace_members.iter().collect();
@@ -159,34 +159,64 @@ fn selected_projection(input: &[u8], script: &str) -> DynResult<String> {
             }
         }
     }
-    Ok(roster.into_iter().map(|name| format!("{name}\n")).collect())
+    Ok(roster)
 }
 
 pub(super) fn run(args: &[String]) -> DynResult<()> {
-    if let [flag, path] = args
-        && flag == "--selected-script"
-    {
-        let script = std::fs::File::open(path)?;
-        let mut contents = String::new();
-        script.take(1_048_577).read_to_string(&mut contents)?;
-        if contents.len() > 1_048_576 {
-            return Err("publish script exceeds 1 MiB".into());
+    let selected = match args {
+        [flag, script] if flag == "--selected-script" => Some((script.as_str(), None)),
+        [flag, script, root_flag, root]
+            if flag == "--selected-script" && root_flag == "--source-root" =>
+        {
+            Some((script.as_str(), Some(root.as_str())))
         }
-        let input = read_metadata()?;
-        let output = selected_projection(&input, &contents)?;
-        return crate::repository::check_report::CheckReport::success(output).emit();
+        _ => None,
+    };
+    if let Some((script, root)) = selected {
+        return run_selected(script, root);
     }
     let pairs = match args {
         [] => false,
         [flag] if flag == "--dependency-pairs" => true,
         _ => {
             return Err(
-                "usage: repository publish-order [--dependency-pairs | --selected-script PATH] < cargo-metadata.json".into(),
+                "usage: repository publish-order [--dependency-pairs | --selected-script PATH [--source-root ROOT]] < cargo-metadata.json".into(),
             );
         }
     };
     let input = read_metadata()?;
     let output = projection(&input, pairs)?;
+    crate::repository::check_report::CheckReport::success(output).emit()
+}
+
+fn run_selected(path: &str, source_root: Option<&str>) -> DynResult<()> {
+    let root = source_root
+        .map(|root| -> DynResult<PathBuf> {
+            let root = super::RepositoryRoot::resolve(Some(std::path::Path::new(root)))?;
+            let root = root.as_path().to_path_buf();
+            let script = std::path::Path::new(path).canonicalize()?;
+            let expected = root.join("scripts/publish-crates.sh").canonicalize()?;
+            if script != expected || !script.starts_with(&root) {
+                return Err("publish script is not bound to the selected source".into());
+            }
+            Ok(root)
+        })
+        .transpose()?;
+    if !std::fs::metadata(path)?.is_file() {
+        return Err("publish script must be a regular file".into());
+    }
+    let script = std::fs::File::open(path)?;
+    let mut contents = String::new();
+    script.take(1_048_577).read_to_string(&mut contents)?;
+    if contents.len() > 1_048_576 {
+        return Err("publish script exceeds 1 MiB".into());
+    }
+    let input = read_metadata()?;
+    let roster = selected_roster(&input, &contents)?;
+    if let Some(root) = root {
+        crate::publish_consistency::release_source::check(&root, &input, &roster)?;
+    }
+    let output: String = roster.into_iter().map(|name| format!("{name}\n")).collect();
     crate::repository::check_report::CheckReport::success(output).emit()
 }
 
@@ -234,8 +264,8 @@ mod tests {
     fn selected_release_roster_preserves_order_and_rejects_invalid_dependencies() {
         let script = "publish_crates=(\n provider\n consumer\n)\n";
         assert_eq!(
-            super::selected_projection(&metadata(false), script).unwrap(),
-            "provider\nconsumer\n"
+            super::selected_roster(&metadata(false), script).unwrap(),
+            ["provider", "consumer"]
         );
         for invalid in [
             "publish_crates=(\n consumer\n provider\n)",
@@ -243,9 +273,9 @@ mod tests {
             "publish_crates=(\n provider\n controller-only\n)",
             "publish_crates=(\n private\n)",
         ] {
-            assert!(super::selected_projection(&metadata(false), invalid).is_err());
+            assert!(super::selected_roster(&metadata(false), invalid).is_err());
         }
-        assert!(super::selected_projection(&metadata(true), script).is_err());
+        assert!(super::selected_roster(&metadata(true), script).is_err());
     }
 
     #[test]
@@ -264,7 +294,7 @@ mod tests {
                 _ => unreachable!(),
             }
             assert!(
-                super::selected_projection(&serde_json::to_vec(&value).unwrap(), script).is_err(),
+                super::selected_roster(&serde_json::to_vec(&value).unwrap(), script).is_err(),
                 "accepted mutation {mutation}"
             );
         }

@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub(crate) mod release_source;
+
 pub(crate) fn check_publish_crates_consistency(repo_root: &Path) -> DynResult<()> {
     let metadata = workspace_metadata(repo_root, "publish crate consistency")?;
     let publish_crates = publish_script_crates(repo_root)?;

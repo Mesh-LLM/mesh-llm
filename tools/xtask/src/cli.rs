@@ -75,7 +75,7 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool native package-source-version {{workspace|abi}} SOURCE (experimental)");
     println!("  cargo xtool repository cargo-target-directory < cargo-metadata.json");
     println!(
-        "  cargo xtool repository publish-order [--dependency-pairs | --selected-script PATH] < cargo-metadata.json"
+        "  cargo xtool repository publish-order [--dependency-pairs | --selected-script PATH [--source-root ROOT]] < cargo-metadata.json"
     );
     println!("  cargo xtool product attestation-status < inspection.json");
     println!("  cargo xtool product rc-ok {{model|request MODEL|verify}}");

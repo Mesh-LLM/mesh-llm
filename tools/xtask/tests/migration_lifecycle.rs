@@ -2,6 +2,8 @@
 
 #[path = "migration_lifecycle/ci_batch_filter/mod.rs"]
 mod ci_batch_filter;
+#[path = "migration_lifecycle/crates_recovery.rs"]
+mod crates_recovery;
 #[path = "migration_lifecycle/macos_deployment_target.rs"]
 mod macos_deployment_target;
 #[path = "migration_lifecycle/package_release_adapter.rs"]

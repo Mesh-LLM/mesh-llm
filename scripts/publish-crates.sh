@@ -326,19 +326,19 @@ publish_crate_with_retry() {
 # map silently breaks the dry-run whenever a new crate joins the workspace, and
 # the failure only surfaces at release time, at the end of a long release build.
 registry_dep_pairs=""
+publication_metadata=""
 
 load_registry_dep_pairs() {
-    local metadata=""
-    if ! metadata="$(cargo metadata --format-version 1 --no-deps 2>/dev/null)"; then
+    if ! publication_metadata="$(cargo metadata --format-version 1 --no-deps --locked 2>/dev/null)"; then
         echo "failed to read cargo metadata for workspace dependency derivation" >&2
         exit 1
     fi
-    if [[ -z "$metadata" ]]; then
+    if [[ -z "$publication_metadata" ]]; then
         echo "cargo metadata returned no workspace data" >&2
         exit 1
     fi
     registry_dep_pairs="$(
-        printf '%s' "$metadata" | mesh_automation repository publish-order --dependency-pairs
+        printf '%s' "$publication_metadata" | mesh_automation repository publish-order --dependency-pairs
     )"
 }
 
@@ -429,9 +429,16 @@ publish_crates=(
     mesh-llm-sdk
 )
 
-if [[ "$dry_run" -eq 1 ]]; then
-    load_registry_dep_pairs
-fi
+load_registry_dep_pairs
+selected_roster="$(
+    printf '%s' "$publication_metadata" \
+        | mesh_automation repository publish-order --selected-script "$PWD/scripts/publish-crates.sh" --source-root "$PWD"
+)"
+publish_crates=()
+while IFS= read -r crate; do
+    [[ -n "$crate" ]] || continue
+    publish_crates+=("$crate")
+done <<< "$selected_roster"
 
 for index in "${!publish_crates[@]}"; do
     crate="${publish_crates[$index]}"
