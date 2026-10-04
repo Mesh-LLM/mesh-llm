@@ -1,3 +1,4 @@
+use super::request_defaults::EmbeddedOpenAiRequestDefaults;
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
 use crate::frontend::GenerationLifecycleConfig;
@@ -44,7 +45,6 @@ use serde_json::json;
 use skippy_inference_api::ModelId;
 use skippy_inference_api::OpenAiBackend;
 use skippy_inference_api::OpenAiHookPolicy;
-use skippy_inference_api::ReasoningEffort;
 use skippy_protocol::StageConfig;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -121,73 +121,6 @@ pub struct EmbeddedOpenAiArgs {
     /// Node-scoped durable disk-cache owner supplied by the embedding host.
     /// `None` keeps standalone and cache-disabled launches in-memory only.
     pub l3_manager: Option<skippy_cache::L3CacheManager>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct EmbeddedOpenAiRequestDefaults {
-    /// Deployment/operator output limit. Package profile limits are resolved
-    /// below this field and above the server fallback.
-    pub max_tokens: Option<u32>,
-    /// Publisher-reviewed profiles carried by model-package v2.
-    pub package_request_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
-    pub stop: Option<Vec<String>>,
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
-    pub presence_penalty: Option<f32>,
-    pub frequency_penalty: Option<f32>,
-    pub seed: Option<u64>,
-    pub logit_bias: Option<BTreeMap<String, Value>>,
-    pub top_k: Option<i32>,
-    pub min_p: Option<f32>,
-    pub repeat_penalty: Option<f32>,
-    pub repeat_last_n: Option<i32>,
-    pub typical_p: Option<f32>,
-    pub top_nsigma: Option<f32>,
-    pub dynatemp_range: Option<f32>,
-    pub dynatemp_exponent: Option<f32>,
-    pub dry: Option<skippy_runtime::DrySamplingConfig>,
-    pub xtc: Option<skippy_runtime::XtcSamplingConfig>,
-    pub mirostat_mode: Option<i32>,
-    pub mirostat_entropy: Option<f32>,
-    pub mirostat_learning_rate: Option<f32>,
-    pub samplers: Option<Vec<String>>,
-    pub sampler_sequence: Option<String>,
-    pub ignore_eos: Option<bool>,
-    pub reasoning_format: Option<EmbeddedReasoningFormat>,
-    pub reasoning_enabled: Option<EmbeddedReasoningEnabled>,
-    pub reasoning_budget: Option<EmbeddedReasoningBudget>,
-    pub chat_template: Option<String>,
-    pub jinja: Option<bool>,
-    pub chat_template_kwargs: Option<Value>,
-    pub skip_chat_parsing: Option<bool>,
-    pub prefill_assistant: Option<Value>,
-    pub system_prompt: Option<String>,
-    pub grammar: Option<Value>,
-    pub json_schema: Option<Value>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EmbeddedReasoningFormat {
-    Auto,
-    None,
-    Deepseek,
-    DeepseekLegacy,
-    Hidden,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EmbeddedReasoningEnabled {
-    Auto,
-    Disabled,
-    Enabled,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EmbeddedReasoningBudget {
-    Auto,
-    Unrestricted,
-    Tokens(u32),
-    Effort(ReasoningEffort),
 }
 
 pub async fn serve_embedded_openai(args: EmbeddedOpenAiArgs) -> Result<()> {

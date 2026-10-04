@@ -9,6 +9,7 @@ use super::WireCondition;
 
 #[derive(Clone)]
 pub struct BinaryStageOptions {
+    pub tuning: crate::settings::ServingTuning,
     pub config: StageConfig,
     pub topology: Option<StageTopology>,
     pub bind_addr: SocketAddr,

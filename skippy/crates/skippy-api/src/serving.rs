@@ -19,7 +19,7 @@ const BUILTIN_PREFILL_ADAPTIVE_TARGET_MS: f64 =
     skippy_config::local_serving::PREFILL_ADAPTIVE_TARGET_MS;
 const DEFAULT_NATIVE_MTP_MAX_TOKENS: usize = skippy_config::local_serving::NATIVE_MTP_DRAFT_TOKENS;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct OpenAiOptions {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,

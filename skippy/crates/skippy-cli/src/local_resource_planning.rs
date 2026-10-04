@@ -14,6 +14,8 @@ pub(crate) struct LocalResourcePlanningInput<'a> {
     pub(crate) model_bytes: u64,
     pub(crate) projector_path: Option<&'a Path>,
     pub(crate) n_gpu_layers: i32,
+    pub(crate) kv_offload: Option<bool>,
+    pub(crate) selected_device: Option<&'a str>,
     pub(crate) ctx_size_override: Option<u32>,
     pub(crate) parallel_override: Option<usize>,
     pub(crate) cache_type_k: &'a str,
@@ -27,7 +29,9 @@ pub(crate) fn plan_local_resources(input: LocalResourcePlanningInput<'_>) -> Run
     let vram_bytes = metadata
         .as_ref()
         .and_then(|meta| kv_cache_quant.kv_cache_bytes_per_token(meta))
-        .map(|_| available_device_memory(input.n_gpu_layers))
+        .map(|_| {
+            available_device_memory(input.n_gpu_layers, input.kv_offload, input.selected_device)
+        })
         .unwrap_or(0);
     let projector_bytes = input
         .projector_path
@@ -49,18 +53,32 @@ pub(crate) fn plan_local_resources(input: LocalResourcePlanningInput<'_>) -> Run
     })
 }
 
-fn available_device_memory(n_gpu_layers: i32) -> u64 {
+fn available_device_memory(
+    n_gpu_layers: i32,
+    kv_offload: Option<bool>,
+    selected_device: Option<&str>,
+) -> u64 {
     let Ok(devices) = backend_devices() else {
         return 0;
     };
-    available_memory_from_devices(&devices, n_gpu_layers)
+    available_memory_from_devices(&devices, n_gpu_layers, kv_offload, selected_device)
 }
 
-fn available_memory_from_devices(devices: &[BackendDevice], n_gpu_layers: i32) -> u64 {
+fn available_memory_from_devices(
+    devices: &[BackendDevice],
+    n_gpu_layers: i32,
+    kv_offload: Option<bool>,
+    selected_device: Option<&str>,
+) -> u64 {
     let mut gpu_bytes = 0u64;
     let mut gpu_present = false;
     let mut cpu_bytes = 0u64;
     for device in devices {
+        if device.device_type != BackendDeviceType::Cpu
+            && selected_device.is_some_and(|name| name != device.name)
+        {
+            continue;
+        }
         match device.device_type {
             BackendDeviceType::Gpu | BackendDeviceType::IntegratedGpu => {
                 gpu_present = true;
@@ -70,7 +88,7 @@ fn available_memory_from_devices(devices: &[BackendDevice], n_gpu_layers: i32) -
             BackendDeviceType::Accelerator | BackendDeviceType::Meta => {}
         }
     }
-    if n_gpu_layers == 0 || !gpu_present {
+    if n_gpu_layers == 0 || kv_offload == Some(false) || !gpu_present {
         cpu_bytes
     } else {
         gpu_bytes
@@ -100,8 +118,38 @@ mod tests {
             device(BackendDeviceType::IntegratedGpu, 0),
             device(BackendDeviceType::Gpu, 12_000_000_000),
         ];
-        assert_eq!(available_memory_from_devices(&devices, -1), 12_000_000_000);
-        assert_eq!(available_memory_from_devices(&devices[..2], -1), 0);
-        assert_eq!(available_memory_from_devices(&devices, 0), 64_000_000_000);
+        assert_eq!(
+            available_memory_from_devices(&devices, -1, None, None),
+            12_000_000_000
+        );
+        assert_eq!(
+            available_memory_from_devices(&devices[..2], -1, None, None),
+            0
+        );
+        assert_eq!(
+            available_memory_from_devices(&devices, 0, None, None),
+            64_000_000_000
+        );
+    }
+
+    #[test]
+    fn selected_device_and_host_kv_controls_choose_the_correct_memory_budget() {
+        let mut selected = device(BackendDeviceType::Gpu, 4_000_000_000);
+        selected.name = "GPU0".into();
+        let mut other = device(BackendDeviceType::Gpu, 16_000_000_000);
+        other.name = "GPU1".into();
+        let devices = [
+            device(BackendDeviceType::Cpu, 64_000_000_000),
+            selected,
+            other,
+        ];
+        assert_eq!(
+            available_memory_from_devices(&devices, -1, Some(true), Some("GPU0")),
+            4_000_000_000
+        );
+        assert_eq!(
+            available_memory_from_devices(&devices, -1, Some(false), Some("GPU0")),
+            64_000_000_000
+        );
     }
 }

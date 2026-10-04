@@ -13,6 +13,15 @@ If no local runtime matches, serving tries a compatible release runtime;
 source builds can have a newer Skippy ABI than the published release. Use
 `--runtime-bundle /path/to/bundle` to select another local bundle explicitly.
 
+## Configure serving
+
+`skippy serve --help` groups every supported operator control by purpose.
+Use `--settings serve.toml` for a complete serving configuration and
+`--print-effective-config` to inspect the resolved launch before loading a model.
+CLI options override `SKIPPY_SERVE_*` environment variables, file settings and
+automatic defaults. See the [serving settings reference](../../docs/SERVING_SETTINGS.md)
+for all controls, precedence, examples and mode constraints.
+
 ## Run one model on one machine
 
 ```sh

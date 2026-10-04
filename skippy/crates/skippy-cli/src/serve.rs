@@ -15,9 +15,7 @@ use skippy_runtime::{ModelOpenEventQueue, RuntimeEventKind, RuntimeEventProgress
 use tokio::{process::Command, sync::oneshot, task::JoinHandle};
 
 use crate::{
-    cli::{
-        OpenAiGuardrailsCliMode, ServeBinaryArgs, ServeCommandArgs, ServeOpenAiArgs, StageTransport,
-    },
+    cli::{ServeBinaryArgs, ServeCommandArgs, ServeOpenAiArgs, StageTransport},
     conversion, shutdown_signal,
 };
 
@@ -107,6 +105,13 @@ fn installed_model_path(model: &str) -> Option<std::path::PathBuf> {
 }
 
 pub(crate) fn validate(args: &ServeCommandArgs) -> Result<()> {
+    args.public.settings.validate_mode(args)?;
+    args.public.settings.tuning(args.public.openai_guardrails)?;
+    let mut stage = skippy_protocol::StageConfig::default();
+    args.public.settings.apply_stage(&mut stage)?;
+    if args.stage_transport.is_some() && args.public.config.is_none() {
+        bail!("--stage-transport requires --config, supplied directly or through serving settings");
+    }
     if args.worker_only && args.prompt {
         bail!("--prompt requires a public inference API");
     }
@@ -116,7 +121,7 @@ pub(crate) fn validate(args: &ServeCommandArgs) -> Result<()> {
     if args.prompt && (!std::io::stdin().is_terminal() || console::mode() != OutputMode::Human) {
         bail!("--prompt requires an interactive terminal and human output");
     }
-    if console::mode() == OutputMode::Json {
+    if console::mode() == OutputMode::Json && !args.print_effective_config {
         bail!("serving produces a stream of events; use --output jsonl or --output human");
     }
     if args.public.config.is_none() && args.public.model_path.is_none() && args.model.is_none() {
@@ -132,7 +137,16 @@ async fn serve_public(args: ServeCommandArgs) -> Result<()> {
         .unwrap_or_else(default_public_bind_addr);
     let startup_timeout = Duration::from_secs(args.public.startup_timeout_secs.max(1));
     console::status("🧠 Preparing model")?;
+    let settings = args.public.settings.clone();
     let mut options = conversion::local_openai_options(args.public)?;
+    if args.print_effective_config {
+        let frontend = options.resolved_openai_options()?;
+        return console::write_json(&settings.report(
+            &options.config,
+            Some(&frontend),
+            &options.tuning,
+        ));
+    }
     let model_open_events = ModelOpenEventQueue::new(skippy_runtime::next_operation_id());
     options.model_open_events = Some(Arc::clone(&model_open_events));
     let model_id = options
@@ -162,14 +176,12 @@ async fn serve_binary_stage(mut args: ServeCommandArgs) -> Result<()> {
         args.public.kv_cache_disk_dir.clone(),
         args.public.kv_cache_min_free.as_deref(),
     )?;
-    if args.public.openai_guardrails != OpenAiGuardrailsCliMode::default() {
-        bail!("--guardrails is not supported by the binary stage frontend");
-    }
     apply_public_frontend_tuning(&args.public, &mut args.stage);
+    args.stage.settings = args.public.settings.clone();
     let startup_timeout = Duration::from_secs(args.public.startup_timeout_secs.max(1));
-    args.stage.config = args.public.config.context("--config is required")?;
-    args.stage.topology = args.public.topology;
-    args.stage.metrics_otlp_grpc = args.public.metrics_otlp_grpc;
+    args.stage.config = args.public.config.clone().context("--config is required")?;
+    args.stage.topology = args.public.topology.clone();
+    args.stage.metrics_otlp_grpc = args.public.metrics_otlp_grpc.clone();
     args.stage.telemetry_queue_capacity = args.public.telemetry_queue_capacity;
     args.stage.telemetry_level = args.public.telemetry_level;
     args.stage.worker_only = args.worker_only;
@@ -182,6 +194,50 @@ async fn serve_binary_stage(mut args: ServeCommandArgs) -> Result<()> {
             .unwrap_or_else(default_public_bind_addr),
     );
     let mut options = conversion::binary_stage_options(args.stage)?;
+    args.public
+        .settings
+        .validate_cache_dependencies(&options.config, disk_cache.is_some())?;
+    if args.print_effective_config {
+        let frontend = options.openai.as_ref().map(|stage| {
+            let mut frontend = skippy_api::serving::OpenAiOptions::embedded_stage_defaults(
+                stage.model_id.clone(),
+                stage.default_max_tokens,
+                stage.generation_concurrency,
+                0,
+                options.native_mtp_enabled,
+            );
+            frontend.request_defaults = options.tuning.request_defaults.clone();
+            frontend.continuous_batching = options.continuous_batching;
+            frontend.pipeline_decode_groups = stage.pipeline_decode_groups;
+            frontend.adaptive_generation_min_concurrency =
+                stage.adaptive_generation_min_concurrency;
+            frontend.generation_queue_capacity = stage.generation_queue_capacity;
+            frontend.generation_admission_timeout_secs = stage.generation_admission_timeout_secs;
+            frontend.prefill_chunk_size = stage.prefill_chunk_size;
+            frontend.prefill_chunk_policy = stage.prefill_chunk_policy.clone();
+            frontend.prefill_chunk_schedule = stage.prefill_chunk_schedule.clone();
+            frontend.prefill_adaptive_start = stage.prefill_adaptive_start;
+            frontend.prefill_adaptive_step = stage.prefill_adaptive_step;
+            frontend.prefill_adaptive_max = stage.prefill_adaptive_max;
+            frontend.prefill_adaptive_target_ms = stage.prefill_adaptive_target_ms;
+            frontend.draft_model_path = stage.draft_model_path.clone();
+            frontend.speculative_window = stage.speculative_window;
+            frontend.adaptive_speculative_window = stage.adaptive_speculative_window;
+            frontend.draft_n_gpu_layers = stage.draft_n_gpu_layers;
+            frontend.speculative = stage.speculative.clone();
+            frontend.native_mtp_draft_model_path = stage.native_mtp_draft_model_path.clone();
+            frontend.native_mtp_max_tokens = stage.native_mtp_max_tokens;
+            frontend.native_mtp_min_tokens = stage.native_mtp_min_tokens;
+            frontend.reply_credit_limit = options.reply_credit_limit;
+            frontend.downstream_connect_timeout_secs = options.downstream_connect_timeout_secs;
+            frontend
+        });
+        return console::write_json(&args.public.settings.report(
+            &options.config,
+            frontend.as_ref(),
+            &options.tuning,
+        ));
+    }
     options.l3_manager = disk_cache.and_then(skippy_api::serving::LocalDiskCacheOptions::acquire);
     let Some(openai) = options.openai.as_ref() else {
         if args.prompt {
@@ -531,6 +587,7 @@ mod tests {
             panic!("expected serve");
         };
         apply_public_frontend_tuning(&args.public, &mut args.stage);
+        args.stage.settings = args.public.settings.clone();
         assert_eq!(args.stage.openai_model_id.as_deref(), Some("served-model"));
         assert_eq!(args.stage.openai_default_max_tokens, 64);
         assert_eq!(args.stage.openai_generation_concurrency, Some(2));

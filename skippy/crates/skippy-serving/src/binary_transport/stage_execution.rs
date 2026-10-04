@@ -994,6 +994,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {
+            exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
             payload: StageKvCachePayload::ResidentKv,
             max_entries: 8,

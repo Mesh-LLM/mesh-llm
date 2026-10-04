@@ -468,6 +468,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
 
     let stage1_handle =
         crate::embedded::start_binary_stage(crate::binary_transport::BinaryStageOptions {
+            tuning: Default::default(),
             config: stage1_config,
             topology: None,
             bind_addr: stage1_addr,

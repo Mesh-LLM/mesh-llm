@@ -1,5 +1,63 @@
 //! Exercise the standalone command's output streams without loading a model.
 #[test]
+fn invalid_serving_settings_preserve_the_explanation() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
+        .args(["serve", "--model", "missing.gguf", "--threads", "many"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("threads"), "{error}");
+    assert!(error.contains("expected an unsigned integer"), "{error}");
+}
+
+#[test]
+fn effective_serving_config_is_json_without_loading_a_runtime_or_model() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("stage.json");
+    std::fs::write(
+        &config,
+        serde_json::to_vec(&skippy_config::example_config()).unwrap(),
+    )
+    .unwrap();
+    let settings = temp.path().join("serve.toml");
+    std::fs::write(
+        &settings,
+        "[distributed]\nconfig = 'stage.json'\n[execution]\nthreads = 3\n[sampling]\ntemperature = 0.4\n[model]\nmlock = true\n",
+    )
+    .unwrap();
+    for transport in [None, Some("binary")] {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"));
+        command
+            .env_remove("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR")
+            .env_remove("SKIPPY_SERVE_THREADS")
+            .env_remove("SKIPPY_SERVE_TEMPERATURE")
+            .args(["--runtime-release", "999.999.999-test", "--runtime-cache"])
+            .arg(temp.path().join("empty-runtime-cache"))
+            .args(["serve", "--settings"])
+            .arg(&settings)
+            .args(["--mlock=false", "--print-effective-config"]);
+        if let Some(transport) = transport {
+            command.args(["--stage-transport", transport]);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{:?}", output);
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["resolution_phase"], "before-model-load");
+        assert_eq!(report["stage"]["mlock"], false);
+        assert_eq!(report["execution"]["threads"], 3);
+        let temperature = report["frontend"]["request_defaults"]["temperature"]
+            .as_f64()
+            .unwrap();
+        assert!((temperature - 0.4).abs() < 1e-6);
+        assert_eq!(report["sources"]["mlock"], "cli");
+        assert_eq!(report["options"]["telemetry-level"], "summary");
+        assert_eq!(report["sources"]["telemetry-level"], "automatic/default");
+        assert!(report["overrides"].get("telemetry-level").is_none());
+    }
+}
+
+#[test]
 fn example_config_is_one_json_document_on_stdout() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
         .arg("example-config")

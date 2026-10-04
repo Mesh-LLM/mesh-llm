@@ -227,6 +227,7 @@ fn recurrent_test_backend(
         resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {
+            exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
             payload: StageKvCachePayload::KvRecurrent,
             max_entries: 8,

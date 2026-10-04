@@ -25,8 +25,10 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         args.downstream_wire_stall_ms,
         args.downstream_wire_stall_p,
     )?;
+    let tuning = args.settings.tuning(args.settings.guardrail_mode()?)?;
     let mut config = load_json::<StageConfig>(&args.config)
         .with_context(|| format!("load stage config {}", args.config.display()))?;
+    args.settings.apply_stage(&mut config)?;
     let topology = match args.topology.as_ref() {
         Some(path) => Some(
             load_json::<StageTopology>(path)
@@ -51,7 +53,13 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
             openai_generation_concurrency,
             "--adaptive-generation-min-concurrency",
         )?;
-    let defaults = binary_frontend_defaults(&args, &config, openai_generation_concurrency);
+    let mut defaults = binary_frontend_defaults(&args, &config, openai_generation_concurrency);
+    if args.openai_draft_model_path.is_some()
+        && args.openai_speculative_config.is_none()
+        && !args.settings.values.contains_key("native-mtp")
+    {
+        defaults.speculative.native_mtp.enabled = false;
+    }
     let openai_speculative: SpeculativeDecodeConfig = args
         .openai_speculative_config
         .as_ref()
@@ -59,6 +67,10 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         .transpose()
         .context("load --speculative-config")?
         .unwrap_or(defaults.speculative);
+    let openai_speculative = args.settings.speculative(
+        openai_speculative,
+        args.openai_draft_model_path.is_some() || defaults.draft_model_path.is_some(),
+    )?;
     openai_speculative.validate()?;
     config.native_mtp_enabled = openai_speculative.native_mtp.enabled;
     if openai_speculative.ngram_fallback_draft && args.openai_draft_model_path.is_none() {
@@ -75,12 +87,16 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
     };
     let adaptive_draft =
         args.openai_draft_model_path.is_some() || defaults.adaptive_speculative_window;
+    let adaptive_speculative_window = args
+        .settings
+        .boolean("adaptive-speculative-window")?
+        .unwrap_or(args.openai_adaptive_speculative_window || adaptive_draft);
     let openai = openai_bind_addr.map(|bind_addr| EmbeddedOpenAiStageOptions {
         bind_addr,
         model_id: args.openai_model_id,
         default_max_tokens: args.openai_default_max_tokens,
         generation_concurrency: openai_generation_concurrency,
-        pipeline_decode_groups: None,
+        pipeline_decode_groups: tuning.pipeline_decode_groups,
         adaptive_generation_min_concurrency,
         generation_queue_capacity: openai_generation_queue_capacity,
         generation_admission_timeout_secs: args.openai_generation_admission_timeout_secs,
@@ -93,7 +109,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         prefill_adaptive_target_ms: args.openai_prefill_adaptive_target_ms,
         draft_model_path: args.openai_draft_model_path.or(defaults.draft_model_path),
         speculative_window: args.openai_speculative_window,
-        adaptive_speculative_window: args.openai_adaptive_speculative_window || adaptive_draft,
+        adaptive_speculative_window,
         draft_n_gpu_layers: args.openai_draft_n_gpu_layers,
         native_mtp_draft_model_path: args
             .openai_native_mtp_draft_model_path
@@ -104,6 +120,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
     });
     let native_mtp_enabled = config.native_mtp_enabled;
     Ok(BinaryStageOptions {
+        tuning: tuning.clone(),
         config,
         topology,
         bind_addr,
@@ -112,11 +129,16 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         telemetry_level: args.telemetry_level.into(),
         max_inflight: args.max_inflight,
         reply_credit_limit: args.reply_credit_limit,
-        async_prefill_forward: args.async_prefill_forward || !args.no_async_prefill_forward,
+        async_prefill_forward: args
+            .settings
+            .boolean("async-prefill-forward")?
+            .unwrap_or(args.async_prefill_forward || !args.no_async_prefill_forward),
         downstream_wire_condition,
         downstream_connect_timeout_secs: args.downstream_connect_timeout_secs,
         native_mtp_enabled,
-        continuous_batching: skippy_config::local_serving::CONTINUOUS_BATCHING,
+        continuous_batching: tuning
+            .continuous_batching
+            .unwrap_or(skippy_config::local_serving::CONTINUOUS_BATCHING),
         compute_meter: None,
         openai,
         l3_manager: None,
@@ -166,11 +188,65 @@ pub fn local_openai_options(
         .map(load_json)
         .transpose()
         .context("load speculative config")?;
+    let mut tuning = args.settings.tuning(args.openai_guardrails)?;
+    let speculative = if args.settings.has_speculative_overrides() {
+        let mut defaults = skippy_api::serving::OpenAiOptions::embedded_stage_defaults(
+            args.model_id.clone(),
+            args.default_max_tokens,
+            config.lane_count as usize,
+            0,
+            config.native_mtp_enabled,
+        );
+        if speculative.is_none()
+            && tuning.draft_model_path.is_none()
+            && tuning.native_mtp_draft_model_path.is_none()
+            && let Some(path) = config
+                .source_model_path
+                .as_deref()
+                .or(config.model_path.as_deref())
+        {
+            skippy_api::speculative::apply_auto_speculation(
+                &mut defaults,
+                std::path::Path::new(path),
+            );
+        }
+        let has_draft = tuning.draft_model_path.is_some() || defaults.draft_model_path.is_some();
+        if tuning.draft_model_path.is_some() {
+            defaults.speculative_window = skippy_config::local_serving::DRAFT_MODEL_TOKENS;
+        }
+        if tuning.draft_model_path.is_some() && !args.settings.values.contains_key("native-mtp") {
+            defaults.speculative.native_mtp.enabled = false;
+        }
+        tuning.draft_model_path = tuning.draft_model_path.or(defaults.draft_model_path);
+        tuning.native_mtp_draft_model_path = tuning
+            .native_mtp_draft_model_path
+            .or(defaults.native_mtp_draft_model_path);
+        tuning.speculative_window = tuning
+            .speculative_window
+            .or(Some(defaults.speculative_window));
+        tuning.adaptive_speculative_window = tuning
+            .adaptive_speculative_window
+            .or(Some(defaults.adaptive_speculative_window));
+        Some(
+            args.settings
+                .speculative(speculative.unwrap_or(defaults.speculative), has_draft)?,
+        )
+    } else {
+        speculative
+    };
     if let Some(plan) = speculative.as_ref() {
         config.native_mtp_enabled = plan.native_mtp.enabled;
     }
 
+    let disk_cache = crate::disk_cache::from_public_settings(
+        args.kv_cache_disk.as_deref(),
+        args.kv_cache_disk_dir.clone(),
+        args.kv_cache_min_free.as_deref(),
+    )?;
+    args.settings
+        .validate_cache_dependencies(&config, disk_cache.is_some())?;
     Ok(skippy_api::serving::LocalOpenAiOptions {
+        tuning,
         config,
         topology,
         speculative,
@@ -196,11 +272,7 @@ pub fn local_openai_options(
         telemetry_level: args.telemetry_level.into(),
         openai_guardrails: args.openai_guardrails.into(),
         model_open_events: None,
-        disk_cache: crate::disk_cache::from_public_settings(
-            args.kv_cache_disk.as_deref(),
-            args.kv_cache_disk_dir,
-            args.kv_cache_min_free.as_deref(),
-        )?,
+        disk_cache,
     })
 }
 

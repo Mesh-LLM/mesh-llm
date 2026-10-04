@@ -8436,6 +8436,7 @@ dependencies = [
  "clap",
  "dirs",
  "reqwest 0.13.5",
+ "serde",
  "serde_json",
  "skippy-api",
  "skippy-cache",
@@ -8443,6 +8444,7 @@ dependencies = [
  "skippy-config",
  "skippy-coordinator",
  "skippy-events",
+ "skippy-inference-api",
  "skippy-model-artifact",
  "skippy-model-hf",
  "skippy-native-runtime",
@@ -8452,6 +8454,7 @@ dependencies = [
  "skippy-serving",
  "tempfile",
  "tokio",
+ "toml 1.1.6+spec-1.1.0",
  "uuid",
 ]
 

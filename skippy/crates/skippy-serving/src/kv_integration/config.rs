@@ -23,9 +23,11 @@ use super::{
 };
 
 mod durable_spill;
+mod exact_state_limits;
 use durable_spill::{
     DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
+use exact_state_limits::exact_state_byte_limits;
 
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
 // sequence lanes, so their exact-state catalog must remain deliberately small.
@@ -40,12 +42,6 @@ const RECURRENT_CACHE_MAX_ENTRIES: usize = 16;
 // turns the catalog into a single-entry cache, where two concurrent sessions
 // on the same stage evict each other on every request.
 const EXACT_STATE_MIN_RETAINED_ENTRIES: usize = 4;
-
-// That retention floor is not allowed to grow without bound. Once the catalog
-// crosses this multiple of the soft cap it evicts again, down to the single
-// entry that keeps exact prefix reuse alive for the stage. That indivisible
-// entry may itself exceed the limit.
-const EXACT_STATE_HARD_CAP_MULTIPLE: u64 = 8;
 
 // Operator override for the limit above, in bytes, for workers whose memory
 // headroom does not match the attention-derived estimate. The last indivisible
@@ -208,6 +204,7 @@ impl KvStageIntegration {
         let exact_max_entries = cache_config.max_entries.clamp(1, 512);
         let exact_byte_limits = exact_state_byte_limits(
             cache_config.max_bytes,
+            cache_config.exact_max_bytes,
             std::env::var(EXACT_STATE_MAX_BYTES_ENV).ok().as_deref(),
         );
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
@@ -895,27 +892,6 @@ fn evict_exact_entries_over(
     Ok(())
 }
 
-/// Resolves the exact-state byte budget from the stage cache cap.
-///
-/// `configured_max_bytes` is the attention-derived stage budget, which is used
-/// as the soft cap. The hard limit defaults to a multiple of it so the working
-/// set stays bounded without inheriting an estimate that structurally
-/// undercounts exact-state payloads. One indivisible snapshot may remain above
-/// that limit. `override_max_bytes` is the operator escape hatch and wins
-/// outright when it parses; zero means unbounded.
-fn exact_state_byte_limits(
-    configured_max_bytes: u64,
-    override_max_bytes: Option<&str>,
-) -> ExactStateByteLimits {
-    let hard_bytes = override_max_bytes
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or_else(|| configured_max_bytes.saturating_mul(EXACT_STATE_HARD_CAP_MULTIPLE));
-    ExactStateByteLimits {
-        soft_bytes: configured_max_bytes,
-        hard_bytes,
-    }
-}
-
 fn effective_cache_payload(
     requested: StageKvCachePayload,
     capability: &ModelKvCapability,
@@ -996,6 +972,7 @@ fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
         .and_then(|value| parse_cache_payload(&value))
         .unwrap_or(StageKvCachePayload::Auto);
     Some(StageKvCacheConfig {
+        exact_max_bytes: None,
         mode,
         payload,
         max_entries,
@@ -1652,30 +1629,6 @@ mod tests {
     }
 
     #[test]
-    fn exact_state_byte_limits_scale_the_ceiling_off_the_stage_budget() {
-        assert_eq!(
-            exact_state_byte_limits(1_024, None),
-            limits(1_024, 1_024 * EXACT_STATE_HARD_CAP_MULTIPLE)
-        );
-        // An unset stage budget stays unbounded, as it was before.
-        assert_eq!(exact_state_byte_limits(0, None), limits(0, 0));
-    }
-
-    #[test]
-    fn exact_state_byte_limits_honour_the_operator_override() {
-        assert_eq!(
-            exact_state_byte_limits(1_024, Some(" 4096 ")),
-            limits(1_024, 4_096)
-        );
-        assert_eq!(exact_state_byte_limits(1_024, Some("0")), limits(1_024, 0));
-        // A malformed override must not silently disable the ceiling.
-        assert_eq!(
-            exact_state_byte_limits(1_024, Some("not-a-number")),
-            limits(1_024, 1_024 * EXACT_STATE_HARD_CAP_MULTIPLE)
-        );
-    }
-
-    #[test]
     fn either_cache_kill_switch_disables_the_cache() {
         assert!(!cache_disabled_by_env(None, None));
         assert!(!cache_disabled_by_env(Some("on"), None));
@@ -2121,6 +2074,7 @@ mod tests {
     fn enabled_auto_config(model_id: &str) -> StageConfig {
         let mut config = test_config(model_id);
         config.kv_cache = Some(StageKvCacheConfig {
+            exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
             payload: StageKvCachePayload::Auto,
             max_entries: 512,
@@ -2154,6 +2108,7 @@ mod reserved_admission_harness {
             stage_id: "stage-0".to_string(),
             model_id: NAMESPACE.to_string(),
             kv_cache: Some(StageKvCacheConfig {
+                exact_max_bytes: None,
                 mode: StageKvCacheMode::LookupRecord,
                 payload: StageKvCachePayload::KvRecurrent,
                 max_entries: 8,

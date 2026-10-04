@@ -74,6 +74,12 @@ pub enum StageTransport {
 
 #[derive(Parser)]
 pub struct ServeCommandArgs {
+    /// Complete serving settings file (TOML); CLI overrides environment and file values.
+    #[arg(long)]
+    pub settings: Option<PathBuf>,
+    /// Print resolved settings and their sources without starting the server.
+    #[arg(long)]
+    pub print_effective_config: bool,
     /// Local model path or Hugging Face repository reference.
     #[arg(long, conflicts_with_all = ["model_path", "config"])]
     pub model: Option<String>,
@@ -81,10 +87,10 @@ pub struct ServeCommandArgs {
     #[arg(long)]
     pub prompt: bool,
     /// Binary stage transport for a prepared stage configuration.
-    #[arg(long, value_enum, requires = "config")]
+    #[arg(long, value_enum)]
     pub stage_transport: Option<StageTransport>,
     /// Run an internal stage without a public inference API.
-    #[arg(long, requires = "config")]
+    #[arg(long)]
     pub worker_only: bool,
     #[command(flatten)]
     #[command(next_help_heading = "Model and public API")]
@@ -96,6 +102,8 @@ pub struct ServeCommandArgs {
 
 #[derive(clap::Args)]
 pub struct ServeBinaryArgs {
+    #[arg(skip)]
+    pub settings: crate::serve_settings::ServeSettings,
     #[arg(skip)]
     pub config: PathBuf,
     #[arg(skip)]
@@ -212,6 +220,8 @@ pub struct ServeBinaryArgs {
 
 #[derive(clap::Args)]
 pub struct ServeOpenAiArgs {
+    #[arg(skip)]
+    pub settings: crate::serve_settings::ServeSettings,
     /// Prepared stage configuration; mutually exclusive with --model-path and --model.
     #[arg(long, conflicts_with = "model_path")]
     pub config: Option<PathBuf>,

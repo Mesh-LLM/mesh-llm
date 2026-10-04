@@ -36,6 +36,7 @@ mod legacy_scheduler_absence_tests {
     }
 }
 pub mod serving_hooks;
+pub mod settings;
 pub mod telemetry;
 pub mod tokenizer;
 

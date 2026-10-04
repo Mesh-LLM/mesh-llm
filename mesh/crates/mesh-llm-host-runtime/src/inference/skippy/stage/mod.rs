@@ -312,6 +312,7 @@ impl StageControlState {
         let config = stage_config(&effective_load, resolved_package.as_ref())?;
         let compute_meter = Arc::new(skippy_serving::compute_meter::StageComputeMeter::default());
         let server = skippy_serving::start_binary_stage(BinaryStageOptions {
+            tuning: Default::default(),
             config,
             topology: None,
             bind_addr,

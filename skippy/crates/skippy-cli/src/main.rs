@@ -6,11 +6,10 @@ mod local_resource_planning;
 mod native_logging;
 mod runtime;
 mod serve;
+mod serve_settings;
 
-#[cfg(unix)]
 use anyhow::Context;
 use anyhow::Result;
-use clap::Parser;
 use cli::{Cli, Command, OutputFormat};
 use std::io::IsTerminal;
 use std::sync::Arc;
@@ -73,6 +72,9 @@ async fn run_main(
     native_logs: Arc<native_logging::NativeDiagnostics>,
 ) -> Result<()> {
     let output = match (&cli.command, cli.output) {
+        (Command::Serve(args), OutputFormat::Auto) if args.print_effective_config => {
+            OutputFormat::Json
+        }
         (Command::Models { command }, _) if command.json() => OutputFormat::Json,
         (Command::Serve(_), OutputFormat::Auto) if !std::io::stdout().is_terminal() => {
             OutputFormat::Jsonl
@@ -98,7 +100,9 @@ async fn run_main(
         && cli.native_runtime.selection.is_none();
     let native_options = runtime::resolve_options(cli.native_runtime)?;
     #[cfg(feature = "dynamic-native-runtime")]
-    if matches!(&cli.command, Command::Serve(_) | Command::PlanSplit(_)) {
+    if matches!(&cli.command, Command::Serve(args) if !args.print_effective_config || args.public.config.is_none())
+        || matches!(&cli.command, Command::PlanSplit(_))
+    {
         runtime::prepare_native_runtime(&native_options, automatic_runtime).await?;
     }
     skippy_runtime::logging::set_native_log_sink(native_logs);
@@ -134,22 +138,25 @@ async fn run_main(
 }
 
 fn parse_cli() -> Result<Option<Cli>> {
-    match Cli::try_parse() {
+    match serve_settings::parse(std::env::args_os()) {
         Ok(cli) => Ok(Some(cli)),
         Err(error)
             if matches!(
-                error.kind(),
-                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+                error.downcast_ref::<clap::Error>().map(clap::Error::kind),
+                Some(clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion)
             ) =>
         {
-            error.print()?;
+            error
+                .downcast_ref::<clap::Error>()
+                .context("expected clap help")?
+                .print()?;
             Ok(None)
         }
         Err(error) => {
             if requested_jsonl_output() {
                 skippy_commands::console::install(skippy_commands::console::OutputMode::Jsonl);
             }
-            anyhow::bail!(error.to_string())
+            Err(error)
         }
     }
 }
