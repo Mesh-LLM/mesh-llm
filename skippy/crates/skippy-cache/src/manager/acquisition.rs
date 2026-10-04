@@ -131,7 +131,7 @@ fn canonical_cache_root(root: &Path) -> Result<PathBuf> {
         bail!("cache root must be absolute: {}", root.display());
     }
     crate::fsinfo::refuse_symlink(root)?;
-    fs::create_dir_all(root)
+    crate::fsinfo::create_dir_all_without_links(root)
         .with_context(|| format!("failed to create cache root {}", root.display()))?;
     fs::canonicalize(root)
         .with_context(|| format!("failed to resolve cache root {}", root.display()))
@@ -170,4 +170,24 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn acquisition_rejects_symlink_roots_and_parents_including_dot_aliases() {
+        let directory = test_root("redirected-parent");
+        let target = directory.join("target");
+        let redirected = directory.join("redirected");
+        fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, &redirected).unwrap();
+        for root in [
+            redirected.clone(),
+            redirected.join("."),
+            redirected.join("cache"),
+            redirected.join("cache").join("."),
+        ] {
+            let error = L3CacheManager::acquire(&root, StoreLimits::new(1024, 0)).unwrap_err();
+            assert!(format!("{error:#}").contains("symlink"), "{error:#}");
+            assert!(!target.join("cache").exists());
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

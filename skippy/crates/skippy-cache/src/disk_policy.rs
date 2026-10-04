@@ -187,9 +187,13 @@ mod tests {
         let barrier = std::sync::Barrier::new(8);
         let owners = std::thread::scope(|scope| {
             let handles = (0..8)
-                .map(|_| {
+                .map(|index| {
                     let barrier = &barrier;
-                    let root = directory.path().to_path_buf();
+                    let root = if index % 2 == 0 {
+                        directory.path().to_path_buf()
+                    } else {
+                        directory.path().join(".")
+                    };
                     scope.spawn(move || {
                         barrier.wait();
                         acquire_disk_cache(&root, DiskCacheBudget::Auto, 0)
