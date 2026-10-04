@@ -1487,3 +1487,12 @@ live hardware qualification. `run-family` now supervises Rust `execute-run`
 with a verified local GGUF path and retained immutable matrix URI. Manual
 comparative caller migration remains open. The explicitly
 retained DuckDB trajectory reader is the only approved replay reader exception.
+
+Snapshot promotion is owned by the native `model-package` component. Required
+`ci-automation-contracts` runs `ci-snapshot-promotion-contracts` before its terminal
+xtask harness. This selects package library tests and the actual promoter CLI
+tests, including immutable source reads, parent-bound atomic publication and
+embedded prepare failure propagation. The embedded layer-package job builds the
+promoter through `just snapshot-promoter-release-build`; existing optional HF
+SDK operations remain transitional. Local fixtures do not certify live HF jobs
+or publication.

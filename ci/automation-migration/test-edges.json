@@ -778,20 +778,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_promote_layer_package_snapshot.py",
-      "members": [
-        [
-          13,
-          "3ed583c8060e831e",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/promote_layer_package_snapshot.py",
-          "fixed MODULE_PATH"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_qa_agent_tool_call_reliability.py",
       "members": [
         [
@@ -1320,7 +1306,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "f8e637e028fd93b8f496f02e1caa9dbbd13a98331652e420a9f659dcc3a27992",
+  "observed_source_sha256": "c9009bd9b751306709e6d325ddb26eab0a19acb09e5d1d41402ba5660175be59",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9851,6 +9837,64 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/family-planner-retirement-coverage.json",
       "sha256": "ed57a0f8701eafdbe65cdecdec924c0d15e8e78b91992db1ef12e49391a6c511"
+    }
+  },
+  "snapshot_promotion_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 121,
+    "core_modules_after": 58,
+    "required_xtask_targets": 108,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/snapshot-promotion-retirement-coverage.json",
+      "sha256": "8aaf859466e34ae5a47ac17ad50b41bdc6f4233da0e40106420a1d67f5294da9"
+    },
+    "current_test_tree": {
+      "sha256": "c9009bd9b751306709e6d325ddb26eab0a19acb09e5d1d41402ba5660175be59",
+      "paths": 51
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "70971879db299e13de27eae29bfdbff8e27914be84f9f9bdd717d6010bde6807",
+      "roster_line": 24,
+      "count": 58
+    },
+    "supersedes": "Legacy snapshot helper ownership and roster snapshots are historical; native package component preserves publishing intent.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "source_head": "ca8d4e21e4a17726630e59bdf0cabcbe6e1a6489",
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-postimage-v5-normal.log",
+        "sha256": "9b76a8108a52fecea01fe3a99c81f62b58f48ea0f64c255297da0116233aeca0",
+        "targets": 111,
+        "passed": 4333,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 868,
+          "passed": 854,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 363.015
+        }
+      },
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-receipts.json",
+        "sha256": "dca7a6ff9ef1ebecc4e710871c4cb9058c9d3d69e63ad45d424b143c2f9b8aa5"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-postimage-v5-receipts.json",
+        "sha256": "599fb77317b908a4a762dd372a340d70fb28d866ddb520fb3fbf6cc546375960"
+      },
+      "limits": "Native component, actual CLI, loopback HTTP and extracted embedded caller fixtures only; no live HF job/publication, actual native backend/model/SDK or protected executor rollout qualified."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/snapshot-promotion-retirement-coverage.json",
+      "sha256": "ebcb4208215a3ab2417b1eaa603917c14067001846a3d44bdc2f04e43e3d654f"
     }
   }
 }

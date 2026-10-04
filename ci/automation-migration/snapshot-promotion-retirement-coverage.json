@@ -1,0 +1,424 @@
+{
+  "status": "LOCAL_POSTIMAGE_QUALIFIED",
+  "source_head": "ca8d4e21e4a17726630e59bdf0cabcbe6e1a6489",
+  "original_intents": 2,
+  "method_maps": [
+    {
+      "method": "test_partial_or_failed_replacement_leaves_main_readable",
+      "owners": [
+        {
+          "path": "crates/model-package/src/snapshot_promotion/tests.rs",
+          "symbol": "partial_staging_leaves_main_artifacts_and_manifest_unchanged"
+        },
+        {
+          "path": "crates/model-package/src/snapshot_promotion/tests.rs",
+          "symbol": "incomplete_staging_cannot_partially_publish_main"
+        },
+        {
+          "path": "crates/model-package/src/snapshot_promotion/transport_tests.rs",
+          "symbol": "real_transport_refuses_catalog_identity_mismatch_before_commit"
+        },
+        {
+          "path": "crates/model-package/tests/snapshot_promotion_cli.rs",
+          "symbol": "embedded_prepare_stops_on_failed_child_even_with_two_plausible_state_lines"
+        }
+      ],
+      "status": "LOCAL_POSTIMAGE_QUALIFIED"
+    },
+    {
+      "method": "test_complete_snapshot_promotes_in_one_parent_guarded_commit",
+      "owners": [
+        {
+          "path": "crates/model-package/src/snapshot_promotion/tests.rs",
+          "symbol": "complete_staging_promotes_artifacts_and_manifest_in_one_parent_guarded_commit"
+        },
+        {
+          "path": "crates/model-package/src/snapshot_promotion/transport_tests.rs",
+          "symbol": "real_transport_pins_reads_and_sends_one_parent_bound_commit"
+        },
+        {
+          "path": "crates/model-package/tests/snapshot_promotion_cli.rs",
+          "symbol": "confirmed_prepare_emits_exact_consumed_lines_and_branches_from_parent"
+        },
+        {
+          "path": "crates/model-package/tests/snapshot_promotion_cli.rs",
+          "symbol": "confirmed_promote_commits_once_then_cleans_staging_and_warns_on_cleanup_failure"
+        }
+      ],
+      "status": "LOCAL_POSTIMAGE_QUALIFIED"
+    }
+  ],
+  "original_receipt": {
+    "path": ".omo/evidence/resume-20261002/snapshot-promotion-original-intents.log",
+    "status": "PASS_2_UNCHANGED_ORIGINAL_TESTS",
+    "sha256": "fe008aab760eb03ccac7578e2b84665b1b50b0d7f855b17a0c7a8d039435b658"
+  },
+  "focused_qualification": {
+    "status": "PASS_FOCUSED",
+    "head": "ca8d4e21e4a17726630e59bdf0cabcbe6e1a6489",
+    "receipts": [
+      {
+        "name": "fmt",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "component",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-component.log",
+        "sha256": "c9fd2fa996382e1270af317f44e409682b1799acaca95842e2af558640bc61c7"
+      },
+      {
+        "name": "migration-cli",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-migration-cli.log",
+        "sha256": "f9e6c43603bd438159050a2c264327f438ca1197fc3858bb852dec8737cd68d3"
+      },
+      {
+        "name": "just-layout",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-just-layout.log",
+        "sha256": "514aa3ffab94064e0fd9742c0adba8283491e45c8329dba7e52a2f63466a5706"
+      },
+      {
+        "name": "daemon-cli",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-daemon-cli.log",
+        "sha256": "2f9113410580019fc549def79c8795d3f72c9a3fe0e402ba586ed4d75cec4aa7"
+      },
+      {
+        "name": "quality",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-quality.log",
+        "sha256": "f224a365de96d29d1fc38620896e57a46cadfeb16893030ea71df853a877bf69"
+      },
+      {
+        "name": "inventory-unit",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-inventory-unit.log",
+        "sha256": "5455b652efc11232545e690dbe09c475bea87ffaa47dc4e9e6a06c6a55607ae1"
+      },
+      {
+        "name": "clippy",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-clippy.log",
+        "sha256": "6b11b0d53a5d95f5eba50b3e549d8457078cf475b389c5f8ff28aa806bff04b5"
+      },
+      {
+        "name": "inventory",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-inventory.log",
+        "sha256": "7a3baea649274825feb69d16ffcd493f70dc21cb63610003c903fe54974fb90a"
+      },
+      {
+        "name": "policy",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-policy.log",
+        "sha256": "f58f0dfb796d497a2dddae3e6723a440620642de5c06f17af6be9f8cf36245ff"
+      }
+    ]
+  },
+  "owner_sources": [
+    {
+      "path": "crates/model-package/Cargo.toml",
+      "sha256": "71011b0561340a7780432edcf7f0ec712bed02c52b11064a9c6a86abf89d8cf3",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/bin/promote-layer-package-snapshot.rs",
+      "sha256": "9051b95f37813f844fc3e1037c0dbe8d76f8d41d0ef6c99064cfd46febbcb748",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/lib.rs",
+      "sha256": "ef26ac0c2b50fcb43851d6d04e5c4a3ff5bae63c1090b081ce4892c0d95d2335",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/script.rs",
+      "sha256": "8a19bf1a3f8efbc96f8a4b2951cdccba364fd633dd63e21766e57b3f3006cc8b",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/scripts/split-model-job.sh",
+      "sha256": "ac50516d3b257955e2dba74a339cf5d75f6ff469da39561fa2a5793e531c3081",
+      "mode": 493
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/cli.rs",
+      "sha256": "fcb3e83998bb3ce1b6ca77e395b740d79ccdebb9c967d241979f774b2f1aace7",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/commit_payload.rs",
+      "sha256": "e2b05f55aa84f2290853465fe6f0ff55bb5bf0680b3f4881dd70918a49961a2b",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/fixtures.rs",
+      "sha256": "dee8ffff9eb6665df7048aafee9ccb089f49279c2024344ee0c7570b0ea597bc",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/hub_fixture.rs",
+      "sha256": "d40a90ccf54be9f1a13f2f14a782a54ad43e706db3812ee20a88fe2d659baf7d",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/mod.rs",
+      "sha256": "4dbe5ced1aba43e23182cbc6de40a6f665060f7e25e7762ccedbcfee7ec61bc4",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/policy.rs",
+      "sha256": "b3e351a6c7dd0e6c2a1c8f7de9c52e4dcd74d8a1ee00c4d898548b96e79dd8fc",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/tests.rs",
+      "sha256": "b1265492e39f81590569b47569dd12b6af8d3657584f53827a84bd123c10a427",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/transport.rs",
+      "sha256": "6954231f09d711f753a2a1d7bde85a0fa5f942a32c2c482d22b67419c5c440b3",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/transport_tests.rs",
+      "sha256": "2b4256a8f8f0029043647417f9c2804efe40ac45941f5d4deda8bddf770f21cc",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/tests/snapshot_promotion_cli.rs",
+      "sha256": "a6791fefbf7b96c01afe8bb2b1bb21b99542c603081427209bf9d1f390ad66bd",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts.rs",
+      "sha256": "99c9930c8f8b085c09374943813404e1a9ef623f58be42beec5d3bb4919ea3e8",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts_tests.rs",
+      "sha256": "56e164609896396fd356218b168034c40ccf0be28f7876ce19b922516f86f622",
+      "mode": 420
+    },
+    {
+      "path": "crates/model-package/src/snapshot_promotion/file_payload_tests.rs",
+      "sha256": "9057d523b6cdb447478db5b901fc24430f45ac75a20d483278709309e4eb323e",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/just_layout_contracts/recipe-ownership.json",
+      "sha256": "e78fcac7b57dbac754c291cefc4b5c08b28128216ecf0d472a405047b642f2d5",
+      "mode": 420
+    },
+    {
+      "path": "tools/xtask/tests/migration_lifecycle/daemon/cli.rs",
+      "sha256": "ac5c535df08974dc366aa11595b2cc1fad27daa31ff003d4556cfec286c6ed9f",
+      "mode": 420
+    }
+  ],
+  "retired_sources": [
+    {
+      "path": "scripts/promote_layer_package_snapshot.py",
+      "sha256": "aab6fc3ecfdda9a51a8492937b0048427bb07816ea6bf9610139cfb7d13e7d9a"
+    },
+    {
+      "path": "scripts/tests/test_promote_layer_package_snapshot.py",
+      "sha256": "4c167e92d0c2722a6bdd9776085c58972e0fa815ccb2ebf72a66358f2ccd0c8a"
+    }
+  ],
+  "retired_inventory": [
+    {
+      "classification": "HF layer-package publishing helper",
+      "deletion_condition": "Document authorized optional caller and local dependencies or port generic publishing plan.",
+      "exception": "Remote publishing helper may remain only as isolated optional workflow; policy/artifact logic is migration scope.",
+      "path": "scripts/promote_layer_package_snapshot.py",
+      "phase": 5,
+      "replacement_owner": "tools/xtask artifact/HF job adapter",
+      "required": false
+    },
+    {
+      "classification": "generic HF artifact test",
+      "deletion_condition": "Promotion planning and manifest tests migrated; test execution remains local/read-only.",
+      "exception": null,
+      "path": "scripts/tests/test_promote_layer_package_snapshot.py",
+      "phase": 2,
+      "replacement_owner": "tools/xtask artifact/HF tests",
+      "required": true
+    }
+  ],
+  "retired_test_groups": [
+    {
+      "file": "scripts/tests/test_promote_layer_package_snapshot.py",
+      "members": [
+        [
+          13,
+          "3ed583c8060e831e",
+          1,
+          "dynamic-import",
+          "import",
+          "scripts/promote_layer_package_snapshot.py",
+          "fixed MODULE_PATH"
+        ]
+      ]
+    }
+  ],
+  "retired_ownership": [
+    {
+      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
+      "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
+      "gate": "Legacy just ci-validate and relevant workflow/platform lane",
+      "module": "scripts/tests/test_promote_layer_package_snapshot.py",
+      "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
+      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
+      "sha256": "4c167e92d0c2722a6bdd9776085c58972e0fa815ccb2ebf72a66358f2ccd0c8a",
+      "test_method_count": 2,
+      "test_methods": [
+        "test_complete_snapshot_promotes_in_one_parent_guarded_commit",
+        "test_partial_or_failed_replacement_leaves_main_readable"
+      ]
+    }
+  ],
+  "required_component_recipe": {
+    "path": "just/ci.just",
+    "recipe": "ci-snapshot-promotion-contracts",
+    "required_from": "ci-automation-contracts",
+    "targets": [
+      "model-package library",
+      "snapshot_promotion_cli"
+    ],
+    "tests": 34
+  },
+  "native_protocol": {
+    "immutable_staging_reads": true,
+    "complete_identity_validation": true,
+    "one_parent_bound_commit": true,
+    "lfs_oid_and_size": true,
+    "uncertain_outcome_retains_staging": true,
+    "cleanup_warning_after_confirmed_success": true
+  },
+  "limits": [
+    "Local finite HTTP fixtures and actual CLI/caller only; no live HF publication, job execution, bucket upload or remote mutation performed.",
+    "Required Python closure remains incomplete with 58 transitional core modules.",
+    "Actual platforms/backends/products/models/live SDK and protected rollout remain incomplete."
+  ],
+  "previous_focused_qualification": {
+    "status": "PENDING_BOOTSTRAP_AND_PACKAGING_REVISION",
+    "previous_receipts": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-pre-bootstrap-focused-receipts.json"
+  },
+  "packaging_proof": {
+    "status": "PASS_LOCAL_ACTUAL_DEBUG_BINARY_CALLER_FIXTURE",
+    "symbol": "embedded_native_helper_survives_build_workspace_cleanup",
+    "path": "crates/model-package/tests/snapshot_promotion_cli.rs",
+    "limits": "Finite local caller fixture uses an actual debug binary; does not establish release compilation or live HF job execution."
+  },
+  "streamed_payload": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "bounded_chunk_bytes": 65536,
+    "aggregate_artifact_limit": false,
+    "regular_content_spooled": true,
+    "payload_spooled_before_post": true,
+    "exact_content_length": true,
+    "regressions": [
+      "file_rows_preserve_binary_bytes_across_chunks_and_escape_paths",
+      "regular_files_above_old_individual_and_aggregate_limits_use_file_output"
+    ],
+    "component_receipt": {
+      "exit_code": 0,
+      "session_id": 99577,
+      "log": ".omo/evidence/resume-20261002/snapshot-promotion-streaming-component-v2.log",
+      "sha256": "543641d7c8bef24fefdfb8bbc185b4a029f7384f2487f0ace30dc5267a82ad8c",
+      "library_passed": 28,
+      "cli_passed": 6
+    },
+    "full_gate_receipt": {
+      "path": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-postimage-v5-receipts.json",
+      "sha256": "599fb77317b908a4a762dd372a340d70fb28d866ddb520fb3fbf6cc546375960"
+    }
+  },
+  "recipe_roster_update": {
+    "path": "tools/xtask/tests/migration_lifecycle/just_layout_contracts/recipe-ownership.json",
+    "recipes": {
+      "just/ci.just": "ci-snapshot-promotion-contracts",
+      "just/skippy.just": "snapshot-promoter-release-build"
+    },
+    "intent": "Preserve exact semantic recipe ownership and native private-visibility checks while adding the required component test and build entrypoints."
+  },
+  "daemon_timeout_diagnostics": {
+    "path": "tools/xtask/tests/migration_lifecycle/daemon/cli.rs",
+    "production_behavior_changed": false,
+    "deadlines_changed": false,
+    "assertions_weakened": false,
+    "milestones": [
+      "audit.json",
+      "startup.armed",
+      "models.armed",
+      "handler"
+    ],
+    "unresolved_cause": "The full run failed before observing status; standalone body-excess and all 28 CLI cases subsequently passed. Cause remains unproven."
+  },
+  "pid_nonce": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "owner": "crates/model-package/tests/snapshot_promotion_cli.rs",
+    "symbol": "embedded_prepare_stops_on_failed_child_even_with_two_plausible_state_lines",
+    "intent": "Actual extracted prepare caller passes timestamp plus calling Bash PID and preserves failed child exit 7.",
+    "negative_receipt": {
+      "path": ".omo/evidence/resume-20261002/snapshot-promotion-pid-nonce-negative.log",
+      "sha256": "7948972cdb94b7813c22712e0e046d079b37797d848d60acb4c3723dd302fbce"
+    },
+    "positive_receipt": {
+      "path": ".omo/evidence/resume-20261002/snapshot-promotion-pid-nonce-positive.log",
+      "sha256": "e1b19d07d846cdff65ad7cc2f2eea3f0b9f9999cad8bb9bb50c27c5e7dbbd29e"
+    },
+    "full_gate_receipt": {
+      "path": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-postimage-v5-receipts.json",
+      "sha256": "599fb77317b908a4a762dd372a340d70fb28d866ddb520fb3fbf6cc546375960"
+    }
+  },
+  "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+  "root_postimage_qualification": {
+    "status": "PASS_LOCAL_POSTIMAGE",
+    "source_head": "ca8d4e21e4a17726630e59bdf0cabcbe6e1a6489",
+    "normal": {
+      "name": "normal",
+      "status": "PASS",
+      "exit_code": 0,
+      "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-postimage-v5-normal.log",
+      "sha256": "9b76a8108a52fecea01fe3a99c81f62b58f48ea0f64c255297da0116233aeca0",
+      "targets": 111,
+      "passed": 4333,
+      "failed": 0,
+      "ignored": 2,
+      "legacy": {
+        "run": 868,
+        "passed": 854,
+        "failed": 0,
+        "skipped": 14,
+        "seconds": 363.015
+      }
+    },
+    "focused_receipts": {
+      "path": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-receipts.json",
+      "sha256": "dca7a6ff9ef1ebecc4e710871c4cb9058c9d3d69e63ad45d424b143c2f9b8aa5"
+    },
+    "aggregate_receipts": {
+      "path": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-postimage-v5-receipts.json",
+      "sha256": "599fb77317b908a4a762dd372a340d70fb28d866ddb520fb3fbf6cc546375960"
+    },
+    "limits": "Native component, actual CLI, loopback HTTP and extracted embedded caller fixtures only; no live HF job/publication, actual native backend/model/SDK or protected executor rollout qualified."
+  }
+}

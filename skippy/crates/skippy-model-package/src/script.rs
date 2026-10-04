@@ -214,7 +214,7 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains("Uploaded and removed"));
         assert!(!EMBEDDED_SCRIPT.contains("api.upload_folder"));
         assert!(EMBEDDED_SCRIPT.contains("TARGET_UPLOAD_REVISION"));
-        assert!(EMBEDDED_SCRIPT.contains("promote_layer_package_snapshot.py"));
+        assert!(EMBEDDED_SCRIPT.contains("promote-layer-package-snapshot"));
         assert!(EMBEDDED_SCRIPT.contains("Atomically promoted replacement snapshot to main"));
         assert!(EMBEDDED_SCRIPT.contains(r#"MOUNTED_SOURCE_PATH="/source/${SOURCE_FILE}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"WRITE_PACKAGE_INPUT="$MOUNTED_SOURCE_PATH""#));

@@ -153,3 +153,7 @@ competitive-benchmark-build:
 # Run the skippy benchmark/debug telemetry collector.
 metrics-server db="/tmp/mesh-metrics.duckdb" http_addr="127.0.0.1:18080" otlp_addr="127.0.0.1:14317" *ARGS="": metrics-server-build
     target/debug/metrics-server serve --db "{{ db }}" --http-addr "{{ http_addr }}" --otlp-grpc-addr "{{ otlp_addr }}" {{ ARGS }}
+
+# Native publisher helper for the isolated layer-package job.
+snapshot-promoter-release-build:
+    just with-lld cargo build --release --locked -p skippy-model-package --bin promote-layer-package-snapshot

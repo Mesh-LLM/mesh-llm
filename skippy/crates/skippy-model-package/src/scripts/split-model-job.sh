@@ -78,7 +78,7 @@ VENV_DIR="${VENV_DIR:-${LOCAL_WORK_DIR}/venv}"
 ARTIFACT_UPLOAD_SCRIPT="${ARTIFACT_UPLOAD_SCRIPT:-${LOCAL_WORK_DIR}/upload-package-artifact.py}"
 SPECULATIVE_SUMMARY_HELPER="${SPECULATIVE_SUMMARY_HELPER:-${LOCAL_WORK_DIR}/speculative-summary.py}"
 ARTIFACT_UPLOAD_HOOK="${ARTIFACT_UPLOAD_HOOK:-${LOCAL_WORK_DIR}/upload-package-artifact.sh}"
-SNAPSHOT_PROMOTER="${SNAPSHOT_PROMOTER:-${TOOL_DIR}/promote_layer_package_snapshot.py}"
+SNAPSHOT_PROMOTER="${SNAPSHOT_PROMOTER:-${TOOL_DIR}/promote-layer-package-snapshot}"
 CARGO_HOME="${CARGO_HOME:-${LOCAL_WORK_DIR}/cargo-home}"
 RUSTUP_HOME="${RUSTUP_HOME:-${LOCAL_WORK_DIR}/rustup-home}"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${LOCAL_WORK_DIR}/cargo-target}"
@@ -181,7 +181,7 @@ PYTHON
 # ─── Build tools ──────────────────────────────────────────────────────────
 echo "=== [1/9] Installing build dependencies ==="
 apt-get update -qq && apt-get install -y -qq \
-    cmake git curl build-essential pkg-config libssl-dev \
+    cmake git curl build-essential pkg-config libssl-dev sudo \
     python3-pip python3-venv > /dev/null 2>&1
 apt-get clean
 rm -rf /var/lib/apt/lists/*
@@ -190,6 +190,8 @@ echo "=== [2/9] Installing Rust ==="
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y > /dev/null 2>&1
 # shellcheck source=/dev/null
 source "${CARGO_HOME}/env"
+# The native promoter build uses the repository Just facade.
+cargo install --locked just --version 1.58.0 > /dev/null 2>&1
 
 # Fetch a raw commit SHA with retries: GitHub's ref advertisement for
 # allow-any-SHA fetches ("upload-pack: not our ref") lags behind the push for
@@ -222,6 +224,9 @@ else
     git checkout --detach FETCH_HEAD
 fi
 
+# Install the canonical compiler-cache/linker prerequisites for Just builds.
+just bootstrap-build-tools
+
 # Full clone needed for git-am patches in prepare-llama
 sed -i 's/--filter=blob:none //' scripts/prepare-llama.sh
 echo "  Running prepare-llama.sh..."
@@ -247,7 +252,9 @@ if [ ! -f "$SLICER" ]; then
     exit 1
 fi
 cp "$SLICER" "${TOOL_DIR}/skippy-package-builder"
-cp scripts/promote_layer_package_snapshot.py "$SNAPSHOT_PROMOTER"
+just snapshot-promoter-release-build
+cp "${CARGO_TARGET_DIR}/release/promote-layer-package-snapshot" "$SNAPSHOT_PROMOTER"
+chmod +x "$SNAPSHOT_PROMOTER"
 SLICER="${TOOL_DIR}/skippy-package-builder"
 chmod +x "$SLICER"
 cd /
@@ -286,12 +293,13 @@ PYTHON
 TARGET_UPLOAD_REVISION="main"
 TARGET_MAIN_PARENT=""
 if [ "$REPUBLISH" = "true" ]; then
-    mapfile -t SNAPSHOT_STATE < <(
-        "$VENV_DIR/bin/python3" "$SNAPSHOT_PROMOTER" prepare \
+    SNAPSHOT_OUTPUT="$(
+        "$SNAPSHOT_PROMOTER" prepare --confirm \
             --repo "$TARGET_REPO" \
             --source-revision "$SOURCE_REVISION" \
             --token "$(date -u +%Y%m%d%H%M%S)-$$"
-    )
+    )"
+    mapfile -t SNAPSHOT_STATE <<< "$SNAPSHOT_OUTPUT"
     TARGET_UPLOAD_REVISION="${SNAPSHOT_STATE[0]:?missing staging revision}"
     TARGET_MAIN_PARENT="${SNAPSHOT_STATE[1]:?missing target main parent}"
     echo "  Staging replacement on ${TARGET_UPLOAD_REVISION} from ${TARGET_MAIN_PARENT}"
@@ -595,7 +603,7 @@ print(f'    Schema: {manifest["schema_version"]}')
 PYTHON
 
 if [ "$REPUBLISH" = "true" ]; then
-    "$VENV_DIR/bin/python3" "$SNAPSHOT_PROMOTER" promote \
+    "$SNAPSHOT_PROMOTER" promote --confirm \
         --repo "$TARGET_REPO" \
         --manifest "$PACKAGE_DIR/model-package.json" \
         --staging-revision "$TARGET_UPLOAD_REVISION" \
