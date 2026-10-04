@@ -240,6 +240,9 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     tcp_stream.write_all(&buffered).await?;
     route_observer.capture_response_unavailable(ArtifactUnavailableReason::ResponseBodyNotBounded);
     if let Err(err) = tokio::io::copy(reader, &mut *tcp_stream).await {
+        tcp_stream.record_exchange_outcome("transport_error");
+        tcp_stream
+            .finish_wire_bytes(openai_frontend::wire_bytes::WireBytesIncomplete::TransportError);
         tracing::debug!("response relay ended after headers were committed: {err}");
     }
     let _ = tcp_stream.shutdown().await;

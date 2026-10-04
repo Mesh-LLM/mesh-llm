@@ -378,10 +378,6 @@ should_skip_initial_dry_run() {
 }
 
 publish_crates=(
-    mesh-llm-plugin
-    mesh-llm-wallet
-    mesh-llm-payments-types
-    mesh-llm-payments
     mesh-llm-identity
     skippy-tokenizer
     mesh-llm-protocol
@@ -412,6 +408,10 @@ publish_crates=(
     mesh-llm-release-footer
     mesh-llm-native-runtime
     mesh-llm-config
+    mesh-llm-plugin
+    mesh-llm-wallet
+    mesh-llm-payments-types
+    mesh-llm-payments
     mesh-llm-ui
     mesh-llm-console-server
     mesh-llm-tui

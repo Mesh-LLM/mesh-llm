@@ -14,6 +14,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 mod commands;
+mod exchange_grants;
 
 use commands::{OwnedNodeCommand, OwnedNodeCommandDeadline, OwnedNodeCommandExecutionShape};
 
@@ -829,6 +830,14 @@ impl Node {
             }
         };
 
+        if matches!(
+            &result,
+            ApplyResult::Applied { .. }
+                | ApplyResult::AppliedWithRestartRequired { .. }
+                | ApplyResult::PersistedWithRevisionTrackingError { .. }
+        ) {
+            self.refresh_plugin_exchange_grants().await;
+        }
         let envelope = match result {
             ApplyResult::Applied {
                 revision,

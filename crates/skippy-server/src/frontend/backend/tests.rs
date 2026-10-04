@@ -1197,7 +1197,9 @@ fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
 // but the hook lifecycle itself never touches `self.runtime` — it only reads
 // `self.hook_policy` — so it's fully exercisable on a modelless backend.
 
-fn hooks_test_backend(hook_policy: Option<Arc<dyn OpenAiHookPolicy>>) -> StageOpenAiBackend {
+pub(super) fn hooks_test_backend(
+    hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+) -> StageOpenAiBackend {
     let config: skippy_protocol::StageConfig = serde_json::from_value(json!({
         "run_id": "hooks-test",
         "topology_id": "hooks-test",

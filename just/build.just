@@ -94,3 +94,27 @@ build-runtime backend="" cuda_arch="" rocm_arch="":
     LLAMA_STAGE_CUDA_ARCHITECTURES="{{ cuda_arch }}" \
       LLAMA_STAGE_AMDGPU_TARGETS="{{ rocm_arch }}" \
       scripts/package-native-runtime.sh --build --backend "$backend"
+
+# Build the installable host-private OpenAI lifecycle observer exemplar.
+build-openai-exchange-exemplar:
+    @just with-lld cargo build -p mesh-llm-plugin --example openai-exchange-observer
+
+# Produce a local-install archive, with the same plugin.toml/executable layout as releases.
+[unix]
+package-openai-exchange-exemplar: build-openai-exchange-exemplar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    package_root="$(mktemp -d)"
+    trap 'rm -rf "$package_root"' EXIT
+    plugin_name=openai-exchange-observer
+    mkdir -p "$package_root/$plugin_name" dist
+    cp "target/debug/examples/$plugin_name" "$package_root/$plugin_name/$plugin_name"
+    printf 'name = "%s"\nversion = "1.0.0"\n' "$plugin_name" > "$package_root/$plugin_name/plugin.toml"
+    "target/debug/examples/$plugin_name" --manifest > "$package_root/$plugin_name/plugin-manifest.json"
+    tar -czf "dist/$plugin_name.tar.gz" -C "$package_root" "$plugin_name"
+
+# Run installed-process lifecycle conformance over loopback HTTP and QUIC.
+[unix]
+test-openai-exchange-conformance: package-openai-exchange-exemplar
+    @just with-lld cargo test -p mesh-llm-plugin --example openai-exchange-observer
+    @just with-lld cargo test -p mesh-llm-host-runtime --lib --no-default-features installed_ -- --ignored --test-threads=1

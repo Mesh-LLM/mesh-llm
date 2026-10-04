@@ -463,6 +463,7 @@ mod tests {
             request_object_request_ids: Vec::new(),
             response_adapter: ResponseAdapter::None,
             correlation_id: None,
+            exchange_observation_id: None,
         };
         // The requesting node forwards the advertised ID; the serving node
         // must translate it back to its content-addressed runtime key.

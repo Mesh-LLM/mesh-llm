@@ -121,6 +121,7 @@ test-all:
     just with-lld cargo test --package skippy-server --no-default-features --lib
     echo ""
     echo "=== 6/11 Plugin author exemplar ==="
+    just test-openai-exchange-conformance
     just with-lld cargo run --quiet --manifest-path docs/plugins/exemplars/web-ui/Cargo.toml -- --print-package-manifest > target/web-ui-exemplar-manifest.json
     diff -u <(jq -S . docs/plugins/exemplars/web-ui/plugin.package.json) <(jq -S . target/web-ui-exemplar-manifest.json)
     node --check docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.js

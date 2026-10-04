@@ -153,6 +153,7 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         plugin_name.clone(),
                                         request_id,
                                         request,
+                                        mesh_tx.clone(),
                                         rpc_bridge.clone(),
                                         outbound_tx.clone(),
                                     );
@@ -578,10 +579,25 @@ fn forward_plugin_request(
     plugin_name: String,
     request_id: u64,
     request: super::proto::RpcRequest,
+    mesh_tx: mpsc::Sender<PluginMeshEvent>,
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     outbound_tx: mpsc::Sender<super::proto::Envelope>,
 ) {
     tokio::spawn(async move {
+        if super::identity_services::is_identity_method(&request.method) {
+            let payload =
+                super::identity_transport::forward_identity_service(&plugin_name, request, mesh_tx)
+                    .await;
+            let _ = outbound_tx
+                .send(super::proto::Envelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    plugin_id: plugin_name,
+                    request_id,
+                    payload: Some(payload),
+                })
+                .await;
+            return;
+        }
         let bridge = rpc_bridge.lock().await.clone();
         let payload = match bridge {
             Some(bridge) => match bridge

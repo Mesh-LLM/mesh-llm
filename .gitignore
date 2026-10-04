@@ -58,3 +58,4 @@ sdk/swift/Generated/MeshLLMFFI.xcframework/
 /docs/crates/
 /docs/pagefind/
 /website/src/assets/site.generated.css
+/dist/openai-exchange-observer.tar.gz

@@ -23,6 +23,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 pub(crate) struct ExternalPlugin {
     spec: ExternalPluginSpec,
+    installed_artifact_sha256: Option<String>,
     web_ui_enabled: Arc<Mutex<Option<bool>>>,
     web_ui_primary_tab: Arc<Mutex<Option<bool>>>,
     instance_id: String,
@@ -61,6 +62,19 @@ async fn stop_runtime(runtime: PluginRuntime, reason: &str) {
 }
 
 impl ExternalPlugin {
+    pub(crate) fn installed_artifact_sha256(&self) -> Option<&str> {
+        self.installed_artifact_sha256.as_deref()
+    }
+    pub fn exchange_grant(&self) -> Option<&mesh_llm_config::OpenAiExchangeGrant> {
+        self.spec.openai_exchange_grant.as_deref()
+    }
+
+    pub(crate) fn installed_metadata(
+        &self,
+    ) -> Option<&mesh_llm_plugin_manager::InstalledPluginMetadata> {
+        self.spec.installed_metadata.as_ref()
+    }
+
     pub(crate) async fn spawn(
         spec: &ExternalPluginSpec,
         instance_id: String,
@@ -71,8 +85,24 @@ impl ExternalPlugin {
         in_process: Option<super::InProcessPluginRunner>,
     ) -> Result<Self> {
         let in_process = in_process.filter(|_| spec.command.is_empty());
+        let installed_artifact_sha256 = if spec
+            .openai_exchange_grant
+            .as_ref()
+            .is_some_and(|grant| grant.read_identity_bundle || grant.delegate_signing_key)
+        {
+            match &spec.installed_metadata {
+                Some(metadata) => Some(
+                    super::identity_registration::artifact_sha256(&metadata.executable_path())
+                        .await?,
+                ),
+                None => None,
+            }
+        } else {
+            None
+        };
         let plugin = Self {
             spec: spec.clone(),
+            installed_artifact_sha256,
             web_ui_enabled: Arc::new(Mutex::new(spec.web_ui_enabled)),
             web_ui_primary_tab: Arc::new(Mutex::new(spec.web_ui_primary_tab)),
             instance_id,
@@ -285,6 +315,7 @@ impl ExternalPlugin {
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                     host_capabilities: vec![
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
+                        mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
                     ],
                 }),
                 Some(self.spec.startup.init_timeout()),
@@ -337,6 +368,18 @@ impl ExternalPlugin {
                 init.plugin_protocol_version,
                 PROTOCOL_VERSION
             );
+        }
+        if let Some(manifest) = &init.manifest {
+            if manifest.openai_exchange_hook.as_ref().is_some_and(|hook| {
+                hook.request_body || hook.effective_request_body || hook.response_body
+            }) {
+                tracing::warn!(plugin = %self.spec.name,
+                    "plugin requests OpenAI prompt or response body access; only explicit host grants authorize observation");
+            }
+            mesh_llm_plugin::openai_exchange::negotiate_openai_exchange(
+                manifest.openai_exchange_hook.as_deref(),
+                self.spec.openai_exchange_grant.as_deref(),
+            )?;
         }
         Ok(())
     }
@@ -1075,6 +1118,7 @@ pub(crate) mod tests {
             install_path,
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
+                openai_exchange_hook: None,
                 config_schema: None,
                 web_ui: Some(InstalledPluginWebUiMetadata {
                     pages: vec![InstalledPluginWebUiPageMetadata {
@@ -1119,6 +1163,7 @@ pub(crate) mod tests {
         asset_root: Option<&str>,
     ) -> ExternalPluginSpec {
         ExternalPluginSpec {
+            openai_exchange_grant: None,
             name: "demo".into(),
             command: "mesh-llm-plugin-demo".into(),
             args: Vec::new(),
@@ -1141,6 +1186,7 @@ pub(crate) mod tests {
         runner: crate::plugin::InProcessPluginRunner,
     ) -> ExternalPlugin {
         let mut plugin = plugin_for_spec(ExternalPluginSpec {
+            openai_exchange_grant: None,
             name: name.into(),
             command: String::new(),
             args: Vec::new(),
@@ -1167,6 +1213,7 @@ pub(crate) mod tests {
         let plugin_name = spec.name.clone();
         let web_ui_enabled = spec.web_ui_enabled;
         let plugin = ExternalPlugin {
+            installed_artifact_sha256: None,
             summary: Arc::new(Mutex::new(PluginSummary {
                 name: spec.name.clone(),
                 kind: "external".into(),
@@ -1441,6 +1488,7 @@ pub(crate) mod tests {
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
                 allow_peer_blocks: None,
+                openai_exchange_grant: None,
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: Vec::new(),
                 url: Some("\u{2003}https://plugin.example.test/v1\u{2003}".into()),

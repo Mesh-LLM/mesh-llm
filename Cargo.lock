@@ -4971,6 +4971,9 @@ version = "0.78.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "hex",
+ "mesh-llm-config",
+ "mesh-llm-identity",
  "prost",
  "prost-build",
  "protoc-bin-vendored",
@@ -4978,7 +4981,9 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -6278,11 +6283,13 @@ dependencies = [
  "base64 0.22.1",
  "futures-core",
  "futures-util",
+ "http-body",
  "http-body-util",
  "mesh-llm-events",
  "mesh-llm-guardrails",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tower",
  "tracing",

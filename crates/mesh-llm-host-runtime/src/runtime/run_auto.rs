@@ -961,6 +961,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
         in_process,
     )
     .await?;
+    plugin_manager.apply_exchange_grants(config).await;
     crate::network::openai::virtual_model::install_inference_bridge(&plugin_manager, options.port)
         .await;
     node.set_plugin_manager(plugin_manager.clone()).await;
@@ -2090,6 +2091,7 @@ mod tests {
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
                 allow_peer_blocks: None,
+                openai_exchange_grant: None,
                 command: Some("invalid-blobstore-command".to_owned()),
                 args: Vec::new(),
                 url: None,

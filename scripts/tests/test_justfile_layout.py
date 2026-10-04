@@ -24,6 +24,8 @@ RECIPES_BY_FILE: Final = {
     "just/build.just": {
         "bootstrap-build-tools", "build", "build-dev", "build-linux", "build-mac", "build-runtime",
         "qa-logging-console-e2e", "with-lld",
+        "build-openai-exchange-exemplar", "package-openai-exchange-exemplar",
+        "test-openai-exchange-conformance",
     },
     "just/release-build.just": {
         "llama-build", "llama-prepare", "llama-prepare-latest", "release",

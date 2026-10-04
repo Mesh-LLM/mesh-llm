@@ -148,6 +148,8 @@ pub struct BufferedHttpRequest {
     pub request_object_request_ids: Vec<String>,
     pub response_adapter: ResponseAdapter,
     pub correlation_id: Option<String>,
+    /// Host-only observation join key; never accepted from an HTTP header.
+    pub exchange_observation_id: Option<String>,
 }
 
 impl BufferedHttpRequest {
@@ -474,6 +476,7 @@ where
         response_adapter,
         request_id: parsed.request_id,
         correlation_id: parsed.correlation_id,
+        exchange_observation_id: None,
     })
 }
 

@@ -1,3 +1,24 @@
+mod buffered_exchange;
+#[cfg(all(test, unix))]
+#[path = "ingress/compatibility_live_tests.rs"]
+mod lifecycle_compatibility_live_tests;
+#[cfg(test)]
+#[path = "ingress/live_identity_tests.rs"]
+mod lifecycle_live_identity_tests;
+#[cfg(test)]
+#[path = "ingress/live_tests.rs"]
+mod lifecycle_live_tests;
+#[cfg(test)]
+#[path = "ingress/live_tunnel_tests.rs"]
+mod lifecycle_live_tunnel_tests;
+#[cfg(test)]
+#[path = "ingress/prepared_dispatch_live_tests.rs"]
+mod lifecycle_prepared_dispatch_live_tests;
+#[cfg(test)]
+#[path = "ingress/typed_frontend_live_tests.rs"]
+mod lifecycle_typed_frontend_live_tests;
+use buffered_exchange::handle_buffered_api_request;
+
 use crate::inference::{election, pipeline};
 use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
@@ -24,6 +45,8 @@ use mesh_llm_events::{OutputEvent, emit_event};
 /// outcome carries no HTTP status at all (a dropped/failed connection).
 fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Option<u16> {
     match *outcome {
+        proxy::RouteDispatchOutcome::PolicyDenied => Some(403),
+        proxy::RouteDispatchOutcome::RequiredHookFailed => Some(503),
         proxy::RouteDispatchOutcome::Responded(status) => Some(status),
         proxy::RouteDispatchOutcome::RespondedWithUsage { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::RespondedWithDigests { status_code, .. } => Some(status_code),
@@ -964,6 +987,8 @@ async fn try_pipeline_proxy(
     let capsule_nonce = proxy::PipelineCapsuleNonce {
         client_nonce,
         nonce_origin,
+        observation_id: request.exchange_observation_id.clone(),
+        exchange_id: Some(request.request_id.as_uuid().to_string()),
     };
 
     tracing::info!("pipeline: {planner_name} (plan) → {strong_name} (execute)");
@@ -988,6 +1013,10 @@ async fn try_pipeline_proxy(
     )
     .await;
     match result {
+        proxy::PipelineProxyResult::PolicyDenied => Some(proxy::RouteDispatchOutcome::PolicyDenied),
+        proxy::PipelineProxyResult::RequiredHookFailed => {
+            Some(proxy::RouteDispatchOutcome::RequiredHookFailed)
+        }
         proxy::PipelineProxyResult::Responded(status) => {
             Some(proxy::RouteDispatchOutcome::Responded(status))
         }
@@ -1838,12 +1867,26 @@ async fn route_request(
         outcome
     } else {
         // No model specified — generic fallback routing to first available target.
-
+        let target = first_available_target(ctx.targets);
+        let mut tcp_stream = tcp_stream;
+        if let Some(outcome) = super::exchange_admission::admit_selected_route(
+            ctx.node,
+            &mut tcp_stream,
+            request,
+            None,
+            "mesh",
+            &format!("{target:?}"),
+            1,
+        )
+        .await
+        {
+            return outcome;
+        }
         proxy::route_to_target(
             ctx.node.clone(),
             tcp_stream,
             None,
-            first_available_target(ctx.targets),
+            target,
             &request.raw,
             proxy::RouteTargetContext {
                 request_id: request.request_id,
@@ -2265,6 +2308,8 @@ async fn try_handle_virtual_model_intercept(
         decision.required_tokens,
         request.response_adapter,
         route_observer,
+        request.exchange_observation_id.as_deref(),
+        request.request_id.as_uuid().to_string(),
     )
     .await
     {
@@ -2277,173 +2322,6 @@ async fn try_handle_virtual_model_intercept(
             VirtualModelInterceptResult::Handled(outcome)
         }
     }
-}
-
-/// Drive one buffered OpenAI-shaped request through every ingress stage in
-/// order: control-plane/admission gates, auto-route resolution, mesh routing
-/// header enforcement, virtual-model dispatch, pipeline, and finally `route_request`'s ordinary
-/// dispatch. Each stage either hands the stream to the next one or writes a
-/// terminal response and returns -- this function owns the single terminal
-/// lifecycle event for the request no matter which stage ends it.
-#[allow(clippy::cognitive_complexity)]
-async fn handle_buffered_api_request(
-    tcp_stream: ClientStream,
-    mut request: proxy::BufferedHttpRequest,
-    ctx: ProxyConnectionContext<'_>,
-    source_addr: Option<std::net::SocketAddr>,
-    ingress_type: crate::runtime::IngressType,
-) {
-    // Claim the parent at host OpenAI ingress. All downstream dispatch sees
-    // only a metadata observer; this scope remains the sole terminal owner.
-    let caller_addr = source_addr.map(|addr| addr.to_string());
-    let request_metadata =
-        crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path)
-            .with_source(Some(
-                if ingress_type == crate::runtime::IngressType::RemoteQuicHttp {
-                    "remote_quic_http"
-                } else {
-                    "direct_http"
-                },
-            ))
-            .with_method(Some(&request.method))
-            .with_caller_identity(
-                None,
-                caller_addr.as_deref(),
-                caller_addr.as_ref().map(|_| CallerPathType::LocalHttp),
-            );
-    let mut lifecycle = crate::logging_runtime_state()
-        .map(|state| state.openai_ingress_attachment(request.request_id, request_metadata))
-        .unwrap_or_else(OpenAiLifecycleAttachment::unowned);
-    if lifecycle.owns_parent() {
-        request.mark_raw_lifecycle_owned();
-        if let Some(body) = request.body_bytes.as_deref() {
-            lifecycle.capture_request_body(body, request.artifact_request_media_kind());
-        }
-    }
-
-    let tcp_stream =
-        match maybe_handle_control_request(tcp_stream, &request, &ctx, lifecycle.route_observer())
-            .await
-        {
-            Ok(outcome) => {
-                lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
-                return;
-            }
-            Err(tcp_stream) => tcp_stream,
-        };
-
-    let local_models = ctx.route.node.models_being_served().await;
-    let callable = callable_models_with_local_served(ctx.route.targets, local_models);
-    let descriptors = ctx.route.node.all_served_model_descriptors().await;
-    proxy::rewrite_public_model_alias(&mut request, &callable, &descriptors);
-
-    // Admission applies to inference work after control-path rejection.
-    let tcp_stream =
-        match admit_buffered_api_request(tcp_stream, &ctx, ingress_type, &lifecycle).await {
-            Ok(stream) => stream,
-            Err(outcome) => {
-                lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
-                return;
-            }
-        };
-
-    let decision = match prepare_auto_route_decision(&mut request, &ctx.route, &descriptors).await {
-        Ok(decision) => decision,
-        Err(rejection) => {
-            let outcome = send_auto_route_rejection(
-                tcp_stream,
-                rejection,
-                ctx.route.node,
-                &request.request_object_request_ids,
-                &request.client_path,
-                lifecycle.route_observer(),
-            )
-            .await;
-            lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
-            return;
-        }
-    };
-
-    let routing_model = decision.effective_model.clone();
-
-    let tcp_stream = match enforce_mesh_routing_headers_before_dispatch(
-        tcp_stream,
-        &request,
-        &decision,
-        routing_model.as_deref(),
-        lifecycle.route_observer(),
-    )
-    .await
-    {
-        Ok(stream) => stream,
-        Err(outcome) => {
-            lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
-            return;
-        }
-    };
-
-    let tcp_stream = match try_handle_virtual_model_intercept(
-        tcp_stream,
-        &mut request,
-        &ctx,
-        &decision,
-        lifecycle.route_observer(),
-    )
-    .await
-    {
-        VirtualModelInterceptResult::Handled(outcome) => {
-            proxy::record_virtual_model_stream_lifecycle(
-                lifecycle.route_observer(),
-                routing_model.as_deref().unwrap_or("virtual-model"),
-                request.response_adapter,
-                outcome,
-            );
-            lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
-            return;
-        }
-        VirtualModelInterceptResult::NotVirtual(stream) => stream,
-    };
-
-    let mut tcp_stream = tcp_stream;
-    if let Some(outcome) = try_pipeline_route(
-        &mut tcp_stream,
-        &mut request,
-        &ctx.route,
-        &decision,
-        routing_model.as_deref(),
-        lifecycle.route_observer(),
-    )
-    .await
-    {
-        proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
-        lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
-        return;
-    }
-
-    let outcome = {
-        let route_observer = lifecycle.route_observer();
-        route_request(
-            tcp_stream,
-            &mut request,
-            &ctx.route,
-            routing_model.as_deref(),
-            decision.required_tokens,
-            route_observer,
-        )
-        .await
-    };
-    if let Some(model) = routing_model.as_deref()
-        && !request.is_tokenize_request()
-    {
-        let mut event =
-            audit_events::model_access(None, model, "route", model_access_succeeded(outcome));
-        if let Some(cid) = request.correlation_id.as_deref() {
-            event = event.with_metadata("request_id", serde_json::Value::String(cid.to_string()));
-        }
-        let _ = emit_audit(event);
-    }
-    proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
-    lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
 }
 
 async fn handle_api_proxy_connection(

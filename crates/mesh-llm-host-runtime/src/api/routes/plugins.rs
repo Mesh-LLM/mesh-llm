@@ -900,6 +900,7 @@ mod tests {
             install_path,
             enabled: true,
             manifest: Some(InstalledPluginManifestMetadata {
+                openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: name.to_string(),
                     schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,

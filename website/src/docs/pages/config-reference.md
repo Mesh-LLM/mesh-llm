@@ -379,6 +379,23 @@ sampling at the backend when it selects mode `1` or `2`.
 | `plugin.<name>.web_ui_enabled` | boolean | unset (follows the plugin's declared default) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.web_ui_primary_tab` | boolean | unset (`false`; primary placement stays off until explicitly enabled) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.allow_peer_blocks` | boolean | unset (`false`; the plugin's peer block requests are refused until explicitly enabled) | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.endpoints` | array of enum | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.phases` | array of enum | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.request_body` | boolean | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.effective_request_body` | boolean | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.response_body` | boolean | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.headers` | array of string | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.admission` | boolean | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.metadata` | boolean | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.read_identity_bundle` | boolean | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.delegate_signing_key` | boolean | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.signing_scopes` | array of string | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.max_delegation_ttl_secs` | integer | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.deadline_ms` | integer | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.max_body_bytes` | integer | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.max_queue_bytes` | integer | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.max_in_flight` | integer | absent grant denies access | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.openai_exchange_grant.failure_policy` | enum | `best_effort`, `required`; absent grant denies access | plugin entry | applies dynamically | wired | none |
 | `plugin.<name>.command` | string | required unless `url` is set | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.args` | array of string | `[]` | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.url` | URL | unset | plugin entry | plugin process restart | wired for HTTP(S) adapter URLs; `tcp://` control is rejected because no authenticated capability handshake exists | none |

@@ -184,6 +184,7 @@ fn installed_plugin_metadata(
         install_path: std::env::temp_dir().join(format!("mesh-llm-plugin-{name}")),
         enabled: true,
         manifest: Some(InstalledPluginManifestMetadata {
+            openai_exchange_hook: None,
             config_schema: schema,
             web_ui: None,
         }),

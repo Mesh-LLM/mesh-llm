@@ -156,6 +156,21 @@ impl Node {
         event: crate::plugin::PluginMeshEvent,
     ) -> Result<()> {
         match event {
+            crate::plugin::PluginMeshEvent::IdentityService {
+                plugin_id,
+                request,
+                response_tx,
+            } => {
+                let node = self.clone();
+                tokio::spawn(async move {
+                    let response = crate::plugin::identity_services::handle_request(
+                        &node, &plugin_id, request,
+                    )
+                    .await;
+                    let _ = response_tx.send(response);
+                });
+                Ok(())
+            }
             crate::plugin::PluginMeshEvent::Channel {
                 plugin_id,
                 mut message,

@@ -1,9 +1,18 @@
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
+
+#[path = "response_metadata.rs"]
+mod response_metadata;
+#[path = "response_wire_bytes.rs"]
+mod response_wire_bytes;
+use openai_frontend::wire_bytes::{WireBytesIncomplete, WireBytesObserver};
+use response_metadata::ResponseMetadata;
+use response_wire_bytes::HttpResponseByteTap;
 
 type QuicBiStream = tokio::io::Join<iroh::endpoint::RecvStream, iroh::endpoint::SendStream>;
 
@@ -35,6 +44,14 @@ async fn wait_for_tcp_disconnect(stream: &TcpStream) -> TcpDisconnectWatch {
 /// authenticated QUIC bi-stream, which enters the same request path without
 /// opening a second plaintext loopback connection.
 pub(crate) enum ClientStream {
+    Metadata {
+        stream: Box<ClientStream>,
+        metadata: Box<ResponseMetadata>,
+    },
+    Observed {
+        stream: Box<ClientStream>,
+        tap: Box<HttpResponseByteTap>,
+    },
     Tcp {
         stream: TcpStream,
         anthropic: bool,
@@ -67,12 +84,61 @@ impl From<TcpStream> for ClientStream {
 }
 
 impl ClientStream {
+    pub(crate) fn add_response_metadata(
+        &mut self,
+        headers: Vec<(String, String)>,
+    ) -> std::io::Result<()> {
+        if headers.is_empty() {
+            return Ok(());
+        }
+        if let Self::Metadata { metadata, .. } = self {
+            return metadata.add(headers);
+        }
+        let original = std::mem::replace(self, Self::Null);
+        *self = original.with_response_metadata(headers);
+        Ok(())
+    }
+    pub(crate) fn with_response_metadata(self, headers: Vec<(String, String)>) -> Self {
+        if headers.is_empty() {
+            return self;
+        }
+        Self::Metadata {
+            stream: Box::new(self),
+            metadata: Box::new(ResponseMetadata::new(headers)),
+        }
+    }
+    /// Observe only bytes actually accepted by the final downstream writer.
+    pub(crate) fn with_wire_bytes_observer(self, observer: Arc<dyn WireBytesObserver>) -> Self {
+        Self::Observed {
+            stream: Box::new(self),
+            tap: Box::new(HttpResponseByteTap::new(observer)),
+        }
+    }
+
+    /// Mark upstream timeout/cancellation explicitly before transport shutdown.
+    pub(crate) fn finish_wire_bytes(&mut self, incomplete: WireBytesIncomplete) {
+        match self {
+            Self::Observed { tap, .. } => tap.finish(Some(incomplete)),
+            Self::Metadata { stream, .. } => stream.finish_wire_bytes(incomplete),
+            _ => {}
+        }
+    }
+    pub(crate) fn record_exchange_outcome(&self, outcome: &str) {
+        match self {
+            Self::Observed { tap, .. } => tap.execution_outcome(outcome),
+            Self::Metadata { stream, .. } => stream.record_exchange_outcome(outcome),
+            _ => {}
+        }
+    }
+
     pub(crate) fn set_client_path(&mut self, path: &str) {
         let messages = matches!(
             path.split('?').next(),
             Some("/v1/messages" | "/v1/messages/count_tokens")
         );
         match self {
+            Self::Metadata { stream, .. } => stream.set_client_path(path),
+            Self::Observed { stream, .. } => stream.set_client_path(path),
             Self::Tcp { anthropic, .. } | Self::Quic { anthropic, .. } => *anthropic = messages,
             // The discard sink answers no client, so it has no response
             // dialect to switch.
@@ -82,6 +148,8 @@ impl ClientStream {
 
     pub(crate) fn is_anthropic(&self) -> bool {
         match self {
+            Self::Metadata { stream, .. } => stream.is_anthropic(),
+            Self::Observed { stream, .. } => stream.is_anthropic(),
             Self::Tcp { anthropic, .. } | Self::Quic { anthropic, .. } => *anthropic,
             Self::Null => false,
         }
@@ -111,6 +179,8 @@ impl ClientStream {
 
     pub(crate) fn set_nodelay(&self, nodelay: bool) -> std::io::Result<()> {
         match self {
+            Self::Metadata { stream, .. } => stream.set_nodelay(nodelay),
+            Self::Observed { stream, .. } => stream.set_nodelay(nodelay),
             Self::Tcp { stream, .. } => stream.set_nodelay(nodelay),
             Self::Quic { .. } => Ok(()),
             Self::Null => Ok(()),
@@ -125,6 +195,8 @@ impl ClientStream {
     /// a locally finished response is not a disconnect signal.
     pub(crate) async fn wait_for_response_disconnect(&self) -> bool {
         match self {
+            Self::Metadata { stream, .. } => Box::pin(stream.wait_for_response_disconnect()).await,
+            Self::Observed { stream, .. } => Box::pin(stream.wait_for_response_disconnect()).await,
             Self::Tcp { stream, .. } => match wait_for_tcp_disconnect(stream).await {
                 TcpDisconnectWatch::Disconnected => true,
                 TcpDisconnectWatch::PipelinedBytes => std::future::pending::<bool>().await,
@@ -142,6 +214,8 @@ impl ClientStream {
 
     pub(crate) fn peer_addr(&self) -> std::io::Result<SocketAddr> {
         match self {
+            Self::Metadata { stream, .. } => stream.peer_addr(),
+            Self::Observed { stream, .. } => stream.peer_addr(),
             Self::Tcp { stream, .. } => stream.peer_addr(),
             Self::Quic { .. } => Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -162,6 +236,8 @@ impl AsyncRead for ClientStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
+            Self::Metadata { stream, .. } => Pin::new(stream.as_mut()).poll_read(cx, buf),
+            Self::Observed { stream, .. } => Pin::new(stream.as_mut()).poll_read(cx, buf),
             Self::Tcp { stream, .. } => Pin::new(stream).poll_read(cx, buf),
             Self::Quic { stream, prefix, .. } => {
                 let position = prefix.position() as usize;
@@ -190,6 +266,16 @@ impl AsyncWrite for ClientStream {
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         match self.get_mut() {
+            Self::Metadata { stream, metadata } => metadata.poll_write(stream.as_mut(), cx, buf),
+            Self::Observed { stream, tap } => {
+                let result = Pin::new(stream.as_mut()).poll_write(cx, buf);
+                match &result {
+                    Poll::Ready(Ok(count)) => tap.update(&buf[..*count]),
+                    Poll::Ready(Err(_)) => tap.finish(Some(WireBytesIncomplete::TransportError)),
+                    Poll::Pending => {}
+                }
+                result
+            }
             Self::Tcp { stream, .. } => Pin::new(stream).poll_write(cx, buf),
             Self::Quic { stream, .. } => Pin::new(stream).poll_write(cx, buf),
             // Discard -- claim the whole buffer was written, same as writing
@@ -200,6 +286,17 @@ impl AsyncWrite for ClientStream {
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
+            Self::Metadata { stream, metadata } => {
+                std::task::ready!(metadata.poll_emit_prefix(stream, cx))?;
+                Pin::new(stream.as_mut()).poll_flush(cx)
+            }
+            Self::Observed { stream, tap } => {
+                let result = Pin::new(stream.as_mut()).poll_flush(cx);
+                if matches!(result, Poll::Ready(Err(_))) {
+                    tap.finish(Some(WireBytesIncomplete::TransportError));
+                }
+                result
+            }
             Self::Tcp { stream, .. } => Pin::new(stream).poll_flush(cx),
             Self::Quic { stream, .. } => Pin::new(stream).poll_flush(cx),
             Self::Null => Poll::Ready(Ok(())),
@@ -208,6 +305,16 @@ impl AsyncWrite for ClientStream {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
+            Self::Metadata { stream, metadata } => metadata.poll_shutdown(stream, cx),
+            Self::Observed { stream, tap } => {
+                let result = Pin::new(stream.as_mut()).poll_shutdown(cx);
+                match &result {
+                    Poll::Ready(Ok(())) => tap.finish(None),
+                    Poll::Ready(Err(_)) => tap.finish(Some(WireBytesIncomplete::TransportError)),
+                    Poll::Pending => {}
+                }
+                result
+            }
             Self::Tcp { stream, .. } => Pin::new(stream).poll_shutdown(cx),
             Self::Quic { stream, .. } => Pin::new(stream).poll_shutdown(cx),
             Self::Null => Poll::Ready(Ok(())),
@@ -219,7 +326,70 @@ impl AsyncWrite for ClientStream {
 mod tests {
     use super::*;
     use iroh::{Endpoint, SecretKey};
+    use openai_frontend::wire_bytes::{WireBytesCommitment, commit_wire_bytes};
+    use std::sync::Mutex;
     use tokio::time::{Duration, timeout};
+
+    #[derive(Default)]
+    struct ByteRecorder {
+        bytes: Mutex<Vec<u8>>,
+        terminals: Mutex<Vec<WireBytesCommitment>>,
+        status: Mutex<Option<u16>>,
+    }
+
+    impl WireBytesObserver for ByteRecorder {
+        fn response_status(&self, status: u16) {
+            *self.status.lock().unwrap() = Some(status);
+        }
+        fn try_chunk(&self, offset: u64, bytes: &[u8]) -> bool {
+            let mut captured = self.bytes.lock().unwrap();
+            assert_eq!(offset, captured.len() as u64);
+            captured.extend_from_slice(bytes);
+            true
+        }
+        fn finish(&self, commitment: WireBytesCommitment) {
+            self.terminals.lock().unwrap().push(commitment);
+        }
+    }
+
+    #[tokio::test]
+    async fn final_tcp_tap_streams_first_frame_before_the_next_frame_exists() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let observer = Arc::new(ByteRecorder::default());
+        let mut writer = ClientStream::from(server).with_wire_bytes_observer(observer.clone());
+        let header =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nAuthorization: hidden\r\n\r\n";
+        let first_frame = b"data: first\n\n";
+        writer.write_all(header).await.unwrap();
+        writer.write_all(b"d\r\ndata: first\n\n\r\n").await.unwrap();
+        let mut reader = client;
+        let mut first_wire = vec![0; header.len() + 18];
+        timeout(Duration::from_secs(2), reader.read_exact(&mut first_wire))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&first_wire[header.len()..], b"d\r\ndata: first\n\n\r\n");
+        assert_eq!(*observer.bytes.lock().unwrap(), first_frame);
+        assert!(observer.terminals.lock().unwrap().is_empty());
+        writer
+            .write_all(b"e\r\ndata: [DONE]\n\n\r\n0\r\n\r\n")
+            .await
+            .unwrap();
+        writer.shutdown().await.unwrap();
+        let mut tail = Vec::new();
+        reader.read_to_end(&mut tail).await.unwrap();
+        assert_eq!(tail, b"e\r\ndata: [DONE]\n\n\r\n0\r\n\r\n");
+        assert_eq!(*observer.status.lock().unwrap(), Some(200));
+        assert_eq!(
+            observer.terminals.lock().unwrap().as_slice(),
+            &[commit_wire_bytes(b"data: first\n\ndata: [DONE]\n\n")]
+        );
+    }
 
     const TEST_ALPN: &[u8] = b"mesh-llm/client-stream-test/1";
 

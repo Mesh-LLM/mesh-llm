@@ -5,11 +5,13 @@ mod backend_lifecycle;
 pub mod chat;
 pub mod common;
 pub mod completions;
+pub mod composite_hooks;
 mod decisions;
 pub mod embeddings;
 pub mod errors;
 mod guardrails;
 pub mod hooks;
+pub mod http_exchange;
 pub mod lifecycle;
 pub mod models;
 mod request_lifecycle;
@@ -19,6 +21,7 @@ pub mod router;
 pub mod sse;
 mod stream_lifecycle;
 pub mod system_one;
+pub mod wire_bytes;
 
 pub use audio::{
     AudioFormat, AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest,

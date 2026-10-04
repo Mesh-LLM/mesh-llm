@@ -49,6 +49,8 @@ fn plugin_endpoint_producer(
 
 fn plugin_manifest_with_endpoint(capability: &str) -> PluginManifestOverview {
     PluginManifestOverview {
+        openai_exchange_body_access_requested: None,
+        openai_exchange_status: None,
         operations: 1,
         resources: 0,
         resource_templates: 0,
