@@ -49,7 +49,7 @@ fn empty_lipo_when_stdout_has_no_architecture() {
 }
 
 #[test]
-fn raw_lipo_when_redaction_triggers_and_python_separators_are_architectures() {
+fn raw_lipo_capture_preserves_plain_words_that_match_redaction_labels() {
     let fixture = Fixture::host();
     fixture.materialize();
     let binary = fixture.framework(0).join("MeshLLMFFI");
@@ -192,4 +192,22 @@ fn assert_tree_stopped(
         }
         other => panic!("unexpected {other:?}"),
     }
+}
+
+#[test]
+fn actual_lipo_adapter_refuses_control_separators_without_echoing_raw_payload() {
+    let fixture = Fixture::host();
+    fixture.materialize();
+    let binary = fixture.framework(0).join("MeshLLMFFI");
+    fs::write(&binary, "arm64\u{1c}private-payload").unwrap();
+    let error = native(&fixture)
+        .inspect(&binary, &Cancellation::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("malformed architecture name"));
+    assert!(!error.contains("private-payload"));
+    assert_eq!(
+        fs::read_to_string(binary).unwrap(),
+        "arm64\u{1c}private-payload"
+    );
 }

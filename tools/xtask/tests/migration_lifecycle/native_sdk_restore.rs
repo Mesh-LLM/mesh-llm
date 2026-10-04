@@ -126,7 +126,14 @@ impl Fixture {
         )
     }
     fn command(&self, arguments: Vec<Value>) -> process::RawProcessReport {
-        let environment: BTreeMap<_, _> = [
+        self.command_with_env(arguments, &[])
+    }
+    fn command_with_env(
+        &self,
+        arguments: Vec<Value>,
+        overrides: &[(&str, String)],
+    ) -> process::RawProcessReport {
+        let mut environment: BTreeMap<_, _> = [
             (
                 "PATH",
                 format!("{}:/usr/bin:/bin", self.root.join("bin").display()),
@@ -141,6 +148,9 @@ impl Fixture {
         .into_iter()
         .map(|(key, value)| (key.into(), Value::Public(value.into())))
         .collect();
+        for (key, value) in overrides {
+            environment.insert((*key).into(), Value::Public(value.clone().into()));
+        }
         let report = process::supervise_raw(
             &ProcessSpec {
                 executable: "/bin/bash".into(),
@@ -464,3 +474,6 @@ fn native_runtime_and_sdk_archive_verifiers_refuse_sibling_and_single_file_paylo
         }
     }
 }
+
+#[path = "native_sdk_restore/kotlin_consumer.rs"]
+mod kotlin_consumer;

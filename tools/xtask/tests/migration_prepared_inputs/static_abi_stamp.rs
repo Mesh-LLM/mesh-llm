@@ -1,4 +1,4 @@
-use crate::support::{Case, Legacy, Scratch, TestResult, assert_output};
+use crate::support::{Case, Legacy, Scratch, TestResult, text};
 
 const SCRIPT: Legacy = Legacy::Script("scripts/verify-static-abi-build-stamp.py");
 const STAMP: &str = "stamp-version=3\npatched-sha=abc\nbackend=cpu\nlink-mode=static\n\
@@ -32,24 +32,24 @@ fn run_with(
 #[test]
 fn migration_prepared_inputs_abi_stamp_accepts_matching_stamp() -> TestResult {
     let ok = "verified static ABI build stamp: backend=cpu cmake_arguments=2\n";
-    assert_output(&run_with(STAMP, &[])?, 0, ok, "");
-    assert_output(&run_with(STAMP, &["--patched-sha", "abc"])?, 0, ok, "");
+    assert_stamp_output(&run_with(STAMP, &[])?, 0, ok, "");
+    assert_stamp_output(&run_with(STAMP, &["--patched-sha", "abc"])?, 0, ok, "");
     let crlf = STAMP.replace('\n', "\r\n");
-    assert_output(&run_with(&crlf, &[])?, 0, ok, "");
+    assert_stamp_output(&run_with(&crlf, &[])?, 0, ok, "");
     Ok(())
 }
 
 #[test]
 fn migration_prepared_inputs_abi_stamp_rejects_changed_identity() -> TestResult {
     let output = run_with(STAMP, &["--patched-sha", "def"])?;
-    let expected = "static ABI build stamp patched-sha mismatch: expected 'def', got 'abc'\n";
-    assert_output(&output, 1, "", expected);
+    let expected = "static ABI build stamp patched-sha mismatch: expected \"def\", got \"abc\"\n";
+    assert_stamp_output(&output, 1, "", expected);
     let epoch = STAMP.replace("toolchain-epoch=e1", "toolchain-epoch=e2");
-    let expected = "static ABI build stamp toolchain-epoch mismatch: expected 'e1', got 'e2'\n";
-    assert_output(&run_with(&epoch, &[])?, 1, "", expected);
+    let expected = "static ABI build stamp toolchain-epoch mismatch: expected \"e1\", got \"e2\"\n";
+    assert_stamp_output(&run_with(&epoch, &[])?, 1, "", expected);
     let backend = STAMP.replace("backend=cpu", "backend=cuda");
-    let expected = "static ABI build stamp backend mismatch: expected 'cpu', got 'cuda'\n";
-    assert_output(&run_with(&backend, &[])?, 1, "", expected);
+    let expected = "static ABI build stamp backend mismatch: expected \"cpu\", got \"cuda\"\n";
+    assert_stamp_output(&run_with(&backend, &[])?, 1, "", expected);
     Ok(())
 }
 
@@ -66,7 +66,7 @@ fn migration_prepared_inputs_abi_stamp_rejects_malformed_stamps() -> TestResult 
         ),
         (
             format!("{STAMP}backend=cpu\n"),
-            "static ABI build stamp repeats singleton field 'backend'\n",
+            "static ABI build stamp repeats singleton field \"backend\"\n",
         ),
         (
             STAMP
@@ -80,7 +80,7 @@ fn migration_prepared_inputs_abi_stamp_rejects_malformed_stamps() -> TestResult 
         ),
     ];
     for (contents, expected) in cases {
-        assert_output(&run_with(&contents, &[])?, 1, "", expected);
+        assert_stamp_output(&run_with(&contents, &[])?, 1, "", expected);
     }
     Ok(())
 }
@@ -90,11 +90,11 @@ fn migration_prepared_inputs_abi_stamp_rejects_unreadable_stamp() -> TestResult 
     let scratch = Scratch::new("abi-stamp-missing")?;
     let missing = scratch.join("missing");
     let output = verify(missing.to_str().ok_or("path")?, &[]).run(scratch.path())?;
-    let expected = format!(
-        "unable to read static ABI build stamp: [Errno 2] No such file or directory: '{}'\n",
-        missing.display()
-    );
-    assert_output(&output, 1, "", &expected);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let diagnostic = text(&output.stderr);
+    assert!(diagnostic.contains("unable to read static ABI build stamp:"));
+    assert!(diagnostic.contains(missing.to_str().ok_or("path")?));
     let scratch = Scratch::new("abi-stamp-binary")?;
     let stamp = scratch.write("stamp", b"backend=\xff\n")?;
     let output = verify(stamp.to_str().ok_or("path")?, &[])
@@ -115,5 +115,35 @@ fn migration_prepared_inputs_abi_stamp_usage_errors_exit_two() -> TestResult {
     .status_only()
     .run(scratch.path())?;
     assert_eq!(output.status.code(), Some(2));
+    Ok(())
+}
+
+// This owner verifies native diagnostics directly. The shared historical
+// helper deliberately ignores expected failure text and is unsuitable here.
+fn assert_stamp_output(output: &std::process::Output, code: i32, stdout: &str, stderr: &str) {
+    assert_eq!(output.status.code(), Some(code), "status");
+    assert_eq!(text(&output.stdout), stdout, "stdout");
+    assert_eq!(text(&output.stderr), stderr, "stderr");
+}
+
+#[test]
+fn migration_prepared_inputs_abi_stamp_refuses_control_delimiters_without_modifying_input()
+-> TestResult {
+    for separator in ['\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}'] {
+        let scratch = Scratch::new("abi-stamp-control")?;
+        let contents = STAMP.replace(
+            "patched-sha=abc\nbackend=cpu",
+            &format!("patched-sha=abc{separator}backend=cpu"),
+        );
+        let stamp = scratch.write("stamp", contents.as_bytes())?;
+        let output = verify(stamp.to_str().ok_or("path")?, &[]).run(scratch.path())?;
+        assert_stamp_output(
+            &output,
+            1,
+            "",
+            "static ABI build stamp is missing required fields: backend\n",
+        );
+        assert_eq!(std::fs::read(&stamp)?, contents.as_bytes());
+    }
     Ok(())
 }
