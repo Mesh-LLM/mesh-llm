@@ -211,9 +211,10 @@ same activation/cache contracts without requiring a monolithic full GGUF.
 - `state-handoff` validates state export/import for a whole model or a
   stage range selected with `--state-layer-start`, `--state-layer-end`, and
   `--state-stage-index`. `--state-payload-kind` selects `full-state`,
-  `recurrent-only`, or `kv-recurrent` payloads. Partial non-final ranges use
-  direct runtime handoff because a standalone binary stage without downstream is
-  necessarily final; final full-state ranges can use the binary control path.
+  `resident-kv`, `recurrent-only`, or `kv-recurrent` payloads. All ranges use
+  direct local runtime handoff; `full-state` remains the default payload.
+  `--binary-control` is rejected because binary state export/import is
+  unavailable. Omit it to run the supported local handoff.
   The report includes the handoff transport, payload kind, state payload size,
   and prefill/export/import/decode timings needed for cache economics. Use
   `--prefix-token-count` to request a deterministic synthetic prefix length;

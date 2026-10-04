@@ -187,6 +187,11 @@ impl LocalStatePayload {
     }
 }
 pub fn state_handoff(args: StateHandoffArgs) -> Result<()> {
+    if args.binary_control {
+        bail!(
+            "--binary-control is unsupported: binary state export/import is unavailable; omit --binary-control to use local runtime state handoff"
+        );
+    }
     let mut args = args;
     normalize_runtime_layer_end(&mut args.runtime)?;
     let report_out = args.output.report_out;
@@ -1845,7 +1850,64 @@ fn encode_handoff_activation(
 
 #[cfg(test)]
 mod tests {
-    use super::{StateTokenizerSource, state_tokenizer_source};
+    use clap::Parser;
+
+    use super::{StateTokenizerSource, state_handoff, state_tokenizer_source};
+    use crate::cli::{Cli, CommandKind, StatePayloadKind};
+
+    #[test]
+    fn binary_control_rejects_every_payload_before_model_or_server_access() {
+        for payload in [
+            "resident-kv",
+            "full-state",
+            "recurrent-only",
+            "kv-recurrent",
+        ] {
+            let cli = Cli::try_parse_from([
+                "skippy-correctness",
+                "state-handoff",
+                "--model",
+                "/__skippy_correctness_missing__/model.gguf",
+                "--stage-server-bin",
+                "/__skippy_correctness_missing__/skippy",
+                "--layer-end",
+                "0",
+                "--source-bind-addr",
+                "127.0.0.1:0",
+                "--restore-bind-addr",
+                "127.0.0.1:0",
+                "--state-payload-kind",
+                payload,
+                "--binary-control",
+            ])
+            .expect("parse unsupported binary control request");
+            let CommandKind::StateHandoff(args) = cli.command else {
+                panic!("expected state handoff command");
+            };
+            let error = state_handoff(args).expect_err("binary control must fail before loading");
+            assert_eq!(
+                error.to_string(),
+                "--binary-control is unsupported: binary state export/import is unavailable; omit --binary-control to use local runtime state handoff",
+                "payload {payload}"
+            );
+        }
+    }
+
+    #[test]
+    fn state_handoff_defaults_to_local_full_state() {
+        let cli = Cli::try_parse_from([
+            "skippy-correctness",
+            "state-handoff",
+            "--model",
+            "model.gguf",
+        ])
+        .expect("parse local state handoff defaults");
+        let CommandKind::StateHandoff(args) = cli.command else {
+            panic!("expected state handoff command");
+        };
+        assert!(!args.binary_control);
+        assert_eq!(args.state_payload_kind, StatePayloadKind::FullState);
+    }
 
     #[test]
     fn local_embedding_stage_reuses_loaded_model_for_tokenization() {

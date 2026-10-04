@@ -18,7 +18,7 @@ Subject: [PATCH] skippy: replay extracted stage programs
  src/llama-model.cpp                           |  25 +
  src/models/bailingmoe3.cpp                    |  82 +-
  src/models/deepseek4.cpp                      | 273 +++++-
- src/models/delta-net-base.cpp                 | 117 ++-
+ src/models/delta-net-base.cpp                 | 120 ++-
  src/models/kimi-linear.cpp                    | 111 ++-
  src/models/laguna.cpp                         |   9 +
  src/models/mamba-base.cpp                     | 194 +++-
@@ -36,7 +36,7 @@ Subject: [PATCH] skippy: replay extracted stage programs
  src/skippy/stage_plan.cpp                     |  10 +-
  src/skippy/stage_program.cpp                  | 878 +++++++++++++++++
  src/skippy/stage_program.h                    | 326 +++++++
- src/skippy/stage_program_extraction.cpp       | 705 ++++++++++++++
+ src/skippy/stage_program_extraction.cpp       | 706 ++++++++++++++
  .../stage_program_extraction_internal.h       |  75 ++
  src/skippy/stage_program_extraction_roots.cpp | 587 ++++++++++++
  src/skippy/stage_program_geometry.cpp         | 506 ++++++++++
@@ -58,7 +58,7 @@ Subject: [PATCH] skippy: replay extracted stage programs
  .../tests/renamed_multishard_planning.cpp     | 223 ++++-
  src/skippy/tests/stage_program_parity.h       | 374 ++++++++
  tests/test-llama-archs.cpp                    |  39 +
- 54 files changed, 7940 insertions(+), 267 deletions(-)
+ 54 files changed, 7944 insertions(+), 267 deletions(-)
  create mode 100644 src/skippy/stage_program.cpp
  create mode 100644 src/skippy/stage_program.h
  create mode 100644 src/skippy/stage_program_extraction.cpp
@@ -2567,7 +2567,7 @@ index 33007e933..381103a13 100644
  
      cur = build_hc_head(inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
 diff --git a/src/models/delta-net-base.cpp b/src/models/delta-net-base.cpp
-index 342a5d795..84efdd843 100644
+index 342a5d795..50278115b 100644
 --- a/src/models/delta-net-base.cpp
 +++ b/src/models/delta-net-base.cpp
 @@ -1,4 +1,5 @@
@@ -2665,7 +2665,15 @@ index 342a5d795..84efdd843 100644
      o = ggml_permute  (ctx0, o, 0, 2, 1, 3); // [S_v, H_v, n_tokens, n_seqs]
      s = ggml_reshape_4d(ctx0, s, S_v, S_v, H_v, n_seqs);
      cb(s, "output_state", il);
-@@ -411,6 +456,12 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
+@@ -356,4 +401,7 @@
+     // [S_v, S_v, H_v, n_seqs]
+     ggml_tensor * kd;
+     k  = ggml_repeat(ctx0, k, s);
++    auto k_repeat_geometry = skippy_stage_geometry_static(k);
++    k_repeat_geometry.dimensions[3] = skippy_stage_geometry_expression::sequences();
++    skippy_stage_geometry_note(k, k_repeat_geometry);
+     kd = ggml_mul   (ctx0, k, d_t);
+@@ -411,6 +459,12 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
              ggml_row_size(result->type, S_v),
              ggml_row_size(result->type, S_v * H_v),
              ggml_row_size(result->type, S_v * H_v * n_tokens), 0);
@@ -2678,7 +2686,7 @@ index 342a5d795..84efdd843 100644
  
      ggml_tensor * new_state = ggml_view_4d(ctx0, result,
              S_v, S_v, H_v, n_seqs,
-@@ -418,6 +469,11 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
+@@ -418,6 +472,11 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
              ggml_row_size(result->type, S_v * S_v),
              ggml_row_size(result->type, S_v * S_v * H_v),
              ggml_row_size(result->type, S_v * H_v * n_tokens * n_seqs));
@@ -2690,7 +2698,7 @@ index 342a5d795..84efdd843 100644
  
      return {output, new_state};
  }
-@@ -464,6 +520,9 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
+@@ -464,6 +523,9 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
      cb(conv_states, "conv_states", il);
  
      conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
@@ -2700,7 +2708,7 @@ index 342a5d795..84efdd843 100644
      cb(conv_states, "conv_states_reshaped", il);
  
      qkv_mixed = ggml_transpose(ctx0, qkv_mixed);
-@@ -485,12 +544,24 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
+@@ -485,12 +547,24 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
                      conv_kernel_size - 1, conv_channels, n_seqs,
                      conv_input->nb[1], conv_input->nb[2],
                      ggml_row_size(conv_input->type, s_idx));
@@ -2725,7 +2733,7 @@ index 342a5d795..84efdd843 100644
          cb(conv_state_update, "conv_state_update", il);
  
          ggml_tensor * conv_write = ggml_cpy(ctx0, conv_state_last, conv_state_update);
-@@ -512,12 +583,25 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
+@@ -512,12 +586,25 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
                          conv_kernel_size - 1, conv_channels, n_seqs,
                          conv_input->nb[1], conv_input->nb[2],
                          ggml_row_size(conv_input->type, s_idx));
@@ -2751,7 +2759,7 @@ index 342a5d795..84efdd843 100644
  
              ggml_tensor * conv_write = ggml_cpy(ctx0, conv_state_last, conv_state_update);
              ggml_build_forward_expand(gf, conv_write);
-@@ -556,9 +640,14 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
+@@ -556,9 +643,14 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
          cb(output, "attn_output", il);
          cb(new_state, "new_state", il);
  
@@ -2769,7 +2777,7 @@ index 342a5d795..84efdd843 100644
          ggml_build_forward_expand(gf, ssm_write);
          state_write(skippy_state_kind::recurrent_ssm, ssm_states_all, ssm_write, il);
  
-@@ -585,6 +674,12 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
+@@ -585,6 +677,12 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
          ggml_row_size(gdn_out->type, S_v * H_v),
          ggml_row_size(gdn_out->type, S_v * H_v * n_seq_tokens),
          0);
@@ -2782,7 +2790,7 @@ index 342a5d795..84efdd843 100644
      cb(output, "attn_output", il);
  
      const size_t row_size = hparams.n_embd_s() * ggml_element_size(ssm_states_all);
-@@ -598,12 +693,26 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
+@@ -598,12 +696,26 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
          ggml_row_size(gdn_out->type, D),
          ggml_row_size(gdn_out->type, state_size_per_snap),
          ggml_row_size(gdn_out->type, attn_score_elems));
@@ -5677,10 +5685,10 @@ index 000000000..b6902afd2
 +#endif
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
 new file mode 100644
-index 000000000..4e89b911b
+index 000000000..2c1fdb4c9
 --- /dev/null
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,706 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -5742,7 +5750,8 @@ index 000000000..4e89b911b
 +                program.supports_embedding_inputs |= capture.ubatch.token == nullptr && typed->embd != nullptr;
 +            }
 +        }
-+        program.separates_token_generation = model.arch == LLM_ARCH_MINIMAX_M3;
++        program.separates_token_generation = model.arch == LLM_ARCH_MINIMAX_M3 ||
++                model.arch == LLM_ARCH_KIMI_LINEAR;
 +        program.token_generation = n_tokens == n_sequences;
 +        if (n_sequences == 0 || n_sequences > capture.cparams.n_seq_max || n_outputs == 0 || n_outputs > n_tokens ||
 +                (graph_type != static_cast<uint32_t>(LLM_GRAPH_TYPE_DEFAULT) &&
