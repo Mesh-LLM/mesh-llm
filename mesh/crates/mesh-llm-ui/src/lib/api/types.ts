@@ -179,6 +179,14 @@ export interface LoggingStatus {
 }
 
 export interface StatusPayload {
+  /** How this node treats a pair of requests a client marked as one pair: fixed facts of the host. */
+  twin_policy?: {
+    marking: 'client_header'
+    header: string
+    host_sends_second_request: boolean
+    serving_node_told: boolean
+    inferred: boolean
+  }
   node_id: string
   node_state: 'client' | 'standby' | 'loading' | 'serving'
   is_client?: boolean
