@@ -28,6 +28,7 @@ tempfile = "3"
 tokio = { version = "=1.53.1", features = ["rt", "net", "time", "macros", "io-util", "sync"] }
 toml = "0.9"
 uuid = "=1.26.0"
+url = "=2.5.8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -36,6 +37,8 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [dev-dependencies]
+rcgen = "=0.14.10"
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 glob = "=0.3.4"
 regex = "=1.13.1"
 semver = "=1.0.28"

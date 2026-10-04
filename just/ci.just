@@ -243,6 +243,7 @@ ci-automation-contracts:
         --test migration_hf_artifact_controls \
         --test migration_hf_converted_artifact \
         --test migration_lifecycle \
+        --test migration_stability \
         --test migration_models \
         --test migration_native_fixtures \
         --test migration_native_generator \
