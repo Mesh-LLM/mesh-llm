@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import os
 import re
 import subprocess
@@ -21,6 +22,50 @@ def job_block(workflow: str, job_name: str, next_job_name: str) -> str:
 
 
 class ReleaseWorkflowArtifactTests(unittest.TestCase):
+    def test_node_addon_matrix_and_published_assets_are_complete(self) -> None:
+        document = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+        jobs = document["jobs"]
+        targets = [row["target"] for row in jobs["build_node_sdk_addon"]["strategy"]["matrix"]["include"]]
+        self.assertEqual(
+            targets,
+            ["darwin-arm64", "linux-arm64", "linux-x64", "win32-x64"],
+        )
+        publish = jobs["publish"]
+        self.assertIn("build_node_sdk_addon", publish["needs"])
+        steps = publish["steps"]
+        verify = next(step for step in steps if step.get("name") == "Verify complete Node SDK addon release matrix")
+        self.assertLess(steps.index(verify), next(
+            index for index, step in enumerate(steps)
+            if step.get("name") == "Publish GitHub release"
+        ))
+        with tempfile.TemporaryDirectory() as temp:
+            assets = Path(temp) / "release-artifacts"
+            assets.mkdir()
+            for target in targets:
+                name = f"mesh-llm-node-sdk-addon-0.78.0-{target}.tar.gz"
+                payload = target.encode()
+                (assets / name).write_bytes(payload)
+                digest = hashlib.sha256(payload).hexdigest()
+                (assets / f"{name}.sha256").write_text(f"{digest}  {name}\n")
+            env = dict(os.environ, RELEASE_TAG="v0.78.0")
+
+            def run() -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    ["bash", "-c", verify["run"]], cwd=temp, env=env,
+                    text=True, capture_output=True,
+                )
+
+            self.assertEqual(run().returncode, 0)
+            missing = assets / "mesh-llm-node-sdk-addon-0.78.0-darwin-arm64.tar.gz"
+            missing.unlink()
+            result = run()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("darwin-arm64", result.stderr)
+            missing.write_bytes(b"tampered")
+            result = run()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("FAILED", result.stdout + result.stderr)
+
     def test_release_is_dispatch_only(self) -> None:
         document = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
         # YAML 1.1 resolves an unquoted `on` key to the boolean True.

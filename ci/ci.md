@@ -1356,6 +1356,9 @@ landed on main.
 Node addon release producers also resolve `sdk` or `mesh/sdk` before version
 checks, native builds, npm pack and immutable artifact staging on Linux, macOS
 and Windows. Executable fixtures cover all three producers in both layouts.
+The release publisher verifies the four supported addon archives and their
+checksum sidecars before publishing assets or dispatching downstream npm
+assembly. Intel macOS is excluded from the Node SDK release matrix.
 
 Legacy change-detection entrypoints and Windows cache triggers recognize both
 product layouts. Nightly and explicit-revision canary pin readers accept exactly

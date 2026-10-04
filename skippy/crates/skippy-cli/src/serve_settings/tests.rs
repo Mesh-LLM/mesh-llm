@@ -434,8 +434,18 @@ fn modes_and_budget_dependencies_produce_actionable_errors() {
 
 #[test]
 fn documented_example_is_a_valid_complete_settings_file() {
-    let text = include_str!("../../../../docs/SERVING_SETTINGS.md");
-    let (_, text) = text.split_once("```toml\n").unwrap();
+    let package_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let path = package_root.join("../../docs/SERVING_SETTINGS.md");
+    // The repository guide is outside the published crate package.
+    if !path.exists() {
+        assert!(
+            !package_root.join("../../../.git").exists(),
+            "missing repository serving settings guide"
+        );
+        return;
+    }
+    let guide = std::fs::read_to_string(path).unwrap();
+    let (_, text) = guide.split_once("```toml\n").unwrap();
     let (text, _) = text.split_once("```").unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("serve.toml");
@@ -459,9 +469,7 @@ fn documented_example_is_a_valid_complete_settings_file() {
     );
     for spec in OPTIONS {
         assert!(
-            text.contains("[model]")
-                && include_str!("../../../../docs/SERVING_SETTINGS.md")
-                    .contains(&format!("`--{}`", spec.name)),
+            text.contains("[model]") && guide.contains(&format!("`--{}`", spec.name)),
             "undocumented {}",
             spec.name
         );

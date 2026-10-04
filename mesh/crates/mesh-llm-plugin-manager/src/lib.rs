@@ -1,6 +1,7 @@
 mod archive;
 pub mod asset;
 pub mod catalog;
+pub mod defaults;
 pub mod github;
 pub mod install;
 pub mod skills;
