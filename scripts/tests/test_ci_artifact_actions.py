@@ -1299,9 +1299,11 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("CACHE_NAMESPACE: mesh-llm", producer)
         self.assertIn(
             "inputs.backend, inputs.target, "
-            "steps.native_toolchain.outputs.epoch, hashFiles(",
+            "steps.native_toolchain.outputs.epoch, "
+            "steps.patched_llama.outputs.sha, hashFiles(",
             producer,
         )
+        self.assertIn("patched SHA does not match prepared llama.cpp", restore_script)
         self.assertIn("'Justfile', 'just/**'", producer)
         self.assertIn(
             "uses: ./.github/actions/resolve-native-toolchain-epoch",
