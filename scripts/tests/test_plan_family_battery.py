@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import struct
 import subprocess
@@ -15,6 +16,55 @@ MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
 
 
 class FamilyBatteryPlannerTests(unittest.TestCase):
+    def test_tensor_byte_preflight_reads_descriptors_without_payloads(self) -> None:
+        spec = importlib.util.spec_from_file_location("family_plan", PLANNER)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.gguf"
+            name = b"weight"
+            # One Q4_0 tensor: 64 values in two 32-value blocks, 18 bytes each.
+            path.write_bytes(
+                b"GGUF" + struct.pack("<IQQ", 3, 1, 0)
+                + struct.pack("<Q", len(name)) + name
+                + struct.pack("<IQIQ", 1, 64, 2, 0)
+            )
+            self.assertEqual(36, module._gguf_tensor_bytes(path, {2: (32, 18)}))
+
+    def test_tensor_byte_preflight_rejects_manifest_mismatch(self) -> None:
+        spec = importlib.util.spec_from_file_location("family_plan", PLANNER)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = {
+                "repo": "example/model",
+                "revision": "a" * 40,
+                "files": ["model.gguf"],
+            }
+            cached = self._materialize_cached_artifact(root, artifact, [2])[0]
+            blob = cached.resolve()
+            name = b"weight"
+            payload = bytearray(blob.read_bytes())
+            payload[8:16] = struct.pack("<Q", 1)
+            payload.extend(struct.pack("<Q", len(name)) + name)
+            payload.extend(struct.pack("<IQIQ", 1, 64, 2, 0))
+            blob.write_bytes(payload)
+            artifact["file_integrity"]["model.gguf"]["size_bytes"] = len(payload)
+            model = {
+                "family": "fixture",
+                "artifact": artifact,
+                "draft_artifact": None,
+                "mmproj_artifact": None,
+                "architecture": "qwen3",
+                "execution": {"mtp_layers": 0, "layer_end": 2, "activation_width": 1024},
+                "resources": {"estimated_model_bytes": 35},
+            }
+            with self.assertRaisesRegex(module.PlanError, "plans 35 tensor bytes.*scans 36"):
+                module._verify_cache([model], root / "cache", {2: (32, 18)})
+
     @staticmethod
     def _write_gguf(
         path: Path,
@@ -349,6 +399,27 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
             result = self._run(MANIFEST, "--verify-plan", str(path))
         self.assertEqual(2, result.returncode)
         self.assertIn("differs from the canonical manifest and selection", result.stderr)
+
+    def test_verify_plan_rejects_gguf_constants_without_scanning_cache(self) -> None:
+        """A verified policy plan must not imply that tensor byte preflight ran."""
+        generated = self._run()
+        self.assertEqual(0, generated.returncode, generated.stderr)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "plan.json"
+            path.write_text(generated.stdout, encoding="utf-8")
+            for cache_args, expected in (
+                ((), "--gguf-constants requires --check-cache"),
+                (("--check-cache",), "--gguf-constants cannot be used with --verify-plan"),
+            ):
+                with self.subTest(cache_args=cache_args):
+                    result = self._run(
+                        MANIFEST,
+                        "--verify-plan", str(path),
+                        *cache_args,
+                        "--gguf-constants", str(Path(temp_dir) / "constants.py"),
+                    )
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn(expected, result.stderr)
 
     def test_non_chat_model_cannot_claim_the_certified_full_profile(self) -> None:
         """Prevent non-chat workloads from inheriting causal-only certification."""
