@@ -563,6 +563,7 @@ fn handle_binary_connection_messages(
                 } else {
                     let eviction_plan = binary_proactive_eviction_plan(
                         message.kind,
+                        message.pos_start,
                         restored_prefill,
                         executable_token_ids.len(),
                         (message.state.prompt_token_count.max(0) as usize)

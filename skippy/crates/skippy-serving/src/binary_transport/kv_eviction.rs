@@ -57,6 +57,7 @@ pub(in crate::binary_transport) struct BinaryProactiveEvictionPlan {
 
 pub(super) fn binary_proactive_eviction_plan(
     kind: WireMessageKind,
+    pos_start: i32,
     restored_prefill: bool,
     executable_token_count: usize,
     remaining_prefill_tokens: usize,
@@ -65,7 +66,8 @@ pub(super) fn binary_proactive_eviction_plan(
         binary_proactive_eviction_required(kind, restored_prefill, executable_token_count);
     BinaryProactiveEvictionPlan {
         required,
-        ensure_session_before_eviction: required && kind.is_prefill(),
+        ensure_session_before_eviction: required
+            && (kind.is_prefill() || (kind == WireMessageKind::DecodeEmbd && pos_start == 0)),
         target_tokens: kind.is_prefill().then(|| {
             u64::try_from(remaining_prefill_tokens.max(executable_token_count)).unwrap_or(u64::MAX)
         }),
@@ -102,9 +104,10 @@ pub(in crate::binary_transport) fn evict_binary_resident_prefix_for_decode(
         return Ok(BinaryProactiveEviction::disabled());
     };
     if plan.ensure_session_before_eviction {
-        // Any prefill chunk can reach eviction before the prefill call has
-        // activated a runtime session. Eviction needs that session for native
-        // resident-prefix sequence drops and decode-batch discovery.
+        // Prefill chunks and the first decode of a one-token prompt can reach
+        // eviction before execution has activated a runtime session. Eviction
+        // needs that session for native resident-prefix sequence drops and
+        // decode-batch discovery.
         runtime.ensure_session_active(session_id).with_context(|| {
             format!("activate binary session {session_id} before resident-prefix eviction")
         })?;
@@ -143,33 +146,92 @@ mod tests {
     #[test]
     fn binary_decode_work_requires_proactive_resident_eviction() {
         assert!(
-            binary_proactive_eviction_plan(WireMessageKind::PrefillFinalEmbd, false, 128, 4096)
+            binary_proactive_eviction_plan(WireMessageKind::PrefillFinalEmbd, 0, false, 128, 4096)
                 .required
         );
-        assert!(binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, false, 1, 0).required);
         assert!(
-            binary_proactive_eviction_plan(WireMessageKind::DecodeReplayEmbd, false, 64, 0)
+            binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, 1, false, 1, 0).required
+        );
+        assert!(
+            binary_proactive_eviction_plan(WireMessageKind::DecodeReplayEmbd, 1, false, 64, 0)
                 .required
         );
         let prefill =
-            binary_proactive_eviction_plan(WireMessageKind::PrefillEmbd, false, 128, 2048);
+            binary_proactive_eviction_plan(WireMessageKind::PrefillEmbd, 0, false, 128, 2048);
         assert!(prefill.required);
         assert!(prefill.ensure_session_before_eviction);
         assert_eq!(prefill.target_tokens, Some(2048));
-        assert!(!binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, true, 1, 0).required);
-        assert!(!binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, false, 0, 0).required);
         assert!(
-            !binary_proactive_eviction_plan(WireMessageKind::TryRestorePrefillDecode, false, 1, 0)
-                .required
+            !binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, 1, true, 1, 0).required
+        );
+        assert!(
+            !binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, 1, false, 0, 0).required
+        );
+        assert!(
+            !binary_proactive_eviction_plan(
+                WireMessageKind::TryRestorePrefillDecode,
+                0,
+                false,
+                1,
+                0
+            )
+            .required
         );
     }
 
     #[test]
     fn one_chunk_prefill_final_admits_session_before_proactive_eviction() {
-        let plan = binary_proactive_eviction_plan(WireMessageKind::PrefillFinalEmbd, false, 1, 1);
+        let plan =
+            binary_proactive_eviction_plan(WireMessageKind::PrefillFinalEmbd, 0, false, 1, 1);
 
         assert!(plan.required);
         assert!(plan.ensure_session_before_eviction);
+    }
+
+    #[test]
+    fn single_token_prompt_decode_admits_session_before_proactive_eviction() {
+        // A fresh one-token prompt sends no prefill frame. Its first downstream
+        // work is DecodeEmbd at position zero, so eviction must admit the lane.
+        let plan = binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, 0, false, 1, 1);
+
+        assert!(plan.required);
+        assert!(plan.ensure_session_before_eviction);
+        assert_eq!(plan.target_tokens, None);
+    }
+
+    #[test]
+    fn decode_admission_is_limited_to_executable_zero_position_decode() {
+        for (pos_start, restored_prefill, executable_tokens) in [
+            (1, false, 1),
+            (128, false, 1),
+            (-1, false, 1),
+            (0, true, 1),
+            (0, false, 0),
+        ] {
+            let plan = binary_proactive_eviction_plan(
+                WireMessageKind::DecodeEmbd,
+                pos_start,
+                restored_prefill,
+                executable_tokens,
+                0,
+            );
+            assert!(!plan.ensure_session_before_eviction);
+        }
+        for kind in [
+            WireMessageKind::DecodeReplayEmbd,
+            WireMessageKind::DecodeReplayFinalEmbd,
+            WireMessageKind::DecodeReadout,
+            WireMessageKind::DecodeLightCtx,
+            WireMessageKind::VerifyWindow,
+        ] {
+            let plan = binary_proactive_eviction_plan(kind, 0, false, 1, 0);
+            assert!(plan.required);
+            assert!(!plan.ensure_session_before_eviction);
+        }
+        let continued_prefill =
+            binary_proactive_eviction_plan(WireMessageKind::PrefillEmbd, 128, false, 1, 16);
+        assert!(continued_prefill.ensure_session_before_eviction);
+        assert_eq!(continued_prefill.target_tokens, Some(16));
     }
 
     #[test]
