@@ -45,3 +45,18 @@ mod publication;
 
 #[path = "ci_runner_cache_contract/controller_checks.rs"]
 mod controller_checks;
+
+#[path = "ci_runner_cache_contract/native_sdk_workflow.rs"]
+mod native_sdk_workflow;
+#[path = "ci_runner_cache_contract/runtime_action.rs"]
+mod runtime_action;
+#[path = "ci_runner_cache_contract/sdk_prepare.rs"]
+mod sdk_prepare;
+#[path = "ci_runner_cache_contract/sdk_resolver.rs"]
+mod sdk_resolver;
+#[path = "ci_runner_cache_contract/static_abi_action.rs"]
+mod static_abi_action;
+#[path = "ci_runner_cache_contract/static_abi_workflow.rs"]
+mod static_abi_workflow;
+#[path = "ci_runner_cache_contract/swift_workflow.rs"]
+mod swift_workflow;
