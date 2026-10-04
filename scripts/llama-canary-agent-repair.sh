@@ -218,6 +218,49 @@ The trusted harness has already written skippy/llama_cpp/upstream.txt to the exa
 
 Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, its publisher, the agent runbook, or their contract tests. Do not create or switch branches, commit, push, open a pull request, or use GitHub credentials. Leave the completed changes in this working tree. The harness will independently rerun the entire verification sequence and only a green exact tree can be published.' \
     "$UPSTREAM_SHA"
+  if [[ -n "${CANARY_PREVIOUS_FEEDBACK:-}" ]]; then
+    printf '\n\nThis is distributed repair attempt %s. The exact prior candidate has already been restored as uncommitted changes on the frozen base. Read the digest-bound family failure summary and every failed-family directory under %s before editing. Preserve the prior repairs, fix the candidate failures demonstrated there, and use focused reproductions before returning control for a new complete family pass.' \
+      "$PASS_ID" "$CANARY_PREVIOUS_FEEDBACK"
+  fi
+}
+
+restore_previous_repair_candidate() {
+  local bundle expected branch bundle_head protected
+  if [[ -z "${CANARY_INPUT_BUNDLE:-}" ]]; then
+    return 0
+  fi
+  if [[ "$HARNESS_MODE" != "repair-build" || -z "${CANARY_PREVIOUS_FEEDBACK:-}" ]]; then
+    echo "previous repair candidate is only valid with distributed family feedback" >&2
+    return 1
+  fi
+  bundle="$CANARY_INPUT_BUNDLE"
+  expected="${CANARY_CANDIDATE_SHA:?previous candidate SHA required}"
+  branch="${CANARY_CANDIDATE_BRANCH:?previous candidate branch required}"
+  git bundle verify "$bundle" >/dev/null
+  bundle_head="$(git bundle list-heads "$bundle" "refs/heads/${branch}" | awk '{print $1}')"
+  if [[ "$bundle_head" != "$expected" ]]; then
+    echo "previous candidate bundle head does not match dependency output" >&2
+    return 1
+  fi
+  git fetch "$bundle" "refs/heads/${branch}" >/dev/null
+  if [[ "$(git rev-parse FETCH_HEAD)" != "$expected" || "$(git rev-parse "${expected}^")" != "$BASE_HEAD" ]]; then
+    echo "previous candidate is not a direct child of the frozen base" >&2
+    return 1
+  fi
+  protected="$(
+    git diff --name-only "$BASE_HEAD" "$expected" -- \
+      .github .agents scripts .gitattributes ci/ci.md ci/llama-canary/agent-repair-prompt.md \
+      | head -n 1
+  )"
+  if [[ -n "$protected" ]]; then
+    echo "previous candidate modified protected orchestration: $protected" >&2
+    return 1
+  fi
+  git diff --binary "$BASE_HEAD" "$expected" -- | git apply --index --binary
+  if [[ "$(git write-tree)" != "$(git rev-parse "${expected}^{tree}")" ]]; then
+    echo "restored previous candidate tree does not match its bundle" >&2
+    return 1
+  fi
 }
 
 agent_session_step() {
@@ -330,6 +373,11 @@ snapshot_candidate_tree() {
     return 1
   fi
   VERIFICATION_TREE="$(git write-tree)"
+  if [[ "$HARNESS_MODE" == "repair-build" && -n "${CANARY_INPUT_BUNDLE:-}" ]] &&
+      [[ "$VERIFICATION_TREE" == "$(git rev-parse "${CANARY_CANDIDATE_SHA}^{tree}")" ]]; then
+    echo "agent made no changes to the restored candidate" >&2
+    return 1
+  fi
   CERTIFIED_SHA="$(
     printf '%s\n\n%s\n' \
       "fix(llama): certify upstream ${UPSTREAM_SHA:0:10}" \
@@ -668,6 +716,7 @@ if ! check_family_cache; then
 fi
 
 if [[ "$HARNESS_MODE" == repair* ]]; then
+  restore_previous_repair_candidate
   write_repair_pin
   verify_repair_pin
   echo "starting agent repair/build gates; distributed families follow in separate jobs"

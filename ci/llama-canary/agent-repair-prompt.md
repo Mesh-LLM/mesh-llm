@@ -81,11 +81,16 @@ pass, the job exports an uncertified immutable candidate and releases its
 runner. Separate jobs certify every family using the exact producer binaries.
 
 A failed family pass or independent verification supplies its candidate and
-all available failure logs to a new session in the next attempt. Read those
-logs before continuing. There are at most three distributed repair attempts;
-every edit requires a new complete build and family pass. Both the first full
-family pass and the fresh independent build/family pass must be green on the
-same commit before the hosted publisher can create a branch or PR.
+confirmed candidate failure logs to a new session in the next attempt. Read
+those logs before continuing. Runner/workflow failures and missing receipts
+are first rechecked only for the affected families on the same immutable
+candidate without invoking this agent; valid candidate failures from a mixed
+pass are retained. Repeated infrastructure failure, corrupt/foreign evidence,
+and other contract failures stop without starting another session. There are
+at most three distributed repair attempts; every edit requires a new complete
+build and family pass. Both the first full family pass and the fresh independent
+build/family pass must be green on the same commit before the hosted publisher
+can create a branch or PR.
 
 ## New upstream model families
 

@@ -257,6 +257,77 @@ run_candidate_gates() {
         self.assertIn("agent developer task exited with status %s", agent)
         self.assertIn('tee -a "$AGENT_LOG"', agent)
 
+    def test_distributed_repair_restores_exact_candidate_and_reads_feedback(self) -> None:
+        restore = self.wrapper[
+            self.wrapper.index("restore_previous_repair_candidate() {") :
+            self.wrapper.index("agent_session_step() {")
+        ]
+        self.assertIn('git bundle verify "$bundle"', restore)
+        self.assertIn('git diff --binary "$BASE_HEAD" "$expected" -- | git apply --index --binary', restore)
+        self.assertIn('git write-tree', restore)
+        self.assertIn('CANARY_PREVIOUS_FEEDBACK', restore)
+        prompt = self.wrapper[
+            self.wrapper.index("agent_prompt() {") :
+            self.wrapper.index("restore_previous_repair_candidate() {")
+        ]
+        self.assertIn('Read the digest-bound family failure summary', prompt)
+
+    def test_snapshot_requires_edits_to_a_restored_repair_build_candidate(self) -> None:
+        snapshot = self.wrapper[
+            self.wrapper.index("snapshot_candidate_tree() {") :
+            self.wrapper.index("write_candidate_bundle() {")
+        ]
+        for mode, bundle, edited, expected_status in (
+            ("repair-build", "prior.bundle", False, 1),
+            ("repair-build", "prior.bundle", True, 0),
+            ("repair-build", "", False, 0),
+            ("repair", "", False, 0),
+        ):
+            with self.subTest(mode=mode, bundle=bundle, edited=edited):
+                with tempfile.TemporaryDirectory() as directory:
+                    repo = Path(directory) / "repo"
+                    repo.mkdir()
+                    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                    subprocess.run(["git", "config", "user.name", "Canary Test"], cwd=repo, check=True)
+                    subprocess.run(["git", "config", "user.email", "canary@example.test"], cwd=repo, check=True)
+                    source = repo / "candidate.txt"
+                    source.write_text("base\n")
+                    subprocess.run(["git", "add", "candidate.txt"], cwd=repo, check=True)
+                    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+                    source.write_text("restored\n")
+                    subprocess.run(["git", "commit", "-qam", "prior candidate"], cwd=repo, check=True)
+                    candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+                    base = subprocess.check_output(["git", "rev-parse", "HEAD^"], cwd=repo, text=True).strip()
+                    delta = subprocess.check_output(["git", "diff", "--binary", base, candidate], cwd=repo)
+                    subprocess.run(["git", "reset", "--hard", "-q", base], cwd=repo, check=True)
+                    subprocess.run(["git", "apply", "--index", "--binary"], cwd=repo, input=delta, check=True)
+                    if edited:
+                        source.write_text("repaired\n")
+                    build = Path(directory) / "build"
+                    closure = Path(f"{build}-workloads")
+                    closure.mkdir()
+                    (closure / "producer.json").write_text("{}\n")
+                    fixture = "\n".join((
+                        "set -euo pipefail",
+                        'ROOT="$1" LLAMA_STAGE_BUILD_DIR="$2" HARNESS_MODE="$3"',
+                        'CANARY_INPUT_BUNDLE="$4" CANARY_CANDIDATE_SHA="$5" BASE_HEAD="$6"',
+                        'UPSTREAM_SHA=0123456789abcdef',
+                        'assert_agent_control_unchanged() { :; }',
+                        'verify_repair_pin() { :; }',
+                        'validate_agent_manifest_changes() { :; }',
+                        'python3() { :; }',
+                        'shasum() { printf "%064d  %s\\n" 0 "$3"; }',
+                        snapshot,
+                        'snapshot_candidate_tree',
+                    ))
+                    result = subprocess.run(
+                        ["bash", "-c", fixture, "bash", str(repo), str(build), mode, bundle, candidate, base],
+                        cwd=repo, text=True, capture_output=True, check=False,
+                    )
+                    self.assertEqual(expected_status, result.returncode, result.stderr)
+                    if expected_status:
+                        self.assertIn("agent made no changes to the restored candidate", result.stderr)
+
     def test_failed_repair_keeps_unverified_source_in_uploaded_evidence(self) -> None:
         failure = self.wrapper[self.wrapper.index('if repair_candidate_until_green; then'):
                                self.wrapper.index('snapshot_candidate_tree', self.wrapper.index('if repair_candidate_until_green; then'))]
