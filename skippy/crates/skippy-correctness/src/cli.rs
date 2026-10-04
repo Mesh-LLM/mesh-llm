@@ -285,6 +285,8 @@ pub struct StateHandoffArgs {
     pub skip_suffix_prefill_check: bool,
     #[arg(long)]
     pub synthetic_input_activation: bool,
+    /// Unsupported: binary state export/import is unavailable. Omit this flag
+    /// to use local runtime state handoff.
     #[arg(long)]
     pub binary_control: bool,
     /// Run the experimental CacheGen acceptance gate against the native
