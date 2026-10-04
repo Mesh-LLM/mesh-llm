@@ -25,6 +25,7 @@ import http.client
 import importlib.util
 import json
 import os
+import runpy
 import statistics
 import subprocess
 import sys
@@ -35,6 +36,7 @@ from typing import Any
 
 
 REPO = Path(__file__).resolve().parents[2]
+serve_args = runpy.run_path(Path(__file__).with_name("serving_cli.py"))["serve_args"]
 SUMMARY_EVENT = "stage.openai_generation_summary"
 RADIX_KEYS = (
     "skippy.kv.radix.namespaces",
@@ -471,7 +473,7 @@ def run_server_cell(
     port = harness.free_port()
     cmd = [
         str(binary),
-        "serve-openai",
+        *serve_args(binary),
         "--config",
         str(config_path),
         "--bind-addr",
