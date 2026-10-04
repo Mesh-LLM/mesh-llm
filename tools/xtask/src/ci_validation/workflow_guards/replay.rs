@@ -73,11 +73,23 @@ fn history_admission(steps: &[Node]) -> DynResult<()> {
         "history repair decision",
     )?;
     let (_, baseline) = by_id(steps, "baseline")?;
-    require(
-        field(baseline, "run"),
-        "cargo xtool automation replay-matrix history-fetch",
-        "anonymous baseline owner",
+    super::handoffs::command(
+        baseline,
+        &[
+            "cargo",
+            "xtool",
+            "automation",
+            "replay-matrix",
+            "history-fetch",
+        ],
+        &[
+            ("--dataset-repo", "\"$DATASET_REPO\""),
+            ("--output", "\"$HISTORY_LOCAL\""),
+        ],
     )?;
+    if field(baseline, "run").is_some_and(|body| body.contains("HF_TOKEN")) {
+        return Err("anonymous history must not acquire publisher credentials".into());
+    }
     if baseline
         .get("env")
         .and_then(|env| env.get("HF_TOKEN"))
@@ -158,6 +170,26 @@ mod tests {
             ("id: inputs", "id: obsolete_inputs"),
             ("--python \"$REPLAY_PYTHON\"", "--reader unspecified"),
         ] {
+            assert!(validate(&WORKFLOW.replace(from, to)).is_err(), "{from}");
+        }
+    }
+    #[test]
+    fn history_fetch_requires_bound_dataset_output_and_anonymous_command() {
+        for (from, to) in [
+            (
+                "--dataset-repo \"$DATASET_REPO\" --output \"$HISTORY_LOCAL\"",
+                "--dataset-repo foreign/dataset --output \"$HISTORY_LOCAL\"",
+            ),
+            (
+                "--dataset-repo \"$DATASET_REPO\" --output \"$HISTORY_LOCAL\"",
+                "--dataset-repo \"$DATASET_REPO\" --output /tmp/unbound",
+            ),
+            (
+                "cargo xtool automation replay-matrix history-fetch",
+                "HF_TOKEN=publisher cargo xtool automation replay-matrix history-fetch",
+            ),
+        ] {
+            assert!(WORKFLOW.contains(from));
             assert!(validate(&WORKFLOW.replace(from, to)).is_err(), "{from}");
         }
     }

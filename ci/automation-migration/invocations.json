@@ -15064,5 +15064,30 @@
       "path": ".omo/evidence/resume-20261002/registry-canary-retirement-v1-receipts.json",
       "sha256": "1e62b665d4d409a08ccb78f935a804238fb9b5af81d51d308fa630ca3061ee39"
     }
+  },
+  "canary_replay_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 109,
+    "core_modules_after": 49,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/canary-replay-test-retirement-coverage.json",
+      "sha256": "c734085dd798476ac1c96362d47802bf0343652c6b1a1b2b0f77c316eba36987"
+    },
+    "current_test_tree": {
+      "sha256": "8776163555aaf450149a4ff2f2a87fe5ff440c1b0eadd39a6d5d292e2f7d6c3d",
+      "paths": 45
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "8611ae3aa87cb6242d58424c5f5a853fd327b23f4891821da195c2efea2252c5",
+      "roster_line": 24,
+      "count": 49
+    },
+    "qualification": {
+      "path": ".omo/evidence/resume-20261002/canary-replay-test-retirement-v1-receipts.json",
+      "sha256": "d30c6c833e8db0b42f23f45a6a5fd47c346b673b456864b5b79415d695e799e4"
+    }
   }
 }

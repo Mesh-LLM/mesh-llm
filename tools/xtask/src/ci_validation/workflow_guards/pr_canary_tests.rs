@@ -174,3 +174,38 @@ fn every_reachable_workflow_rejects_credentials_write_or_privileged_execution() 
         }
     }
 }
+
+#[test]
+fn immutable_merge_identity_and_bounded_summary_cannot_be_dropped() {
+    let source = include_str!("../../../../../.github/workflows/ci-pr-canary-lane.yml");
+    for (from, to) in [
+        ("name: Canary / CI", "name: Unbound result"),
+        (
+            "[plan, ui_artifact, hosts, native_runtime, product]",
+            "[plan, hosts]",
+        ),
+        ("[[ \"$PRODUCT_RESULT\" == success ]]", "true"),
+        ("native runtime-event gate", "unqualified gate"),
+        ("Linux lane orchestration", "unqualified orchestration"),
+        ("refs/pull/${PR_NUMBER}/head", "refs/heads/main"),
+        (
+            "ref: ${{ inputs.merge_sha }}",
+            "ref: ${{ inputs.head_sha }}",
+        ),
+        (
+            "git merge-base --is-ancestor \"$HEAD_SHA\" \"$MERGE_SHA\"",
+            "true",
+        ),
+        ("parent_count < 3", "parent_count < 2"),
+        ("-- ci/ownership.yml ci/slices.yml", "-- unrelated.yml"),
+        ("PR_NUMBER: ${{ inputs.pr_number }}", "PR_NUMBER: 1"),
+    ] {
+        assert!(source.contains(from));
+        let mut workflows = actual();
+        workflows.insert(
+            "ci-pr-canary-lane.yml".into(),
+            workflow_yaml::parse(&source.replace(from, to)).unwrap(),
+        );
+        assert!(check(&workflows).is_err(), "{from}");
+    }
+}
