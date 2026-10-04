@@ -11,7 +11,11 @@ use skippy_serving::frontend::DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
-#[command(name = "skippy", version, about = "Skippy model serving and runtime management")]
+#[command(
+    name = "skippy",
+    version,
+    about = "Skippy model serving and runtime management"
+)]
 pub struct Cli {
     /// Output presentation for humans or automation.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Auto)]
