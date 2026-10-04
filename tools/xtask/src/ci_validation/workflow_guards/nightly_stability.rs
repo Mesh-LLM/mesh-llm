@@ -51,6 +51,34 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     )?;
     h::binding(kv, "continue-on-error", "true")?;
     h::before(execute, kv_execute)?;
+    h::command(
+        kv,
+        &[
+            "\"${MESH_LLM_AUTOMATION_BIN:?automation",
+            "preparation",
+            "required}\"",
+            "automation",
+            "stability",
+            "kv-tool-loop",
+        ],
+        &[
+            ("--base-url", "\"$MESH_STABILITY_BASE_URL\""),
+            ("--models", "\"$MESH_KV_MODELS\""),
+            ("--attempts", "\"$MESH_KV_ATTEMPTS\""),
+            ("--pressure-turns", "\"$MESH_KV_PRESSURE_TURNS\""),
+            ("--overlap-requests", "\"$MESH_KV_OVERLAP_REQUESTS\""),
+            ("--timeout", "\"$MESH_STABILITY_TIMEOUT\""),
+            ("--min-cached-tokens", "\"$MESH_KV_MIN_CACHED_TOKENS\""),
+            (
+                "--suffix-prefill-limit",
+                "\"$MESH_KV_SUFFIX_PREFILL_LIMIT\"",
+            ),
+            (
+                "--output-dir",
+                "\"$MESH_STABILITY_OUTPUT_DIR/kv-tool-loop\"",
+            ),
+        ],
+    )?;
     let (summary_index, summary) = h::step(steps, "name", "Publish run summary")?;
     let (upload_index, upload) = h::step(steps, "name", "Upload stability evidence")?;
     let (fail_index, fail) = h::step(steps, "name", "Fail on stability regression")?;
@@ -248,6 +276,27 @@ mod tests {
             assert!(
                 check(&documents(&SOURCE.replace(from, to))).is_err(),
                 "accepted broken nightly handoff: {from}"
+            );
+        }
+    }
+
+    #[test]
+    fn nightly_kv_native_owner_rejects_missing_command_or_changed_probe_inputs() {
+        for (from, to) in [
+            (
+                "automation stability kv-tool-loop",
+                "automation stability nightly",
+            ),
+            ("--pressure-turns", "--other-turns"),
+            ("--overlap-requests", "--other-requests"),
+            ("--min-cached-tokens", "--other-tokens"),
+            ("--suffix-prefill-limit", "--other-limit"),
+            ("\"$MESH_KV_MODELS\"", "\"$MESH_STABILITY_MODELS\""),
+        ] {
+            assert!(SOURCE.contains(from));
+            assert!(
+                check(&documents(&SOURCE.replace(from, to))).is_err(),
+                "accepted broken KV caller: {from}"
             );
         }
     }

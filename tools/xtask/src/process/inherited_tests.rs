@@ -75,12 +75,23 @@ fn deadline_cancellation_and_normal_exit_clean_only_owned_tree() {
     let directory = tempfile::tempdir().unwrap();
     let mut sentinel = Command::new("/bin/sleep").arg("30").spawn().unwrap();
     let result = supervise_inherited(
-        &spec("trap '' TERM; /bin/sleep 30 & wait", directory.path()),
+        &spec(
+            "trap '' TERM; printf ready > term-ready; /bin/sleep 30 & wait",
+            directory.path(),
+        ),
         &limits(),
         &Cancellation::default(),
     )
     .unwrap();
-    assert!(result.cleanup.complete && result.cleanup.forced);
+    assert!(
+        result.cleanup.complete && result.cleanup.forced,
+        "deadline cleanup={:?}, outcome={:?}, failure={:?}, elapsed={:?}, fixture_ready={}",
+        result.cleanup,
+        result.outcome,
+        result.failure,
+        result.elapsed,
+        directory.path().join("term-ready").is_file(),
+    );
     assert_eq!(result.outcome, Outcome::Deadline);
     assert!(sentinel.try_wait().unwrap().is_none());
     let token = Cancellation::default();

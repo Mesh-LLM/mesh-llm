@@ -1,6 +1,19 @@
 mod agents;
 mod cases;
 mod evidence;
+mod kv_cache;
+mod kv_cache_probe;
+mod kv_certification;
+mod kv_conversation;
+mod kv_mode;
+mod kv_native_logs;
+mod kv_options;
+mod kv_overlap;
+mod kv_plans;
+mod kv_reports;
+mod kv_requests;
+mod kv_tool_calls;
+mod kv_transcripts;
 mod options;
 mod plans;
 mod release_attestation;
@@ -28,10 +41,18 @@ use std::{
 pub(crate) use options::USAGE;
 
 pub(crate) fn run(root: Option<&Path>, args: &[String]) -> DynResult<()> {
+    if args.first().is_some_and(|mode| mode == "kv-tool-loop") {
+        return kv_mode::run(&args[1..]);
+    }
     let help = args == ["--help"]
         || matches!(args, [mode, flag] if matches!(mode.as_str(), "nightly" | "tool-call") && flag == "--help");
     if help {
-        return CheckReport::success(format!("{USAGE}\n")).emit();
+        let usage = if args == ["--help"] {
+            format!("{USAGE}\n{}\n", kv_options::USAGE)
+        } else {
+            format!("{USAGE}\n")
+        };
+        return CheckReport::success(usage).emit();
     }
     let mut options = match Options::parse(args) {
         Ok(options) => options,

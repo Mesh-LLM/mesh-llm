@@ -233,18 +233,6 @@
       ]
     },
     {
-      "file": ".github/workflows/nightly-stability-run.yml",
-      "members": [
-        [
-          181,
-          "cebac2970963c61a",
-          1,
-          "script",
-          "direct executable shebang scripts/qa-kv-tool-loop-stability.py --base-url $MESH_STABILITY_BASE_URL --models $MESH_KV_MODELS --attempts $MESH_KV_ATTEMPTS --pressure-turns $MESH_KV_PRESSURE_TURNS --overlap-requests $MESH_KV_OVERLAP_REQUESTS --timeout $MESH_STABILITY_TIMEOUT --min-cached-tokens $MESH_KV_MIN_CACHED_TOKENS --suffix-prefill-limit $MESH_KV_SUFFIX_PREFILL_LIMIT --output-dir $MESH_STABILITY_OUTPUT_DIR/kv-tool-loop; optional inputs.kv_tool_loop; later summary checks outcome"
-        ]
-      ]
-    },
-    {
       "file": ".github/workflows/windows-warm-caches.yml",
       "members": [
         [
@@ -9756,6 +9744,117 @@
         "sha256": "098d38f629f5e60818fda5bf7657cd6fccd543afd7d22c0a984d604be043ab67"
       },
       "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. KV tool-loop helper and optional OpenCode Python closure remain open."
+    }
+  },
+  "kv_native_caller_cutover": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "source": {
+      "path": ".github/workflows/nightly-stability-run.yml",
+      "sha256": "b476c0e179ee354cfb3c66dfff8dad9c6cd6861a630e51fe3e9e8530b49fc4f4"
+    },
+    "archived_python_callers": {
+      "file": ".github/workflows/nightly-stability-run.yml",
+      "members": [
+        [
+          181,
+          "cebac2970963c61a",
+          1,
+          "script",
+          "direct executable shebang scripts/qa-kv-tool-loop-stability.py --base-url $MESH_STABILITY_BASE_URL --models $MESH_KV_MODELS --attempts $MESH_KV_ATTEMPTS --pressure-turns $MESH_KV_PRESSURE_TURNS --overlap-requests $MESH_KV_OVERLAP_REQUESTS --timeout $MESH_STABILITY_TIMEOUT --min-cached-tokens $MESH_KV_MIN_CACHED_TOKENS --suffix-prefill-limit $MESH_KV_SUFFIX_PREFILL_LIMIT --output-dir $MESH_STABILITY_OUTPUT_DIR/kv-tool-loop; optional inputs.kv_tool_loop; later summary checks outcome"
+        ]
+      ]
+    },
+    "required_owner": {
+      "command": "automation stability kv-tool-loop",
+      "target": "migration_stability",
+      "workflow_guard": "ci_validation::workflow_guards::nightly_stability"
+    },
+    "legacy_owner_retained": false,
+    "limits": [
+      "Local focused implementation tests passed; caller cutover and full gate pending.",
+      "No live model or hosted nightly qualification."
+    ],
+    "previous_activation_status": "APPLIED_CALLER_UNQUALIFIED",
+    "legacy_owner_retained_at_activation": true,
+    "qualification": {
+      "source_head": "2c8acd66fdc237b32c52217a81679cbe48ba9a30",
+      "receipts": {
+        "path": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-receipts.json",
+        "sha256": "8df1e27cc3e787c8d17ef3ac0ff6dd1170a46cc05dce6ffee9014ab6b0b71804"
+      },
+      "normal": {
+        "targets": 112,
+        "passed": 4474,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 801,
+          "passed": 787,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 404.844
+        },
+        "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-normal.log",
+        "sha256": "078198d29f32ec79d549dffcd55fcd8d49752d8b36174d8efd407a7b7baf2698"
+      },
+      "focused": {
+        "units": 42,
+        "actual_cli": 28,
+        "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-native.log",
+        "sha256": "764fabfc459fe24c13ba18b7f5a2e381aa855e54c33d9b68584869090eca9ed4"
+      },
+      "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. Optional OpenCode Python closure remains open. Prior inherited cleanup failure cause remains unproven; diagnostics preserve deadlines/assertions; full prepared_source and ten exact repeats passed before this full postimage gate."
+    }
+  },
+  "kv_tool_loop_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 113,
+    "core_modules_after": 53,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/kv-tool-loop-retirement-coverage.json",
+      "sha256": "45dfd3d64d74a9a29a22b87ddb7966afaa9cc3864f4f531b176ac9abe775d0f7"
+    },
+    "current_test_tree": {
+      "sha256": "f15a213e9cc9fc6bb8eb25230584e065fc2d1c8988d156276a0794d6c383b458",
+      "paths": 47
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "roster_line": 24,
+      "count": 53
+    },
+    "supersedes": "Legacy KV source and tests retired after native caller qualification; historical records retained.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "qualification": {
+      "source_head": "2c8acd66fdc237b32c52217a81679cbe48ba9a30",
+      "receipts": {
+        "path": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-receipts.json",
+        "sha256": "8df1e27cc3e787c8d17ef3ac0ff6dd1170a46cc05dce6ffee9014ab6b0b71804"
+      },
+      "normal": {
+        "targets": 112,
+        "passed": 4474,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 801,
+          "passed": 787,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 404.844
+        },
+        "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-normal.log",
+        "sha256": "078198d29f32ec79d549dffcd55fcd8d49752d8b36174d8efd407a7b7baf2698"
+      },
+      "focused": {
+        "units": 42,
+        "actual_cli": 28,
+        "log": ".omo/evidence/resume-20261002/kv-retirement-postimage-v1-native.log",
+        "sha256": "764fabfc459fe24c13ba18b7f5a2e381aa855e54c33d9b68584869090eca9ed4"
+      },
+      "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. Optional OpenCode Python closure remains open. Prior inherited cleanup failure cause remains unproven; diagnostics preserve deadlines/assertions; full prepared_source and ten exact repeats passed before this full postimage gate."
     }
   }
 }
