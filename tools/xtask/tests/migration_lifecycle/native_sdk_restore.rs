@@ -477,3 +477,6 @@ fn native_runtime_and_sdk_archive_verifiers_refuse_sibling_and_single_file_paylo
 
 #[path = "native_sdk_restore/kotlin_consumer.rs"]
 mod kotlin_consumer;
+
+#[path = "native_sdk_restore/swift_consumer.rs"]
+mod swift_consumer;

@@ -87,11 +87,13 @@ native_runtime_dir="$(
 )"
 export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
 
+export MESH_SDK_REPOSITORY_ROOT="$REPO_ROOT"
+
 # shellcheck disable=SC2016 # The nested shell expands exported fixture variables.
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
     bash -lc '
         set -euo pipefail
-        cd '"$REPO_ROOT"'
+        cd "$MESH_SDK_REPOSITORY_ROOT"
         swift run \
             --package-path mesh/sdk/swift/example/MeshExampleApp \
             MeshExampleApp \

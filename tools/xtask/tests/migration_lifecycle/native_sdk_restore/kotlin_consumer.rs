@@ -1,15 +1,15 @@
 //! Actual Kotlin adapter with real archive/console owners and finite process observers.
-//! This does not execute Java, Gradle, a model, or the nested login shell.
+//! Nested body coverage uses an inert Gradle observer. No model or real Gradle is run.
 use super::*;
 
-fn write_executable(root: &Path, name: &str, body: &str) {
+pub(super) fn write_executable(root: &Path, name: &str, body: &str) {
     let path = root.join(name);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-fn consumer_fixture() -> Fixture {
+pub(super) fn consumer_fixture() -> Fixture {
     let fixture = Fixture::new(false);
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for name in [
@@ -89,6 +89,24 @@ printf '%s' "$7" > "$GITHUB_WORKSPACE/nested-client-body"
 printf 'verified-library-client-handoff\n' > "$GITHUB_WORKSPACE/client-observer"
 printf '%s' "$MESHLLM_KOTLIN_JNA_LIBRARY_PATH" > "$GITHUB_WORKSPACE/consumed-library-path"
 [[ ! -f "$GITHUB_WORKSPACE/fail-client" ]] || exit 18
+if [[ -f "$GITHUB_WORKSPACE/execute-nested-client" ]]; then
+    export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$GITHUB_WORKSPACE/owned-cache"
+    export MESH_SDK_INVITE_TOKEN="inert-invite"
+    /bin/bash -c "$7"
+fi
+"#,
+    );
+    write_executable(
+        &fixture.root,
+        "sdk/kotlin/example/example-jvm/gradlew",
+        r#"#!/bin/bash
+set -euo pipefail
+[[ "$PWD" == "$GITHUB_WORKSPACE/sdk/kotlin/example/example-jvm" ]] || exit 92
+[[ "$#" == 3 && "$1" == --no-daemon && "$2" == run && "$3" == --args=inert-invite ]] || exit 93
+[[ "$MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR" == "$GITHUB_WORKSPACE/observed-runtime" ]] || exit 94
+[[ "$MESH_LLM_NATIVE_RUNTIME_CACHE_DIR" == "$GITHUB_WORKSPACE/owned-cache" ]] || exit 95
+printf 'literal-root-client-body\n' > "$GITHUB_WORKSPACE/client-body-observer"
+[[ ! -f "$GITHUB_WORKSPACE/fail-client-body" ]] || exit 23
 "#,
     );
     fixture
@@ -263,4 +281,58 @@ fn kotlin_actual_consumer_stops_before_client_on_console_build_or_argument_failu
     );
     assert!(!report.process.status.unwrap().success());
     assert!(!fixture.root.join("client-observer").exists());
+}
+
+#[test]
+fn kotlin_actual_handoff_body_keeps_spaces_quotes_and_dollar_in_repository_path_literal() {
+    let mut fixture = consumer_fixture();
+    let renamed = fixture
+        .root
+        .parent()
+        .unwrap()
+        .join("SDK with 'quotes' and $literal");
+    fs::rename(&fixture.root, &renamed).unwrap();
+    fixture.root = renamed;
+    fs::create_dir_all(fixture.root.join("sdk/kotlin/example/example-jvm")).unwrap();
+    fs::write(
+        fixture.root.join("execute-nested-client"),
+        b"bounded body execution",
+    )
+    .unwrap();
+    let report = run_consumer(
+        &fixture,
+        "x86_64-unknown-linux-gnu",
+        "debug",
+        Some("--skip-build"),
+    );
+    assert!(
+        report.process.status.unwrap().success(),
+        "{}",
+        String::from_utf8_lossy(report.stderr.as_ref().unwrap().as_bytes())
+    );
+    assert_eq!(
+        fs::read(fixture.root.join("client-body-observer")).unwrap(),
+        b"literal-root-client-body\n"
+    );
+}
+
+#[test]
+fn kotlin_actual_handoff_body_failure_propagates_and_cleans_the_verified_library() {
+    let fixture = consumer_fixture();
+    fs::write(
+        fixture.root.join("execute-nested-client"),
+        b"bounded body execution",
+    )
+    .unwrap();
+    fs::write(fixture.root.join("fail-client-body"), b"finite failure").unwrap();
+    let report = run_consumer(
+        &fixture,
+        "x86_64-unknown-linux-gnu",
+        "debug",
+        Some("--skip-build"),
+    );
+    assert_eq!(report.process.status.unwrap().code(), Some(23));
+    assert!(fixture.root.join("client-body-observer").is_file());
+    let consumed = fs::read_to_string(fixture.root.join("consumed-library-path")).unwrap();
+    assert!(!Path::new(&consumed).exists());
 }
