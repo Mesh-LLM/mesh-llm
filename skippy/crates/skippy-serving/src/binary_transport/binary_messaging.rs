@@ -1,7 +1,11 @@
 mod public_frontend;
+mod server_lifecycle;
+
+pub(crate) use server_lifecycle::serve_binary_stage_with_shutdown_and_boundary_observer;
+use server_lifecycle::{EmbeddedFrontendTask, wait_for_shutdown};
+pub use server_lifecycle::{serve_binary_stage, serve_binary_stage_with_shutdown};
 use std::{
     collections::BTreeMap,
-    future::Future,
     io::{self, Write},
     net::{TcpListener, TcpStream},
     sync::{
@@ -345,70 +349,6 @@ fn finish_connection_workers(
         (Err(error), Err(shutdown_error)) => Err(error.context(format!(
             "connection worker shutdown also failed: {shutdown_error:#}"
         ))),
-    }
-}
-
-pub async fn serve_binary_stage(options: BinaryStageOptions) -> Result<()> {
-    serve_binary_stage_with_shutdown(options, std::future::pending::<()>()).await
-}
-
-pub async fn serve_binary_stage_with_shutdown(
-    options: BinaryStageOptions,
-    shutdown: impl Future<Output = ()> + Send + 'static,
-) -> Result<()> {
-    serve_binary_stage_with_shutdown_and_boundary_observer(options, shutdown, |_, _| {}).await
-}
-
-pub(crate) async fn serve_binary_stage_with_shutdown_and_boundary_observer(
-    options: BinaryStageOptions,
-    shutdown: impl Future<Output = ()> + Send + 'static,
-    boundary_observer: impl FnOnce(Option<ActivationBoundaryDesc>, Option<ActivationBoundaryDesc>),
-) -> Result<()> {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_task = tokio::spawn({
-        let stop = stop.clone();
-        async move {
-            shutdown.await;
-            stop.store(true, Ordering::SeqCst);
-        }
-    });
-    let result = run_binary_stage(options, stop, boundary_observer);
-    stop_task.abort();
-    if let Some(frontend) = result? {
-        frontend.finish().await?;
-    }
-    Ok(())
-}
-
-/// Own the frontend task so startup failures, panics and early worker errors
-/// cannot leave a detached listener behind.
-struct EmbeddedFrontendTask(Option<tokio::task::JoinHandle<Result<()>>>);
-
-impl EmbeddedFrontendTask {
-    fn is_finished(&self) -> bool {
-        self.0.as_ref().is_none_or(|task| task.is_finished())
-    }
-
-    async fn finish(mut self) -> Result<()> {
-        if let Some(task) = self.0.as_mut() {
-            task.await.context("embedded OpenAI task failed")??;
-        }
-        self.0.take();
-        Ok(())
-    }
-}
-
-impl Drop for EmbeddedFrontendTask {
-    fn drop(&mut self) {
-        if let Some(task) = self.0.take() {
-            task.abort();
-        }
-    }
-}
-
-async fn wait_for_shutdown(requested: Arc<AtomicBool>) {
-    while !requested.load(Ordering::SeqCst) {
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -765,7 +705,7 @@ mod shutdown_tests {
         finish_connection_workers,
     };
     use crate::test_activation::boundary_f32;
-    use anyhow::{Context, anyhow};
+    use anyhow::anyhow;
     use std::{
         io::{Read, Write},
         net::{TcpListener, TcpStream},
@@ -777,98 +717,6 @@ mod shutdown_tests {
         thread,
         time::{Duration, Instant},
     };
-
-    #[tokio::test]
-    async fn embedded_frontend_failure_and_panic_are_returned_to_the_owner() {
-        let failed = super::EmbeddedFrontendTask(Some(tokio::spawn(async {
-            Err(anyhow!("frontend bind failed"))
-        })));
-        assert!(
-            failed
-                .finish()
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("bind failed")
-        );
-        let panicked = super::EmbeddedFrontendTask(Some(tokio::spawn(async {
-            panic!("frontend panic");
-            #[allow(unreachable_code)]
-            Ok(())
-        })));
-        assert!(
-            panicked
-                .finish()
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("task failed")
-        );
-    }
-
-    #[tokio::test]
-    async fn early_worker_exit_cancels_the_owned_frontend() {
-        let (dropped, observed) = tokio::sync::oneshot::channel::<()>();
-        let task = super::EmbeddedFrontendTask(Some(tokio::spawn(async move {
-            let _dropped = dropped;
-            std::future::pending::<()>().await;
-            Ok(())
-        })));
-        drop(task);
-        assert!(
-            tokio::time::timeout(Duration::from_secs(1), observed)
-                .await
-                .unwrap()
-                .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn cancelling_the_join_also_cancels_the_frontend() {
-        let (dropped, observed) = tokio::sync::oneshot::channel::<()>();
-        let task = super::EmbeddedFrontendTask(Some(tokio::spawn(async move {
-            let _dropped = dropped;
-            std::future::pending::<()>().await;
-            Ok(())
-        })));
-        let owner = tokio::spawn(task.finish());
-        tokio::task::yield_now().await;
-        owner.abort();
-        let _ = owner.await;
-        assert!(
-            tokio::time::timeout(Duration::from_secs(1), observed)
-                .await
-                .unwrap()
-                .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn frontend_remains_owned_until_inflight_work_finishes_after_stop() {
-        let requested = Arc::new(AtomicBool::new(false));
-        let (draining, started) = tokio::sync::oneshot::channel();
-        let (release, finished) = tokio::sync::oneshot::channel();
-        let task = super::EmbeddedFrontendTask(Some(tokio::spawn({
-            let requested = requested.clone();
-            async move {
-                super::wait_for_shutdown(requested).await;
-                let _ = draining.send(());
-                finished.await.context("drain interrupted")?;
-                Ok(())
-            }
-        })));
-        requested.store(true, Ordering::SeqCst);
-        tokio::time::timeout(Duration::from_secs(1), started)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            !task.is_finished(),
-            "stop request must not detach an active frontend"
-        );
-        release.send(()).unwrap();
-        task.finish().await.unwrap();
-    }
 
     #[test]
     fn graph_boundary_is_the_only_activation_width_authority() {
