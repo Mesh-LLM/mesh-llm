@@ -46,10 +46,19 @@ pub(super) fn run(plan: Plan, failure: Option<&str>) {
     let mut sentinel = Sentinel::new(&case);
     let output = command(&case).output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.success(), failure.is_none(), "{stderr}");
+    let milestones = ["audit.json", "startup.armed", "models.armed", "handler"]
+        .map(|name| (name, case.native.join(name).exists()));
+    assert_eq!(
+        output.status.success(),
+        failure.is_none(),
+        "{stderr}; fixture milestones: {milestones:?}"
+    );
     match failure {
         Some(cause) => {
-            assert!(stderr.contains(cause), "{stderr}");
+            assert!(
+                stderr.contains(cause),
+                "{stderr}; fixture milestones: {milestones:?}"
+            );
             assert!(output.stdout.is_empty());
         }
         None => assert!(

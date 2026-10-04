@@ -12,6 +12,8 @@ readme = "README.md"
 sha2.workspace = true
 
 [dependencies]
+base64 = "0.22.1"
+clap.workspace = true
 anyhow.workspace = true
 bytes = "1"
 chrono = "0.4"
@@ -19,6 +21,7 @@ hf_hub = { package = "skippy-hf-hub", path = "../skippy-hf-hub", version = "0.78
 skippy-model-hf = { path = "../skippy-model-hf", version = "0.78.0"  }
 skippy-model-ref = { path = "../skippy-model-ref", version = "0.78.0"  }
 skippy-package-format = { path = "../skippy-package-format", version = "0.78.0" }
+mesh-llm-events = { path = "../../../mesh/crates/mesh-llm-events", version = "0.78.0" }
 reqwest = { version = "0.13", features = ["json", "stream"] }
 serde.workspace = true
 serde_json.workspace = true

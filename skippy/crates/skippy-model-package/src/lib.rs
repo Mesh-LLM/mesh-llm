@@ -27,3 +27,5 @@ pub fn build_hf_client() -> Result<hf_hub::HFClient> {
 
     builder.build().context("build HuggingFace API client")
 }
+
+pub mod snapshot_promotion;

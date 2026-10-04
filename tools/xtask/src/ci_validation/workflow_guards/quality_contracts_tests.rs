@@ -128,7 +128,10 @@ fn required_cargo_test_cannot_be_looped_or_have_errexit_disabled_or_status_repla
     for changed in [
         source.replace("set -euo pipefail", "set -euo pipefail\n    set +e"),
         source.replace("set -euo pipefail", "set -euo pipefail\n    set +o errexit"),
-        source.clone() + "    echo success\n",
+        source.replace(
+            "        -- --test-threads=1\n",
+            "        -- --test-threads=1\n    echo success\n",
+        ),
         looped,
     ] {
         assert!(recipe(&changed, &targets).is_err());
@@ -173,4 +176,27 @@ fn replacement_owner_cannot_be_omitted_from_the_normal_registry() {
         error.to_string(),
         "Quality integration owners omitted from normal CI: replacement"
     );
+}
+
+#[test]
+fn snapshot_component_library_and_actual_cli_cannot_be_omitted_or_filtered() {
+    let (source, targets) = inputs();
+    recipe(&source, &targets).unwrap();
+    for changed in [
+        source.replace("    just ci-snapshot-promotion-contracts\n", ""),
+        source.replace(
+            "    just ci-snapshot-promotion-contracts\n",
+            "    just ci-snapshot-promotion-contracts || true\n",
+        ),
+        source.replace(
+            "-p model-package --lib --test snapshot_promotion_cli",
+            "-p model-package --test snapshot_promotion_cli",
+        ),
+        source.replace(
+            "--test snapshot_promotion_cli -- --test-threads=1",
+            "--test snapshot_promotion_cli -- preview --test-threads=1",
+        ),
+    ] {
+        assert!(recipe(&changed, &targets).is_err());
+    }
 }

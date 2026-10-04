@@ -56,6 +56,7 @@
       "skippy-rewriter-build",
       "skippy-wan-lab-build-bins",
       "skippy-workload-oracles-build",
+      "snapshot-promoter-release-build",
       "spec-bench"
     ],
     "just/mesh.just": [
@@ -98,6 +99,7 @@
       "ci-legacy-contracts",
       "ci-sccache-seed-build",
       "ci-shellcheck",
+      "ci-snapshot-promotion-contracts",
       "ci-validate",
       "no-console-print",
       "publish-crates",

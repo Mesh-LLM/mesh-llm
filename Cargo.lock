@@ -8710,9 +8710,12 @@ name = "skippy-model-package"
 version = "0.78.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bytes",
  "chrono",
+ "clap",
  "futures",
+ "mesh-llm-events",
  "reqwest 0.13.5",
  "serde",
  "serde_json",

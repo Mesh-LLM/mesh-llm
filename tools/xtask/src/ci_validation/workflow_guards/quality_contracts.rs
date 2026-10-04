@@ -176,7 +176,30 @@ fn recipe(source: &str, targets: &[String]) -> DynResult<()> {
     if test + 1 != commands.len() {
         return Err("direct required Cargo test must be the terminal recipe statement".into());
     }
-    invocation(commands[test], targets)
+    invocation(commands[test], targets)?;
+    snapshot_component(source, &commands)
+}
+
+fn snapshot_component(source: &str, commands: &[&str]) -> DynResult<()> {
+    if commands
+        .iter()
+        .filter(|line| **line == "just ci-snapshot-promotion-contracts")
+        .count()
+        != 1
+    {
+        return Err("required native snapshot component coverage omitted or masked".into());
+    }
+    if body(source, "ci-snapshot-promotion-contracts")?
+        != [
+            "just with-lld cargo test --locked -p model-package --lib --test snapshot_promotion_cli -- --test-threads=1",
+        ]
+    {
+        return Err(
+            "native snapshot library and actual CLI tests must be selected without filtering"
+                .into(),
+        );
+    }
+    Ok(())
 }
 fn invocation(command: &str, targets: &[String]) -> DynResult<()> {
     let mut words = command.split_whitespace();

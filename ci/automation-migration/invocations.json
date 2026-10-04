@@ -1520,553 +1520,621 @@
         },
         {
           "path": "just/ci.just",
-          "line": 186,
+          "line": 187,
           "text": "just with-lld cargo test --locked -p xtask --bin xtask \\"
         },
         {
           "path": "just/ci.just",
-          "line": 187,
+          "line": 188,
           "text": "--test automation_selector \\"
         },
         {
           "path": "just/ci.just",
-          "line": 188,
+          "line": 189,
           "text": "--test canary_cache_configuration \\"
         },
         {
           "path": "just/ci.just",
-          "line": 189,
+          "line": 190,
           "text": "--test canary_controller_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 190,
+          "line": 191,
           "text": "--test canary_result_gate \\"
         },
         {
           "path": "just/ci.just",
-          "line": 191,
+          "line": 192,
           "text": "--test ci_runner_cache_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 192,
+          "line": 193,
           "text": "--test family_battery_environment \\"
         },
         {
           "path": "just/ci.just",
-          "line": 193,
+          "line": 194,
           "text": "--test family_battery_prepared_source \\"
         },
         {
           "path": "just/ci.just",
-          "line": 194,
+          "line": 195,
           "text": "--test l4_producers \\"
         },
         {
           "path": "just/ci.just",
-          "line": 195,
+          "line": 196,
           "text": "--test lane_l11_optional_tooling \\"
         },
         {
           "path": "just/ci.just",
-          "line": 196,
+          "line": 197,
           "text": "--test lane_l12_build_llama \\"
         },
         {
           "path": "just/ci.just",
-          "line": 197,
+          "line": 198,
           "text": "--test lane_l1_ui_delivery \\"
         },
         {
           "path": "just/ci.just",
-          "line": 198,
+          "line": 199,
           "text": "--test lane_l2_authority \\"
         },
         {
           "path": "just/ci.just",
-          "line": 199,
+          "line": 200,
           "text": "--test lane_l2_hosted_bootstrap \\"
         },
         {
           "path": "just/ci.just",
-          "line": 200,
+          "line": 201,
           "text": "--test lane_l2_quality_contracts \\"
         },
         {
           "path": "just/ci.just",
-          "line": 201,
+          "line": 202,
           "text": "--test lane_l2_registry_pulls \\"
         },
         {
           "path": "just/ci.just",
-          "line": 202,
+          "line": 203,
           "text": "--test lane_l2_runtime_lifecycle \\"
         },
         {
           "path": "just/ci.just",
-          "line": 203,
+          "line": 204,
           "text": "--test lane_l2_runtime_seed \\"
         },
         {
           "path": "just/ci.just",
-          "line": 204,
+          "line": 205,
           "text": "--test lane_l3_abi_restore \\"
         },
         {
           "path": "just/ci.just",
-          "line": 205,
+          "line": 206,
           "text": "--test lane_l3_cache_metadata \\"
         },
         {
           "path": "just/ci.just",
-          "line": 206,
+          "line": 207,
           "text": "--test lane_l3_display_projection \\"
         },
         {
           "path": "just/ci.just",
-          "line": 207,
+          "line": 208,
           "text": "--test lane_l3_l2_dispatch \\"
         },
         {
           "path": "just/ci.just",
-          "line": 208,
+          "line": 209,
           "text": "--test lane_l5_adapter_contracts \\"
         },
         {
           "path": "just/ci.just",
-          "line": 209,
+          "line": 210,
           "text": "--test lane_l5_release_product \\"
         },
         {
           "path": "just/ci.just",
-          "line": 210,
+          "line": 211,
           "text": "--test lane_l6_sdk_swift \\"
         },
         {
           "path": "just/ci.just",
-          "line": 211,
+          "line": 212,
           "text": "--test lane_l7_control_plane \\"
         },
         {
           "path": "just/ci.just",
-          "line": 212,
+          "line": 213,
           "text": "--test lane_l7_daemon_lifecycle \\"
         },
         {
           "path": "just/ci.just",
-          "line": 213,
+          "line": 214,
           "text": "--test lane_l7_logging_console \\"
         },
         {
           "path": "just/ci.just",
-          "line": 214,
+          "line": 215,
           "text": "--test lane_l7_logging_recovery \\"
         },
         {
           "path": "just/ci.just",
-          "line": 215,
+          "line": 216,
           "text": "--test lane_l7_plans \\"
         },
         {
           "path": "just/ci.just",
-          "line": 216,
+          "line": 217,
           "text": "--test lane_l7_sdk_fixture \\"
         },
         {
           "path": "just/ci.just",
-          "line": 217,
+          "line": 218,
           "text": "--test lane_l7_split_recovery \\"
         },
         {
           "path": "just/ci.just",
-          "line": 218,
+          "line": 219,
           "text": "--test lane_l7_standalone \\"
         },
         {
           "path": "just/ci.just",
-          "line": 219,
+          "line": 220,
           "text": "--test lane_l8_smoke \\"
         },
         {
           "path": "just/ci.just",
-          "line": 220,
+          "line": 221,
           "text": "--test laya_cli_fixture \\"
         },
         {
           "path": "just/ci.just",
-          "line": 221,
+          "line": 222,
           "text": "--test local_ports \\"
         },
         {
           "path": "just/ci.just",
-          "line": 222,
+          "line": 223,
           "text": "--test migration_archives \\"
         },
         {
           "path": "just/ci.just",
-          "line": 223,
+          "line": 224,
           "text": "--test migration_bootstrap \\"
         },
         {
           "path": "just/ci.just",
-          "line": 224,
+          "line": 225,
           "text": "--test migration_canary_aggregate_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 225,
+          "line": 226,
           "text": "--test migration_canary_receipts \\"
         },
         {
           "path": "just/ci.just",
-          "line": 226,
+          "line": 227,
           "text": "--test migration_canary_receipts_parity \\"
         },
         {
           "path": "just/ci.just",
-          "line": 227,
+          "line": 228,
           "text": "--test migration_cargo_metadata \\"
         },
         {
           "path": "just/ci.just",
-          "line": 228,
+          "line": 229,
           "text": "--test migration_cargo_packages_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 229,
+          "line": 230,
           "text": "--test migration_ci_graph \\"
         },
         {
           "path": "just/ci.just",
-          "line": 230,
+          "line": 231,
           "text": "--test migration_ci_operations \\"
         },
         {
           "path": "just/ci.just",
-          "line": 231,
+          "line": 232,
           "text": "--test migration_ci_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 232,
+          "line": 233,
           "text": "--test migration_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 233,
+          "line": 234,
           "text": "--test migration_family_plan \\"
         },
         {
           "path": "just/ci.just",
-          "line": 234,
+          "line": 235,
           "text": "--test migration_hf_artifact_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 235,
+          "line": 236,
           "text": "--test migration_hf_artifact_controls \\"
         },
         {
           "path": "just/ci.just",
-          "line": 236,
+          "line": 237,
           "text": "--test migration_hf_converted_artifact \\"
         },
         {
           "path": "just/ci.just",
-          "line": 237,
+          "line": 238,
           "text": "--test migration_lifecycle \\"
         },
         {
           "path": "just/ci.just",
-          "line": 238,
+          "line": 239,
           "text": "--test migration_models \\"
         },
         {
           "path": "just/ci.just",
-          "line": 239,
+          "line": 240,
           "text": "--test migration_native_fixtures \\"
         },
         {
           "path": "just/ci.just",
-          "line": 240,
+          "line": 241,
           "text": "--test migration_native_generator \\"
         },
         {
           "path": "just/ci.just",
-          "line": 241,
+          "line": 242,
           "text": "--test migration_native_policy \\"
         },
         {
           "path": "just/ci.just",
-          "line": 242,
+          "line": 243,
           "text": "--test migration_optional_isolation \\"
         },
         {
           "path": "just/ci.just",
-          "line": 243,
+          "line": 244,
           "text": "--test migration_package_source_version \\"
         },
         {
           "path": "just/ci.just",
-          "line": 244,
+          "line": 245,
           "text": "--test migration_patch_bytes \\"
         },
         {
           "path": "just/ci.just",
-          "line": 245,
+          "line": 246,
           "text": "--test migration_patch_shards \\"
         },
         {
           "path": "just/ci.just",
-          "line": 246,
+          "line": 247,
           "text": "--test migration_prepared_inputs \\"
         },
         {
           "path": "just/ci.just",
-          "line": 247,
+          "line": 248,
           "text": "--test migration_process \\"
         },
         {
           "path": "just/ci.just",
-          "line": 248,
+          "line": 249,
           "text": "--test migration_product \\"
         },
         {
           "path": "just/ci.just",
-          "line": 249,
+          "line": 250,
           "text": "--test migration_qualification_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 250,
+          "line": 251,
           "text": "--test migration_release \\"
         },
         {
           "path": "just/ci.just",
-          "line": 251,
+          "line": 252,
           "text": "--test migration_report_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 252,
+          "line": 253,
           "text": "--test migration_report_safety \\"
         },
         {
           "path": "just/ci.just",
-          "line": 253,
+          "line": 254,
           "text": "--test migration_repository \\"
         },
         {
           "path": "just/ci.just",
-          "line": 254,
+          "line": 255,
           "text": "--test migration_run_family \\"
         },
         {
           "path": "just/ci.just",
-          "line": 255,
+          "line": 256,
           "text": "--test migration_workload_oracle_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 256,
+          "line": 257,
           "text": "--test migration_xcframework_cli \\"
         },
         {
           "path": "just/ci.just",
-          "line": 257,
+          "line": 258,
           "text": "--test openai_smoke_config \\"
         },
         {
           "path": "just/ci.just",
-          "line": 258,
+          "line": 259,
           "text": "--test opencode_config_adapter \\"
         },
         {
           "path": "just/ci.just",
-          "line": 259,
+          "line": 260,
           "text": "--test opencode_fixture_evidence \\"
         },
         {
           "path": "just/ci.just",
-          "line": 260,
+          "line": 261,
           "text": "--test prepared_source \\"
         },
         {
           "path": "just/ci.just",
-          "line": 261,
+          "line": 262,
           "text": "--test release_inventory_evidence \\"
         },
         {
           "path": "just/ci.just",
-          "line": 262,
+          "line": 263,
           "text": "--test release_inventory_provenance \\"
         },
         {
           "path": "just/ci.just",
-          "line": 263,
+          "line": 264,
           "text": "--test release_inventory_publication \\"
         },
         {
           "path": "just/ci.just",
-          "line": 264,
+          "line": 265,
           "text": "--test replay_acceptance_gates \\"
         },
         {
           "path": "just/ci.just",
-          "line": 265,
+          "line": 266,
           "text": "--test replay_arm_pass \\"
         },
         {
           "path": "just/ci.just",
-          "line": 266,
+          "line": 267,
           "text": "--test replay_build_arm \\"
         },
         {
           "path": "just/ci.just",
-          "line": 267,
+          "line": 268,
           "text": "--test replay_context_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 268,
+          "line": 269,
           "text": "--test replay_external_engines \\"
         },
         {
           "path": "just/ci.just",
-          "line": 269,
+          "line": 270,
           "text": "--test replay_external_run \\"
         },
         {
           "path": "just/ci.just",
-          "line": 270,
+          "line": 271,
           "text": "--test replay_history \\"
         },
         {
           "path": "just/ci.just",
-          "line": 271,
+          "line": 272,
           "text": "--test replay_history_hub \\"
         },
         {
           "path": "just/ci.just",
-          "line": 272,
+          "line": 273,
           "text": "--test replay_interruption \\"
         },
         {
           "path": "just/ci.just",
-          "line": 273,
+          "line": 274,
           "text": "--test replay_l3 \\"
         },
         {
           "path": "just/ci.just",
-          "line": 274,
+          "line": 275,
           "text": "--test replay_manifest_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 275,
+          "line": 276,
           "text": "--test replay_manual_profile \\"
         },
         {
           "path": "just/ci.just",
-          "line": 276,
+          "line": 277,
           "text": "--test replay_manual_resume_refs \\"
         },
         {
           "path": "just/ci.just",
-          "line": 277,
+          "line": 278,
           "text": "--test replay_model_preflight \\"
         },
         {
           "path": "just/ci.just",
-          "line": 278,
+          "line": 279,
           "text": "--test replay_pass_schedule \\"
         },
         {
           "path": "just/ci.just",
-          "line": 279,
+          "line": 280,
           "text": "--test replay_pooled_rows \\"
         },
         {
           "path": "just/ci.just",
-          "line": 280,
+          "line": 281,
           "text": "--test replay_progress \\"
         },
         {
           "path": "just/ci.just",
-          "line": 281,
+          "line": 282,
           "text": "--test replay_publication_prepare \\"
         },
         {
           "path": "just/ci.just",
-          "line": 282,
+          "line": 283,
           "text": "--test replay_report \\"
         },
         {
           "path": "just/ci.just",
-          "line": 283,
+          "line": 284,
           "text": "--test replay_retirement \\"
         },
         {
           "path": "just/ci.just",
-          "line": 284,
+          "line": 285,
           "text": "--test replay_run_execution \\"
         },
         {
           "path": "just/ci.just",
-          "line": 285,
+          "line": 286,
           "text": "--test replay_server_cell \\"
         },
         {
           "path": "just/ci.just",
-          "line": 286,
+          "line": 287,
           "text": "--test replay_session_evidence \\"
         },
         {
           "path": "just/ci.just",
-          "line": 287,
+          "line": 288,
           "text": "--test replay_trajectory_execution \\"
         },
         {
           "path": "just/ci.just",
-          "line": 288,
+          "line": 289,
           "text": "--test swift_api_checksum \\"
         },
         {
           "path": "just/ci.just",
-          "line": 289,
+          "line": 290,
           "text": "--test swift_privacy_adapter \\"
         },
         {
           "path": "just/ci.just",
-          "line": 290,
+          "line": 291,
           "text": "--test swift_producer_environment \\"
         },
         {
           "path": "just/ci.just",
-          "line": 291,
+          "line": 292,
           "text": "--test workload_certify_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 292,
+          "line": 293,
           "text": "--test workload_oracle_producer_contract \\"
         },
         {
           "path": "just/ci.just",
-          "line": 293,
+          "line": 294,
           "text": "--test workload_smoke_config \\"
         },
         {
           "path": "just/ci.just",
-          "line": 294,
+          "line": 295,
           "text": "--test workload_start_retry \\"
         },
         {
           "path": "just/ci.just",
-          "line": 295,
+          "line": 296,
           "text": "-- --test-threads=1"
+        }
+      ]
+    },
+    {
+      "id": "boundary:quality-contracts:snapshot-promotion-component-tests",
+      "caller": "just:with-lld",
+      "line": 0,
+      "source_block": "exec cargo test --locked -p model-package --lib --test snapshot_promotion_cli -- --test-threads=1",
+      "occurrence": 1,
+      "candidate_id": null,
+      "bound_child": null,
+      "child": null,
+      "disposition": "platform_conditional",
+      "selector": "Literal required model-package component test argv behind existing Unix/Windows with-lld authority.",
+      "rationale": "The unresolved selector is the existing platform wrapper, not a Python interpreter or dynamic test target. Native library tests and the actual snapshot CLI target are explicitly selected by the required automation recipe.",
+      "reachable_bytes": "Locked Rust model-package library and snapshot_promotion_cli integration target, including package format, native HF client, TLS and HTTP dependencies; no llama.cpp or UI build. Fixture requests target loopback only and use synthetic credentials. Passing local fixtures does not establish live HF publication or native platform qualification.",
+      "replacement_owner": "crates/model-package/src/snapshot_promotion; crates/model-package/tests/snapshot_promotion_cli.rs",
+      "deletion_condition": "Remove when the required graph resolves both platform wrapper bodies directly; changes to literal argv or wrapper bodies require fresh exact binding.",
+      "evidence": [
+        {
+          "path": "just/ci.just",
+          "line": 300,
+          "text": "just with-lld cargo test --locked -p model-package --lib --test snapshot_promotion_cli -- --test-threads=1"
+        },
+        {
+          "path": "just/build.just",
+          "line": 16,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 17,
+          "text": "[unix]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 18,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 25,
+          "text": "scripts/cargo-linker --mesh-probe >/dev/null"
+        },
+        {
+          "path": "just/build.just",
+          "line": 26,
+          "text": "exec {{ COMMAND }}"
+        },
+        {
+          "path": "just/build.just",
+          "line": 28,
+          "text": "[private]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 29,
+          "text": "[windows]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 30,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 31,
+          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
         }
       ]
     }
@@ -14675,6 +14743,64 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/family-planner-retirement-coverage.json",
       "sha256": "ed57a0f8701eafdbe65cdecdec924c0d15e8e78b91992db1ef12e49391a6c511"
+    }
+  },
+  "snapshot_promotion_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 121,
+    "core_modules_after": 58,
+    "required_xtask_targets": 108,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/snapshot-promotion-retirement-coverage.json",
+      "sha256": "8aaf859466e34ae5a47ac17ad50b41bdc6f4233da0e40106420a1d67f5294da9"
+    },
+    "current_test_tree": {
+      "sha256": "c9009bd9b751306709e6d325ddb26eab0a19acb09e5d1d41402ba5660175be59",
+      "paths": 51
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "70971879db299e13de27eae29bfdbff8e27914be84f9f9bdd717d6010bde6807",
+      "roster_line": 24,
+      "count": 58
+    },
+    "supersedes": "Legacy snapshot helper ownership and roster snapshots are historical; native package component preserves publishing intent.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "source_head": "ca8d4e21e4a17726630e59bdf0cabcbe6e1a6489",
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-postimage-v5-normal.log",
+        "sha256": "9b76a8108a52fecea01fe3a99c81f62b58f48ea0f64c255297da0116233aeca0",
+        "targets": 111,
+        "passed": 4333,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 868,
+          "passed": 854,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 363.015
+        }
+      },
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-focused-v6-receipts.json",
+        "sha256": "dca7a6ff9ef1ebecc4e710871c4cb9058c9d3d69e63ad45d424b143c2f9b8aa5"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/snapshot-promotion-retirement-postimage-v5-receipts.json",
+        "sha256": "599fb77317b908a4a762dd372a340d70fb28d866ddb520fb3fbf6cc546375960"
+      },
+      "limits": "Native component, actual CLI, loopback HTTP and extracted embedded caller fixtures only; no live HF job/publication, actual native backend/model/SDK or protected executor rollout qualified."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/snapshot-promotion-retirement-coverage.json",
+      "sha256": "ebcb4208215a3ab2417b1eaa603917c14067001846a3d44bdc2f04e43e3d654f"
     }
   }
 }

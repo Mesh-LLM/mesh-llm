@@ -1602,3 +1602,12 @@ missing fixtures and registry dimension/MTP drift fail CI validation. The matrix
 checks admitted stage chains and explicit unsupported contracts without model
 weights; it does not confer real-model certification. See
 `ci/llama-canary/SYNTHETIC_GRAPH_CONTRACTS.md` for structural coverage and limits.
+
+Snapshot promotion is owned by the native `model-package` component. Required
+`ci-automation-contracts` runs `ci-snapshot-promotion-contracts` before its terminal
+xtask harness. This selects package library tests and the actual promoter CLI
+tests, including immutable source reads, parent-bound atomic publication and
+embedded prepare failure propagation. The embedded layer-package job builds the
+promoter through `just snapshot-promoter-release-build`; existing optional HF
+SDK operations remain transitional. Local fixtures do not certify live HF jobs
+or publication.
