@@ -232,46 +232,6 @@
       ]
     ],
     [
-      "scripts/tests/test_llama_canary_family_evidence.py",
-      [
-        [
-          "fixture",
-          "git in synthetic canary checkouts",
-          "two distinct init/add/commit sequences and helper git subcommands bind local source identities",
-          [
-            343,
-            400,
-            347,
-            404,
-            348,
-            405,
-            420
-          ]
-        ],
-        [
-          "fixture",
-          "selected llama-canary workflow gate Bash run block",
-          "bash -c steps[gate].run with OUTCOME fixture; target depends on selected named step",
-          [
-            559
-          ]
-        ]
-      ]
-    ],
-    [
-      "scripts/tests/test_llama_canary_handoff_contract.py",
-      [
-        [
-          "fixture",
-          "git -C fixture source tree",
-          "Retained helper takes test-selected Git subcommands for prepared-source roundtrip and sealed snapshot assertions; removed pack-worker clone intention is owned by typed pipeline.",
-          [
-            28
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_llama_native_full_replay.py",
       [
         [
@@ -747,83 +707,6 @@
       ]
     },
     {
-      "file": "scripts/tests/test_canary_family_memory.py",
-      "members": [
-        [
-          16,
-          "11ea3efd51a54cdb",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/llama-canary-family-evidence.py",
-          "fixed ROOT-relative module, not an interpreter child"
-        ],
-        [
-          152,
-          "1436a034d24f6365",
-          1,
-          "subprocess-or-interpreter",
-          "fixture",
-          "Python lock-holder process",
-          "Test spawns a local Python child that takes the pre-provisioned host lock and creates ready/released markers; cleanup kills and waits for it"
-        ],
-        [
-          153,
-          "5f78fc23cd74d425",
-          1,
-          "subprocess-or-interpreter",
-          "assembly",
-          "sys.executable -c host lock holder",
-          "Interpreter argv continuation for subprocess.Popen at line 152; not a second launch"
-        ],
-        [
-          174,
-          "539150affc3213f3",
-          1,
-          "subprocess-or-interpreter",
-          "assembly",
-          "sys.executable -c fixture",
-          "command vector constructed here, launched by later family-memory helper"
-        ],
-        [
-          205,
-          "539150affc3213f3",
-          2,
-          "subprocess-or-interpreter",
-          "assembly",
-          "sys.executable -c memory-pressure fixture",
-          "Command vector passed to guarded_run; child writes PID and waits so reserve breach terminates its process group"
-        ],
-        [
-          226,
-          "0bf030a2ab303515",
-          1,
-          "subprocess-or-interpreter",
-          "assembly",
-          "sys.executable -c raise SystemExit(7)",
-          "argument supplied to the family-memory subprocess helper; the launch is inside that imported implementation"
-        ],
-        [
-          237,
-          "9b70c65a29c881bf",
-          1,
-          "subprocess-or-interpreter",
-          "assembly",
-          "parent Python source with nested Popen([sys.executable, -c, child])",
-          "string constructs a nested child program; execution occurs only when parent is spawned"
-        ],
-        [
-          241,
-          "bff89751275b4b29",
-          1,
-          "subprocess-or-interpreter",
-          "assembly",
-          "sys.executable -c parent",
-          "argument vector handed to the helper; not itself a launch"
-        ]
-      ]
-    },
-    {
       "file": "scripts/tests/test_check_skippy_workload_candidate.py",
       "members": [
         [
@@ -940,34 +823,6 @@
           "fixture",
           "existing source-owned command or inert source reference retained from main",
           "Main bd5514dd8 retained source: return subprocess.run(; preserve status, inherited/captured streams and named source-owned effects until Rust owner cutover"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_llama_canary_family_evidence.py",
-      "members": [
-        [
-          19,
-          "fe0e3800fc46ee93",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/llama-canary-family-evidence.py",
-          "fixed canary evidence module; its own imports and children need separate closure"
-        ]
-      ]
-    },
-    {
-      "file": "scripts/tests/test_llama_canary_handoff_contract.py",
-      "members": [
-        [
-          14,
-          "546bf09b0468dd09",
-          1,
-          "dynamic-import",
-          "import",
-          "scripts/llama-canary-family-evidence.py",
-          "fixed canary handoff implementation"
         ]
       ]
     },
@@ -1532,7 +1387,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "146c4b39859e30c2c93518339a8e607fb286e1194a7b8db2d78fa0bf254aac7c",
+  "observed_source_sha256": "619a01fd5aafa5f52a51d71655a31372070630b95902f0a00cb4b52d1241fbf1",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9887,6 +9742,63 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/manifest-policy-retirement-coverage.json",
       "sha256": "d02bb2db824afa80a1093fc998916329020e14851707a582b024ebbe3463d1ef"
+    }
+  },
+  "family_helper_memory_and_handoff_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 129,
+    "core_modules_after": 61,
+    "required_targets": 108,
+    "durable_coverage": {
+      "path": "ci/automation-migration/family-helper-retirement-coverage.json",
+      "sha256": "6faaedc0b2f3546f26254eb03f0b0dc6074a831d11919061dbe5a882fb245891"
+    },
+    "current_test_tree": {
+      "sha256": "619a01fd5aafa5f52a51d71655a31372070630b95902f0a00cb4b52d1241fbf1",
+      "paths": 54
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "fcc0f4e4368c295cdf1435de99e01df3014b8ff10bc0a7db604ede23eadea034",
+      "roster_line": 24,
+      "count": 61
+    },
+    "supersedes": "Earlier retained family/memory loader and three test module snapshots are historical after this activation.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/family-helper-retirement-postimage-focused-receipts.json",
+        "sha256": "8a0956e9599283c42dd1a3b2586adeb807f648f8e122a272387148ebc28d265b"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/family-helper-retirement-postimage-receipts.json",
+        "sha256": "1e86ee6da308d120016b7cedc8311c630ee6cda7a661e5eda5004a1fa1c1cb0b"
+      },
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/family-helper-retirement-postimage-normal.log",
+        "sha256": "b29d18a48ba6a2cb1d78cc956a6053e9c7d1ac8414391175c0c2055f1d6c5536",
+        "targets": 109,
+        "passed": 4289,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 910,
+          "passed": 896,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 361.404
+        }
+      },
+      "original_intent_scope": "All 42 family, 18 memory and two handoff original methods passed before retirement. Current named native owners cover those intents; actual admission-before-child and extended actual CLI native bundle/provenance corruption proof both passed before retirement. The deleted helper-specific inventory schema/check and two tests are obsolete; runner-image loader checks remain.",
+      "limits": "Family/memory helpers and three complete legacy test modules retired through actual local typed/native fixture proof. Windows native selection, other-platform/model/product/live SDK/hosted/protected acceptance and remaining generic Python closure are still open."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/family-helper-retirement-coverage.json",
+      "sha256": "e5be2956bbbe3116d9d7ee83c43b88eb670e8df93aeb52f78852e25f83256f95"
     }
   }
 }
