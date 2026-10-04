@@ -13,6 +13,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import runpy
 import socket
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 HOME = Path.home()
+serve_args = runpy.run_path(Path(__file__).with_name("serving_cli.py"))["serve_args"]
 
 
 @dataclass(frozen=True)
@@ -809,7 +811,7 @@ def run_skippy_serving_path_sweep(
     port = free_port()
     cmd = [
         str(server_bin),
-        "serve-openai",
+        *serve_args(server_bin),
         "--config",
         str(config_path),
         "--bind-addr",
