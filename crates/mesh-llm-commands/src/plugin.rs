@@ -107,10 +107,14 @@ async fn install_defaults() -> Result<()> {
                 "✅ Installed default {name} {}",
                 installed.metadata.installed_version
             )?,
-            DefaultPluginOutcome::AlreadyCurrent
-            | DefaultPluginOutcome::OperatorManaged
+            DefaultPluginOutcome::AlreadyCurrent => {}
+            other @ (DefaultPluginOutcome::OperatorManaged
             | DefaultPluginOutcome::Disabled
-            | DefaultPluginOutcome::UnsupportedPlatform => {}
+            | DefaultPluginOutcome::UnsupportedPlatform) => {
+                if let Some(line) = left_alone_line(name, &other) {
+                    writeln!(err, "{line}")?;
+                }
+            }
             DefaultPluginOutcome::NotInstalled(reason) => {
                 writeln!(err, "⚠️ Default {name} not installed: {reason}")?;
                 failed = true;
@@ -184,6 +188,23 @@ fn delete(name: &str) -> Result<()> {
     let mut err = mesh_llm_events::console_err();
     writeln!(err, "🗑️  Deleted {name}")?;
     Ok(())
+}
+
+/// One line for a default that provisioning left alone; none for one already current.
+fn left_alone_line(name: &str, outcome: &DefaultPluginOutcome) -> Option<String> {
+    match outcome {
+        DefaultPluginOutcome::OperatorManaged => Some(format!(
+            "ℹ️  Default {name} left alone: you run it from your own config or install"
+        )),
+        DefaultPluginOutcome::Disabled => Some(format!(
+            "ℹ️  Default {name} left at its installed version: it is disabled \
+             (enable it, then run `mesh-llm plugins update {name}` to move to the reviewed pin)"
+        )),
+        DefaultPluginOutcome::UnsupportedPlatform => Some(format!(
+            "ℹ️  No reviewed {name} release for this platform; not installed"
+        )),
+        _ => None,
+    }
 }
 
 fn info(name: &str, runtime_rows: Option<&PluginListRows>) -> Result<bool> {
@@ -506,5 +527,40 @@ url = "unix:///run/remote.sock"
         assert!(!configured.contains("capsule-emit-mesh"));
         assert!(configured.contains("operator-run"));
         assert!(configured.contains("remote"));
+    }
+
+    #[test]
+    fn a_default_left_alone_says_why() {
+        let line = |outcome| left_alone_line("capsules", &outcome);
+        assert!(
+            line(DefaultPluginOutcome::OperatorManaged)
+                .unwrap()
+                .contains("left alone")
+        );
+        assert!(
+            line(DefaultPluginOutcome::Disabled)
+                .unwrap()
+                .contains("disabled")
+        );
+        assert!(
+            line(DefaultPluginOutcome::UnsupportedPlatform)
+                .unwrap()
+                .contains("this platform")
+        );
+        assert!(line(DefaultPluginOutcome::AlreadyCurrent).is_none());
+    }
+
+    #[test]
+    fn update_takes_no_default_plugins() {
+        use clap::Parser;
+        let cli = mesh_llm_cli::Cli::try_parse_from(["mesh-llm", "update", "--no-default-plugins"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(mesh_llm_cli::Command::Update {
+                no_default_plugins: true,
+                ..
+            })
+        ));
     }
 }

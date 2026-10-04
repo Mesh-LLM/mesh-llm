@@ -4,6 +4,7 @@ param(
     [string]$Flavor,
     [switch]$NoPathUpdate,
     [switch]$NoSetup,
+    [switch]$NoDefaultPlugins,
     [switch]$Help
 )
 
@@ -42,7 +43,7 @@ if (-not $InstallDir) {
 
 function Show-Usage {
     @"
-Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPathUpdate] [-NoSetup]
+Usage: install.ps1 [-PreRelease] [-InstallDir <DIR>] [-Flavor <FLAVOR>] [-NoPathUpdate] [-NoSetup] [-NoDefaultPlugins]
 
 Options:
   -PreRelease             Install the latest published GitHub prerelease instead of the latest stable release.
@@ -50,6 +51,7 @@ Options:
   -Flavor <FLAVOR>        Legacy compatibility flag. The installer installs the Windows x64 product bundle, including its packaged runtime; ``mesh-llm.exe setup`` may select another compatible runtime.
   -NoPathUpdate           Do not add the install directory to the user Path.
   -NoSetup                Do not run ``mesh-llm.exe setup``; print the exact command instead.
+  -NoDefaultPlugins       Do not install or update the reviewed default plugins.
   -Help                   Show this help text.
 
 Environment overrides:
@@ -710,13 +712,15 @@ try {
     Write-Host "Installed $asset to $InstallDir"
     & $meshBinary --version
 
-    try {
-        & $meshBinary plugins install-defaults
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Default plugins could not be fully installed; MeshLLM is installed."
+    if (-not $NoDefaultPlugins) {
+        try {
+            & $meshBinary plugins install-defaults
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Default plugins could not be fully installed; MeshLLM is installed."
+            }
+        } catch {
+            Write-Warning "Default plugins could not be fully installed; MeshLLM is installed: $_"
         }
-    } catch {
-        Write-Warning "Default plugins could not be fully installed; MeshLLM is installed: $_"
     }
 
     if ($NoPathUpdate -and -not $pathUpdated) {

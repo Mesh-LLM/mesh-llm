@@ -17,6 +17,7 @@ INSTALL_VERBOSE="${MESH_LLM_INSTALL_VERBOSE:-0}"
 # only; remove it after their documented support window ends.
 COMPOSED_PRODUCT_MIN_VERSION="0.75.0"
 AUTO_SETUP=1
+DEFAULT_PLUGINS=1
 DOWNLOADED_ARCHIVE=""
 DOWNLOADED_ASSET=""
 SETUP_ARGS=()
@@ -65,7 +66,7 @@ path_contains_install_dir() {
 
 usage() {
     cat <<EOF
-Usage: install.sh [--pre-release] [--install-dir DIR] [--no-setup] [--verbose]
+Usage: install.sh [--pre-release] [--install-dir DIR] [--no-setup] [--no-default-plugins] [--verbose]
 
 Options:
   --pre-release              Install the latest published GitHub prerelease instead of the latest stable release.
@@ -73,6 +74,7 @@ Options:
   --no-setup                 Do not run \
                              \
 mesh-llm setup automatically after install.
+  --no-default-plugins       Do not install or update the reviewed default plugins.
   --service                  Legacy compatibility flag. Passes --service through to \
                              \
 mesh-llm setup instead of installing services in shell.
@@ -120,6 +122,9 @@ parse_args() {
                 ;;
             --no-setup)
                 AUTO_SETUP=0
+                ;;
+            --no-default-plugins)
+                DEFAULT_PLUGINS=0
                 ;;
             --verbose)
                 INSTALL_VERBOSE=1
@@ -859,7 +864,9 @@ main() {
     # Provision from the pins compiled into the installed binary. Plugin
     # download failures leave the Mesh installation usable and are retryable by
     # running this installer or `mesh-llm update` again.
-    if ! "$INSTALL_DIR/mesh-llm" plugins install-defaults; then
+    if ! bool_is_true "$DEFAULT_PLUGINS"; then
+        :
+    elif ! "$INSTALL_DIR/mesh-llm" plugins install-defaults; then
         warn "default plugins could not be fully installed; mesh-llm is installed"
     fi
     if bool_is_true "$INSTALL_VERBOSE"; then

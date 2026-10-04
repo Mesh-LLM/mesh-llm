@@ -39,6 +39,17 @@ pub(super) enum PostInstallAction {
     ExitAfterInstall,
 }
 
+/// What follows a bundle install: the restart or exit, and whether the new
+/// binary's default plugins are provisioned (`false` with
+/// `--no-default-plugins`). Only the Windows hand-off reads it; on Unix the
+/// install returns and its caller acts on both.
+#[derive(Clone, Copy)]
+#[cfg_attr(not(windows), allow(dead_code))]
+struct PostInstall {
+    action: PostInstallAction,
+    provision_defaults: bool,
+}
+
 pub(super) struct ReleaseInfo {
     pub(super) tag: String,
     pub(super) version: String,
@@ -315,6 +326,7 @@ pub(super) async fn install_latest_bundle(
     asset_name: &str,
     expected_flavor: backend::BinaryFlavor,
     action: PostInstallAction,
+    provision_defaults: bool,
 ) -> Result<InstallOutcome> {
     let unique = format!(
         "{}-{}",
@@ -351,11 +363,16 @@ pub(super) async fn install_latest_bundle(
             &extracted,
             &backup,
             &staged_files,
-            action,
+            PostInstall {
+                action,
+                provision_defaults,
+            },
         )?;
         install_native_runtime_after_update(install_dir, release, &workspace).await;
         #[cfg(not(windows))]
-        provision_default_plugins_after_update(install_dir).await;
+        if provision_defaults {
+            provision_default_plugins_after_update(install_dir).await;
+        }
         Ok::<InstallOutcome, anyhow::Error>(install_outcome(action))
     }
     .await;
@@ -1018,7 +1035,7 @@ fn finish_bundle_install(
     extracted: &Path,
     backup: &Path,
     staged_files: &[String],
-    _action: PostInstallAction,
+    _post: PostInstall,
 ) -> Result<()> {
     replace_bundle_files(install_dir, extracted, backup, staged_files)
 }
@@ -1031,7 +1048,7 @@ fn finish_bundle_install(
     extracted: &Path,
     backup: &Path,
     staged_files: &[String],
-    action: PostInstallAction,
+    post: PostInstall,
 ) -> Result<()> {
     use std::process::Command;
 
@@ -1043,17 +1060,23 @@ fn finish_bundle_install(
         extracted,
         backup,
         staged_files,
-        action,
+        post.action,
     )?;
     std::fs::write(&script, script_body)
         .with_context(|| format!("Failed to write {}", script.display()))?;
 
-    Command::new("powershell")
+    let mut updater = Command::new("powershell");
+    updater
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
         .arg("-File")
-        .arg(&script)
+        .arg(&script);
+    if !post.provision_defaults {
+        // The installed binary's `plugins install-defaults` honours this.
+        updater.env("MESH_LLM_NO_DEFAULT_PLUGINS", "1");
+    }
+    updater
         .spawn()
         .with_context(|| format!("Failed to launch Windows updater {}", script.display()))?;
 

@@ -67,6 +67,9 @@ pub struct UpdateCommandOptions<'a> {
     pub detect_flavor: bool,
     pub requested_version: Option<&'a str>,
     pub current_version: &'static str,
+    /// `false` with `--no-default-plugins`: the new binary's default plugins
+    /// are not installed or updated.
+    pub provision_default_plugins: bool,
 }
 
 enum NoticeGuidance {
@@ -216,6 +219,7 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
         &asset_name,
         target.bundle_flavor,
         PostInstallAction::ExitAfterInstall,
+        options.provision_default_plugins,
     )
     .await
     {
@@ -346,6 +350,7 @@ async fn apply_update_if_available(
         &asset_name,
         target.bundle_flavor,
         action,
+        true,
     )
     .await
     {

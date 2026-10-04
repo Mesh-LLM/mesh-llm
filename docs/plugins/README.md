@@ -547,8 +547,12 @@ Plugin archives are downloaded separately; they are not inside the Mesh bundle.
 Node startup performs no plugin download. An unsupported platform or empty
 list is skipped. A download or verification failure warns without undoing the
 Mesh installation; rerunning the installer or update retries it.
-Set `MESH_LLM_NO_DEFAULT_PLUGINS=1` for an installer or update invocation to
-skip default provisioning for that invocation.
+To skip default provisioning for one invocation, pass `--no-default-plugins`
+to `install.sh` or `mesh-llm update`, `-NoDefaultPlugins` to `install.ps1`, or
+set `MESH_LLM_NO_DEFAULT_PLUGINS=1`. Provisioning prints one line for a default
+it leaves alone: one you run from your own `[[plugin]]` entry or install, one
+left at its installed version because it is disabled, or a platform with no
+reviewed release.
 
 `plugin-install.json` records whether an installation is default managed. A
 later installer or update moves enabled default-managed plugins to the newly

@@ -893,6 +893,10 @@ pub enum Command {
         /// Re-detect the best host backend flavor before selecting the release bundle.
         #[arg(long, conflicts_with = "flavor")]
         detect_flavor: bool,
+        /// Do not install or update the reviewed default plugins.
+        /// Same as MESH_LLM_NO_DEFAULT_PLUGINS=1.
+        #[arg(long)]
+        no_default_plugins: bool,
     },
     /// Inspect local GPUs, stable IDs, and cached bandwidth.
     #[command(alias = "gpu")]

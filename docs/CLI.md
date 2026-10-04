@@ -474,6 +474,7 @@ Switches:
 - `--version <VERSION>`: install a specific release tag or version, for example `v0.60.0`.
 - `--flavor <FLAVOR>`: install or switch to a specific release bundle flavor (`cpu`, `cuda`, `rocm`, `vulkan`, or `metal`).
 - `--detect-flavor`: re-detect the best host backend flavor before selecting the release bundle. Cannot be combined with `--flavor`.
+- `--no-default-plugins`: do not install or update the reviewed default plugins after updating (same as `MESH_LLM_NO_DEFAULT_PLUGINS=1`). See [Default Plugins](plugins/README.md#default-plugins).
 - `--auto-update`: available on most commands; when set, mesh-llm checks for a newer bundled release before proceeding.
 
 
