@@ -1502,3 +1502,19 @@ the required native migration_lifecycle::runtime_events_gate tests and typed
 workflow guards. The Python contract module is retired together with its core
 roster entry after native caller and original-intent qualification. Finite
 fixtures do not establish live native reporter or model execution.
+
+Native `cargo xtool automation stability nightly` and `tool-call` commands own
+OpenAI chat/streaming and forced-tool probes, bounded optional agent processes,
+release-attestation inspection, and evidence summaries. The required
+`migration_stability` target executes these commands against finite local HTTP,
+TLS, and process fixtures, including invocation from outside the checkout. HTTP
+uses the existing Hyper client. HTTPS uses an existing curl 8.4 or newer with
+certificate verification and platform trust; an explicit `CURL_CA_BUNDLE` may
+select a trust bundle. Curl's 8.4 download limit also covers unknown-length
+responses. Rust owns response parsing, SSE completion, joined worker ownership,
+process cancellation, and private-file cleanup. TLS fixture dependencies are
+test-only and do not enter the automation bootstrap dependency closure. Plan
+mode performs no HTTP, TLS capability probe, or evidence writes. The nightly
+workflow still calls the transitional Python harnesses;
+KV orchestration and the optional OpenCode adapter's Python closure remain open.
+Local fixtures do not certify live model, KV cache, or hosted endpoint behavior.

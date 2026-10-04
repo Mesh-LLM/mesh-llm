@@ -54,8 +54,9 @@ pub(crate) fn print_usage() {
     );
     println!("  cargo xtool automation split-probe <verb> ...");
     println!(
-        "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
+        "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
         crate::automation::client_readiness::USAGE,
+        crate::automation::stability::USAGE,
         crate::automation::daemon_readiness::USAGE,
         crate::automation::REPLAY_EXPORT_USAGE,
         crate::automation::REPLAY_RUN_FAMILY_USAGE,
@@ -105,6 +106,7 @@ pub(crate) enum CliCommand<'a> {
     WorkloadSmokeConfig(&'a [String]),
     SmokeInputs(&'a [String]),
     WorkloadSmoke(&'a [String]),
+    Stability(&'a [String]),
     SystemOneCases(&'a [String]),
     SystemOneSmoke(&'a [String]),
     BinaryStageReadiness(&'a [String]),
@@ -240,6 +242,9 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "laya" => {
                 CliCommand::Laya(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "stability" => {
+                CliCommand::Stability(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "split-probe" => {
                 CliCommand::SplitProbe(rest)

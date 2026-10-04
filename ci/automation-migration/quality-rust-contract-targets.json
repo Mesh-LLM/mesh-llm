@@ -67,6 +67,7 @@
   "migration_report_safety",
   "migration_repository",
   "migration_run_family",
+  "migration_stability",
   "migration_workload_oracle_cli",
   "migration_xcframework_cli",
   "openai_smoke_config",

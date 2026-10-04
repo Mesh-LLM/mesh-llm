@@ -34,6 +34,7 @@ pub(crate) mod logging_recovery;
 pub(crate) mod openai_smoke_config;
 pub(crate) mod runtime_install;
 pub(crate) mod sdk_fixture;
+pub(crate) mod stability;
 pub(crate) mod startup_recovery;
 pub(crate) mod ui_build;
 pub(crate) mod workload_smoke_config;

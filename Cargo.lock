@@ -11421,7 +11421,9 @@ dependencies = [
  "num-bigint",
  "plist",
  "proc-macro2",
+ "rcgen",
  "regex",
+ "rustls",
  "semver",
  "serde",
  "serde_json",
@@ -11433,6 +11435,7 @@ dependencies = [
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "unicode-normalization",
+ "url",
  "uuid",
  "windows-sys 0.61.2",
 ]
