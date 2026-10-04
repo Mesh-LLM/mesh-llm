@@ -419,6 +419,7 @@ pub(crate) mod tests {
 
         let payload = status_payload(snapshot);
         let expected = StatusPayload {
+            twin_policy: crate::api::status::TwinPolicy::current(),
             my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.68.0".into(),
             latest_version: Some("0.68.0".into()),

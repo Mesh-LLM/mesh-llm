@@ -212,11 +212,27 @@ mod tests {
         assert_eq!(forwarded, expected);
     }
 
+    #[test]
+    fn the_status_twin_policy_says_what_forwarding_does() {
+        // `/api/status` tells a UI the serving node is not told it is half of a
+        // pair; this is the forwarding that makes it true.
+        let policy = crate::api::status::TwinPolicy::current();
+        assert!(!policy.serving_node_told);
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{}: pair-7\r\nContent-Length: 2\r\n\r\n{{}}",
+            policy.header
+        );
+        let forwarded = prepare_peer_forwarded_request(raw.as_bytes()).unwrap();
+        assert!(!String::from_utf8_lossy(&forwarded)
+            .to_ascii_lowercase()
+            .contains(policy.header));
+    }
+
     /// Regression (CodeRabbit / erlich, PR #1671 round 2): routing headers
     /// must never survive a peer-to-peer hop, or a peer that re-enters
     /// `route_request` can re-route the request again with no hop bound.
     #[test]
-    fn peer_forwarding_strips_mesh_routing_headers() {
+        fn peer_forwarding_strips_mesh_routing_headers() {
         let body = b"{}";
         let raw = format!(
             "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-mesh-target: aabbcc\r\nx-mesh-exclude: ddeeff,001122\r\nx-mesh-twin-bracket: pair-7\r\nX-Keep: yes\r\nContent-Length: {}\r\n\r\n",
