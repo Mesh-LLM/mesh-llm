@@ -14,28 +14,28 @@ dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime", "skippy-servi
 [dependencies]
 reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", features = ["rt"] }
-skippy-config = { path = "../skippy-config", version = "0.77.0" }
-skippy-cache = { path = "../skippy-cache", version = "0.77.0" }
-skippy-serving = { path = "../skippy-serving", version = "0.77.0" }
-skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.77.0" }
-skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.77.0" }
-skippy-inference-api = { path = "../skippy-inference-api", version = "0.77.0" }
+skippy-config = { path = "../skippy-config", version = "0.78.0" }
+skippy-cache = { path = "../skippy-cache", version = "0.78.0" }
+skippy-serving = { path = "../skippy-serving", version = "0.78.0" }
+skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.78.0" }
+skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.78.0" }
+skippy-inference-api = { path = "../skippy-inference-api", version = "0.78.0" }
 anyhow.workspace = true
 hex = "0.4"
 sha2.workspace = true
-skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.77.0" }
-skippy-protocol = { path = "../skippy-protocol", version = "0.77.0" }
-skippy-runtime = { path = "../skippy-runtime", version = "0.77.0" }
+skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.78.0" }
+skippy-protocol = { path = "../skippy-protocol", version = "0.78.0" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.78.0" }
 serde.workspace = true
 serde_json.workspace = true
 tracing = "0.1"
-skippy-package-format = { path = "../skippy-package-format", version = "0.77.0" }
-skippy-model = { path = "../skippy-model", version = "0.77.0" }
-skippy-ffi = { path = "../skippy-ffi", version = "0.77.0", default-features = false }
+skippy-package-format = { path = "../skippy-package-format", version = "0.78.0" }
+skippy-model = { path = "../skippy-model", version = "0.78.0" }
+skippy-ffi = { path = "../skippy-ffi", version = "0.78.0", default-features = false }
 
-skippy-model-ref = { path = "../skippy-model-ref", version = "0.77.0" }
-skippy-model-hf = { path = "../skippy-model-hf", version = "0.77.0" }
-hf_hub = { package = "skippy-hf-hub", path = "../skippy-hf-hub", version = "0.77.0", default-features = false, features = ["blocking"] }
+skippy-model-ref = { path = "../skippy-model-ref", version = "0.78.0" }
+skippy-model-hf = { path = "../skippy-model-hf", version = "0.78.0" }
+hf_hub = { package = "skippy-hf-hub", path = "../skippy-hf-hub", version = "0.78.0", default-features = false, features = ["blocking"] }
 same-file = "1.0.6"
 
 [target.'cfg(windows)'.dependencies]

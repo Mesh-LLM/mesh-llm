@@ -279,6 +279,7 @@ fn status_shadow_compare_bumps_engine_health_on_a_genuine_mismatch() {
     crate::runtime_events::install_runtime_event_engine(engine.clone());
 
     let collector = super::super::collector::RuntimeDataCollector::new();
+    let local_before = collector.shadow_divergence_count(FieldId::Status);
     let before = engine.health().snapshot().event_cutover_divergence;
     let changed = collector.update_runtime_status(RuntimeDataDirty::STATUS, |status| {
         status.llama_ready = true;
@@ -288,9 +289,13 @@ fn status_shadow_compare_bumps_engine_health_on_a_genuine_mismatch() {
 
     assert!(changed, "the legacy write must still apply");
     assert_eq!(
-        after,
-        before + 1,
-        "a genuine Status/reducer mismatch must bump engine health"
+        collector.shadow_divergence_count(FieldId::Status),
+        local_before + 1,
+        "this collector must record exactly one Status mismatch"
+    );
+    assert!(
+        after > before,
+        "a genuine Status/reducer mismatch must bump engine health; other collectors may also publish to the global engine"
     );
     assert!(
         collector.runtime_status_snapshot().llama_ready,

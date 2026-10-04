@@ -48,29 +48,6 @@ pub(crate) fn append_safe_header(headers: &mut String, name: &str, value: &str) 
     headers.push_str("\r\n");
 }
 
-/// Like `send_json_ok` but allows the caller to append arbitrary response
-/// headers (e.g. `x-moa-*` observability headers).
-///
-/// Header names must satisfy the RFC 7230 tchar grammar (ASCII
-/// alphanumeric + a small symbol set); invalid names are dropped with a
-/// warning rather than written verbatim. Values are stripped of CR/LF.
-pub async fn send_json_ok_with_headers(
-    mut stream: ClientStream,
-    data: &serde_json::Value,
-    extra_headers: &[(&str, String)],
-) -> std::io::Result<()> {
-    let body = data.to_string();
-    let mut headers = String::from("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n");
-    for (name, value) in extra_headers {
-        append_safe_header(&mut headers, name, value);
-    }
-    headers.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
-    stream.write_all(headers.as_bytes()).await?;
-    stream.write_all(body.as_bytes()).await?;
-    stream.shutdown().await?;
-    Ok(())
-}
-
 /// Send a bounded JSON error and record it only after the exact client-visible
 /// body has been written successfully.
 pub(crate) async fn send_json_with_status_and_headers_observed(

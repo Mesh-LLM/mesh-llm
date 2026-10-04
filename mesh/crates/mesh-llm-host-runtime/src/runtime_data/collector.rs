@@ -91,6 +91,11 @@ impl RuntimeDataCollector {
         Self::default()
     }
 
+    #[cfg(test)]
+    pub(super) fn shadow_divergence_count(&self, field: FieldId) -> u64 {
+        self.shared.event_cutover_health.divergence_count(field)
+    }
+
     pub(crate) fn producer(&self, source: RuntimeDataSource) -> RuntimeDataProducer {
         RuntimeDataProducer::new(self.clone(), source)
     }

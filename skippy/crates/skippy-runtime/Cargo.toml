@@ -15,11 +15,11 @@ dynamic-native-runtime = ["skippy-ffi/dynamic-runtime"]
 crossbeam-queue.workspace = true
 anyhow.workspace = true
 hex = "0.4"
-skippy-ffi = { path = "../skippy-ffi", version = "0.77.0", default-features = false  }
-skippy-cache = { path = "../skippy-cache", version = "0.77.0" }
-skippy-model = { path = "../skippy-model", version = "0.77.0" }
-skippy-model-ref = { path = "../skippy-model-ref", version = "0.77.0" }
-skippy-package-format = { path = "../skippy-package-format", version = "0.77.0" }
+skippy-ffi = { path = "../skippy-ffi", version = "0.78.0", default-features = false  }
+skippy-cache = { path = "../skippy-cache", version = "0.78.0" }
+skippy-model = { path = "../skippy-model", version = "0.78.0" }
+skippy-model-ref = { path = "../skippy-model-ref", version = "0.78.0" }
+skippy-package-format = { path = "../skippy-package-format", version = "0.78.0" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

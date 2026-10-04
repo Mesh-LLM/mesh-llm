@@ -76,6 +76,7 @@ members = [
     "skippy/crates/llama-spec-bench",
     "skippy/crates/skippy-bench",
     "mesh/crates/mesh-mixture-of-agents",
+    "mesh/crates/mesh-llm-moa-plugin",
     "tools/xtask",
 ]
 default-members = [
@@ -87,7 +88,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-version = "0.77.0"
+version = "0.78.0"
 
 [workspace.dependencies]
 ahash = "0.8.12"
@@ -95,10 +96,10 @@ anyhow = "1"
 blake3 = "1"
 crossbeam-queue = "0.3"
 clap = { version = "4", features = ["derive"] }
-mesh-llm-analytics = { path = "mesh/crates/mesh-llm-analytics", version = "0.77.0" }
-mesh-llm-build-info = { path = "mesh/crates/mesh-llm-build-info", version = "0.77.0" }
-mesh-llm-release-footer = { path = "mesh/crates/mesh-llm-release-footer", version = "0.77.0" }
-mesh-llm-skills = { path = "mesh/crates/mesh-llm-skills", version = "0.77.0" }
+mesh-llm-analytics = { path = "mesh/crates/mesh-llm-analytics", version = "0.78.0" }
+mesh-llm-build-info = { path = "mesh/crates/mesh-llm-build-info", version = "0.78.0" }
+mesh-llm-release-footer = { path = "mesh/crates/mesh-llm-release-footer", version = "0.78.0" }
+mesh-llm-skills = { path = "mesh/crates/mesh-llm-skills", version = "0.78.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"

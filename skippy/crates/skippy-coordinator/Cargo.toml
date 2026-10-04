@@ -10,4 +10,4 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [dependencies]
 thiserror = "2"
-skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.77.0" }
+skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.78.0" }

@@ -6,10 +6,12 @@ This is the checked-in implementation. Normative rules live in
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-wallet` alongside `mesh-llm-payments`;
-`just ci-crate-lists` checks it against workspace membership. The publish
-chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
-`mesh-llm-payments`, including optional dependencies.
+`mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
+crates; `just ci-crate-lists` checks it against workspace membership. The
+publish chain orders `mesh-llm-plugin` before `mesh-llm-wallet` and
+`mesh-llm-payments`, including optional dependencies. It also publishes
+`mesh-mixture-of-agents` before `mesh-llm-moa-plugin`, and both before
+`mesh-llm-host-runtime`.
 
 ## Entry points
 

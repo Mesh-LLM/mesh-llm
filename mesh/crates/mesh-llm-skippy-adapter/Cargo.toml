@@ -17,23 +17,23 @@ dynamic-native-runtime = ["skippy-api/dynamic-native-runtime", "skippy-runtime/d
 workspace = true
 
 [dependencies]
-hf_hub = { package = "skippy-hf-hub", path = "../../../skippy/crates/skippy-hf-hub", version = "0.77.0", default-features = false, features = ["blocking"] }
-mesh-llm-config = { path = "../mesh-llm-config", version = "0.77.0" }
-mesh-llm-events = { path = "../mesh-llm-events", version = "0.77.0" }
-skippy-config = { path = "../../../skippy/crates/skippy-config", version = "0.77.0" }
-skippy-api = { path = "../../../skippy/crates/skippy-api", version = "0.77.0" }
-skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.77.0" }
-skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.77.0" }
-skippy-inference-api = { path = "../../../skippy/crates/skippy-inference-api", version = "0.77.0" }
-skippy-package-format = { path = "../../../skippy/crates/skippy-package-format", version = "0.77.0" }
-skippy-protocol = { path = "../../../skippy/crates/skippy-protocol", version = "0.77.0" }
-skippy-runtime = { path = "../../../skippy/crates/skippy-runtime", version = "0.77.0" }
-skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.77.0" }
+hf_hub = { package = "skippy-hf-hub", path = "../../../skippy/crates/skippy-hf-hub", version = "0.78.0", default-features = false, features = ["blocking"] }
+mesh-llm-config = { path = "../mesh-llm-config", version = "0.78.0" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0" }
+skippy-config = { path = "../../../skippy/crates/skippy-config", version = "0.78.0" }
+skippy-api = { path = "../../../skippy/crates/skippy-api", version = "0.78.0" }
+skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.78.0" }
+skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.78.0" }
+skippy-inference-api = { path = "../../../skippy/crates/skippy-inference-api", version = "0.78.0" }
+skippy-package-format = { path = "../../../skippy/crates/skippy-package-format", version = "0.78.0" }
+skippy-protocol = { path = "../../../skippy/crates/skippy-protocol", version = "0.78.0" }
+skippy-runtime = { path = "../../../skippy/crates/skippy-runtime", version = "0.78.0" }
+skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.78.0" }
 anyhow = "1"
 dirs = "6.0.0"
 serde_json = "1"
 toml = "1.1"
 
 [dev-dependencies]
-skippy-model = { path = "../../../skippy/crates/skippy-model", version = "0.77.0" }
+skippy-model = { path = "../../../skippy/crates/skippy-model", version = "0.78.0" }
 tempfile = "3"

@@ -37,48 +37,49 @@ claude-live-model-integration = ["claude-code-integration"]
 workspace = true
 
 [dependencies]
-mesh-llm-control-api = { path = "../mesh-llm-control-api", version = "0.77.0" }
-mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.77.0" }
-mesh-llm-transport = { path = "../mesh-llm-transport", version = "0.77.0" }
-skippy-api = { path = "../../../skippy/crates/skippy-api", version = "0.77.0" }
-skippy-events = { path = "../../../skippy/crates/skippy-events", version = "0.77.0" }
-mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.77.0", optional = true }
-mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.77.0", optional = true }
+mesh-llm-moa-plugin = { path = "../mesh-llm-moa-plugin", version = "0.78.0" }
+mesh-llm-control-api = { path = "../mesh-llm-control-api", version = "0.78.0" }
+mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78.0" }
+mesh-llm-transport = { path = "../mesh-llm-transport", version = "0.78.0" }
+skippy-api = { path = "../../../skippy/crates/skippy-api", version = "0.78.0" }
+skippy-events = { path = "../../../skippy/crates/skippy-events", version = "0.78.0" }
+mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.78.0", optional = true }
+mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.78.0", optional = true }
 bytes = "1"
 mesh-llm-build-info.workspace = true
-mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.77.0"  }
-mesh-llm-config = { path = "../mesh-llm-config", version = "0.77.0"  }
-mesh-llm-runtime-event-contracts = { path = "../mesh-llm-runtime-event-contracts", version = "0.77.0" }
-mesh-llm-events = { path = "../mesh-llm-events", version = "0.77.0"  }
-mesh-llm-log-store = { path = "../mesh-llm-log-store", version = "0.77.0"  }
-mesh-llm-membership = { path = "../mesh-llm-membership", version = "0.77.0", features = ["host-io"] }
-mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.77.0"  }
-mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.77.0"  }
-mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.77.0", features = ["host-io"]  }
-skippy-native-runtime = { path = "../../../skippy/crates/skippy-native-runtime", version = "0.77.0"  }
-mesh-native-serving-plugin-host = { path = "../mesh-native-serving-plugin-host", version = "0.77.0" }
-skippy-guardrails = { path = "../../../skippy/crates/skippy-guardrails", version = "0.77.0"  }
-mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.77.0"  }
-mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.77.0"  }
-mesh-llm-system = { path = "../mesh-llm-system", version = "0.77.0", features = ["skippy-devices"]  }
-mesh-llm-types = { path = "../mesh-llm-types", version = "0.77.0"  }
-mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.77.0", default-features = false  }
-mesh-llm-node = { path = "../mesh-llm-node", version = "0.77.0"  }
-mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.77.0", features = ["host-io"]  }
-skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.77.0"  }
-skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.77.0"  }
-skippy-model-ref = { path = "../../../skippy/crates/skippy-model-ref", version = "0.77.0"  }
-skippy-model-resolver = { path = "../../../skippy/crates/skippy-model-resolver", version = "0.77.0"  }
-skippy-inference-api = { path = "../../../skippy/crates/skippy-inference-api", version = "0.77.0"  }
-skippy-protocol = { path = "../../../skippy/crates/skippy-protocol", version = "0.77.0"  }
-skippy-cache = { path = "../../../skippy/crates/skippy-cache", version = "0.77.0"  }
-skippy-coordinator = { path = "../../../skippy/crates/skippy-coordinator", version = "0.77.0"  }
-skippy-runtime = { path = "../../../skippy/crates/skippy-runtime", version = "0.77.0"  }
-skippy-ffi = { path = "../../../skippy/crates/skippy-ffi", version = "0.77.0", default-features = false }
-skippy-model = { path = "../../../skippy/crates/skippy-model", version = "0.77.0" }
-skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.77.0"  }
-skippy-topology = { path = "../../../skippy/crates/skippy-topology", version = "0.77.0"  }
-skippy-package-format = { path = "../../../skippy/crates/skippy-package-format", version = "0.77.0"  }
+mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.78.0"  }
+mesh-llm-config = { path = "../mesh-llm-config", version = "0.78.0"  }
+mesh-llm-runtime-event-contracts = { path = "../mesh-llm-runtime-event-contracts", version = "0.78.0" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0"  }
+mesh-llm-log-store = { path = "../mesh-llm-log-store", version = "0.78.0"  }
+mesh-llm-membership = { path = "../mesh-llm-membership", version = "0.78.0", features = ["host-io"] }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.78.0"  }
+mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.78.0"  }
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.78.0", features = ["host-io"]  }
+skippy-native-runtime = { path = "../../../skippy/crates/skippy-native-runtime", version = "0.78.0"  }
+mesh-native-serving-plugin-host = { path = "../mesh-native-serving-plugin-host", version = "0.78.0" }
+skippy-guardrails = { path = "../../../skippy/crates/skippy-guardrails", version = "0.78.0"  }
+mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.78.0"  }
+mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.78.0"  }
+mesh-llm-system = { path = "../mesh-llm-system", version = "0.78.0", features = ["skippy-devices"]  }
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.78.0"  }
+mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.78.0", default-features = false  }
+mesh-llm-node = { path = "../mesh-llm-node", version = "0.78.0"  }
+mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.78.0", features = ["host-io"]  }
+skippy-model-artifact = { path = "../../../skippy/crates/skippy-model-artifact", version = "0.78.0"  }
+skippy-model-hf = { path = "../../../skippy/crates/skippy-model-hf", version = "0.78.0"  }
+skippy-model-ref = { path = "../../../skippy/crates/skippy-model-ref", version = "0.78.0"  }
+skippy-model-resolver = { path = "../../../skippy/crates/skippy-model-resolver", version = "0.78.0"  }
+skippy-inference-api = { path = "../../../skippy/crates/skippy-inference-api", version = "0.78.0"  }
+skippy-protocol = { path = "../../../skippy/crates/skippy-protocol", version = "0.78.0"  }
+skippy-cache = { path = "../../../skippy/crates/skippy-cache", version = "0.78.0"  }
+skippy-coordinator = { path = "../../../skippy/crates/skippy-coordinator", version = "0.78.0"  }
+skippy-runtime = { path = "../../../skippy/crates/skippy-runtime", version = "0.78.0"  }
+skippy-ffi = { path = "../../../skippy/crates/skippy-ffi", version = "0.78.0", default-features = false }
+skippy-model = { path = "../../../skippy/crates/skippy-model", version = "0.78.0" }
+skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.78.0"  }
+skippy-topology = { path = "../../../skippy/crates/skippy-topology", version = "0.78.0"  }
+skippy-package-format = { path = "../../../skippy/crates/skippy-package-format", version = "0.78.0"  }
 iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs", "unstable-net-report"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -98,7 +99,7 @@ opentelemetry = { version = "0.32.0", default-features = false, features = ["met
 opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics"] }
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["metrics", "http-proto", "reqwest-blocking-client"] }
 rustls = "0.23.36"
-mesh-llm-analytics = { path = "../mesh-llm-analytics", version = "0.77.0" }
+mesh-llm-analytics = { path = "../mesh-llm-analytics", version = "0.78.0" }
 ryu = "1"
 reqwest = { version = "0.13", features = ["stream", "json"] }
 futures-util = "0.3"
@@ -125,7 +126,7 @@ tower = { version = "0.5", features = ["util"] }
 schemars = "1"
 prost = "0.14"
 toml = "1.1"
-hf_hub = { package = "skippy-hf-hub", path = "../../../skippy/crates/skippy-hf-hub", version = "0.77.0", default-features = false, features = ["blocking"] }
+hf_hub = { package = "skippy-hf-hub", path = "../../../skippy/crates/skippy-hf-hub", version = "0.78.0", default-features = false, features = ["blocking"] }
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
@@ -138,21 +139,21 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.77.0", features = ["test-support"] }
-mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.77.0", features = ["plugin-server"] }
+mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78.0", features = ["test-support"] }
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.78.0", features = ["plugin-server"] }
 # start_paused test clocks for the probe cooldown regression tests.
 tokio = { version = "1", features = ["full", "test-util"] }
 bitcoin = { version = "0.32", features = ["secp-recovery"] }
 lightning-invoice = { version = "0.35.0-rc1", features = ["std"] }
 serial_test = "4"
-skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.77.0", features = ["test-support"] }
+skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.78.0", features = ["test-support"] }
 opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics", "testing"] }
-mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.77.0"  }
+mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.78.0"  }
 # Enables the membership crate's `test-support` home override during the host's
 # own test build, so cross-crate callers (where the membership crate's
 # `cfg(test)` is false) still honor `MESH_LLM_TEST_HOME`. Not in
 # `[dependencies]`: a library consumer must never get the env-var override.
-mesh-llm-membership = { path = "../mesh-llm-membership", version = "0.77.0", features = ["test-support"] }
+mesh-llm-membership = { path = "../mesh-llm-membership", version = "0.78.0", features = ["test-support"] }
 # Used by the gated-relay regression test to spawn an in-process iroh-relay
 # with AccessConfig::Restricted, then build a real iroh::Endpoint from our
 # relay_map_from_urls output and verify --relay-auth tokens reach the relay

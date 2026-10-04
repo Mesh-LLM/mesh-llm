@@ -11,7 +11,7 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-mesh-llm-events = { path = "../mesh-llm-events", version = "0.77.0" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0" }
 serde = { version = "1", features = ["derive"] }
 httparse = "1"
 http = "1"
