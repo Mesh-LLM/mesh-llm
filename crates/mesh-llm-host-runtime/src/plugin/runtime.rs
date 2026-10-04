@@ -60,6 +60,33 @@ async fn stop_runtime(runtime: PluginRuntime, reason: &str) {
     }
 }
 
+/// Default-managed packages may provide audit, mesh, event, and web UI
+/// surfaces, but they cannot register as an inference provider. Filter the
+/// untrusted plugin declaration before any host surface publishes it.
+fn restrict_default_inference(init: &mut proto::InitializeResponse) -> bool {
+    fn allowed(capability: &str) -> bool {
+        capability != "admission_policy.v1"
+            && !capability.starts_with("endpoint:inference")
+            && !capability.starts_with("inference.")
+    }
+    let before_init = init.capabilities.len();
+    init.capabilities.retain(|capability| allowed(capability));
+    let mut removed = init.capabilities.len() != before_init;
+    if let Some(manifest) = init.manifest.as_mut() {
+        let before_capabilities = manifest.capabilities.len();
+        manifest
+            .capabilities
+            .retain(|capability| allowed(capability));
+        removed |= manifest.capabilities.len() != before_capabilities;
+        let before_endpoints = manifest.endpoints.len();
+        manifest.endpoints.retain(|endpoint| {
+            proto::EndpointKind::try_from(endpoint.kind) != Ok(proto::EndpointKind::Inference)
+        });
+        removed |= manifest.endpoints.len() != before_endpoints;
+    }
+    removed
+}
+
 impl ExternalPlugin {
     pub(crate) async fn spawn(
         spec: &ExternalPluginSpec,
@@ -497,7 +524,7 @@ impl ExternalPlugin {
         outbound_tx: mpsc::Sender<proto::Envelope>,
         pending: PendingResponses,
     ) -> Result<()> {
-        let init = self
+        let mut init = self
             .initialize_runtime(generation, outbound_tx, pending)
             .await?;
 
@@ -508,6 +535,15 @@ impl ExternalPlugin {
                     self.spec.name
                 )
             })?;
+        if self
+            .spec
+            .installed_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.default_managed)
+            && restrict_default_inference(&mut init)
+        {
+            tracing::warn!(plugin = %self.spec.name, "Ignored inference capability from default-managed plugin");
+        }
         *self.server_info.lock().await = Some(server_info.clone());
         *self.manifest.lock().await = init.manifest.clone();
 
@@ -1036,6 +1072,34 @@ pub(crate) mod tests {
     use super::super::transport::{read_envelope, write_envelope};
     use super::super::{PluginCapabilityProvider, PluginEndpointSummary};
     use super::*;
+
+    #[test]
+    fn default_plugin_cannot_register_inference_but_keeps_other_endpoints() {
+        let mut init = proto::InitializeResponse {
+            capabilities: vec!["admission_policy.v1".into(), "audit.v1".into()],
+            manifest: Some(proto::PluginManifest {
+                endpoints: vec![
+                    proto::EndpointManifest {
+                        kind: proto::EndpointKind::Inference as i32,
+                        ..Default::default()
+                    },
+                    proto::EndpointManifest {
+                        kind: proto::EndpointKind::Mcp as i32,
+                        ..Default::default()
+                    },
+                ],
+                capabilities: vec!["endpoint:inference".into(), "audit.v1".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(restrict_default_inference(&mut init));
+        assert_eq!(init.capabilities, ["audit.v1"]);
+        let manifest = init.manifest.unwrap();
+        assert_eq!(manifest.capabilities, ["audit.v1"]);
+        assert_eq!(manifest.endpoints.len(), 1);
+        assert_eq!(manifest.endpoints[0].kind, proto::EndpointKind::Mcp as i32);
+    }
     use crate::runtime_data::{
         PluginDataKey, PluginEndpointKey, RuntimeDataCollector, RuntimeDataSource,
     };
@@ -1074,6 +1138,7 @@ pub(crate) mod tests {
             downloaded_asset_name: "demo.tar.gz".into(),
             install_path,
             enabled: true,
+            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
                 config_schema: None,
                 web_ui: Some(InstalledPluginWebUiMetadata {

@@ -88,6 +88,7 @@ pub(super) fn format_skills(command: &mesh_llm_cli::SkillCommand, assembly: &mut
 pub(super) fn format_plugin(command: &mesh_llm_cli::PluginCommand, assembly: &mut SummaryAssembly) {
     use mesh_llm_cli::PluginCommand;
     match command {
+        PluginCommand::InstallDefaults => assembly.command.push_str(" plugins install-defaults"),
         PluginCommand::Install {
             reference,
             archive,

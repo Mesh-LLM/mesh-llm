@@ -1,12 +1,16 @@
 use std::io::Write;
 
 use anyhow::{Result, bail};
+use mesh_llm_plugin_manager::defaults::{
+    DEFAULT_PLUGINS, DefaultPluginOutcome, default_plugins_opted_out, install_default_plugins,
+};
 use mesh_llm_plugin_manager::install::install_plugin_archive;
 use mesh_llm_plugin_manager::{
     PluginCatalog, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
     default_store_root, install_plugin, update_plugin,
 };
 use reqwest::Client;
+use std::collections::BTreeSet;
 
 use mesh_llm_cli::PluginCommand;
 use mesh_llm_tui::terminal_progress::{
@@ -39,6 +43,7 @@ pub async fn run_plugin_command(
     runtime_rows: Option<&PluginListRows>,
 ) -> Result<bool> {
     match command {
+        PluginCommand::InstallDefaults => install_defaults().await?,
         PluginCommand::Install {
             reference,
             archive,
@@ -67,6 +72,46 @@ pub async fn run_plugin_command(
         }
     }
     Ok(true)
+}
+
+async fn install_defaults() -> Result<()> {
+    if default_plugins_opted_out() || DEFAULT_PLUGINS.is_empty() {
+        return Ok(());
+    }
+    let options = PluginInstallOptions::from_env()?;
+    let config = mesh_llm_config::load_config(None)?;
+    let configured: BTreeSet<String> = config
+        .plugins
+        .iter()
+        .map(|plugin| plugin.name.clone())
+        .collect();
+    let mut progress = CliPluginProgress::default();
+    let outcomes =
+        install_default_plugins(DEFAULT_PLUGINS, &configured, &options, &mut progress).await;
+    progress.finish();
+    let mut err = mesh_llm_events::console_err();
+    let mut failed = false;
+    for (name, outcome) in outcomes {
+        match outcome {
+            DefaultPluginOutcome::Installed(installed) => writeln!(
+                err,
+                "✅ Installed default {name} {}",
+                installed.metadata.installed_version
+            )?,
+            DefaultPluginOutcome::AlreadyCurrent
+            | DefaultPluginOutcome::OperatorManaged
+            | DefaultPluginOutcome::Disabled
+            | DefaultPluginOutcome::UnsupportedPlatform => {}
+            DefaultPluginOutcome::NotInstalled(reason) => {
+                writeln!(err, "⚠️ Default {name} not installed: {reason}")?;
+                failed = true;
+            }
+        }
+    }
+    if failed {
+        bail!("one or more default plugins could not be provisioned");
+    }
+    Ok(())
 }
 
 async fn install(

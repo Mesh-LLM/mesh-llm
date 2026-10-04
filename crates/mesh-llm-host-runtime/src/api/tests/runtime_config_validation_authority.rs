@@ -204,6 +204,7 @@ fn install_blackboard_schema(plugin_dir: &std::path::Path) {
             downloaded_asset_name: "blackboard.tar.gz".to_string(),
             install_path: std::env::temp_dir().join("mesh-llm-plugin-blackboard-api-tests"),
             enabled: true,
+            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
                 config_schema: Some(blackboard_schema()),
                 web_ui: None,

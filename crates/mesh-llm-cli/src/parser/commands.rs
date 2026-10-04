@@ -854,11 +854,6 @@ pub struct Cli {
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
     pub nostr_discovery: bool,
-
-    /// Don't install the default plugins on first run.
-    /// Same as MESH_LLM_NO_DEFAULT_PLUGINS=1.
-    #[arg(long)]
-    pub no_default_plugins: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1274,6 +1269,8 @@ pub enum ConfigCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum PluginCommand {
+    /// Provision the reviewed default plugins (used by installers and mesh-llm update).
+    InstallDefaults,
     /// Install a native plugin from the catalog, GitHub, or a local release archive.
     Install {
         /// Plugin catalog name, GitHub owner/repo, or GitHub URL.

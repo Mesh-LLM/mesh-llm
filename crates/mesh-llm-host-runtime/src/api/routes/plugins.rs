@@ -899,6 +899,7 @@ mod tests {
             downloaded_asset_name: format!("{name}.tar.gz"),
             install_path,
             enabled: true,
+            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: name.to_string(),

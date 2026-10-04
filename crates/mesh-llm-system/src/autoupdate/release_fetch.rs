@@ -354,6 +354,10 @@ pub(super) async fn install_latest_bundle(
             action,
         )?;
         install_native_runtime_after_update(install_dir, release, &workspace).await;
+        #[cfg(not(windows))]
+        if matches!(action, PostInstallAction::ExitAfterInstall) {
+            provision_default_plugins_after_update(install_dir);
+        }
         Ok::<InstallOutcome, anyhow::Error>(install_outcome(action))
     }
     .await;
@@ -362,6 +366,21 @@ pub(super) async fn install_latest_bundle(
         let _ = std::fs::remove_dir_all(&workspace);
     }
     result
+}
+
+#[cfg(not(windows))]
+fn provision_default_plugins_after_update(install_dir: &Path) {
+    let binary = install_dir.join(mesh_binary_name());
+    match std::process::Command::new(&binary)
+        .args(["plugins", "install-defaults"])
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => tracing::warn!(?status, "Default plugin provisioning after update failed"),
+        Err(error) => {
+            tracing::warn!(%error, "Could not start default plugin provisioning after update")
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -1122,6 +1141,16 @@ try {{
         $installed.Add($name) | Out-Null
     }}
 
+    if (-not $restartAfterUpdate) {{
+        try {{
+            & $exePath plugins install-defaults
+            if ($LASTEXITCODE -ne 0) {{
+                Write-Warning 'Default plugins could not be fully installed; MeshLLM was updated.'
+            }}
+        }} catch {{
+            Write-Warning "Default plugins could not be fully installed; MeshLLM was updated: $_"
+        }}
+    }}
     if ($restartAfterUpdate) {{
         $env:MESH_LLM_SELF_UPDATE_ATTEMPTED = '1'
         & $exePath @args

@@ -330,6 +330,7 @@ mod tests {
             downloaded_asset_name: "blackboard.tar.gz".to_string(),
             install_path: PathBuf::from("/tmp/blackboard"),
             enabled: true,
+            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: "blackboard".to_string(),

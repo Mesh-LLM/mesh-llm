@@ -602,7 +602,7 @@ class InstallScriptTests(unittest.TestCase):
             result, calls, tools = self._run_main(tmp, interactive=True)
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls.read_text(encoding="utf-8"), "setup\n")
+            self.assertEqual(calls.read_text(encoding="utf-8"), "plugins install-defaults\nsetup\n")
             self.assertFalse(tools.exists())
             self.assertIn("↓ Fetching mesh-llm release...", result.stdout)
             self.assertIn("Installed mesh-llm to", result.stdout)
@@ -619,7 +619,7 @@ class InstallScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls.read_text(encoding="utf-8"), "setup --verbose\n")
+            self.assertEqual(calls.read_text(encoding="utf-8"), "plugins install-defaults\nsetup --verbose\n")
             self.assertFalse(tools.exists())
             self.assertIn("Release channel: stable", result.stdout)
             self.assertIn("Verified checksum:", result.stdout)
@@ -636,7 +636,7 @@ class InstallScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls.read_text(encoding="utf-8"), "setup --verbose\n")
+            self.assertEqual(calls.read_text(encoding="utf-8"), "plugins install-defaults\nsetup --verbose\n")
             self.assertFalse(tools.exists())
             self.assertIn("Release channel: stable", result.stdout)
 
@@ -645,7 +645,7 @@ class InstallScriptTests(unittest.TestCase):
             result, calls, tools = self._run_main(tmp, interactive=False)
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(calls.exists())
+            self.assertEqual(calls.read_text(encoding="utf-8"), "plugins install-defaults\n")
             self.assertFalse(tools.exists())
             self.assertIn("↓ Fetching mesh-llm release...", result.stdout)
             self.assertIn("Run this next:", result.stdout)
@@ -657,10 +657,23 @@ class InstallScriptTests(unittest.TestCase):
             result, calls, tools = self._run_main(tmp, interactive=True, args=["--no-setup"])
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(calls.exists())
+            self.assertEqual(calls.read_text(encoding="utf-8"), "plugins install-defaults\n")
             self.assertFalse(tools.exists())
             self.assertIn("Run this next:", result.stdout)
             self.assertIn("/mesh-llm setup", result.stdout)
+
+    def test_default_plugin_failure_does_not_undo_mesh_install(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, _tools = self._run_main(
+                tmp,
+                interactive=False,
+                args=["--no-setup"],
+                extra_exports="export MESH_LLM_TEST_PLUGIN_FAIL=1",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("default plugins could not be fully installed", result.stderr)
+            self.assertTrue((Path(tmp) / "bin/mesh-llm").is_file())
+            self.assertEqual(calls.read_text(encoding="utf-8"), "plugins install-defaults\n")
 
     def test_main_downloads_recommended_cuda_asset_on_jetson_orin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -688,7 +701,7 @@ class InstallScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls.read_text(encoding="utf-8"), "setup --service\n")
+            self.assertEqual(calls.read_text(encoding="utf-8"), "plugins install-defaults\nsetup --service\n")
             self.assertFalse(tools.exists())
             self.assertNotIn("runtime install", calls.read_text(encoding="utf-8"))
             self.assertNotIn("runtime prune", calls.read_text(encoding="utf-8"))
@@ -794,7 +807,8 @@ class InstallScriptTests(unittest.TestCase):
             mesh_llm.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
-                f"printf '%s\\n' \"$*\" >> {calls}\n",
+                f"printf '%s\\n' \"$*\" >> {calls}\n"
+                'if [[ "$*" == "plugins install-defaults" && "${MESH_LLM_TEST_PLUGIN_FAIL:-0}" == 1 ]]; then exit 9; fi\n',
                 encoding="utf-8",
             )
             mesh_llm.chmod(0o755)

@@ -134,7 +134,8 @@ pub async fn install_default_plugin(
         source: GitHubPluginSource::from_url(&entry.github_url)?,
         version: Some(PluginVersion::new(pin.version.to_string())?),
     };
-    install_resolved_plugin(resolved, options, progress, None, Some(pin.sha256)).await
+    let current = PluginStore::new(&options.store_root).load_optional(name)?;
+    install_resolved_plugin(resolved, options, progress, current, Some(pin.sha256)).await
 }
 
 /// Install catalog plugin `name` as a default at `pin`, a pin the caller holds
@@ -171,7 +172,8 @@ pub async fn install_default_plugin_at(
         source: GitHubPluginSource::from_url(&entry.github_url)?,
         version: Some(PluginVersion::new(pin.version.to_string())?),
     };
-    install_resolved_plugin(resolved, options, progress, None, Some(pin.sha256)).await
+    let current = PluginStore::new(&options.store_root).load_optional(name)?;
+    install_resolved_plugin(resolved, options, progress, current, Some(pin.sha256)).await
 }
 
 /// The built-in pin and the catalog's must name the same release (with or
@@ -235,6 +237,7 @@ pub fn install_plugin_archive(
         downloaded_asset_name: asset_name,
         install_path: extracted.install_path,
         enabled: current.as_ref().map(|item| item.enabled).unwrap_or(true),
+        default_managed: false,
         manifest: extracted.manifest,
         last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
         last_status: current.as_ref().and_then(|item| item.last_status.clone()),
@@ -272,6 +275,21 @@ pub async fn update_plugin(
 ) -> Result<InstallOutcome> {
     let store = PluginStore::new(&options.store_root);
     let current = store.load(name)?;
+    if current.default_managed {
+        let default = crate::defaults::DEFAULT_PLUGINS
+            .iter()
+            .find(|default| default.name == name)
+            .with_context(|| {
+                format!("default plugin '{name}' has no reviewed pin in this build")
+            })?;
+        let pin = default.pin_for(options.target.triple()).with_context(|| {
+            format!(
+                "default plugin '{name}' has no reviewed pin for {}",
+                options.target.triple()
+            )
+        })?;
+        return install_default_plugin_at(name, pin, options, progress).await;
+    }
     let source = GitHubPluginSource::from_url(&current.source_repository)?;
     let resolved = ResolvedInstallSource {
         plugin_name: current.name.clone(),
@@ -370,7 +388,7 @@ async fn install_resolved_plugin(
     )?;
     let _ = fs::remove_file(&archive_path);
 
-    let metadata = build_installed_metadata(
+    let mut metadata = build_installed_metadata(
         &resolved,
         &release.tag_name,
         asset,
@@ -378,6 +396,9 @@ async fn install_resolved_plugin(
         extracted,
         current.as_ref(),
     );
+    if pinned_sha256.is_some() {
+        metadata.default_managed = true;
+    }
     PluginStore::new(&options.store_root).save(&metadata)?;
 
     if let Some(current) = current {
@@ -415,6 +436,7 @@ fn build_installed_metadata(
         downloaded_asset_name: asset.name.clone(),
         install_path: extracted.install_path,
         enabled: current.map(|metadata| metadata.enabled).unwrap_or(true),
+        default_managed: current.is_some_and(|metadata| metadata.default_managed),
         manifest: extracted.manifest,
         last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
         last_status: current.and_then(|metadata| metadata.last_status.clone()),

@@ -856,6 +856,12 @@ main() {
     fi
 
     install_bundle "$tmp_dir/mesh-bundle"
+    # Provision from the pins compiled into the installed binary. Plugin
+    # download failures leave the Mesh installation usable and are retryable by
+    # running this installer or `mesh-llm update` again.
+    if ! "$INSTALL_DIR/mesh-llm" plugins install-defaults; then
+        warn "default plugins could not be fully installed; mesh-llm is installed"
+    fi
     if bool_is_true "$INSTALL_VERBOSE"; then
         echo "Installed $DOWNLOADED_ASSET to $INSTALL_DIR"
     else

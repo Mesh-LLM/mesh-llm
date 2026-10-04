@@ -59,7 +59,16 @@ pub(crate) fn configured_external_plugin_spec(
             "tcp:// plugin control is unsupported because it has no authenticated capability handshake"
         );
     }
-    let startup = PluginStartupOptions::from_config(&entry.startup);
+    let mut startup = PluginStartupOptions::from_config(&entry.startup);
+    let installed_metadata = installed_plugin_metadata_for_name(&entry.name)
+        .ok()
+        .flatten();
+    if installed_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.default_managed)
+    {
+        startup.optional = true;
+    }
     let command = entry
         .command
         .as_deref()
@@ -89,9 +98,7 @@ pub(crate) fn configured_external_plugin_spec(
         startup,
         web_ui_enabled: entry.web_ui_enabled,
         web_ui_primary_tab: entry.web_ui_primary_tab,
-        installed_metadata: installed_plugin_metadata_for_name(&entry.name)
-            .ok()
-            .flatten(),
+        installed_metadata,
     }))
 }
 
@@ -168,7 +175,10 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         args: Vec::new(),
         url: None,
         env: BTreeMap::new(),
-        startup: PluginStartupOptions::default(),
+        startup: PluginStartupOptions {
+            optional: metadata.default_managed,
+            ..PluginStartupOptions::default()
+        },
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         installed_metadata: Some(metadata.clone()),

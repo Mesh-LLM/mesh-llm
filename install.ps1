@@ -710,6 +710,15 @@ try {
     Write-Host "Installed $asset to $InstallDir"
     & $meshBinary --version
 
+    try {
+        & $meshBinary plugins install-defaults
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Default plugins could not be fully installed; MeshLLM is installed."
+        }
+    } catch {
+        Write-Warning "Default plugins could not be fully installed; MeshLLM is installed: $_"
+    }
+
     if ($NoPathUpdate -and -not $pathUpdated) {
         Write-Host "Install directory was not added to PATH. Use the full command below until you add $InstallDir to PATH."
     }

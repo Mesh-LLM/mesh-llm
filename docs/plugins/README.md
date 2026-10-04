@@ -534,53 +534,43 @@ the installed archive, extracted files, and local plugin metadata.
 
 ## Default Plugins
 
-A fresh node installs a short list of default plugins once, on first run
-(`mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`). Today the list is
-`capsule-emit-mesh` 0.1.1; each entry is added by its own change. Payment and wallet plugins are never on
-it: a node pays or gets paid only through a plugin its operator chose. A
-default installs as an ordinary package, so it can serve a web UI like any
-installed plugin.
+The reviewed default list is `mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`.
+Today it contains `capsule-emit-mesh` 0.1.1. Each entry pins a release version
+and an archive SHA-256 per supported platform. The catalog locates the plugin;
+if it also pins that platform, the pins must agree. GitHub's digest and the
+compiled digest must both match the download. Payment and wallet plugins are
+excluded from the default list.
 
-Each entry is pinned in the list itself: an exact release version and the
-SHA-256 of that release's archive for each platform (macOS arm64, Linux x86_64,
-Linux arm64). The catalog says where the plugin lives; if its entry also pins
-this platform (`version` and `sha256`), the two pins must agree. The download
-must match the pin as well as GitHub's reported digest. A platform without a
-pin, a disagreement, a mismatch, or no network means the plugin is not
-installed and the node starts normally; the install is tried again on the next
-start, bounded to 30 seconds. Bumping a default is one entry in the list per
-release.
+`install.sh`, `install.ps1`, and `mesh-llm update` run the installed binary's
+`mesh-llm plugins install-defaults` command after installing the Mesh bundle.
+Plugin archives are downloaded separately; they are not inside the Mesh bundle.
+Node startup performs no plugin download. An unsupported platform or empty
+list is skipped. A download or verification failure warns without undoing the
+Mesh installation; rerunning the installer or update retries it.
+Set `MESH_LLM_NO_DEFAULT_PLUGINS=1` for an installer or update invocation to
+skip default provisioning for that invocation.
 
-The node says what it did: one line when a default is installed, naming the
-version and how to remove it, and one warning when it couldn't be. After that a
-default is silent: later starts don't look it up, download it, or log about it.
+`plugin-install.json` records whether an installation is default managed. A
+later installer or update moves enabled default-managed plugins to the newly
+reviewed pin. An operator-installed plugin with the same name is left alone;
+an explicit `[[plugin]]` entry with that name is also left alone;
+`mesh-llm plugins update` also follows the compiled pin for default-managed
+plugins. Disabling a default preserves the installed record and prevents an
+automatic upgrade. Deleting it removes that record, so the next installer or
+update run installs it again. To keep a default off across upgrades, disable
+it rather than delete it. There is no separate offered-defaults state file.
+
+A default plugin that fails to start is optional: its failure is reported as
+an inactive plugin and does not abort node startup. A default-managed plugin
+cannot register an inference endpoint: the host removes inference endpoints
+and admission-policy capability claims from its initialization manifest before
+publishing routes. Its audit and web UI surfaces can still load.
 
 `capsule-emit-mesh` keeps a signed record of each request this node serves, on
 the node's own disk. By default it keeps SHA-256 digests of the request and
 response, never their text; keeping text takes two operator opt-ins
 (`MESH_LLM_PLUGIN_EXCHANGE_BODIES=1` on the host and the plugin's own setting).
-It is quiet while the node is: with no served requests it writes no records and
-cuts no checkpoints, and it makes no network calls unless the operator
-configures a witness URL. Remove it with `mesh-llm plugins delete
-capsule-emit-mesh`, or keep it installed but off with `mesh-llm plugins disable
-capsule-emit-mesh`.
-
-Opting out:
-
-| How | Effect |
-| --- | ------ |
-| `mesh-llm serve --no-default-plugins` | This start offers no defaults. |
-| `MESH_LLM_NO_DEFAULT_PLUGINS=1` | Same, from the environment. |
-| `[[plugin]]` with the plugin's `name` and `enabled = false` in the config | The operator has chosen: the default is recorded as offered and never installed. |
-| `mesh-llm plugins disable <name>` | Keeps it installed but not launched. |
-| `mesh-llm plugins delete <name>` | Removes it; it is not reinstalled. |
-
-Once installed, a default is an ordinary installed plugin. Each default is
-offered once (recorded in `defaults-offered.json` in the plugin store), so a
-removed default is never reinstalled, and a plugin the operator already
-installed or lists in their config is left alone. If that record exists but
-can't be read, no default is offered until it is fixed or removed, so a removed
-default never comes back through a damaged file.
+It makes no network calls unless the operator configures a witness URL.
 
 ## Hugging Face Plugin Catalog
 

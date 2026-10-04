@@ -271,6 +271,8 @@ pub struct InstalledPluginMetadata {
     pub downloaded_asset_name: String,
     pub install_path: PathBuf,
     pub enabled: bool,
+    #[serde(default)]
+    pub default_managed: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub manifest: Option<InstalledPluginManifestMetadata>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -450,6 +452,7 @@ mod tests {
             downloaded_asset_name: "blackboard-v1.0.0-aarch64-apple-darwin.tar.gz".to_string(),
             install_path: PathBuf::from("/tmp/plugins/blackboard"),
             enabled: true,
+            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: name.to_string(),
