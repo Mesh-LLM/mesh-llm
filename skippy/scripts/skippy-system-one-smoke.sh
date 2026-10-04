@@ -241,7 +241,7 @@ start_stage_server() {
   local label="$1" config="$2" port="$3" log="$4" deadline
   echo "system-one: starting ${label} on 127.0.0.1:${port}"
   LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-    "$STAGE_SERVER_BIN" serve-openai \
+    "$STAGE_SERVER_BIN" serve \
       --config "$config" \
       --bind-addr "127.0.0.1:${port}" \
       >"$log" 2>&1 &
@@ -263,7 +263,7 @@ start_stage_server() {
   return 1
 }
 
-# Shared body for one `serve-openai` + case-matrix run. Arguments:
+# Shared body for one `serve` + case-matrix run. Arguments:
 # label, artifact id, explicit model path override, mode, n_batch, request
 # timeout.
 run_cases_against_stage() {

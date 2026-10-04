@@ -318,7 +318,7 @@ start_candidate_server() {
     attempt_log="$SERVER_LOG.attempt-$attempt"
     rm -f "$attempt_log"
     LLAMA_STAGE_BACKEND="$BACKEND" \
-      "$CANDIDATE_BIN_DIR/skippy-server" serve-openai \
+      "$CANDIDATE_BIN_DIR/skippy" serve \
         --config "$CONFIG_PATH" \
         --bind-addr "127.0.0.1:$PORT" \
         --default-max-tokens 128 \

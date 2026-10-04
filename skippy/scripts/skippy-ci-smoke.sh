@@ -549,7 +549,7 @@ write_stage_config "$OPENAI_CONFIG" "$DENSE_MODEL_ID" "$DENSE_MODEL_PATH" "$DENS
 
 echo "smoke: OpenAI /v1/chat/completions streaming/tools/logprobs/structured-output"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-  "$STAGE_SERVER_BIN" serve-openai \
+  "$STAGE_SERVER_BIN" serve \
     --config "$OPENAI_CONFIG" \
     --bind-addr "127.0.0.1:${OPENAI_PORT}" \
     --default-max-tokens 2 \
@@ -715,7 +715,7 @@ SERVER_PID=""
 
 echo "smoke: staged OpenAI repeated-prompt and growing-chat cache reuse"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-  "$STAGE_SERVER_BIN" serve-binary \
+  "$STAGE_SERVER_BIN" serve --stage-transport binary \
     --config "$PROMPT_CONFIG" \
     --max-inflight 4 \
     --bind-addr "127.0.0.1:${PROMPT_OPENAI_PORT}" \
