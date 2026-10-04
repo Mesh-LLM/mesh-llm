@@ -5,7 +5,10 @@ use std::{
     io::IsTerminal,
     net::SocketAddr,
     path::Path,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -150,11 +153,15 @@ async fn serve_public(args: ServeCommandArgs) -> Result<()> {
         .unwrap_or_else(|| options.config.model_id.clone());
     let (stop, stopped) = oneshot::channel();
     let shutdown = shutdown_signal()?;
-    let server = skippy_api::serving::serve_local_openai_with_shutdown(options, async move {
+    let (shutdown, shutdown_requested) = track_shutdown_request(async move {
         tokio::select! { _ = shutdown => {}, _ = stopped => {} }
     });
+    let server = skippy_api::serving::serve_local_openai_with_shutdown(options, shutdown);
     serve_with_readiness(
-        server,
+        ReadinessServer {
+            future: server,
+            shutdown_requested,
+        },
         bind_addr,
         model_id,
         args.prompt,
@@ -243,12 +250,20 @@ async fn serve_binary_stage(mut args: ServeCommandArgs) -> Result<()> {
         }
         let bind_addr = options.bind_addr;
         let model_id = options.config.model_id.clone();
-        let server = skippy_serving::binary_transport::serve_binary_stage_with_shutdown(
-            options,
-            shutdown_signal()?,
-        );
-        return serve_worker_with_readiness(server, bind_addr, model_id, "binary", startup_timeout)
-            .await;
+        let (shutdown, shutdown_requested) = track_shutdown_request(shutdown_signal()?);
+        let server =
+            skippy_serving::binary_transport::serve_binary_stage_with_shutdown(options, shutdown);
+        return serve_worker_with_readiness(
+            ReadinessServer {
+                future: server,
+                shutdown_requested,
+            },
+            bind_addr,
+            model_id,
+            "binary",
+            startup_timeout,
+        )
+        .await;
     };
     let bind_addr = openai.bind_addr;
     let model_id = openai
@@ -257,12 +272,16 @@ async fn serve_binary_stage(mut args: ServeCommandArgs) -> Result<()> {
         .unwrap_or_else(|| options.config.model_id.clone());
     let (stop, stopped) = oneshot::channel();
     let shutdown = shutdown_signal()?;
+    let (shutdown, shutdown_requested) = track_shutdown_request(async move {
+        tokio::select! { _ = shutdown => {}, _ = stopped => {} }
+    });
     let server =
-        skippy_serving::binary_transport::serve_binary_stage_with_shutdown(options, async move {
-            tokio::select! { _ = shutdown => {}, _ = stopped => {} }
-        });
+        skippy_serving::binary_transport::serve_binary_stage_with_shutdown(options, shutdown);
     serve_with_readiness(
-        server,
+        ReadinessServer {
+            future: server,
+            shutdown_requested,
+        },
         bind_addr,
         model_id,
         args.prompt,
@@ -291,8 +310,33 @@ pub(crate) fn apply_public_frontend_tuning(public: &ServeOpenAiArgs, stage: &mut
     stage.openai_speculative_config = public.speculative_config.clone();
 }
 
+// Keep the observation with the server future instead of adding unrelated
+// shutdown arguments to every readiness call.
+struct ReadinessServer<F> {
+    future: F,
+    shutdown_requested: Arc<AtomicBool>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReadinessOutcome {
+    Ready,
+    ShutdownRequested,
+}
+
+fn track_shutdown_request(
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> (impl Future<Output = ()> + Send + 'static, Arc<AtomicBool>) {
+    let requested = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&requested);
+    let shutdown = async move {
+        shutdown.await;
+        observed.store(true, Ordering::SeqCst);
+    };
+    (shutdown, requested)
+}
+
 async fn serve_worker_with_readiness(
-    server: impl Future<Output = Result<()>> + Send + 'static,
+    server: ReadinessServer<impl Future<Output = Result<()>> + Send + 'static>,
     bind_addr: SocketAddr,
     model_id: String,
     transport: &str,
@@ -301,7 +345,8 @@ async fn serve_worker_with_readiness(
     if bind_addr.port() == 0 {
         bail!("stage listener must use a fixed port so readiness can be reported");
     }
-    let mut server = tokio::spawn(server);
+    let shutdown_requested = server.shutdown_requested;
+    let mut server = tokio::spawn(server.future);
     console::status(&format!("🧠 Loading {transport} stage for {model_id}"))?;
     let deadline = Instant::now() + startup_timeout;
     let probe = readiness_addr(bind_addr);
@@ -309,6 +354,9 @@ async fn serve_worker_with_readiness(
         tokio::select! {
             outcome = &mut server => {
                 outcome.context("join serving task")??;
+                if shutdown_requested.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
                 bail!("stage exited before its listener became ready");
             }
             connection = tokio::net::TcpStream::connect(probe) => {
@@ -336,7 +384,7 @@ async fn serve_worker_with_readiness(
 }
 
 async fn serve_with_readiness(
-    server: impl Future<Output = Result<()>> + Send + 'static,
+    server: ReadinessServer<impl Future<Output = Result<()>> + Send + 'static>,
     bind_addr: SocketAddr,
     model_id: String,
     prompt: bool,
@@ -348,16 +396,21 @@ async fn serve_with_readiness(
         bail!("--bind-addr must use a fixed port so readiness can be reported");
     }
     let api_base = format!("http://{}/v1", readiness_addr(bind_addr));
-    let mut server = tokio::spawn(server);
+    let shutdown_requested = server.shutdown_requested;
+    let mut server = tokio::spawn(server.future);
     console::status("🧠 Loading model and starting the API")?;
-    wait_for_ready(
+    let readiness = wait_for_ready(
         &api_base,
         &model_id,
         &mut server,
         startup_timeout,
         model_open_events.as_deref(),
+        &shutdown_requested,
     )
     .await?;
+    if readiness == ReadinessOutcome::ShutdownRequested {
+        return Ok(());
+    }
     console::event(
         "ready",
         &serde_json::json!({"model_id":model_id,"api_base":api_base}),
@@ -425,7 +478,8 @@ async fn wait_for_ready(
     server: &mut JoinHandle<Result<()>>,
     startup_timeout: Duration,
     model_open_events: Option<&ModelOpenEventQueue>,
-) -> Result<()> {
+    shutdown_requested: &AtomicBool,
+) -> Result<ReadinessOutcome> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(1))
         .build()?;
@@ -437,6 +491,9 @@ async fn wait_for_ready(
         tokio::select! {
             outcome = &mut *server => {
                 outcome.context("join serving task")??;
+                if shutdown_requested.load(Ordering::SeqCst) {
+                    return Ok(ReadinessOutcome::ShutdownRequested);
+                }
                 bail!("server exited before the API became ready");
             }
             response = client.get(format!("{api_base}/models")).send() => {
@@ -447,7 +504,7 @@ async fn wait_for_ready(
                         if let Some(queue) = model_open_events {
                             report_model_open_events(queue)?;
                         }
-                        return Ok(());
+                        return Ok(ReadinessOutcome::Ready);
                     }
                 }
             }
@@ -508,6 +565,67 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use clap::Parser;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_distinguishes_requested_shutdown_from_premature_completion() {
+        let (stop, stopped) = oneshot::channel();
+        let (shutdown, shutdown_requested) = track_shutdown_request(async move {
+            stopped.await.unwrap();
+        });
+        let mut server = tokio::spawn(async move {
+            shutdown.await;
+            Ok(())
+        });
+        stop.send(()).unwrap();
+        let outcome = wait_for_ready(
+            "http://127.0.0.1:0/v1",
+            "never-ready",
+            &mut server,
+            Duration::from_secs(1),
+            None,
+            &shutdown_requested,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, ReadinessOutcome::ShutdownRequested);
+
+        let mut server = tokio::spawn(async { Ok(()) });
+        let error = wait_for_ready(
+            "http://127.0.0.1:0/v1",
+            "never-ready",
+            &mut server,
+            Duration::from_secs(1),
+            None,
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("server exited before the API became ready")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn requested_shutdown_does_not_hide_a_pre_ready_server_failure() {
+        let (shutdown, shutdown_requested) = track_shutdown_request(async {});
+        let mut server = tokio::spawn(async move {
+            shutdown.await;
+            anyhow::bail!("model open failed")
+        });
+        let error = wait_for_ready(
+            "http://127.0.0.1:0/v1",
+            "never-ready",
+            &mut server,
+            Duration::from_secs(1),
+            None,
+            &shutdown_requested,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("model open failed"));
+    }
 
     #[test]
     fn binary_worker_bind_override_is_explicit() {
