@@ -51,6 +51,7 @@ impl Drop for PendingHostResponseGuard {
     }
 }
 
+#[derive(Clone)]
 pub struct PluginContext<'a> {
     pub(crate) outbound_tx: mpsc::Sender<proto::Envelope>,
     pub(crate) pending_host_responses: PendingHostResponses,
@@ -71,6 +72,16 @@ impl<'a> PluginContext<'a> {
             pending_host_responses,
             plugin_id,
             host_capabilities: Arc::from([]),
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn owned(&self) -> PluginContext<'static> {
+        PluginContext {
+            outbound_tx: self.outbound_tx.clone(),
+            pending_host_responses: self.pending_host_responses.clone(),
+            plugin_id: self.plugin_id.clone(),
+            host_capabilities: self.host_capabilities.clone(),
             _marker: PhantomData,
         }
     }
@@ -154,6 +165,45 @@ impl<'a> PluginContext<'a> {
             0,
         )
         .await
+    }
+
+    pub async fn request_host<P, R>(&self, method: &str, params: P) -> Result<R>
+    where
+        P: Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut pending_guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
+
+        self.send_payload(
+            proto::envelope::Payload::RpcRequest(proto::RpcRequest {
+                method: method.to_string(),
+                params_json: serde_json::to_string(&params)?,
+            }),
+            request_id,
+        )
+        .await?;
+
+        let response = rx.await??;
+        pending_guard.disarm();
+        match response.payload {
+            Some(proto::envelope::Payload::RpcResponse(response)) => {
+                Ok(serde_json::from_str(&response.result_json)?)
+            }
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected RPC response"),
+        }
+    }
+
+    pub async fn infer(
+        &self,
+        request: crate::HostInferenceRequest,
+    ) -> Result<crate::HostInferenceResponse> {
+        self.request_host("inference/chat_completions", request)
+            .await
     }
 
     pub async fn open_mesh_stream(

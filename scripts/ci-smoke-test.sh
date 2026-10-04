@@ -113,6 +113,14 @@ env MESH_LLM_CONFIG="$SMOKE_CONFIG_PATH" MESH_LLM_RUNTIME_ROOT="$SMOKE_RUNTIME_R
 MESH_PID=$!
 
 cleanup() {
+    local exit_status=$?
+    if (( exit_status != 0 )); then
+        while IFS= read -r -d '' native_log; do
+            echo "--- native runtime log: $native_log ---"
+            tail -100 "$native_log" 2>/dev/null || true
+            echo "--- end native runtime log ---"
+        done < <(find "$SMOKE_RUNTIME_ROOT" -name skippy-native.log -type f -print0 2>/dev/null)
+    fi
     echo "Shutting down mesh-llm (PID $MESH_PID)..."
     kill "$MESH_PID" 2>/dev/null || true
     pkill -P "$MESH_PID" 2>/dev/null || true
@@ -197,7 +205,10 @@ CHAT_PAYLOAD="$(
       temperature: 0
     }'
 )"
-RESPONSE="$(curl -fsS --max-time 60 "${BASE_URL}/chat/completions" -H 'content-type: application/json' -d "$CHAT_PAYLOAD")"
+if ! RESPONSE="$(curl --fail-with-body -sS --max-time 60 "${BASE_URL}/chat/completions" -H 'content-type: application/json' -d "$CHAT_PAYLOAD")"; then
+    echo "Non-stream chat completion failed: $RESPONSE" >&2
+    exit 1
+fi
 printf '%s' "$RESPONSE" | jq -e '.object == "chat.completion" and (.choices[0].message.content | length > 0)' >/dev/null
 
 echo "Testing stream chat completion..."
