@@ -400,6 +400,27 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("differs from the canonical manifest and selection", result.stderr)
 
+    def test_verify_plan_rejects_gguf_constants_without_scanning_cache(self) -> None:
+        """A verified policy plan must not imply that tensor byte preflight ran."""
+        generated = self._run()
+        self.assertEqual(0, generated.returncode, generated.stderr)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "plan.json"
+            path.write_text(generated.stdout, encoding="utf-8")
+            for cache_args, expected in (
+                ((), "--gguf-constants requires --check-cache"),
+                (("--check-cache",), "--gguf-constants cannot be used with --verify-plan"),
+            ):
+                with self.subTest(cache_args=cache_args):
+                    result = self._run(
+                        MANIFEST,
+                        "--verify-plan", str(path),
+                        *cache_args,
+                        "--gguf-constants", str(Path(temp_dir) / "constants.py"),
+                    )
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn(expected, result.stderr)
+
     def test_non_chat_model_cannot_claim_the_certified_full_profile(self) -> None:
         """Prevent non-chat workloads from inheriting causal-only certification."""
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

@@ -838,6 +838,11 @@ def main(argv: list[str] | None = None) -> int:
             + "\n"
         )
         return 0
+    if args.gguf_constants is not None:
+        if not args.check_cache:
+            raise PlanError("--gguf-constants requires --check-cache")
+        if args.verify_plan is not None:
+            raise PlanError("--gguf-constants cannot be used with --verify-plan")
     if args.verify_plan is not None:
         supplied = _object(json.loads(args.verify_plan.read_text(encoding="utf-8")), "plan")
         requested_families = supplied.get("requested_families")
@@ -861,8 +866,6 @@ def main(argv: list[str] | None = None) -> int:
             raise PlanError("--check-cache requires --cache-root or HF_CACHE/HF_HOME")
         cache_root = Path(env_cache)
     if not args.check_cache:
-        if args.gguf_constants is not None:
-            raise PlanError("--gguf-constants requires --check-cache")
         cache_root = None
     plan = build_plan(
         args.manifest,
