@@ -716,7 +716,7 @@ fn stage_server_command(
         .map(|mbps| format!(" --downstream-wire-mbps {mbps}"))
         .unwrap_or_default();
     format!(
-        "{} serve-binary --config {} --topology {} --metrics-otlp-grpc {} --telemetry-queue-capacity {} --telemetry-level {} --max-inflight {}{}{} --downstream-wire-delay-ms {}{}",
+        "{} serve --stage-transport binary --worker-only --config {} --topology {} --metrics-otlp-grpc {} --telemetry-queue-capacity {} --telemetry-level {} --max-inflight {}{}{} --downstream-wire-delay-ms {}{}",
         shell_quote(bin),
         shell_quote(config_path),
         shell_quote(
@@ -1734,12 +1734,9 @@ mod tests {
             local_shared_model_path: None,
             selected_package_files: Vec::new(),
         };
-        let command = remote_start_command(
-            &args,
-            &plan,
-            &stage,
-            "/tmp/remote/run-1/stage-0/skippy-serving",
-        );
+        let command =
+            remote_start_command(&args, &plan, &stage, "/tmp/remote/run-1/stage-0/skippy");
+        assert!(command.contains("serve --stage-transport binary --worker-only --config"));
         assert!(command.contains("stage.exit"));
         assert!(command.contains("stage.pid"));
         assert!(command.contains("wait \"$child\""));

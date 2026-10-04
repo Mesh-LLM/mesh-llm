@@ -425,7 +425,10 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
 
     let mut stage_command = Command::new(&args.stage_server_bin);
     stage_command.args([
-        "serve-binary",
+        "serve",
+        "--stage-transport",
+        "binary",
+        "--worker-only",
         "--config",
         config_path
             .to_str()
@@ -690,7 +693,10 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
 
     let mut stage2_command = Command::new(&args.stage_server_bin);
     stage2_command.args([
-        "serve-binary",
+        "serve",
+        "--stage-transport",
+        "binary",
+        "--worker-only",
         "--config",
         stage2_config_path
             .to_str()
@@ -705,7 +711,10 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
 
     let mut stage1_command = Command::new(&args.stage_server_bin);
     stage1_command.args([
-        "serve-binary",
+        "serve",
+        "--stage-transport",
+        "binary",
+        "--worker-only",
         "--config",
         stage1_config_path
             .to_str()
