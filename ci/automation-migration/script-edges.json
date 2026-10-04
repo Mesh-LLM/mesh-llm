@@ -411,11 +411,11 @@
       "members": [
         [
           24,
-          "3a84aadce7e4acb9",
+          "f89927004cdb00b6",
           1,
           "environment",
-          "explicit surviving61 scripts.tests modules",
-          "Family handoff, memory admission, controller and receipt intents are owned by actual Rust/native fixtures; remaining61 Python modules stay required."
+          "explicit surviving60 scripts.tests modules",
+          "Provenance and candidate freshness intents belong to actual Rust CLI/process fixtures; remaining60 Python modules stay required."
         ]
       ]
     },
@@ -635,22 +635,6 @@
   "python_implementation_edges": [],
   "python_implementation_groups": [
     {
-      "boundary": "--generation, --crates and optional --batches come from protected action; Cargo discovers candidate workspace membership",
-      "file": "scripts/ci-cargo-packages.py",
-      "members": [
-        [
-          97,
-          "e507857cf58e28bf",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "cargo metadata --locked --no-deps --format-version=1",
-          "main reads JSON stdout to resolve only present candidate workspace package owners; nonzero raises and fails the protected batch; no source write"
-        ]
-      ],
-      "root": "candidate executor protected package batch translation"
-    },
-    {
       "boundary": "--current-binary, --released-binary, --model and --output are operator paths; no wallet funding or remote mutation",
       "file": "scripts/qa-lightning-compatibility.py",
       "members": [
@@ -674,22 +658,6 @@
         ]
       ],
       "root": "optional operator-run mixed-version payment compatibility"
-    },
-    {
-      "boundary": "source root from CLI; --write-source-snapshot is an explicit file output, not child launch",
-      "file": "scripts/check-skippy-workload-candidate.py",
-      "members": [
-        [
-          29,
-          "82bcd0144272b94c",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "git -C <root> <args>",
-          "source_identity runs diff --binary HEAD, ls-files --others --exclude-standard -z and rev-parse HEAD; check_output captures bytes, nonzero raises; reads source state"
-        ]
-      ],
-      "root": "optional canary candidate source verification"
     },
     {
       "boundary": "repo/revision/source and HF destination are CLI inputs; upload-only mode skips clone/build/conversion",
@@ -900,31 +868,6 @@
       "root": "optional Hugging Face MTP composition job"
     },
     {
-      "boundary": "checkout derived from selected source .deps/llama.cpp; no inferred global pin",
-      "file": "scripts/llama-oracle-source.py",
-      "members": [
-        [
-          67,
-          "ecc65f5e67215e99",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "git -C <checkout> rev-parse HEAD",
-          "verifier reads HEAD via subprocess.run; checked status and stdout, rejects bad identity; no write"
-        ],
-        [
-          73,
-          "2e06741c731456c7",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "git -C <checkout> diff-index --quiet HEAD --",
-          "verifier requires clean tracked tree; check=True raises on nonzero; no stdout and no write"
-        ]
-      ],
-      "root": "optional canary prepared llama source verification"
-    },
-    {
       "boundary": "base URL/models/attempts, optional agent smoke selection and binary/public key are CLI inputs; --print-plan avoids launch",
       "file": "scripts/qa-nightly-stability.py",
       "members": [
@@ -1020,16 +963,6 @@
   ],
   "python_implementation_sources": [
     [
-      "scripts/check-skippy-workload-candidate.py",
-      "b1e11aaf123a19feeacea8cdbd3b51c0edd7cf33e829f877020bb30e49127539",
-      138
-    ],
-    [
-      "scripts/ci-cargo-packages.py",
-      "9f15bd3e32bd9263dfec4d1b6f7f5744680a196e79c0f387ade538341f1ecb36",
-      111
-    ],
-    [
       "scripts/generate-bench-corpus.py",
       "cb9bedff8794e225726f15c7b62770cd15e387e48f2df7d794d5adfa5bc56dda",
       747
@@ -1048,11 +981,6 @@
       "scripts/hf-skippy-mtp-compose-job.py",
       "87b9724c3802312327eb4d0786b51e852335e6468a54e7691280b0627ea7d59d",
       273
-    ],
-    [
-      "scripts/llama-oracle-source.py",
-      "711254e94c81f6640b5adba155eab8fffe4028263d8c38985e38bf69459635ad",
-      89
     ],
     [
       "scripts/qa-lightning-compatibility.py",
@@ -10057,6 +9985,68 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/family-helper-retirement-coverage.json",
       "sha256": "e5be2956bbbe3116d9d7ee83c43b88eb670e8df93aeb52f78852e25f83256f95"
+    }
+  },
+  "provenance_cargo_and_candidate_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 125,
+    "core_modules_after": 60,
+    "required_targets": 108,
+    "durable_coverage": {
+      "path": "ci/automation-migration/provenance-helper-retirement-coverage.json",
+      "sha256": "6a33a3abbda9c879ea35755f8eb2e87803be0a0224c272ab57fb51ac470fbc57"
+    },
+    "current_test_tree": {
+      "sha256": "3a1304227a7edc1de6dddde572cabcefc2e751dd3c088fe9f04166bfc6649675",
+      "paths": 53
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "6d467b2c211057cdc1ea7a116c91b16d987c7056a501a78f38538876a0e64cbe",
+      "roster_line": 24,
+      "count": 60
+    },
+    "supersedes": "Earlier retained helper snapshots are historical; Rust successor map and required test roster remain.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "head": "32a6cf92367f86c6f8c6ac37fb5b43fb12c35fad",
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/provenance-helper-retirement-postimage-focused-receipts.json",
+        "sha256": "a12b397d434bfe16e2aa9df204d2d05bcb09b16d0364775280e96c4b5e411a72"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/provenance-helper-retirement-postimage-receipts.json",
+        "sha256": "f623d94994aaeb6bc8c2632f20e10c9bfe50c7948f47e73483aca3df85e4b78f"
+      },
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/provenance-helper-retirement-postimage-normal.log",
+        "sha256": "1672f951b7729d83e96f1d79acf97324a881f80fe48f09872c84ca4d0c0cb1b2",
+        "targets": 109,
+        "passed": 4293,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 906,
+          "passed": 892,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 352.438
+        }
+      },
+      "intent_scope": "Forty focused native helper checks, four unchanged candidate originals and fifteen workload CLI groups passed before helper retirement. Standard JSON diagnostic quoting and complete current roster/domain refusal proofs passed with all existing family-plan owners. Unreferenced parser-emulation fixture files were not compiled by the predecessor target.",
+      "limits": "Local CLI/process and finite inert artifact proof only. Protected executor rollout, platform/model/product/live SDK and remaining generic Python closure remain incomplete."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/provenance-helper-retirement-coverage.json",
+      "sha256": "f6c502f99eaf58b58153525e48331f5beaab507235bcc99f276857d064401a03"
+    },
+    "additional_diagnostic_coverage": {
+      "path": "ci/automation-migration/family-planner-diagnostic-coverage.json",
+      "sha256": "559aa3f84e1e3889fd5d95b17241ecdf87c694e55c6bea82cfee9657c35bef92"
     }
   }
 }

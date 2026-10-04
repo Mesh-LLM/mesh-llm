@@ -78,7 +78,7 @@ pub(super) fn parse(value: Option<&Json>, field: &str) -> PlanResult<Artifact> {
         {
             return Err(format!(
                 "{field}.files contains an unsafe path: {}",
-                file.repr()
+                file.diagnostic()
             ));
         }
     }
@@ -94,7 +94,7 @@ pub(super) fn parse(value: Option<&Json>, field: &str) -> PlanResult<Artifact> {
     }
     let mut file_integrity = BTreeMap::new();
     for file in &files {
-        let record_field = format!("{integrity_field}[{}]", file.repr());
+        let record_field = format!("{integrity_field}[{}]", file.diagnostic());
         let record = object(integrity.get_key(file), &record_field)?;
         exact(record, &["size_bytes", "blob_id"], &record_field)?;
         let size_bytes = Integer::parse(

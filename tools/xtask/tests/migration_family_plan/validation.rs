@@ -181,3 +181,155 @@ fn bounded_flags_reject_unimplemented_modes_and_malformed_values() {
     );
     assert!(huge.stdout.is_empty());
 }
+
+#[test]
+fn invalid_label_diagnostic_uses_json_quoting_and_keeps_one_error_line() {
+    for (label, quoted) in [("bad'label\"", true), ("bad\n'label\"", false)] {
+        let path = with_manifest(|manifest| manifest["models"][0]["family"] = json!(label));
+        let output = run(&["--manifest", path.to_str().expect("UTF-8")]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+        assert_eq!(stderr.lines().count(), 1);
+        if quoted {
+            assert!(stderr.contains("has an invalid label"));
+            assert!(stderr.contains(&serde_json::to_string(label).expect("JSON label")));
+        } else {
+            assert!(stderr.contains("models[0].family must be a non-empty single-line string"));
+        }
+        fs::remove_file(path).expect("cleanup fixture");
+    }
+}
+
+#[test]
+fn profile_and_non_causal_policy_refusals_preserve_specific_domain_reasons() {
+    let changes: &[ManifestChange] = &[
+        (
+            "activation_width must be an unsigned 64-bit integer >= 1",
+            |doc| {
+                doc["models"][0]["execution"]
+                    .as_object_mut()
+                    .expect("execution")
+                    .remove("activation_width");
+            },
+        ),
+        ("must require exactly the three core lanes", |doc| {
+            doc["policy"]["profiles"]["full"]["required_lanes"] =
+                json!(["state-handoff", "chain", "single-step"]);
+        }),
+        ("must require exactly the three core lanes", |doc| {
+            doc["policy"]["profiles"]["package-oracle"]["required_lanes"] =
+                json!(["single-step", "chain", "state-handoff", "graph-parse"]);
+        }),
+        (
+            "workload-smoke must remain provisional and oracle-free",
+            |doc| {
+                doc["policy"]["profiles"]["workload-smoke"]["oracle"] = json!("local-monolithic");
+            },
+        ),
+        (
+            "workload-oracle requires certified local-monolithic smoke and oracle lanes",
+            |doc| {
+                doc["policy"]["profiles"]["workload-oracle"]["required_lanes"] =
+                    json!(["class-specific-smoke"]);
+            },
+        ),
+        ("models[0].class must be", |doc| {
+            doc["models"][0]
+                .as_object_mut()
+                .expect("model")
+                .remove("class");
+        }),
+        ("models[0].class must be", |doc| {
+            doc["models"][0]["class"] = json!("guessed-from-name");
+        }),
+        ("requires an mmproj_artifact", |doc| {
+            doc["models"][0]["class"] = json!("speech_recognition");
+            doc["models"][0]["profile"] = json!("workload-smoke");
+        }),
+        ("must disable speculative decoding", |doc| {
+            doc["models"][0]["class"] = json!("embedding");
+            doc["models"][0]["profile"] = json!("workload-smoke");
+            doc["models"][0]["execution"]["speculative_policy"] = json!("mtp-if-present");
+        }),
+        ("must not request split or MTP certification", |doc| {
+            doc["models"][0]["class"] = json!("embedding");
+            doc["models"][0]["profile"] = json!("workload-smoke");
+            doc["models"][0]["execution"]["mtp_layers"] = json!(1);
+        }),
+    ];
+    for (reason, change) in changes {
+        let path = with_manifest(*change);
+        let output = run(&["--manifest", path.to_str().expect("UTF-8")]);
+        assert_eq!(output.status.code(), Some(2), "{reason}");
+        assert!(output.stdout.is_empty(), "{reason}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(reason),
+            "{reason}: {:?}",
+            output.stderr
+        );
+        fs::remove_file(path).expect("cleanup fixture");
+    }
+}
+
+#[test]
+fn current_manifest_preserves_every_family_class_projector_and_native_head() {
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(root().join("ci/llama-canary/family-certified.json")).expect("current manifest"),
+    )
+    .expect("manifest JSON");
+    let output = run(&["--shard-count", "4"]);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let plan: Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
+    let source = manifest["models"].as_array().expect("source models");
+    let selected = plan["selected_models"].as_array().expect("selected models");
+    assert_eq!(selected.len(), source.len());
+    let families: std::collections::BTreeSet<_> = selected
+        .iter()
+        .map(|model| model["family"].as_str().expect("family"))
+        .collect();
+    assert_eq!(families.len(), source.len());
+    for model in source {
+        let actual = selected
+            .iter()
+            .find(|row| row["family"] == model["family"])
+            .expect("family retained");
+        assert_eq!(actual["class"], model["class"]);
+        assert_eq!(actual["architecture"], model["architecture"]);
+        assert_eq!(actual["artifact"], model["artifact"]);
+        assert_eq!(actual["mmproj_artifact"], model["mmproj_artifact"]);
+        let heads = model["execution"]["mtp_layers"]
+            .as_u64()
+            .expect("native heads");
+        assert_eq!(actual["execution"]["mtp_layers"], json!(heads));
+        let lanes = actual["certification_lanes"].as_array().expect("lanes");
+        if model["class"] == "causal_generation" {
+            assert_eq!(
+                lanes.iter().any(|lane| lane == "native-mtp-heads"),
+                heads > 0
+            );
+            assert!(lanes.iter().any(|lane| lane == "single-step"));
+            assert!(lanes.iter().any(|lane| lane == "chain"));
+            assert!(lanes.iter().any(|lane| lane == "state-handoff"));
+        } else {
+            assert_eq!(heads, 0);
+            assert_eq!(lanes.len(), 2);
+            assert!(lanes[0].as_str().expect("smoke lane").ends_with("-smoke"));
+            assert!(lanes[1].as_str().expect("oracle lane").ends_with("-oracle"));
+        }
+    }
+    let sharded: Vec<_> = plan["shards"]
+        .as_array()
+        .expect("shards")
+        .iter()
+        .flat_map(|shard| shard["families"].as_array().expect("shard families").iter())
+        .map(|family| family.as_str().expect("family"))
+        .collect();
+    assert_eq!(sharded.len(), families.len());
+    assert_eq!(
+        sharded
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        families
+    );
+}
