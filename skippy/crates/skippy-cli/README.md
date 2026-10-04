@@ -5,6 +5,9 @@ Messages APIs on the same address. It also downloads models, manages native
 runtimes, and runs explicit split stages. The CLI owns argument parsing and
 terminal output; `skippy-serving` owns the serving loops.
 
+Use `skippy --version` to identify the CLI build and `skippy runtime list` to
+inspect installed native runtime releases.
+
 Build with `just skippy` to package a local native runtime and build the CLI.
 The executable automatically discovers the verified `native-runtimes/` directory
 beside it, including `target/debug/native-runtimes` from that build. Use
