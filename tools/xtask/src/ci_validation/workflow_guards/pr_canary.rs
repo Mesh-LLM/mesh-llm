@@ -24,6 +24,8 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     entry(document(workflows, "pr_ci_canary.yml")?)?;
     let lane = document(workflows, "ci-pr-canary-lane.yml")?;
     lane_handoffs(lane)?;
+    source_identity(lane)?;
+    diagnostic_summary(lane)?;
     for (_, name) in SLICES {
         policy(document(workflows, name)?)?;
     }
@@ -134,6 +136,111 @@ fn lane_handoffs(lane: &Node) -> DynResult<()> {
     }
     Ok(())
 }
+fn source_identity(lane: &Node) -> DynResult<()> {
+    let steps = h::steps(h::job(lane, "plan")?)?;
+    let checkout = h::checkout(steps, "${{ inputs.merge_sha }}", None)?;
+    let (validate, step) = h::step(steps, "name", "Validate merge and head identities")?;
+    let (changes, _) = h::step(steps, "id", "changes")?;
+    h::before(checkout, validate)?;
+    h::before(validate, changes)?;
+    if step.get("if").is_some() || step.get("continue-on-error").is_some() {
+        return Err("PR canary source identity must be checked unconditionally".into());
+    }
+    let env = h::member(step, "env")?;
+    for (key, expected) in [
+        ("BASE_SHA", "${{ inputs.base_sha }}"),
+        ("HEAD_SHA", "${{ inputs.head_sha }}"),
+        ("MERGE_SHA", "${{ inputs.merge_sha }}"),
+        ("PR_NUMBER", "${{ inputs.pr_number }}"),
+    ] {
+        h::binding(env, key, expected)?;
+    }
+    h::command(
+        step,
+        &[
+            "git",
+            "fetch",
+            "--no-tags",
+            "origin",
+            "\"$BASE_SHA\"",
+            "\"$MERGE_SHA\"",
+            "\"refs/pull/${PR_NUMBER}/head\"",
+        ],
+        &[],
+    )?;
+    h::command(
+        step,
+        &[
+            "git",
+            "merge-base",
+            "--is-ancestor",
+            "\"$HEAD_SHA\"",
+            "\"$MERGE_SHA\"",
+        ],
+        &[],
+    )?;
+    let body = field(step, "run").ok_or("missing source identity command")?;
+    for required in [
+        "set -euo pipefail",
+        "^[0-9a-f]{40}$",
+        "^[1-9][0-9]*$",
+        "git cat-file -e \"${!value}^{commit}\"",
+        "parent_count < 3",
+        "git diff --quiet \"$BASE_SHA\" \"$MERGE_SHA\" -- ci/ownership.yml ci/slices.yml",
+    ] {
+        if !body
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .any(|line| line.contains(required))
+        {
+            return Err(format!("PR canary source admission lost {required}").into());
+        }
+    }
+    Ok(())
+}
+fn diagnostic_summary(lane: &Node) -> DynResult<()> {
+    let summary = h::job(lane, "summary")?;
+    h::binding(summary, "name", "Canary / CI")?;
+    h::condition(summary, "${{ !cancelled() }}")?;
+    let actual = h::member(summary, "needs")?
+        .list()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let expected = ["plan", "ui_artifact", "hosts", "native_runtime", "product"]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err("PR canary summary must wait for its complete bounded graph".into());
+    }
+    let (_, step) = h::step(h::steps(summary)?, "name", "Validate canary graph")?;
+    let env = h::member(step, "env")?;
+    let body = field(step, "run").ok_or("missing canary summary")?;
+    for (key, job) in [
+        ("PLAN_RESULT", "plan"),
+        ("UI_RESULT", "ui_artifact"),
+        ("HOST_RESULT", "hosts"),
+        ("RUNTIME_RESULT", "native_runtime"),
+        ("PRODUCT_RESULT", "product"),
+    ] {
+        h::binding(env, key, &format!("${{{{ needs.{job}.result }}}}"))?;
+        let assertion = format!("[[ \"${key}\" == success ]]");
+        if !body.lines().any(|line| line.trim() == assertion) {
+            return Err(format!("PR canary summary cannot skip {job} result").into());
+        }
+    }
+    for required in [
+        "set -euo pipefail",
+        "native runtime-event gate",
+        "Linux lane orchestration",
+        "GITHUB_STEP_SUMMARY",
+    ] {
+        if !body.contains(required) {
+            return Err(format!("PR canary summary lost {required}").into());
+        }
+    }
+    Ok(())
+}
+
 fn policy(slice: &Node) -> DynResult<()> {
     h::member(
         h::member(h::member(slice, "on")?, "workflow_call")?,
