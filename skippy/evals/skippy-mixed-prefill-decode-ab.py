@@ -10,6 +10,7 @@ import json
 import math
 import os
 import random
+import runpy
 import socket
 import statistics
 import subprocess
@@ -17,6 +18,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+
+
+serve_args = runpy.run_path(Path(__file__).with_name("serving_cli.py"))["serve_args"]
 
 
 def sha256(path: Path) -> str:
@@ -470,7 +474,7 @@ def launch_cell(
         common.extend(["--reply-credit-limit", "1", "--async-prefill-forward"])
     stage0_command = [
         str(binary),
-        "serve-binary",
+        *serve_args(binary, binary_transport=True),
         "--config",
         str(stage0_config),
         *common,
@@ -496,7 +500,13 @@ def launch_cell(
             ["--prefill-adaptive-target-ms", str(args.adaptive_target_ms)]
         )
     stage1_command = (
-        [str(binary), "serve-binary", "--config", str(stage1_config), *common]
+        [
+            str(binary),
+            *serve_args(binary, binary_transport=True, worker_only=True),
+            "--config",
+            str(stage1_config),
+            *common,
+        ]
         if stage1_config is not None
         else None
     )

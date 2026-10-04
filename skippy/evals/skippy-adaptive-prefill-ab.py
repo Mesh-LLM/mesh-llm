@@ -16,6 +16,7 @@ import json
 import math
 import os
 import random
+import runpy
 import socket
 import statistics
 import subprocess
@@ -27,6 +28,7 @@ from typing import Any
 REPO = Path(__file__).resolve().parents[2]
 PREFILL_EVENT = "stage.openai_prefill"
 CALIBRATION_EVENT = "stage.openai_prefill_calibration"
+serve_args = runpy.run_path(Path(__file__).with_name("serving_cli.py"))["serve_args"]
 
 
 def sha256(path: Path) -> str:
@@ -346,14 +348,14 @@ def launch_cell(
     ]
     stage1_command = [
         str(binary),
-        "serve-binary",
+        *serve_args(binary, binary_transport=True, worker_only=True),
         "--config",
         str(stage1_config),
         *common,
     ]
     stage0_command = [
         str(binary),
-        "serve-binary",
+        *serve_args(binary, binary_transport=True),
         "--config",
         str(stage0_config),
         *common,
