@@ -1,0 +1,60 @@
+From e4886c9c394678b6d810f299cea0e37a4446419f Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 5 Oct 2026 07:19:51 +1100
+Subject: [PATCH] test(skippy): reject invalid stage replay geometry
+
+---
+ src/skippy/tests/graph_build_inputs.cpp | 37 +++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index 4b0b430ed..0a8778bf0 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -1539,6 +1539,43 @@ static int check_stage_program_replay(const char * model_path) {
+     }
+     set_reuse_environment("1");
+ 
++    // Admission alone accepted several canary graphs that failed at replay.
++    // Corrupt one captured geometry recipe at a time and require the replay
++    // guard to reject it before GGML constructs an invalid tensor.
++    auto rejects_bad_geometry = [&](ggml_op kind, const char * expected) {
++        skippy_stage_program changed = first_program;
++        bool found = false;
++        for (auto & operation : changed.operations) {
++            if (operation.op != kind) continue;
++            if (kind == GGML_OP_VIEW) {
++                operation.geometry.view_offset = skippy_stage_geometry_expression::constant(1LL << 40);
++            } else {
++                operation.geometry.dimensions[0] = skippy_stage_geometry_expression::constant(1LL << 20);
++            }
++            found = true;
++            break;
++        }
++        if (!found) return false;
++        compatibility_installation->program = changed;
++        bool rejected = false;
++        try {
++            compatibility->decode(compatibility_batch, first_inputs);
++        } catch (const std::runtime_error & exception) {
++            rejected = std::string(exception.what()).find(expected) != std::string::npos;
++        }
++        // A failed replay can still have advanced sequence bookkeeping.
++        // Keep each mutation and the existing binding checks independent.
++        llama_memory_clear(llama_get_memory(compatibility.get()), true);
++        compatibility_installation->program = first_program;
++        return rejected;
++    };
++    if (!rejects_bad_geometry(GGML_OP_VIEW, "VIEW geometry exceeds source storage") ||
++            !rejects_bad_geometry(GGML_OP_RESHAPE, "RESHAPE changes element count")) {
++        std::fprintf(stderr, "stage replay did not reject invalid VIEW/RESHAPE geometry\n");
++        llama_batch_free(compatibility_batch);
++        return 200;
++    }
++
+     bool rejected_model_binding = false;
+     std::unique_ptr<llama_model, decltype(&llama_model_free)> other_model(load_model(model_path), llama_model_free);
+     if (!other_model) {
+-- 
+2.54.0 (Apple Git-157)
+

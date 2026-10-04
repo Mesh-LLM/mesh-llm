@@ -104,6 +104,11 @@ one main source SHA and the upstream target before any hardware work. Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
 preflight. Changed pins use up to three distributed repair attempts. Each
+candidate build compares pinned GGUF tensor descriptor bytes with the manifest
+using the prepared llama.cpp GGML type table before compilation. A seven-family
+real-model Metal gate runs on the built exact candidate before distributed
+fan-out; it does not replace the complete family and independent passes.
+Grouped failure traces point the repair agent at affected families first. Each
 attempt runs one complete candidate family pass followed (only when all
 families pass) by one independent build and complete verification pass on the
 exact same commit. A candidate-class family failure emits digest-bound evidence

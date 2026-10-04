@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import struct
 import sys
 from pathlib import Path, PurePosixPath
@@ -97,6 +98,45 @@ class _GgufReader:
             item_kind = self.u32()
             return [self.value(item_kind) for _ in range(self.u64())]
         raise PlanError(f"unsupported GGUF metadata type {kind}: {self.path}")
+
+
+def _gguf_tensor_bytes(path: Path, layouts: dict[int, tuple[int, int]]) -> int:
+    """Sum tensor payload sizes from descriptors; never read tensor data."""
+    reader = _GgufReader(path)
+    try:
+        if reader.read(4) != b"GGUF" or reader.u32() < 2:
+            raise PlanError(f"invalid GGUF header: {path}")
+        tensor_count, kv_count = reader.u64(), reader.u64()
+        for _ in range(kv_count):
+            reader.string()
+            reader.value(reader.u32())
+        total = 0
+        for _ in range(tensor_count):
+            name = reader.string()
+            dimensions = [reader.u64() for _ in range(reader.u32())]
+            ggml_type = reader.u32()
+            reader.u64()  # offset into the payload, which remains unread
+            if not dimensions or any(size == 0 for size in dimensions):
+                raise PlanError(f"invalid tensor dimensions for {name}: {path}")
+            if ggml_type not in layouts:
+                raise PlanError(f"unknown GGML tensor type {ggml_type} for {name}: {path}")
+            block_size, type_size = layouts[ggml_type]
+            if dimensions[0] % block_size:
+                raise PlanError(f"unaligned tensor {name} for GGML type {ggml_type}: {path}")
+            tensor_bytes = dimensions[0] // block_size * type_size
+            for size in dimensions[1:]:
+                tensor_bytes *= size
+            total += tensor_bytes
+        return total
+    finally:
+        reader.close()
+
+
+def _ggml_layouts(constants: Path) -> dict[int, tuple[int, int]]:
+    if not constants.is_file():
+        raise PlanError(f"prepared llama.cpp GGML type table is missing: {constants}")
+    values = runpy.run_path(str(constants))
+    return {int(kind): layout for kind, layout in values["GGML_QUANT_SIZES"].items()}
 
 
 def _gguf_dimensions(path: Path) -> tuple[str, int, int, int] | None:
@@ -599,7 +639,8 @@ def _artifact_cache_paths(cache_root: Path, artifact: dict[str, Any]) -> list[Pa
     return [base.joinpath(*PurePosixPath(file).parts) for file in artifact["files"]]
 
 
-def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
+def _verify_cache(models: list[dict[str, Any]], cache_root: Path,
+                  layouts: dict[int, tuple[int, int]] | None = None) -> None:
     missing: list[str] = []
     for model in models:
         artifacts = [("target", model["artifact"])]
@@ -637,6 +678,16 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
         joined = "\n  ".join(missing)
         raise PlanError(f"immutable family cache is incomplete:\n  {joined}")
     for model in models:
+        if layouts is not None:
+            scanned = sum(_gguf_tensor_bytes(path, layouts) for path in
+                          _artifact_cache_paths(cache_root, model["artifact"]))
+            planned = model["resources"]["estimated_model_bytes"]
+            if scanned != planned:
+                raise PlanError(
+                    f"{model['family']} resources.estimated_model_bytes in manifest plans "
+                    f"{planned} tensor bytes, immutable GGUF metadata scans {scanned} "
+                    f"({', '.join(model['artifact']['files'])})"
+                )
         artifacts = [("target", model["artifact"])]
         if model["draft_artifact"] is not None:
             artifacts.append(("draft", model["draft_artifact"]))
@@ -688,6 +739,7 @@ def build_plan(
     families: str = "",
     shard_count: int = 1,
     cache_root: Path | None = None,
+    gguf_constants: Path | None = None,
 ) -> dict[str, Any]:
     """Validate an immutable roster, optionally verify its cache, and shard selected families."""
     manifest, manifest_sha256 = _load_manifest(manifest_path)
@@ -697,7 +749,8 @@ def build_plan(
     if not models:
         raise PlanError("family selection produced no models")
     if cache_root is not None:
-        _verify_cache(models, cache_root)
+        _verify_cache(models, cache_root,
+                      _ggml_layouts(gguf_constants) if gguf_constants is not None else None)
     shards = _shards(models, shard_count)
     matrix = {
         "include": [
@@ -750,6 +803,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--cache-root", type=Path)
     parser.add_argument("--check-cache", action="store_true")
+    parser.add_argument("--gguf-constants", type=Path,
+                        help="prepared llama.cpp gguf-py type table; also check planned tensor bytes")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--verify-plan", type=Path, help="recompute and verify an existing policy plan")
@@ -806,12 +861,15 @@ def main(argv: list[str] | None = None) -> int:
             raise PlanError("--check-cache requires --cache-root or HF_CACHE/HF_HOME")
         cache_root = Path(env_cache)
     if not args.check_cache:
+        if args.gguf_constants is not None:
+            raise PlanError("--gguf-constants requires --check-cache")
         cache_root = None
     plan = build_plan(
         args.manifest,
         families=args.families,
         shard_count=args.shard_count,
         cache_root=cache_root,
+        gguf_constants=args.gguf_constants,
     )
     rendered = json.dumps(plan, indent=2, sort_keys=True) + "\n"
     if args.output:

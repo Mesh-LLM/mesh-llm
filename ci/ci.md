@@ -126,7 +126,13 @@ a branch moving later cannot change the selected source for that run.
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The producer performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
-the immutable HF cache before compilation and exports a candidate Git bundle,
+the immutable HF cache before compilation. After preparing the exact llama.cpp
+pin, it reads GGUF tensor descriptors with that pin's GGML type table and
+compares each target's tensor byte sum with the manifest before any build.
+After the build, seven pinned Metal models exercise dense parity, recurrent and
+MoE replay, embedding and rerank startup, encoder-decoder ordering, and image
+response content before the 95-family matrix is submitted. The full matrix
+and independent verification retain publication authority. The producer exports a candidate Git bundle,
 one-family-per-shard plan, four arm64 certification binaries, a prebuilt
 multimodal library-test executable, and the run-scoped CPU workload oracle
 closure. Static Metal resources are embedded; an unpackaged non-system dylib
