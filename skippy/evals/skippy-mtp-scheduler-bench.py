@@ -6,12 +6,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import runpy
 import socket
 import statistics
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
+
+
+serve_args = runpy.run_path(Path(__file__).with_name("serving_cli.py"))["serve_args"]
 
 
 def free_port() -> int:
@@ -130,7 +134,7 @@ def run_server(
     write_config(config, package, port, lanes, model_id, layer_start, layer_end)
     command = [
         str(server_bin),
-        "serve-binary",
+        *serve_args(server_bin, binary_transport=True, worker_only=True),
         "--config",
         str(config),
         "--bind-addr",

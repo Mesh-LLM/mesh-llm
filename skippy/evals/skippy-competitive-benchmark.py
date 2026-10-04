@@ -19,6 +19,7 @@ import math
 import os
 import platform as platform_module
 import re
+import runpy
 import shutil
 import signal
 import socket
@@ -33,6 +34,7 @@ from typing import Any, Iterator, Sequence
 
 
 REPO = Path(__file__).resolve().parents[2]
+serve_args = runpy.run_path(Path(__file__).with_name("serving_cli.py"))["serve_args"]
 DEFAULT_CONFIG = REPO / "skippy/evals/skippy-competitive-benchmark.json"
 PROMPT_GENERATOR = REPO / "skippy/evals/skippy-agentic-prompt-manifest.py"
 ARMS = ("llama", "mesh")
@@ -560,7 +562,7 @@ def server_command(
     if arm in ("mesh", ADAPTIVE_MESH_ARM):
         command = [
             str(args.mesh_binary),
-            "serve-openai",
+            *serve_args(args.mesh_binary),
             "--config",
             str(stage_config),
             "--bind-addr",

@@ -196,8 +196,11 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         args = SimpleNamespace(mesh_binary=Path("mesh"), llama_binary=Path("llama"))
         common = (model, Path("model.gguf"), Path("stage.json"), 19000, 16384, 2, 8)
 
-        mesh = BENCH.server_command("mesh", args, *common, True)
-        raw = BENCH.server_command("llama", args, *common, True)
+        with mock.patch.object(BENCH, "serve_args", return_value=["serve"]) as probe:
+            mesh = BENCH.server_command("mesh", args, *common, True)
+            raw = BENCH.server_command("llama", args, *common, True)
+        probe.assert_called_once_with(args.mesh_binary)
+        self.assertEqual(mesh[:2], [str(args.mesh_binary), "serve"])
 
         self.assertEqual(mesh[mesh.index("--generation-concurrency") + 1], "2")
         self.assertEqual(mesh[mesh.index("--generation-queue-capacity") + 1], "256")
@@ -216,18 +219,21 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
             llama_binary=Path("llama"),
             tokenizer_root=Path("tokenizers"),
         )
-        command = BENCH.server_command(
-            "mesh-adaptive",
-            args,
-            model,
-            Path("model.gguf"),
-            Path("stage.json"),
-            19000,
-            16384,
-            4,
-            8,
-            True,
-        )
+        with mock.patch.object(BENCH, "serve_args", return_value=["serve-openai"]) as probe:
+            command = BENCH.server_command(
+                "mesh-adaptive",
+                args,
+                model,
+                Path("model.gguf"),
+                Path("stage.json"),
+                19000,
+                16384,
+                4,
+                8,
+                True,
+            )
+        probe.assert_called_once_with(args.mesh_binary)
+        self.assertEqual(command[:2], [str(args.mesh_binary), "serve-openai"])
 
         self.assertEqual(command[command.index("--generation-concurrency") + 1], "4")
         self.assertIn("--adaptive-generation-concurrency", command)
