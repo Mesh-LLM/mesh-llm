@@ -20,8 +20,9 @@ with 15 expected skips and passed its repository consistency checks after the
 inventory correction.
 Formatting, Justfile, and diff checks passed.
 
-These are local source/package results. The composed product build and remote
-CI remain pending and are not established by the passing checks above.
+These are local source/package results. The linked pull request records
+subsequent composed product builds and remote CI results. The checks above
+alone do not establish those results.
 
 | Acceptance | Implementation | Verification |
 | --- | --- | --- |
