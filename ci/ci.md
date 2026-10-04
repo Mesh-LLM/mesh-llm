@@ -1630,7 +1630,13 @@ covers unknown-length responses starting in 8.4. Rust owns response parsing,
 SSE completion, joined worker ownership, process cancellation, and private-file
 cleanup. TLS fixture dependencies are test-only and do not enter the automation
 bootstrap dependency closure. Plan mode performs no HTTP, TLS capability probe,
-or evidence writes. The nightly workflow still calls the transitional Python
-harnesses;
-KV orchestration and the optional OpenCode adapter's Python closure remain open.
+or evidence writes. The nightly workflow prepares the native automation tool and calls its nightly
+command. KV orchestration and the optional OpenCode adapter's Python closure
+remain transitional.
 Local fixtures do not certify live model, KV cache, or hosted endpoint behavior.
+
+The two general stability Python harnesses, their 22 test methods, the two KV
+workflow contract methods, and six product-crate Python bindings are retired
+together after original and native caller qualification. The required
+`migration_stability` target and native workflow guards retain this coverage.
+The core gate still selects 54 transitional Python modules.

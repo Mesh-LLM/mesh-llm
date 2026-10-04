@@ -1738,20 +1738,6 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
-      "gate": "Legacy just ci-validate and relevant workflow/platform lane",
-      "module": "scripts/tests/test_kv_nightly_workflow_contract.py",
-      "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "0b7915f9afb843bc8ac75b562cd5d4ccdbb5c51dae837fd9f9d724e48b3af6b7",
-      "test_method_count": 2,
-      "test_methods": [
-        "test_live_nightly_runs_both_harnesses_and_preserves_failures",
-        "test_ownership_schedule_is_trusted_hosted_and_reproducible"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after exact archive, manifest, checksum, mode, symlink, and OS parity.",
       "gate": "Legacy just ci-validate plus artifact/platform qualification",
       "module": "scripts/tests/test_linux_native_runtime_deps.py",
@@ -2708,26 +2694,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
       "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
-      "module": "scripts/tests/test_qa_agent_tool_call_reliability.py",
-      "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "8e176aea277c676cf0695591533aa7bc4e8422bcbfb632ec0dc241409574be9c",
-      "test_method_count": 8,
-      "test_methods": [
-        "test_extracts_streamed_tool_call",
-        "test_extracts_valid_tool_call",
-        "test_normalizes_mesh_base_url_to_v1",
-        "test_print_plan_does_not_require_network",
-        "test_rejects_wrong_tool_call_shape",
-        "test_requests_explicitly_disable_thinking",
-        "test_validates_tool_result_continuation",
-        "test_writes_jsonl_probe_results"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
-      "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
       "module": "scripts/tests/test_qa_kv_tool_loop_stability.py",
       "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -2771,32 +2737,6 @@
         "test_shell_syntax_is_valid",
         "test_uses_v6_delete_contract_and_private_marker_assertions",
         "test_wait_status_binds_label_before_constructing_output_path"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after deterministic cases and named live workflow coverage are retained.",
-      "gate": "Legacy just ci-validate; live behavior in its named optional/scheduled workflow",
-      "module": "scripts/tests/test_qa_nightly_stability.py",
-      "owner": "Owning QA/benchmark component; generic orchestration in tools/xtask/src/process or automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "b1d4b4290983a8755edb7442eff76f89372f0e4a38cb842369acf06c2e570b24",
-      "test_method_count": 14,
-      "test_methods": [
-        "test_build_plan_can_skip_streaming",
-        "test_build_plan_is_side_effect_free_and_repeatable",
-        "test_chat_probe_reports_http_failure_without_crashing",
-        "test_chat_probe_reports_validation_failure_with_response_metadata",
-        "test_chat_requests_explicitly_disable_thinking",
-        "test_command_specs_keep_logs_relative_to_output_dir",
-        "test_missing_optional_agent_cli_records_prereq",
-        "test_parses_models_and_agent_smokes",
-        "test_stream_chat_probe_reports_http_failure_without_crashing",
-        "test_stream_chat_probe_reports_validation_failure_with_response_metadata",
-        "test_summarizes_command_results",
-        "test_summarizes_probe_results",
-        "test_summary_markdown_includes_timing_snapshot",
-        "test_write_evidence_outputs_machine_readable_files"
       ]
     },
     {
@@ -13521,6 +13461,62 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/runtime-events-retirement-coverage.json",
       "sha256": "f65713332ee6a4d9467c0e4e66db051c96231fd3ae7fd6970ac52a6cd7ac74d5"
+    }
+  },
+  "nightly_stability_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 115,
+    "core_modules_after": 54,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/nightly-stability-retirement-coverage.json",
+      "sha256": "0a756092e59f49ad0b983a11ce91197490ce2c46586641af42fd3d47a7a9f9a6"
+    },
+    "current_test_tree": {
+      "sha256": "d73551bdabaf9248f860ad7072a62773f8839cb65a4d5a59b14fff3ee859034e",
+      "paths": 48
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "8e6a698f6efdea21fdce154164908e6dd7769baeb1b3dc0679d8dfcd2c3c2b5a",
+      "roster_line": 24,
+      "count": 54
+    },
+    "supersedes": "Previous QA helper/test/documentation bindings are historical; native nightly owner and typed workflow guard preserve their intentions.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "qualification": {
+      "source_head": "7258f91e80613fa77a1b4bbb3256777f62d21ee1",
+      "receipts": {
+        "path": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-receipts.json",
+        "sha256": "1dfae46ebdbccab72e2e01783dc93185a3495ce2a2dbb45f5de9d3343f7cb9ab"
+      },
+      "normal": {
+        "targets": 112,
+        "passed": 4445,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 819,
+          "passed": 805,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 401.212
+        },
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-normal.log",
+        "sha256": "510d4122fd36d4fc2cb84ca63f6335bd1c963ee6f26b4217ea1de71aef17c39c"
+      },
+      "focused": {
+        "units": 22,
+        "actual_cli": 19,
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-native.log",
+        "sha256": "dd8f46a50daf152c7e089858c8322c03a50aaf75c4d23c6b89bb232ee760c8c7"
+      },
+      "website": {
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-website-v1.log",
+        "sha256": "098d38f629f5e60818fda5bf7657cd6fccd543afd7d22c0a984d604be043ab67"
+      },
+      "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. KV tool-loop helper and optional OpenCode Python closure remain open."
     }
   }
 }

@@ -28,6 +28,11 @@ use std::{
 pub(crate) use options::USAGE;
 
 pub(crate) fn run(root: Option<&Path>, args: &[String]) -> DynResult<()> {
+    let help = args == ["--help"]
+        || matches!(args, [mode, flag] if matches!(mode.as_str(), "nightly" | "tool-call") && flag == "--help");
+    if help {
+        return CheckReport::success(format!("{USAGE}\n")).emit();
+    }
     let mut options = match Options::parse(args) {
         Ok(options) => options,
         Err(error) => return CheckReport::usage(USAGE, &error).emit(),

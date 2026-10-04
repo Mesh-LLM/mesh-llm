@@ -175,7 +175,9 @@ fn other_shard_checks_live_source_without_claiming_completion() -> DynResult<()>
         ledger["outside_scanner_source_calls"]
             .as_array()
             .map(Vec::len),
-        Some(6)
+        // The three docs/AGENTS.md QA callers now use native stability commands.
+        // Two manual quantization instructions and the runtime-smoke TSV remain.
+        Some(3)
     );
     // Given the checked-in shard and actual sources.
     // When reconciling the fourth shard, then every runnable TSV row is owned.
