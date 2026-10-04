@@ -1,5 +1,5 @@
 import { useCallback, useRef, type Ref } from 'react'
-import { Code2, ListEnd, MessageSquareX, Paperclip, RotateCcw, Send, Square } from 'lucide-react'
+import { Code2, ListEnd, MessageSquareX, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/cn'
 
@@ -12,6 +12,8 @@ type ComposerProps = {
   onAttach?: (files: File[]) => void
   onSystemPrompt?: () => void
   attachmentCount?: number
+  attachments?: File[]
+  onRemoveAttachment?: (index: number) => void
   onStop?: () => void
   onRetry?: () => void
   canRetry?: boolean
@@ -41,6 +43,8 @@ export function Composer({
   onAttach,
   onSystemPrompt,
   attachmentCount = 0,
+  attachments = [],
+  onRemoveAttachment,
   onStop,
   onRetry,
   canRetry = false,
@@ -77,6 +81,36 @@ export function Composer({
       )}
       data-panel-interactive="true"
     >
+      {attachments.length > 0 ? (
+        <div
+          className="flex flex-wrap items-center gap-1.5 border-b border-border-soft px-3.5 py-2"
+          data-testid="composer-attachments"
+        >
+          {attachments.map((file, index) => {
+            const fileName = file.name || `Attachment ${index + 1}`
+            return (
+              <span
+                key={`${index}:${fileName}`}
+                className="inline-flex max-w-56 items-center gap-1.5 rounded-[var(--radius)] border border-border bg-panel-strong px-2 py-1 text-[length:var(--density-type-caption)] text-fg-muted"
+              >
+                <Paperclip aria-hidden={true} className="size-3 shrink-0 text-fg-faint" />
+                <span className="truncate">{fileName}</span>
+                <Tooltip content={`Remove ${fileName}`}>
+                  <button
+                    type="button"
+                    className="ui-control inline-flex size-4 shrink-0 items-center justify-center rounded-[var(--radius)] border"
+                    aria-label={`Remove attachment ${fileName}`}
+                    disabled={disabled}
+                    onClick={() => onRemoveAttachment?.(index)}
+                  >
+                    <X className="size-2.5" />
+                  </button>
+                </Tooltip>
+              </span>
+            )
+          })}
+        </div>
+      ) : null}
       <label className="sr-only" htmlFor="prompt-composer">
         Prompt
       </label>
@@ -189,10 +223,6 @@ export function Composer({
               <span className="text-fg-faint">Generating response… queue another prompt or stop.</span>
             ) : submitQueuesPrompt ? (
               <span className="text-fg-faint">Chat providers are busy… queue this prompt for this conversation.</span>
-            ) : attachmentCount > 0 ? (
-              <span className="text-fg-faint">
-                {attachmentCount} attachment{attachmentCount === 1 ? '' : 's'} ready
-              </span>
             ) : (
               <div className="hidden text-fg-faint md:block">
                 <kbd
