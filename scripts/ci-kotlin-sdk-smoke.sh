@@ -47,6 +47,8 @@ native_runtime_dir="$(
 )"
 export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
 
+export MESH_SDK_REPOSITORY_ROOT="$REPO_ROOT"
+
 # shellcheck disable=SC2016 # The nested shell expands exported fixture variables.
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
     bash -lc '
@@ -63,6 +65,6 @@ scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
         export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="${MESH_LLM_NATIVE_RUNTIME_CACHE_DIR:?}"
         export JNA_LIBRARY_PATH="${MESHLLM_KOTLIN_JNA_LIBRARY_PATH}${JNA_LIBRARY_PATH:+:$JNA_LIBRARY_PATH}"
         export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djna.library.path=$MESHLLM_KOTLIN_JNA_LIBRARY_PATH"
-        cd '"$REPO_ROOT"'/mesh/sdk/kotlin/example/example-jvm
+        cd "$MESH_SDK_REPOSITORY_ROOT"/mesh/sdk/kotlin/example/example-jvm
         ./gradlew --no-daemon run --args="$MESH_SDK_INVITE_TOKEN"
     '
