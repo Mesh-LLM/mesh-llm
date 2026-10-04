@@ -202,7 +202,7 @@ agent integrations, MoA reducer behavior, or anything that may affect
 `tools` / `tool_calls` / tool-result continuation:
 
 ```bash
-scripts/qa-agent-tool-call-reliability.py \
+cargo xtool automation stability tool-call \
   --base-url http://127.0.0.1:9337/v1 \
   --models auto,mesh \
   --attempts 3 \
@@ -224,7 +224,7 @@ live mesh endpoint stays usable across repeated chat, streaming, tool-call, and
 optional agent-client checks:
 
 ```bash
-scripts/qa-nightly-stability.py \
+cargo xtool automation stability nightly \
   --base-url http://127.0.0.1:9337/v1 \
   --models auto,mesh \
   --attempts 5 \

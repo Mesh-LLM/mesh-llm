@@ -412,15 +412,6 @@
       "required": false
     },
     {
-      "classification": "QA agent harness",
-      "deletion_condition": "Port generic supervision/JSON and document optional harness boundary.",
-      "exception": null,
-      "path": "scripts/qa-agent-tool-call-reliability.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa process plus protocol component tests",
-      "required": false
-    },
-    {
       "classification": "QA stability harness",
       "deletion_condition": "Port generic orchestration; preserve exact recurrence/cache coverage and caller boundary.",
       "exception": null,
@@ -436,15 +427,6 @@
       "path": "scripts/qa-lightning-compatibility.py",
       "phase": 5,
       "replacement_owner": "tools/xtask qa/process and payments owner",
-      "required": false
-    },
-    {
-      "classification": "nightly QA orchestration",
-      "deletion_condition": "Port generic process/evidence handling or prove it is domain-specific and isolated.",
-      "exception": null,
-      "path": "scripts/qa-nightly-stability.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask qa/process",
       "required": false
     },
     {
@@ -745,15 +727,6 @@
       "required": true
     },
     {
-      "classification": "generic workflow test",
-      "deletion_condition": "Schedule/trust workflow checks in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_kv_nightly_workflow_contract.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
-      "required": true
-    },
-    {
       "classification": "evaluation replay contract test",
       "deletion_condition": "L3 replay fixture semantics and process cleanup pass under replacement owner.",
       "exception": null,
@@ -826,28 +799,10 @@
       "required": true
     },
     {
-      "classification": "generic optional QA test",
-      "deletion_condition": "Test orchestration/report cases migrated.",
-      "exception": null,
-      "path": "scripts/tests/test_qa_agent_tool_call_reliability.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask qa tests",
-      "required": true
-    },
-    {
       "classification": "generic QA test",
       "deletion_condition": "KV tool-loop contract tests remain required in replacement suite.",
       "exception": null,
       "path": "scripts/tests/test_qa_kv_tool_loop_stability.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask qa tests",
-      "required": true
-    },
-    {
-      "classification": "generic nightly QA test",
-      "deletion_condition": "Nightly stability behavior covered by replacement tests.",
-      "exception": null,
-      "path": "scripts/tests/test_qa_nightly_stability.py",
       "phase": 2,
       "replacement_owner": "tools/xtask qa tests",
       "required": true
@@ -1224,7 +1179,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 120,
+  "tracked_file_count": 115,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -9746,6 +9701,62 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/runtime-events-retirement-coverage.json",
       "sha256": "f65713332ee6a4d9467c0e4e66db051c96231fd3ae7fd6970ac52a6cd7ac74d5"
+    }
+  },
+  "nightly_stability_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 115,
+    "core_modules_after": 54,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/nightly-stability-retirement-coverage.json",
+      "sha256": "0a756092e59f49ad0b983a11ce91197490ce2c46586641af42fd3d47a7a9f9a6"
+    },
+    "current_test_tree": {
+      "sha256": "d73551bdabaf9248f860ad7072a62773f8839cb65a4d5a59b14fff3ee859034e",
+      "paths": 48
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "8e6a698f6efdea21fdce154164908e6dd7769baeb1b3dc0679d8dfcd2c3c2b5a",
+      "roster_line": 24,
+      "count": 54
+    },
+    "supersedes": "Previous QA helper/test/documentation bindings are historical; native nightly owner and typed workflow guard preserve their intentions.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "qualification": {
+      "source_head": "7258f91e80613fa77a1b4bbb3256777f62d21ee1",
+      "receipts": {
+        "path": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-receipts.json",
+        "sha256": "1dfae46ebdbccab72e2e01783dc93185a3495ce2a2dbb45f5de9d3343f7cb9ab"
+      },
+      "normal": {
+        "targets": 112,
+        "passed": 4445,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 819,
+          "passed": 805,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 401.212
+        },
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-normal.log",
+        "sha256": "510d4122fd36d4fc2cb84ca63f6335bd1c963ee6f26b4217ea1de71aef17c39c"
+      },
+      "focused": {
+        "units": 22,
+        "actual_cli": 19,
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-native.log",
+        "sha256": "dd8f46a50daf152c7e089858c8322c03a50aaf75c4d23c6b89bb232ee760c8c7"
+      },
+      "website": {
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-website-v1.log",
+        "sha256": "098d38f629f5e60818fda5bf7657cd6fccd543afd7d22c0a984d604be043ab67"
+      },
+      "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. KV tool-loop helper and optional OpenCode Python closure remain open."
     }
   }
 }

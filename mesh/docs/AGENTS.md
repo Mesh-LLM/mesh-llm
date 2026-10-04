@@ -213,7 +213,7 @@ Use the lightweight QA probe before or after changes that affect agent routing,
 OpenAI chat-completions, tool-call translation, or MoA reducer behavior:
 
 ```bash
-scripts/qa-agent-tool-call-reliability.py \
+cargo xtool automation stability tool-call \
   --base-url http://127.0.0.1:9337/v1 \
   --models auto,mesh \
   --attempts 3 \
@@ -229,7 +229,7 @@ default and reconstructs `delta.tool_calls[*]` by index before validation.
 For a side-effect-free review of the planned checks:
 
 ```bash
-scripts/qa-agent-tool-call-reliability.py --models auto,mesh --attempts 2 --print-plan
+cargo xtool automation stability tool-call --models auto,mesh --attempts 2 --print-plan
 ```
 
 This complements the heavier Goose, OpenCode, and Pi smoke scripts. Those prove
@@ -242,7 +242,7 @@ Use the repeatable stability harness when a branch needs broader live-mesh
 evidence without changing the mesh under test:
 
 ```bash
-scripts/qa-nightly-stability.py \
+cargo xtool automation stability nightly \
   --base-url http://127.0.0.1:9337/v1 \
   --models auto,mesh \
   --attempts 5 \

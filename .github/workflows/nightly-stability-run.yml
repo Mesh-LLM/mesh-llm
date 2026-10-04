@@ -118,6 +118,11 @@ jobs:
 
           echo "run=true" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare native stability automation
+        id: automation
+        if: ${{ steps.preflight.outputs.run == 'true' }}
+        uses: ./.github/actions/prepare-automation
+
       - name: Install requested agent CLIs
         # node/pnpm come from the prebuilt image; corepack is unneeded since
         # the image already bakes the pinned pnpm version on PATH.
@@ -164,7 +169,7 @@ jobs:
           if [[ "$MESH_STABILITY_SKIP_STREAMING" == "true" ]]; then
             args+=(--skip-streaming)
           fi
-          scripts/qa-nightly-stability.py "${args[@]}"
+          "${MESH_LLM_AUTOMATION_BIN:?automation preparation required}" automation stability nightly "${args[@]}"
 
       - name: Run KV tool-loop stability harness
         id: kv_tool_loop

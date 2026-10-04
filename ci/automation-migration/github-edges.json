@@ -236,14 +236,7 @@
       "file": ".github/workflows/nightly-stability-run.yml",
       "members": [
         [
-          167,
-          "fa3bc6e614d1bdf2",
-          1,
-          "script",
-          "direct executable shebang scripts/qa-nightly-stability.py ${args[@]} --base-url --models --attempts --timeout --agent-smokes --output-dir [--skip-streaming]; harness probes live API and optional agent subprocesses, writes evidence; continue-on-error, later summary checks outcomes"
-        ],
-        [
-          176,
+          181,
           "cebac2970963c61a",
           1,
           "script",
@@ -9707,6 +9700,62 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/runtime-events-retirement-coverage.json",
       "sha256": "f65713332ee6a4d9467c0e4e66db051c96231fd3ae7fd6970ac52a6cd7ac74d5"
+    }
+  },
+  "nightly_stability_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 115,
+    "core_modules_after": 54,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/nightly-stability-retirement-coverage.json",
+      "sha256": "0a756092e59f49ad0b983a11ce91197490ce2c46586641af42fd3d47a7a9f9a6"
+    },
+    "current_test_tree": {
+      "sha256": "d73551bdabaf9248f860ad7072a62773f8839cb65a4d5a59b14fff3ee859034e",
+      "paths": 48
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "8e6a698f6efdea21fdce154164908e6dd7769baeb1b3dc0679d8dfcd2c3c2b5a",
+      "roster_line": 24,
+      "count": 54
+    },
+    "supersedes": "Previous QA helper/test/documentation bindings are historical; native nightly owner and typed workflow guard preserve their intentions.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "qualification": {
+      "source_head": "7258f91e80613fa77a1b4bbb3256777f62d21ee1",
+      "receipts": {
+        "path": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-receipts.json",
+        "sha256": "1dfae46ebdbccab72e2e01783dc93185a3495ce2a2dbb45f5de9d3343f7cb9ab"
+      },
+      "normal": {
+        "targets": 112,
+        "passed": 4445,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 819,
+          "passed": 805,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 401.212
+        },
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-normal.log",
+        "sha256": "510d4122fd36d4fc2cb84ca63f6335bd1c963ee6f26b4217ea1de71aef17c39c"
+      },
+      "focused": {
+        "units": 22,
+        "actual_cli": 19,
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-native.log",
+        "sha256": "dd8f46a50daf152c7e089858c8322c03a50aaf75c4d23c6b89bb232ee760c8c7"
+      },
+      "website": {
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-website-v1.log",
+        "sha256": "098d38f629f5e60818fda5bf7657cd6fccd543afd7d22c0a984d604be043ab67"
+      },
+      "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. KV tool-loop helper and optional OpenCode Python closure remain open."
     }
   }
 }

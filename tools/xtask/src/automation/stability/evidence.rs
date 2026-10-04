@@ -75,6 +75,18 @@ pub(super) fn markdown(
             cell(&row.log)
         ));
     }
+    text.push_str("\n## Timing snapshot\n\n| Group | Passed | Failed | Prerequisites | Elapsed ms |\n|---|---:|---:|---:|---:|\n");
+    for (name, counts) in [
+        ("OpenAI surface probes", &summary.probes),
+        ("Command probes", &summary.commands),
+        ("Release attestation", &summary.attestation.counts),
+        ("Total", &summary.counts),
+    ] {
+        text.push_str(&format!(
+            "| {name} | {} | {} | {} | {} |\n",
+            counts.passed, counts.failed, counts.prereq, counts.elapsed_ms
+        ));
+    }
     let attestation = summary.release_attestation;
     text.push_str(&format!(
         "\nRelease attestation: {}. Expected: {}. {}\n",

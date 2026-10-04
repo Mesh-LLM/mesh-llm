@@ -5,6 +5,9 @@ mod process;
 #[path = "migration_stability/tls_cases.rs"]
 mod tls_cases;
 
+#[path = "migration_stability/nightly_cases.rs"]
+mod nightly_cases;
+
 mod fixture {
     use super::process::{
         self, Cancellation, Completion, Limits, ProcessSpec, RawCaptureOptions, Readiness, Value,

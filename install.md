@@ -670,7 +670,7 @@ by `/v1/models`.
 For a coding harness, validate tool calls rather than stopping at plain chat:
 
 ```sh
-scripts/qa-agent-tool-call-reliability.py \
+cargo xtool automation stability tool-call \
   --base-url http://127.0.0.1:9337/v1 \
   --models '<exact-model-id>' --attempts 2 --print-plan
 ```

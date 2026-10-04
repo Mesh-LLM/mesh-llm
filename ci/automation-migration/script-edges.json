@@ -411,11 +411,11 @@
       "members": [
         [
           24,
-          "f1219609ee7ecd00",
+          "79741ca682af6c65",
           1,
           "environment",
-          "explicit surviving57 scripts.tests modules",
-          "Required native runtime-event action/wrapper fixtures and workflow guards own the retired intentions; remaining57 Python modules stay required."
+          "explicit surviving54 scripts.tests modules",
+          "Required native nightly CLI and typed workflow guards own retired QA intentions; 54 transitional modules remain selected."
         ]
       ]
     },
@@ -868,40 +868,6 @@
       "root": "optional Hugging Face MTP composition job"
     },
     {
-      "boundary": "base URL/models/attempts, optional agent smoke selection and binary/public key are CLI inputs; --print-plan avoids launch",
-      "file": "scripts/qa-nightly-stability.py",
-      "members": [
-        [
-          211,
-          "b055144f6196d6bd",
-          1,
-          "subprocess-or-interpreter",
-          "indirect",
-          "scripts/qa-agent-tool-call-reliability.py",
-          "build_command_specs constructs sys.executable tool-call smoke with --base-url --models --attempts --timeout --output, optional --skip-streaming; run_command launches at 314"
-        ],
-        [
-          314,
-          "dfec6f29bb3aaa45",
-          1,
-          "subprocess-or-interpreter",
-          "execution",
-          "conditional: scripts/qa-agent-tool-call-reliability.py or scripts/ci-opencode-smoke.sh|ci-pi-smoke.sh|ci-goose-smoke.sh",
-          "run_command(spec): cwd ROOT, env augmented by spec, stdout/stderr combined in per-step log, check=False; exit 0 PASS else FAIL, missing prereq PREREQ without launch; logs/results evidence written"
-        ],
-        [
-          900,
-          "dfec6f29bb3aaa45",
-          2,
-          "subprocess-or-interpreter",
-          "execution",
-          "cargo run -q -p xtask -- release-attestation inspect --binary <binary> --json [--public-key-file <path>]",
-          "inspect_release_attestation only when binary configured: cwd ROOT capture text stdout/stderr check=False; nonzero command_failed, successful JSON status checked, evidence emitted; no binary mutation"
-        ]
-      ],
-      "root": "optional nightly live endpoint and agent smoke evidence"
-    },
-    {
       "boundary": "binary/model/port/mode selected per trial; HTTP readiness and request calls are not subprocess candidates",
       "file": "scripts/run-event-benchmark-matrix.py",
       "members": [
@@ -986,11 +952,6 @@
       "scripts/qa-lightning-compatibility.py",
       "729066935dc2a4d345e68b5554be825c3b3617d855e571e35e70d610213dd9aa",
       184
-    ],
-    [
-      "scripts/qa-nightly-stability.py",
-      "1b498c75eb79dbe6f5477dd429279d0eade1413c48d5829da393bc3108950f6a",
-      1058
     ],
     [
       "scripts/run-event-benchmark-matrix.py",
@@ -10220,6 +10181,62 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/runtime-events-retirement-coverage.json",
       "sha256": "f65713332ee6a4d9467c0e4e66db051c96231fd3ae7fd6970ac52a6cd7ac74d5"
+    }
+  },
+  "nightly_stability_helper_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 115,
+    "core_modules_after": 54,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/nightly-stability-retirement-coverage.json",
+      "sha256": "0a756092e59f49ad0b983a11ce91197490ce2c46586641af42fd3d47a7a9f9a6"
+    },
+    "current_test_tree": {
+      "sha256": "d73551bdabaf9248f860ad7072a62773f8839cb65a4d5a59b14fff3ee859034e",
+      "paths": 48
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "8e6a698f6efdea21fdce154164908e6dd7769baeb1b3dc0679d8dfcd2c3c2b5a",
+      "roster_line": 24,
+      "count": 54
+    },
+    "supersedes": "Previous QA helper/test/documentation bindings are historical; native nightly owner and typed workflow guard preserve their intentions.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "qualification": {
+      "source_head": "7258f91e80613fa77a1b4bbb3256777f62d21ee1",
+      "receipts": {
+        "path": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-receipts.json",
+        "sha256": "1dfae46ebdbccab72e2e01783dc93185a3495ce2a2dbb45f5de9d3343f7cb9ab"
+      },
+      "normal": {
+        "targets": 112,
+        "passed": 4445,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 819,
+          "passed": 805,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 401.212
+        },
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-normal.log",
+        "sha256": "510d4122fd36d4fc2cb84ca63f6335bd1c963ee6f26b4217ea1de71aef17c39c"
+      },
+      "focused": {
+        "units": 22,
+        "actual_cli": 19,
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-postimage-v2-native.log",
+        "sha256": "dd8f46a50daf152c7e089858c8322c03a50aaf75c4d23c6b89bb232ee760c8c7"
+      },
+      "website": {
+        "log": ".omo/evidence/resume-20261002/nightly-retirement-website-v1.log",
+        "sha256": "098d38f629f5e60818fda5bf7657cd6fccd543afd7d22c0a984d604be043ab67"
+      },
+      "limits": "Local macOS fixture and contract qualification. Hosted execution, Linux/Windows/GPU/model and SDK acceptance remain unverified. KV tool-loop helper and optional OpenCode Python closure remain open."
     }
   }
 }
