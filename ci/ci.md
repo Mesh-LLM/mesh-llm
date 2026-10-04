@@ -493,6 +493,12 @@ flowchart TD
     KIND -- "no" --> DOWNSTREAM["Publish crates and dispatch<br/>packages, images, and npm"]
 ```
 
+The stable crates.io job verifies the checksummed Linux x86_64 release archive
+and restores its native runtime libraries before Cargo package verification.
+Its `LLAMA_STAGE_LIB_DIR` points at the restored `libmtmd.so`,
+`libllama-common.so`, and `libllama.so`. The same archive gate is used when
+resuming a partial crates.io publication.
+
 ## Graph shape
 
 ```mermaid
