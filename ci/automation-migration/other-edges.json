@@ -11133,5 +11133,30 @@
       "path": ".omo/evidence/resume-20261002/two-node-split-v1-receipts.json",
       "sha256": "dd32e94f012cdce3419d3f97868672dcffb4638cd9ddbb6d5744883d7cc946c5"
     }
+  },
+  "product_composer_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 106,
+    "core_modules_after": 46,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/product-composer-retirement-coverage.json",
+      "sha256": "1c048d28b17918c6579864ef66aeaa501d5c6e170cebf6fc619007887cf8f5ac"
+    },
+    "current_test_tree": {
+      "sha256": "09611ad7dd0b97ef4ce1664ecf7f3310ff739ae92e87b0f68fadb09a48d9823d",
+      "paths": 42
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "0b6bdd501f6003b59af12eb1abb0ea60cb6ce92139b1e6dbfb11673b1253ac42",
+      "roster_line": 24,
+      "count": 46
+    },
+    "qualification": {
+      "path": ".omo/evidence/resume-20261002/product-composer-v1-receipts.json",
+      "sha256": "e3ed663556047e8356fe61c9383f4d48c17fad86d8ffa613f35c8541454c4ea7"
+    }
   }
 }

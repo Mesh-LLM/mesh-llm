@@ -60,10 +60,22 @@ fn snapshot(root: &Path) -> Snapshot {
 }
 
 fn invoke(root: &Path, environment: BTreeMap<OsString, Value>) -> process::RawProcessReport {
+    invoke_arguments(
+        root,
+        vec![Value::Public("scripts/ci-compose-product-input.sh".into())],
+        environment,
+    )
+}
+
+fn invoke_arguments(
+    root: &Path,
+    arguments: Vec<Value>,
+    environment: BTreeMap<OsString, Value>,
+) -> process::RawProcessReport {
     let result = process::supervise_raw(
         &ProcessSpec {
             executable: "/bin/bash".into(),
-            arguments: vec![Value::Public("scripts/ci-compose-product-input.sh".into())],
+            arguments,
             cwd: root.into(),
             environment,
         },
@@ -155,6 +167,24 @@ impl Fixture {
     }
 
     fn run_version(&self, output: &str, requested: &str) -> process::RawProcessReport {
+        self.run_inputs(output, requested, &[])
+    }
+
+    fn run_inputs(
+        &self,
+        output: &str,
+        requested: &str,
+        overrides: &[(&str, String)],
+    ) -> process::RawProcessReport {
+        invoke(&self.root, self.environment(output, requested, overrides))
+    }
+
+    fn environment(
+        &self,
+        output: &str,
+        requested: &str,
+        overrides: &[(&str, String)],
+    ) -> BTreeMap<OsString, Value> {
         let mut environment = BTreeMap::new();
         for (key, value) in [
             (
@@ -187,7 +217,10 @@ impl Fixture {
         ] {
             environment.insert(key.into(), Value::Public(value.into()));
         }
-        invoke(&self.root, environment)
+        for (key, value) in overrides {
+            environment.insert((*key).into(), Value::Public(value.clone().into()));
+        }
+        environment
     }
 
     fn events(&self) -> Vec<String> {
@@ -584,3 +617,17 @@ fn product_composition_adapter_rejects_noncanonical_host_checksum_before_staging
         );
     }
 }
+
+#[path = "product_composition_adapter/attestation.rs"]
+mod attestation;
+#[path = "product_composition_adapter/windows_paths.rs"]
+mod windows_paths;
+
+#[path = "product_composition_adapter/host_attestation.rs"]
+mod host_attestation;
+#[path = "product_composition_adapter/model_restore.rs"]
+mod model_restore;
+#[path = "product_composition_adapter/readiness.rs"]
+mod readiness;
+#[path = "product_composition_adapter/restore_product.rs"]
+mod restore_product;

@@ -867,35 +867,6 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after exact archive, manifest, checksum, mode, symlink, and OS parity.",
-      "gate": "Legacy just ci-validate plus artifact/platform qualification",
-      "module": "scripts/tests/test_ci_product_composer.py",
-      "owner": "tools/xtask/src/artifact or owning platform/native component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "c3eeb207abad8cbe316c4f6833093682da38c81b2f7d88fb90dfafecbe5cc930",
-      "test_method_count": 17,
-      "test_methods": [
-        "test_product_action_only_composes_verified_inputs",
-        "test_product_action_rejects_destructive_output_paths",
-        "test_product_archive_preserves_verified_executable_modes",
-        "test_product_composer_accepts_host_build_metadata",
-        "test_product_composer_accepts_one_checksums_runtime_archive",
-        "test_product_composer_normalizes_windows_shell_boundaries",
-        "test_product_composer_rejects_corrupt_runtime_archive_sidecar",
-        "test_product_composer_rejects_drift_despite_build_metadata",
-        "test_product_composer_rejects_host_version_drift",
-        "test_product_composer_rejects_noncanonical_host_sidecar",
-        "test_product_composer_rejects_noncanonical_verifier_sidecar",
-        "test_product_composer_requires_exact_runtime_archive_sidecar",
-        "test_release_attestation_is_verified_without_compiling_in_composer",
-        "test_smoke_restore_delegates_model_restore_to_the_shared_action",
-        "test_smoke_restore_rechecks_the_archived_product",
-        "test_test_model_restore_is_optional_and_verified",
-        "test_test_model_restore_selects_one_artifact_from_a_multi_artifact_manifest"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "cutover_status": "deleted with final caller; historical intent roster retained",
       "deletion_condition": "Delete only after exact archive, manifest, checksum, mode, symlink, and OS parity.",
       "gate": "Legacy just ci-validate plus artifact/platform qualification",
@@ -13566,6 +13537,31 @@
     "qualification": {
       "path": ".omo/evidence/resume-20261002/two-node-split-v1-receipts.json",
       "sha256": "dd32e94f012cdce3419d3f97868672dcffb4638cd9ddbb6d5744883d7cc946c5"
+    }
+  },
+  "product_composer_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 106,
+    "core_modules_after": 46,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/product-composer-retirement-coverage.json",
+      "sha256": "1c048d28b17918c6579864ef66aeaa501d5c6e170cebf6fc619007887cf8f5ac"
+    },
+    "current_test_tree": {
+      "sha256": "09611ad7dd0b97ef4ce1664ecf7f3310ff739ae92e87b0f68fadb09a48d9823d",
+      "paths": 42
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "0b6bdd501f6003b59af12eb1abb0ea60cb6ce92139b1e6dbfb11673b1253ac42",
+      "roster_line": 24,
+      "count": 46
+    },
+    "qualification": {
+      "path": ".omo/evidence/resume-20261002/product-composer-v1-receipts.json",
+      "sha256": "e3ed663556047e8356fe61c9383f4d48c17fad86d8ffa613f35c8541454c4ea7"
     }
   }
 }
