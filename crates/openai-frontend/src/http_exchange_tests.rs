@@ -24,6 +24,7 @@ struct Recorder {
     response: Mutex<Vec<u8>>,
     terminals: Mutex<Vec<WireBytesCommitment>>,
     deny: bool,
+    response_headers: Vec<(String, String)>,
 }
 
 #[async_trait]
@@ -40,7 +41,7 @@ impl HttpExchangePolicy for Arc<Recorder> {
         HttpExchangeAdmission {
             observation_id: None,
             observer: Some(self.clone()),
-            response_headers: Vec::new(),
+            response_headers: self.response_headers.clone(),
             denial: self.deny.then(|| {
                 OpenAiError::from_kind(
                     StatusCode::FORBIDDEN,
@@ -157,6 +158,45 @@ fn request_body(path: &str, stream: bool, model: &str) -> Vec<u8> {
         "/v1/responses" => format!("{{ \"model\":\"{model}\", \"input\":\"hi\", \"stream\":{stream} }}\n"),
         _ => format!("{{ \"model\":\"{model}\", \"messages\":[{{\"role\":\"user\",\"content\":\"hi\"}}], \"stream\":{stream} }}\n"),
     }.into_bytes()
+}
+
+#[tokio::test]
+async fn unrelated_headers_do_not_consume_plugin_response_header_limit() {
+    let headers = (0..20)
+        .flat_map(|index| {
+            [
+                (format!("a-unrelated-{index:02}"), "ignore".into()),
+                (format!("x-plugin-test-{index:02}"), "permitted".into()),
+            ]
+        })
+        .collect();
+    let backend = Arc::new(Backend {
+        recorder: Arc::new(Recorder {
+            response_headers: headers,
+            ..Default::default()
+        }),
+        calls: AtomicUsize::new(0),
+    });
+    let response = crate::router(backend)
+        .oneshot(request(
+            "/v1/chat/completions",
+            &request_body("/v1/chat/completions", false, "tiny"),
+        ))
+        .await
+        .unwrap();
+    for index in 0..20 {
+        assert!(
+            !response
+                .headers()
+                .contains_key(format!("a-unrelated-{index:02}").as_str())
+        );
+        assert_eq!(
+            response
+                .headers()
+                .contains_key(format!("x-plugin-test-{index:02}").as_str()),
+            index < 16
+        );
+    }
 }
 
 #[tokio::test]

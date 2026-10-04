@@ -4,12 +4,35 @@ use anyhow::{Result, bail};
 use mesh_llm_identity::plugin_delegation::IdentityEvidenceStatus;
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
 use super::PluginManager;
 use super::identity_services::PluginIdentityGrants;
 
 pub const EXCHANGE_SIGNING_SCOPE: &str = "mesh.openai.exchange.evidence.sign.v1";
+const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+pub(super) const IDENTITY_EXECUTION_DEADLINE: Duration = Duration::from_secs(20);
+
+#[derive(Debug)]
+pub(super) struct ArtifactInspectionTimeout;
+
+impl std::fmt::Display for ArtifactInspectionTimeout {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("plugin artifact inspection deadline exceeded; retry setup")
+    }
+}
+
+impl std::error::Error for ArtifactInspectionTimeout {}
+
+pub(super) fn artifact_inspection_is_transient(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ArtifactInspectionTimeout>().is_some()
+}
+
+fn artifact_inspection_deadline(bytes: u64) -> Duration {
+    // Budget 16 MiB/s plus one second for I/O scheduling, capped at 17s.
+    Duration::from_secs(1 + bytes.min(MAX_ARTIFACT_BYTES).div_ceil(16 * 1024 * 1024))
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PublicPluginArtifactMetadata {
@@ -91,51 +114,69 @@ impl PluginManager {
             &metadata.executable_path(),
             plugin.installed_artifact_sha256(),
         )
-        .await;
+        .await?;
         Ok((grants, digest, status))
     }
 }
 
 pub(super) async fn artifact_sha256(path: &Path) -> Result<String> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+    let metadata = tokio::time::timeout(Duration::from_secs(1), tokio::fs::symlink_metadata(path))
+        .await
+        .map_err(|_| ArtifactInspectionTimeout)??;
+    bounded_artifact_hash(
         hash_regular_artifact(path),
+        artifact_inspection_deadline(metadata.len()),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("plugin artifact inspection deadline exceeded"))?
+}
+
+async fn bounded_artifact_hash(
+    hash: impl std::future::Future<Output = Result<String>>,
+    deadline: Duration,
+) -> Result<String> {
+    tokio::time::timeout(deadline, hash)
+        .await
+        .map_err(|_| ArtifactInspectionTimeout)?
 }
 
 async fn inspect_artifact(
     path: &Path,
     captured: Option<&str>,
-) -> (Option<String>, IdentityEvidenceStatus) {
-    match artifact_sha256(path).await {
+) -> Result<(Option<String>, IdentityEvidenceStatus)> {
+    artifact_evidence(artifact_sha256(path).await, captured)
+}
+
+fn artifact_evidence(
+    result: Result<String>,
+    captured: Option<&str>,
+) -> Result<(Option<String>, IdentityEvidenceStatus)> {
+    match result {
         Ok(digest) => {
             let status = if Some(digest.as_str()) == captured {
                 IdentityEvidenceStatus::Verified
             } else {
                 IdentityEvidenceStatus::Invalid
             };
-            (Some(digest), status)
+            Ok((Some(digest), status))
         }
+        Err(error) if artifact_inspection_is_transient(&error) => Err(error),
         Err(error) => {
             let missing = error
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-            (
+            Ok((
                 None,
                 if missing {
                     IdentityEvidenceStatus::Missing
                 } else {
                     IdentityEvidenceStatus::Invalid
                 },
-            )
+            ))
         }
     }
 }
 
 async fn hash_regular_artifact(path: &Path) -> Result<String> {
-    const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
     let metadata = tokio::fs::symlink_metadata(path).await?;
     if !metadata.is_file() || metadata.len() > MAX_ARTIFACT_BYTES {
         bail!("plugin artifact must be a regular file at most 256 MiB");
@@ -150,7 +191,8 @@ async fn hash_regular_artifact(path: &Path) -> Result<String> {
         bail!("plugin artifact changed during inspection");
     }
     let mut digest = Sha256::new();
-    let mut buffer = [0; 64 * 1024];
+    // Keep the I/O buffer off every enclosing host/router future's stack.
+    let mut buffer = vec![0; 64 * 1024];
     let mut total = 0u64;
     loop {
         let len = file.read(&mut buffer).await?;
@@ -176,18 +218,40 @@ mod tests {
         tokio::fs::write(&path, b"original").await.unwrap();
         let captured = artifact_sha256(&path).await.unwrap();
         assert_eq!(
-            inspect_artifact(&path, Some(&captured)).await.1,
+            inspect_artifact(&path, Some(&captured)).await.unwrap().1,
             IdentityEvidenceStatus::Verified
         );
         tokio::fs::write(&path, b"changed").await.unwrap();
-        let (actual, status) = inspect_artifact(&path, Some(&captured)).await;
+        let (actual, status) = inspect_artifact(&path, Some(&captured)).await.unwrap();
         assert_eq!(status, IdentityEvidenceStatus::Invalid);
         assert_eq!(actual.unwrap(), hex::encode(Sha256::digest(b"changed")));
         tokio::fs::remove_file(&path).await.unwrap();
         assert_eq!(
-            inspect_artifact(&path, Some(&captured)).await,
+            inspect_artifact(&path, Some(&captured)).await.unwrap(),
             (None, IdentityEvidenceStatus::Missing)
         );
+    }
+    #[tokio::test]
+    async fn inspection_timeouts_remain_transient_and_size_budget_is_bounded() {
+        assert_eq!(artifact_inspection_deadline(1), Duration::from_secs(2));
+        assert_eq!(
+            artifact_inspection_deadline(64 * 1024 * 1024),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            artifact_inspection_deadline(u64::MAX),
+            Duration::from_secs(17)
+        );
+        assert!(artifact_inspection_deadline(MAX_ARTIFACT_BYTES) < IDENTITY_EXECUTION_DEADLINE);
+        let error = bounded_artifact_hash(std::future::pending(), Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(artifact_inspection_is_transient(&error));
+        let error = artifact_evidence(Err(error), Some("captured")).unwrap_err();
+        assert!(artifact_inspection_is_transient(&error));
+        assert!(!artifact_inspection_is_transient(&anyhow::anyhow!(
+            "artifact changed"
+        )));
     }
     #[tokio::test]
     async fn artifact_reads_reject_nonregular_and_oversized_inputs() {

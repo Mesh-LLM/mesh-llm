@@ -21,6 +21,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+mod exchange_request;
+#[cfg(test)]
+mod exchange_request_tests;
+
 pub(crate) struct ExternalPlugin {
     spec: ExternalPluginSpec,
     installed_artifact_sha256: Option<String>,
@@ -1201,7 +1205,7 @@ pub(crate) mod tests {
         plugin
     }
 
-    fn plugin_for_spec(spec: ExternalPluginSpec) -> ExternalPlugin {
+    pub(super) fn plugin_for_spec(spec: ExternalPluginSpec) -> ExternalPlugin {
         plugin_for_spec_with_runtime_data(spec).0
     }
 

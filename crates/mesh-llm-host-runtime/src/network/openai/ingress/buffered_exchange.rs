@@ -15,13 +15,6 @@ pub(super) async fn handle_buffered_api_request(
     source_addr: Option<std::net::SocketAddr>,
     ingress_type: crate::runtime::IngressType,
 ) {
-    let (tcp_stream, mut exchange) = match begin_exchange(tcp_stream, &mut request, &ctx).await {
-        Ok(admitted) => admitted,
-        Err(()) => return,
-    };
-    if exchange.is_some() {
-        request.mark_raw_lifecycle_owned();
-    }
     // Claim the parent at host OpenAI ingress. All downstream dispatch sees
     // only a metadata observer; this scope remains the sole terminal owner.
     let caller_addr = source_addr.map(|addr| addr.to_string());
@@ -48,6 +41,14 @@ pub(super) async fn handle_buffered_api_request(
         if let Some(body) = request.body_bytes.as_deref() {
             lifecycle.capture_request_body(body, request.artifact_request_media_kind());
         }
+    }
+    let (tcp_stream, mut exchange) =
+        match begin_exchange(tcp_stream, &mut request, &ctx, &mut lifecycle).await {
+            Ok(admitted) => admitted,
+            Err(()) => return,
+        };
+    if exchange.is_some() {
+        request.mark_raw_lifecycle_owned();
     }
 
     let tcp_stream =
@@ -185,6 +186,7 @@ async fn begin_exchange(
     stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &ProxyConnectionContext<'_>,
+    lifecycle: &mut OpenAiLifecycleAttachment,
 ) -> Result<(ClientStream, Option<crate::plugin::ExchangeSession>), ()> {
     let endpoint = match request.client_path.split('?').next() {
         Some("/v1/chat/completions") => "chat_completions",
@@ -236,9 +238,10 @@ async fn begin_exchange(
             stream,
             status,
             "OpenAI plugin admission rejected the exchange",
-            OpenAiLifecycleAttachment::unowned().route_observer(),
+            lifecycle.route_observer(),
         )
         .await;
+        proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
         session
             .finish(if result.denied {
                 "policy_denied"
@@ -246,6 +249,11 @@ async fn begin_exchange(
                 "internal_hook_failure"
             })
             .await;
+        lifecycle.terminal(terminal_outcome_for_dispatch(if result.denied {
+            proxy::RouteDispatchOutcome::PolicyDenied
+        } else {
+            proxy::RouteDispatchOutcome::RequiredHookFailed
+        }));
         return Err(());
     }
     Ok((stream, Some(session)))

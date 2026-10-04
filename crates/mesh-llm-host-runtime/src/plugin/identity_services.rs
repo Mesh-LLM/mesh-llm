@@ -182,22 +182,12 @@ pub(crate) async fn handle_request(
 ) -> Result<super::proto::RpcResponse, super::proto::ErrorResponse> {
     let result = match node.plugin_manager().await {
         Some(manager) => {
-            let admitted = manager
-                .inner
-                .identity_registry
-                .try_lock()
-                .map_err(|_| anyhow::anyhow!("identity service busy"))
-                .and_then(|mut registry| {
-                    registry.admit_service(
-                        plugin_id,
-                        chrono::Utc::now().timestamp_millis().unsigned_abs(),
-                    )
-                });
+            let admitted = admit_identity_service(&manager, plugin_id).await;
             if let Err(error) = admitted {
                 return Err(identity_service_error(error));
             }
             let mut revision = manager.exchange_grant_revision(plugin_id);
-            let result=tokio::time::timeout(std::time::Duration::from_secs(2),async {tokio::select! {
+            let result=tokio::time::timeout(super::identity_registration::IDENTITY_EXECUTION_DEADLINE,async {tokio::select! {
                 biased;
                 _ = revision.changed() => Err(anyhow::anyhow!("identity service grant changed during invocation")),
                 result = handle_identity_request(node, plugin_id, request) => result,
@@ -214,6 +204,25 @@ pub(crate) async fn handle_request(
     };
     result.map_err(identity_service_error)
 }
+async fn admit_identity_service(manager: &super::PluginManager, plugin_id: &str) -> Result<()> {
+    // Signing and revocation hold the shared registry briefly. Queue setup calls
+    // through those critical sections without losing per-plugin admission limits.
+    let mut registry = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        manager.inner.identity_registry.lock(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("identity service admission deadline exceeded; retry setup"))?;
+    registry.admit_service(
+        plugin_id,
+        chrono::Utc::now().timestamp_millis().unsigned_abs(),
+    )
+}
+
+fn registration_error_requires_revocation(error: &anyhow::Error) -> bool {
+    !super::identity_registration::artifact_inspection_is_transient(error)
+}
+
 fn identity_service_error(error: anyhow::Error) -> super::proto::ErrorResponse {
     super::proto::ErrorResponse {
         code: rmcp::model::ErrorCode::INVALID_REQUEST.0,
@@ -241,7 +250,9 @@ async fn handle_identity_request(
         match manager.identity_grants_and_artifact(plugin_id).await {
             Ok(binding) => binding,
             Err(error) => {
-                manager.revoke_plugin_delegations(plugin_id).await;
+                if registration_error_requires_revocation(&error) {
+                    manager.revoke_plugin_delegations(plugin_id).await;
+                }
                 return Err(error);
             }
         };
@@ -355,3 +366,63 @@ fn validate_identity_input(request: &super::proto::RpcRequest) -> Result<()> {
 #[cfg(test)]
 #[path = "identity_services_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn admission_waits_for_shared_registry_and_retains_per_plugin_limits() {
+        let manager = super::super::PluginManager::for_test_summaries(Vec::new());
+        let mut held = manager.inner.identity_registry.lock().await;
+        held.admit_service("other-plugin", 1000).unwrap();
+        let admission = admit_identity_service(&manager, "observer");
+        tokio::pin!(admission);
+        tokio::select! {
+            result = &mut admission => panic!("contended admission returned early: {result:?}"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {},
+        }
+        drop(held);
+        admission.await.unwrap();
+        assert!(
+            admit_identity_service(&manager, "observer")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("already active")
+        );
+        admit_identity_service(&manager, "healthy").await.unwrap();
+        manager
+            .inner
+            .identity_registry
+            .lock()
+            .await
+            .release_service("observer");
+        admit_identity_service(&manager, "observer").await.unwrap();
+    }
+
+    #[test]
+    fn transient_artifact_timeout_does_not_revoke_current_delegations() {
+        let timeout: anyhow::Error =
+            super::super::identity_registration::ArtifactInspectionTimeout.into();
+        assert!(!registration_error_requires_revocation(&timeout));
+        assert!(registration_error_requires_revocation(&anyhow::anyhow!(
+            "identity grant unavailable"
+        )));
+    }
+
+    #[tokio::test]
+    async fn admission_deadline_does_not_consume_plugin_quota() {
+        let manager = super::super::PluginManager::for_test_summaries(Vec::new());
+        let held = manager.inner.identity_registry.lock().await;
+        assert!(
+            admit_identity_service(&manager, "observer")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("admission deadline")
+        );
+        drop(held);
+        admit_identity_service(&manager, "observer").await.unwrap();
+    }
+}

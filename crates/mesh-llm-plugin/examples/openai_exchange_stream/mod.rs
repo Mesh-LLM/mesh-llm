@@ -153,16 +153,15 @@ impl StreamEvidence {
 
     pub async fn request_body(&self, event: &serde_json::Value) -> Option<serde_json::Value> {
         let id = event["exchange_id"].as_str()?;
-        let kind = if event["phase"] == "request_received" {
-            "openai_exchange_request"
-        } else {
-            "openai_exchange_effective"
-        };
         let mut bodies = self.1.lock().await;
-        bodies
-            .remove(&(id.into(), kind.into()))
-            .or_else(|| bodies.remove(&(id.into(), "openai_exchange_original".into())))
-            .and_then(|(value, _)| value)
+        let body = if event["phase"] == "request_received" {
+            bodies
+                .remove(&(id.into(), "openai_exchange_original".into()))
+                .or_else(|| bodies.remove(&(id.into(), "openai_exchange_request".into())))
+        } else {
+            bodies.remove(&(id.into(), "openai_exchange_effective".into()))
+        };
+        body.and_then(|(value, _)| value)
     }
 
     pub async fn verify_terminal(&self, event: &serde_json::Value) -> bool {
@@ -221,6 +220,32 @@ async fn log_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn body_lookup_preserves_original_and_never_substitutes_it_for_effective() {
+        let evidence = StreamEvidence::default();
+        let original = serde_json::json!({"prompt":"original-sensitive-text"});
+        let alias = serde_json::json!({"prompt":"legacy-alias"});
+        let effective = serde_json::json!({"prompt":"effective-text"});
+        let mut bodies = evidence.1.lock().await;
+        for (kind, value) in [
+            ("openai_exchange_original", original.clone()),
+            ("openai_exchange_request", alias),
+            ("openai_exchange_effective", effective.clone()),
+        ] {
+            bodies.insert(("exchange".into(), kind.into()), (Some(value), Vec::new()));
+        }
+        drop(bodies);
+        let selected = serde_json::json!({"exchange_id":"exchange","phase":"backend_selected"});
+        assert_eq!(evidence.request_body(&selected).await, Some(effective));
+        assert!(evidence.request_body(&selected).await.is_none());
+        let received = serde_json::json!({"exchange_id":"exchange","phase":"request_received"});
+        assert_eq!(evidence.request_body(&received).await, Some(original));
+        assert_eq!(
+            evidence.request_body(&received).await,
+            Some(serde_json::json!({"prompt":"legacy-alias"}))
+        );
+    }
+
     #[tokio::test]
     async fn malformed_request_retains_exact_bytes_and_acknowledges_digest() {
         let evidence = StreamEvidence::default();

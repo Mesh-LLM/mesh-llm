@@ -7,15 +7,16 @@ matrix records implementation and verification separately; pending checks are
 not acceptance proof.
 
 Fresh focused checks passed: 229 config tests, 57 plugin library tests, 15
-identity tests, and 291 frontend tests. Earlier checks passed for unchanged
+identity tests, and 292 frontend tests. Earlier checks passed for unchanged
 package-manager code (57 tests), Skippy (877 passed, five preexisting ignored),
-and UI (1,835 tests). The final host unit suite passed 3,947 tests with 27
-ignored after the timeout-exhaustion fix. All 16 packaged installed conformance
+and UI (1,835 tests). The final host unit suite passed 3,957 tests with 27
+ignored after the review fixes. All 16 packaged installed conformance
 tests and both authenticated side-stream receiver tests passed in the final
 run. Wire-byte framing/digest tests passed independently.
 Warnings-denied all-target Clippy with default features disabled passed for
-the seven affected crates before the final timeout fix; host Clippy passed
-again after that fix. Local `ci-validate` completed 1,944 tests successfully
+the seven affected crates before the review fixes; host, frontend, and plugin
+Clippy passed again after those fixes, with a final host rerun after the
+cancellation-safe owner apply. Local `ci-validate` completed 1,944 tests successfully
 with 15 expected skips and passed its repository consistency checks after the
 inventory correction.
 Formatting, Justfile, and diff checks passed.
@@ -49,7 +50,7 @@ alone do not establish those results.
 | Unsupported host fails clearly | Required lifecycle initialization rejection when host omits capability | Negotiation and installed old-capability handshake checks passed |
 | Maintained exemplar | Generic Rust plugin, manifest/package recipes, authenticated receipt receiver | Rebuilt package, installed startup/conformance, and both receiver tests passed |
 | Author/security documentation | Normative contract, grant reference, exemplar and wire vectors | Source audit completed and final local results recorded here |
-| Owner grant revocation applies live | Persisted owner apply refreshes grant registry and cancels copies | Host grant suite, concurrent persisted-revocation regression, and installed manager-reduction fixtures passed; full owner API apply integration remains outside these fixtures |
+| Owner grant revocation applies live | Persisted owner apply refreshes grant registry and cancels copies even when the command waiter is cancelled | Host grant suite, concurrent and cancelled-command persisted-revocation regressions, and installed manager-reduction fixtures passed; full owner API apply integration remains outside these fixtures |
 
 Installed conformance requires `just package-openai-exchange-exemplar` and an
 explicit ignored-test invocation. A missing package fails the test. The

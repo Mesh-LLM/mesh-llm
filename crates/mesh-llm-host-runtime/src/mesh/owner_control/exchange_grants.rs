@@ -1,19 +1,41 @@
 //! Refresh security permissions after persisted owner-control configuration.
 
-use crate::plugin::PluginManager;
-use crate::runtime::config_state::ConfigState;
+use crate::plugin::{MeshConfig, PluginManager};
+use crate::runtime::config_state::{
+    ApplyResult, ConfigPersistence, ConfigState, PendingConfigApply,
+};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-impl super::Node {
-    pub(crate) async fn refresh_plugin_exchange_grants(&self) -> anyhow::Result<()> {
-        let Some(manager) = self.plugin_manager().await else {
-            return Ok(());
-        };
-        refresh_exchange_grants(Arc::clone(&self.config_state), manager).await
+/// Commit and publish security permissions in the same cancellation-independent
+/// blocking owner. Dropping the command's JoinHandle cannot skip publication.
+pub(super) fn apply_with_exchange_grants(
+    config_state: Arc<Mutex<ConfigState>>,
+    config: MeshConfig,
+    expected_revision: u64,
+    persist: impl FnOnce(&PendingConfigApply) -> ConfigPersistence,
+    manager: Option<PluginManager>,
+    runtime: tokio::runtime::Handle,
+) -> (ApplyResult, u64, [u8; 32]) {
+    let result = super::apply_owner_control_config_with_persistence(
+        Arc::clone(&config_state),
+        config,
+        expected_revision,
+        persist,
+    );
+    if matches!(
+        &result.0,
+        ApplyResult::Applied { .. }
+            | ApplyResult::AppliedWithRestartRequired { .. }
+            | ApplyResult::PersistedWithRevisionTrackingError { .. }
+    ) && let Some(manager) = manager
+    {
+        publish_exchange_grants(config_state, manager, runtime, || {});
     }
+    result
 }
 
+#[cfg(test)]
 async fn refresh_exchange_grants(
     config_state: Arc<Mutex<ConfigState>>,
     manager: PluginManager,
@@ -48,10 +70,9 @@ fn publish_exchange_grants(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::{MeshConfig, PluginHostMode, ResolvedPlugins};
+    use crate::plugin::{PluginHostMode, ResolvedPlugins};
 
-    #[tokio::test]
-    async fn concurrent_refresh_cannot_restore_grants_after_revocation() {
+    async fn granted_fixture() -> (std::path::PathBuf, Arc<Mutex<ConfigState>>, PluginManager) {
         let directory = std::env::temp_dir().join(format!(
             "mesh-llm-owner-grant-refresh-{}",
             rand::random::<u64>()
@@ -96,6 +117,12 @@ mod tests {
         .await
         .unwrap();
         manager.apply_exchange_grants(&config).await;
+        (directory, state, manager)
+    }
+
+    #[tokio::test]
+    async fn concurrent_refresh_cannot_restore_grants_after_revocation() {
+        let (directory, state, manager) = granted_fixture().await;
         let (snapshot_tx, snapshot_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let old_state = Arc::clone(&state);
@@ -144,6 +171,56 @@ mod tests {
         old_refresh.await.unwrap();
         revocation.await.unwrap();
         assert!(manager.effective_exchange_grant("observer").is_none());
+        manager.shutdown().await;
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[tokio::test]
+    async fn cancelled_owner_command_still_reconciles_persisted_revocation() {
+        let (directory, state, manager) = granted_fixture().await;
+        let revision = manager.exchange_grant_revision("observer");
+        let (persisted_tx, persisted_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (published_tx, published_rx) = tokio::sync::oneshot::channel();
+        let apply_state = Arc::clone(&state);
+        let apply_manager = manager.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let waiter = tokio::spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                let result = apply_with_exchange_grants(
+                    apply_state,
+                    MeshConfig::default(),
+                    0,
+                    |pending| {
+                        let persistence = pending.persist();
+                        assert!(matches!(persistence, ConfigPersistence::Persisted));
+                        persisted_tx.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                        persistence
+                    },
+                    Some(apply_manager),
+                    runtime,
+                );
+                published_tx.send(result).unwrap();
+            })
+            .await
+            .unwrap();
+        });
+        persisted_rx.await.unwrap();
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        release_tx.send(()).unwrap();
+        let (result, applied_revision, _) = published_rx.await.unwrap();
+        assert!(matches!(result, ApplyResult::Applied { .. }));
+        assert_eq!(applied_revision, 1);
+        assert_eq!(state.lock().await.revision(), 1);
+        assert!(manager.effective_exchange_grant("observer").is_none());
+        assert!(
+            revision.has_changed().unwrap(),
+            "in-flight observers must be revoked"
+        );
+        let persisted = ConfigState::load(&directory.join("config.toml")).unwrap();
+        assert!(persisted.config().plugins.is_empty());
         manager.shutdown().await;
         std::fs::remove_dir_all(directory).ok();
     }

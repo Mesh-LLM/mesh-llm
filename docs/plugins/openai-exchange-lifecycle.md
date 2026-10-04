@@ -88,7 +88,9 @@ a required unavailable policy produces a stable OpenAI 503 hook error, while a
 policy denial produces 403. Best-effort observer faults mark evidence incomplete
 without converting successful inference into a backend failure. Circuit and
 in-flight limits bound repeated failures. Backend deadlines and hook deadlines
-are different causes and must remain distinguishable.
+are different causes and must remain distinguishable. Lifecycle RPCs send once;
+deadline expiry or cancellation removes that call's pending response without
+retrying or restarting the plugin.
 
 Metadata permission is required for annotations or response headers. Annotation
 keys are host-namespaced by plugin, at most 128 bytes, values at most 1024 bytes,
@@ -180,8 +182,11 @@ and five per rolling minute per plugin; registry capacity is checked before
 signing. This limit is independent of certificate expiry and pruning.
 All identity RPCs are admitted before filesystem work, with one active call
 and thirty calls per rolling minute per plugin. Artifact inspection accepts
-regular files up to 256 MiB and has a one-second deadline; the whole service
-has a two-second execution deadline. Identity work runs separately from the
+regular files up to 256 MiB. Hashing has a size-scaled deadline capped at
+17 seconds, following a one-second metadata deadline. The whole service has
+a 20-second execution deadline; registry admission waits at most 250 ms.
+A transient inspection timeout requires retry and preserves existing
+delegations. Identity work runs separately from the
 serial plugin mesh-event forwarder.
 Maximum lifetime is the smaller of the
 operator grant, 24 hours, and the ownership certificate's remaining lifetime.

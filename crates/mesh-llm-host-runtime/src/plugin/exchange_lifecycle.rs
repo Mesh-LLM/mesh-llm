@@ -10,7 +10,7 @@ use openai_frontend::wire_bytes::{WireBytesCommitment, WireBytesObserver, commit
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
-use super::{PluginManager, proto};
+use super::PluginManager;
 #[path = "exchange_metadata.rs"]
 mod exchange_metadata;
 #[path = "exchange_terminal_completion.rs"]
@@ -459,18 +459,10 @@ async fn invoke_phase(
         event["body_stream_kind"] = json!(kind);
     }
     let input = serde_json::to_string(&event).map_err(|_| HookFailure::Internal)?;
-    let reply = tokio::time::timeout_at(
-        deadline,
-        plugin.invoke_service(
-            proto::ServiceKind::OpenaiExchange,
-            handler,
-            &input,
-            Some(deadline.saturating_duration_since(Instant::now())),
-        ),
-    )
-    .await
-    .map_err(|_| HookFailure::Internal)?
-    .map_err(|_| HookFailure::Internal)?;
+    let reply = plugin
+        .invoke_exchange_service(handler, &input, deadline)
+        .await
+        .map_err(|_| HookFailure::Internal)?;
     if reply.is_error || reply.output_json.len() > 32 * 1024 {
         return Err(HookFailure::Internal);
     }

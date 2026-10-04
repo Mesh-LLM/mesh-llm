@@ -79,12 +79,16 @@ impl PluginManager {
                         .iter()
                         .any(|phase| grant.phases.contains(phase))
             });
-        let unavailable = active
-            && mesh_llm_plugin::openai_exchange::negotiate_openai_exchange(
-                declaration,
-                grant.as_ref(),
-            )
-            .is_err();
+        let subscribed = grant
+            .as_ref()
+            .is_some_and(|grant| !grant.endpoints.is_empty() && !grant.phases.is_empty());
+        let unavailable = (declaration.is_none() && subscribed)
+            || (active
+                && mesh_llm_plugin::openai_exchange::negotiate_openai_exchange(
+                    declaration,
+                    grant.as_ref(),
+                )
+                .is_err());
         self.inner
             .exchange_health
             .lock()
@@ -138,6 +142,74 @@ pub(crate) fn subscribes(
 mod tests {
     use super::*;
     use mesh_llm_plugin::openai_exchange::{negotiate_openai_exchange, openai_exchange_hook};
+
+    #[tokio::test]
+    async fn status_refresh_preserves_unavailable_subscription_until_grant_removed() {
+        use super::super::config::{ExternalPluginSpec, PluginHostMode, ResolvedPlugins};
+        let declaration = openai_exchange_hook("observe");
+        let grant = OpenAiExchangeGrant {
+            endpoints: declaration.endpoints,
+            phases: declaration.phases,
+            metadata: true,
+            deadline_ms: 100,
+            max_body_bytes: 1024,
+            max_queue_bytes: 1024,
+            max_in_flight: 1,
+            failure_policy: mesh_llm_config::OpenAiExchangeFailurePolicy::Required,
+            ..Default::default()
+        };
+        let spec = ExternalPluginSpec {
+            name: "deferred-observer".into(),
+            command: "must-not-start-deferred-observer".into(),
+            args: Vec::new(),
+            url: None,
+            env: Default::default(),
+            startup: super::super::PluginStartupOptions {
+                lazy_start: true,
+                ..Default::default()
+            },
+            web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            installed_metadata: None,
+            openai_exchange_grant: Some(Box::new(grant)),
+        };
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        let manager = PluginManager::start(
+            &ResolvedPlugins {
+                externals: vec![spec],
+                inactive: Vec::new(),
+            },
+            PluginHostMode {
+                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+            },
+            tx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            manager
+                .exchange_permissions_preflight("chat_completions")
+                .await
+                .error_status(),
+            Some(503)
+        );
+        // Status projection refreshes against an absent live manifest for a
+        // deferred/restarting process. It must retain the operator's warning.
+        manager.refresh_exchange_permissions_status("deferred-observer", None);
+        assert_eq!(
+            manager.exchange_health_status("deferred-observer"),
+            "permissions_unavailable"
+        );
+        manager
+            .apply_exchange_grants(&mesh_llm_config::MeshConfig::default())
+            .await;
+        manager.refresh_exchange_permissions_status("deferred-observer", None);
+        assert_eq!(
+            manager.exchange_health_status("deferred-observer"),
+            "disabled"
+        );
+        manager.shutdown().await;
+    }
 
     #[test]
     fn reduced_permissions_remain_active_but_complete_removal_disables() {

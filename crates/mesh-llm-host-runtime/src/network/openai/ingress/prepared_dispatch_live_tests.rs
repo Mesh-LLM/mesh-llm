@@ -207,16 +207,26 @@ async fn installed_lifecycle_pipeline_admits_each_prepared_dispatch_and_never_fa
 #[tokio::test]
 #[ignore = "requires just package-openai-exchange-exemplar"]
 async fn installed_lifecycle_virtual_admission_observes_final_invocation_before_backend_runs() {
-    for deny in [true, false] {
+    for (deny, path, endpoint) in [
+        (true, "/v1/chat/completions", "chat_completions"),
+        (false, "/v1/responses", "responses"),
+    ] {
         let mut host = LiveHost::start(true, true).await;
         select_policy(&mut host, if deny { "exchange-echo" } else { "" }, true).await;
-        let response = host.request("/v1/chat/completions", br#"{"model":"exchange-echo","messages":[{"role":"user","content":"echo this"}],"stream":false}"#).await;
+        let body: &[u8] = if path == "/v1/responses" {
+            br#"{"model":"exchange-echo","input":"echo this","stream":false}"#
+        } else {
+            br#"{"model":"exchange-echo","messages":[{"role":"user","content":"echo this"}],"stream":false}"#
+        };
+        let response = host.request(path, body).await;
         let invocation_file = host.root.path().join("virtual.json");
         let events = host.events();
         let selected = events
             .iter()
             .find(|event| event["phase"] == "backend_selected")
             .expect("virtual dispatch must be observed");
+        assert_eq!(selected["path"], path);
+        assert_eq!(selected["endpoint"], endpoint);
         assert_eq!(
             selected["effective_request_encoding"],
             "plugin_invocation_json"

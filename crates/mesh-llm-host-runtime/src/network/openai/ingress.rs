@@ -2302,6 +2302,7 @@ async fn try_handle_virtual_model_intercept(
         ctx.route.node,
         tcp_stream,
         &request.path,
+        &request.client_path,
         model_id,
         body,
         candidate_models,

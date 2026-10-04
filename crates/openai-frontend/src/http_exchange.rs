@@ -118,13 +118,15 @@ pub(crate) async fn http_exchange_middleware(
             headers.insert(name.to_ascii_lowercase(), value);
         }
     }
-    for (name, value) in headers.into_iter().take(16) {
-        if name.starts_with("x-plugin-")
-            && let (Ok(name), Ok(value)) = (
-                axum::http::HeaderName::try_from(name),
-                axum::http::HeaderValue::try_from(value),
-            )
-        {
+    for (name, value) in headers
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("x-plugin-"))
+        .take(16)
+    {
+        if let (Ok(name), Ok(value)) = (
+            axum::http::HeaderName::try_from(name),
+            axum::http::HeaderValue::try_from(value),
+        ) {
             response.headers_mut().append(name, value);
         }
     }
