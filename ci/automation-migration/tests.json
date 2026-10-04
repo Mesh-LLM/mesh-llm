@@ -1816,55 +1816,33 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_llama_canary_agent_manifest_policy.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "70e119456e83eb35b07593b6de56eeefa8aa11f12db118bb25f03a3a5c7b0824",
-      "test_method_count": 8,
-      "test_methods": [
-        "test_family_allows_only_positive_tensor_size_corrections",
-        "test_family_rejects_roster_changes",
-        "test_parity_allows_exact_additive_classification",
-        "test_parity_allows_immutable_variant_rows_for_one_source",
-        "test_parity_rejects_existing_row_changes_and_missing_sources",
-        "test_parity_rejects_missing_existing_source_identity",
-        "test_parity_rejects_non_classification_fields",
-        "test_parity_rejects_scope_reduction_and_new_artifact_authority"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_llama_canary_agent_repair_contract.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "a70f233d9efffaa4f4e7e4cd4c3caf9bdbf0334512ba42e34bfad093f415c34f",
-      "test_method_count": 23,
+      "sha256": "220cc4bdb093d9d5eb3462c0c7fc27a59ac8e03533f71d0453e2d9e3c66d3519",
+      "test_method_count": 21,
       "test_methods": [
-        "test_agent_and_final_verification_have_explicit_budgets",
-        "test_agent_cannot_change_harness_or_commit",
-        "test_agent_failure_records_the_exit_status_in_evidence",
-        "test_agent_has_no_github_credentials_or_publication_authority",
-        "test_agent_runbook_describes_complete_developer_task",
-        "test_build_gate_is_complete",
-        "test_certification_is_full_and_uses_prebuilt_candidate",
-        "test_certification_rejects_failed_or_empty_producer_environment",
-        "test_certified_commit_is_bound_to_verified_tree",
-        "test_dispatch_sha_is_rejected_before_use",
-        "test_each_returned_candidate_gets_a_full_verification_window",
-        "test_failure_paths_do_not_publish",
-        "test_final_verification_clears_agent_native_products_and_forces_smokes",
-        "test_persistent_runner_scratch_is_scoped_and_pruned",
-        "test_pinned_build_checks_pin_without_rewriting_it",
-        "test_prepare_owns_pin_and_exact_prepared_upstream",
-        "test_protected_status_detects_untracked_python_startup_hook",
-        "test_publisher_pushes_only_exact_ready_commit",
-        "test_runnable_row_carrying_unsupported_reason_is_rejected",
-        "test_shell_syntax",
-        "test_verify_mode_restores_tree_identity_from_candidate_commit",
         "test_wrapper_keeps_one_agent_session_until_ordered_gates_are_green",
-        "test_wrapper_reexecs_natively_before_state_initialization"
+        "test_pinned_build_checks_pin_without_rewriting_it",
+        "test_wrapper_reexecs_natively_before_state_initialization",
+        "test_agent_and_final_verification_have_explicit_budgets",
+        "test_each_returned_candidate_gets_a_full_verification_window",
+        "test_prepare_owns_pin_and_exact_prepared_upstream",
+        "test_build_gate_is_complete",
+        "test_model_cache_is_an_infrastructure_gate_outside_agent_repair",
+        "test_certification_is_full_and_uses_prebuilt_candidate",
+        "test_agent_has_no_github_credentials_or_publication_authority",
+        "test_agent_failure_records_the_exit_status_in_evidence",
+        "test_failure_paths_do_not_publish",
+        "test_certified_commit_is_bound_to_verified_tree",
+        "test_verify_mode_restores_tree_identity_from_candidate_commit",
+        "test_publisher_pushes_only_exact_ready_commit",
+        "test_final_verification_clears_agent_native_products_and_forces_smokes",
+        "test_agent_runbook_describes_complete_developer_task",
+        "test_dispatch_sha_is_rejected_before_use",
+        "test_shell_syntax",
+        "test_persistent_runner_scratch_is_scoped_and_pruned",
+        "test_runnable_row_carrying_unsupported_reason_is_rejected"
       ]
     },
     {
@@ -13510,6 +13488,63 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/selected-ref-retirement-coverage.json",
       "sha256": "3f5a0a00be12c54e7dcce8e9ab0cea0a2fe826c6f99ffe106c02d261323c1334"
+    }
+  },
+  "manifest_policy_helper_and_partial_repair_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 134,
+    "core_modules_after": 64,
+    "required_targets": 108,
+    "durable_coverage": {
+      "path": "ci/automation-migration/manifest-policy-retirement-coverage.json",
+      "sha256": "881f74d73321e0c96773a0a799363d730a7ca6512bf091bdec0035dffb1fe48c"
+    },
+    "current_test_tree": {
+      "sha256": "146c4b39859e30c2c93518339a8e607fb286e1194a7b8db2d78fa0bf254aac7c",
+      "paths": 57
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "a14c84805159c712e094307c7e72dd7bb098e697f30ddf69e3cfeb311330eb35",
+      "roster_line": 24,
+      "count": 64
+    },
+    "supersedes": "Earlier retained legacy helper/importer and test snapshots are historical after this activation.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/manifest-policy-retirement-postimage-focused-receipts.json",
+        "sha256": "8d713daed2bd5d134bccee74736e866cad6bcc7496d03621664551dd9e8ac5dd"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/manifest-policy-retirement-postimage-receipts.json",
+        "sha256": "e2e0d077eef6dfecc97c0fa8a0e435d3afdbb922b6b8ed329193bc9c582a7618"
+      },
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/manifest-policy-retirement-postimage-normal.log",
+        "sha256": "b2be68c32277d7f14be2afcb884d06c2b062d533dd076d41c20feaf118f8e047",
+        "targets": 109,
+        "passed": 4290,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 972,
+          "passed": 958,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 349.68
+        }
+      },
+      "original_intent_scope": "All eight standalone and 23 original mixed legacy methods passed before retirement. Five actual Rust policy groups, six actual maintained Bash/Git guard groups and one selector group covering all four actual caller modes passed. Twenty-one unrelated mixed methods remain and pass.",
+      "limits": "Manifest-policy helper, standalone fixture and two covered mixed methods retired; twenty-one unrelated mixed methods remain required. Windows native selection, product/runtime/model/SDK/other-platform and hosted/protected acceptance remain open."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/manifest-policy-retirement-coverage.json",
+      "sha256": "d02bb2db824afa80a1093fc998916329020e14851707a582b024ebbe3463d1ef"
     }
   }
 }

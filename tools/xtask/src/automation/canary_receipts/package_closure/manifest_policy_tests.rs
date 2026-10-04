@@ -61,3 +61,84 @@ fn actual_native_files_require_real_paired_calls_outside_comments_strings_and_ra
     );
     assert_eq!(boundaries, BTreeSet::from(["paired".into()]));
 }
+
+#[test]
+fn family_roster_identity_and_execution_cannot_change_with_size_corrections() {
+    let before = json!({"models":[
+        {"family":"alpha","execution":{"trunk_layers":2},"resources":{"estimated_model_bytes":100}},
+        {"family":"beta","execution":{"trunk_layers":4},"resources":{"estimated_model_bytes":200}}
+    ]});
+    let mut corrected = before.clone();
+    corrected["models"][0]["resources"]["estimated_model_bytes"] = json!(96);
+    assert!(family(&before, &corrected).is_ok());
+    let mut changed = corrected.clone();
+    changed["models"][0]["execution"]["trunk_layers"] = json!(1);
+    assert!(family(&before, &changed).is_err());
+    changed = corrected.clone();
+    changed["models"].as_array_mut().unwrap().pop();
+    assert!(family(&before, &changed).is_err());
+    changed = corrected.clone();
+    changed["models"]
+        .as_array_mut()
+        .unwrap()
+        .push(before["models"][0].clone());
+    assert!(family(&before, &changed).is_err());
+    changed = corrected;
+    changed["models"].as_array_mut().unwrap().swap(0, 1);
+    assert!(family(&before, &changed).is_err());
+}
+
+#[test]
+fn parity_identity_and_exact_new_rows_refuse_all_artifact_selectors() {
+    let before = json!({"candidates":[
+        {"llama_model":"alpha","family":"alpha","status":"certified"},
+        {"llama_model":"alpha","family":"alpha_multimodal","status":"candidate_multimodal"}
+    ]});
+    let mut after = before.clone();
+    after["candidates"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"llama_model":"beta","family":"beta","status":"candidate"}));
+    let sources = BTreeSet::from(["alpha".into(), "beta".into()]);
+    let boundaries = sources.clone();
+    assert!(parity(&before, &after, &sources, &boundaries).is_ok());
+    let mut reduced = after.clone();
+    reduced["candidates"][2]["status"] = json!("needs_boundary_registration");
+    assert!(parity(&before, &reduced, &sources, &boundaries).is_err());
+    let unpaired = BTreeSet::from(["alpha".into()]);
+    assert!(parity(&before, &reduced, &sources, &unpaired).is_ok());
+    assert!(parity(&before, &after, &sources, &unpaired).is_err());
+    reduced = after.clone();
+    reduced["candidates"][2]["unsupported_reason"] = json!("cannot run");
+    assert!(parity(&before, &reduced, &sources, &boundaries).is_err());
+    for (field, value) in [
+        ("repo", json!("owner/repo")),
+        ("include", json!("*.gguf")),
+        ("revision", json!("a".repeat(40))),
+        ("file_integrity", json!({"model.gguf":{"size_bytes":1}})),
+        ("splits", json!("1")),
+        ("recurrent", json!("all")),
+        ("model_pin", json!({"repo":"owner/repo"})),
+    ] {
+        let mut forged = after.clone();
+        forged["candidates"][2][field] = value;
+        assert!(
+            parity(&before, &forged, &sources, &boundaries).is_err(),
+            "{field}"
+        );
+    }
+    let mut missing_identity = before.clone();
+    missing_identity["candidates"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("llama_model");
+    assert!(parity(&missing_identity, &missing_identity, &sources, &boundaries).is_err());
+    let mut duplicate_new = after.clone();
+    duplicate_new["candidates"]
+        .as_array_mut()
+        .unwrap()
+        .push(after["candidates"][2].clone());
+    assert!(parity(&before, &duplicate_new, &sources, &boundaries).is_err());
+    after["candidates"].as_array_mut().unwrap().swap(0, 1);
+    assert!(parity(&before, &after, &sources, &boundaries).is_err());
+}

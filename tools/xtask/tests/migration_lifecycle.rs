@@ -207,3 +207,6 @@ mod ui_package_contracts;
 
 #[path = "migration_lifecycle/just_layout_contracts.rs"]
 mod just_layout_contracts;
+
+#[path = "migration_lifecycle/canary_agent_control.rs"]
+mod canary_agent_control;

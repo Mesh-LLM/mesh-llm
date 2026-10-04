@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 const FAMILY: &str = "ci/llama-canary/family-certified.json";
-const PARITY: &str = "docs/skippy/llama-parity-candidates.json";
+const PARITY: &str = "skippy/docs/llama-parity-candidates.json";
 const RUNNABLE: [&str; 3] = ["candidate", "candidate_stateful", "candidate_multimodal"];
 const NONRUNNABLE: [&str; 7] = [
     "implementation_base",

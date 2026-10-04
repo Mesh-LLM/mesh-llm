@@ -162,6 +162,9 @@ impl Fixture {
             "run_for",
             "remaining_verification_seconds",
             "run_verification_logged",
+            "repair_source_inspection",
+            "validate_agent_manifest_changes",
+            "controller_package_context",
         ]
         .map(|name| caller_function(&source, name))
         .join("\n");
@@ -487,4 +490,72 @@ fn copied_real_final_bundle_uses_candidate_base_when_controller_contains_candida
             .as_str()
             .unwrap()
     );
+}
+
+#[test]
+fn actual_manifest_mode_selector_uses_real_owner_in_all_modes_and_preserves_failure() {
+    for mode in ["repair", "verify", "repair-build", "verify-build"] {
+        let f = Fixture::content_new();
+        let controller = PathBuf::from(
+            f.document["authority"]["controller"]["root"]
+                .as_str()
+                .unwrap(),
+        );
+        if mode == "repair" {
+            prepared_source(&controller);
+        }
+        let prelude = format!(
+            "HARNESS_MODE={mode}\nCANARY_CONTROLLER_SHA=$BASE_HEAD\nGITHUB_RUN_ID=1\nGITHUB_RUN_ATTEMPT=1\nCANARY_MESH_SOURCE=\nMANIFEST_POLICY_LOG=\"$RUNNER_TEMP/manifest-selector.log\"\nVERIFICATION_DEADLINE_AT=$(( $(date +%s) + 20 ))\n"
+        );
+        let local = if mode == "repair" {
+            "ROOT=$TRUSTED_ROOT\nCANDIDATE_BASE_HEAD=$BASE_HEAD\n"
+        } else {
+            ""
+        };
+        let action = format!("{prelude}{local}validate_agent_manifest_changes");
+        let accepted = f.logged(&action);
+        assert!(
+            accepted.process.success(),
+            "{mode}: {:?}; {}",
+            accepted.process,
+            String::from_utf8_lossy(accepted.stderr.as_ref().unwrap().as_bytes())
+        );
+        let result: Json = serde_json::from_slice(accepted.stdout.unwrap().as_bytes()).unwrap();
+        assert_eq!(result["status"], "agent_manifest_policy_admitted", "{mode}");
+        let log = f.work.join("manifest-selector.log");
+        assert_eq!(
+            serde_json::from_slice::<Json>(&fs::read(&log).unwrap()).unwrap(),
+            result
+        );
+        let root = if mode == "repair" {
+            controller
+        } else {
+            f.work.join("candidate")
+        };
+        let policy_path = root.join("ci/llama-canary/family-certified.json");
+        let mut policy: Json = serde_json::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
+        policy["agent_changed_policy"] = json!(true);
+        fs::write(&policy_path, serde_json::to_vec(&policy).unwrap()).unwrap();
+        let rejected = f.logged(&action);
+        assert!(
+            !rejected.process.success(),
+            "{mode}: {:?}",
+            rejected.process
+        );
+        assert!(
+            rejected.process.cleanup.complete,
+            "{mode}: {:?}",
+            rejected.process
+        );
+        assert!(
+            !String::from_utf8_lossy(rejected.stdout.unwrap().as_bytes())
+                .contains("agent_manifest_policy_admitted"),
+            "{mode}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&fs::read(log).unwrap())
+                .contains("agent_manifest_policy_admitted"),
+            "{mode}"
+        );
+    }
 }
