@@ -580,8 +580,7 @@ models until it is reviewed again.
 
 `capsule-emit-mesh` keeps a signed record of each request this node serves, on
 the node's own disk. By default it keeps SHA-256 digests of the request and
-response, never their text; keeping text takes two operator opt-ins
-(`MESH_LLM_PLUGIN_EXCHANGE_BODIES=1` on the host and the plugin's own setting).
+response, never their text; mesh-llm does not pass exchange text to plugins.
 It makes no network calls unless the operator configures a witness URL.
 
 ## Hugging Face Plugin Catalog
