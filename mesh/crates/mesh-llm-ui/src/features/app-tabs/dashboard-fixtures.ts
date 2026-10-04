@@ -103,6 +103,7 @@ export const PEER_SUMMARY: PeerSummary = { total: 3, online: 3, capacity: 'all s
 export const MODELS: ModelSummary[] = [
   {
     name: 'gemma-4-26B-A4B-it-UD',
+    fitLabel: 'Likely fits',
     fullId: 'gemma-4-26B-A4B-it-UD-Q4_K_XL',
     family: 'Gemma',
     familyColor: 'family-5',
@@ -125,6 +126,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.5-0.8B-UD',
+    fitLabel: 'Likely comfortable',
     fullId: 'Qwen3.5-0.8B-UD-Q4_K_XL',
     family: 'Qwen',
     familyColor: 'family-2',
@@ -147,6 +149,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.5-2B',
+    fitLabel: 'Likely comfortable',
     fullId: 'Qwen3.5-2B-Q4_K_M',
     family: 'Qwen',
     familyColor: 'family-2',
@@ -169,6 +172,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.5-4B-UD',
+    fitLabel: 'Likely fits',
     fullId: 'Qwen3.5-4B-UD-Q4_K_XL',
     family: 'Qwen',
     familyColor: 'family-2',
@@ -191,6 +195,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.6-27B-UD',
+    fitLabel: 'Possible with tradeoffs',
     fullId: 'Qwen3.6-27B-UD-Q4_K_XL',
     family: 'Qwen',
     familyColor: 'family-2',
@@ -213,6 +218,7 @@ export const MODELS: ModelSummary[] = [
   },
   {
     name: 'Qwen3.6-35B-A3B-UD',
+    fitLabel: 'Possible with tradeoffs',
     fullId: 'Qwen3.6-35B-A3B-UD-Q4_K_XL',
     family: 'Qwen',
     familyColor: 'family-2',

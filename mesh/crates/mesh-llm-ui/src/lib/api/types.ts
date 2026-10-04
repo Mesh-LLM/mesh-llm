@@ -77,6 +77,7 @@ export interface MeshModelRaw {
   moe?: boolean
   vision?: boolean
   license?: string
+  fit_label?: string
 }
 
 export enum LatencySource {

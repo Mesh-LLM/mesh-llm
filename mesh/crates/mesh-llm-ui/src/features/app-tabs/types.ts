@@ -91,6 +91,7 @@ export type ModelSummary = {
   capabilities?: ModelCapabilities
   license?: string
   activitySummary?: string
+  fitLabel?: string
 }
 export type MeshNodeRenderKind = 'client' | 'worker' | 'active' | 'serving' | 'self'
 export type MeshNodeState = 'serving' | 'loading' | 'standby' | 'client'

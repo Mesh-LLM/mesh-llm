@@ -39,12 +39,51 @@ describe('ModelDrawer', () => {
     expect(screen.getByText('14.2 GB')).toBeInTheDocument()
   })
 
-  it('shows Unknown quant instead of a fabricated fallback when quant is missing', () => {
+  it('derives quant from the colon tag in the model name when quant metadata is missing', () => {
     render(<ModelDrawer open model={MODEL} peers={[]} onClose={() => {}} />)
 
     expect(screen.getByText('Quant')).toBeInTheDocument()
+    expect(screen.getByText('Q1_0')).toBeInTheDocument()
+  })
+
+  it('shows Unknown quant when the name has no colon tag and quant metadata is missing', () => {
+    const model: ModelSummary = { ...MODEL, name: 'Hermes-2-Pro-Mistral-7B', fullId: 'Hermes-2-Pro-Mistral-7B' }
+    render(<ModelDrawer open model={model} peers={[]} onClose={() => {}} />)
+
+    expect(screen.getByText('Quant')).toBeInTheDocument()
     expect(screen.getByText('Unknown')).toBeInTheDocument()
-    expect(screen.queryByText('Q4_K_XL')).not.toBeInTheDocument()
+  })
+
+  it('shows Unknown quant when the colon suffix is not a quant tag', () => {
+    const model: ModelSummary = { ...MODEL, name: 'gguf:0123456789abcdef', fullId: 'gguf:0123456789abcdef' }
+    render(<ModelDrawer open model={model} peers={[]} onClose={() => {}} />)
+
+    expect(screen.getByText('Quant')).toBeInTheDocument()
+    expect(screen.getByText('Unknown')).toBeInTheDocument()
+    expect(screen.queryByText('0123456789abcdef')).not.toBeInTheDocument()
+  })
+
+  it('prefers explicit quant metadata over the colon tag', () => {
+    const model: ModelSummary = { ...MODEL, quant: 'Q4_K_M' }
+    render(<ModelDrawer open model={model} peers={[]} onClose={() => {}} />)
+
+    expect(screen.getByText('Q4_K_M')).toBeInTheDocument()
+    expect(screen.queryByText('Q1_0')).not.toBeInTheDocument()
+  })
+
+  it('shows the backend fit verdict instead of a hardcoded Fits badge', () => {
+    const model: ModelSummary = { ...MODEL, fitLabel: 'Likely fits' }
+    render(<ModelDrawer open model={model} peers={[]} onClose={() => {}} />)
+
+    expect(screen.getByText('Suitable for this node')).toBeInTheDocument()
+    expect(screen.queryByText('Fits')).not.toBeInTheDocument()
+  })
+
+  it('falls back to Check fit when the backend reports no fit verdict', () => {
+    render(<ModelDrawer open model={MODEL} peers={[]} onClose={() => {}} />)
+
+    expect(screen.getByText('Check fit')).toBeInTheDocument()
+    expect(screen.queryByText('Fits')).not.toBeInTheDocument()
   })
 
   it('shows each peer’s own VRAM in the active peers table', () => {

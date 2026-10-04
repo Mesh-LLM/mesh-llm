@@ -1,6 +1,7 @@
 import { useId } from 'react'
 import { Cpu, HardDrive, Hash, Network } from 'lucide-react'
 import { StatusBadge } from '@/components/ui/StatusBadge'
+import type { StatusBadgeTone } from '@/components/ui/StatusBadge'
 import { Drawer } from '@/features/drawers/components/Drawer'
 import { drawerIcon } from '@/features/drawers/lib/badge-styles'
 import { modelStatusBadge } from '@/features/drawers/lib/model-status'
@@ -10,6 +11,7 @@ import { SectionHead } from '@/features/drawers/components/SectionHead'
 import { LatencySource } from '@/lib/api/types'
 import { formatPeerLatencySummary } from '@/lib/format-latency'
 import { formatModelSizeGB } from '@/lib/format-model-size'
+import { fitLabelTone, headerFitLabel } from '@/lib/model-fit'
 import type { ConfigModel, ModelSummary, Peer } from '@/features/app-tabs/types'
 
 type DrawerModel = ConfigModel | ModelSummary
@@ -23,10 +25,24 @@ function modelSubtitle(model: DrawerModel) {
   return isConfigModel(model) ? model.family : (model.fullId ?? model.family)
 }
 
+function isQuantTag(tag: string): boolean {
+  const upper = tag.toUpperCase()
+  if (upper.startsWith('IQ') || upper.startsWith('BF')) return true
+  if (!upper.startsWith('Q') && !upper.startsWith('F')) return false
+  return upper.length >= 2 && upper[1] >= '0' && upper[1] <= '9'
+}
+
 function modelQuant(model: ModelSummary) {
   if (model.quant) return model.quant
-  if (!model.fullId?.startsWith(`${model.name}-`)) return 'Unknown'
-  return model.fullId.slice(model.name.length + 1)
+  const separator = model.name.lastIndexOf(':')
+  if (separator < 0) return 'Unknown'
+  const tag = model.name.slice(separator + 1)
+  return isQuantTag(tag) ? tag : 'Unknown'
+}
+
+function fitBadgeTone(label?: string): StatusBadgeTone {
+  const tone = fitLabelTone(label)
+  return tone === 'good' || tone === 'warn' || tone === 'bad' ? tone : 'muted'
 }
 
 function modelSummarySize(model: ModelSummary) {
@@ -125,7 +141,7 @@ function ModelDrawerContent({
             <StatusBadge dot tone={status.tone}>
               {status.label}
             </StatusBadge>
-            <StatusBadge tone="good">Fits</StatusBadge>
+            <StatusBadge tone={fitBadgeTone(model.fitLabel)}>{headerFitLabel(model.fitLabel)}</StatusBadge>
           </>
         }
         onClose={onClose}

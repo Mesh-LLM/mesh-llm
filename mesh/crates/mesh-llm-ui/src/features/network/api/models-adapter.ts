@@ -35,6 +35,7 @@ export function adaptModelsToSummary(models: MeshModelRaw[]): ModelSummary[] {
     moe: model.capabilities?.moe ?? model.moe ?? false,
     vision: model.capabilities?.vision ?? model.vision ?? model.tags?.includes('vision') ?? false,
     capabilities: model.capabilities,
-    license: model.license
+    license: model.license,
+    fitLabel: model.fit_label
   }))
 }
