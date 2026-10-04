@@ -133,6 +133,15 @@ fn linux_service_install_writes_systemd_files_and_runs_expected_commands() {
 
     let report = install_service(&context, &mut runner).expect("systemd install should succeed");
 
+    #[cfg(unix)]
+    {
+        assert_eq!(unix_mode(&report.env_file), 0o600);
+        assert_eq!(
+            unix_mode(report.env_file.parent().expect("env file parent")),
+            0o700
+        );
+    }
+
     assert_eq!(report.summary, "installed and started");
     assert_eq!(report.status, ServiceInstallStatus::Started);
     assert_eq!(
@@ -192,6 +201,15 @@ fn macos_service_install_writes_runner_and_plist_and_preserves_manual_start_guid
     let mut runner = FakeRunner::default();
 
     let report = install_service(&context, &mut runner).expect("launchd install should succeed");
+
+    #[cfg(unix)]
+    {
+        assert_eq!(unix_mode(&report.env_file), 0o600);
+        assert_eq!(
+            unix_mode(report.env_file.parent().expect("env file parent")),
+            0o700
+        );
+    }
 
     assert_eq!(
         report.summary,
