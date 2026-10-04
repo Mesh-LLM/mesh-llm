@@ -12,5 +12,7 @@ mod affected_crates;
 mod conventional_commit;
 #[path = "migration_repository/env_mutation_census.rs"]
 mod env_mutation_census;
+#[path = "migration_repository/publish_order.rs"]
+mod publish_order;
 #[path = "migration_repository/upstream_pin.rs"]
 mod upstream_pin;

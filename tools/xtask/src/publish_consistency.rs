@@ -32,39 +32,8 @@ pub(crate) fn check_publish_crates_consistency(repo_root: &Path) -> DynResult<()
 fn publish_script_crates(repo_root: &Path) -> DynResult<Vec<String>> {
     let relative_path = "scripts/publish-crates.sh";
     let contents = fs::read_to_string(repo_root.join(relative_path))?;
-    let mut in_array = false;
-    let mut crates = Vec::new();
-    let mut seen = BTreeSet::new();
-
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if !in_array {
-            if trimmed == "publish_crates=(" {
-                in_array = true;
-            }
-            continue;
-        }
-
-        if trimmed == ")" {
-            if crates.is_empty() {
-                return Err(format!("{relative_path}: publish_crates array is empty").into());
-            }
-            return Ok(crates);
-        }
-
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let crate_name = trimmed.trim_matches('"').to_string();
-        if !seen.insert(crate_name.clone()) {
-            return Err(
-                format!("{relative_path}: duplicate publish_crates entry `{crate_name}`").into(),
-            );
-        }
-        crates.push(crate_name);
-    }
-
-    Err(format!("{relative_path}: missing publish_crates array").into())
+    crate::repository::publish_roster::parse(&contents)
+        .map_err(|error| format!("{relative_path}: {error}").into())
 }
 
 fn workspace_packages_by_name<'a>(

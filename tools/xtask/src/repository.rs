@@ -6,6 +6,7 @@ pub(crate) mod check_report;
 mod conventional_commit;
 mod env_census;
 mod publish_order;
+pub(crate) mod publish_roster;
 mod selected_ref;
 pub(crate) mod text;
 mod upstream_pin;
