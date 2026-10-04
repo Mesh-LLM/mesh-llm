@@ -51,6 +51,11 @@ impl RuntimeState {
     }
 
     pub(crate) fn warmup_generation_graph(&self) -> Result<bool> {
+        // Prewarming invokes decode_step. Encode-only models cannot decode,
+        // and encoder-decoder models must encode a source first.
+        if self.model.workload_info()?.kind != ModelWorkload::CausalGeneration {
+            return Ok(false);
+        }
         if self.model.input_activation_boundary().is_some()
             || self.model.output_activation_boundary().is_some()
         {

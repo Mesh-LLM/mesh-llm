@@ -217,19 +217,38 @@ run_candidate_gates() {
         ]
         main = self.wrapper[self.wrapper.index('if ! check_family_cache; then') :]
         self.assertIn("--check-cache", cache)
-        self.assertNotIn("--check-cache", gates)
+        self.assertIn("--gguf-constants", gates)
+        self.assertLess(gates.index("run_prepare"), gates.index("--gguf-constants"))
+        self.assertLess(gates.index("--gguf-constants"), gates.index("run_full_build"))
         self.assertLess(main.index("check_family_cache"), main.index("repair_candidate_until_green"))
         self.assertIn("record_failure_class infrastructure model-cache", main)
 
     def test_certification_is_full_and_uses_prebuilt_candidate(self) -> None:
         certify = self.wrapper[
-            self.wrapper.index("run_certification() {") : self.wrapper.index("write_upstream_summary() {")
+            self.wrapper.index("run_certification() {") : self.wrapper.index("run_early_metal_certification() {")
         ]
         self.assertIn("skippy-llama-parity.py --llama-src .deps/llama.cpp validate", certify)
         self.assertNotIn("--cadence", certify)
         self.assertNotIn("--families", certify)
         self.assertNotIn("skippy-canary-live-matrix", certify)
         self.assertIn("scripts/skippy-family-battery.sh --skip-build --plan", certify)
+
+    def test_early_metal_gate_uses_exact_prebuilt_candidate_before_family_fanout(self) -> None:
+        gate = self.wrapper[
+            self.wrapper.index("run_early_metal_certification() {") :
+            self.wrapper.index("run_candidate_gates() {")
+        ]
+        self.assertIn("--skip-build", gate)
+        self.assertIn("-workloads/cargo/debug/skippy\"", gate)
+        self.assertIn('.target.name == "skippy_serving"', gate)
+        for family in ("llama", "mamba2", "deepseek2", "nomic-bert-embedding",
+                       "jina-bert-v2-rerank", "t5-encoder-decoder", "qwen3-vl"):
+            self.assertIn(family, gate)
+        candidate = self.wrapper[
+            self.wrapper.index("run_candidate_gates() {") :
+            self.wrapper.index("write_split_certification_roster() {")
+        ]
+        self.assertLess(candidate.index("run_full_build"), candidate.index("run_early_metal_certification"))
 
     def test_agent_has_no_github_credentials_or_publication_authority(self) -> None:
         agent = self.wrapper[

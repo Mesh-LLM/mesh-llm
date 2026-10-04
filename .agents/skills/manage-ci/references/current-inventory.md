@@ -104,6 +104,11 @@ one main source SHA and the upstream target before any hardware work. Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
 preflight. Changed pins use up to three distributed repair attempts. Each
+candidate build compares pinned GGUF tensor descriptor bytes with the manifest
+using the prepared llama.cpp GGML type table before compilation. A seven-family
+real-model Metal gate runs on the built exact candidate before distributed
+fan-out; it does not replace the complete family and independent passes.
+Grouped failure traces point the repair agent at affected families first. Each
 attempt runs one complete candidate family pass followed (only when all
 families pass) by one independent build and complete verification pass on the
 exact same commit. A candidate-class family failure emits digest-bound evidence
@@ -304,6 +309,11 @@ for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
 target; prerelease tags are excluded so RC and final notes use the same stable
 baseline.
+The stable crates.io publisher downloads the versioned Linux x86_64 release
+archive and checksum sidecar after GitHub release publication, verifies the
+checksum and required native libraries (`libmtmd.so`, `libllama-common.so`,
+`libllama.so`), then supplies that library directory to Cargo's package
+verification. The resume workflow uses the same release-archive contract.
 
 The `release_notes` job runs after a successful stable publish with
 `contents: write` and regroups that published body into Keep a Changelog

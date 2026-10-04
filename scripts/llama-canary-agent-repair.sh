@@ -219,8 +219,9 @@ The trusted harness has already written skippy/llama_cpp/upstream.txt to the exa
 Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, its publisher, the agent runbook, or their contract tests. Do not create or switch branches, commit, push, open a pull request, or use GitHub credentials. Leave the completed changes in this working tree. The harness will independently rerun the entire verification sequence and only a green exact tree can be published.' \
     "$UPSTREAM_SHA"
   if [[ -n "${CANARY_PREVIOUS_FEEDBACK:-}" ]]; then
-    printf '\n\nThis is distributed repair attempt %s. The exact prior candidate has already been restored as uncommitted changes on the frozen base. Read the digest-bound family failure summary and every failed-family directory under %s before editing. Preserve the prior repairs, fix the candidate failures demonstrated there, and use focused reproductions before returning control for a new complete family pass.' \
+    printf '\n\nThis is distributed repair attempt %s. The exact prior candidate has already been restored as uncommitted changes on the frozen base. Read the digest-bound family failure summary and every failed-family directory under %s before editing. Preserve the prior repairs, fix the candidate failures demonstrated there, and use focused reproductions before returning control for a new complete family pass.\n\n' \
       "$PASS_ID" "$CANARY_PREVIOUS_FEEDBACK"
+    python3 scripts/summarize-canary-feedback.py "$CANARY_PREVIOUS_FEEDBACK"
   fi
 }
 
@@ -567,6 +568,34 @@ run_certification() {
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
 }
 
+run_early_metal_certification() {
+  local setting workload_settings mm_test_bin
+  local workload_env=()
+  # A cached executable is usable only when its recorded source tree (and
+  # therefore pin), native stamp, and every handed-off binary still match.
+  run_verification_logged "verify exact workload producer" "$CERTIFY_LOG" \
+    python3 scripts/check-skippy-workload-candidate.py \
+      --candidate-binary "${LLAMA_STAGE_BUILD_DIR:?}-workloads/cargo/debug/skippy" \
+      --native-build-dir "${LLAMA_STAGE_BUILD_DIR:?}-workloads/native" \
+      --producer-manifest "${LLAMA_STAGE_BUILD_DIR:?}-workloads/producer.json" || return 1
+  workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
+  [[ -n "$workload_settings" ]] || return 1
+  while IFS= read -r setting; do
+    workload_env+=("$setting")
+  done <<< "$workload_settings"
+  mm_test_bin="$(jq -rs '[.[] | select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "skippy_serving" and .executable != null) | .executable] | unique | if length == 1 then .[0] else error("expected one exact multimodal test executable") end' "$STATE_DIR/mm-build.jsonl")" || return 1
+  [[ -x "$mm_test_bin" ]] || return 1
+  # One exact candidate on Metal, with representatives for split parity,
+  # recurrent and MoE replay, both encode-only startup classes, T5 ordering,
+  # and an actual image response. The full roster remains the promotion gate.
+  run_verification_logged "early real-model Metal certification" "$CERTIFY_LOG" env \
+    FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID}-early" \
+    FAMILY_BATTERY_MM_TEST_BIN="$mm_test_bin" \
+    "${workload_env[@]}" \
+    scripts/skippy-family-battery.sh --skip-build \
+      --families llama,mamba2,deepseek2,nomic-bert-embedding,jina-bert-v2-rerank,t5-encoder-decoder,qwen3-vl
+}
+
 run_candidate_gates() {
   local roster_mode="${1:-verify}"
   if [[ "$roster_mode" != "verify" && "$roster_mode" != "refresh" ]]; then
@@ -584,6 +613,13 @@ run_candidate_gates() {
     # Independent verification uses the default read-only mode below.
     write_split_certification_roster || return 1
   fi
+  # The prepared pin supplies the exact GGML type table. Compare tensor
+  # descriptors with the manifest now, before the native and Rust builds.
+  run_verification_logged "validate pinned GGUF tensor bytes before compilation" "$CERTIFY_LOG" \
+    python3 scripts/plan-family-battery.py --shard-count 256 \
+      --check-cache --cache-root "$HF_CACHE" \
+      --gguf-constants "$ROOT/.deps/llama.cpp/gguf-py/gguf/constants.py" \
+      --output "$PLAN_PATH" || return 1
   validate_agent_manifest_changes || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
     run_verification_logged "validate family plan before compilation" "$CERTIFY_LOG" \
@@ -592,6 +628,7 @@ run_candidate_gates() {
   fi
   run_full_build || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
+    run_early_metal_certification || return 1
     run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
       python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate
   else

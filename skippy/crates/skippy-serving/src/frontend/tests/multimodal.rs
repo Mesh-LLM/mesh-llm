@@ -299,14 +299,9 @@ fn assert_nonempty_chat_response(response: &ChatCompletionResponse) {
         .expect("expected a multimodal response choice")
         .message;
     let content = message.content.as_deref().unwrap_or_default().trim();
-    let reasoning = message
-        .reasoning_content
-        .as_deref()
-        .unwrap_or_default()
-        .trim();
     assert!(
-        !content.is_empty() || !reasoning.is_empty(),
-        "expected non-empty multimodal content or reasoning; response={response:?}"
+        !content.is_empty(),
+        "expected non-empty image response content; response={response:?}"
     );
 }
 
