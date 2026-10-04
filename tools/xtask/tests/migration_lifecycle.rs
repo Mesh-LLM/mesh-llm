@@ -1,5 +1,8 @@
 #![cfg(unix)]
 
+#[path = "migration_lifecycle/two_node_split/mod.rs"]
+mod two_node_split;
+
 #[path = "migration_lifecycle/ci_batch_filter/mod.rs"]
 mod ci_batch_filter;
 #[path = "migration_lifecycle/crates_recovery.rs"]

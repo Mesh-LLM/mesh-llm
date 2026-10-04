@@ -11108,5 +11108,30 @@
       "path": ".omo/evidence/resume-20261002/native-runtime-prepare-v1-receipts.json",
       "sha256": "eecd2a16709aa8a5758b2a7a531da47ea4cc532dcccf4333f0d1e8d84db2b98a"
     }
+  },
+  "two_node_split_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 107,
+    "core_modules_after": 47,
+    "required_xtask_targets": 109,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/two-node-split-retirement-coverage.json",
+      "sha256": "6922aee137c3b8af51894fa3538334db641a003f92b1fffdb713a49a32295451"
+    },
+    "current_test_tree": {
+      "sha256": "636ab38e0296957a2a4c21108e90921bb72a9c75b19fc4c984686c0400ef07d3",
+      "paths": 43
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "458680e5f14771a14f7c058583e9ea71ed81998078f5adcb46b660b550c147e8",
+      "roster_line": 24,
+      "count": 47
+    },
+    "qualification": {
+      "path": ".omo/evidence/resume-20261002/two-node-split-v1-receipts.json",
+      "sha256": "dd32e94f012cdce3419d3f97868672dcffb4638cd9ddbb6d5744883d7cc946c5"
+    }
   }
 }
