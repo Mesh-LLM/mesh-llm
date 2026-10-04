@@ -86,7 +86,6 @@ pub(crate) fn validate_converted_artifact(artifact_dir: &Path) -> Result<(), Art
             source,
         })?;
     let expected_splits = match manifest.get("expected_splits") {
-        Some(Value::Bool(true)) => 1,
         Some(Value::Number(number)) => number
             .as_u64()
             .and_then(|count| usize::try_from(count).ok())

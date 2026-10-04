@@ -285,3 +285,33 @@ fn migration_hf_artifact_cli_preflight_checks_basename_before_shards() -> TestRe
     assert_eq!(files(&artifact_dir)?, before);
     Ok(())
 }
+
+#[test]
+fn migration_hf_artifact_cli_refuses_boolean_count_without_success_or_artifact_mutation()
+-> TestResult {
+    for count in [true, false] {
+        let (_temp, artifact_dir) = complete_artifact()?;
+        let manifest =
+            serde_json::json!({"expected_splits":count,"output_basename":"Inkling-BF16"});
+        fs::write(
+            artifact_dir.join("skippy-convert-manifest.json"),
+            serde_json::to_vec(&manifest)?,
+        )?;
+        fs::write(
+            artifact_dir.join("Inkling-BF16.gguf"),
+            b"existing single artifact",
+        )?;
+        let before = files(&artifact_dir)?;
+        let output = run(&[
+            "hf-converted-artifact",
+            "preflight",
+            "--artifact-dir",
+            artifact_dir.to_str().ok_or("non-UTF8 fixture")?,
+        ])?;
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("invalid expected_splits"));
+        assert_eq!(files(&artifact_dir)?, before);
+    }
+    Ok(())
+}
