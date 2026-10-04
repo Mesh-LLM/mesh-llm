@@ -7,6 +7,26 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
+async fn completed_exchange_events(host: &LiveHost, count: usize) -> Vec<serde_json::Value> {
+    // Client EOF can precede the independent observer's terminal callback.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let events = host.events();
+            if events
+                .iter()
+                .filter(|event| event["phase"] == "exchange_finished")
+                .count()
+                >= count
+            {
+                return events;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("observer must publish a terminal callback after QUIC client EOF")
+}
+
 async fn quic_request(host: &LiveHost, body: &[u8]) -> Vec<u8> {
     let caller = Box::pin(Node::new_for_tests(NodeRole::Worker))
         .await
@@ -76,7 +96,7 @@ async fn installed_lifecycle_quic_ingress_delivers_real_stream_and_denies_before
         String::from_utf8_lossy(&response)
     );
     assert_eq!(host.requests.lock().await.len(), 1);
-    let events = host.events();
+    let events = completed_exchange_events(&host, 1).await;
     let received = events
         .iter()
         .find(|event| event["phase"] == "request_received")
@@ -109,7 +129,7 @@ async fn installed_lifecycle_quic_ingress_delivers_real_stream_and_denies_before
         1,
         "denied QUIC request reached backend"
     );
-    let events = host.events();
+    let events = completed_exchange_events(&host, 2).await;
     assert_eq!(
         events
             .iter()
