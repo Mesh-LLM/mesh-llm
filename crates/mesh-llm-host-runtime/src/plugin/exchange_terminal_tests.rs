@@ -86,3 +86,69 @@ async fn drop_terminal_uses_final_receipt_and_late_emission_state() {
     peer.await.unwrap();
     manager.shutdown().await;
 }
+
+#[tokio::test]
+async fn failed_denial_write_terminal_preserves_cancelled_delivery_and_exact_empty_prefix() {
+    use crate::network::{openai::client_stream::ClientStream, proxy::send_error_observed};
+    use tokio::net::{TcpListener, TcpStream};
+    for denied in [false, true] {
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        let manager = PluginManager::start(
+            &ResolvedPlugins {
+                externals: Vec::new(),
+                inactive: Vec::new(),
+            },
+            PluginHostMode {
+                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+            },
+            tx,
+        )
+        .await
+        .unwrap();
+        let (mut session, _) = ExchangeSession::begin(
+            &manager,
+            request_event(
+                "failed-denial".into(),
+                "chat_completions",
+                "POST",
+                "/v1/chat/completions",
+                b"{}",
+                Default::default(),
+                false,
+            ),
+        )
+        .await;
+        {
+            let mut emission = session.emission.lock().unwrap();
+            emission.denied = denied;
+            emission.required_failure = !denied;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut writer, _) = listener.accept().await.unwrap();
+        writer.shutdown().await.unwrap();
+        let stream = ClientStream::from(writer).with_wire_bytes_observer(session.observer());
+        let written = send_error_observed(
+            stream,
+            if denied { 403 } else { 503 },
+            "rejected",
+            crate::logging::OpenAiLifecycleAttachment::unowned().route_observer(),
+        )
+        .await;
+        assert!(written.is_err());
+        session.observer().execution_outcome("client_cancelled");
+        let event = session.final_terminal_event("client_cancelled").await;
+        assert_eq!(event["execution_outcome"], "client_cancelled");
+        assert_eq!(event["response_wire_commitment"]["byte_count"], 0);
+        assert_eq!(
+            event["response_wire_commitment"]["sha256"],
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert!(!event["response_wire_commitment"]["incomplete"].is_null());
+        assert_eq!(event["any_response_bytes_emitted"], false);
+        session.finish("client_cancelled").await;
+        manager.shutdown().await;
+    }
+}

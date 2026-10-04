@@ -9,14 +9,14 @@ not acceptance proof.
 Fresh focused checks passed: 229 config tests, 57 plugin library tests, 15
 identity tests, and 292 frontend tests. Earlier checks passed for unchanged
 package-manager code (57 tests), Skippy (877 passed, five preexisting ignored),
-and UI (1,835 tests). The final host unit suite passed 3,959 tests with 27
+and UI (1,835 tests). The final host unit suite passed 3,961 tests with 27
 ignored after the review fixes. All 16 packaged installed conformance
 tests and both authenticated side-stream receiver tests passed in the final
 run. Wire-byte framing/digest tests passed independently.
 Warnings-denied all-target Clippy with default features disabled passed for
 the seven affected crates before the review fixes; host, frontend, and plugin
 Clippy passed again after those fixes, with a final host rerun after the
-cancellation-safe owner apply. Local `ci-validate` completed 1,944 tests successfully
+startup owner-grant coordination and failed denial-response delivery. Local `ci-validate` completed 1,944 tests successfully
 with 15 expected skips and passed its repository consistency checks after the
 inventory correction.
 Formatting, Justfile, and diff checks passed.
@@ -31,7 +31,7 @@ alone do not establish those results.
 | Stable denial OpenAI error | Raw/typed ingress admission, deny-wins result | Host unit suite and installed denial/error-shape fixtures passed |
 | Allow preserves request bytes | Read-only decisions; exact body side streams | Installed backend byte recorder and independent receipt checks passed |
 | Effective request and selected route | Raw selected admission; typed prepared admission after defaults; prepared pipeline/virtual dispatch | Prepared denial regression and installed planner/strong/virtual dispatch checks passed |
-| Terminal outcomes | Shared host observation and frontend terminal guards | Host/frontend/Skippy suites and installed success/invalid/deny/error/timeout/cancel fixtures passed; focused final exhaustion regression passed |
+| Terminal outcomes | Shared host observation and frontend terminal guards | Host/frontend/Skippy suites and installed success/invalid/deny/error/timeout/cancel fixtures passed; focused exhaustion and actual failed-denial-write regressions passed |
 | Independent byte digests | Final emitter SHA-256, entity framing observer | Wire vectors, installed backend/client comparisons, and independent receiver receipt checks passed |
 | Live streaming, no reorder or rewrite | Ordered bounded copies; authenticated raw byte side streams; gated backend tail | Receiver tests and installed client-frame/observer-progress checks before tail release passed |
 | Overflow/disconnect incomplete | Observer queue and completeness flags; independent healthy recipient | Host unit suite and installed overflow/disconnect isolation fixtures passed |

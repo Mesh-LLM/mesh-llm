@@ -234,7 +234,7 @@ async fn begin_exchange(
         .with_wire_bytes_observer(session.observer())
         .with_response_metadata(result.headers.clone());
     if let Some(status) = result.error_status() {
-        let _ = proxy::send_error_observed(
+        let written = proxy::send_error_observed(
             stream,
             status,
             "OpenAI plugin admission rejected the exchange",
@@ -242,21 +242,28 @@ async fn begin_exchange(
         )
         .await;
         proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
-        session
-            .finish(if result.denied {
-                "policy_denied"
-            } else {
-                "internal_hook_failure"
-            })
-            .await;
-        lifecycle.terminal(terminal_outcome_for_dispatch(if result.denied {
-            proxy::RouteDispatchOutcome::PolicyDenied
-        } else {
-            proxy::RouteDispatchOutcome::RequiredHookFailed
-        }));
+        let outcome = rejection_delivery_outcome(result.denied, written);
+        if matches!(outcome, proxy::RouteDispatchOutcome::Dropped(_)) {
+            session.observer().execution_outcome("client_cancelled");
+        }
+        session.finish(exchange_outcome(outcome)).await;
+        lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
         return Err(());
     }
     Ok((stream, Some(session)))
+}
+
+fn rejection_delivery_outcome(
+    denied: bool,
+    written: std::io::Result<()>,
+) -> proxy::RouteDispatchOutcome {
+    if written.is_err() {
+        proxy::RouteDispatchOutcome::Dropped("plugin_admission_response_write_failed")
+    } else if denied {
+        proxy::RouteDispatchOutcome::PolicyDenied
+    } else {
+        proxy::RouteDispatchOutcome::RequiredHookFailed
+    }
 }
 
 async fn finish_exchange(
@@ -313,6 +320,60 @@ fn exchange_outcome(outcome: proxy::RouteDispatchOutcome) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_admission_error_write_records_one_dropped_core_terminal() {
+        use crate::logging::{LoggingService, RawMeshLifecycleOwners, RawMeshRequestLifecycle};
+        use std::sync::Arc;
+        use tokio::{
+            io::AsyncWriteExt,
+            net::{TcpListener, TcpStream},
+        };
+        for denied in [false, true] {
+            let service = Arc::new(LoggingService::new_disabled(Default::default()));
+            let request_id = openai_frontend::generate_request_id();
+            let parent = RawMeshRequestLifecycle::register(
+                service.clone(),
+                Arc::new(RawMeshLifecycleOwners::default()),
+                request_id,
+            )
+            .unwrap();
+            let mut lifecycle = OpenAiLifecycleAttachment::new(Some(parent));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let _client = TcpStream::connect(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.shutdown().await.unwrap();
+            let written = proxy::send_error_observed(
+                stream.into(),
+                if denied { 403 } else { 503 },
+                "rejected",
+                lifecycle.route_observer(),
+            )
+            .await;
+            assert!(
+                written.is_err(),
+                "locally shut down socket cannot deliver denial"
+            );
+            let outcome = rejection_delivery_outcome(denied, written);
+            assert_eq!(exchange_outcome(outcome), "client_cancelled");
+            lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
+            drop(lifecycle);
+            let records = service.bus_ref().replay_window().records;
+            assert_eq!(
+                records
+                    .iter()
+                    .filter(|record| record.entry.payload.contains("\"type\":\"dropped\""))
+                    .count(),
+                1
+            );
+            assert!(records.iter().all(|record| {
+                !record.entry.payload.contains("\"type\":\"rejected\"")
+                    && !record.entry.payload.contains("\"type\":\"failed\"")
+            }));
+        }
+    }
     #[test]
     fn enriched_error_responses_preserve_validation_and_timeout_outcomes() {
         for (status, expected) in [

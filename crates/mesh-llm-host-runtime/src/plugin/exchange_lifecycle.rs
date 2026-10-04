@@ -729,7 +729,12 @@ impl ExchangeSession {
         event["phase"] = json!("exchange_finished");
         event["ingress_observation_point"] = event["observation_point"].clone();
         event["observation_point"] = json!("client_egress");
-        event["execution_outcome"] = json!(if emission.denied {
+        event["execution_outcome"] = json!(if matches!(
+            emission.execution_outcome.as_deref(),
+            Some("client_cancelled" | "transport_error")
+        ) {
+            emission.execution_outcome.as_deref().unwrap()
+        } else if emission.denied {
             "policy_denied"
         } else if emission.required_failure {
             "internal_hook_failure"
