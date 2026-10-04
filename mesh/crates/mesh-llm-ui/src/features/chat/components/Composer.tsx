@@ -1,9 +1,14 @@
-import { useCallback, useRef, type Ref } from 'react'
+import { useCallback, useRef, type ClipboardEvent, type Ref } from 'react'
 import { Code2, ListEnd, MessageSquareX, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
+import { validateAttachmentFile } from '@/lib/attachments'
 import { cn } from '@/lib/cn'
 
 type ComposerProcessingStage = 'downloading' | 'starting' | 'processing'
+
+function pastedImageFiles(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
+  return Array.from(event.clipboardData?.files ?? []).filter((file) => validateAttachmentFile(file, 'image') === null)
+}
 
 type ComposerProps = {
   value: string
@@ -124,6 +129,15 @@ export function Composer({
         value={value}
         style={{ minHeight: 88, fontFamily: 'var(--font-sans)' }}
         onChange={(event) => onChange(event.target.value)}
+        onPaste={(event) => {
+          if (!onAttach) return
+
+          const images = pastedImageFiles(event)
+          if (images.length === 0) return
+
+          event.preventDefault()
+          onAttach(images)
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && isStreaming && onStop) {
             event.preventDefault()
