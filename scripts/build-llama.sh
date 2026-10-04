@@ -267,10 +267,28 @@ fi
 # producer-local workspace path.
 if [[ "$LLAMA_LINK_MODE" == "static" ]]; then
   PREFIX_MAP_FLAGS="-ffile-prefix-map=$ROOT=/mesh-llm -fdebug-prefix-map=$ROOT=/mesh-llm -fmacro-prefix-map=$ROOT=/mesh-llm"
-  CMAKE_ARGS+=(
-    "-DCMAKE_C_FLAGS=$PREFIX_MAP_FLAGS"
-    "-DCMAKE_CXX_FLAGS=$PREFIX_MAP_FLAGS"
-  )
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      # Setting CMAKE_<LANG>_FLAGS replaces CMake's platform defaults, which
+      # for MSVC carry /EHsc: without it C++ exceptions do not unwind (C4530)
+      # and the Skippy probes abort with 0xc0000409. Seed the _INIT values so
+      # CMake appends its defaults, and drop the cached flags so an existing
+      # build directory picks them up. MSVC ignores the GCC prefix-map flags
+      # (D9002); MinGW still applies them.
+      CMAKE_ARGS+=(
+        -UCMAKE_C_FLAGS
+        -UCMAKE_CXX_FLAGS
+        "-DCMAKE_C_FLAGS_INIT=$PREFIX_MAP_FLAGS"
+        "-DCMAKE_CXX_FLAGS_INIT=$PREFIX_MAP_FLAGS"
+      )
+      ;;
+    *)
+      CMAKE_ARGS+=(
+        "-DCMAKE_C_FLAGS=$PREFIX_MAP_FLAGS"
+        "-DCMAKE_CXX_FLAGS=$PREFIX_MAP_FLAGS"
+      )
+      ;;
+  esac
 fi
 
 SELECTED_CMAKE_GENERATOR="Unix Makefiles"
