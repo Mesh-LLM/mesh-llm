@@ -844,15 +844,6 @@
       "required": false
     },
     {
-      "classification": "generic canary policy test",
-      "deletion_condition": "Manifest policy and trusted-code boundaries tested in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_llama_canary_agent_manifest_policy.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation/automation tests",
-      "required": true
-    },
-    {
       "classification": "generic canary workflow test",
       "deletion_condition": "Repair guards and admission contract tests migrated.",
       "exception": null,
@@ -1150,15 +1141,6 @@
       "required": true
     },
     {
-      "classification": "trusted canary agent policy",
-      "deletion_condition": "Port generic validation and preserve trusted-source/candidate restrictions.",
-      "exception": null,
-      "path": "scripts/validate-llama-canary-agent-manifests.py",
-      "phase": 5,
-      "replacement_owner": "tools/xtask ci_validation/automation",
-      "required": false
-    },
-    {
       "classification": "retained Python SDK packaging component",
       "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
       "exception": "Python SDK Hatch wheel hook verifies packaged native bridge presence; no SDK isolation qualification claimed.",
@@ -1368,7 +1350,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 136,
+  "tracked_file_count": 134,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -9541,6 +9523,63 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/selected-ref-retirement-coverage.json",
       "sha256": "3f5a0a00be12c54e7dcce8e9ab0cea0a2fe826c6f99ffe106c02d261323c1334"
+    }
+  },
+  "manifest_policy_helper_and_partial_repair_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 134,
+    "core_modules_after": 64,
+    "required_targets": 108,
+    "durable_coverage": {
+      "path": "ci/automation-migration/manifest-policy-retirement-coverage.json",
+      "sha256": "881f74d73321e0c96773a0a799363d730a7ca6512bf091bdec0035dffb1fe48c"
+    },
+    "current_test_tree": {
+      "sha256": "146c4b39859e30c2c93518339a8e607fb286e1194a7b8db2d78fa0bf254aac7c",
+      "paths": 57
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "a14c84805159c712e094307c7e72dd7bb098e697f30ddf69e3cfeb311330eb35",
+      "roster_line": 24,
+      "count": 64
+    },
+    "supersedes": "Earlier retained legacy helper/importer and test snapshots are historical after this activation.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/manifest-policy-retirement-postimage-focused-receipts.json",
+        "sha256": "8d713daed2bd5d134bccee74736e866cad6bcc7496d03621664551dd9e8ac5dd"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/manifest-policy-retirement-postimage-receipts.json",
+        "sha256": "e2e0d077eef6dfecc97c0fa8a0e435d3afdbb922b6b8ed329193bc9c582a7618"
+      },
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/manifest-policy-retirement-postimage-normal.log",
+        "sha256": "b2be68c32277d7f14be2afcb884d06c2b062d533dd076d41c20feaf118f8e047",
+        "targets": 109,
+        "passed": 4290,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 972,
+          "passed": 958,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 349.68
+        }
+      },
+      "original_intent_scope": "All eight standalone and 23 original mixed legacy methods passed before retirement. Five actual Rust policy groups, six actual maintained Bash/Git guard groups and one selector group covering all four actual caller modes passed. Twenty-one unrelated mixed methods remain and pass.",
+      "limits": "Manifest-policy helper, standalone fixture and two covered mixed methods retired; twenty-one unrelated mixed methods remain required. Windows native selection, product/runtime/model/SDK/other-platform and hosted/protected acceptance remain open."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/manifest-policy-retirement-coverage.json",
+      "sha256": "d02bb2db824afa80a1093fc998916329020e14851707a582b024ebbe3463d1ef"
     }
   }
 }
