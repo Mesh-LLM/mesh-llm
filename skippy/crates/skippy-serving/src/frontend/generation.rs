@@ -5,6 +5,7 @@ mod incremental_text;
 mod parsing;
 mod persistent_lanes;
 mod queue;
+mod request_defaults;
 mod server;
 mod streaming;
 mod timeouts;
@@ -13,11 +14,12 @@ mod types;
 mod workload;
 
 pub use cache_hints::{CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS};
-pub(crate) use server::serve_embedded_openai_with_scheduler;
-pub use server::{
-    EmbeddedOpenAiArgs, EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults, EmbeddedOpenAiRouter,
-    EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
+pub use request_defaults::{
+    EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
+    EmbeddedReasoningFormat,
 };
+pub(crate) use server::serve_embedded_openai_with_scheduler;
+pub use server::{EmbeddedOpenAiArgs, EmbeddedOpenAiBackend, EmbeddedOpenAiRouter};
 pub use server::{
     embedded_openai_backend, embedded_openai_router, serve_embedded_openai,
     serve_embedded_openai_with_shutdown, serve_openai_backend_with_shutdown,

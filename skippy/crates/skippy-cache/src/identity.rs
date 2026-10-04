@@ -1059,6 +1059,7 @@ mod identity_stability_tests {
         let native = config_with_topology("topology-a");
         let cachegen = StageConfig {
             kv_cache: Some(skippy_protocol::StageKvCacheConfig {
+                exact_max_bytes: None,
                 mode: skippy_protocol::StageKvCacheMode::LookupRecord,
                 payload: skippy_protocol::StageKvCachePayload::KvRecurrent,
                 max_entries: 64,

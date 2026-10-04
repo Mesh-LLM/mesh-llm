@@ -46,6 +46,7 @@ impl FamilyPolicy {
         let max_bytes = derive_stage_cache_max_bytes(config, package_meta).unwrap_or(0);
         let bounded_entries = derive_max_entries_from_kv_cells(config, min_tokens, max_entries);
         Some(StageKvCacheConfig {
+            exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
             // The host only requests automatic selection. The server resolves
             // the concrete payload after llama.cpp has loaded and classified

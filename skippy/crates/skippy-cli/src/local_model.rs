@@ -10,7 +10,10 @@ use crate::local_resource_planning::{LocalResourcePlanningInput, plan_local_reso
 pub(crate) fn prepare_openai_stage(args: &ServeOpenAiArgs) -> Result<StageConfig> {
     match (&args.config, &args.model_path) {
         (Some(path), None) => {
-            load_json(path).with_context(|| format!("load stage config {}", path.display()))
+            let mut config =
+                load_json(path).with_context(|| format!("load stage config {}", path.display()))?;
+            args.settings.apply_stage(&mut config)?;
+            Ok(config)
         }
         (None, Some(path)) => {
             // Preserve the final path component so strict source verification
@@ -34,6 +37,28 @@ pub(crate) fn prepare_openai_stage(args: &ServeOpenAiArgs) -> Result<StageConfig
             options.generation_concurrency = args
                 .generation_concurrency
                 .unwrap_or(options.generation_concurrency);
+            let patch = args.settings.stage_patch()?;
+            if let Some(value) = patch
+                .get("cache_type_k")
+                .and_then(serde_json::Value::as_str)
+            {
+                options.cache_type_k = value.into();
+            }
+            if let Some(value) = patch
+                .get("cache_type_v")
+                .and_then(serde_json::Value::as_str)
+            {
+                options.cache_type_v = value.into();
+            }
+            options.kv_offload = patch.get("kv_offload").and_then(serde_json::Value::as_bool);
+            options.selected_device = patch
+                .get("selected_device")
+                .map(|value| serde_json::from_value(value.clone()))
+                .transpose()?;
+            skippy_runtime::parse_cache_type(&options.cache_type_k)?;
+            skippy_runtime::parse_cache_type(&options.cache_type_v)?;
+            options.flash_attn_type =
+                skippy_api::kv_cache::effective_flash_attention(&options.cache_type_v);
             options.checkpoint_quantization = args.checkpoint_quantization.clone();
             options.native_mtp_enabled = skippy_model_artifact::gguf::supports_native_mtp(&path);
             options.checkpoint_imatrix = args
@@ -63,6 +88,11 @@ pub(crate) fn prepare_openai_stage(args: &ServeOpenAiArgs) -> Result<StageConfig
                 model_bytes: identity.source_model_bytes,
                 projector_path: options.projector_path.as_deref(),
                 n_gpu_layers: options.n_gpu_layers,
+                kv_offload: options.kv_offload,
+                selected_device: options
+                    .selected_device
+                    .as_ref()
+                    .map(|device| device.backend_device.as_str()),
                 ctx_size_override: args.ctx_size,
                 parallel_override: args.generation_concurrency,
                 cache_type_k: &options.cache_type_k,
@@ -74,11 +104,13 @@ pub(crate) fn prepare_openai_stage(args: &ServeOpenAiArgs) -> Result<StageConfig
             // Load from the verified source locator (including managed multipart
             // views), not from an independently resolved input path.
             options.model_path = identity.source_model_path.clone();
-            skippy_api::single_stage_config(
+            let mut config = skippy_api::single_stage_config(
                 &options,
                 identity.into(),
                 format!("skippy-{}", uuid::Uuid::new_v4()),
-            )
+            )?;
+            args.settings.apply_stage(&mut config)?;
+            Ok(config)
         }
         _ => anyhow::bail!("provide exactly one of --config or --model-path"),
     }

@@ -1277,6 +1277,7 @@ mod tests {
             ctx_size: 256,
             lane_count: 1,
             kv_cache: Some(skippy_protocol::StageKvCacheConfig {
+                exact_max_bytes: None,
                 mode: skippy_protocol::StageKvCacheMode::LookupRecord,
                 payload: skippy_protocol::StageKvCachePayload::ResidentKv,
                 max_entries: 8,
@@ -1356,6 +1357,7 @@ mod tests {
             ctx_size: 256,
             lane_count: 1,
             kv_cache: Some(skippy_protocol::StageKvCacheConfig {
+                exact_max_bytes: None,
                 mode: skippy_protocol::StageKvCacheMode::LookupRecord,
                 payload: skippy_protocol::StageKvCachePayload::ResidentKv,
                 max_entries: 8,

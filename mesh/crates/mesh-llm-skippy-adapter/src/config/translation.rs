@@ -472,6 +472,7 @@ impl ResolvedSkippyConfig {
         let mut resolved = match &self.model_fit.prefix_cache {
             ResolvedStageKvCache::FamilyDefault => family_default,
             ResolvedStageKvCache::Disabled => Some(StageKvCacheConfig {
+                exact_max_bytes: None,
                 mode: StageKvCacheMode::Disabled,
                 payload: StageKvCachePayload::Auto,
                 max_entries: 0,
@@ -484,6 +485,7 @@ impl ResolvedSkippyConfig {
             }),
             ResolvedStageKvCache::Explicit(template) => {
                 let mut cache = family_default.unwrap_or(StageKvCacheConfig {
+                    exact_max_bytes: None,
                     mode: template.mode.clone(),
                     payload: StageKvCachePayload::Auto,
                     max_entries: 128,

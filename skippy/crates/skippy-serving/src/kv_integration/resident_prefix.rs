@@ -848,6 +848,7 @@ mod proactive_eviction_tests {
             ctx_size: 10,
             lane_count: 1,
             kv_cache: Some(StageKvCacheConfig {
+                exact_max_bytes: None,
                 mode: StageKvCacheMode::LookupRecord,
                 payload: StageKvCachePayload::ResidentKv,
                 max_entries: 4,

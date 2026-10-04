@@ -30,6 +30,7 @@ impl LocalDiskCacheOptions {
 
 /// Prepared local OpenAI serving options. Model acquisition and argument parsing belong to callers.
 pub struct LocalOpenAiOptions {
+    pub tuning: skippy_serving::settings::ServingTuning,
     pub config: StageConfig,
     pub topology: Option<StageTopology>,
     pub speculative: Option<SpeculativeDecodeConfig>,
@@ -57,7 +58,8 @@ pub struct LocalOpenAiOptions {
 }
 
 impl LocalOpenAiOptions {
-    fn into_request(self) -> Result<(SocketAddr, ModelLoadRequest)> {
+    pub fn resolved_openai_options(&self) -> Result<OpenAiOptions> {
+        self.tuning.validate()?;
         skippy_config::validate_config(&self.config, self.topology.as_ref())?;
         if self.config.downstream.is_some() {
             bail!(
@@ -85,12 +87,15 @@ impl LocalOpenAiOptions {
         }
         let mut openai = OpenAiOptions::direct_single_stage_defaults(
             self.model_id
+                .clone()
                 .unwrap_or_else(|| self.config.model_id.clone()),
             self.default_max_tokens,
             concurrency,
             self.config.native_mtp_enabled,
         );
         if self.speculative.is_none()
+            && self.tuning.draft_model_path.is_none()
+            && self.tuning.native_mtp_draft_model_path.is_none()
             && let Some(path) = self
                 .config
                 .source_model_path
@@ -105,18 +110,50 @@ impl LocalOpenAiOptions {
         });
         openai.generation_admission_timeout_secs = self.generation_admission_timeout_secs;
         openai.prefill_chunk_size = self.prefill_chunk_size;
-        openai.prefill_chunk_policy = self.prefill_chunk_policy;
-        openai.prefill_chunk_schedule = self.prefill_chunk_schedule;
+        openai.prefill_chunk_policy = self.prefill_chunk_policy.clone();
+        openai.prefill_chunk_schedule = self.prefill_chunk_schedule.clone();
         openai.prefill_adaptive_start = self.prefill_adaptive_start;
         openai.prefill_adaptive_step = self.prefill_adaptive_step;
         openai.prefill_adaptive_max = self.prefill_adaptive_max;
         openai.prefill_adaptive_target_ms = self.prefill_adaptive_target_ms;
-        if let Some(speculative) = self.speculative {
+        if let Some(speculative) = self.speculative.clone() {
             openai.native_mtp_enabled = speculative.native_mtp.enabled;
             openai.native_mtp_max_tokens = speculative.native_mtp.max_draft_tokens;
             openai.native_mtp_min_tokens = speculative.native_mtp.min_draft_tokens;
             openai.speculative = speculative;
         }
+        if let Some(path) = self.tuning.draft_model_path.clone() {
+            openai.draft_model_path = Some(path);
+            if self.speculative.is_none() {
+                openai.native_mtp_enabled = false;
+                openai.speculative.native_mtp.enabled = false;
+            }
+            openai.speculative_window = self
+                .tuning
+                .speculative_window
+                .unwrap_or(skippy_config::local_serving::DRAFT_MODEL_TOKENS);
+        }
+        if let Some(path) = self.tuning.native_mtp_draft_model_path.clone() {
+            openai.native_mtp_draft_model_path = Some(path);
+        }
+        if let Some(window) = self.tuning.speculative_window {
+            openai.speculative_window = window;
+        }
+        if let Some(adaptive) = self.tuning.adaptive_speculative_window {
+            openai.adaptive_speculative_window = adaptive;
+        }
+        openai.draft_n_gpu_layers = self.tuning.draft_n_gpu_layers;
+        openai.continuous_batching = self
+            .tuning
+            .continuous_batching
+            .unwrap_or(openai.continuous_batching);
+        openai.pipeline_decode_groups = self.tuning.pipeline_decode_groups;
+        openai.request_defaults = self.tuning.request_defaults.clone();
+        Ok(openai)
+    }
+
+    fn into_request(self) -> Result<(SocketAddr, ModelLoadRequest)> {
+        let openai = self.resolved_openai_options()?;
         let native_mtp_enabled = openai.native_mtp_enabled;
         let mtp_source = if native_mtp_enabled {
             if openai.native_mtp_draft_model_path.is_some() {
@@ -136,8 +173,8 @@ impl LocalOpenAiOptions {
                 runtime: EmbeddedRuntimeOptions {
                     config,
                     topology: self.topology,
-                    n_threads: None,
-                    n_threads_batch: None,
+                    n_threads: self.tuning.n_threads,
+                    n_threads_batch: self.tuning.n_threads_batch,
                     mtp_source,
                     metrics_otlp_grpc: self.metrics_otlp_grpc,
                     telemetry_queue_capacity: self.telemetry_queue_capacity,
@@ -154,9 +191,11 @@ impl LocalOpenAiOptions {
                 generation_observer: None,
                 kv_observer: None,
                 hook_policy: None,
-                guardrails: Some(skippy_serving::OpenAiGuardrailsConfig::for_standalone_mode(
-                    self.openai_guardrails,
-                )),
+                guardrails: self.tuning.guardrails.or_else(|| {
+                    Some(skippy_serving::OpenAiGuardrailsConfig::for_standalone_mode(
+                        self.openai_guardrails,
+                    ))
+                }),
                 guardrail_telemetry: None,
                 downstream_wire_condition: skippy_serving::binary_transport::WireCondition::new(
                     0.0, None,
@@ -185,6 +224,7 @@ mod tests {
 
     fn options() -> LocalOpenAiOptions {
         LocalOpenAiOptions {
+            tuning: Default::default(),
             config: serde_json::from_value(skippy_config::example_config()).unwrap(),
             topology: None,
             speculative: None,

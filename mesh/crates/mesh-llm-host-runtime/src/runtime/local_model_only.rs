@@ -525,6 +525,7 @@ mod tests {
         .with_ctx_size(512)
         .with_generation_concurrency(1)
         .with_kv_cache(Some(StageKvCacheConfig {
+            exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
             payload: StageKvCachePayload::Auto,
             max_entries: 8,

@@ -405,6 +405,10 @@ pub struct StageKvCacheConfig {
     /// Zero keeps L2 disabled.
     #[serde(default)]
     pub l2_max_bytes: u64,
+    /// Exact-state retention ceiling; None derives eight times max_bytes.
+    /// One indivisible snapshot may exceed it. Some(0) disables the ceiling.
+    #[serde(default)]
+    pub exact_max_bytes: Option<u64>,
     #[serde(default)]
     pub codec: StageKvCacheCodec,
     #[serde(default = "default_kv_cache_min_tokens")]

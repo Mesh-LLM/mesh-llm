@@ -23,6 +23,7 @@ skippy-cache = { path = "../skippy-cache", version = "0.77.0" }
 skippy-commands = { path = "../skippy-commands", version = "0.77.0" }
 skippy-model-hf = { path = "../skippy-model-hf", version = "0.77.0" }
 skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.77.0" }
+skippy-inference-api = { path = "../skippy-inference-api", version = "0.77.0" }
 skippy-config = { path = "../skippy-config", version = "0.77.0" }
 skippy-coordinator = { path = "../skippy-coordinator", version = "0.77.0" }
 skippy-events = { path = "../skippy-events", version = "0.77.0" }
@@ -31,7 +32,9 @@ skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.77.0
 skippy-runtime = { path = "../skippy-runtime", version = "0.77.0" }
 skippy-serving = { path = "../skippy-serving", version = "0.77.0" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde.workspace = true
 serde_json.workspace = true
+toml = "1"
 tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 uuid = { version = "1", features = ["v4"] }
 
