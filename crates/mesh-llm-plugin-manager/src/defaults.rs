@@ -31,6 +31,60 @@ pub struct DefaultPlugin {
     pub version: &'static str,
     /// `(target triple, lowercase hex SHA-256 of that release's archive)`.
     pub sha256: &'static [(&'static str, &'static str)],
+    /// The host surfaces this default may use. The host keeps only these from
+    /// the plugin's initialize answer and removes the rest.
+    pub allows: &'static [Surface],
+    /// The capability strings this default may declare; none by default.
+    pub capabilities: &'static [&'static str],
+}
+
+/// A host surface a plugin's initialize answer can claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    WebUi,
+    Config,
+    MeshChannels,
+    MeshEvents,
+    HttpRoutes,
+    /// MCP operations, resources, resource templates, prompts, completions.
+    McpOperations,
+    InferenceEndpoints,
+    /// Any endpoint that is not an inference endpoint.
+    OtherEndpoints,
+    VirtualModels,
+}
+
+impl Surface {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::WebUi => "web UI",
+            Self::Config => "config",
+            Self::MeshChannels => "mesh channels",
+            Self::MeshEvents => "mesh events",
+            Self::HttpRoutes => "HTTP routes",
+            Self::McpOperations => "MCP operations",
+            Self::InferenceEndpoints => "inference endpoints",
+            Self::OtherEndpoints => "other endpoints",
+            Self::VirtualModels => "virtual models",
+        }
+    }
+}
+
+/// What a default-managed plugin that is no longer on this build's list may
+/// still use: everything but serving models, until it is reviewed again.
+pub const UNLISTED_DEFAULT_ALLOWS: &[Surface] = &[
+    Surface::WebUi,
+    Surface::Config,
+    Surface::MeshChannels,
+    Surface::MeshEvents,
+    Surface::HttpRoutes,
+    Surface::McpOperations,
+    Surface::OtherEndpoints,
+];
+
+/// This build's entry for a default plugin, by its installed name.
+pub fn default_plugin(name: &str) -> Option<&'static DefaultPlugin> {
+    DEFAULT_PLUGINS.iter().find(|default| default.name == name)
 }
 
 impl DefaultPlugin {
@@ -66,6 +120,19 @@ pub const DEFAULT_PLUGINS: &[DefaultPlugin] = &[DefaultPlugin {
             "578c89497a61591907bd065d1b751a2c2cc2c545b62c105ce1aab96e3db647ac",
         ),
     ],
+    // An audit plugin: records, its page and its settings; it serves no model.
+    // Other (non-inference) endpoints stay allowed so a later release can
+    // declare an MCP endpoint without the host stripping it.
+    allows: &[
+        Surface::WebUi,
+        Surface::Config,
+        Surface::MeshChannels,
+        Surface::MeshEvents,
+        Surface::HttpRoutes,
+        Surface::McpOperations,
+        Surface::OtherEndpoints,
+    ],
+    capabilities: &[],
 }];
 
 /// What provisioning did with one default.
@@ -164,6 +231,8 @@ mod tests {
             LINUX,
             "abababababababababababababababababababababababababababababababab",
         )],
+        allows: &[Surface::WebUi],
+        capabilities: &[],
     };
 
     fn installed(version: &str, managed: bool, enabled: bool) -> InstalledPluginMetadata {
@@ -293,5 +362,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn no_shipped_default_may_serve_a_model() {
+        for default in DEFAULT_PLUGINS {
+            assert!(
+                !default.allows.contains(&Surface::InferenceEndpoints),
+                "{}",
+                default.name
+            );
+            assert!(
+                !default.allows.contains(&Surface::VirtualModels),
+                "{}",
+                default.name
+            );
+        }
+        assert!(!UNLISTED_DEFAULT_ALLOWS.contains(&Surface::InferenceEndpoints));
+        assert!(!UNLISTED_DEFAULT_ALLOWS.contains(&Surface::VirtualModels));
     }
 }

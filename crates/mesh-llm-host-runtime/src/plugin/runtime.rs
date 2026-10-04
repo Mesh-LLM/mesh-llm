@@ -12,6 +12,7 @@ use super::{
 use crate::runtime_data::RuntimeDataProducer;
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::{MeshVisibility, STARTUP_DISABLED_ERROR_CODE};
+use mesh_llm_plugin_manager::defaults::{Surface, UNLISTED_DEFAULT_ALLOWS, default_plugin};
 use rmcp::model::{InitializeRequestParams, ServerInfo};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -60,29 +61,77 @@ async fn stop_runtime(runtime: PluginRuntime, reason: &str) {
     }
 }
 
-/// Default-managed packages may provide audit, mesh, event, and web UI
-/// surfaces, but they cannot register as an inference provider. Filter the
-/// untrusted plugin declaration before any host surface publishes it.
-fn restrict_default_inference(init: &mut proto::InitializeResponse) -> bool {
-    fn allowed(capability: &str) -> bool {
-        capability != "admission_policy.v1"
-            && !capability.starts_with("endpoint:inference")
-            && !capability.starts_with("inference.")
-    }
-    let before_init = init.capabilities.len();
-    init.capabilities.retain(|capability| allowed(capability));
-    let mut removed = init.capabilities.len() != before_init;
+/// Keep only what a default-managed plugin's entry allows from its initialize
+/// answer: the host surfaces in `allows`, the capability strings in
+/// `capabilities`. Filter the untrusted plugin declaration before any host
+/// surface publishes it. Returns the names of what was removed.
+fn restrict_default_plugin(
+    init: &mut proto::InitializeResponse,
+    allows: &[Surface],
+    capabilities: &[&str],
+) -> Vec<&'static str> {
+    let may = |surface: Surface| allows.contains(&surface);
+    let keep_capability = |capability: &String| capabilities.contains(&capability.as_str());
+    let mut removed = Vec::new();
+    let before = init.capabilities.len();
+    init.capabilities.retain(keep_capability);
+    let mut capabilities_removed = init.capabilities.len() != before;
     if let Some(manifest) = init.manifest.as_mut() {
-        let before_capabilities = manifest.capabilities.len();
-        manifest
-            .capabilities
-            .retain(|capability| allowed(capability));
-        removed |= manifest.capabilities.len() != before_capabilities;
-        let before_endpoints = manifest.endpoints.len();
-        manifest.endpoints.retain(|endpoint| {
-            proto::EndpointKind::try_from(endpoint.kind) != Ok(proto::EndpointKind::Inference)
-        });
-        removed |= manifest.endpoints.len() != before_endpoints;
+        let before = manifest.capabilities.len();
+        manifest.capabilities.retain(keep_capability);
+        capabilities_removed |= manifest.capabilities.len() != before;
+        if !may(Surface::WebUi) && manifest.web_ui.take().is_some() {
+            removed.push(Surface::WebUi.name());
+        }
+        if !may(Surface::Config) && manifest.config_schema.take().is_some() {
+            removed.push(Surface::Config.name());
+        }
+        if !may(Surface::MeshChannels) && !manifest.mesh_channels.is_empty() {
+            manifest.mesh_channels.clear();
+            removed.push(Surface::MeshChannels.name());
+        }
+        if !may(Surface::MeshEvents) && !manifest.mesh_event_subscriptions.is_empty() {
+            manifest.mesh_event_subscriptions.clear();
+            removed.push(Surface::MeshEvents.name());
+        }
+        if !may(Surface::HttpRoutes) && !manifest.http_bindings.is_empty() {
+            manifest.http_bindings.clear();
+            removed.push(Surface::HttpRoutes.name());
+        }
+        if !may(Surface::McpOperations)
+            && !(manifest.operations.is_empty()
+                && manifest.resources.is_empty()
+                && manifest.resource_templates.is_empty()
+                && manifest.prompts.is_empty()
+                && manifest.completions.is_empty())
+        {
+            manifest.operations.clear();
+            manifest.resources.clear();
+            manifest.resource_templates.clear();
+            manifest.prompts.clear();
+            manifest.completions.clear();
+            removed.push(Surface::McpOperations.name());
+        }
+        let is_inference = |endpoint: &proto::EndpointManifest| {
+            proto::EndpointKind::try_from(endpoint.kind) == Ok(proto::EndpointKind::Inference)
+        };
+        if !may(Surface::InferenceEndpoints) && manifest.endpoints.iter().any(is_inference) {
+            manifest
+                .endpoints
+                .retain(|endpoint| !is_inference(endpoint));
+            removed.push(Surface::InferenceEndpoints.name());
+        }
+        if !may(Surface::OtherEndpoints) && manifest.endpoints.iter().any(|e| !is_inference(e)) {
+            manifest.endpoints.retain(is_inference);
+            removed.push(Surface::OtherEndpoints.name());
+        }
+        if !may(Surface::VirtualModels) && !manifest.virtual_models.is_empty() {
+            manifest.virtual_models.clear();
+            removed.push(Surface::VirtualModels.name());
+        }
+    }
+    if capabilities_removed {
+        removed.push("capabilities");
     }
     removed
 }
@@ -540,9 +589,19 @@ impl ExternalPlugin {
             .installed_metadata
             .as_ref()
             .is_some_and(|metadata| metadata.default_managed)
-            && restrict_default_inference(&mut init)
         {
-            tracing::warn!(plugin = %self.spec.name, "Ignored inference capability from default-managed plugin");
+            let (allows, capabilities) = default_plugin(&self.spec.name)
+                .map_or((UNLISTED_DEFAULT_ALLOWS, &[][..]), |default| {
+                    (default.allows, default.capabilities)
+                });
+            let removed = restrict_default_plugin(&mut init, allows, capabilities);
+            if !removed.is_empty() {
+                tracing::warn!(
+                    plugin = %self.spec.name,
+                    removed = %removed.join(", "),
+                    "Removed what this default plugin is not allowed to use"
+                );
+            }
         }
         *self.server_info.lock().await = Some(server_info.clone());
         *self.manifest.lock().await = init.manifest.clone();
@@ -1074,7 +1133,7 @@ pub(crate) mod tests {
     use super::*;
 
     #[test]
-    fn default_plugin_cannot_register_inference_but_keeps_other_endpoints() {
+    fn a_default_plugin_keeps_only_what_its_entry_allows() {
         let mut init = proto::InitializeResponse {
             capabilities: vec!["admission_policy.v1".into(), "audit.v1".into()],
             manifest: Some(proto::PluginManifest {
@@ -1089,17 +1148,57 @@ pub(crate) mod tests {
                     },
                 ],
                 capabilities: vec!["endpoint:inference".into(), "audit.v1".into()],
+                virtual_models: vec![proto::VirtualModelManifest::default()],
+                mesh_channels: vec![proto::MeshChannelManifest::default()],
+                web_ui: Some(proto::PluginWebUiManifest::default()),
                 ..Default::default()
             }),
             ..Default::default()
         };
-        assert!(restrict_default_inference(&mut init));
+        let removed = restrict_default_plugin(
+            &mut init,
+            &[
+                Surface::WebUi,
+                Surface::MeshChannels,
+                Surface::OtherEndpoints,
+            ],
+            &["audit.v1"],
+        );
+        assert_eq!(
+            removed,
+            ["inference endpoints", "virtual models", "capabilities"]
+        );
         assert_eq!(init.capabilities, ["audit.v1"]);
         let manifest = init.manifest.unwrap();
         assert_eq!(manifest.capabilities, ["audit.v1"]);
         assert_eq!(manifest.endpoints.len(), 1);
         assert_eq!(manifest.endpoints[0].kind, proto::EndpointKind::Mcp as i32);
+        assert!(
+            manifest.virtual_models.is_empty(),
+            "a default cannot list a model"
+        );
+        assert_eq!(manifest.mesh_channels.len(), 1);
+        assert!(manifest.web_ui.is_some());
     }
+
+    #[test]
+    fn a_default_within_its_allowlist_loses_nothing_and_warns_of_nothing() {
+        let mut init = proto::InitializeResponse {
+            manifest: Some(proto::PluginManifest {
+                mesh_channels: vec![proto::MeshChannelManifest::default()],
+                http_bindings: vec![proto::HttpBindingManifest::default()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let removed = restrict_default_plugin(
+            &mut init,
+            &[Surface::MeshChannels, Surface::HttpRoutes],
+            &[],
+        );
+        assert!(removed.is_empty());
+    }
+
     use crate::runtime_data::{
         PluginDataKey, PluginEndpointKey, RuntimeDataCollector, RuntimeDataSource,
     };

@@ -565,9 +565,12 @@ it rather than delete it. There is no separate offered-defaults state file.
 
 A default plugin that fails to start is optional: its failure is reported as
 an inactive plugin and does not abort node startup. A default-managed plugin
-cannot register an inference endpoint: the host removes inference endpoints
-and admission-policy capability claims from its initialization manifest before
-publishing routes. Its audit and web UI surfaces can still load.
+keeps only the surfaces its entry allows: before publishing routes, the host
+removes everything else from its initialization manifest and logs a warning
+naming each removed surface. No default entry allows inference endpoints or
+virtual models, so a default plugin cannot serve a model. A default-managed
+plugin that is no longer on this build's list keeps everything but serving
+models until it is reviewed again.
 
 `capsule-emit-mesh` keeps a signed record of each request this node serves, on
 the node's own disk. By default it keeps SHA-256 digests of the request and
