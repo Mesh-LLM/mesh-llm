@@ -366,28 +366,6 @@
       ]
     ],
     [
-      "scripts/tests/test_runtime_events_native_gate.py",
-      [
-        [
-          "fixture",
-          "scripts/ci-runtime-events-native-gate.sh",
-          "run_gate executes wrapper with stub cargo and model/bundle fixtures; callers check evidence success/rejection, not actual Rust integration test",
-          [
-            109
-          ]
-        ],
-        [
-          "fixture",
-          "restore-test-model action resolve-model Bash block",
-          "runs extracted step with synthetic manifest and GITHUB_OUTPUT for PR/main/manual cadence",
-          [
-            335,
-            371
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_workload_lane_execution.py",
       [
         [
@@ -1306,7 +1284,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "c9009bd9b751306709e6d325ddb26eab0a19acb09e5d1d41402ba5660175be59",
+  "observed_source_sha256": "5d5dcd91abf0ec12d59e1b463f7fd82bbc3f8d4569e1c1a3f068fc9a60e6819b",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9895,6 +9873,64 @@
     "previous_durable_coverage": {
       "path": "ci/automation-migration/snapshot-promotion-retirement-coverage.json",
       "sha256": "ebcb4208215a3ab2417b1eaa603917c14067001846a3d44bdc2f04e43e3d654f"
+    }
+  },
+  "runtime_event_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 120,
+    "core_modules_after": 57,
+    "required_xtask_targets": 108,
+    "required_component_targets": 2,
+    "durable_coverage": {
+      "path": "ci/automation-migration/runtime-events-retirement-coverage.json",
+      "sha256": "3fab2a5c67f967bbfa0bd24729087ae1e29bbab27691dba8e5cd660c310a0f9d"
+    },
+    "current_test_tree": {
+      "sha256": "5d5dcd91abf0ec12d59e1b463f7fd82bbc3f8d4569e1c1a3f068fc9a60e6819b",
+      "paths": 50
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "7000ff1665003eeca45b5ed626f74ceb6464f0f5e100df1ec2e28c42bd4ff259",
+      "roster_line": 24,
+      "count": 57
+    },
+    "supersedes": "Previous runtime-event Python ownership is historical; required native action/wrapper fixtures and workflow guards preserve its intentions.",
+    "previous_activation_status": "APPLIED_POSTIMAGE_UNQUALIFIED",
+    "root_postimage_qualification": {
+      "status": "PASS_LOCAL_POSTIMAGE",
+      "source_head": "9472229dbd86405d28ba9441b29a5a692fa92887",
+      "normal": {
+        "name": "normal",
+        "status": "PASS",
+        "exit_code": 0,
+        "log": ".omo/evidence/resume-20261002/runtime-events-retirement-postimage-v1-normal.log",
+        "sha256": "89250d13bbc908fe62a47dd43606bfd00af50bf87f38595a0664480d4a624c1a",
+        "targets": 111,
+        "passed": 4335,
+        "failed": 0,
+        "ignored": 2,
+        "legacy": {
+          "run": 843,
+          "passed": 829,
+          "failed": 0,
+          "skipped": 14,
+          "seconds": 350.313
+        }
+      },
+      "focused_receipts": {
+        "path": ".omo/evidence/resume-20261002/runtime-events-retirement-focused-v1-receipts.json",
+        "sha256": "e0683793a5947bcb4d3c3a6780c17d7aadab65f425ef893ce7aece14fc1a1d88"
+      },
+      "aggregate_receipts": {
+        "path": ".omo/evidence/resume-20261002/runtime-events-retirement-postimage-v1-receipts.json",
+        "sha256": "f6d1c1b1d89486cb0dd8648915bda630b7472e55d1dbbdd5567fe9defd9a5c4d"
+      },
+      "limits": "Current resolver action, native CLI, copied gate wrapper and structural workflow fixtures only; no actual native reporter/model/download, live platform/product/SDK or protected rollout qualification."
+    },
+    "previous_durable_coverage": {
+      "path": "ci/automation-migration/runtime-events-retirement-coverage.json",
+      "sha256": "f65713332ee6a4d9467c0e4e66db051c96231fd3ae7fd6970ac52a6cd7ac74d5"
     }
   }
 }

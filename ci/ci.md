@@ -1611,3 +1611,9 @@ embedded prepare failure propagation. The embedded layer-package job builds the
 promoter through `just snapshot-promoter-release-build`; existing optional HF
 SDK operations remain transitional. Local fixtures do not certify live HF jobs
 or publication.
+
+Runtime-event wrapper and current model-resolution action contracts are owned by
+the required native migration_lifecycle::runtime_events_gate tests and typed
+workflow guards. The Python contract module is retired together with its core
+roster entry after native caller and original-intent qualification. Finite
+fixtures do not establish live native reporter or model execution.
