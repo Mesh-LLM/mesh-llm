@@ -355,9 +355,7 @@ pub(super) async fn install_latest_bundle(
         )?;
         install_native_runtime_after_update(install_dir, release, &workspace).await;
         #[cfg(not(windows))]
-        if matches!(action, PostInstallAction::ExitAfterInstall) {
-            provision_default_plugins_after_update(install_dir);
-        }
+        provision_default_plugins_after_update(install_dir).await;
         Ok::<InstallOutcome, anyhow::Error>(install_outcome(action))
     }
     .await;
@@ -368,17 +366,46 @@ pub(super) async fn install_latest_bundle(
     result
 }
 
+/// The longest an update waits for default plugin provisioning before it goes
+/// on without it (each plugin's own install is already bounded at 60 seconds).
 #[cfg(not(windows))]
-fn provision_default_plugins_after_update(install_dir: &Path) {
-    let binary = install_dir.join(mesh_binary_name());
-    match std::process::Command::new(&binary)
-        .args(["plugins", "install-defaults"])
-        .status()
-    {
-        Ok(status) if status.success() => {}
-        Ok(status) => tracing::warn!(?status, "Default plugin provisioning after update failed"),
+const PROVISION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Provision the new binary's default plugins. Both `mesh-llm update` and
+/// `--auto-update` do, before any restart: a node that only ever auto-updates
+/// gets new defaults and reviewed pin bumps too, and starts with them.
+#[cfg(not(windows))]
+async fn provision_default_plugins_after_update(install_dir: &Path) {
+    let mut command = tokio::process::Command::new(install_dir.join(mesh_binary_name()));
+    command.args(["plugins", "install-defaults"]);
+    match run_with_deadline(command, PROVISION_DEADLINE).await {
+        Ok(Some(status)) if status.success() => {}
+        Ok(Some(status)) => {
+            tracing::warn!(?status, "Default plugin provisioning after update failed")
+        }
+        Ok(None) => tracing::warn!(
+            deadline = ?PROVISION_DEADLINE,
+            "Default plugin provisioning after update did not finish in time; it was stopped"
+        ),
         Err(error) => {
             tracing::warn!(%error, "Could not start default plugin provisioning after update")
+        }
+    }
+}
+
+/// Run `command` to completion, or kill it at `deadline`: `Ok(None)` then.
+/// Waits without blocking the async runtime.
+#[cfg(not(windows))]
+async fn run_with_deadline(
+    mut command: tokio::process::Command,
+    deadline: std::time::Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    let mut child = command.kill_on_drop(true).spawn()?;
+    match tokio::time::timeout(deadline, child.wait()).await {
+        Ok(status) => status.map(Some),
+        Err(_) => {
+            let _ = child.kill().await;
+            Ok(None)
         }
     }
 }
@@ -1141,15 +1168,15 @@ try {{
         $installed.Add($name) | Out-Null
     }}
 
-    if (-not $restartAfterUpdate) {{
-        try {{
-            & $exePath plugins install-defaults
-            if ($LASTEXITCODE -ne 0) {{
-                Write-Warning 'Default plugins could not be fully installed; MeshLLM was updated.'
-            }}
-        }} catch {{
-            Write-Warning "Default plugins could not be fully installed; MeshLLM was updated: $_"
+    # Before any restart, so an auto-updated node also gets new defaults and
+    # reviewed pin bumps, and starts with them.
+    try {{
+        & $exePath plugins install-defaults
+        if ($LASTEXITCODE -ne 0) {{
+            Write-Warning 'Default plugins could not be fully installed; MeshLLM was updated.'
         }}
+    }} catch {{
+        Write-Warning "Default plugins could not be fully installed; MeshLLM was updated: $_"
     }}
     if ($restartAfterUpdate) {{
         $env:MESH_LLM_SELF_UPDATE_ATTEMPTED = '1'
@@ -1252,6 +1279,58 @@ mod tests {
             name: name.into(),
             sha256: "a".repeat(64),
         }
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn provisioning_that_hangs_is_stopped_at_its_deadline() {
+        let mut slow = tokio::process::Command::new("sleep");
+        slow.arg("30");
+        let started = std::time::Instant::now();
+        // On a single-threaded runtime this other task only gets to run if the
+        // wait below yields instead of blocking the thread.
+        let ticked =
+            tokio::spawn(async { tokio::time::sleep(std::time::Duration::from_millis(50)).await });
+        let outcome = run_with_deadline(slow, std::time::Duration::from_millis(200))
+            .await
+            .unwrap();
+        assert!(outcome.is_none());
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert!(ticked.is_finished(), "the wait did not block the runtime");
+        let quick = tokio::process::Command::new("true");
+        assert!(
+            run_with_deadline(quick, std::time::Duration::from_secs(10))
+                .await
+                .unwrap()
+                .is_some_and(|status| status.success())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_updater_provisions_defaults_before_restarting() {
+        let dir = temp_dir("handoff-defaults");
+        let script = windows_update_script(
+            &dir.join("mesh-llm.exe"),
+            &dir,
+            &dir.join("ws"),
+            &dir.join("x"),
+            &dir.join("b"),
+            &[],
+            PostInstallAction::RestartCurrentProcess,
+        )
+        .unwrap();
+        let provision = script
+            .find("plugins install-defaults")
+            .expect("provisions defaults");
+        let restart = script
+            .find("$env:MESH_LLM_SELF_UPDATE_ATTEMPTED")
+            .expect("restarts");
+        assert!(
+            provision < restart,
+            "defaults are provisioned before the restart"
+        );
+        assert!(!script.contains("if (-not $restartAfterUpdate)"));
     }
 
     #[test]
