@@ -8,8 +8,18 @@ use std::path::Path;
 
 const SELECT: Legacy = Legacy::Heredoc("scripts/ci-prepare-native-runtime.sh", 2);
 const ABI: &str = "1.2.3";
-const MALFORMED: &str =
-    "native runtime compatibility output must be a JSON list or an object with a runtimes list\n";
+fn rejected(output: &std::process::Output, diagnostic: &str) {
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "rejection must not select an artifact"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 fn row(id: &str, backend: &str, supported: bool) -> Value {
     json!({"id": id, "backend": backend, "supported": supported})
@@ -64,7 +74,7 @@ fn selected(dir: &Path) -> String {
 }
 
 #[test]
-fn migration_prepared_inputs_sdk_runtime_accepts_catalog_and_legacy_reports() -> TestResult {
+fn migration_prepared_inputs_sdk_runtime_accepts_catalog_and_flat_reports() -> TestResult {
     let rows = json!([row("linux-cpu", "cpu", true)]);
     for report in [json!({"catalogs": {}, "runtimes": rows}), rows.clone()] {
         let scratch = Scratch::new("sdk-runtime")?;
@@ -84,38 +94,59 @@ fn migration_prepared_inputs_sdk_runtime_accepts_catalog_and_legacy_reports() ->
 
 #[test]
 fn migration_prepared_inputs_sdk_runtime_prefers_aliased_backend() -> TestResult {
-    let scratch = Scratch::new("sdk-runtime-alias")?;
-    bundle(
-        &scratch,
-        &[
-            ("cpu", "linux-cpu", json!(ABI)),
-            ("rocm", "linux-rocm", json!(ABI)),
-        ],
-    )?;
-    let report = json!([
-        row("linux-cpu", "cpu", true),
-        row("linux-rocm", "rocm", true)
-    ]);
-    let output = select_json(&scratch, "hip", &report)?;
-    assert_output(&output, 0, &selected(&scratch.join("bundle/rocm")), "");
+    for (alias, backend) in [("hip", "rocm"), ("cuda-blackwell", "cuda")] {
+        let scratch = Scratch::new("sdk-runtime-alias")?;
+        bundle(
+            &scratch,
+            &[
+                ("cpu", "linux-cpu", json!(ABI)),
+                ("accelerator", "linux-accelerator", json!(ABI)),
+            ],
+        )?;
+        let report = json!([
+            row("linux-cpu", "cpu", true),
+            row("linux-accelerator", backend, true)
+        ]);
+        let output = select_json(&scratch, alias, &report)?;
+        assert_output(
+            &output,
+            0,
+            &selected(&scratch.join("bundle/accelerator")),
+            "",
+        );
+    }
+    let scratch = Scratch::new("sdk-runtime-sole-accelerator")?;
+    bundle(&scratch, &[("", "linux-vulkan", json!(ABI))])?;
+    let report = json!([row("linux-vulkan", "vulkan", true)]);
+    assert_output(
+        &select_json(&scratch, "cpu", &report)?,
+        0,
+        &selected(&scratch.join("bundle")),
+        "",
+    );
     Ok(())
 }
 
 #[test]
 fn migration_prepared_inputs_sdk_runtime_rejects_malformed_reports() -> TestResult {
-    let rows_error = "native runtime compatibility rows must be JSON objects\n";
-    for (report, expected) in [
-        (json!({"runtimes": {}}), MALFORMED),
-        (json!({"catalogs": []}), MALFORMED),
-        (json!("runtimes"), MALFORMED),
-        (
-            json!([row("linux-cpu", "cpu", true), "linux-cpu"]),
-            rows_error,
-        ),
+    for report in [
+        json!({"runtimes": {}}),
+        json!({"catalogs": []}),
+        json!("runtimes"),
+        json!([row("linux-cpu", "cpu", true), "linux-cpu"]),
+        json!([{"id":null,"backend":"cpu","supported":true}]),
+        json!([{"id":"linux-cpu","backend":7,"supported":true}]),
+        json!([{"id":"linux-cpu","backend":"cpu","supported":1}]),
+        json!([{"id":"linux-cpu","backend":"cpu"}]),
+        // Unsupported rows still belong to the producer's typed report.
+        json!([row("linux-cpu","cpu",true),{"id":null,"backend":"cpu","supported":false}]),
     ] {
         let scratch = Scratch::new("sdk-runtime-malformed")?;
         bundle(&scratch, &[("linux-cpu", "linux-cpu", json!(ABI))])?;
-        assert_output(&select_json(&scratch, "cpu", &report)?, 1, "", expected);
+        rejected(
+            &select_json(&scratch, "cpu", &report)?,
+            "containing typed runtime rows",
+        );
     }
     let scratch = Scratch::new("sdk-runtime-json")?;
     bundle(&scratch, &[("linux-cpu", "linux-cpu", json!(ABI))])?;
@@ -130,8 +161,7 @@ fn migration_prepared_inputs_sdk_runtime_rejects_malformed_reports() -> TestResu
     let output = Case::same(&["sdk-runtime-select"], &args, SELECT)
         .status_only()
         .run(scratch.path())?;
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
+    rejected(&output, "containing typed runtime rows");
     Ok(())
 }
 
@@ -140,45 +170,49 @@ fn migration_prepared_inputs_sdk_runtime_requires_exactly_one_supported_row() ->
     let prefix =
         "expected exactly one compatible adjacent native runtime (preferred backend cpu); found";
     let two = json!([
-        {"id": null, "backend": 7, "supported": true},
-        {"backend": "vulkan", "supported": true},
-        {"id": "gone", "backend": "cpu", "supported": 1},
+        row("linux-vulkan", "vulkan", true),
+        row("linux-rocm", "rocm", true),
     ]);
     for (report, found) in [
         (json!([row("linux-cpu", "cpu", false)]), "none"),
-        (two, "None:7, <missing-id>:vulkan"),
+        (two, "linux-vulkan:vulkan, linux-rocm:rocm"),
+        (
+            json!([row("cpu-one", "cpu", true), row("cpu-two", "cpu", true)]),
+            "cpu-one:cpu, cpu-two:cpu",
+        ),
     ] {
         let scratch = Scratch::new("sdk-runtime-count")?;
         bundle(&scratch, &[("linux-cpu", "linux-cpu", json!(ABI))])?;
         let expected = format!("{prefix} {found}\n");
-        assert_output(&select_json(&scratch, "cpu", &report)?, 1, "", &expected);
+        rejected(&select_json(&scratch, "cpu", &report)?, expected.trim_end());
     }
     let scratch = Scratch::new("sdk-runtime-id")?;
     bundle(&scratch, &[])?;
     let output = select_json(&scratch, "cpu", &json!([row(" \t", "cpu", true)]))?;
-    assert_output(
-        &output,
-        1,
-        "",
-        "compatible native runtime is missing its id\n",
-    );
+    rejected(&output, "require nonempty id and backend strings");
     Ok(())
 }
 
 #[test]
 fn migration_prepared_inputs_sdk_runtime_rejects_abi_drift_and_missing_directory() -> TestResult {
     let report = json!([row("linux-cpu", "cpu", true)]);
-    for (abi, found) in [(json!("9.9.9"), "9.9.9"), (Value::Null, "None")] {
+    for (abi, message) in [
+        (
+            json!("9.9.9"),
+            format!("has Skippy ABI 9.9.9, expected {ABI}"),
+        ),
+        (Value::Null, "native runtime manifest is invalid".into()),
+    ] {
         let scratch = Scratch::new("sdk-runtime-abi")?;
         bundle(&scratch, &[("linux-cpu", "linux-cpu", abi)])?;
-        let expected =
-            format!("adjacent native runtime linux-cpu has Skippy ABI {found}, expected {ABI}\n");
-        assert_output(&select_json(&scratch, "cpu", &report)?, 1, "", &expected);
+        rejected(&select_json(&scratch, "cpu", &report)?, &message);
     }
     let scratch = Scratch::new("sdk-runtime-none")?;
     bundle(&scratch, &[("other", "linux-other", json!(ABI))])?;
-    let expected = "expected one adjacent artifact directory for runtime linux-cpu; found none\n";
-    assert_output(&select_json(&scratch, "cpu", &report)?, 1, "", expected);
+    rejected(
+        &select_json(&scratch, "cpu", &report)?,
+        "expected one adjacent artifact directory for runtime linux-cpu; found 0",
+    );
     let scratch = Scratch::new("sdk-runtime-two")?;
     bundle(
         &scratch,
@@ -187,13 +221,10 @@ fn migration_prepared_inputs_sdk_runtime_rejects_abi_drift_and_missing_directory
             ("b", "linux-cpu", json!(ABI)),
         ],
     )?;
-    let root = scratch.join("bundle");
-    let expected = format!(
-        "expected one adjacent artifact directory for runtime linux-cpu; found {}, {}\n",
-        root.display(),
-        root.join("b").display()
+    rejected(
+        &select_json(&scratch, "cpu", &report)?,
+        "expected one adjacent artifact directory for runtime linux-cpu; found 2",
     );
-    assert_output(&select_json(&scratch, "cpu", &report)?, 1, "", &expected);
     Ok(())
 }
 
@@ -210,6 +241,6 @@ fn migration_prepared_inputs_sdk_runtime_rejects_symlink_escape() -> TestResult 
         scratch.join("outside").display()
     );
     let output = select_json(&scratch, "cpu", &json!([row("linux-cpu", "cpu", true)]))?;
-    assert_output(&output, 1, "", &expected);
+    rejected(&output, expected.trim_end());
     Ok(())
 }
