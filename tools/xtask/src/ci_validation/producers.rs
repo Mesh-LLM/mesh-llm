@@ -1,3 +1,4 @@
+mod protected_runner_policy;
 use crate::command::{DynResult, ensure_contains, ensure_not_contains};
 
 pub(super) struct ProducerInvariantSources<'a> {
@@ -92,71 +93,16 @@ pub(super) fn check_producer_invariants(sources: &ProducerInvariantSources<'_>) 
         "cargo build",
         "composition must not compile",
     )?;
-    check_protected_reusable_runner_policy(sources.native_sdk, "native SDK reusable workflow")?;
-    check_protected_reusable_runner_policy(sources.static_abi, "static ABI reusable workflow")?;
+    protected_runner_policy::check(
+        sources.native_sdk,
+        "native SDK reusable workflow",
+        protected_runner_policy::Producer::NativeSdk,
+    )?;
+    protected_runner_policy::check(
+        sources.static_abi,
+        "static ABI reusable workflow",
+        protected_runner_policy::Producer::StaticAbi,
+    )?;
 
-    Ok(())
-}
-
-fn check_protected_reusable_runner_policy(workflow: &str, context: &str) -> DynResult<()> {
-    for (required, contract) in [
-        ("runner_size:", "bounded runner-size input"),
-        ("default: '8'", "bounded runner-size default"),
-        ("runner_policy:", "protected runner policy job"),
-        ("runs-on: ubuntu-24.04", "fixed hosted policy runner"),
-        (
-            "uses: ./.github/actions/select-ci-runners",
-            "central protected runner selector",
-        ),
-        (
-            "repository: ${{ github.repository }}",
-            "immutable repository context",
-        ),
-        (
-            "head_repository: ${{ github.event.pull_request.head.repo.full_name }}",
-            "same-repository PR head context",
-        ),
-        ("ref: ${{ github.ref }}", "immutable ref context"),
-        (
-            "original_event_name: ${{ inputs.original_event_name }}",
-            "protected original event context",
-        ),
-        (
-            "depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
-            "repository Depot gate",
-        ),
-        (
-            "depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}",
-            "repository PR Depot gate",
-        ),
-        (
-            "manual_use_depot: ${{ inputs.use_depot }}",
-            "typed main-dispatch canary flag",
-        ),
-        (
-            "runner_size must be one of: default, 4, 8, 16",
-            "bounded runner-size validation",
-        ),
-        (
-            "runs-on: ${{ needs.runner_policy.outputs.runner }}",
-            "derived producer runner",
-        ),
-        (
-            "allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}",
-            "derived Depot cache authority",
-        ),
-    ] {
-        ensure_contains(workflow, required, &format!("{context} {contract}"))?;
-    }
-    for (forbidden, contract) in [
-        ("inputs.runs_on", "caller-controlled runner label"),
-        (
-            "inputs.allow_depot_remote_cache",
-            "caller-controlled Depot cache authority",
-        ),
-        ("fromJson(inputs.runs_on)", "caller-controlled runner JSON"),
-    ] {
-        ensure_not_contains(workflow, forbidden, &format!("{context} {contract}"))?;
-    }
     Ok(())
 }
