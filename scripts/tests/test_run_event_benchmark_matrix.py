@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "run-event-benchmark-matrix.py"
 COMPARATOR_SCRIPT = ROOT / "scripts" / "compare-event-benchmark-matrix.py"
 RUST_OUTPUT_TYPES = (
-    ROOT / "crates" / "mesh-llm-commands" / "src" / "gpus" / "tune" / "output_types.rs"
+    ROOT / "mesh" / "crates" / "mesh-llm-commands" / "src" / "gpus" / "tune" / "output_types.rs"
 )
 
 
@@ -960,7 +960,7 @@ class HiddenSelectorWiringTests(unittest.TestCase):
 class LocalModelOnlyCliCompatibilityTests(unittest.TestCase):
     """`--local-model-only` rejects `--headless` at CLI validation
     (`validate_local_model_only_options` in
-    `crates/mesh-llm-host-runtime/src/runtime/local_model_only.rs`: "never
+    `mesh/crates/mesh-llm-host-runtime/src/runtime/local_model_only.rs`: "never
     starts a console; remove --headless") and never starts a console/
     management API at all ("does not start owner control or management
     APIs", same function) -- so `execute_trial`'s argv must never pass

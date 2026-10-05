@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def shell_function(script: str, name: str) -> str:
     """Load one top-level function verbatim, excluding the script's entrypoint."""
-    source = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+    source = (ROOT / "skippy" / "scripts" / script).read_text(encoding="utf-8")
     start = source.index(f"{name}() {{\n")
     end = source.index("\n}\n", start) + 3
     return source[start:end]
@@ -162,7 +162,7 @@ class WorkloadLaneExecutionTests(unittest.TestCase):
             binary_dir = root / "bin"
             binary_dir.mkdir()
             calls = root / "calls"
-            server = binary_dir / "skippy-server"
+            server = binary_dir / "skippy"
             server.write_text(
                 "#!/usr/bin/env bash\n"
                 "printf '%s\\n' \"$*\" >> \"$CALLS\"\n"
@@ -198,6 +198,12 @@ class WorkloadLaneExecutionTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             invocations = calls.read_text().splitlines()
             self.assertEqual(2, len(invocations))
+            self.assertTrue(
+                all(
+                    invocation.startswith("serve --config ")
+                    for invocation in invocations
+                )
+            )
             self.assertIn("127.0.0.1:41001", invocations[0])
             self.assertIn("127.0.0.1:41002", invocations[1])
             self.assertTrue((root / "server.log.attempt-1").exists())
@@ -211,7 +217,7 @@ class WorkloadLaneExecutionTests(unittest.TestCase):
             binary_dir = root / "bin"
             binary_dir.mkdir()
             calls = root / "calls"
-            server = binary_dir / "skippy-server"
+            server = binary_dir / "skippy"
             server.write_text(
                 "#!/usr/bin/env bash\n"
                 "printf '%s\\n' \"$*\" >> \"$CALLS\"\n"
@@ -243,7 +249,9 @@ class WorkloadLaneExecutionTests(unittest.TestCase):
                 text=True, check=False, timeout=5,
             )
             self.assertEqual(1, result.returncode)
-            self.assertEqual(1, len(calls.read_text().splitlines()))
+            invocations = calls.read_text().splitlines()
+            self.assertEqual(1, len(invocations))
+            self.assertTrue(invocations[0].startswith("serve --config "))
             self.assertIn("model initialization failed", (root / "server.log").read_text())
 
 

@@ -15,33 +15,33 @@ configuration UI, or an installed plugin's `config_schema`.
 
 Config settings are not just struct fields. A complete setting has:
 
-- A persisted TOML shape in `crates/mesh-llm-config/src/model.rs`.
-- Authoring/editor support in `crates/mesh-llm-config/src/authoring.rs` when
+- A persisted TOML shape in `mesh/crates/mesh-llm-config/src/model.rs`.
+- Authoring/editor support in `mesh/crates/mesh-llm-config/src/authoring.rs` when
   code needs to create or mutate it.
 - Built-in schema metadata in
-  `crates/mesh-llm-config/src/model/built_in_schema.rs` when it is a core
+  `mesh/crates/mesh-llm-config/src/model/built_in_schema.rs` when it is a core
   mesh-llm setting.
-- Validation diagnostics in `crates/mesh-llm-config/src/validate.rs`, with
+- Validation diagnostics in `mesh/crates/mesh-llm-config/src/validate.rs`, with
   stable `ConfigPath` and canonical path metadata.
 - Runtime schema aggregation/export in
-  `crates/mesh-llm-host-runtime/src/config_schema.rs`.
+  `mesh/crates/mesh-llm-host-runtime/src/config_schema.rs`.
 - Owner-control apply behavior in
-  `crates/mesh-llm-host-runtime/src/runtime/config_state.rs` when it can be
+  `mesh/crates/mesh-llm-host-runtime/src/runtime/config_state.rs` when it can be
   changed dynamically.
-- API/protocol conversion coverage in `crates/mesh-llm-host-runtime/src/api/`,
-  `crates/mesh-llm-host-runtime/src/protocol/`, and
-  `crates/mesh-llm-protocol/proto/node.proto` when it crosses process or node
+- API/protocol conversion coverage in `mesh/crates/mesh-llm-host-runtime/src/api/`,
+  `mesh/crates/mesh-llm-host-runtime/src/protocol/`, and
+  `mesh/crates/mesh-llm-protocol/proto/node.proto` when it crosses process or node
   boundaries.
 - UI adapter and fixture coverage under
-  `crates/mesh-llm-ui/src/features/configuration/` and
-  `crates/mesh-llm-host-runtime/tests/fixtures/`.
+  `mesh/crates/mesh-llm-ui/src/features/configuration/` and
+  `mesh/crates/mesh-llm-host-runtime/tests/fixtures/`.
 
 ## Built-In Settings Checklist
 
 When adding or removing a built-in setting:
 
 - Update `MeshConfig` or the owning nested config struct in
-  `crates/mesh-llm-config/src/model.rs`.
+  `mesh/crates/mesh-llm-config/src/model.rs`.
 - Update defaults and editor helpers in `authoring.rs` if generated configs,
   tests, or command flows need to write the setting.
 - Add, rename, or remove the corresponding descriptor in
@@ -63,16 +63,16 @@ When adding or removing a built-in setting:
 Plugin settings are install-time schemas, not hard-coded built-in settings.
 
 - The plugin manifest owns its schema through `config_schema` in
-  `crates/mesh-llm-plugin/src/manifest.rs` and
-  `crates/mesh-llm-plugin/proto/plugin.proto`.
+  `mesh/crates/mesh-llm-plugin/src/manifest.rs` and
+  `mesh/crates/mesh-llm-plugin/proto/plugin.proto`.
 - Keep `schema_version` at
   `mesh_llm_config::SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION` unless the schema
   format itself becomes incompatible. Tightening validation of existing v1
   fields such as `required`, type, enum, object, array, or constraints does not
   by itself require a schema version bump.
 - Host-side installed plugin schema loading and strict validation live in
-  `crates/mesh-llm-host-runtime/src/plugin/config.rs` and
-  `crates/mesh-llm-config/src/plugin_validation.rs`.
+  `mesh/crates/mesh-llm-host-runtime/src/plugin/config.rs` and
+  `mesh/crates/mesh-llm-config/src/plugin_validation.rs`.
 - Required plugin settings must be rejected even when `[plugin.settings]` is
   absent.
 - Missing or unavailable schemas should reject custom settings, but plugin
@@ -83,14 +83,14 @@ Plugin settings are install-time schemas, not hard-coded built-in settings.
 ## Owner-Control And UI
 
 - Dynamic apply behavior belongs in
-  `crates/mesh-llm-host-runtime/src/runtime/config_state.rs`.
+  `mesh/crates/mesh-llm-host-runtime/src/runtime/config_state.rs`.
 - The management API should return diagnostics for both rejected applies and
   successful applies with warnings.
 - Protobuf changes must be additive unless explicitly approved as breaking.
   Older nodes and clients should ignore unknown fields.
 - The UI should consume exported schema metadata instead of duplicating setting
   ownership, labels, constraints, or apply behavior.
-- Snapshot fixtures in `crates/mesh-llm-host-runtime/tests/fixtures/` are the
+- Snapshot fixtures in `mesh/crates/mesh-llm-host-runtime/tests/fixtures/` are the
   cross-check between Rust schema export and the TypeScript adapter.
 
 ## Validation
@@ -113,7 +113,7 @@ cargo clippy -p mesh-llm-config -p mesh-llm-plugin -p mesh-llm-plugin-manager -p
 Also run the UI checks when the schema export or adapter changes:
 
 ```bash
-cd crates/mesh-llm-ui
+cd mesh/crates/mesh-llm-ui
 npm test -- --run src/features/configuration/api/config-adapter.test.ts
 npm run typecheck
 ```

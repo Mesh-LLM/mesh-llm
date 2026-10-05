@@ -21,8 +21,8 @@ fn exempts_only_named_source_categories() {
         )));
     }
     for path in [
-        "crates/mesh-llm/src/main.rs",
-        "crates/mesh-client/src/lib.rs",
+        "mesh/crates/mesh-llm/src/main.rs",
+        "mesh/crates/mesh-client/src/lib.rs",
         "crates/new-product/src/lib.rs",
         "crates/demo/src/test_support.rs",
         "crates/demo/src/testing.rs",

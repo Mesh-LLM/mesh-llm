@@ -29,7 +29,7 @@ class CandidateBuildFreshnessTests(unittest.TestCase):
             stamp = native / ".mesh-llm-build-stamp"
             stamp.write_text("cpu native fixture")
             os.utime(stamp, ns=(1, 1))
-            binary, test_binary = root / "skippy-server", root / "skippy-tests"
+            binary, test_binary = root / "skippy", root / "skippy-tests"
             files = CANDIDATE.producer_files(binary, native, test_binary)
             for name, path in files.items():
                 if name != "native_stamp":
@@ -76,7 +76,7 @@ class CandidateBuildFreshnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)
             stamp = directory / ".mesh-llm-build-stamp"
-            binary = directory / "skippy-server"
+            binary = directory / "skippy"
             stamp.touch()
             binary.touch(mode=0o755)
             os.utime(stamp, ns=(1_000_000_000, 1_000_000_000))
@@ -88,7 +88,7 @@ class CandidateBuildFreshnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)
             stamp = directory / ".mesh-llm-build-stamp"
-            binary = directory / "skippy-server"
+            binary = directory / "skippy"
             stamp.touch()
             binary.touch(mode=0o755)
             os.utime(stamp, ns=(2_000_000_000, 2_000_000_000))
@@ -103,7 +103,7 @@ class CandidateBuildFreshnessTests(unittest.TestCase):
         """Require the candidate executable and its native-build stamp."""
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)
-            binary = directory / "skippy-server"
+            binary = directory / "skippy"
             self.assertIn("candidate executable is missing", self._check(binary, directory).stderr)
             binary.touch(mode=0o755)
             self.assertIn("native build stamp is missing", self._check(binary, directory).stderr)

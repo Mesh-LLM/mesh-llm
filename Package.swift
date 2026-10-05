@@ -3,7 +3,7 @@ import PackageDescription
 import Foundation
 
 let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
-let swiftSDKRelativePath = "sdk/swift"
+let swiftSDKRelativePath = "mesh/sdk/swift"
 let ffiXCFrameworkRelativePath = "\(swiftSDKRelativePath)/Generated/MeshLLMFFI.xcframework"
 let ffiXCFrameworkPath = "\(repoRoot)/\(ffiXCFrameworkRelativePath)"
 let remoteFFIXCFrameworkURL = "https://github.com/Mesh-LLM/mesh-llm/releases/download/__MESH_SWIFT_RELEASE_TAG__/MeshLLMFFI.xcframework.zip"
@@ -53,7 +53,7 @@ let package = Package(
         .target(
             name: "MeshLLM",
             dependencies: meshLLMDependencies,
-            path: "sdk/swift/Sources/MeshLLM",
+            path: "mesh/sdk/swift/Sources/MeshLLM",
             exclude: hasFFIBinaryTarget ? [] : ["Generated"],
             resources: [
                 .copy("Resources/Console"),
@@ -72,7 +72,7 @@ let package = Package(
         .testTarget(
             name: "MeshLLMTests",
             dependencies: ["MeshLLM"],
-            path: "sdk/swift/Tests/MeshLLMTests"
+            path: "mesh/sdk/swift/Tests/MeshLLMTests"
         ),
     ] + packageTargets
 )

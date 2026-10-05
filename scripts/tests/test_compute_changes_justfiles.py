@@ -273,9 +273,9 @@ class ComputeChangesJustfileTests(unittest.TestCase):
             nested = recipes / "nested"
             nested.mkdir()
             nested_build = nested / "runtime.just"
-            nested_build.write_text("build-runtime:\n    printf backend\n", encoding="utf-8")
+            nested_build.write_text("skippy:\n    printf backend\n", encoding="utf-8")
             nested_base = commit(repository, "nested recipe")
-            nested_build.write_text("build-runtime:\n    printf changed\n", encoding="utf-8")
+            nested_build.write_text("skippy:\n    printf changed\n", encoding="utf-8")
             nested_head = commit(repository, "nested backend recipe")
             self.assertTrue(
                 classify(

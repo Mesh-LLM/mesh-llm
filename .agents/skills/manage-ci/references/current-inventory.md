@@ -104,6 +104,11 @@ one main source SHA and the upstream target before any hardware work. Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
 preflight. Changed pins use up to three distributed repair attempts. Each
+candidate build compares pinned GGUF tensor descriptor bytes with the manifest
+using the prepared llama.cpp GGML type table before compilation. A seven-family
+real-model Metal gate runs on the built exact candidate before distributed
+fan-out; it does not replace the complete family and independent passes.
+Grouped failure traces point the repair agent at affected families first. Each
 attempt runs one complete candidate family pass followed (only when all
 families pass) by one independent build and complete verification pass on the
 exact same commit. A candidate-class family failure emits digest-bound evidence
@@ -304,6 +309,11 @@ for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
 target; prerelease tags are excluded so RC and final notes use the same stable
 baseline.
+The stable crates.io preflight and publisher each download the versioned Linux x86_64 release
+archive and checksum sidecar after GitHub release publication, verifies the
+checksum and required native libraries (`libmtmd.so`, `libllama-common.so`,
+`libllama.so`), then supplies that library directory to Cargo's package
+verification. The resume workflow uses the same release-archive contract.
 
 The `release_notes` job runs after a successful stable publish with
 `contents: write` and regroups that published body into Keep a Changelog
@@ -390,13 +400,13 @@ runner-contract update is active.
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows host/runtime/product/platform/smoke graph with one platform-local UI producer |
 | `ci-pr-canary-lane.yml` | Optional protected merge-source diagnostic lane for one Linux amd64 CPU UI/host/runtime/product chain; runner policy stays on the default branch, and the summary is step-summary-only and non-required |
-| `ci-quality-slice.yml` | Contracts, format, unused-dependency check, Clippy and generated CLI inventory freshness; additive protected authority sentinel |
+| `ci-quality-slice.yml` | Contracts (including product-crate README, description, and local-link checks), format, unused-dependency check, Clippy and generated CLI inventory freshness; additive protected authority sentinel |
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release callers prepare one source/version-bound UI with complete file checksums, shared by all hosts and SDK resources |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
-| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch, plus a pinned, digest-verified Skippy correctness fixture; related PR changes additionally compile one asserted, fully qualified runtime test and smoke an immutable SmolLM2 SafeTensors checkpoint through the complete Mesh config/resolver/server/native path to sampled prefill and decode with every supported load-time quantization |
+| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch, plus a pinned, digest-verified Skippy correctness fixture; related PR changes (including `mesh-llm-skippy-adapter`) additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
-| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against the runtime it just built and uploads its evidence. |
+| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, and Windows log-store privacy ACL checks |
 | `ci-{linux,macos,windows}-product-smoke-slice.yml` | Platform-local core, scripted, model-download, and Laya smokes. The pinned Laya Multilingual F16 GGUF runs startup plus the complete upstream golden `/systemone` battery on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm, macOS Metal, and Windows CPU; each row selects the exact native device name, so an unavailable backend fails at model load. Core CPU/CUDA/Metal restores the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once and runs both through standalone inference, OpenAI client compatibility, and constrained-Tokio restart. The CPU two-node split row uses the same pair for dense KV and strict recurrent `KvRecurrent` validation, persists strict-whitelist seed/worker identity and stage/model snapshots, reconciles two-observer topology and exact two-stage contiguous-cut agreement, and uploads evidence on every outcome. The Linux CPU row additionally preserves node cache roots across restart and requires an observable durable-L3 fill before status and clear verification. Product restore verifies the manifest backend and forces discovery through the bundled runtime. CUDA verifies the packaged dependency closure with `LD_LIBRARY_PATH` unset, runs inherited and strict device probes, installs no cudart or cuBLAS packages, and leaves the NVIDIA driver host-owned. Windows accelerator product targets remain build-only because CI has no Windows accelerator runners. There is no separate product-integration or Qwen migration lane. |
@@ -455,7 +465,7 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `smoke.yml` | `smoke_tests` | `public cpu` when `inputs.runner != 'gpu-nvidia'`, else uncontainerized (see opt-out below) |
 | `sdk-smoke.yml` | its job | `public cpu` when `inputs.sdk_kind != 'swift'`, else uncontainerized |
 | `ci-ui-artifact-slice.yml` | `ui_artifact` | `public ui` ordinarily; existing `public web` for nonempty release tags |
-| `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `website` | `public ui`, `public browser`, existing `public web`, respectively |
+| `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `mesh/website` | `public ui`, `public browser`, existing `public web`, respectively |
 | `website-pages.yml` | `build` | `public web` |
 | `nightly-stability-run.yml` | `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
 | `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
@@ -610,7 +620,7 @@ stdout with an npm warning) and passes it as the seventh argument; a mismatch
 against the image's own build-time `playwright --version` fails fast instead
 of surfacing as a confusing Playwright/Chromium error deep in the E2E run.
 
-`crates/mesh-llm-ui/package.json`'s `@playwright/test` and
+`mesh/crates/mesh-llm-ui/package.json`'s `@playwright/test` and
 `mesh-llm-runner-images`' `config/playwright-pin.txt` are now a matched pair
 (both `1.62.1` as of 2026-08-20; re-check the two sources rather than
 trusting this line). Bumping the mesh-llm side alone fails `ui_e2e` on
@@ -619,7 +629,7 @@ cross-repo sequence, in order: bump `config/playwright-pin.txt` in
 `mesh-llm-runner-images`, rebuild and promote the `public web` image, re-pin
 the new digest in `ci-web-slice.yml` (and `ci-ui-artifact-slice.yml` /
 `website-pages.yml` / `nightly-stability-run.yml`, which share it), then
-bump `@playwright/test` in `crates/mesh-llm-ui/package.json`.
+bump `@playwright/test` in `mesh/crates/mesh-llm-ui/package.json`.
 
 ### `setup-macos-lld` composite
 
@@ -735,11 +745,25 @@ boundary.
 
 - `prepare-host-input` / `prepare-windows-host-input`: neutral host bytes,
   import report and checksum.
+- `prepare-skippy-cli-input`: one backend-neutral standalone Skippy CLI and
+  checksum per platform host slice, built before the MeshLLM host. PR/main CI
+  publishes `ci-skippy-cli-<platform>-<architecture>` once per platform;
+  Unix and Windows producers verify host imports before checksumming and retain
+  `host-imports.json`; release publishes separate versioned CLI archives from the
+  same producer, verifies the report matches the executable SHA-256, and includes
+  it in the archive.
 - `prepare-native-runtime-input`: one verified native runtime archive and
   manifest. Non-Windows artifacts include the checksum-bound
-  `skippy-model-package` tool used by split-serving consumers to prepare
+  `skippy-package-builder` tool used by split-serving consumers to prepare
   package-v2 fixtures; Windows artifacts remain DLL-only until the producer has
-  a reliable import-library path for the tool.
+  a reliable import-library path for the tool. The Linux CPU row uses a
+  forced-hosted selection from the central runner policy, leaving accelerator
+  rows on their normal provider, and can restore an exact cache of this
+  packaged runtime, keyed by target,
+  toolchain/image epoch, Skippy and native recipe inputs. Restored bytes are
+  verified against the planned backend and target as well as the full package
+  contract before the runtime-event gate and run-scoped upload. Only trusted
+  main pushes publish; PRs restore only and Depot rows bypass this cache.
 - `prepare-static-abi-input`: portable static ABI archive.
 - `compose-product-input`: exact host/runtime verification and composition.
   Linux CPU readiness also feeds the composed host's real `runtime list
@@ -780,7 +804,7 @@ boundary.
   a positive floor fail when no cache requests are observable; the zero-floor
   SafeTensors observation remains non-failing and emits a wiring warning.
 
-Rust-test batches that contain `skippy-runtime` or `skippy-model-package`
+Rust-test batches that contain `skippy-runtime` or `skippy-package-builder`
 resolve the generated Skippy correctness manifest, then restore the pinned Qwen
 fixture from one exact GitHub Actions cache key containing its file SHA-256 and
 `.github/cache-version.txt`. Every use is verified against the pinned size and
@@ -1031,7 +1055,7 @@ The handle rule exempts only the files that implement the console output
 facility, listed as `CONSOLE_OUTPUT_OWNERS` in the same module: the sink-aware
 writer and its pre-sink CLI fallback, the inline progress renderers, the TUI
 output manager / fd capture / terminal backend, the runtime tracing writer,
-skippy-server's stderr telemetry sink, and the CLI presentation surfaces.
+skippy-serving's stderr telemetry sink, and the CLI presentation surfaces.
 A capability probe such as `io::stdout().is_terminal()` reads nothing and is
 not a handle.
 
@@ -1090,6 +1114,98 @@ acquisition after extraction: retain its existing split-serving rule on main,
 with model-download ownership on the relocated path. That conservatively runs
 both domains until the later catalog cleanup; existing main routing is unchanged.
 
+The OpenAI-compatible frontend package is `skippy-inference-api`; its direct
+CI owner, affected-crate roster, executor package translation, and publish
+order use that name. The legacy `openai-frontend` predecessor remains an input
+to the pre-extraction package translator.
+
+Skippy inference contracts are published as `skippy-events` and guardrail primitives
+as `skippy-guardrails`. Both appear in the affected-crate fallback roster and
+publish chain; `skippy-events` precedes its Mesh event consumers. Guardrail
+consumers use the Skippy package directly. CI lane topology is unchanged.
+
+Native runtime policy and hardware detection are owned by `skippy-native-runtime`
+and `skippy-hardware-profile`. Crate-selection, SDK-smoke detection and publishing
+references use those names; runtime artifact IDs, manifests and lane topology
+retain their existing contracts during the ownership extraction.
+
+The runtime acquisition package is `skippy-runtime-install`; affected-crate,
+publish-order, environment-census and Docker precheck references follow that name.
+Mesh release policy is supplied by `mesh-llm-system`. This ownership change does
+not change native runtime artifact identities, runner policy or lane topology.
+
+The HF client path dependency is now `skippy-hf-hub`; Docker inputs and the
+publish dependency order include it before model acquisition. No workflow
+permissions, runner selection, or CI topology changed for this source rehome.
+
+GPU benchmark library/native source ownership is `skippy-gpu-bench`. CI backend
+ownership rows, crate rosters and runtime packaging source paths follow the move;
+packaged helper names, native symbols and execution policy are unchanged.
+
+Native runtime packaging reads `skippy/crates/skippy-native-runtime/RUNTIME_VERSION`,
+not the Mesh workspace package version. The catalog generator verifies the
+stamped runtime release against that source (or `--runtime-version`); its
+publication tag determines archive URLs independently. Product composition
+reads the exact host executable with `--log-format json --print-build-contract`
+and compares its compiled required Skippy ABI to the runtime manifest. Missing
+product-version input defaults to the host version, never the runtime release.
+The product manifest records required and supplied ABI plus runtime release.
+No workflow dispatch, runner, or publication permissions change.
+
+Product schema coverage compares the composer's emitted root, host and runtime
+field sets with `schemas/product-v2.schema.json`, including required/supplied ABI
+and runtime release. Default bundled startup additionally verifies the complete
+runtime-tree digest using the composer's ordinal-path hashing contract; Rust and
+Python pin the same golden digest.
+
+Native runtime artifacts and release catalogs now carry integer schema_version 2
+and release_version. Packaging, verification, catalog generation, CI cache
+installation and product composition reject legacy generations. Mesh product
+manifest mesh_version and the distinct native-SDK version contract remain
+product identities. Legacy runtime parsing is confined to the explicit cache
+importer; no alias or automatic migration is introduced.
+
+Standalone dynamic startup in skippy-api depends on skippy-runtime-install and
+skippy-native-runtime. The publish roster orders those dependencies and the
+serving library before the API; the Linux test Docker context includes
+installer/native/hardware crates.
+Runtime selection is shared with Mesh embedded local startup; no runner or
+release publication policy changes.
+
+Unix standalone server host builds are exposed as `just skippy-cli-build`
+and `just skippy-cli-release-build`; both enable dynamic-native-runtime.
+They consume a separately packaged runtime at execution time. Platform host
+and release jobs build the CLI once per platform, with release publishing a
+separate Skippy CLI archive.
+
+`skippy-api` owns shared single-stage configuration, family cache policy and
+checkpoint preparation. The host consumes it; publish/affected-crate rosters and
+Linux Docker contexts include the new owner. Mesh rendering and hooks stay in
+the host. No external CI policy changes.
+
+The shared `skippy-api` lifecycle now consumes the embedded `skippy-serving`
+service; publish order places the server before the API, then the CLI. Native
+runtime startup and model backend composition belong to the API. Source identity
+and planning are shared with Mesh. CI topology and runner policy are unchanged.
+
+Split-certification roster generation now targets `skippy/crates/skippy-api/src/split-certified.json`.
+The release-bound recipe build script and admission checks move with this neutral
+owner; canary generation/check commands and enforcement policy are unchanged.
+
+The standalone command now lives in `skippy-cli` (binary `skippy`); `skippy-serving` is the Clap-free embedded service library. CLI source is included in Docker prechecks, affected-crate selection, split-serving ownership and the publish roster after its server dependency. Certification, benchmark, smoke and WAN lab launches use the new binary. `just skippy-cli-build` and `just skippy-cli-release-build` select the dynamic-runtime CLI.
+
+Mesh raw byte-stream interfaces and TCP/QUIC relay are owned by
+`mesh-llm-transport`, consumed by the host and client. The runtime-product
+ownership row, publish order, affected-crate fallback and Docker source lists
+include it. The host retains admission/routing and supplies its existing
+first-response timeout; no protocol, runner, permissions or artifact-policy
+change accompanies this extraction.
+
+The adapter/control-API extraction also adds both packages to the affected-crate fallback list and the dependency-ordered publish chain. Workspace test coverage remains automatic; both packages stay in the default test graph. Explicit runtime-product catalog admission is carried by the additive protected-default-branch catalog prerequisite, preserving the source-catalog byte comparison.
+
+Membership extraction adds `mesh-llm-membership` to the affected-crate fallback and publish chain after its identity/protocol/routing/type dependencies. The Linux test Docker source list includes membership, control API and the Skippy adapter. Canary and workload executable handoffs name `skippy` and `skippy-package-builder`, with prebuilt library tests from `skippy-serving`; artifact verification and protected ownership catalogs remain unchanged.
+
+
 ### Protected executor compatibility for the product extraction
 
 The protected executor workflows pin `resolve-source-layout` to commit
@@ -1131,6 +1247,12 @@ translation. Candidate workflow tests and local checks validate compatibility;
 protected PR runs alone cannot certify a workflow definition that has not yet
 landed on main.
 
+The local `just test-all` native test group follows the renamed
+`skippy-package-builder` owner. Its full suite runs separately with default
+features disabled so the shipped Mesh binary cannot unify dynamic-runtime
+linkage into native package tests. The current model-acquisition
+`skippy-model-package` stays in the ordinary workspace group.
+
 Node addon release producers also resolve `sdk` or `mesh/sdk` before version
 checks, native builds, npm pack and immutable artifact staging on Linux, macOS
 and Windows. Executable fixtures cover all three producers in both layouts.
@@ -1140,6 +1262,20 @@ product layouts. Nightly and explicit-revision canary pin readers accept exactly
 one legacy or relocated pin, rejecting missing and ambiguous source trees.
 
 Release version propagation discovers both relocated crate trees, including
+versioned local dependencies. The compiler seed warmer uses the resolved UI
+placeholder directory. Neither change expands runner or cache authority.
+
+Product script test implementations now live in `mesh/scripts/tests/` and
+`skippy/scripts/tests/`. Existing `scripts/tests/test_*.py` entrypoints delegate
+through `product_test_loader.py`, preserving the same unittest discovery and
+CI gates. Cross-workspace planner and contract tests stay at root. The Skippy
+rewriter and recipe fixtures live under its existing `scripts/` ownership
+pattern; deployment assets live under `mesh/deploy/`. Protected catalogs and
+required checks are unchanged.
+
+The dormant `docker-precheck.yml` reusable validates the relocated product
+crate/script COPY roots and Mesh entrypoint path. It remains unreferenced;
+this repair does not add a workflow caller or change required checks.
 versioned local dependencies, and resolves each versioned sidecar from the same
 source layout, so a relocated-only checkout can propagate a version without a
 root `website/`, `sdk/` or `docs/` tree. The website recipes consume the

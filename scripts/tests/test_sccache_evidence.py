@@ -93,7 +93,11 @@ class SccacheEvidenceTests(unittest.TestCase):
         )
         expected = {
             ("ci-linux-host-slice.yml", "linux_host"): policy,
-            ("ci-linux-runtime-slice.yml", "linux_runtime"): policy,
+            ("ci-linux-runtime-slice.yml", "linux_runtime"): (
+                "${{ matrix.runtime.backend == 'cpu' && "
+                "needs.runner_policy.outputs.allow_native_github_cache_cpu || "
+                "needs.runner_policy.outputs.allow_native_github_cache }}"
+            ),
             ("ci-quality-slice.yml", "quality_contracts"): policy,
             ("ci-quality-slice.yml", "rust_clippy"): policy,
             ("ci-quality-slice.yml", "cli_docs_sync"): policy,

@@ -43,7 +43,7 @@ def producer_files(binary: Path, build_dir: Path, test_binary: Path) -> dict[str
     return {
         "candidate": binary,
         "test_binary": test_binary,
-        "model_package": binary.parent / "skippy-model-package",
+        "model_package": binary.parent / "skippy-package-builder",
         "correctness": binary.parent / "skippy-correctness",
         "topology_plan": binary.parent / "skippy-topology-plan",
         "native_stamp": build_dir / ".mesh-llm-build-stamp",
@@ -103,7 +103,7 @@ def check_candidate(binary: Path, build_dir: Path) -> None:
     if binary.stat().st_mtime_ns <= stamp.stat().st_mtime_ns:
         raise RuntimeError(
             "candidate executable predates the stamped native ABI; "
-            "rebuild skippy-server against the current LLAMA_STAGE_BUILD_DIR"
+            "rebuild skippy against the current LLAMA_STAGE_BUILD_DIR"
         )
 
 

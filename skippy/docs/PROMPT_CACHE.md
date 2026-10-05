@@ -1,0 +1,165 @@
+# Skippy OpenAI Prompt Cache
+
+Skippy OpenAI serving has an automatic prompt-prefix cache for normal text
+generation. The cache is intended to provide the same operator-facing outcome
+as llama-server prompt reuse: repeated prompts, and prompts with a long shared
+prefix, avoid recomputing the whole prefix on later requests.
+
+## llama-server Reference Behavior
+
+llama-server keeps prompt state in serving slots. With `cache_prompt` enabled,
+each request compares its prompt tokens with the selected slot and reuses the
+longest common prefix already resident in that slot. With `--cache-ram`,
+llama-server can also save idle slot state into a RAM prompt cache and reload
+the closest reusable prompt state later. No client cache key is required for
+the common case.
+
+Important llama-server properties:
+
+- `cache_prompt` controls per-request prompt reuse.
+- `--cache-ram N` enables RAM prompt-cache storage.
+- idle slots may be saved to the prompt cache and cleared.
+- later requests choose reusable state by prompt similarity or cache lookup.
+- reported timings include cached versus processed prompt tokens.
+
+## Skippy Behavior
+
+Skippy uses the stage KV integration rather than llama-server slots. When a
+stage has `kv_cache.mode = "lookup-record"`, Skippy records prompt-prefix
+state after prefill and probes that state before later OpenAI chat/completion
+requests. A client `prompt_cache_key` is optional; ordinary requests without a
+key share the default namespace and can hit automatically.
+
+Skippy records exact prompt-prefix identities and a small shared-prefix grid.
+The exact path covers identical prompts. The shared-prefix path covers prompts
+whose common prefix falls on the configured stride, such as a stable system
+prompt or tool schema followed by different user tails. This is not arbitrary
+llama-server LCP slot selection; it is deterministic prefix identity probing.
+
+Skippy reports cache state in OpenAI usage and telemetry:
+
+- `usage.prompt_tokens_details.cached_tokens` is the OpenAI-compatible cached
+  prompt token count.
+- `stage.openai_generation_summary` emits `skippy.kv.status`, one of
+  `disabled`, `miss`, or `hit`.
+- The same summary emits `skippy.kv.cached_prompt_tokens`,
+  `skippy.kv.matched_prefix_tokens`, `skippy.kv.suffix_prefill_tokens`, and
+  `skippy.kv.hit_kind`. The hit kind is `none` for disabled or missed cache
+  lookups.
+
+## Exact-State Retention
+
+Recurrent and hybrid families store an exact-state snapshot: the complete
+native session state, which is indivisible and includes recurrent and
+convolution buffers. The stage byte budget (`prefix_cache.max_bytes`, or
+`SKIPPY_KV_CACHE_MAX_BYTES`) is derived from attention KV metadata, so it
+systematically undercounts those snapshots and a single snapshot can exceed it.
+
+The exact catalog therefore treats that budget as a soft cap. It keeps a small
+working set of snapshots past the soft cap, so concurrent sessions on one stage
+do not evict each other on every request, and it never evicts its last entry,
+because a snapshot that self-evicts leaves the stage with no exact prefix reuse
+at all. A hard limit bounds that allowance and defaults to a multiple of the
+soft cap, but it is not an absolute physical-byte ceiling: the last indivisible
+snapshot remains reusable even when it exceeds the limit. Set
+`SKIPPY_KV_CACHE_EXACT_MAX_BYTES` to pin the limit in bytes on a worker whose
+memory headroom does not match the attention-derived estimate; `0` disables the
+limit. Both limits are reported on
+`stage.openai_generation_summary` as `skippy.exact_cache.max_bytes` and
+`skippy.exact_cache.hard_max_bytes`.
+
+## Host-RAM L2 Cache
+
+Set `model_fit.cache_ram_mib` to a positive MiB value to enable the bounded
+host-RAM exact-state tier for that model. The default value, `0`, leaves L2
+disabled. Prefix caching and the node-local L3 cache must also be enabled.
+
+Exact-state lookup proceeds from the in-process radix cache (L1), to host RAM
+(L2), then to the node-local disk cache (L3). L3 remains authoritative: the
+server locates the current durable manifest before serving an L2 mirror and
+requires the mirror digest to match it. The cache worker promotes an L3 fill
+on its second hit within ten minutes, or on the first hit for prefixes of at
+least 4,096 tokens. Payloads larger than 64 MiB stay out of L2. A verified L2
+hit restores the request immediately and queues the same payload to rewarm L1.
+Rewarm records do not rewrite an existing L3 entry. Unloading the stage drops
+its L2 tier.
+
+`stage.openai_generation_summary` reports `skippy.kv.l2.enabled`, budget and
+resident byte counts, logical bytes, entries, segments, hits, misses, inserts,
+evictions, and admission refusals. Exact-hit telemetry identifies the restore
+source as `l2` and includes fill time and whether the L1 rewarm was queued.
+
+## Durable admission
+
+After a stage has measured an L3 restore, local OpenAI serving uses that
+restore-cost EWMA with the generation service estimator's cold-prefill cost.
+New entries remain in L1 probation and reach L3 after two observed reuses.
+Admission scores reuse probability and saved prefill time per exclusive and
+fractionally shared byte. Under disk pressure, the shared node manager removes
+the lowest-benefit inactive manifests first and preserves active pins. Before
+the first usable timing sample, or on serving paths without one, the existing
+reference-aware LRU write-through remains the safe fallback.
+
+The L3 activity status reports `benefit_probation`, `benefit_persist`,
+`benefit_lru_fallback`, and `benefit_evictions` counters.
+
+## mesh-llm Defaults
+
+mesh-llm wires Skippy prefix cache through family policy. For supported model
+families, generated `StageConfig` values receive a bounded cache config with
+`mode = "lookup-record"` and a production payload such as `resident-kv` or
+`kv-recurrent`. This applies to normal mesh-llm embedded Skippy serving without
+requiring users to send `prompt_cache_key`.
+
+The default is conditional, not universal:
+
+- unsupported or unknown families may leave `kv_cache` unset.
+- raw `skippy-serving serve-openai` leaves cache off unless the stage config or
+  `SKIPPY_KV_CACHE`/`SKIPPY_PREFIX_CACHE` enables it.
+- operators can disable cache with `model_fit.prompt_cache = false` or
+  `model_fit.prefix_cache.enabled = false`.
+- recurrent-state families use `kv-recurrent` rather than `resident-kv` when
+  the family policy requires it.
+
+## Benchmarking
+
+Use `skippy/evals/skippy-openai-cache-matrix.py` to compare cold and warm behavior
+across native llama-server and Skippy OpenAI endpoints. The script records four
+rows:
+
+- cold native: llama-server with request cache disabled.
+- cold Skippy: Skippy endpoint started with prefix cache disabled.
+- warm native: llama-server with request cache enabled.
+- warm Skippy: Skippy endpoint started with prefix cache enabled.
+
+The report is intended to prove cache behavior before comparing timing. Each
+row includes a verdict, observed cache statuses, prompt tokens, cacheable
+prefix tokens, cached tokens, suffix/uncached prefix tokens, and cache
+efficiency. For Skippy OpenAI chat generation, the cacheable prefix excludes
+the final current token that drives decode, so `cacheable = prompt_tokens - 1`.
+
+Example:
+
+```bash
+python3 skippy/evals/skippy-openai-cache-matrix.py \
+  --llama-cold-base-url http://127.0.0.1:8081 \
+  --llama-warm-base-url http://127.0.0.1:8082 \
+  --skippy-cold-base-url http://127.0.0.1:9337/v1 \
+  --skippy-warm-base-url http://127.0.0.1:9447/v1 \
+  --model Qwen/Qwen3-0.6B:Q4_K_M \
+  --output-dir target/skippy-openai-cache-matrix/local
+```
+
+Start the cold native endpoint with `--cache-ram 0`. Start the warm native
+endpoint with `--cache-ram N` or the llama-server default prompt-cache setting.
+
+The default benchmark pattern is `exact`, so the warmup and measured request
+use the same prompt. To exercise Skippy's shared-prefix grid against
+llama-server's LCP reuse, add `--pattern shared-prefix`. By default, the script
+exits non-zero when either warm row reports zero cached tokens; use
+`--allow-missing-warm-cache` only for exploratory timing runs where the endpoint
+does not expose cached-token counts.
+
+The cold Skippy endpoint should use a config with no `kv_cache` or with
+`kv_cache.mode = "disabled"`. The warm Skippy endpoint should use mesh-llm
+family defaults or an explicit `lookup-record` prefix cache.

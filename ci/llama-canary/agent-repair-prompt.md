@@ -3,7 +3,7 @@
 You are working on a trusted `main` checkout on the `family-certify`
 self-hosted runner. Complete the llama.cpp upstream update as one developer
 task. The harness has written the exact target SHA to
-`third_party/llama.cpp/upstream.txt` and `.deps/llama-canary-target-sha`.
+`skippy/llama_cpp/upstream.txt` and `.deps/llama-canary-target-sha`.
 
 Read `.agents/skills/llama-patch-changes/SKILL.md` before changing the queue.
 When the stage ABI changes, also read
@@ -62,7 +62,7 @@ Manifest edits are deliberately narrow. In
 `ci/llama-canary/family-certified.json`, keep the roster, artifact identities,
 lanes, execution policy, and every other field unchanged; only
 `resources.estimated_model_bytes` may be corrected from the immutable GGUF
-tensor scan. In `docs/skippy/llama-parity-candidates.json`, keep every existing
+tensor scan. In `skippy/docs/llama-parity-candidates.json`, keep every existing
 row and all top-level policy unchanged. Append exactly one classification row
 for each source file missing from the manifest. New rows are limited to the
 classification fields `llama_model`, `family`, `status`, and optional `notes`

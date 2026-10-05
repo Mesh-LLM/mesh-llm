@@ -91,6 +91,14 @@ class AffectedCratesLayoutTests(unittest.TestCase):
         self.assertTrue(relocated_ui['ui_changed'])
         self.assertEqual(relocated_ui['test_crates'], [])
 
+    def test_relocated_llama_recipe_selects_all_rust_tests(self) -> None:
+        for path in (
+            'skippy/llama_cpp/upstream.txt',
+            'skippy/llama_cpp/patches/0001-test.patch',
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(self._run([path])['all_rust'])
+
 
 if __name__ == '__main__':
     unittest.main()

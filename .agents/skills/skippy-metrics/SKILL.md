@@ -12,9 +12,9 @@ benchmark/report integration.
 
 ## Ownership
 
-`crates/skippy-metrics` owns shared attribute names. Stage servers may emit
+`skippy/crates/skippy-metrics` owns shared attribute names. Stage servers may emit
 OTLP/telemetry, but request-path serving must not block on telemetry export.
-`crates/metrics-server` owns benchmark/debug telemetry ingest, SQLite storage,
+`skippy/crates/metrics-server` owns benchmark/debug telemetry ingest, SQLite storage,
 run lifecycle, and canonical report export.
 
 Mesh API runtime status is not a telemetry dump. Keep public runtime status
@@ -24,7 +24,7 @@ of the status shape.
 ## Validation
 
 ```bash
-cargo test -p skippy-server --lib
+cargo test -p skippy-serving --lib
 cargo test -p mesh-llm --lib
 ```
 

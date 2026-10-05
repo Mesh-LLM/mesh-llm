@@ -104,7 +104,7 @@ def main() -> int:
         "--output",
         type=Path,
         default=repo_root
-        / "crates/mesh-llm-runtime-event-contracts/inventory/spec_manifest.json",
+        / "mesh/crates/mesh-llm-runtime-event-contracts/inventory/spec_manifest.json",
     )
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()

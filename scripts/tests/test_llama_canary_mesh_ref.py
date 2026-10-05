@@ -75,7 +75,7 @@ class MeshRefTests(unittest.TestCase):
 
     def test_relocated_pin_and_ambiguous_or_missing_pin(self):
         legacy = self.repo / 'third_party/llama.cpp/upstream.txt'
-        relocated = self.repo / 'skippy/third_party/llama.cpp/upstream.txt'
+        relocated = self.repo / 'skippy/llama_cpp/upstream.txt'
         relocated.parent.mkdir(parents=True)
         legacy.rename(relocated)
         self.git(self.repo, 'add', '-A')

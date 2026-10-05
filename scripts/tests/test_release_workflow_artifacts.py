@@ -663,6 +663,36 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertIn('"repos/${TARGET_REPOSITORY}/dispatches"', dispatch)
 
+    def test_crates_preflight_restores_verified_native_libraries(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        preflight = workflow[
+            workflow.index("  publish_crates_preflight:\n") :
+            workflow.index("  publish_crates:\n")
+        ]
+
+        self.assertIn("needs: [metadata, publish]", preflight)
+        self.assertIn('sha256sum --check "$archive.sha256"', preflight)
+        self.assertIn("libmtmd.so libllama-common.so libllama.so", preflight)
+        self.assertIn("LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}", preflight)
+        self.assertIn("mesh-llm-preflight-crates-native-verify", preflight)
+        self.assertLess(
+            preflight.index("Restore verified release runtime libraries"),
+            preflight.index("Dry-run crates.io package chain"),
+        )
+
+    def test_crates_publisher_restores_verified_native_libraries(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        publish_crates = workflow[workflow.index("  publish_crates:\n"):]
+
+        self.assertIn("mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz", publish_crates)
+        self.assertIn('sha256sum --check "$archive.sha256"', publish_crates)
+        self.assertIn("libmtmd.so libllama-common.so libllama.so", publish_crates)
+        self.assertIn("LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}", publish_crates)
+        self.assertLess(
+            publish_crates.index("Restore verified release runtime libraries"),
+            publish_crates.index("Publish crates.io package chain"),
+        )
+
     def test_release_assets_and_manual_tags_are_immutable(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         publish = job_block(
