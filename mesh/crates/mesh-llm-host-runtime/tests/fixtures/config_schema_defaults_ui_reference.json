@@ -806,6 +806,13 @@
       }
     },
     {
+      "canonical_path": "defaults.throughput.last_stage_decode_batch",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.throughput.parallel",
       "support": "supported",
       "source": {
