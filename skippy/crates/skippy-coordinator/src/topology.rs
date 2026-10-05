@@ -21,7 +21,7 @@ pub const CALIBRATED_PER_STAGE_OVERHEAD_US: u128 = 1_300;
 pub const CALIBRATED_PER_HOP_OVERHEAD_US: u128 = 13_000;
 
 pub use locked::{LockedTopologyStage, plan_locked_topology};
-pub use performance::{StageDecodeEstimate, ThroughputEstimate};
+pub use performance::{PlacementObjective, StageDecodeEstimate, ThroughputEstimate};
 
 const MINIMUM_AUTO_CONTEXT_LENGTH: u32 = 65_536;
 const CONTEXT_STEPS: &[u32] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072];
@@ -93,6 +93,10 @@ pub struct TopologyPlanningInput {
     /// stages is new information and still re-cuts, through
     /// [`rebalance_topology`] directly.
     pub auto_balance: bool,
+    /// What the re-cut optimises for. Only consulted when `auto_balance` is
+    /// set; defaults to `Throughput`, which is the behaviour `--auto-balance`
+    /// has always had.
+    pub placement_objective: PlacementObjective,
 }
 
 /// Directed link measurement between two candidate stage nodes.
@@ -246,8 +250,13 @@ pub fn rebalance_topology(
         current.context_length,
         current.parallel_lanes,
     )?;
-    let stages =
-        performance::balance_stages(&current.stages, &nodes, &layer_weights, &layer_required)?;
+    let stages = performance::balance_stages(
+        &current.stages,
+        &nodes,
+        &layer_weights,
+        &layer_required,
+        input.placement_objective,
+    )?;
     if stages
         .iter()
         .zip(&current.stages)
@@ -1372,6 +1381,7 @@ mod tests {
             edges: Vec::new(),
             activation_frame_bytes: 0,
             auto_balance: false,
+            placement_objective: Default::default(),
         }
     }
 
@@ -1393,6 +1403,7 @@ mod tests {
             edges: Vec::new(),
             activation_frame_bytes: 0,
             auto_balance: false,
+            placement_objective: Default::default(),
         }
     }
 
@@ -1862,6 +1873,7 @@ mod tests {
             edges: Vec::new(),
             activation_frame_bytes: 0,
             auto_balance: false,
+            placement_objective: Default::default(),
         };
         let layer_weights = layer_weight_bytes(&request);
         let kv_per_layer = request.kv_bytes_per_token.div_ceil(u64::from(LAYERS));

@@ -63,6 +63,10 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) adaptive_speculative_window: bool,
     pub(in crate::frontend) ngram_max: usize,
     pub(in crate::frontend) speculative: SpeculativeDecodeConfig,
+    /// Decides from measured throughput whether speculation is earning its
+    /// keep. `None` leaves the resolved plan's setting in force unconditionally.
+    pub(in crate::frontend) speculation_governor:
+        Option<std::sync::Arc<crate::frontend::speculation_gate::SpeculationGovernor>>,
     pub(in crate::frontend) generation_limit: Arc<GenerationConcurrencyController>,
     pub(in crate::frontend) generation_queue_depth: Arc<AtomicUsize>,
     pub(in crate::frontend) generation_queue_limit: usize,
