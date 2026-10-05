@@ -72,3 +72,6 @@ mod authority_callers;
 
 #[path = "ci_runner_cache_contract/safetensors_smoke/mod.rs"]
 mod safetensors_smoke;
+
+#[path = "ci_runner_cache_contract/artifact_workflows/mod.rs"]
+mod artifact_workflows;
