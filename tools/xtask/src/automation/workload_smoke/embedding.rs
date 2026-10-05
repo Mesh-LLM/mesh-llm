@@ -137,10 +137,29 @@ mod tests {
             let mut response = encoded();
             response["data"][0]["index"] = index;
             assert!(check(&numeric(), &response).is_err());
+            let mut numeric_response = numeric();
+            numeric_response["data"][0]["index"] = response["data"][0]["index"].clone();
+            assert!(check(&numeric_response, &encoded()).is_err());
         }
         let mut response = numeric();
         response["data"][0]["embedding"] = json!([true, 0]);
         assert!(check(&response, &encoded()).is_err());
+    }
+    #[test]
+    fn rejects_invalid_item_objects_and_nonstring_encoded_payloads() {
+        for object in [json!("list"), json!(null), json!(false)] {
+            let mut response = encoded();
+            response["data"][0]["object"] = object.clone();
+            assert!(check(&numeric(), &response).is_err());
+            let mut numeric_response = numeric();
+            numeric_response["data"][0]["object"] = object;
+            assert!(check(&numeric_response, &encoded()).is_err());
+        }
+        for payload in [json!([1.0, 0.0]), json!(null), json!(true), json!(1)] {
+            let mut response = encoded();
+            response["data"][0]["embedding"] = payload;
+            assert!(check(&numeric(), &response).is_err());
+        }
     }
     #[test]
     fn rejects_wrong_base64_values_lengths_and_nonfinite_values() {

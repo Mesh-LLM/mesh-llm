@@ -898,27 +898,6 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
-      "gate": "Legacy just ci-validate and relevant workflow/platform lane",
-      "module": "scripts/tests/test_ci_openai_embeddings_smoke.py",
-      "owner": "tools/xtask/src/ci_validation or owning action/workflow component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "f330913f3a087a7f72b2b1ad5bc6d9dc3636de18fcf266bf471a2649a4cbdae1",
-      "test_method_count": 9,
-      "test_methods": [
-        "test_base64_cardinality_and_metadata_are_required",
-        "test_base64_parity_allows_float32_rounding",
-        "test_base64_values_must_match_float_response",
-        "test_empty_and_surplus_batches_fail",
-        "test_invalid_payloads_still_fail",
-        "test_item_metadata_must_match_single_input",
-        "test_numeric_batch_rejects_invalid_indexes_and_boolean_components",
-        "test_response_metadata_must_match_request",
-        "test_valid_single_item_response_passes"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "cutover_status": "deleted with final caller; historical intent roster retained",
       "deletion_condition": "Delete only after exact archive, manifest, checksum, mode, symlink, and OS parity.",
       "gate": "Legacy just ci-validate plus artifact/platform qualification",
@@ -1268,30 +1247,6 @@
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
-      "gate": "Legacy just ci-validate plus owning build/install/platform gate",
-      "module": "scripts/tests/test_cuda_toolkit.py",
-      "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "edc6cb36edb2619434e8c5a50f854dbd134392e6be875fd656ea88dce4463cba",
-      "test_method_count": 12,
-      "test_methods": [
-        "test_canonical_path_falls_back_to_python",
-        "test_detector_accepts_major_only_cuda_version_declaration",
-        "test_detector_fails_without_compiler_or_toolkit_metadata",
-        "test_detector_rejects_cuda_version_minor_mismatch",
-        "test_detector_uses_cudacxx_before_nvcc_and_path",
-        "test_detector_uses_nvcc_when_cudacxx_is_unset",
-        "test_detector_uses_path_nvcc_when_overrides_are_unset",
-        "test_detector_uses_toolkit_owned_metadata_without_compiler",
-        "test_preserves_explicit_cuda_environment",
-        "test_propagates_helper_failure_when_nvcc_is_missing",
-        "test_resolves_toolkit_root_through_nvcc_symlink",
-        "test_windows_cmake_compiler_path_restores_missing_exe_suffix"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after each behavior case has an owning replacement and required platform evidence.",
       "gate": "Legacy just ci-validate and relevant workflow/platform lane",
       "module": "scripts/tests/test_depot_authority_sentinel.py",
@@ -1586,26 +1541,6 @@
       ],
       "current_source_sha256": "a4334307db0bcf87a81588022fb276630042ecb21f5e05bb5c8cb89fc0470fb5",
       "source_refresh_note": "Historical baseline sha256 preserved; current_source_sha256 binds exact current release inventory recipe ownership, all3 methods retained."
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after behavioral success/failure cases run in the typed owner and relevant platform gate.",
-      "gate": "Legacy just ci-validate plus owning build/install/platform gate",
-      "module": "scripts/tests/test_justfile_release_runtime.py",
-      "owner": "tools/xtask semantic owner or existing platform/tool component",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "c3dd85d0719627241015ba72b57ef8175de9e17124db454f5a0b007fdfe9fc3f",
-      "test_method_count": 8,
-      "test_methods": [
-        "test_aarch64_cuda_release_build_propagates_major_and_target_to_the_packager",
-        "test_aarch64_cuda_release_build_selects_arches_at_the_13_boundary",
-        "test_build_runtime_defaults_the_backend_and_forwards_the_one_it_was_given",
-        "test_bundle_uses_the_product_packager_and_copies_its_checksum",
-        "test_cuda12_release_recipes_include_pascal_sm61",
-        "test_cuda_release_build_selects_arches_at_the_12_8_boundary",
-        "test_cuda_release_recipes_propagate_the_selected_toolkit_major",
-        "test_release_runtime_build_does_not_expand_empty_array_under_nounset"
-      ]
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -2773,21 +2708,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after exact deterministic notes/version/preflight parity; fixtures cannot publish.",
       "gate": "Legacy just ci-validate plus just check-release/just publish-crates",
-      "module": "scripts/tests/test_release_version_script.py",
-      "owner": "tools/xtask/src/release or release workflow owner",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "ff5db3fed2038da48297e30c2772f4ac9682d367ff2acc94fcf64145cf0f1751",
-      "test_method_count": 3,
-      "test_methods": [
-        "test_known_versions_file_defines_the_function_the_script_edits",
-        "test_update_known_mesh_versions_fails_loudly_on_a_wrong_file",
-        "test_update_known_mesh_versions_prepends_the_new_version"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after exact deterministic notes/version/preflight parity; fixtures cannot publish.",
-      "gate": "Legacy just ci-validate plus just check-release/just publish-crates",
       "module": "scripts/tests/test_release_workflow_artifacts.py",
       "owner": "tools/xtask/src/release or release workflow owner",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -3343,23 +3263,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_skippy_dynamic_link.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "328c0008eb0f41c48f4bc0a5aad06f34ebd120e8759028a16d82a882aae351b9",
-      "test_method_count": 5,
-      "test_methods": [
-        "test_driverless_elf_link_resolves_indirect_driver_without_bundling_stub",
-        "test_legacy_cuda_selectors_resolve_the_same_driver",
-        "test_linux_cuda_links_selected_driver_without_runtime_search_path",
-        "test_other_dynamic_targets_do_not_acquire_cuda_dependency",
-        "test_runtime_loader_remains_free_of_native_link_dependencies"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_skippy_llama_parity.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -3729,26 +3632,6 @@
         "test_manifest_hash_failure_preserves_an_existing_output",
         "test_materialization_rejects_row_provenance_drift",
         "test_real_generator_builds_deterministic_canned_manifest"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_skippy_static_link.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "2e935c5f2e35fad950cbe0f6681f92261b298449c9e6b0cde948e5deaa2be382",
-      "test_method_count": 8,
-      "test_methods": [
-        "test_active_metal_backend_links_only_cache_enabled_archive",
-        "test_backend_cache_mismatch_fails_closed_despite_stale_archive",
-        "test_cache_boolean_accepts_crlf_and_surrounding_whitespace",
-        "test_cpu_ignores_stale_gpu_and_blas_archives",
-        "test_crlf_cache_values_are_recognized",
-        "test_enabled_staged_accelerator_requires_matching_selected_backend",
-        "test_unreadable_cache_never_means_disabled_backends",
-        "test_unselected_backend_cache_mismatch_fails_closed"
       ]
     },
     {
@@ -13643,5 +13526,25 @@
       "roster_line": 24,
       "count": 44
     }
+  },
+  "native_platform_fixture_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 96,
+    "core_modules_after": 37,
+    "durable_coverage": {
+      "path": "ci/automation-migration/native-platform-fixture-retirement-coverage.json",
+      "sha256": "f7de23ddbc717255e1aeacd5b47c35b2ebe62b614ae35d429e230cbc4ceca07d"
+    },
+    "current_test_tree": {
+      "sha256": "5304d7a82ad1b8355b696eb80feeefeed055d4575035745d31545b3b821561d4",
+      "paths": 33
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "14dd3796f4605073cef461905709d35866cbbdc9919a1233eb4bbd8bb5efcc96",
+      "roster_line": 32,
+      "count": 37
+    },
+    "supersedes": "Archived historical Python test entries are retained in coverage; current source method maps and native tests own the replacement intentions."
   }
 }

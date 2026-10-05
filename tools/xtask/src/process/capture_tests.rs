@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(target_os = "macos")]
 use std::io::Read;
 #[cfg(not(target_os = "macos"))]
 use std::os::fd::OwnedFd;

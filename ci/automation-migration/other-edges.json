@@ -11220,5 +11220,25 @@
       "roster_line": 24,
       "count": 44
     }
+  },
+  "native_platform_fixture_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 96,
+    "core_modules_after": 37,
+    "durable_coverage": {
+      "path": "ci/automation-migration/native-platform-fixture-retirement-coverage.json",
+      "sha256": "f7de23ddbc717255e1aeacd5b47c35b2ebe62b614ae35d429e230cbc4ceca07d"
+    },
+    "current_test_tree": {
+      "sha256": "5304d7a82ad1b8355b696eb80feeefeed055d4575035745d31545b3b821561d4",
+      "paths": 33
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "14dd3796f4605073cef461905709d35866cbbdc9919a1233eb4bbd8bb5efcc96",
+      "roster_line": 32,
+      "count": 37
+    },
+    "supersedes": "Archived historical Python test entries are retained in coverage; current source method maps and native tests own the replacement intentions."
   }
 }

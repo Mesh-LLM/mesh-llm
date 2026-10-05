@@ -37,7 +37,7 @@ impl DynamicFixture {
             ("XTASK_STATIC_ABI_FFI_CHILD".to_owned(), "yes".into()),
             (
                 "CARGO_MANIFEST_DIR".to_owned(),
-                root.join("crates/skippy-ffi").into_os_string(),
+                root.join("skippy/crates/skippy-ffi").into_os_string(),
             ),
             ("TARGET".to_owned(), target.into()),
             (format!("{prefix}_LINK_MODE"), "dynamic".into()),
@@ -177,3 +177,7 @@ fn dynamic_runtime_loader_remains_free_of_native_link_directives() {
             .any(|line| line.starts_with("cargo:rustc-link-"))
     );
 }
+
+#[cfg(target_os = "linux")]
+#[path = "dynamic_link/linux_elf.rs"]
+mod linux_elf;

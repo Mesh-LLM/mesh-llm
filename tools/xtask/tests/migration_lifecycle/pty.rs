@@ -44,7 +44,11 @@ impl<'a> Terminal<'a> {
         // SAFETY: the fork child calls only async-signal-safe terminal syscalls before exec.
         unsafe {
             command.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY.into(), 0) < 0 {
+                #[cfg(target_os = "linux")]
+                let request = libc::TIOCSCTTY;
+                #[cfg(not(target_os = "linux"))]
+                let request = libc::TIOCSCTTY.into();
+                if libc::setsid() < 0 || libc::ioctl(0, request, 0) < 0 {
                     return Err(io::Error::last_os_error());
                 }
                 if libc::tcsetpgrp(0, libc::getpgrp()) < 0 {

@@ -14,7 +14,7 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool automation workload-tts-oracle --help");
     println!("  cargo xtool automation openai-smoke-config cache --help");
     println!(
-        "  cargo xtool automation agent-fixture-inputs {{sha256 FILE | soak MODEL TARGET_CHARS OUTPUT | surface MODEL OUTPUT}}"
+        "  cargo xtool automation agent-fixture-inputs {{sha256 FILE | soak MODEL TARGET_CHARS OUTPUT | surface MODEL OUTPUT | coding-setup ROOT | coding-verify ROOT INITIAL_SHA256 ABSOLUTE_JUST ABSOLUTE_RUSTC}}"
     );
     println!(
         "  cargo xtool automation agent-client-config {{pi BASE MODEL JSON | goose BASE MODEL PROVIDER_JSON CONFIG_YAML | opencode [BASE MODEL]}}"

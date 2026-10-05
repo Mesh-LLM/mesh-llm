@@ -18,7 +18,7 @@ use std::{
 mod actual_build_script {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/skippy-ffi/build.rs"
+        "/../../skippy/crates/skippy-ffi/build.rs"
     ));
     pub(super) fn run() {
         main();
@@ -67,7 +67,7 @@ impl Fixture {
             .canonicalize()
             .unwrap()
             .join("FFI boundary with spaces");
-        for name in ["crates/skippy-ffi", "scripts", "bin"] {
+        for name in ["skippy/crates/skippy-ffi", "scripts", "bin"] {
             fs::create_dir_all(root.join(name)).unwrap();
         }
         let build = root.join("prepared").join(format!("static-{backend}"));
@@ -156,7 +156,10 @@ printf '%s\n' "$FFI_FIXTURE_ROOT/prepared/static-$LLAMA_STAGE_BACKEND"
             ),
             (
                 "CARGO_MANIFEST_DIR",
-                self.root.join("crates/skippy-ffi").display().to_string(),
+                self.root
+                    .join("skippy/crates/skippy-ffi")
+                    .display()
+                    .to_string(),
             ),
             ("TARGET", target.to_owned()),
             ("LLAMA_STAGE_BACKEND", backend.to_owned()),
@@ -298,3 +301,6 @@ fn static_abi_ffi_actual_boundary_contracts() {
 
 #[path = "static_abi_ffi_boundary/dynamic_link.rs"]
 mod dynamic_link;
+
+#[path = "static_abi_ffi_boundary/static_backend_selection.rs"]
+mod static_backend_selection;

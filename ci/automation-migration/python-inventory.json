@@ -520,30 +520,12 @@
       "required": true
     },
     {
-      "classification": "generic test for SDK smoke",
-      "deletion_condition": "Workflow isolation and coverage are explicitly tested; actual SDK smoke remains advisory only by approved policy.",
-      "exception": null,
-      "path": "scripts/tests/test_ci_openai_embeddings_smoke.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation plus advisory SDK tests",
-      "required": true
-    },
-    {
       "classification": "generic artifact/workflow test",
       "deletion_condition": "Producer-consumer reachability remains tested in Rust.",
       "exception": null,
       "path": "scripts/tests/test_ci_sdk_producers.py",
       "phase": 2,
       "replacement_owner": "tools/xtask ci_validation/artifact tests",
-      "required": true
-    },
-    {
-      "classification": "generic CI source-layout test",
-      "deletion_condition": "Rust tests cover source-layout action and relocated producer/consumer shell boundaries.",
-      "exception": null,
-      "path": "scripts/tests/test_ci_source_layout.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask ci_validation",
       "required": true
     },
     {
@@ -571,15 +553,6 @@
       "path": "scripts/tests/test_compare_event_benchmark_matrix.py",
       "phase": 2,
       "replacement_owner": "tools/xtask automation tests",
-      "required": true
-    },
-    {
-      "classification": "generic shell/toolchain test",
-      "deletion_condition": "Tool resolution and fallback contract covered in Rust/native tests.",
-      "exception": null,
-      "path": "scripts/tests/test_cuda_toolkit.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask native policy tests",
       "required": true
     },
     {
@@ -625,15 +598,6 @@
       "path": "scripts/tests/test_install_sh.py",
       "phase": 5,
       "replacement_owner": "shell/native installer test owner",
-      "required": true
-    },
-    {
-      "classification": "generic Just source test",
-      "deletion_condition": "Release recipe contract tested in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_justfile_release_runtime.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask release tests",
       "required": true
     },
     {
@@ -709,15 +673,6 @@
       "required": true
     },
     {
-      "classification": "generic release version test",
-      "deletion_condition": "Version contract test migrated with no implicit version mutation.",
-      "exception": null,
-      "path": "scripts/tests/test_release_version_script.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask release tests",
-      "required": true
-    },
-    {
       "classification": "generic workflow/artifact test",
       "deletion_condition": "Release producer graph and artifact contract tested in Rust.",
       "exception": null,
@@ -772,15 +727,6 @@
       "required": true
     },
     {
-      "classification": "generic native artifact test",
-      "deletion_condition": "Dynamic link closure tests remain on relevant platform owners.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_dynamic_link.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask artifact/native policy tests",
-      "required": true
-    },
-    {
       "classification": "generic native parity test",
       "deletion_condition": "Parity inventory and source checks migrated.",
       "exception": null,
@@ -823,15 +769,6 @@
       "path": "scripts/tests/test_skippy_scheduler_fixtures.py",
       "phase": 2,
       "replacement_owner": "tools/xtask fixture tests",
-      "required": true
-    },
-    {
-      "classification": "generic native artifact test",
-      "deletion_condition": "Static link closure tested on actual platform owners.",
-      "exception": null,
-      "path": "scripts/tests/test_skippy_static_link.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask artifact/native policy tests",
       "required": true
     },
     {
@@ -1071,7 +1008,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 103,
+  "tracked_file_count": 96,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -9915,5 +9852,25 @@
       "roster_line": 24,
       "count": 44
     }
+  },
+  "native_platform_fixture_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 96,
+    "core_modules_after": 37,
+    "durable_coverage": {
+      "path": "ci/automation-migration/native-platform-fixture-retirement-coverage.json",
+      "sha256": "f7de23ddbc717255e1aeacd5b47c35b2ebe62b614ae35d429e230cbc4ceca07d"
+    },
+    "current_test_tree": {
+      "sha256": "5304d7a82ad1b8355b696eb80feeefeed055d4575035745d31545b3b821561d4",
+      "paths": 33
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "14dd3796f4605073cef461905709d35866cbbdc9919a1233eb4bbd8bb5efcc96",
+      "roster_line": 32,
+      "count": 37
+    },
+    "supersedes": "Archived historical Python test entries are retained in coverage; current source method maps and native tests own the replacement intentions."
   }
 }
