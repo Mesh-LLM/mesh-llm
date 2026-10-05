@@ -67,7 +67,7 @@ KNOWN_UNAUDITED_MUTATION_COUNTS = {
     "mesh/crates/mesh-llm-host-runtime/src/api/tests/runtime_config_validation_authority.rs": 3,
     "mesh/crates/mesh-llm-host-runtime/src/mesh/tests/admission/requirements.rs": 6,
     "mesh/crates/mesh-llm-host-runtime/src/mesh/tests/owner_control.rs": 5,
-    "mesh/crates/mesh-llm-host-runtime/src/models/inventory.rs": 13,
+    "skippy/crates/skippy-model-hf/src/inventory.rs": 12,
     "mesh/crates/mesh-llm-host-runtime/src/models/resolve/tests.rs": 4,
     "mesh/crates/mesh-llm-host-runtime/src/network/nostr/auto.rs": 6,
     "mesh/crates/mesh-llm-host-runtime/src/runtime/config_state_tests/support.rs": 3,
