@@ -18,12 +18,12 @@ plugin-server = ["dep:mesh-llm-plugin", "dep:rmcp", "mesh-llm-payments-types/eng
 
 [dependencies]
 anyhow.workspace = true
-mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.78.0", optional = true }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.78.1", optional = true }
 rmcp = { version = "3", features = ["server"], optional = true }
 async-trait = "0.1"
 fs2 = "0.4"
-mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.78.0" }
-mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.78.0" }
+mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.78.1" }
+mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.78.1" }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
