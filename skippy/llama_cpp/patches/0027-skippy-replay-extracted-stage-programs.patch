@@ -34,7 +34,7 @@ Subject: [PATCH] skippy: replay extracted stage programs
  src/skippy/model_loading.cpp                  |  24 +-
  src/skippy/session.cpp                        |   6 +
  src/skippy/stage_plan.cpp                     |  10 +-
- src/skippy/stage_program.cpp                  | 878 +++++++++++++++++
+ src/skippy/stage_program.cpp                  | 883 +++++++++++++++++
  src/skippy/stage_program.h                    | 326 +++++++
  src/skippy/stage_program_extraction.cpp       | 706 ++++++++++++++
  .../stage_program_extraction_internal.h       |  75 ++
@@ -58,7 +58,7 @@ Subject: [PATCH] skippy: replay extracted stage programs
  .../tests/renamed_multishard_planning.cpp     | 223 ++++-
  src/skippy/tests/stage_program_parity.h       | 374 ++++++++
  tests/test-llama-archs.cpp                    |  39 +
- 54 files changed, 7944 insertions(+), 267 deletions(-)
+ 54 files changed, 7949 insertions(+), 267 deletions(-)
  create mode 100644 src/skippy/stage_program.cpp
  create mode 100644 src/skippy/stage_program.h
  create mode 100644 src/skippy/stage_program_extraction.cpp
@@ -4469,10 +4469,10 @@ index f0cd2726c..539a9bdc7 100644
      params.embeddings = false;
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
 new file mode 100644
-index 000000000..9d484103c
+index 000000000..a51617bcf
 --- /dev/null
 +++ b/src/skippy/stage_program.cpp
-@@ -0,0 +1,878 @@
+@@ -0,0 +1,883 @@
 +#include "stage_program.h"
 +
 +#include "stage_program_inputs.h"
@@ -4759,6 +4759,11 @@ index 000000000..9d484103c
 +    };
 +    const auto make_recurrent_input = [&](const input & recipe, size_t slot) {
 +        auto recurrent = std::make_unique<llm_graph_input_rs>(memory_recurrent);
++        recurrent->s_copy = nullptr;
++        recurrent->s_copy_main = nullptr;
++        recurrent->s_copy_extra = nullptr;
++        recurrent->head = memory_recurrent->get_head();
++        recurrent->rs_z = memory_recurrent->get_rs_z();
 +        if (!recipe.values[slot].empty()) {
 +            recurrent->s_copy = ggml_new_tensor_1d(context, GGML_TYPE_I32, memory_recurrent->get_n_rs());
 +            ggml_set_input(recurrent->s_copy);
