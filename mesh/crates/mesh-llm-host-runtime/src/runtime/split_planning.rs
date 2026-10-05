@@ -2,62 +2,19 @@ use crate::inference::skippy;
 use anyhow::{Context, Result};
 use skippy_coordinator::topology::{
     LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlan, TopologyPlanningInput,
-    TopologyStagePlan, estimate_plan_throughput, minimum_valid_context, plan_locked_topology,
-    plan_topology, plan_topology_with_stage0, rebalance_topology,
+    TopologyStagePlan, default_runtime_headroom_bytes, diagnostic_candidate_bytes_per_layer,
+    estimate_plan_throughput, minimum_valid_context, plan_locked_topology, plan_topology,
+    plan_topology_with_stage0, rebalance_topology, repriced_stage_weight_bytes,
+    required_stage_bytes,
 };
 use std::collections::HashMap;
 
 use super::local::{SplitParticipant, SplitParticipantExclusion};
 use super::split_topology_lock::LockedSplitStageAssignment;
 
-// Fixed per-node reserve the split planner will not fill with weights or KV.
-//
-// This is the *context-independent* half of the overhead model. The
-// *context-scaled* half — compute-graph buffers and scratch that grow with
-// `n_ctx` — is charged inside the topology planner, which bills KV at 100/85
-// (see `skippy_coordinator::topology`), holding back 15% of each node's
-// post-weight space exactly like the single-node context planner's
-// `usable_kv_cache_budget`.
-//
-// This fixed reserve covers what that KV-scaled term does not: the OpenAI
-// frontend, per-session runtime state, and — most importantly — margin between
-// the advertised budget and physical memory. On Apple Silicon the advertised
-// budget (Metal's `recommendedMaxWorkingSetSize`) can sit near 90% of total
-// unified memory, so packing a node to it starves the OS and swaps the whole
-// machine (observed: it made split hosts unusable). A flat 1/10 (10%) mirrors
-// the single-node fit cushion in `runtime::capacity` (which requires 110% of
-// model bytes) and, combined with the topology KV compute reserve, keeps a
-// split host healthy. Users who want to push a node harder can raise its share
-// with `--max-vram`.
-const RUNTIME_NODE_HEADROOM_NUMERATOR: u64 = 1;
-const RUNTIME_NODE_HEADROOM_DENOMINATOR: u64 = 10;
-
-// Context-independent floor on that reserve.
-//
-// The KV-scaled term grows with `n_ctx`, but the compute graph is sized by
-// lanes and batch: a four-lane stage allocated five buffers of 229.61 MiB each
-// — 1.12 GiB — whether it held 12 layers or 18. A stage holding many layers at
-// a modest context is therefore priced almost entirely on weights and KV, and
-// the proportional share alone does not cover what the graph will take.
-//
-// Measured on a 16 GB host: planning admitted a 35-of-36-layer stage at 8.7 GB
-// against a 12 GB budget; the process reached 12.0 GB resident, the machine
-// fell to 10% free, the node stopped heartbeating and the split lost the stage.
-//
-// 1 GiB is a floor calibrated at one working point, not a model of the buffers,
-// so it is deliberately flat: extrapolating the per-lane figure to large lane
-// counts would reserve several GiB on exactly the nodes whose context-scaled
-// share is already generous.
-const RUNTIME_NODE_HEADROOM_FLOOR_BYTES: u64 = 1024 * 1024 * 1024;
+// Skippy owns the split runtime's fixed headroom and KV compute reserve.
+// Mesh supplies measured node budgets and reports the selected placement.
 const DEFAULT_TARGET_DECODE_TPOT_MS: u32 = 33;
-
-// KV compute reserve, mirroring `skippy_coordinator::topology`'s
-// `KV_COMPUTE_RESERVE_*`. Charging KV at 100/85 holds back 15% of post-weight
-// space for llama.cpp compute-graph buffers/scratch. Kept in sync with the
-// planner so the `split_capacity_shortfall` diagnostic reports the same
-// per-layer cost the real planner uses.
-const KV_COMPUTE_RESERVE_NUMERATOR: u128 = 100;
-const KV_COMPUTE_RESERVE_DENOMINATOR: u128 = 85;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyPlanInput {
@@ -233,17 +190,6 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
         target_decode_tpot_ms: input.target_decode_tpot_ms,
         auto_balance: input.auto_balance,
     }
-}
-
-pub(super) fn default_runtime_headroom_bytes(vram_bytes: u64) -> u64 {
-    let proportional = vram_bytes
-        .saturating_mul(RUNTIME_NODE_HEADROOM_NUMERATOR)
-        .div_ceil(RUNTIME_NODE_HEADROOM_DENOMINATOR);
-    // Never reserve more than the node has: a tiny node keeps the proportional
-    // share rather than being planned out of existence by the floor.
-    proportional
-        .max(RUNTIME_NODE_HEADROOM_FLOOR_BYTES.min(vram_bytes / 2))
-        .min(vram_bytes)
 }
 
 pub(super) fn split_participants_for_stages(
@@ -707,26 +653,14 @@ fn apply_initial_cut_override(
 /// override against the weights of a cut that no longer exists — and
 /// admissions are built from the new ranges, not the old ones.
 fn reprice_stages(stages: &mut [RuntimeSliceStagePlan], package: &skippy::SkippyPackageIdentity) {
-    let layer_weights = package_layer_weight_bytes(package);
-    if layer_weights.is_empty() {
-        // No per-layer detail: fall back to an even share of the model so the
-        // capacity check still sees the moved boundaries rather than stale
-        // totals.
-        let per_layer = package
-            .source_model_bytes
-            .checked_div(u64::from(package.layer_count).max(1))
-            .unwrap_or(0);
-        for stage in stages.iter_mut() {
-            stage.parameter_bytes =
-                u64::from(stage.layer_end - stage.layer_start).saturating_mul(per_layer);
-        }
-        return;
-    }
-    for stage in stages.iter_mut() {
-        stage.parameter_bytes = layer_weights
-            [stage.layer_start as usize..(stage.layer_end as usize).min(layer_weights.len())]
-            .iter()
-            .fold(0u64, |acc, bytes| acc.saturating_add(*bytes));
+    for stage in stages {
+        stage.parameter_bytes = repriced_stage_weight_bytes(
+            &package.layer_weight_bytes,
+            package.source_model_bytes,
+            package.layer_count,
+            stage.layer_start,
+            stage.layer_end,
+        );
     }
 }
 
@@ -753,12 +687,8 @@ fn planner_recurrent_bytes_by_layer(recurrent: &[u64], layer_count: u32) -> Vec<
     vec![0; layer_count as usize]
 }
 
-/// What a stage costs under the topology planner's capacity model: the
-/// weights of the range it holds, context-scaled KV charged at the compute
-/// reserve, and lane-scaled recurrent state. Mirrors
-/// `layer_required_bytes` in `skippy_coordinator::topology`, including the
-/// 100/85 KV compute-reserve charge from `split_candidate_bytes_per_layer`;
-/// KV is a single shared allocation, so the lane count never multiplies it.
+/// Ask Skippy to recheck a stage against the same lane-scaled KV, recurrent,
+/// and compute-reserve costs used by its topology planner.
 fn stage_required_bytes(
     stage: &RuntimeSliceStagePlan,
     layer_weights: &[u64],
@@ -767,23 +697,16 @@ fn stage_required_bytes(
     context_length: u32,
     parallel_lanes: usize,
 ) -> u64 {
-    let start = (stage.layer_start as usize).min(layer_weights.len());
-    let end = (stage.layer_end as usize).min(layer_weights.len());
-    layer_weights[start..end]
-        .iter()
-        .zip(recurrent_by_layer[start..end].iter())
-        .fold(0u128, |total, (weight, recurrent)| {
-            let kv_with_compute_reserve = u128::from(kv_per_layer)
-                .saturating_mul(u128::from(context_length))
-                .saturating_mul(KV_COMPUTE_RESERVE_NUMERATOR)
-                .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
-            let recurrent = u128::from(*recurrent).saturating_mul(parallel_lanes as u128);
-            total
-                .saturating_add(u128::from(*weight))
-                .saturating_add(kv_with_compute_reserve)
-                .saturating_add(recurrent)
-        })
-        .min(u128::from(u64::MAX)) as u64
+    required_stage_bytes(
+        layer_weights,
+        recurrent_by_layer,
+        kv_per_layer,
+        context_length,
+        parallel_lanes,
+        stage.layer_start,
+        stage.layer_end,
+    )
+    .unwrap_or(u64::MAX)
 }
 
 /// Move the cut to `boundaries`, keeping each stage's node and order. Ignored
@@ -904,20 +827,14 @@ fn split_candidate_bytes_per_layer(
     weight_per_layer: u64,
     kv_per_layer: u64,
     context_length: u32,
-    _parallel_lanes: usize,
+    parallel_lanes: usize,
 ) -> u64 {
-    // Mirror of `skippy_coordinator::topology::candidate_bytes_per_layer` so the
-    // `split_capacity_shortfall` diagnostic reports the same per-layer cost the
-    // real planner uses. KV cache is a single unified allocation shared across
-    // all parallel lanes with eviction — lane count does not multiply KV cost.
-    // KV is charged at KV_COMPUTE_RESERVE_NUMERATOR/DENOMINATOR (100/85) to hold
-    // back 15% of post-weight space for compute-graph buffers/scratch.
-    let kv_bytes = u128::from(kv_per_layer).saturating_mul(u128::from(context_length));
-    let kv_with_compute_reserve = kv_bytes
-        .saturating_mul(KV_COMPUTE_RESERVE_NUMERATOR)
-        .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
-    let total = u128::from(weight_per_layer).saturating_add(kv_with_compute_reserve);
-    total.min(u128::from(u64::MAX)) as u64
+    diagnostic_candidate_bytes_per_layer(
+        weight_per_layer,
+        kv_per_layer,
+        context_length,
+        parallel_lanes,
+    )
 }
 
 fn max_layers_for_participant(
@@ -1174,7 +1091,7 @@ mod tests {
             let vram = vram_gb * 1024 * 1024 * 1024;
             let headroom = default_runtime_headroom_bytes(vram);
             assert!(
-                headroom >= RUNTIME_NODE_HEADROOM_FLOOR_BYTES,
+                headroom >= 1024 * 1024 * 1024,
                 "{vram_gb} GB node reserved {headroom} B, under the compute-graph floor"
             );
             assert!(
@@ -1291,6 +1208,29 @@ mod tests {
             error.to_string().contains("context-scaled KV"),
             "error should name the KV terms: {error}"
         );
+    }
+
+    #[test]
+    fn an_override_rechecks_kv_for_every_planned_lane() {
+        let (pkg, participants, stages) = overridden_stages();
+        validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(50_000, Vec::new(), 65_536, 1),
+        )
+        .expect("one lane fits the per-stage KV budget");
+        validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(50_000, Vec::new(), 65_536, 4),
+        )
+        .expect_err("four lanes must not be approved against a one-lane KV estimate");
     }
 
     #[test]

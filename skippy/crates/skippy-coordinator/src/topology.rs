@@ -1,7 +1,14 @@
 use std::cmp::Ordering;
 
+mod capacity;
 mod locked;
 mod performance;
+
+use capacity::layer_required_bytes;
+pub use capacity::{
+    default_runtime_headroom_bytes, diagnostic_candidate_bytes_per_layer,
+    repriced_stage_weight_bytes, required_stage_bytes,
+};
 
 pub use locked::{LockedTopologyStage, plan_locked_topology};
 pub use performance::{StageDecodeEstimate, ThroughputEstimate};
@@ -29,8 +36,6 @@ const SEQUENCE_IDS_PER_LANE_WITH_RESIDENT_CACHE: usize = 3;
 /// rides on the KV term it scales with context length, matching how compute
 /// buffers grow with `n_ctx`. A fixed per-node floor (see the coordinator's
 /// node headroom) covers the context-independent minimum on top of this.
-const KV_COMPUTE_RESERVE_NUMERATOR: u128 = 100;
-const KV_COMPUTE_RESERVE_DENOMINATOR: u128 = 85;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TopologyPlanningInput {
@@ -648,48 +653,6 @@ fn layer_weight_bytes(input: &TopologyPlanningInput) -> Vec<u64> {
         .model_weight_bytes
         .div_ceil(u64::from(input.layer_count));
     vec![weight_per_layer; input.layer_count as usize]
-}
-
-fn candidate_bytes_per_layer(
-    weight_per_layer: u64,
-    kv_per_layer: u64,
-    context_length: u32,
-    parallel_lanes: usize,
-) -> Option<u64> {
-    // One unified cache reserves a full per-lane context for every lane.
-    let kv_bytes = u128::from(kv_per_layer)
-        .checked_mul(u128::from(context_length))?
-        .checked_mul(parallel_lanes as u128)?;
-    // Charge KV at 100/85 so 15% of the node's post-weight space is held back
-    // for llama.cpp compute-graph buffers/scratch (mirrors the single-node
-    // context planner's `usable_kv_cache_budget`). This scales the reserve with
-    // context length, matching how compute buffers grow with `n_ctx`.
-    let kv_with_compute_reserve = kv_bytes
-        .checked_mul(KV_COMPUTE_RESERVE_NUMERATOR)?
-        .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
-    let total = u128::from(weight_per_layer).checked_add(kv_with_compute_reserve)?;
-    total.try_into().ok()
-}
-
-fn layer_required_bytes(
-    layer_weights: &[u64],
-    recurrent_bytes_by_layer: &[u64],
-    kv_per_layer: u64,
-    context_length: u32,
-    parallel_lanes: usize,
-) -> Option<Vec<u64>> {
-    layer_weights
-        .iter()
-        .zip(recurrent_bytes_by_layer.iter().copied())
-        .map(|(weight, recurrent_bytes)| {
-            candidate_bytes_per_layer(*weight, kv_per_layer, context_length, parallel_lanes)
-                .and_then(|base| {
-                    recurrent_bytes
-                        .checked_mul(parallel_lanes as u64)
-                        .and_then(|recurrent| base.checked_add(recurrent))
-                })
-        })
-        .collect()
 }
 
 fn recurrent_bytes_by_layer(input: &TopologyPlanningInput) -> Vec<u64> {
