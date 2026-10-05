@@ -194,3 +194,33 @@ eviction decisions into one round. `waiting-prefix aggregate --input FILE
 round medians. Missing numeric telemetry remains null. Repeated request or
 round identities are rejected. These commands support offline evidence analysis;
 the model-backed A/B workload runner remains in Python during its cutover.
+
+
+The native workload plan resolves the entire selected profile before execution:
+
+```bash
+just with-lld cargo xtool automation waiting-prefix plan \
+  --catalog evals/skippy-scheduler-fixtures.json --profile warm-affinity \
+  --model-id "$MODEL_ID" --model-sha256 "$MODEL_SHA256" --output plan.json
+```
+
+Use the model identity pinned in the selected catalog profile. For an HF profile,
+pass `--prompt-manifest FILE`; its exact bytes must match the catalog SHA-256
+and cover every family and request. Synthetic profiles omit that option.
+`--contract FILE` applies only the documented cache-entry override and records
+cache seeding separately from the measured request count. The plan records the
+catalog, contract and manifest hashes. Resolving a plan does not verify a model
+file or run inference.
+
+The native `waiting-prefix execute-requests --input FILE --output FILE` command
+runs a staggered request phase against an already-running local server. Its
+schema-1 input requires `round`, `version` as `old` or `new`, `base_url` as
+`http://127.0.0.1:<port>/v1`, `model`, `output_tokens`,
+`request_timeout_secs`, `stagger_ms`, and a nonempty `prompts` list of
+`family` and `prompt` strings. Results retain request identities in order,
+streaming usage, timing and content hashes. HTTP failures, timeouts and
+interruption retain failed request evidence and exit unsuccessfully; invalid
+input preserves any previous output. The command requires complete streaming
+usage and the terminal marker. Server startup, cache seeding, telemetry capture
+and the complete old/new comparison remain owned by the Python workload runner
+until its replacement passes validation.

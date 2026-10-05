@@ -2,9 +2,11 @@
 mod acceptance;
 mod aggregation;
 mod report;
+mod requests;
 mod telemetry;
 #[cfg(test)]
 mod tests;
+mod workload_plan;
 
 use crate::{automation::agentic_prompt_manifest::fixture_profile, command::DynResult};
 use acceptance::{Aggregate, Contract};
@@ -12,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, io::Write, path::Path};
 
-const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix validate-prompts FILE";
+const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix execute-requests --input FILE --output FILE\n  cargo xtool automation waiting-prefix plan --catalog FILE --profile NAME --model-id ID --model-sha256 HASH [--contract FILE] [--prompt-manifest FILE] --output FILE\n  cargo xtool automation waiting-prefix validate-prompts FILE";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Prompt {
@@ -171,6 +173,8 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
             Ok(())
         }
         [verb, rest @ ..] if verb == "evaluate" => evaluate(rest),
+        [verb, rest @ ..] if verb == "plan" => workload_plan::run(rest),
+        [verb, rest @ ..] if verb == "execute-requests" => requests::run(rest),
         [verb, rest @ ..] if verb == "summarize" || verb == "aggregate" => {
             measurement_command(verb, rest)
         }
