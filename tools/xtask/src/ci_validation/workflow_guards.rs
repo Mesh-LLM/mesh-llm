@@ -1,4 +1,5 @@
 mod action_pins;
+mod build_acceleration;
 mod cache_authority;
 mod cache_boundaries;
 mod cache_callers;
@@ -27,6 +28,7 @@ mod runner_finalization;
 mod runtime_events;
 mod selected_ref;
 mod shell;
+mod windows_build_paths;
 
 use super::lane_results::workflow_yaml::{self, Node};
 use crate::command::DynResult;
@@ -34,6 +36,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub(super) fn check(root: &Path) -> DynResult<()> {
+    build_acceleration::check(root)?;
+    windows_build_paths::check(root)?;
     compute_changes_budget::check(root)?;
     action_pins::check(root)?;
     let mut workflows = BTreeMap::new();
@@ -117,3 +121,6 @@ pub(super) fn job_permission_is_none(
 ) -> Result<bool, String> {
     permissions::effective_none(document, job, permission)
 }
+
+#[cfg(test)]
+mod build_accelerator_sources;
