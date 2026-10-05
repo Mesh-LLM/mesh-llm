@@ -130,6 +130,7 @@ pub(crate) fn test_stage_admission(
         layer_end,
         resident_tensor_ids: vec!["tensor-0".to_string()],
         sidecars: Vec::new(),
+        kv_graph_state: String::new(),
         profiles: vec![skippy_protocol::StageAdmissionProfile {
             profile_id: "default".to_string(),
             graph_identity: "graph".to_string(),

@@ -931,6 +931,7 @@ mod tests {
             layer_end: 2,
             resident_tensor_ids: vec!["tensor-resident".to_string()],
             sidecars: Vec::new(),
+            kv_graph_state: String::new(),
             profiles: Vec::new(),
         };
 
