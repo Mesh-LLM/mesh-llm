@@ -3,8 +3,8 @@ description: Build, verify host imports, and checksum one backend-neutral Skippy
 
 inputs:
   source_sha:
-    description: Full immutable source revision selected by the caller.
-    required: true
+    description: Full immutable source revision selected by the caller; legacy protected host slices use the checked-out revision.
+    required: false
   profile:
     description: Build profile (debug, dev, or release).
     required: false
@@ -31,10 +31,12 @@ runs:
           release) recipe=skippy-cli-release-build; profile_dir=release ;;
           *) echo "unsupported Skippy profile: $INPUT_PROFILE" >&2; exit 1 ;;
         esac
-        [[ "$INPUT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid selected source SHA" >&2; exit 1; }
         # Container users can differ from the checkout owner. Scope Git's trust
         # exception to this immutable checkout query; do not alter global config.
-        [[ "$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)" == "$INPUT_SOURCE_SHA" ]] || { echo "Skippy CLI checkout differs from selected source" >&2; exit 1; }
+        checkout_sha="$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)"
+        if [[ -z "$INPUT_SOURCE_SHA" ]]; then INPUT_SOURCE_SHA="$checkout_sha"; fi
+        [[ "$INPUT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid selected source SHA" >&2; exit 1; }
+        [[ "$checkout_sha" == "$INPUT_SOURCE_SHA" ]] || { echo "Skippy CLI checkout differs from selected source" >&2; exit 1; }
         export SKIPPY_SOURCE_SHA="$INPUT_SOURCE_SHA"
         just "$recipe"
         mkdir -p "$INPUT_OUTPUT_DIR"
@@ -62,9 +64,10 @@ runs:
           'release' { $recipe = 'skippy-cli-release-build'; $profileDir = 'release' }
           default { throw "unsupported Skippy profile: $env:INPUT_PROFILE" }
         }
-        if ($env:INPUT_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid selected source SHA' }
         $checkoutSha = (& git rev-parse HEAD).Trim()
         if ($LASTEXITCODE -ne 0) { throw 'Could not resolve Skippy source revision' }
+        if (-not $env:INPUT_SOURCE_SHA) { $env:INPUT_SOURCE_SHA = $checkoutSha }
+        if ($env:INPUT_SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid selected source SHA' }
         if ($checkoutSha -cne $env:INPUT_SOURCE_SHA) { throw 'Skippy CLI checkout differs from selected source' }
         $env:SKIPPY_SOURCE_SHA = $env:INPUT_SOURCE_SHA
         & just $recipe

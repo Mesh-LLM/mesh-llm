@@ -417,6 +417,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Each selected platform builds one backend-neutral standalone Skippy CLI
   independently of the Mesh UI and host. Pass the selected immutable source SHA
   into CLI preparation and require the checkout to match before building.
+  Until the protected pre-migration host slices are removed, their local CLI
+  preparation may derive that SHA from the selected checked-out commit; the
+  dedicated CLI slices and release callers must pass it explicitly.
   Verify its embedded source/version/ABI contract and the native producer's
   source sidecar, then compose it with each exact selected runtime before starting
   the Mesh host. Standalone composition and its eventual qualification receipt

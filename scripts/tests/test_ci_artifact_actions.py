@@ -129,22 +129,24 @@ class CiArtifactActionTests(unittest.TestCase):
             )
             (tools / "just").chmod(0o755)
             (tools / "readelf").chmod(0o755)
-            result = subprocess.run(
-                ["bash", "-c", script],
-                cwd=root,
-                env={
-                    **os.environ,
-                    "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
-                    "INPUT_PROFILE": "release",
-                    "INPUT_OUTPUT_DIR": "cli-input",
-                    "INPUT_SOURCE_SHA": source_sha,
-                    "GITHUB_WORKSPACE": str(root),
-                },
-                capture_output=True,
-                text=True,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("host dependency policy rejected", result.stderr)
+            for selected_sha in (source_sha, ""):
+                with self.subTest(selected_sha=selected_sha or "legacy host"):
+                    result = subprocess.run(
+                        ["bash", "-c", script],
+                        cwd=root,
+                        env={
+                            **os.environ,
+                            "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+                            "INPUT_PROFILE": "release",
+                            "INPUT_OUTPUT_DIR": "cli-input",
+                            "INPUT_SOURCE_SHA": selected_sha,
+                            "GITHUB_WORKSPACE": str(root),
+                        },
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("host dependency policy rejected", result.stderr)
             self.assertFalse((root / "cli-input" / "skippy.sha256").exists())
             report = json.loads((root / "cli-input" / "host-imports.json").read_text())
             self.assertEqual(report["rejected_imports"], ["libllama.so"])

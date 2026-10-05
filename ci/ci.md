@@ -962,6 +962,8 @@ platform lane builds one backend-neutral standalone Skippy CLI independently
 of its UI-dependent Mesh host and uploads
 `ci-skippy-cli-<platform>-<architecture>` with a checksum, embedded build
 contract, and `host-imports.json` after verifying host imports.
+The standalone slice passes the selected source SHA into CLI preparation;
+protected pre-migration host slices derive it from their checked-out source.
 Native-runtime slices build or restore one Skippy llama.cpp
 runtime per selected backend and upload a source-bound `ci-source.json` beside
 the archive. The Linux CPU package cache uses the exact source revision in its
