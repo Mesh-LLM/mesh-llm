@@ -80,11 +80,24 @@ jobs:
     steps:
       - name: Require the trusted release ref
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Manual releases must be dispatched from refs/heads/main, not $GITHUB_REF." >&2
-            exit 1
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            case "$GITHUB_REF" in
+              refs/heads/main) ;;
+              refs/heads/release/0.78.1)
+                if [[ "v${INPUT_VERSION#v}" != "v0.78.1" ]]; then
+                  echo "release/0.78.1 may only publish v0.78.1." >&2
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "Manual releases must be dispatched from main or release/0.78.1, not $GITHUB_REF." >&2
+                exit 1
+                ;;
+            esac
           fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -167,6 +180,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
           CANARY: ${{ steps.meta.outputs.canary }}
+          RELEASE_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           source_sha="$GITHUB_SHA"
@@ -180,7 +194,7 @@ jobs:
               exit 1
             fi
           elif [[ "$CANARY" == "true" ]]; then
-            echo "Canary release: leaving main unchanged."
+            echo "Canary release: leaving $RELEASE_REF unchanged."
           else
             scripts/release-version.sh "$RELEASE_TAG"
             cargo fmt --all -- --check
@@ -192,7 +206,7 @@ jobs:
               exit 1
             fi
             if git diff --cached --quiet; then
-              echo "main already contains the complete $RELEASE_TAG version update."
+              echo "$RELEASE_REF already contains the complete $RELEASE_TAG version update."
             else
               git config user.name "github-actions[bot]"
               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -200,7 +214,7 @@ jobs:
             fi
             source_sha="$(git rev-parse HEAD)"
             release_remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-            git push "$release_remote" "$source_sha:refs/heads/main"
+            git push "$release_remote" "$source_sha:$RELEASE_REF"
           fi
 
           release_notes_base="$(

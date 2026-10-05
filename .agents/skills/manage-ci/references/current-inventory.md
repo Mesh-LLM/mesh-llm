@@ -48,7 +48,7 @@ row resolves, and the still-unverified census in agreement.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
-| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
+| `release.yml` | dispatch on the default branch, or on `release/0.78.1` for `v0.78.1` only | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
 | `resume-crates-release.yml` (`Release · Resume crates.io`) | dispatch on the default branch | Exact-tag, exact-SHA recovery for a partially published stable crates.io chain; grants `packages: read` to pull its pinned GHCR runner image, then uses the immutable release source and the trusted default-branch publisher script |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
@@ -289,9 +289,12 @@ non-cancelling concurrency group serializes canary runs, not individual families
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the
-tracked version surface changes, and fast-forwards `main` before any release
-build starts. `just release` is a preflight and synchronous dispatcher for that
-same workflow. Canary dispatches never update `main` or publish. Release tags
+tracked version surface changes, and fast-forwards the dispatched branch before
+any release build starts: `main` for a default-branch dispatch, or
+`release/0.78.1` for the `v0.78.1` patch release it alone may publish.
+`just release` is a preflight and synchronous dispatcher for a `main` release;
+the patch branch is dispatched directly with `gh workflow run release.yml
+--ref release/0.78.1`. Canary dispatches never update `main` or publish. Release tags
 and releases are immutable on the manual release path: a non-canary dispatch
 refuses an already-existing tag and fails closed if it cannot verify the
 remote tag state. The release workflow is dispatch-only, so re-pushing a tag

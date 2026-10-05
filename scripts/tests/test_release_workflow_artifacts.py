@@ -223,10 +223,10 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             '"$GITHUB_EVENT_NAME" == "workflow_dispatch"',
             metadata,
         )
-        self.assertIn(
-            '"$GITHUB_REF" != "refs/heads/main"',
-            metadata,
-        )
+        self.assertIn('refs/heads/main) ;;', metadata)
+        self.assertIn('refs/heads/release/0.78.1)', metadata)
+        self.assertIn('"v${INPUT_VERSION#v}" != "v0.78.1"', metadata)
+        self.assertIn('git push "$release_remote" "$source_sha:$RELEASE_REF"', metadata)
         self.assertIn(
             'git merge-base --is-ancestor "$GITHUB_SHA" '
             "refs/remotes/origin/main",
@@ -263,9 +263,9 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             metadata,
         )
         self.assertIn('scripts/release-version.sh "$RELEASE_TAG"', metadata)
-        self.assertIn("Canary release: leaving main unchanged", metadata)
+        self.assertIn("Canary release: leaving $RELEASE_REF unchanged", metadata)
         self.assertIn(
-            'git push "$release_remote" "$source_sha:refs/heads/main"',
+            'git push "$release_remote" "$source_sha:$RELEASE_REF"',
             metadata,
         )
         self.assertIn(
@@ -296,7 +296,7 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         whitespace_check = metadata.index("git diff --check", format_check)
         stage_release_source = metadata.index("git add --update", whitespace_check)
         push_release_source = metadata.index(
-            'git push "$release_remote" "$source_sha:refs/heads/main"',
+            'git push "$release_remote" "$source_sha:$RELEASE_REF"',
         )
         self.assertLess(manual_version_update, format_check)
         self.assertLess(format_check, whitespace_check)
