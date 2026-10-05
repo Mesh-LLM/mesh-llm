@@ -26,6 +26,8 @@ pub(super) struct CurrentManifest {
 #[serde(deny_unknown_fields)]
 pub(super) struct LegacyManifest {
     runtime: LegacyArtifact,
+    #[serde(default, rename = "build", skip_serializing)]
+    _build: Option<BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -235,6 +237,10 @@ mod tests {
             "backend": {"kind": "cpu"}, "libraries": ["lib/runtime.so"]
         }});
         let parsed: NativeRuntimeManifest = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(parsed.runtime.release_version.as_deref(), Some("0.78.0"));
+        let mut with_build = legacy.clone();
+        with_build["build"] = json!({"backend": "metal", "llama_patch_digest": "abc"});
+        let parsed: NativeRuntimeManifest = serde_json::from_value(with_build).unwrap();
         assert_eq!(parsed.runtime.release_version.as_deref(), Some("0.78.0"));
         let mut missing = legacy.clone();
         missing["runtime"]
