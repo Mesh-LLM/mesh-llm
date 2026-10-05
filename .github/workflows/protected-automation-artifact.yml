@@ -1,0 +1,102 @@
+name: Protected native repository automation
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Native executor, linux-x64, linux-arm64, macos-arm64, or windows-x64.
+        required: true
+        type: string
+      lane:
+        description: Topic scope, quality, website, linux, macos, or windows.
+        required: true
+        type: string
+      protected_source_sha:
+        description: Immutable source already frozen by the protected lane; must be an ancestor of the protected default branch.
+        required: true
+        type: string
+    outputs:
+      source_sha:
+        value: ${{ jobs.producer.outputs.source_sha }}
+      artifact_id:
+        value: ${{ jobs.producer.outputs.artifact_id }}
+      binary_sha256:
+        value: ${{ jobs.producer.outputs.binary_sha256 }}
+      producer_os:
+        value: ${{ jobs.producer.outputs.producer_os }}
+      producer_arch:
+        value: ${{ jobs.producer.outputs.producer_arch }}
+
+permissions:
+  contents: read
+
+jobs:
+  producer:
+    name: Protected automation (${{ inputs.platform }})
+    # The fallback is hosted and fails closed in the first step. Inputs cannot
+    # select arbitrary labels or persistent/Depot runners.
+    runs-on: ${{ inputs.platform == 'linux-arm64' && 'ubuntu-24.04-arm' || inputs.platform == 'macos-arm64' && 'macos-15' || inputs.platform == 'windows-x64' && 'windows-2022' || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GIT_MASTER: '1'
+      CARGO_INCREMENTAL: '0'
+      SCCACHE_GHA_ENABLED: 'false'
+      SCCACHE_MULTILEVEL_CHAIN: disk
+    outputs:
+      source_sha: ${{ steps.upload.outputs.source_sha }}
+      artifact_id: ${{ steps.upload.outputs.artifact_id }}
+      binary_sha256: ${{ steps.upload.outputs.binary_sha256 }}
+      producer_os: ${{ steps.identity.outputs.producer_os }}
+      producer_arch: ${{ steps.identity.outputs.producer_arch }}
+    steps:
+      - name: Admit native protected executor
+        id: identity
+        shell: bash
+        env:
+          AUTOMATION_PLATFORM: ${{ inputs.platform }}
+          AUTOMATION_LANE: ${{ inputs.lane }}
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted || exit 1
+          case "$AUTOMATION_PLATFORM:$RUNNER_OS:$RUNNER_ARCH" in
+            linux-x64:Linux:X64|linux-arm64:Linux:ARM64|macos-arm64:macOS:ARM64|windows-x64:Windows:X64) ;;
+            *) echo "unsupported or mismatched native automation executor" >&2; exit 1 ;;
+          esac
+          case "$AUTOMATION_LANE" in
+            quality|website|linux|macos|windows) ;;
+            *) echo "unsupported automation topic" >&2; exit 1 ;;
+          esac
+          {
+            printf 'producer_os=%s\n' "$RUNNER_OS"
+            printf 'producer_arch=%s\n' "$RUNNER_ARCH"
+          } >> "$GITHUB_OUTPUT"
+          printf 'SCCACHE_DIR=%s/protected-automation-sccache\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Freeze protected automation source
+        id: source
+        shell: bash
+        env:
+          AUTOMATION_PROTECTED_SOURCE_SHA: ${{ inputs.protected_source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$AUTOMATION_PROTECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git merge-base --is-ancestor "$AUTOMATION_PROTECTED_SOURCE_SHA" HEAD
+          git checkout --detach "$AUTOMATION_PROTECTED_SOURCE_SHA"
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "$AUTOMATION_PROTECTED_SOURCE_SHA" || exit 1
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+      - name: Produce immutable protected automation
+        id: upload
+        uses: ./.github/actions/upload-automation
+        with:
+          source_sha: ${{ steps.source.outputs.source_sha }}
+          source-profile: protected-clean
+          runner-profile: ${{ runner.os == 'Linux' && 'hosted-bare' || 'image' }}
+          ci-lane: ${{ inputs.lane }}

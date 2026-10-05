@@ -12,6 +12,10 @@ inputs:
     description: Closed source claim; release-prepared preserves release checkout identity, protected-clean requires a clean source tree.
     required: false
     default: release-prepared
+  ci-lane:
+    description: Optional closed CI artifact scope, quality, website, linux, macos, or windows; requires protected-clean source.
+    required: false
+    default: ''
 outputs:
   artifact_id:
     description: Immutable same-run artifact identifier supplied by upload-artifact.
@@ -31,8 +35,16 @@ runs:
         AUTOMATION_PROFILE: ${{ inputs.runner-profile }}
         AUTOMATION_SOURCE_PROFILE: ${{ inputs.source-profile }}
         AUTOMATION_SOURCE_SHA: ${{ inputs.source_sha }}
+        AUTOMATION_CI_LANE: ${{ inputs.ci-lane }}
       run: |
         set -euo pipefail
+        case "${AUTOMATION_CI_LANE:-}" in
+          '') ;;
+          quality|website|linux|macos|windows)
+            test "$AUTOMATION_SOURCE_PROFILE" = protected-clean || exit 1
+            ;;
+          *) echo "unsupported automation CI lane" >&2; exit 1 ;;
+        esac
         [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
         test "$(git rev-parse HEAD)" = "$AUTOMATION_SOURCE_SHA" || exit 1
         case "$AUTOMATION_SOURCE_PROFILE" in
@@ -49,7 +61,7 @@ runs:
         esac
     - name: Prepare producer automation
       id: prepare
-      if: runner.os == 'Windows' || inputs.runner-profile == 'hosted-bare'
+      if: runner.os == 'Windows' || inputs.runner-profile == 'hosted-bare' || (runner.os == 'macOS' && inputs.source-profile == 'protected-clean')
       uses: ./.github/actions/prepare-automation
       with:
         runner-profile: ${{ inputs.runner-profile }}
@@ -58,11 +70,19 @@ runs:
       shell: bash
       env:
         AUTOMATION_SOURCE_SHA: ${{ inputs.source_sha }}
+        AUTOMATION_CI_LANE: ${{ inputs.ci-lane }}
         AUTOMATION_BINARY_PATH: ${{ steps.prepare.outputs.binary_path }}
         AUTOMATION_PROFILE: ${{ inputs.runner-profile }}
         AUTOMATION_SOURCE_PROFILE: ${{ inputs.source-profile }}
       run: |
         set -euo pipefail
+        case "${AUTOMATION_CI_LANE:-}" in
+          '') ;;
+          quality|website|linux|macos|windows)
+            test "$AUTOMATION_SOURCE_PROFILE" = protected-clean || exit 1
+            ;;
+          *) echo "unsupported automation CI lane" >&2; exit 1 ;;
+        esac
         [[ "$AUTOMATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
         test "$(git rev-parse HEAD)" = "$AUTOMATION_SOURCE_SHA" || exit 1
         case "$AUTOMATION_SOURCE_PROFILE" in
@@ -110,7 +130,7 @@ runs:
       id: upload
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
-        name: automation-${{ runner.os }}-${{ runner.arch }}-${{ inputs.source_sha }}
+        name: automation-${{ runner.os }}-${{ runner.arch }}-${{ inputs.source_sha }}${{ inputs.ci-lane != '' && format('-{0}', inputs.ci-lane) || '' }}
         path: ${{ runner.temp }}/immutable-automation/*
         if-no-files-found: error
-        retention-days: 90
+        retention-days: ${{ inputs.ci-lane != '' && 1 || 90 }}

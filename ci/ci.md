@@ -1688,3 +1688,16 @@ command. The existing 27 pinned `audit-depot-pr-isolation` callers remain
 transitional until each has a native protected producer dependency and the
 replacement action is published at a reviewed protected commit. Local fixtures
 do not establish hosted artifact transport or provider isolation.
+
+The prepared `protected-automation-artifact.yml` reusable producer accepts
+closed native platform and topic inputs plus one immutable protected source SHA.
+Its fixed GitHub-hosted executor map admits only Linux X64/ARM64, macOS ARM64,
+and Windows X64. After checking out the protected default branch, it verifies
+the requested commit is an ancestor before selecting and compiling that source.
+Topic-scoped immutable artifacts retain for one day; unscoped release artifacts
+retain their existing name and 90-day policy. The upload action initializes the
+macOS automation environment for protected-clean producers. Native artifact IDs,
+source SHA, executable digest, and OS/architecture are independent outputs.
+Caller provisioning remains incomplete until each selected lane declares one
+producer per native executor variant and forwards its exact dependency outputs.
+No hosted execution or cross-platform native qualification is recorded here.
