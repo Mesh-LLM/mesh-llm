@@ -63,6 +63,7 @@ pub(super) fn build(
         );
     }
     let seeds=[("production",production),("event_disabled",reference),("baseline",baseline)].into_iter().filter(|(_,input)|input.seed!=options.seed).map(|(name,input)|format!("{name}: manifest seed {} does not match --seed {}; pairing requires the SAME seed on every side",input.seed,options.seed)).collect::<Vec<_>>();
+    let trial_plan_violations = super::prompt_identity::violations(production, reference, baseline);
     let environment_a =
         environment_identity::compare(&production.environment, &reference.environment, true)?;
     let environment_b =
@@ -79,6 +80,10 @@ pub(super) fn build(
     let mut reasons = Vec::new();
     for (blocked, name) in [
         (!seeds.is_empty(), "seed_mismatch"),
+        (
+            !trial_plan_violations.is_empty(),
+            "trial_plan_identity_mismatch",
+        ),
         (
             !environment_a.is_empty(),
             "environment_mismatch_comparison_a",
@@ -103,6 +108,7 @@ pub(super) fn build(
         "max_degradation_percent":options.max_degradation_percent,"max_mdd_percent":options.max_mdd_percent,
         "min_primary_pairs":options.min_primary_pairs,"min_scenario_pairs":options.min_scenario_pairs,"report_holm":options.report_holm,
         "input_violations":seeds,
+        "trial_plan_violations":trial_plan_violations,
         "comparison_a":{"description":format!("production vs {} on the current binary",reference.mode),"status":status_a,"environment_violations":environment_a,"metrics":screening::report(&a,options.report_holm)?},
         "comparison_b":{"description":"current-binary production vs baseline-binary production","status":status_b,"environment_violations":environment_b,"metrics":screening::report(&b,options.report_holm)?},
         "callback_ingress_p99":gates.callback,"health":gates.health,"health_availability":gates.availability,

@@ -10,6 +10,7 @@ mod manifest;
 mod options;
 mod order_identity;
 mod pairing;
+mod prompt_identity;
 mod report;
 mod resampling;
 mod retry;
