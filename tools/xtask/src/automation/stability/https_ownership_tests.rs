@@ -1,7 +1,5 @@
 use super::*;
-#[allow(dead_code)]
-#[path = "../../../tests/migration_stability/tls_fixture.rs"]
-mod fixture;
+use crate::automation::tls_fixture as fixture;
 
 #[test]
 fn stability_https_dropping_pending_future_joins_owned_transfer_and_closes_tls_peer() {

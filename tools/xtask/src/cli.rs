@@ -5,6 +5,9 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
     "usage: cargo xtool hf-converted-artifact preflight --artifact-dir <directory>";
 
 pub(crate) fn print_usage() {
+    println!(
+        "  cargo xtool automation agent-recording-proxy UPSTREAM_API_BASE CAPTURE_JSONL READY_FILE LIFETIME_SECONDS"
+    );
     println!("  cargo xtool automation local-ports COUNT");
     println!("  cargo xtool automation system-one-cases --help");
     println!("  cargo xtool automation system-one-smoke --help");
@@ -101,6 +104,7 @@ pub(crate) enum CliCommand<'a> {
     CacheFamilyReport(&'a [String]),
     AgentFixtureEvidence(&'a [String]),
     AgentFixtureInputs(&'a [String]),
+    AgentRecordingProxy(&'a [String]),
     FamilyBatteryPolicy(&'a [String]),
     FamilyModelIdentity(&'a [String]),
     LocalPorts(&'a [String]),
@@ -199,6 +203,11 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "agent-recording-proxy" =>
+            {
+                CliCommand::AgentRecordingProxy(rest)
+            }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "agent-fixture-inputs" =>
             {

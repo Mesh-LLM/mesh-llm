@@ -10,7 +10,7 @@ agent_smoke_automation() {
             echo "MESH_LLM_AUTOMATION_BIN must be an absolute executable" >&2
             return 1
         fi
-        "$MESH_LLM_AUTOMATION_BIN" automation "$@"
+        env HOME="$AGENT_SMOKE_AUTOMATION_HOME" "$MESH_LLM_AUTOMATION_BIN" automation "$@"
     else
         env HOME="$AGENT_SMOKE_AUTOMATION_HOME" just --justfile "$AGENT_SMOKE_AUTOMATION_ROOT/Justfile" automation-run automation "$@"
     fi
@@ -44,79 +44,7 @@ agent_smoke_pick_model() {
 
 agent_smoke_write_fixture() {
     local work_dir="${1:?work dir required}"
-    mkdir -p "${work_dir}/facts" "${work_dir}/src" "${work_dir}/notes" "${work_dir}/tests"
-
-    cat >"${work_dir}/README.md" <<'EOF'
-# Agent Smoke Fixture
-
-This repository is intentionally tiny. The smoke test should answer only from
-files on disk, not from the prompt text.
-EOF
-
-    cat >"${work_dir}/facts/signal.md" <<'EOF'
-# Runtime Signal
-
-CODEWORD=signal-7429
-
-Question seed:
-Which file names contain the word signal?
-EOF
-
-    cat >"${work_dir}/src/matrix.txt" <<'EOF'
-checksum: FS-319-DELTA
-numbers: 2 3 4 5
-hint: the prime sum is computed from the numbers line
-EOF
-
-    cat >"${work_dir}/src/smoke_calc.py" <<'EOF'
-from __future__ import annotations
-
-
-def parse_codeword(path: str) -> str:
-    """Return the CODEWORD value from a small key/value markdown file."""
-    raise NotImplementedError("ci smoke fixture")
-
-
-def prime_sum_from_matrix(path: str) -> int:
-    """Return the sum of prime numbers from the numbers line in matrix.txt."""
-    raise NotImplementedError("ci smoke fixture")
-EOF
-
-    cat >"${work_dir}/tests/test_smoke_calc.py" <<'EOF'
-from pathlib import Path
-import sys
-import unittest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from smoke_calc import parse_codeword, prime_sum_from_matrix
-
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-class SmokeCalcTests(unittest.TestCase):
-    def test_parse_codeword(self):
-        self.assertEqual(parse_codeword(str(ROOT / "facts" / "signal.md")), "signal-7429")
-
-    def test_prime_sum_from_matrix(self):
-        self.assertEqual(prime_sum_from_matrix(str(ROOT / "src" / "matrix.txt")), 10)
-
-
-if __name__ == "__main__":
-    unittest.main()
-EOF
-
-    cat >"${work_dir}/notes/manifest.txt" <<'EOF'
-tracked files:
-- facts/signal.md
-- src/matrix.txt
-- src/smoke_calc.py
-- tests/test_smoke_calc.py
-- README.md
-EOF
-
-    agent_smoke_automation agent-fixture-inputs sha256 "${work_dir}/src/smoke_calc.py"
+    agent_smoke_automation agent-fixture-inputs coding-setup "$work_dir"
 }
 
 agent_smoke_prompt() {
@@ -125,9 +53,9 @@ You are running a CI smoke test in a throwaway project. Use filesystem and codin
 
 Tasks:
 1. Inspect the repository.
-2. Read facts/signal.md, src/matrix.txt, and tests/test_smoke_calc.py.
-3. Implement src/smoke_calc.py so the tests pass.
-4. Run the Python unit tests.
+2. Read facts/signal.md, src/matrix.txt, and tests/smoke_calc.rs.
+3. Implement src/smoke_calc.rs using only the Rust standard library so the tests pass.
+4. Run just test.
 5. Answer exactly these four lines with no Markdown and no extra text:
 CODEWORD=<the CODEWORD value from facts/signal.md>
 CHECKSUM=<the checksum value from src/matrix.txt>
@@ -176,60 +104,11 @@ agent_smoke_validate_fixture() {
     local label="${4:?label required}"
     local require_tool_events="${5:-false}"
 
-    if ! python3 -m unittest discover -s "${work_dir}/tests" -p 'test_*.py'; then
-        echo "${label} fixture tests failed after the coding session" >&2
-        echo "--- src/smoke_calc.py ---" >&2
-        sed -n '1,220p' "${work_dir}/src/smoke_calc.py" >&2 || true
+    if ! agent_smoke_automation agent-fixture-inputs coding-verify "$work_dir" "$initial_sha" "$(command -v just)" "$(command -v rustc)"; then
+        echo "${label} fixture implementation verification failed after the coding session" >&2
+        sed -n '1,220p' "${work_dir}/src/smoke_calc.rs" >&2 || true
         return 1
     fi
-
-    python3 - "${work_dir}" "${initial_sha}" <<'PY'
-import hashlib
-import importlib.util
-import sys
-import tempfile
-from pathlib import Path
-
-root = Path(sys.argv[1])
-initial_sha = sys.argv[2]
-source_path = root / "src" / "smoke_calc.py"
-source = source_path.read_text(encoding="utf-8")
-current_sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
-
-if current_sha == initial_sha:
-    print("Agent left src/smoke_calc.py unchanged.", file=sys.stderr)
-    sys.exit(1)
-
-for forbidden in ("NotImplementedError", "ci smoke fixture"):
-    if forbidden in source:
-        print(f"Agent left placeholder marker in src/smoke_calc.py: {forbidden}", file=sys.stderr)
-        sys.exit(1)
-
-spec = importlib.util.spec_from_file_location("smoke_calc", source_path)
-module = importlib.util.module_from_spec(spec)
-assert spec and spec.loader
-spec.loader.exec_module(module)
-
-with tempfile.TemporaryDirectory(prefix="mesh-agent-hidden-") as tmp:
-    tmp_path = Path(tmp)
-    signal_path = tmp_path / "other_signal.md"
-    matrix_path = tmp_path / "other_matrix.txt"
-    signal_path.write_text("# Hidden\n\nCODEWORD=hidden-8842\n", encoding="utf-8")
-    matrix_path.write_text("checksum: hidden\nnumbers: 6 7 8 9 10 11 12 13\n", encoding="utf-8")
-
-    codeword = module.parse_codeword(str(signal_path))
-    prime_sum = module.prime_sum_from_matrix(str(matrix_path))
-
-if codeword != "hidden-8842":
-    print(f"Hidden codeword validation failed: {codeword!r}", file=sys.stderr)
-    sys.exit(1)
-
-if prime_sum != 31:
-    print(f"Hidden prime-sum validation failed: {prime_sum!r}", file=sys.stderr)
-    sys.exit(1)
-
-print("Hidden implementation validation passed")
-PY
 
     agent_smoke_evidence result "$output_path" "$label" "$require_tool_events"
 }

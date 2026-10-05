@@ -55,6 +55,7 @@ fn run() -> DynResult<()> {
             automation::agent_fixture_evidence::run(rest)
         }
         cli::CliCommand::AgentFixtureInputs(rest) => automation::agent_fixture_inputs::run(rest),
+        cli::CliCommand::AgentRecordingProxy(rest) => automation::agent_recording_proxy::run(rest),
         cli::CliCommand::FamilyBatteryPolicy(rest) => automation::family_battery_policy::run(rest),
         cli::CliCommand::FamilyModelIdentity(rest) => automation::family_model_identity::run(rest),
         cli::CliCommand::LocalPorts(rest) => automation::local_ports::run(rest),

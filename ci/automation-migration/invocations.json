@@ -2185,12 +2185,6 @@
       "closure_note": "Dynamic import used by release-note classifier; caller scripts/release-notes-generate.sh; exact command flags vary by fallback path.",
       "expression": "_CHECKER_PATH",
       "target": "scripts/check-conventional-commit.py"
-    },
-    {
-      "caller": "scripts/ci-agent-live-fixture-lib.sh:208",
-      "closure_note": "Loads generated fixture source; preserve its source/code identity and generated-file provenance rather than counting it as a tracked Python inventory path.",
-      "expression": "${work_dir}/src/smoke_calc.py passed to inline Python",
-      "target": "runtime fixture path, not a tracked repository path"
     }
   ],
   "dynamic_import_fixture_specification": {
@@ -3703,8 +3697,8 @@
     },
     {
       "path": "scripts/ci-opencode-smoke.sh",
-      "sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
-      "line_count": 320
+      "sha256": "64da39dff321b4f958f74582ee8fb71a9f5bcb1c61cdfaeaadf164a019221206",
+      "line_count": 235
     },
     {
       "path": "scripts/ci-compat-smoke.sh",
@@ -3755,6 +3749,11 @@
       "path": "ci/required-sdk-python/requirements.lock",
       "sha256": "e60a887ad0e8f353d0df5fc764dd00b663c8f766a246b33282e041ebf3d31ec6",
       "line_count": 720
+    },
+    {
+      "path": "scripts/ci-agent-live-fixture-lib.sh",
+      "sha256": "b42e7d34509d7786d1b3048f5020f49915cefb5aaccabbbcfaa8202ccbc4e4a0",
+      "line_count": 114
     }
   ],
   "current_wave_intent_proofs": {
@@ -15224,7 +15223,7 @@
   "opencode_selection_surface_cutover": {
     "status": "LOCAL_POSTIMAGE_QUALIFIED",
     "source": "scripts/ci-opencode-smoke.sh",
-    "source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
+    "source_sha256": "64da39dff321b4f958f74582ee8fb71a9f5bcb1c61cdfaeaadf164a019221206",
     "removed_helpers": [
       "model picker inline Python",
       "captured API surface validator inline Python"
@@ -15235,33 +15234,31 @@
     ],
     "native_tests": ".omo/evidence/resume-20261002/linux-native-focused-v3-tests.log",
     "native_clippy": ".omo/evidence/resume-20261002/linux-native-focused-v3-clippy.log",
-    "remaining_python": [
-      "recording proxy"
-    ],
+    "remaining_python": [],
     "limits": "No live OpenCode/model/SDK or whole Python-free path claim.",
-    "prior_source_sha256": "28de128f98cbefff703e1a51cb9abec2c9cdbb8e268da4b012c6ccc7b2bc8681",
-    "successor_record": "opencode_coding_capture_cutover",
+    "prior_source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
+    "successor_record": "agent_coding_recording_proxy_cutover",
     "maintained_normal": {
       "exit_code": 0,
-      "session_id": 52210,
-      "freeze": ".omo/evidence/resume-20261002/agent-fixture-maintained-freeze-v1.json",
-      "freeze_sha256": "54ee568cb7dca0efedf2cc8ebadb7ac21870fbd1bcd26e5bd2ef0b77f4d7ffae",
-      "log": ".omo/evidence/resume-20261002/agent-fixture-maintained-v1-normal.log",
-      "sha256": "9a42499a1b273ef34c4fb449b7a5bdc8538b9ae3903fb2e3b1ec49ecc45e3c27",
+      "session_id": 53597,
+      "freeze": ".omo/evidence/resume-20261002/agent-proxy-shared-maintained-freeze-v3.json",
+      "freeze_sha256": "6f02a033be3dea402edf6262857a1d0260ab75e8287efc6f4d210e6886fcedf4",
+      "log": ".omo/evidence/resume-20261002/agent-proxy-shared-maintained-v3-normal.log",
+      "sha256": "4a2b15695b9973ac76d92a765124cea25b9f1a3560caab3d54f5ef72e7d53299",
       "rust": {
         "groups": 114,
-        "passed": 4691,
+        "passed": 4705,
         "failed": 0,
         "ignored": 2
       },
       "legacy": {
         "run": 664,
+        "seconds": 91.199,
         "skipped": 13,
-        "seconds": 127.743,
         "failed": 0,
         "errors": 0
       },
-      "limits": "Local maintained normal gate. No live model, SDK, hosted, Windows or whole migration completion proof."
+      "limits": "Local maintained normal gate. No live agent/model/SDK, hosted, Windows or whole-migration completion proof."
     }
   },
   "native_platform_fixture_retirement": {
@@ -15287,7 +15284,7 @@
   "opencode_coding_capture_cutover": {
     "status": "LOCAL_POSTIMAGE_QUALIFIED",
     "source": "scripts/ci-opencode-smoke.sh",
-    "source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
+    "source_sha256": "64da39dff321b4f958f74582ee8fb71a9f5bcb1c61cdfaeaadf164a019221206",
     "changes": [
       {
         "path": "tools/xtask/src/automation/agent_fixture_evidence.rs",
@@ -15470,32 +15467,613 @@
         "target": "generated workspace fixture path"
       }
     ],
-    "remaining_python": [
-      "recording HTTP(S) proxy"
-    ],
+    "remaining_python": [],
     "regression": ".omo/evidence/resume-20261002/agent-surface-maximum-input-v1.json",
     "limits": "Maintained corrected full normal gate required. Private Linux fixtures do not prove live OpenCode/model/SDK, Windows or hosted execution.",
+    "prior_source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
+    "successor_record": "agent_coding_recording_proxy_cutover",
     "maintained_normal": {
       "exit_code": 0,
-      "session_id": 52210,
-      "freeze": ".omo/evidence/resume-20261002/agent-fixture-maintained-freeze-v1.json",
-      "freeze_sha256": "54ee568cb7dca0efedf2cc8ebadb7ac21870fbd1bcd26e5bd2ef0b77f4d7ffae",
-      "log": ".omo/evidence/resume-20261002/agent-fixture-maintained-v1-normal.log",
-      "sha256": "9a42499a1b273ef34c4fb449b7a5bdc8538b9ae3903fb2e3b1ec49ecc45e3c27",
+      "session_id": 53597,
+      "freeze": ".omo/evidence/resume-20261002/agent-proxy-shared-maintained-freeze-v3.json",
+      "freeze_sha256": "6f02a033be3dea402edf6262857a1d0260ab75e8287efc6f4d210e6886fcedf4",
+      "log": ".omo/evidence/resume-20261002/agent-proxy-shared-maintained-v3-normal.log",
+      "sha256": "4a2b15695b9973ac76d92a765124cea25b9f1a3560caab3d54f5ef72e7d53299",
       "rust": {
         "groups": 114,
-        "passed": 4691,
+        "passed": 4705,
         "failed": 0,
         "ignored": 2
       },
       "legacy": {
         "run": 664,
+        "seconds": 91.199,
         "skipped": 13,
-        "seconds": 127.743,
         "failed": 0,
         "errors": 0
       },
-      "limits": "Local maintained normal gate. No live model, SDK, hosted, Windows or whole migration completion proof."
+      "limits": "Local maintained normal gate. No live agent/model/SDK, hosted, Windows or whole-migration completion proof."
     }
+  },
+  "agent_coding_recording_proxy_cutover": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "source_head": "946c937d87e4d7c93c86ab0b7ec3a1de5d9f9309",
+    "source_states": [
+      {
+        "path": "scripts/ci-opencode-smoke.sh",
+        "sha256": "64da39dff321b4f958f74582ee8fb71a9f5bcb1c61cdfaeaadf164a019221206",
+        "prior_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
+        "line_count": 235
+      },
+      {
+        "path": "scripts/ci-agent-live-fixture-lib.sh",
+        "sha256": "b42e7d34509d7786d1b3048f5020f49915cefb5aaccabbbcfaa8202ccbc4e4a0",
+        "prior_sha256": "0636ecfb90bca3408839ab61a58e439247cd7b9b7019dac9d4ab1b9070eb4f1e",
+        "line_count": 114
+      }
+    ],
+    "changes": [
+      {
+        "path": "scripts/ci-agent-live-fixture-lib.sh",
+        "preimage_sha256": "0636ecfb90bca3408839ab61a58e439247cd7b9b7019dac9d4ab1b9070eb4f1e",
+        "sha256": "b42e7d34509d7786d1b3048f5020f49915cefb5aaccabbbcfaa8202ccbc4e4a0",
+        "mode": 493
+      },
+      {
+        "path": "scripts/ci-opencode-smoke.sh",
+        "preimage_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
+        "sha256": "64da39dff321b4f958f74582ee8fb71a9f5bcb1c61cdfaeaadf164a019221206",
+        "mode": 493
+      },
+      {
+        "path": "tools/xtask/Cargo.toml",
+        "preimage_sha256": "45712cdbde429aa196485d623af1f9f40c370282278587d41d378a4f2f6723e1",
+        "sha256": "17383a3fda9ad976c847b4862ae19e1f4ba608b77a51410c73591d6abbbb8c99",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/automation/agent_fixture_inputs/coding.rs",
+        "preimage_sha256": "9cc5b53f8e061cf3808f97c3774884c925e8760d49a94d2eaa37f9027f0f78b0",
+        "sha256": "ce23c22aee04ec517737ebc46020b1f3a44a56a456404896e0a605bb23b3fd6c",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/automation/agent_recording_proxy/forwarding.rs",
+        "preimage_sha256": null,
+        "sha256": "092b9172627f6715ae2182797aa775aabac250936aad86d0ab60677c73e946ba",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/automation/agent_recording_proxy/listener.rs",
+        "preimage_sha256": null,
+        "sha256": "c89ade39d67655af8b35c2e596e419b70bcb210841a59c7411eb231d8766cf9d",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/automation/agent_recording_proxy/mod.rs",
+        "preimage_sha256": null,
+        "sha256": "d931c3cd3f1177784cea639c112c6da59aef822a749e2d50af8dfb8510cb7296",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/automation/agent_recording_proxy/request_projection.rs",
+        "preimage_sha256": null,
+        "sha256": "4eab6ddb9e805d8e4da577dd5ff6868f6e5053f1197447687e4643314c21793c",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/automation/agent_recording_proxy/tests.rs",
+        "preimage_sha256": null,
+        "sha256": "eac0b6e8c1eea3c1c0c59de6b24f3b8a1a7cbb43d8ed4129d5d2949f17d64489",
+        "mode": 420,
+        "integration_sha256": "9540e68c8f21d784501b545d0f96e80348626c81eabb34ea6f274015e88170bd"
+      },
+      {
+        "path": "tools/xtask/src/automation/mod.rs",
+        "preimage_sha256": "aabf2ddc6c5c6142cf663b1b3e83a8a0f0ed14fb05401efdd8be5db4e6c87bf2",
+        "sha256": "9bb4979e88b7c7dc0ee6643bb07db274181cd97c0844d55162a6d54ebd62b82e",
+        "mode": 420,
+        "integration_sha256": "732f6a4549eac24042fdd8ac596550e906cd550fab04aff295df7e14ad84fac2"
+      },
+      {
+        "path": "tools/xtask/src/cli.rs",
+        "preimage_sha256": "c400535f4ce1c9752c7b92f3a2b47da519d357d2cd3577ab6e181309ae838aa9",
+        "sha256": "74befec66eee6461dbae2c53e9b6920a20d6309be4bd50fd53184e660e4bcd0f",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/main.rs",
+        "preimage_sha256": "82d5509d709673a6797592be8166179ab1050993616534683edb8937b54cb056",
+        "sha256": "0285b2283717726cdeedd9658b2a5445710aef603b56acffdf9982d31578147e",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle.rs",
+        "preimage_sha256": "c31f79e5c1275561c6ef5b9cfe4bfbb285f876cc1546fd7d28562d0a44b73c08",
+        "sha256": "1eacaed00e8a1279a81a1a641ae201614e2c08f0d84007c17aefb6d95c9fa363",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/agent_live_coding_fixture.rs",
+        "preimage_sha256": null,
+        "sha256": "336d6c1bd4dfd54c4dac6070b328eacfff082e578fc4efec81fc8f3cc5e93ff3",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/tests/migration_lifecycle/opencode_recording_proxy.rs",
+        "preimage_sha256": null,
+        "sha256": "067b614b0a6ddda045801a830a1b0efdffb9535e9bc273d6ec68be9ebeb1d787",
+        "mode": 420
+      },
+      {
+        "path": "tools/xtask/src/automation/stability/https_ownership_tests.rs",
+        "preimage_sha256": "21cd74f498d30501bfc62b4d9dcca998a1e37cad10609bc2c00b36bb1d4187d4",
+        "sha256": "76178cd89bda818e47b50ccd15027ca91a9be99d71d35b17ef3f55f0b93b0c05",
+        "mode": 420
+      }
+    ],
+    "archived_python_groups": [
+      {
+        "file": "scripts/ci-agent-live-fixture-lib.sh",
+        "members": [
+          [
+            71,
+            "734184679b47bbf6",
+            1,
+            "data",
+            "generated src/smoke_calc.py",
+            "cat heredoc writes a Python fixture file; does not invoke it"
+          ],
+          [
+            85,
+            "b057b4ac8dca15b3",
+            1,
+            "data",
+            "generated tests/test_smoke_calc.py",
+            "cat heredoc writes test source; execution occurs at unittest discover at line 220"
+          ],
+          [
+            114,
+            "603c47c8b5e235ba",
+            1,
+            "data",
+            "generated prompt path src/smoke_calc.py",
+            "literal list item in here-document, not shell invocation"
+          ],
+          [
+            115,
+            "4f0a2aeb5304979f",
+            1,
+            "data",
+            "generated prompt path tests/test_smoke_calc.py",
+            "literal list item in here-document, not shell invocation"
+          ],
+          [
+            128,
+            "3b2c3c5a94f28b00",
+            1,
+            "data",
+            "agent prompt path mention",
+            "instruction text inside heredoc; not Python execution"
+          ],
+          [
+            129,
+            "e1d0b092cd400962",
+            1,
+            "data",
+            "agent prompt path mention",
+            "instruction text inside heredoc; not Python execution"
+          ],
+          [
+            179,
+            "34887fa867acd69a",
+            1,
+            "environment",
+            "generated tests/test_smoke_calc.py via unittest",
+            "executes generated test in work_dir; failure branch prints fixture source, may return nonzero via enclosing guard; runtime-generated code closure is not tracked Python file"
+          ],
+          [
+            181,
+            "be3f0e5e46006fa5",
+            1,
+            "data",
+            "diagnostic echo of generated fixture path",
+            "writes stderr only; no interpreter"
+          ],
+          [
+            182,
+            "6474296b2bd94fb8",
+            1,
+            "data",
+            "sed reads generated Python fixture",
+            "prints file on stderr; not interpreter"
+          ],
+          [
+            195,
+            "6d71c27a055dd3fc",
+            1,
+            "data",
+            "inline Python body literal inside heredoc",
+            "scanner emitted a candidate for Python source_path assignment; no second interpreter launch"
+          ],
+          [
+            200,
+            "ea256265ed0ed238",
+            1,
+            "data",
+            "inline Python body diagnostic",
+            "already inside Python from line 227; not a second launch"
+          ],
+          [
+            205,
+            "2c9a05f128d5ffba",
+            1,
+            "data",
+            "inline Python body diagnostic",
+            "already inside Python from line 227; not a second launch"
+          ],
+          [
+            119,
+            "edfd9381bca98414",
+            1,
+            "data",
+            "generated src/smoke_calc.py argument to Rust SHA owner",
+            "agent_smoke_automation agent-fixture-inputs sha256 reads generated fixture bytes; no Python interpreter starts on this line"
+          ]
+        ]
+      },
+      {
+        "file": "scripts/ci-agent-live-fixture-lib.sh",
+        "members": [
+          [
+            186,
+            "b12e87c4d66ae607",
+            1,
+            "inline",
+            "fixture implementation validation",
+            "python3 - argv work_dir initial_sha; loads generated implementation and runs hidden inputs, nonzero fails harness; test output inherited"
+          ]
+        ]
+      },
+      {
+        "file": "scripts/ci-opencode-smoke.sh",
+        "members": [
+          [
+            95,
+            "ac337b0230cc385a",
+            1,
+            "inline",
+            "background OpenAI recording proxy",
+            "python3 -u - argv MESH_BASE_URL SURFACE_LOG SURFACE_READY; stdout/stderr redirected to SURFACE_PROXY_LOG, background PID cleaned on EXIT; writes capture log/readiness marker"
+          ]
+        ]
+      }
+    ],
+    "archived_generated_loader": [
+      {
+        "caller": "scripts/ci-agent-live-fixture-lib.sh:208",
+        "closure_note": "Loads generated fixture source; preserve its source/code identity and generated-file provenance rather than counting it as a tracked Python inventory path.",
+        "expression": "${work_dir}/src/smoke_calc.py passed to inline Python",
+        "target": "runtime fixture path, not a tracked repository path"
+      }
+    ],
+    "private_qualification": {
+      "freeze": ".omo/evidence/resume-20261002/agent-proxy-shared-private-freeze-v2.json",
+      "freeze_sha256": "d2afc2ddb7b2c50a2c5fd54fe20199175c02f9db6f5b56e5066b5ed163720947",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0,
+      "receipts": [
+        {
+          "kind": "tests",
+          "log": ".omo/evidence/resume-20261002/agent-proxy-shared-private-v2-tests.log",
+          "sha256": "01406c24d00eaf9803af53a1060f00739cf75c6c5d1fe207d2fc32062c43a0aa",
+          "exit_code": 0
+        },
+        {
+          "kind": "clippy",
+          "log": ".omo/evidence/resume-20261002/agent-proxy-shared-private-v2-clippy.log",
+          "sha256": "710c685c8512b52e5539a7ae1a0556974a74f809f3e35d5f54c7152118148a83",
+          "exit_code": 0
+        }
+      ]
+    },
+    "owners": [
+      "automation agent-recording-proxy",
+      "automation agent-fixture-inputs coding-setup",
+      "automation agent-fixture-inputs coding-verify",
+      "automation agent-fixture-evidence result"
+    ],
+    "preserved_contracts": [
+      "HTTP(S), API prefix/query, response status/body/API headers and captured consumer schema",
+      "Fresh per-run readiness and capture evidence; bounded request/response/concurrency/lifetime with cancellation-owned Curl cleanup",
+      "Independent visible/hidden coding checks reject unchanged and constant answers",
+      "Goose/Pi answer and editing tool-event requirements remain required",
+      "Captured automation HOME survives isolated Pi client HOME"
+    ],
+    "remaining_python_in_these_adapters": [],
+    "limits": "Applied source only, full maintained postimage gate required. Private Linux fixtures do not prove live OpenCode/Goose/Pi/model/SDK, hosted or Windows execution. Repository Python inventory remains 96 files and 37 transitional core modules.",
+    "prior_qualified_cutovers": {
+      "opencode_coding_capture_cutover": {
+        "status": "LOCAL_POSTIMAGE_QUALIFIED",
+        "source": "scripts/ci-opencode-smoke.sh",
+        "source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
+        "changes": [
+          {
+            "path": "tools/xtask/src/automation/agent_fixture_evidence.rs",
+            "preimage_sha256": "17a149440b706cd0db0fc117d45c2d928d6569d0ed4ce91ae69a5ccb317db820",
+            "sha256": "b6fec7629dc4bcc880d390decc0b8617c950f503f46a8ec24118546a8b1e8e1d"
+          },
+          {
+            "path": "tools/xtask/tests/migration_lifecycle/agent_surface_capture_bound.rs",
+            "preimage_sha256": null,
+            "sha256": "064383f92cba3801d8a5f2419dc69bb9589915e751997cb61cf104fa54a6895b"
+          },
+          {
+            "path": "tools/xtask/src/automation/agent_fixture_inputs.rs",
+            "preimage_sha256": "94c7c4963d5eed52ef96c67cc155c190ef36d4759a67236ae45cc236dccd82dc",
+            "sha256": "89869a34ee34606e11a3346a33bea351016e81a89e8fe39bd3b1d01327dde3ae"
+          },
+          {
+            "path": "tools/xtask/src/automation/agent_fixture_inputs/coding.rs",
+            "preimage_sha256": null,
+            "sha256": "9cc5b53f8e061cf3808f97c3774884c925e8760d49a94d2eaa37f9027f0f78b0"
+          },
+          {
+            "path": "scripts/ci-opencode-smoke.sh",
+            "preimage_sha256": "28de128f98cbefff703e1a51cb9abec2c9cdbb8e268da4b012c6ccc7b2bc8681",
+            "sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2"
+          },
+          {
+            "path": "tools/xtask/tests/migration_lifecycle/opencode_coding_fixture.rs",
+            "preimage_sha256": null,
+            "sha256": "319d87f5d1d75b19338c81237a5e87c7f79ce7e4120045ece7db8d4866d2f276"
+          },
+          {
+            "path": "tools/xtask/tests/migration_lifecycle.rs",
+            "preimage_sha256": "839865ac3076a0e05d80495ff033f7b83240d75a953ba7e32976476ace89e747",
+            "sha256": "c31f79e5c1275561c6ef5b9cfe4bfbb285f876cc1546fd7d28562d0a44b73c08"
+          },
+          {
+            "path": "tools/xtask/src/cli.rs",
+            "preimage_sha256": "a61965e6cf0d3e0a2b2cc8793a8332da72dcd0fd9f9a808c0ae1446569e4220a",
+            "sha256": "c400535f4ce1c9752c7b92f3a2b47da519d357d2cd3577ab6e181309ae838aa9",
+            "limits": "Usage-only successor delta; full maintained gate required."
+          }
+        ],
+        "private_qualification": {
+          "freeze": ".omo/evidence/resume-20261002/agent-fixture-private-freeze-v2.json",
+          "freeze_sha256": "6bfedde8ea96eebb9da6c0684f52e3c016bd63340042ac296f5422615de6cf43",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "tests": {
+            "log": ".omo/evidence/resume-20261002/agent-fixture-private-v2-tests.log",
+            "sha256": "ab1b114cc155f7c5e8f8e0a4b7a7a45449b03f197c59f55eae73a74b0d9a1e75",
+            "exit_code": 0
+          },
+          "clippy": {
+            "log": ".omo/evidence/resume-20261002/agent-fixture-private-v2-clippy.log",
+            "sha256": "aa92065308e9769a32f47988abc196df7212ba9318224c2b870c375ffa5658eb",
+            "exit_code": 0
+          }
+        },
+        "archived_generated_python_candidates": [
+          [
+            246,
+            "2c5028771a4b8c75",
+            1,
+            "data",
+            "generated src/smoke_calc.py",
+            "cat writes fixture, not interpreter execution"
+          ],
+          [
+            259,
+            "e77b2dfd630b6d2e",
+            1,
+            "data",
+            "Rust agent-fixture-inputs SHA256 over generated component",
+            "Current source boundary preserved: INITIAL_IMPL_SHA=\"$(\"${opencode_automation[@]}\" automation agent-fixture-inputs sha256 \"${WORK_DIR}/src/smoke_calc.py\")\""
+          ],
+          [
+            261,
+            "c9093bfb5d28f5f0",
+            1,
+            "data",
+            "generated tests/test_smoke_calc.py",
+            "cat writes tests, execution belongs to line 522"
+          ],
+          [
+            290,
+            "603c47c8b5e235ba",
+            1,
+            "data",
+            "generated prompt path src/smoke_calc.py",
+            "here-document data only"
+          ],
+          [
+            291,
+            "4f0a2aeb5304979f",
+            1,
+            "data",
+            "generated prompt path tests/test_smoke_calc.py",
+            "here-document data only"
+          ],
+          [
+            295,
+            "086be451f621e27f",
+            1,
+            "data",
+            "agent prompt mentions Python fixture",
+            "single quoted prompt assignment, no interpreter"
+          ],
+          [
+            297,
+            "37e9ec4052b0eae7",
+            1,
+            "data",
+            "agent prompt mentions Python tests",
+            "single quoted prompt assignment, no interpreter"
+          ],
+          [
+            377,
+            "1034563d4db0c21a",
+            1,
+            "environment",
+            "generated tests/test_smoke_calc.py via unittest",
+            "runs generated test suite; failure branch prints source to stderr, not a tracked script call"
+          ],
+          [
+            379,
+            "be3f0e5e46006fa5",
+            1,
+            "data",
+            "diagnostic echo",
+            "stderr text, not interpreter"
+          ],
+          [
+            380,
+            "9db64d74072a0cf1",
+            1,
+            "data",
+            "sed prints generated Python fixture",
+            "stderr text only; no interpreter"
+          ],
+          [
+            384,
+            "07fd9dbce61dbe6c",
+            1,
+            "inline",
+            "agent implementation check",
+            "python3 - argv WORK_DIR INITIAL_IMPL_SHA; imports generated fixture and tests hidden inputs; failure rejects"
+          ],
+          [
+            393,
+            "6d71c27a055dd3fc",
+            1,
+            "data",
+            "Python body of line 529 heredoc",
+            "not another invocation"
+          ],
+          [
+            398,
+            "c6a37ff6fb668f65",
+            1,
+            "data",
+            "Python body diagnostic of line 529 heredoc",
+            "not another invocation"
+          ],
+          [
+            403,
+            "aa426647b49488af",
+            1,
+            "data",
+            "Python body diagnostic of line 529 heredoc",
+            "not another invocation"
+          ]
+        ],
+        "archived_dynamic_loader": [
+          {
+            "caller": "scripts/ci-opencode-smoke.sh:287",
+            "closure_note": "The helper launches a test module generated under WORK_DIR; exact generated content/producer closure remains a separate caller contract.",
+            "expression": "${WORK_DIR}/src/smoke_calc.py passed to inline Python module loader",
+            "target": "generated workspace fixture path"
+          }
+        ],
+        "remaining_python": [
+          "recording HTTP(S) proxy"
+        ],
+        "regression": ".omo/evidence/resume-20261002/agent-surface-maximum-input-v1.json",
+        "limits": "Maintained corrected full normal gate required. Private Linux fixtures do not prove live OpenCode/model/SDK, Windows or hosted execution.",
+        "maintained_normal": {
+          "exit_code": 0,
+          "session_id": 52210,
+          "freeze": ".omo/evidence/resume-20261002/agent-fixture-maintained-freeze-v1.json",
+          "freeze_sha256": "54ee568cb7dca0efedf2cc8ebadb7ac21870fbd1bcd26e5bd2ef0b77f4d7ffae",
+          "log": ".omo/evidence/resume-20261002/agent-fixture-maintained-v1-normal.log",
+          "sha256": "9a42499a1b273ef34c4fb449b7a5bdc8538b9ae3903fb2e3b1ec49ecc45e3c27",
+          "rust": {
+            "groups": 114,
+            "passed": 4691,
+            "failed": 0,
+            "ignored": 2
+          },
+          "legacy": {
+            "run": 664,
+            "skipped": 13,
+            "seconds": 127.743,
+            "failed": 0,
+            "errors": 0
+          },
+          "limits": "Local maintained normal gate. No live model, SDK, hosted, Windows or whole migration completion proof."
+        }
+      },
+      "opencode_selection_surface_cutover": {
+        "status": "LOCAL_POSTIMAGE_QUALIFIED",
+        "source": "scripts/ci-opencode-smoke.sh",
+        "source_sha256": "30b8293e0d23277c1be54db86f4d8a2ae9ff4d7740328309ad57b2ae9955e9e2",
+        "removed_helpers": [
+          "model picker inline Python",
+          "captured API surface validator inline Python"
+        ],
+        "owners": [
+          "automation agent-pick-model",
+          "automation agent-fixture-evidence surface"
+        ],
+        "native_tests": ".omo/evidence/resume-20261002/linux-native-focused-v3-tests.log",
+        "native_clippy": ".omo/evidence/resume-20261002/linux-native-focused-v3-clippy.log",
+        "remaining_python": [
+          "recording proxy"
+        ],
+        "limits": "No live OpenCode/model/SDK or whole Python-free path claim.",
+        "prior_source_sha256": "28de128f98cbefff703e1a51cb9abec2c9cdbb8e268da4b012c6ccc7b2bc8681",
+        "successor_record": "opencode_coding_capture_cutover",
+        "maintained_normal": {
+          "exit_code": 0,
+          "session_id": 52210,
+          "freeze": ".omo/evidence/resume-20261002/agent-fixture-maintained-freeze-v1.json",
+          "freeze_sha256": "54ee568cb7dca0efedf2cc8ebadb7ac21870fbd1bcd26e5bd2ef0b77f4d7ffae",
+          "log": ".omo/evidence/resume-20261002/agent-fixture-maintained-v1-normal.log",
+          "sha256": "9a42499a1b273ef34c4fb449b7a5bdc8538b9ae3903fb2e3b1ec49ecc45e3c27",
+          "rust": {
+            "groups": 114,
+            "passed": 4691,
+            "failed": 0,
+            "ignored": 2
+          },
+          "legacy": {
+            "run": 664,
+            "skipped": 13,
+            "seconds": 127.743,
+            "failed": 0,
+            "errors": 0
+          },
+          "limits": "Local maintained normal gate. No live model, SDK, hosted, Windows or whole migration completion proof."
+        }
+      }
+    },
+    "maintained_normal": {
+      "exit_code": 0,
+      "session_id": 53597,
+      "freeze": ".omo/evidence/resume-20261002/agent-proxy-shared-maintained-freeze-v3.json",
+      "freeze_sha256": "6f02a033be3dea402edf6262857a1d0260ab75e8287efc6f4d210e6886fcedf4",
+      "log": ".omo/evidence/resume-20261002/agent-proxy-shared-maintained-v3-normal.log",
+      "sha256": "4a2b15695b9973ac76d92a765124cea25b9f1a3560caab3d54f5ef72e7d53299",
+      "rust": {
+        "groups": 114,
+        "passed": 4705,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 664,
+        "seconds": 91.199,
+        "skipped": 13,
+        "failed": 0,
+        "errors": 0
+      },
+      "limits": "Local maintained normal gate. No live agent/model/SDK, hosted, Windows or whole-migration completion proof."
+    },
+    "maintained_test_correction": "Proxy and existing stability tests import one test-only TLS fixture registration. Full maintained all-target Clippy and normal gate passed."
   }
 }
