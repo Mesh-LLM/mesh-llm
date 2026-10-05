@@ -87,6 +87,9 @@ pub(crate) struct StageLoadRequest {
     pub(crate) ctx_size: u32,
     pub(crate) lane_count: u32,
     pub(crate) continuous_batching: bool,
+    /// Planned final-stage decode batching, carried so the stage that owns the
+    /// output layers learns the policy even when it is another machine.
+    pub(crate) last_stage_decode_batch: Option<bool>,
     pub(crate) n_batch: Option<u32>,
     pub(crate) n_ubatch: Option<u32>,
     pub(crate) n_gpu_layers: i32,

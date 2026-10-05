@@ -181,6 +181,27 @@ async fn run_local_model_only_inner(
     super::node_lifecycle_events::emit_node_starting();
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
+    // Composed first, so it only fills gaps: the explicit CLI overrides below
+    // run after and win, and anything already in the config file is already
+    // present and therefore left alone.
+    let strategy_plan = crate::runtime::serving_strategy::apply_serving_strategy(
+        &mut config,
+        options.strategy,
+        crate::runtime::serving_strategy::StrategyContext {
+            split: options.split,
+            auto_balance_requested: options.auto_balance,
+        },
+    );
+    if crate::runtime::serving_strategy::strategy_requests_auto_balance(
+        options.strategy,
+        crate::runtime::serving_strategy::StrategyContext {
+            split: options.split,
+            auto_balance_requested: options.auto_balance,
+        },
+    ) {
+        options.auto_balance = true;
+    }
+    crate::runtime::serving_strategy::log_strategy_plan(&strategy_plan);
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     super::run_auto::apply_runtime_cli_parallel_override(&mut config, options.parallel);
     apply_runtime_cli_checkpoint_overrides(
