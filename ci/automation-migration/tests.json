@@ -3506,25 +3506,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_skippy_scheduler_fixtures.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "ce847fb667f29b5e66ab56c097536d221a257ece8aa0d28e7d2a1423b229eca9",
-      "test_method_count": 7,
-      "test_methods": [
-        "test_catalog_rejects_context_below_derived_pinned_requirement",
-        "test_catalog_rejects_unpinned_model_identity",
-        "test_checked_in_catalog_is_valid_and_pins_measured_rows",
-        "test_fetch_uses_pinned_hf_cache_and_strict_verification",
-        "test_manifest_hash_failure_preserves_an_existing_output",
-        "test_materialization_rejects_row_provenance_drift",
-        "test_real_generator_builds_deterministic_canned_manifest"
-      ]
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_skippy_tts_oracle.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -3728,28 +3709,6 @@
           }
         ]
       }
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_skippy_waiting_prefix_ab.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "40ed7f7be46729f32403819a1fb3ded71e76c016b7bb7fb956205760cd4c9941",
-      "test_method_count": 10,
-      "test_methods": [
-        "test_capacity_contract_reuses_workload_with_layer_specific_bounds",
-        "test_checked_in_fixture_profile_owns_the_workload_shape",
-        "test_eviction_profile_enforces_hardware_acceptance",
-        "test_failed_rounds_keep_nullable_percentiles_in_report",
-        "test_fixture_input_validation_pins_model_and_manifest_mode",
-        "test_reads_a_deterministic_prompt_manifest",
-        "test_rejects_an_empty_prompt_manifest",
-        "test_summary_combines_capacity_and_legacy_proactive_evictions",
-        "test_warm_profile_accepts_the_measured_neutral_boundary",
-        "test_zero_baseline_regression_fails_closed"
-      ]
     },
     {
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
@@ -13559,6 +13518,25 @@
       "sha256": "4d9c2fba2b4606756c4b7351832c757da7c82fb092b4af79b52960ffdd1522b4",
       "roster_line": 32,
       "count": 32
+    }
+  },
+  "scheduler_waiting_test_retirement": {
+    "status": "OWNERSHIP_TRANSFERRED_POSTIMAGE_NORMAL_VALIDATION_PENDING",
+    "python_paths_after": 89,
+    "core_modules_after": 30,
+    "durable_coverage": {
+      "path": "ci/automation-migration/scheduler-waiting-test-retirement-coverage.json",
+      "sha256": "065da4ff840d303ee4deedcf0216760658f4646f8d33fc417c460200c176a334"
+    },
+    "current_test_tree": {
+      "sha256": "84f61f2d3b2c97cb191bfa4e7af480a69ee883c498248eeeb8598a8edcfff274",
+      "paths": 28
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "8aace3684b9fe9774542d1d827d5300031d68c08680b32b072eb9a7ae8258929",
+      "roster_line": 32,
+      "count": 30
     }
   }
 }

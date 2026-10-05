@@ -70,7 +70,7 @@ fn root() -> std::path::PathBuf {
 
 fn fixture_contract(profile: &str) -> Contract {
     let input: Value = serde_json::from_slice(
-        &std::fs::read(root().join("evals/skippy-scheduler-fixtures.json")).unwrap(),
+        &std::fs::read(root().join("skippy/evals/skippy-scheduler-fixtures.json")).unwrap(),
     )
     .unwrap();
     serde_json::from_value(
@@ -150,7 +150,7 @@ fn pressure_requires_measured_baseline_complete_success_and_all_gains() {
 
 #[test]
 fn capacity_bounds_allow_unknown_legacy_cost_but_require_measured_after_cost() {
-    let options = BTreeMap::from([("--contract", "evals/skippy-capacity-acceptance.json")]);
+    let options = BTreeMap::from([("--contract", "skippy/evals/skippy-capacity-acceptance.json")]);
     let path = root().join(options["--contract"]);
     let path = path.to_str().unwrap();
     let contract = contract(&BTreeMap::from([("--contract", path)])).unwrap();
@@ -261,7 +261,7 @@ fn offline_command_writes_failure_evidence_and_preserves_output_on_invalid_input
         report.to_str().unwrap().into(),
         "--contract".into(),
         root()
-            .join("evals/skippy-capacity-acceptance.json")
+            .join("skippy/evals/skippy-capacity-acceptance.json")
             .to_str()
             .unwrap()
             .into(),
