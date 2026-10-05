@@ -126,6 +126,9 @@ async fn prepared_output_payment_can_resume_without_resubmitting_started_payment
         let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
         automatic(&service)?;
         service.await_authorization(&terms("prepared", 700)).await?;
+        if charge.segment == 1 {
+            service.ledger.record_output_delivery(&charge.request_id)?;
+        }
         service.ledger.prepare_charge(&charge)?;
     }
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
@@ -149,6 +152,9 @@ async fn prepared_input_payment_is_failed_on_reopen_without_a_wallet_call() -> R
         let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
         automatic(&service)?;
         service.await_authorization(&terms("unsent", 700)).await?;
+        if charge.segment == 1 {
+            service.ledger.record_output_delivery(&charge.request_id)?;
+        }
         service.ledger.prepare_charge(&charge)?;
         assert_eq!(
             service.ledger.available_budget(100_000, crate::now_ms())?,
@@ -247,6 +253,9 @@ async fn prepared_wallet_send_survives_reopen() -> Result<()> {
             expires_at_ms: invoice.expires_at_ms,
         })?;
         service.approve(&id).await?;
+        if charge.segment == 1 {
+            service.ledger.record_output_delivery(&charge.request_id)?;
+        }
         service.ledger.prepare_charge(&charge)?;
     }
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
@@ -415,6 +424,7 @@ async fn failed_charge_does_not_release_an_uncertain_sibling() -> Result<()> {
     service
         .ledger
         .begin_submission(&pending.invoice.payment_hash)?;
+    service.ledger.record_output_delivery("siblings")?;
     wallet.reject_submission.store(true, Ordering::SeqCst);
     assert!(
         service

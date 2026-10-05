@@ -378,6 +378,24 @@ impl Ledger {
 
     /// Commit intent before contacting the wallet. A segment/hash can never be
     /// repurposed; errors leave the reservation held until reconciliation.
+    /// Only local payer transport evidence may enable a new output charge.
+    pub fn record_output_delivery(&self, id: &str) -> Result<()> {
+        let changed = self.lock()?.execute(
+            "UPDATE requests SET output_delivered=1 WHERE id=? AND state='approved'",
+            [id],
+        )?;
+        ensure!(changed == 1, "request is not approved");
+        Ok(())
+    }
+
+    pub fn output_delivered(&self, id: &str) -> Result<bool> {
+        Ok(self.lock()?.query_row(
+            "SELECT output_delivered FROM requests WHERE id=?",
+            [id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn prepare_charge(&self, charge: &Charge) -> Result<bool> {
         ensure!(
             charge.max_total_msat >= charge.amount_msat,
@@ -401,6 +419,17 @@ impl Ledger {
                 "segment already has different payment terms"
             );
             return Ok(false);
+        }
+        if charge.segment == 1 {
+            let delivered: bool = transaction.query_row(
+                "SELECT output_delivered FROM requests WHERE id=?",
+                [&charge.request_id],
+                |row| row.get(0),
+            )?;
+            ensure!(
+                delivered,
+                "output payment requires durable delivery evidence"
+            );
         }
         charge
             .invoice
@@ -533,7 +562,7 @@ fn finalize_terminal_requests(connection: &Connection) -> Result<()> {
     connection.execute("UPDATE charges SET state='failed' WHERE state='prepared' AND EXISTS(SELECT 1 FROM charges sibling WHERE sibling.request_id=charges.request_id AND sibling.state='failed')", [])?;
     // Failure revokes unused authorization, but cannot release any uncertain
     // sibling charge. A send has only one charge and can close on success.
-    connection.execute("UPDATE requests SET state=CASE WHEN EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND state='failed') THEN 'failed' ELSE 'completed' END WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND state IN ('prepared','pending')) AND (EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND state='failed') OR (json_extract(terms,'$.peer')='wallet-send' AND EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND state='succeeded')))", [])?;
+    connection.execute("UPDATE requests SET state=CASE WHEN EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND state='failed') THEN 'failed' ELSE 'completed' END WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND state IN ('prepared','pending')) AND (EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND state='failed') OR (json_extract(terms,'$.peer')='wallet-send' AND EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND state='succeeded')) OR (EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND segment=0 AND state='succeeded') AND EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id AND segment=1 AND state='succeeded')))", [])?;
     Ok(())
 }
 

@@ -432,16 +432,17 @@ pub(crate) async fn exchange_tracked(
     let _ = ready.send(());
     let mut cancelled = false;
     let mut output_settled = false;
+    let result = async {
     loop {
         let reading = wire::read(&mut recv);
         tokio::pin!(reading);
         let frame = loop {
             tokio::select! {
                 result = &mut input_payment, if !input_settled => {
+                    input_settled = true;
                     let payment = result.context("input payment task failed")??;
                     accounted_msat = accounted_msat.saturating_add(payment.amount_msat).saturating_add(payment.fee_msat);
                     observations.settled(0, &payment);
-                    input_settled = true;
                     progress.input_settled = true;
                 }
                 frame = &mut reading => break frame?,
@@ -455,7 +456,13 @@ pub(crate) async fn exchange_tracked(
         match frame {
             Frame::Output { bytes } => {
                 ensure!(!output_settled, "output after final invoice");
-                progress.output_delivered |= !bytes.is_empty();
+                if !bytes.is_empty() && !progress.output_delivered {
+                    // This is transport delivery, not parsed application success.
+                    progress.output_delivered = true;
+                    let _: Empty = payments.call(
+                        ops::RECORD_OUTPUT_DELIVERY, &IdRequest { id: id.clone() },
+                    ).await?;
+                }
                 if !cancelled && output.write_all(&bytes).await.is_err() {
                     cancelled = true;
                     progress.cancelled = true;
@@ -471,6 +478,7 @@ pub(crate) async fn exchange_tracked(
                     !output_settled && request_id == id,
                     "unexpected output invoice"
                 );
+                ensure!(progress.output_delivered, "output invoice before delivery");
                 observations.invoice(1, &invoice);
                 let payment = settle_output(&payments, &terms, tokens, invoice).await?;
                 accounted_msat = accounted_msat
@@ -481,7 +489,8 @@ pub(crate) async fn exchange_tracked(
             }
             Frame::Complete => {
                 if !input_settled {
-                    let payment = input_payment.await.context("input payment task failed")??;
+                    input_settled = true;
+                    let payment = (&mut input_payment).await.context("input payment task failed")??;
                     accounted_msat = accounted_msat
                         .saturating_add(payment.amount_msat)
                         .saturating_add(payment.fee_msat);
@@ -504,6 +513,25 @@ pub(crate) async fn exchange_tracked(
             _ => bail!("invalid payment exchange frame"),
         }
     }
+    }.await;
+    // Transfer ownership on early stream failure: terminal wallet observation
+    // must continue, but must not hold the application's error response open.
+    if !input_settled {
+        let mut terminal_progress = progress.clone();
+        terminal_progress.observe_cancellation(&cancellation);
+        tokio::spawn(async move {
+            if let Ok(Ok(payment)) = input_payment.await {
+                observations.settled(0, &payment);
+                terminal_progress.input_settled = true;
+                if terminal_progress.paid_undelivered()
+                    && let Some((node, _)) = evidence
+                {
+                    record_paid_undelivered(&node, peer).await;
+                }
+            }
+        });
+    }
+    result
 }
 
 /// Durably approve `terms`, then re-check spending policy before any payment.

@@ -78,6 +78,9 @@ async fn startup_releases_approvals_that_never_reached_the_wallet() -> Result<()
             service.approve("request").await?;
             if state != "absent" {
                 let charge = charge("request", segment, 3, 600, 700);
+                if segment == 1 {
+                    service.ledger.record_output_delivery("request")?;
+                }
                 service.ledger.prepare_charge(&charge)?;
                 if state == "pending" {
                     service

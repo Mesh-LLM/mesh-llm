@@ -170,6 +170,16 @@ fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> Operatio
     add_op(
         &mut router,
         &source,
+        ops::RECORD_OUTPUT_DELIVERY,
+        "Persist payer receipt of nonempty transport output.",
+        |service, request: IdRequest| async move {
+            service.record_output_delivery(&request.id)?;
+            Ok(Empty {})
+        },
+    );
+    add_op(
+        &mut router,
+        &source,
         ops::SETTLE_OUTPUT,
         "Validate and pay a seller output invoice.",
         |service, request: SettleOutputRequest| async move { service.settle_output(request).await },

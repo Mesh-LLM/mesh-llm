@@ -4,7 +4,8 @@ use rusqlite::Connection;
 
 /// 1: first versioned schema. 2: `serving_accounting.forgiven`, set by the
 /// operator `unblock` command for delivered output that will not be invoiced.
-const VERSION: u32 = 2;
+// 3: payer-side nonempty transport output receipt. Legacy rows default false.
+const VERSION: u32 = 3;
 
 pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -28,6 +29,12 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
             &transaction,
             "serving_accounting",
             "forgiven",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &transaction,
+            "requests",
+            "output_delivered",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
         transaction.pragma_update(None, "user_version", VERSION)?;
@@ -89,7 +96,7 @@ mod tests {
 
     #[test]
     fn version_one_and_pre_versioned_ledgers_gain_the_forgiven_column() -> Result<()> {
-        for legacy_version in [0, 1] {
+        for legacy_version in [0, 1, 2] {
             let mut connection = Connection::open_in_memory()?;
             connection.execute_batch(include_str!("schema.sql"))?;
             connection.execute_batch("ALTER TABLE serving_accounting DROP COLUMN forgiven")?;
