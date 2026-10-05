@@ -76,6 +76,55 @@ impl<F: FnOnce()> Drop for LocalSessionCleanupGuard<F> {
 const GRAPH_REUSE_LOG_STRIDE: usize = 256;
 
 impl StageOpenAiBackend {
+    /// Fold a finished request into the speculation gate, and log a verdict.
+    ///
+    /// Called after the summary so a flip is attributable to the window that
+    /// caused it. Counters move on every request; the gate only decides once a
+    /// window has closed.
+    fn record_speculation_outcome(&self, output: &GeneratedText) {
+        let Some(governor) = self.speculation_governor.as_ref() else {
+            return;
+        };
+        let (proposed, accepted) = output.speculative_stats.as_ref().map_or((0, 0), |stats| {
+            (stats.draft_tokens as u64, stats.accepted_tokens as u64)
+        });
+        let Some(decision) =
+            governor.record(u64::from(output.completion_tokens), proposed, accepted)
+        else {
+            return;
+        };
+        let mut attrs = std::collections::BTreeMap::new();
+        attrs.insert(
+            "llama_stage.spec.gate_decision".to_string(),
+            serde_json::json!(format!("{decision:?}")),
+        );
+        attrs.insert(
+            "llama_stage.spec.gate_speculating".to_string(),
+            serde_json::json!(governor.allows_speculation()),
+        );
+        self.telemetry.emit("stage.openai_speculation_gate", attrs);
+    }
+
+    /// The resolved speculation plan, with the gate's verdict applied.
+    ///
+    /// Disabling means clearing `ngram` and `extension` and the native-MTP
+    /// enable, the same shape `speculation_after_prefix_restore` uses for its
+    /// own conditional bypass. Borrowed when nothing is gated off, so the
+    /// common path allocates nothing.
+    fn gated_speculative(&self) -> std::borrow::Cow<'_, crate::frontend::SpeculativeDecodeConfig> {
+        let Some(governor) = self.speculation_governor.as_ref() else {
+            return std::borrow::Cow::Borrowed(&self.speculative);
+        };
+        if governor.allows_speculation() {
+            return std::borrow::Cow::Borrowed(&self.speculative);
+        }
+        let mut stood_down = self.speculative.clone();
+        stood_down.ngram = None;
+        stood_down.extension = None;
+        stood_down.native_mtp.enabled = false;
+        std::borrow::Cow::Owned(stood_down)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn generate_multimodal_text(
         &self,

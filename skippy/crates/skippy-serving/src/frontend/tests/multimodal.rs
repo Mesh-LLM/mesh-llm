@@ -536,6 +536,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         telemetry.clone(),
     )?;
     let backend = StageOpenAiBackend {
+        speculation_governor: None,
         runtime,
         workload: Default::default(),
         telemetry,
