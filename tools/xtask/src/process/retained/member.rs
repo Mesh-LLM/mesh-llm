@@ -2,8 +2,8 @@ use super::{Disposition, Launch, MemberId, MemberReport, MemberState, Snapshot};
 use crate::process::capture::Capture;
 use crate::process::output::{Output, output_file};
 use crate::process::{
-    Failure, GracefulRequest, Limits, Outcome, ProcessReport, Readiness, ReadinessStop, Stream,
-    control, platform,
+    Failure, GracefulRequest, Limits, Outcome, ProcessReport, ReadinessStop, Stream, control,
+    platform,
 };
 use std::time::{Duration, Instant};
 pub(super) struct Member {
@@ -84,7 +84,13 @@ impl Member {
             state,
         }
     }
-    pub fn finish(&mut self, limits: &Limits, disposition: Disposition, mut observe: impl FnMut()) {
+    pub fn finish<Observer: super::Coordinator>(
+        &mut self,
+        limits: &Limits,
+        disposition: Disposition,
+        observer: &mut Observer,
+        mut observe: impl FnMut(&mut Observer),
+    ) {
         let Some(mut output) = self.output.take() else {
             return;
         };
@@ -94,13 +100,13 @@ impl Member {
         ) && self.admitted.is_some();
         let (cleanup, status, request) = if live_stop {
             control::shutdown_ready(&mut self.child, limits, || {
-                output.poll(&Readiness::None);
-                observe();
+                poll_captured(&mut output, self.id, observer);
+                observe(observer);
             })
         } else {
             let (cleanup, status) = control::shutdown(&mut self.child, limits, || {
-                output.poll(&Readiness::None);
-                observe();
+                poll_captured(&mut output, self.id, observer);
+                observe(observer);
             });
             (cleanup, status, GracefulRequest::SkippedInactiveTree)
         };
@@ -126,8 +132,8 @@ impl Member {
         };
         let until = Instant::now() + limits.forced_shutdown;
         while !output.stdout.eof() || !output.stderr.eof() {
-            output.poll(&Readiness::None);
-            observe();
+            poll_captured(&mut output, self.id, observer);
+            observe(observer);
             if output.failure.is_some() {
                 break;
             }
@@ -137,7 +143,7 @@ impl Member {
             }
             std::thread::sleep(control::POLL);
         }
-        observe();
+        observe(observer);
         let readiness_stop = match self.admitted {
             Some(elapsed) if live_stop => ReadinessStop::ProbeAdmitted { elapsed, request },
             Some(_) | None => ReadinessStop::NotAdmitted,
@@ -171,5 +177,17 @@ impl Member {
         if let (Some(policy), Some(report)) = (&self.expected, &mut self.report) {
             report.completion = Some(policy.receipt(self.started.elapsed(), &report.process));
         }
+    }
+}
+
+fn poll_captured<Observer: super::Coordinator>(
+    output: &mut Output,
+    member: super::MemberId,
+    observer: &mut Observer,
+) {
+    if let Err(error) =
+        output.poll_captured(&mut |line, _readiness_allowed| observer.captured_line(member, line))
+    {
+        output.failure.get_or_insert(error);
     }
 }

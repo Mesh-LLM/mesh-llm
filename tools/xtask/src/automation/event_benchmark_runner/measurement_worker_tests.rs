@@ -215,3 +215,59 @@ fn error_and_model_bounds_keep_serialized_receipt_below_64kib() {
     };
     assert!(serde_json::to_vec(&evidence).unwrap().len() < 64 * 1024);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn readiness_http_cap_respects_configured_request_timeout_before_the_larger_deadline() {
+    let mut fixture = Fixture::new(vec![Reply::Hold, Reply::models()]).await;
+    let mut input = input(fixture.port);
+    input.readiness_timeout_ms = 1500;
+    input.request_timeout_ms = 200;
+    input.validate().unwrap();
+    let model = tokio::time::timeout(
+        Duration::from_millis(800),
+        ready(&input, &Cancellation::default()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(model, "served-real-id");
+    assert!(fixture.next().await.starts_with("GET /v1/models "));
+    assert!(fixture.next().await.starts_with("GET /v1/models "));
+    assert!(fixture.empty());
+}
+#[tokio::test(flavor = "current_thread")]
+async fn readiness_http_cap_keeps_two_second_probe_limit_when_both_input_budgets_are_larger() {
+    let mut fixture = Fixture::new(vec![Reply::Hold, Reply::models()]).await;
+    let mut input = input(fixture.port);
+    input.readiness_timeout_ms = 5000;
+    input.request_timeout_ms = 5000;
+    input.validate().unwrap();
+    let model = tokio::time::timeout(
+        Duration::from_secs(3),
+        ready(&input, &Cancellation::default()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(model, "served-real-id");
+    assert!(fixture.next().await.starts_with("GET /v1/models "));
+    assert!(fixture.next().await.starts_with("GET /v1/models "));
+    assert!(fixture.empty());
+}
+#[tokio::test(flavor = "current_thread")]
+async fn readiness_http_cap_cannot_extend_the_remaining_overall_readiness_window() {
+    let mut fixture = Fixture::new(vec![Reply::Hold]).await;
+    let mut input = input(fixture.port);
+    input.readiness_timeout_ms = 250;
+    input.request_timeout_ms = 5000;
+    input.validate().unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_millis(800),
+        ready(&input, &Cancellation::default()),
+    )
+    .await
+    .unwrap();
+    assert!(result.is_err());
+    assert!(fixture.next().await.starts_with("GET /v1/models "));
+    assert!(fixture.empty());
+}

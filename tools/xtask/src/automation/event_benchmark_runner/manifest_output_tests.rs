@@ -150,3 +150,33 @@ fn certification_host_classification_retains_frozen_gates() {
         );
     }
 }
+
+#[test]
+fn actual_producer_manifest_preserves_schema_mode_status_and_component_trial_wording() {
+    let values = manifests(1, 0, false);
+    for (value, mode) in values[..2].iter().zip(["production", "event-disabled"]) {
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["metrics_schema"], "streaming_v1");
+        assert_eq!(value["mode"], mode);
+        assert_eq!(
+            value["trial_unit"],
+            serde_json::to_value(super::super::trial_contract::unit()).unwrap()
+        );
+        assert_eq!(value["trials"].as_array().unwrap().len(), 30);
+        assert!(
+            value["trials"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["status"] == "succeeded")
+        );
+        assert_eq!(
+            value["expected_dropped_progress"],
+            u64::from(mode == "event-disabled")
+        );
+        assert_eq!(value["expected_dropped_diagnostic"], 0);
+        let encoded = serde_json::to_vec(value).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&encoded).unwrap(), *value);
+    }
+    assert!(compare(&values).0);
+}

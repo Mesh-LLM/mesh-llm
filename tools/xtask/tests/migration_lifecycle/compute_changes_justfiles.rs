@@ -121,7 +121,12 @@ impl Fixture {
                 .as_ref()
                 .map(|s| String::from_utf8_lossy(s.as_bytes()))
         );
-        assert!(!result.process.stdout.truncated && !result.process.stderr.truncated);
+        assert!(
+            !result.process.stdout.truncated
+                && !result.process.stderr.truncated
+                && result.process.stdout.suppressed_lines == 0
+                && result.process.stderr.suppressed_lines == 0
+        );
         result.stdout.unwrap().as_bytes().to_vec()
     }
     fn git(&self, args: &[&str]) -> String {
@@ -405,3 +410,6 @@ fn compute_changes_justfiles_unreadable_revision_and_unknown_change_status_fail_
     assert!(f.classify(&base, &head, "just/missing.just", "push"));
     assert!(f.classify(&head, &head, "Justfile", "push"));
 }
+
+#[path = "compute_changes_event_range.rs"]
+mod event_range;

@@ -1,12 +1,13 @@
 use super::{Disposition, MemberId, member::Member, owner::expired};
-use crate::process::{Cancellation, Failure, Limits, Outcome, Readiness};
+use crate::process::{Cancellation, Failure, Limits, Outcome};
 use std::time::Instant;
 
-pub(super) fn stop(
+pub(super) fn stop<Observer: super::Coordinator>(
     members: &mut [Member],
     id: MemberId,
     limits: &Limits,
-    mut observe: impl FnMut(&mut [Member]) -> Result<Option<Outcome>, Failure>,
+    observer: &mut Observer,
+    mut observe: impl FnMut(&mut [Member], &mut Observer) -> Result<Option<Outcome>, Failure>,
 ) -> Result<Option<Outcome>, Failure> {
     let index = members
         .iter()
@@ -17,12 +18,12 @@ pub(super) fn stop(
         .split_first_mut()
         .ok_or(Failure::InvalidSpec("stop target missing"))?;
     let mut terminal = Ok(None);
-    target.finish(limits, Disposition::IntentionalStop, || {
+    target.finish(limits, Disposition::IntentionalStop, observer, |observer| {
         for survivors in [&mut *before, &mut *after] {
             if matches!(terminal, Ok(None)) {
-                terminal = observe(survivors);
+                terminal = observe(survivors, observer);
             } else {
-                drain(survivors);
+                drain(survivors, observer);
             }
         }
     });
@@ -40,15 +41,16 @@ pub(super) fn stop(
     }
 }
 
-pub(super) fn finish(
+pub(super) fn finish<Observer: super::Coordinator>(
     members: &mut [Member],
     context: (Instant, &Limits, &Cancellation),
     terminal: (&mut Outcome, &mut Option<Failure>),
+    observer: &mut Observer,
 ) {
     let (started, limits, cancellation) = context;
     let (outcome, failure) = terminal;
     for index in 0..members.len() {
-        let observation = observe_cleanup(members, context);
+        let observation = observe_cleanup(members, context, observer);
         if *outcome == Outcome::Ready {
             match observation {
                 Ok(Some(observed)) => *outcome = observed,
@@ -67,9 +69,9 @@ pub(super) fn finish(
             Outcome::Ready => Disposition::SessionCleanup,
             other => Disposition::Failure(other),
         };
-        target.finish(limits, disposition, || {
+        target.finish(limits, disposition, observer, |observer| {
             for survivors in [&mut *before, &mut *after] {
-                let observation = observe_cleanup(survivors, context);
+                let observation = observe_cleanup(survivors, context, observer);
                 if *outcome == Outcome::Ready {
                     match observation {
                         Ok(Some(observed)) => *outcome = observed,
@@ -103,15 +105,20 @@ pub(super) fn finish(
     }
 }
 
-pub(super) fn observe_cleanup(
+pub(super) fn observe_cleanup<Observer: super::Coordinator>(
     survivors: &mut [Member],
     context: (Instant, &Limits, &Cancellation),
+    observer: &mut Observer,
 ) -> Result<Option<Outcome>, Failure> {
     let (started, limits, cancellation) = context;
     let mut outcome = expired(started, limits, cancellation);
     for member in survivors {
         if let Some(output) = &mut member.output {
-            output.poll(&Readiness::None);
+            if let Err(error) = output.poll_captured(&mut |line, _readiness_allowed| {
+                observer.captured_line(member.id, line)
+            }) {
+                output.failure.get_or_insert(error);
+            }
             if let Some(error) = output.failure.take() {
                 return Err(error);
             }
@@ -123,10 +130,14 @@ pub(super) fn observe_cleanup(
     Ok(outcome.or_else(|| expired(started, limits, cancellation)))
 }
 
-fn drain(members: &mut [Member]) {
+fn drain<Observer: super::Coordinator>(members: &mut [Member], observer: &mut Observer) {
     for member in members {
         if let Some(output) = &mut member.output {
-            output.poll(&Readiness::None);
+            if let Err(error) = output.poll_captured(&mut |line, _readiness_allowed| {
+                observer.captured_line(member.id, line)
+            }) {
+                output.failure.get_or_insert(error);
+            }
             if let Err(error) = member.child.exited() {
                 output.failure.get_or_insert(error);
             }

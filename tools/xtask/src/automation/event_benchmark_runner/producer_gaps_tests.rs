@@ -270,6 +270,7 @@ fn captured_trial(
         listener_ready: false,
         host_readiness_timeout: Duration::from_secs(2),
         host_started: None,
+        health_streams: [None, None],
     };
     let limits = Limits {
         execution: Duration::from_secs(5),
@@ -299,6 +300,7 @@ fn captured_trial(
         cleanup_complete: true,
         cleanup_forced: false,
         capture_complete: completeness,
+        health_capture_complete: false,
         health_observation_error: if completeness {
             None
         } else {
@@ -402,6 +404,7 @@ fn unavailable_health_diagnostic_survives_trial_to_manifest_without_erasing_metr
             cleanup_complete: true,
             cleanup_forced: false,
             capture_complete: false,
+            health_capture_complete: false,
             health_observation_error: Some("ambiguous final health across streams".into()),
             inheritance: Default::default(),
         };

@@ -170,3 +170,39 @@ fn scenario_labels_remain_metadata_and_log_paths_never_use_their_raw_bytes() {
     assert!(!stem.contains(".."));
     assert_eq!(entry.prompt_sha256().len(), 64);
 }
+
+#[test]
+fn comparison_b_plan_reproduces_both_binary_side_orders_with_the_same_prompt_identity() {
+    let sides = sides(
+        "candidate".into(),
+        Some("baseline".into()),
+        &[Mode::Production],
+    )
+    .unwrap();
+    let entries = build(&spec(), &sides).unwrap();
+    assert_eq!(entries, build(&spec(), &sides).unwrap());
+    let observed = entries
+        .iter()
+        .map(|entry| entry.side_order_first.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(observed, BTreeSet::from(["current", "baseline"]));
+    let first_orders = (0..50)
+        .map(|seed| {
+            let mut specification = spec();
+            specification.seed = seed;
+            build(&specification, &sides).unwrap()[0]
+                .side_order_first
+                .clone()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        first_orders,
+        BTreeSet::from(["current".to_string(), "baseline".to_string()])
+    );
+    for (entry, mode_entry) in entries.iter().zip(build(&spec(), &defaults()).unwrap()) {
+        assert_eq!(entry.prompt_seed, mode_entry.prompt_seed);
+        assert_eq!(entry.prompt_sha256(), mode_entry.prompt_sha256());
+        assert_eq!(entry.scenario, mode_entry.scenario);
+        assert_eq!(entry.pair_index, mode_entry.pair_index);
+    }
+}

@@ -65,3 +65,20 @@ fn malformed_envelopes_and_oversized_records_do_not_replace_prior_observation() 
         2
     );
 }
+
+#[test]
+fn final_health_preserves_terminal_diagnostic_cancellation_counts_and_measured_p99_together() {
+    let first = record(
+        "terminal_delivery_failed=99 dropped_progress=99 dropped_diagnostic=99 cancelled_reservation_rejected=99 ingress_p99_us=99",
+    );
+    let final_line = record(
+        "terminal_delivery_failed=2 dropped_progress=7 dropped_diagnostic=3 cancelled_reservation_rejected=0 ingress_p99_us=6",
+    );
+    let result = final_observation(&[first, b"\n".to_vec(), final_line].concat());
+    let health = result.health.unwrap();
+    assert_eq!(health["terminal_delivery_failed"], 2);
+    assert_eq!(health["dropped_progress"], 7);
+    assert_eq!(health["dropped_diagnostic"], 3);
+    assert_eq!(health["cancelled_reservation_rejected"], 0);
+    assert_eq!(result.ingress_p99_us, Some(6.0));
+}

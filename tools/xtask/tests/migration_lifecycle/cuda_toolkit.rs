@@ -108,8 +108,20 @@ impl Fixture {
         .unwrap();
         assert_eq!(report.process.outcome, Outcome::Exited);
         assert!(
-            report.process.failure.is_none() && report.process.cleanup.complete,
+            report.process.failure.is_none()
+                && report.process.cleanup.complete
+                && !report.process.cleanup.forced
+                && !report.process.cleanup.graceful_signal_failed
+                && report.process.cleanup.failure.is_none(),
             "{report:?}"
+        );
+        assert_eq!(
+            report.stdout.as_ref().unwrap().as_bytes().len() as u64,
+            report.process.stdout.bytes_seen
+        );
+        assert_eq!(
+            report.stderr.as_ref().unwrap().as_bytes().len() as u64,
+            report.process.stderr.bytes_seen
         );
         (
             report.process.status.unwrap().success(),
@@ -250,3 +262,6 @@ fn configuration_propagates_missing_compiler_failure() {
     let fixture = Fixture::new();
     assert!(!fixture.run("configure_cuda_toolkit_env", &[("PATH", "")]).0);
 }
+
+#[path = "cuda_toolkit/package_intent.rs"]
+mod package_intent;

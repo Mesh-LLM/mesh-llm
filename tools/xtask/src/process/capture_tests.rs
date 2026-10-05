@@ -155,3 +155,41 @@ fn migration_process_readiness_snapshot_rejects_post_cutoff_newline_and_eof() {
     assert!(error.is_none());
     assert_eq!(report.bytes_retained, b"READY\n");
 }
+
+#[test]
+fn typed_line_capture_requires_actual_eof_independent_of_redacted_log_storage() {
+    let (mut observed, mut writer) = capture();
+    writer.write_all(b"tokens=2\nHEALTH\n").unwrap();
+    let mut classifications = 0;
+    observed.poll_probe(&mut |_| classifications += 1).unwrap();
+    assert_eq!(classifications, 2);
+    let (report, error) = observed.finish();
+    assert!(error.is_none());
+    assert_eq!(report.suppressed_lines, 1);
+    assert!(!report.line_capture_complete);
+    drop(writer);
+    let (mut observed, mut writer) = capture();
+    writer.write_all(b"tokens=2\nHEALTH\n").unwrap();
+    drop(writer);
+    observed.poll_probe(&mut |_| {}).unwrap();
+    let (report, error) = observed.finish();
+    assert!(error.is_none() && report.line_capture_complete);
+}
+#[test]
+fn failed_capture_persistence_never_replays_a_classified_line_and_is_incomplete() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("read-only-handle");
+    std::fs::write(&destination, []).unwrap();
+    let (mut observed, mut writer) = capture();
+    observed.file = Some(std::fs::File::open(&destination).unwrap());
+    writer.write_all(b"HEALTH\n").unwrap();
+    drop(writer);
+    let mut classifications = 0;
+    assert!(observed.poll_probe(&mut |_| classifications += 1).is_err());
+    assert_eq!(classifications, 1);
+    observed.poll_probe(&mut |_| classifications += 1).unwrap();
+    assert_eq!(classifications, 1);
+    let (report, _) = observed.finish();
+    assert!(!report.line_capture_complete);
+    directory.close().unwrap();
+}

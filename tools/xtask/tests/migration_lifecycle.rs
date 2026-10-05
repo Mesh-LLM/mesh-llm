@@ -255,3 +255,13 @@ mod installer_unix;
 #[cfg(unix)]
 #[path = "migration_lifecycle/event_benchmark_worker.rs"]
 mod event_benchmark_worker;
+
+#[path = "migration_lifecycle/canary_workflow_contract.rs"]
+mod canary_workflow_contract;
+#[path = "migration_lifecycle/family_terminal_outcomes.rs"]
+mod family_terminal_outcomes;
+#[path = "migration_lifecycle/repair_candidate_gates.rs"]
+mod repair_candidate_gates;
+
+#[path = "migration_lifecycle/runtime_package_producer.rs"]
+mod runtime_package_producer;

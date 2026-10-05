@@ -1399,7 +1399,7 @@
       "bound_child": null,
       "child": null,
       "disposition": "platform_conditional",
-      "selector": "Explicit private Unix with-lld body at just/build.just:16-26; Windows body at28-31. Visibility is not process admission. Literal current ci-automation-contracts argv is bound in full.",
+      "selector": "Explicit private Unix with-lld body at just/build.just:16-26; Windows body at28-36. Visibility is not process admission. Literal current ci-automation-contracts argv is bound in full.",
       "rationale": "The graph walks the wrapper bodies and literal argv; unresolved status is platform selection, not an unknown interpreter or dynamic target. Both existing platform bodies remain explicitly source-bound; no scanner exemption or ecosystem exception.",
       "reachable_bytes": "Unix sccache preflight and scripts/cargo-linker --mesh-probe (sources scripts/lib/lld.sh), then literal locked Cargo build selecting xtask bins/inert examples only; Windows PowerShell checks sccache and forwards the same literal Cargo command. These wrapper/linker sources contain no Python invocation. Product/native/UI dependency exclusion belongs to existing actual automation bootstrap dependency admission.",
       "replacement_owner": "tools/xtask/src/automation_bootstrap.rs",
@@ -1448,12 +1448,37 @@
         {
           "path": "just/build.just",
           "line": 30,
-          "text": "with-lld *COMMAND:"
+          "text": "[script(\"powershell.exe\", \"-NoProfile\", \"-ExecutionPolicy\", \"Bypass\", \"-File\")]"
         },
         {
           "path": "just/build.just",
           "line": 31,
-          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+          "text": "@with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 32,
+          "text": "$ErrorActionPreference = 'Stop'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 33,
+          "text": "if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }"
+        },
+        {
+          "path": "just/build.just",
+          "line": 34,
+          "text": "$LASTEXITCODE = 0"
+        },
+        {
+          "path": "just/build.just",
+          "line": 35,
+          "text": "Invoke-Expression '{{ COMMAND }}'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 36,
+          "text": "exit $LASTEXITCODE"
         }
       ]
     },
@@ -1467,7 +1492,7 @@
       "bound_child": null,
       "child": null,
       "disposition": "platform_conditional",
-      "selector": "Explicit private Unix with-lld body at just/build.just:16-26; Windows body at28-31. Visibility is not process admission. Literal current ci-automation-contracts argv is bound in full.",
+      "selector": "Explicit private Unix with-lld body at just/build.just:16-26; Windows body at28-36. Visibility is not process admission. Literal current ci-automation-contracts argv is bound in full.",
       "rationale": "The graph walks the wrapper bodies and literal argv; unresolved status is platform selection, not an unknown interpreter or dynamic target. Both existing platform bodies remain explicitly source-bound; no scanner exemption or ecosystem exception.",
       "reachable_bytes": "Same existing platform wrapper/probe, then exact literal locked Cargo test selecting owning xtask unit harness plus 110 reviewed integration targets and serial unfiltered harness. Fixtures own temporary files/local Git/finite local HTTP and inert executable surrogates; real SDK/model/native qualification remains separate. Global operator controller environment remains inherited.",
       "replacement_owner": "tools/xtask/src/ci_validation/workflow_guards/quality_contracts.rs",
@@ -1511,12 +1536,37 @@
         {
           "path": "just/build.just",
           "line": 30,
-          "text": "with-lld *COMMAND:"
+          "text": "[script(\"powershell.exe\", \"-NoProfile\", \"-ExecutionPolicy\", \"Bypass\", \"-File\")]"
         },
         {
           "path": "just/build.just",
           "line": 31,
-          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+          "text": "@with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 32,
+          "text": "$ErrorActionPreference = 'Stop'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 33,
+          "text": "if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }"
+        },
+        {
+          "path": "just/build.just",
+          "line": 34,
+          "text": "$LASTEXITCODE = 0"
+        },
+        {
+          "path": "just/build.just",
+          "line": 35,
+          "text": "Invoke-Expression '{{ COMMAND }}'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 36,
+          "text": "exit $LASTEXITCODE"
         },
         {
           "path": "just/ci.just",
@@ -2139,12 +2189,37 @@
         {
           "path": "just/build.just",
           "line": 30,
-          "text": "with-lld *COMMAND:"
+          "text": "[script(\"powershell.exe\", \"-NoProfile\", \"-ExecutionPolicy\", \"Bypass\", \"-File\")]"
         },
         {
           "path": "just/build.just",
           "line": 31,
-          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+          "text": "@with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 32,
+          "text": "$ErrorActionPreference = 'Stop'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 33,
+          "text": "if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }"
+        },
+        {
+          "path": "just/build.just",
+          "line": 34,
+          "text": "$LASTEXITCODE = 0"
+        },
+        {
+          "path": "just/build.just",
+          "line": 35,
+          "text": "Invoke-Expression '{{ COMMAND }}'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 36,
+          "text": "exit $LASTEXITCODE"
         }
       ]
     },
@@ -2202,12 +2277,37 @@
         {
           "path": "just/build.just",
           "line": 30,
-          "text": "with-lld *COMMAND:"
+          "text": "[script(\"powershell.exe\", \"-NoProfile\", \"-ExecutionPolicy\", \"Bypass\", \"-File\")]"
         },
         {
           "path": "just/build.just",
           "line": 31,
-          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+          "text": "@with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 32,
+          "text": "$ErrorActionPreference = 'Stop'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 33,
+          "text": "if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }"
+        },
+        {
+          "path": "just/build.just",
+          "line": 34,
+          "text": "$LASTEXITCODE = 0"
+        },
+        {
+          "path": "just/build.just",
+          "line": 35,
+          "text": "Invoke-Expression '{{ COMMAND }}'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 36,
+          "text": "exit $LASTEXITCODE"
         },
         {
           "path": "just/ci.just",
@@ -2270,12 +2370,37 @@
         {
           "path": "just/build.just",
           "line": 30,
-          "text": "with-lld *COMMAND:"
+          "text": "[script(\"powershell.exe\", \"-NoProfile\", \"-ExecutionPolicy\", \"Bypass\", \"-File\")]"
         },
         {
           "path": "just/build.just",
           "line": 31,
-          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+          "text": "@with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 32,
+          "text": "$ErrorActionPreference = 'Stop'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 33,
+          "text": "if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }"
+        },
+        {
+          "path": "just/build.just",
+          "line": 34,
+          "text": "$LASTEXITCODE = 0"
+        },
+        {
+          "path": "just/build.just",
+          "line": 35,
+          "text": "Invoke-Expression '{{ COMMAND }}'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 36,
+          "text": "exit $LASTEXITCODE"
         },
         {
           "path": "just/ci.just",
@@ -2338,12 +2463,37 @@
         {
           "path": "just/build.just",
           "line": 30,
-          "text": "with-lld *COMMAND:"
+          "text": "[script(\"powershell.exe\", \"-NoProfile\", \"-ExecutionPolicy\", \"Bypass\", \"-File\")]"
         },
         {
           "path": "just/build.just",
           "line": 31,
-          "text": "@powershell -NoProfile -ExecutionPolicy Bypass -Command \"$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'\""
+          "text": "@with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 32,
+          "text": "$ErrorActionPreference = 'Stop'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 33,
+          "text": "if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }"
+        },
+        {
+          "path": "just/build.just",
+          "line": 34,
+          "text": "$LASTEXITCODE = 0"
+        },
+        {
+          "path": "just/build.just",
+          "line": 35,
+          "text": "Invoke-Expression '{{ COMMAND }}'"
+        },
+        {
+          "path": "just/build.just",
+          "line": 36,
+          "text": "exit $LASTEXITCODE"
         },
         {
           "path": "just/ci.just",
@@ -2351,6 +2501,44 @@
           "text": "MESH_LLM_TEST_XTASK_BIN=\"$binary\" just with-lld cargo test --locked -p trajectory-reader --features parquet-input --test prompt_command native_prompt_command_ -- --test-threads=1"
         }
       ]
+    },
+    {
+      "bound_child": null,
+      "caller": "just:with-lld",
+      "candidate_id": null,
+      "child": null,
+      "deletion_condition": "Remove when the graph resolves Unix Just wrapper attributes",
+      "disposition": "platform_conditional",
+      "evidence": [
+        {
+          "path": ".github/workflows/ci-platform-checks-slice.yml",
+          "line": 286,
+          "text": "just with-lld cargo build --locked -p xtask --bin xtask --example migration_generator_fixture"
+        },
+        {
+          "path": "just/build.just",
+          "line": 17,
+          "text": "[unix]"
+        },
+        {
+          "path": "just/build.just",
+          "line": 18,
+          "text": "with-lld *COMMAND:"
+        },
+        {
+          "path": "just/build.just",
+          "line": 26,
+          "text": "exec {{ COMMAND }}"
+        }
+      ],
+      "id": "boundary:windows-contract-tools:with-lld",
+      "line": 0,
+      "occurrence": 1,
+      "rationale": "The graph uses the current host Just dump, whose Unix wrapper is explicitly conditional. The Windows source counterpart forwards the same literal command; this record does not assert native Windows execution.",
+      "reachable_bytes": "Current-checkout Cargo builds xtask and migration_generator_fixture only; the selected workflow step is native Windows gated",
+      "replacement_owner": "tools/xtask/src/migration_inventory/required_graph/recipes.rs",
+      "selector": "Platform-qualified with-lld wrapper forwards literal automation binary and inert fixture build arguments from the Windows unit-contract step",
+      "source_block": "exec cargo build --locked -p xtask --bin xtask --example migration_generator_fixture"
     }
   ],
   "census": {

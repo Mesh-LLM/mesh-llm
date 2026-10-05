@@ -27,8 +27,13 @@ with-lld *COMMAND:
 
 [private]
 [windows]
-with-lld *COMMAND:
-    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'"
+[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+@with-lld *COMMAND:
+    $ErrorActionPreference = 'Stop'
+    if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }
+    $LASTEXITCODE = 0
+    Invoke-Expression '{{ COMMAND }}'
+    exit $LASTEXITCODE
 
 
 # Build both local products for the current platform: Skippy, then MeshLLM.

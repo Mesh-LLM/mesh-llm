@@ -153,3 +153,84 @@ fn graph_expands_checked_in_just_bindings_without_claiming_census() -> DynResult
     assert_eq!(graph.unresolved, 0);
     Ok(())
 }
+
+#[test]
+fn graph_binds_workflow_recipe_arguments_and_refuses_dynamic_commands() -> DynResult<()> {
+    let bootstrap = super::just_bindings::call("just automation-bootstrap | tee \"$report\"")?
+        .expect("literal bootstrap command");
+    assert_eq!(bootstrap.recipe, "automation-bootstrap");
+    assert!(bootstrap.arguments.is_empty());
+    let root = crate::command::unique_temp_dir("graph-workflow-just-arguments");
+    source(
+        &root,
+        "Justfile",
+        "with-lld *COMMAND:\n    exec {{ COMMAND }}\n",
+    )?;
+    source(&root, "scripts/child.py", "pass\n")?;
+    let workflow = ".github/workflows/check.yml";
+    let paths = vec![
+        "Justfile".to_owned(),
+        "scripts/child.py".to_owned(),
+        workflow.to_owned(),
+    ];
+    for command in [
+        "run: just with-lld python3 scripts/child.py",
+        "run: just with-lld python3 scripts/child.py | tee \"$report\"",
+        "run: |\n          just with-lld python3 scripts/child.py",
+    ] {
+        source(
+            &root,
+            workflow,
+            &format!("jobs:\n  check:\n    steps:\n      - name: check\n        {command}\n"),
+        )?;
+        let graph = report(&root, &paths, &[], &BTreeSet::new(), &[workflow])?;
+        assert!(
+            graph.edges.iter().any(|edge| edge.parent == "just:with-lld"
+                && edge.child.as_deref() == Some("scripts/child.py")),
+            "{graph:?}"
+        );
+        assert!(
+            !graph
+                .edges
+                .iter()
+                .any(|edge| edge.unresolved_reason.as_deref()
+                    == Some("required executable argument is unbound")),
+            "{graph:?}"
+        );
+    }
+    for command in [
+        "just with-lld $COMMAND",
+        "just $RECIPE python3 scripts/child.py",
+        "just with-lld python3 scripts/child.py | bash",
+        "just with-lld python3 scripts/child.py | tee \"$report\" | bash",
+        "just with-lld python3 scripts/child.py | tee \"$(touch marker)\"",
+        "just with-lld python3 scripts/child.py | tee \"`touch marker`\"",
+        "just with-lld python3 scripts/child.py | tee \"${report}\"",
+        "just with-lld python3 scripts/child.py | tee \"$report/suffix\"",
+        "just with-lld python3 scripts/child.py | tee \"$1\"",
+        "just with-lld python3 scripts/child.py | tee -a",
+        "just with-lld python3 scripts/child.py | tee --help",
+        "just with-lld python3 scripts/child.py | tee -a \"$report\"",
+        "just with-lld python3 scripts/child.py | tee \"$report\" > sink",
+        "just with-lld python3 scripts/child.py | tee \"$report\"; touch marker",
+    ] {
+        source(&root, workflow, &format!("run: {command}\n"))?;
+        let graph = report(&root, &paths, &[], &BTreeSet::new(), &[workflow])?;
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|edge| edge.parent == workflow && edge.status == "unknown_selection"),
+            "{graph:?}"
+        );
+        assert!(
+            !graph
+                .edges
+                .iter()
+                .any(|edge| edge.parent == "just:with-lld"),
+            "{graph:?}"
+        );
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

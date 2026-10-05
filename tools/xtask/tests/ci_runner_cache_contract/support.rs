@@ -116,14 +116,24 @@ impl Fixture {
         .unwrap();
         let report = raw.process;
         assert!(
-            report.cleanup.complete && report.failure.is_none(),
+            report.cleanup.complete
+                && !report.cleanup.forced
+                && !report.cleanup.graceful_signal_failed
+                && report.cleanup.failure.is_none()
+                && report.failure.is_none(),
             "{report:?}"
         );
         assert_eq!(report.outcome, process::Outcome::Exited, "{report:?}");
+        let stdout = raw.stdout.unwrap();
+        let stderr = raw.stderr.unwrap();
+        assert_eq!(stdout.as_bytes().len() as u64, report.stdout.bytes_seen);
+        assert_eq!(stderr.as_bytes().len() as u64, report.stderr.bytes_seen);
+        // Privacy diagnostics may suppress cache credentials intentionally.
+        // Complete raw fixture bytes are independent of sanitized persistence.
         Output {
             status: report.status.unwrap(),
-            stdout: raw.stdout.unwrap().as_bytes().to_vec(),
-            stderr: raw.stderr.unwrap().as_bytes().to_vec(),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
         }
     }
     pub(super) fn selector(&self, env: &[(&str, &str)]) -> Output {

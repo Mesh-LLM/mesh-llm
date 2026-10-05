@@ -81,3 +81,6 @@ mod artifact_gaps;
 
 #[path = "ci_runner_cache_contract/artifact_action_sources/mod.rs"]
 mod artifact_action_sources;
+
+#[path = "ci_runner_cache_contract/windows_composition/mod.rs"]
+mod windows_composition;

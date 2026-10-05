@@ -140,3 +140,6 @@ fn each_missing_component_is_rejected_without_creating_a_replacement_directory()
         assert!(!root.join("mesh").join(relative).exists());
     }
 }
+
+#[path = "source_layout_action/artifact_routing.rs"]
+mod artifact_routing;

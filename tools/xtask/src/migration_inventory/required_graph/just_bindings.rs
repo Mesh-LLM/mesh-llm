@@ -30,10 +30,15 @@ pub(super) fn call(line: &str) -> Result<Option<Invocation>, String> {
     }
     let arguments = match words[index + 2..]
         .iter()
-        .position(|word| matches!(*word, ">" | ">>"))
+        .position(|word| matches!(*word, ">" | ">>" | "|"))
     {
         Some(redirect) => match &words[index + 2 + redirect + 1..] {
-            [target] if literal(target) => &words[index + 2..index + 2 + redirect],
+            [target] if words[index + 2 + redirect] != "|" && literal(target) => {
+                &words[index + 2..index + 2 + redirect]
+            }
+            ["tee", target] if words[index + 2 + redirect] == "|" && output_target(target) => {
+                &words[index + 2..index + 2 + redirect]
+            }
             _ => return Err(format!("dynamic Just arguments for {recipe}")),
         },
         None => &words[index + 2..],
@@ -46,6 +51,25 @@ pub(super) fn call(line: &str) -> Result<Option<Invocation>, String> {
         recipe: (*recipe).to_owned(),
         arguments,
     }))
+}
+
+fn output_target(value: &str) -> bool {
+    if literal(value) {
+        return !value.starts_with('-');
+    }
+    let Some(name) = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .and_then(|value| value.strip_prefix('$'))
+    else {
+        return false;
+    };
+    name.chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn env_assignment(word: &str) -> bool {

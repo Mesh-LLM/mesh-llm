@@ -489,3 +489,8 @@ run_full_build
         }
     }
 }
+
+#[path = "workload_oracle_producer_contract/full_replay.rs"]
+mod full_replay;
+#[path = "workload_oracle_producer_contract/review_regressions.rs"]
+mod review_regressions;

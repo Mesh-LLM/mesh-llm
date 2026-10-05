@@ -29,6 +29,7 @@ fn provenance(directory: &Path, trial: &trial_cell::Trial) -> DynResult<()> {
             "cleanup_complete": trial.cleanup_complete,
             "cleanup_forced": trial.cleanup_forced,
             "capture_complete": trial.capture_complete,
+            "health_capture_complete": trial.health_capture_complete,
             "health_observation_error": trial.health_observation_error,
         }),
         evidence_io::RECEIPT_BYTES,
@@ -40,6 +41,24 @@ pub(super) fn execute(
     metadata: &admission::Metadata,
     start: Instant,
     cancellation: &Cancellation,
+) -> DynResult<Execution> {
+    execute_with(
+        command,
+        metadata,
+        start,
+        cancellation,
+        preflight::revalidate,
+        trial_cell::execute,
+    )
+}
+
+fn execute_with(
+    command: &options::Command,
+    metadata: &admission::Metadata,
+    start: Instant,
+    cancellation: &Cancellation,
+    mut revalidate: impl FnMut(&admission::Metadata, &Path, Duration, &Cancellation) -> DynResult<()>,
+    mut trial: impl FnMut(&trial_cell::Input<'_>, &Cancellation) -> DynResult<trial_cell::Trial>,
 ) -> DynResult<Execution> {
     if !metadata.runtime_packages_verified {
         return Err("benchmark execution requires native runtime package verification".into());
@@ -59,13 +78,13 @@ pub(super) fn execute(
             .output_dir
             .join(format!("{}-identity", entry.log_stem(&side.side_id)));
         std::fs::create_dir(&validation)?;
-        preflight::revalidate(
+        revalidate(
             metadata,
             &validation,
             deadline.saturating_sub(start.elapsed()),
             cancellation,
         )?;
-        let mut trial = trial_cell::execute(
+        let mut trial = trial(
             &trial_cell::Input {
                 side,
                 entry,
@@ -148,3 +167,7 @@ pub(super) fn publish(
     }
     Ok(paths)
 }
+
+#[cfg(all(test, unix))]
+#[path = "matrix_command_tests.rs"]
+mod command_tests;

@@ -18,6 +18,7 @@ pub(super) struct Capture<R> {
     pending: Vec<u8>,
     oversized: bool,
     eof: bool,
+    observation_failed: bool,
     limit: usize,
     secrets: Vec<Vec<u8>>,
     raw: Option<super::raw::RawCapture>,
@@ -40,6 +41,7 @@ impl<R: Read + platform::Pipe> Capture<R> {
             pending: Vec::with_capacity(LINE_LIMIT),
             oversized: false,
             eof: false,
+            observation_failed: false,
             limit,
             secrets,
             raw: None,
@@ -89,7 +91,10 @@ impl<R: Read + platform::Pipe> Capture<R> {
                         error.kind(),
                         io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
                     ) => {}
-                Err(error) => return Err(Failure::io("observe output EOF", error)),
+                Err(error) => {
+                    self.observation_failed = true;
+                    return Err(Failure::io("observe output EOF", error));
+                }
             }
         }
         Ok(ready)
@@ -126,7 +131,10 @@ impl<R: Read + platform::Pipe> Capture<R> {
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => break,
-                Err(error) => return Err(Failure::io("read output", error)),
+                Err(error) => {
+                    self.observation_failed = true;
+                    return Err(Failure::io("read output", error));
+                }
             }
         }
         Ok(ready)
@@ -186,6 +194,9 @@ impl<R: Read + platform::Pipe> Capture<R> {
                     LineEnding::Eof
                 },
             });
+        if self.oversized {
+            self.report.oversized_lines = self.report.oversized_lines.saturating_add(1);
+        }
         let sensitive = sensitive_line(&self.pending);
         if self.oversized || sensitive {
             self.report.suppressed_lines = self.report.suppressed_lines.saturating_add(1);
@@ -201,17 +212,28 @@ impl<R: Read + platform::Pipe> Capture<R> {
         self.report
             .bytes_retained
             .extend_from_slice(&self.pending[..retained]);
-        if let Some(file) = &mut self.file {
-            file.write_all(&self.pending[..retained])
-                .map_err(|error| Failure::io("write output", error))?;
-        }
+        let persisted = match &mut self.file {
+            Some(file) => file
+                .write_all(&self.pending[..retained])
+                .map_err(|error| Failure::io("write output", error)),
+            None => Ok(()),
+        };
+        // A callback has already consumed this bounded line, even if persistence fails.
         self.pending.clear();
         self.oversized = false;
+        if persisted.is_err() {
+            self.observation_failed = true;
+        }
+        persisted?;
         Ok(ready)
     }
 
     pub(super) fn finish(mut self) -> (StreamReport, Option<Failure>) {
         let failure = self.flush_line(&Readiness::None).err();
+        self.report.line_capture_complete = self.eof
+            && self.report.oversized_lines == 0
+            && !self.observation_failed
+            && failure.is_none();
         (self.report, failure)
     }
 

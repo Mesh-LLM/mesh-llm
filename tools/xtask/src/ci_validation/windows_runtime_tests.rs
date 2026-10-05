@@ -109,3 +109,13 @@ fn windows_product_is_a_verified_composer_without_a_host_or_runtime_build() {
 #[cfg_attr(not(windows), allow(dead_code))]
 #[path = "windows_build_native.rs"]
 mod native;
+
+#[path = "windows_installer/mod.rs"]
+mod installer;
+
+#[path = "windows_installer_static_tests.rs"]
+mod installer_static;
+
+#[cfg(windows)]
+#[path = "windows_with_lld.rs"]
+mod with_lld;
