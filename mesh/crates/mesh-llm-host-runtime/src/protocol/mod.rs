@@ -122,16 +122,19 @@ pub(crate) fn attach_own_plugin_keys(
     }
 }
 
+/// A decoded gossip frame's announcements, and the sender's verified plugin keys.
+pub(crate) type GossipWithPluginKeys = (
+    Vec<(EndpointAddr, PeerAnnouncement)>,
+    Vec<crate::mesh::plugin_keys::BoundPluginKey>,
+);
+
 /// [`decode_gossip_payload`], plus the plugin keys on the sender's own entry
 /// whose binding verifies against the sender's node key.
 pub(crate) fn decode_gossip_payload_and_plugin_keys(
     protocol: ControlProtocol,
     remote: EndpointId,
     buf: &[u8],
-) -> Result<(
-    Vec<(EndpointAddr, PeerAnnouncement)>,
-    Vec<crate::mesh::plugin_keys::BoundPluginKey>,
-)> {
+) -> Result<GossipWithPluginKeys> {
     let announcements = decode_gossip_payload(protocol, remote, buf)?;
     // The frame decoded and validated above; read the sender's own entry again.
     let frame = crate::proto::node::GossipFrame::decode(buf)
