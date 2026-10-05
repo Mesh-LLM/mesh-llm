@@ -174,17 +174,31 @@ async fn update(name: &str) -> Result<()> {
 
 fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
-    let mut err = mesh_llm_events::console_err();
+    set_enabled_in(&store, name, enabled, &mut mesh_llm_events::console_err())
+}
+
+fn set_enabled_in(
+    store: &PluginStore,
+    name: &str,
+    enabled: bool,
+    err: &mut impl Write,
+) -> Result<()> {
     // A default that is not installed (for example right after a delete) is
     // turned off, or back on, by a record the installers and update respect.
-    if default_plugin(name).is_some() && store.load_optional(name)?.is_none() {
-        store.set_default_turned_off(name, !enabled)?;
+    // Enabling a default always removes that record, installed or not, so a
+    // stale one never outlives an install.
+    let is_default = default_plugin(name).is_some();
+    if is_default && enabled {
+        store.set_default_turned_off(name, false)?;
+    }
+    if is_default && store.load_optional(name)?.is_none() {
         if enabled {
             writeln!(
                 err,
                 "✅ Enabled {name}: the next installer or mesh-llm update run installs it"
             )?;
         } else {
+            store.set_default_turned_off(name, true)?;
             writeln!(
                 err,
                 "⏸️  Disabled {name}: the installers and mesh-llm update will not install it again"
@@ -569,6 +583,68 @@ url = "unix:///run/remote.sock"
         assert!(!configured.contains("capsule-emit-mesh"));
         assert!(configured.contains("operator-run"));
         assert!(configured.contains("remote"));
+    }
+
+    fn installed_default(store: &PluginStore, enabled: bool) {
+        store
+            .save(&mesh_llm_plugin_manager::InstalledPluginMetadata {
+                name: "capsule-emit-mesh".into(),
+                source_repository: "https://github.com/Mesh-LLM/capsule-emit-mesh-plugin".into(),
+                installed_version: "v0.1.2".into(),
+                target_triple: "x86_64-unknown-linux-gnu".into(),
+                downloaded_asset_name: "capsule-emit-mesh.tar.gz".into(),
+                install_path: store.root().join("installed").join("capsule-emit-mesh"),
+                enabled,
+                default_managed: false,
+                manifest: None,
+                last_protocol_version: None,
+                last_status: None,
+                last_error: None,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn disabling_a_plugin_that_is_not_installed_and_not_a_default_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let error = set_enabled_in(&store, "not-a-default", false, &mut Vec::new()).unwrap_err();
+        assert!(error.to_string().contains("not installed"), "{error:#}");
+        assert!(!store.default_turned_off("not-a-default"));
+    }
+
+    #[test]
+    fn disabling_an_uninstalled_default_records_it_and_enabling_removes_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        set_enabled_in(&store, "capsule-emit-mesh", false, &mut Vec::new()).unwrap();
+        assert!(store.default_turned_off("capsule-emit-mesh"));
+        set_enabled_in(&store, "capsule-emit-mesh", true, &mut Vec::new()).unwrap();
+        assert!(!store.default_turned_off("capsule-emit-mesh"));
+    }
+
+    #[test]
+    fn enabling_an_installed_default_removes_a_stale_turned_off_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        // Turned off while not installed, then installed explicitly anyway.
+        store
+            .set_default_turned_off("capsule-emit-mesh", true)
+            .unwrap();
+        installed_default(&store, false);
+        set_enabled_in(&store, "capsule-emit-mesh", true, &mut Vec::new()).unwrap();
+        assert!(!store.default_turned_off("capsule-emit-mesh"));
+        assert!(store.load("capsule-emit-mesh").unwrap().enabled);
+    }
+
+    #[test]
+    fn disabling_an_installed_default_keeps_the_install_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        installed_default(&store, true);
+        set_enabled_in(&store, "capsule-emit-mesh", false, &mut Vec::new()).unwrap();
+        assert!(!store.load("capsule-emit-mesh").unwrap().enabled);
+        assert!(!store.default_turned_off("capsule-emit-mesh"));
     }
 
     #[test]

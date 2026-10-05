@@ -191,14 +191,13 @@ pub async fn install_default_plugins(
             outcomes.push((default.name, DefaultPluginOutcome::OperatorManaged));
             continue;
         }
-        if store.default_turned_off(default.name) {
-            outcomes.push((default.name, DefaultPluginOutcome::TurnedOff));
-            continue;
-        }
         let outcome = match store.load_optional(default.name) {
             Err(error) => {
                 DefaultPluginOutcome::NotInstalled(format!("read installed metadata: {error:#}"))
             }
+            // The turned-off record only matters while nothing is installed:
+            // an installed plugin is handled by its own record.
+            Ok(None) if store.default_turned_off(default.name) => DefaultPluginOutcome::TurnedOff,
             Ok(current) => match plan(default, current.as_ref(), target) {
                 Plan::SkipOperator => DefaultPluginOutcome::OperatorManaged,
                 Plan::SkipDisabled => DefaultPluginOutcome::Disabled,
@@ -413,6 +412,34 @@ mod tests {
         // plugins enable undoes it.
         store.set_default_turned_off("notes", false).unwrap();
         assert!(!store.default_turned_off("notes"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_installed_default_with_a_stale_turned_off_record_is_handled_normally() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        store.set_default_turned_off("notes", true).unwrap();
+        let mut record = installed("v1.0.0", true, true);
+        record.install_path = temp.path().join("installed").join("notes");
+        store.save(&record).unwrap();
+
+        let options = PluginInstallOptions {
+            store_root: temp.path().to_path_buf(),
+            install_root: temp.path().join("installed"),
+            catalog_url: "http://127.0.0.1:9/unreachable".into(),
+            target: crate::target::PluginTarget::from_os_arch("linux", "x86_64").unwrap(),
+        };
+        let outcomes = install_default_plugins(
+            &[NOTES],
+            &BTreeSet::new(),
+            &options,
+            &mut |_: crate::install::PluginProgressEvent| {},
+        )
+        .await;
+        assert!(matches!(
+            outcomes.as_slice(),
+            [("notes", DefaultPluginOutcome::AlreadyCurrent)]
+        ));
     }
 
     #[test]
