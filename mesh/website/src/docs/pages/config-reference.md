@@ -180,7 +180,7 @@ normal warnings in every mode.
 | `model_fit.ubatch` | integer | `0` = auto (`n_ubatch`); should not exceed `batch` | both | model reload | wired | none |
 | `model_fit.cache_type_k`<br>`model_fit.cache_type_v` | enum (dtype) | `auto` (default) follows package-validated publisher KV metadata, then publisher compute dtype, then F16; explicit schema values are `f16`, `f32`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, and `q5_1`, gated by runtime support | both | model reload | wired | none |
 | `model_fit.kv_offload` | bool-or-`auto` | `auto` | both | model reload | wired | none |
-| `model_fit.kv_unified` | legacy bool-or-`auto` | Unified KV is always used; `auto` and `true` are accepted, `false` is rejected | both | model reload | wired (hidden compatibility setting) | none |
+| `model_fit.kv_unified` | bool-or-`auto` | `auto` derives from lane count; `false` requests per-sequence KV (multi-lane activation exports require unified KV) | both | model reload | wired (hidden compatibility setting) | none |
 | `model_fit.cache_ram_mib` | integer | `0`/unset = host-RAM L2 disabled | both | model reload | wired; requires prefix caching and active L3 | none |
 | `model_fit.cache_idle_slots` | integer | unset uses the runtime lane count; `0` drops every reset lane, positive values cap retained idle sessions | both | model reload | wired | none |
 | `model_fit.prompt_cache` | bool-or-`auto` | `auto` | both | model reload | wired | none |

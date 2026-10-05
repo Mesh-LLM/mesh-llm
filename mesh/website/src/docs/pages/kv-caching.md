@@ -80,7 +80,7 @@ The relevant controls are:
 | `cache_type_k` | `auto`, `f16`, `q8_0`, `q4_0` | Storage and compute dtype for attention keys |
 | `cache_type_v` | `auto`, `f16`, `q8_0`, `q4_0` | Storage and compute dtype for attention values |
 | `kv_offload` | `auto`, `true`, `false` | Whether KV tensors may reside on the selected accelerator rather than host memory |
-| `kv_unified` | `auto`, `true` | Legacy compatibility setting. Skippy always uses unified KV; `false` is rejected. |
+| `kv_unified` | `auto`, `true`, `false` | `auto` derives from lane count. `false` requests per-sequence KV; multi-lane activation exports still require unified KV. |
 | `flash_attention` | `auto`, `enabled`, `disabled` | Selects the fused attention path; a quantized V cache requires the enabled path |
 
 Q8_0 and Q4_0 encode values in 32-element blocks. A model whose KV head
