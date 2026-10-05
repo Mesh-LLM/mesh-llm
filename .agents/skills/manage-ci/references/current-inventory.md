@@ -405,6 +405,7 @@ runner-contract update is active.
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release callers prepare one source/version-bound UI with complete file checksums, shared by all hosts and SDK resources |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch, plus a pinned, digest-verified Skippy correctness fixture; planned `skippy-ffi` tests execute; selected PR, main, and manual-full Skippy changes additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
+
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
@@ -419,6 +420,12 @@ runner-contract update is active.
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke with optional typed model context-size and recurrent-model inputs; recurrent models restore and save through a dedicated trust-scoped cache before the smoke runs |
 | `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
 | `hf-download-smoke.yml` | Hugging Face download smoke |
+
+Rust test and Quality Clippy batch jobs now upload a `mesh-ci-cargo-census-v1`
+receipt after every selected Cargo invocation succeeds. The receipt binds the
+resolved selected and actually executed package names, batch ID, kind and source
+SHA; a mismatch fails the batch. This is per-batch execution evidence; the
+planner and `ci-crate-lists` still own exhaustive main workspace allocation.
 
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
 workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no

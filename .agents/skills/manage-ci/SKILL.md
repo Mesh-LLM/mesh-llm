@@ -208,7 +208,9 @@ owning source, and update the inventory and topology in the same change.
   not a workflow-maintained allowlist.
 - A planned Rust package must execute its Clippy and test checks. When a package
   needs an isolated feature graph, run a separate Cargo invocation and include
-  its result in the same required lane. The selected SafeTensors executable
+  its result in the same required lane. Each batch records the package names
+  only after its Cargo invocation succeeds, rejects a selected/executed
+  mismatch, and uploads the run-scoped execution census. The selected SafeTensors executable
   smoke runs with the same required cases on PR, main, and manual-full sources.
 - Use measured workload data to rebalance deterministic shards, but keep the
   checked-in algorithm reproducible. Use one Cargo invocation per shard unless

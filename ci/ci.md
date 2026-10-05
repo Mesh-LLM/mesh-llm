@@ -592,7 +592,11 @@ closed.
 workspace crate exactly once. Planned `skippy-ffi` packages execute their
 tests and run Clippy in an isolated dynamic-runtime feature graph rather than
 being silently skipped by a batch. Selected SafeTensors executable coverage
-runs on PR, exhaustive main and manual-full sources.
+runs on PR, exhaustive main and manual-full sources. Each Cargo batch writes a
+run-scoped census after successful invocations, verifies it against its resolved
+package list, and uploads the receipt for review. Historical PR plans may name
+a package absent from their checked-out tree; the existing workspace filter
+records that skip before the resolved list reaches this execution gate.
 
 Control-plane changes fail open through the selected profile. When they
 require the `web` slice, both console and website rows execute even without a

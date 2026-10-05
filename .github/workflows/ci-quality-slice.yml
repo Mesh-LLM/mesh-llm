@@ -333,26 +333,42 @@ jobs:
       - name: Run one Clippy invocation for the batch
         env:
           CLIPPY_CRATES: ${{ steps.resolve_batch_crates.outputs.crates }}
+          CARGO_BATCH_ID: ${{ matrix.batch.id }}
+          CARGO_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
         run: |
           set -euo pipefail
           mapfile -t crates < <(jq -r '.[]' <<<"$CLIPPY_CRATES")
-          if [[ "${#crates[@]}" -eq 0 ]]; then
-            exit 0
-          fi
+          executed=()
           args=()
+          batched=()
           for crate in "${crates[@]}"; do
             # skippy-ffi has a distinct dynamic-runtime feature graph. Run it
             # separately so a batched Cargo invocation cannot unify features
             # from another package and conceal its own warnings.
             [[ "$crate" == "skippy-ffi" ]] && continue
             args+=("-p" "$crate")
+            batched+=("$crate")
           done
           if [[ "${#args[@]}" -gt 0 ]]; then
             cargo clippy "${args[@]}" --all-targets -- -D warnings
+            executed+=("${batched[@]}")
           fi
           if printf '%s\n' "${crates[@]}" | grep -qxF skippy-ffi; then
             cargo clippy --locked -p skippy-ffi --all-targets -- -D warnings
+            executed+=(skippy-ffi)
           fi
+          executed_json="$(jq -cn --args '$ARGS.positional' ${executed[@]+"${executed[@]}"})"
+          python3 "$GITHUB_WORKSPACE/scripts/record-ci-cargo-census.py" \
+            --kind clippy --batch-id "$CARGO_BATCH_ID" --source-sha "$CARGO_SOURCE_SHA" \
+            --selected "$CLIPPY_CRATES" --executed "$executed_json" \
+            --out "$RUNNER_TEMP/cargo-census.json"
+      - name: Upload actual Clippy package census
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: cargo-census-clippy-${{ matrix.batch.id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cargo-census.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Capture Clippy cache evidence
         if: ${{ !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats

@@ -242,9 +242,12 @@ jobs:
         env:
           TEST_CRATES: ${{ steps.resolve_batch_crates.outputs.crates }}
           SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/${{ steps.skippy_correctness_model.outputs.file }}
+          CARGO_BATCH_ID: ${{ matrix.batch.id }}
+          CARGO_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
         run: |
           set -euo pipefail
           mapfile -t crates < <(jq -r '.[]' <<<"$TEST_CRATES")
+          executed=()
           for crate in ${crates[@]+"${crates[@]}"}; do
             echo "::group::cargo test -p $crate"
             cargo test --locked -p "$crate"
@@ -255,8 +258,21 @@ jobs:
                 claude_cli_executes_read_tool_through_host_ingress
               echo "::endgroup::"
             fi
+            executed+=("$crate")
             echo "::endgroup::"
           done
+          executed_json="$(jq -cn --args '$ARGS.positional' ${executed[@]+"${executed[@]}"})"
+          python3 "$GITHUB_WORKSPACE/scripts/record-ci-cargo-census.py" \
+            --kind test --batch-id "$CARGO_BATCH_ID" --source-sha "$CARGO_SOURCE_SHA" \
+            --selected "$TEST_CRATES" --executed "$executed_json" \
+            --out "$RUNNER_TEMP/cargo-census.json"
+      - name: Upload actual Rust test package census
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: cargo-census-test-${{ matrix.batch.id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cargo-census.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Capture Rust test cache evidence
         if: ${{ !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats
