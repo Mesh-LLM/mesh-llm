@@ -1,6 +1,6 @@
 use crate::inference::skippy;
 use anyhow::{Context, Result};
-pub(super) use skippy_coordinator::topology::PlacementObjective;
+pub(crate) use skippy_coordinator::topology::PlacementObjective;
 use skippy_coordinator::topology::{
     LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlan, TopologyPlanningInput,
     TopologyStagePlan, estimate_plan_throughput, minimum_valid_context, plan_locked_topology,
@@ -109,6 +109,55 @@ pub(super) struct RuntimeSliceStagePlan {
     pub(super) parameter_bytes: u64,
 }
 
+/// How a split chooses its layer boundaries, and whether they keep moving.
+///
+/// These were one `auto_balance: bool`, which conflated two decisions that do
+/// not always travel together. `--auto-balance` wants both: cut by measured
+/// node speed, then keep re-cutting from observed stage busy time. A
+/// latency-shaped deployment wants the speed-aware cut and *not* the closed
+/// loop — one in-flight request produces too noisy a busy-time signal to
+/// rebalance on, and the controller's propose/measure/rollback cycle costs a
+/// drain and a cutover each time it tries.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SplitPlacementPolicy {
+    /// Re-cut by measured node speed instead of packing the largest node
+    /// first, optimising for this objective. `None` keeps capacity-only
+    /// placement, which is what a split does without `--auto-balance`.
+    pub(crate) speed_aware: Option<PlacementObjective>,
+    /// Keep re-cutting from observed stage busy time while serving.
+    pub(crate) closed_loop: bool,
+}
+
+impl SplitPlacementPolicy {
+    /// Capacity-only placement: the historical default.
+    pub(crate) const CAPACITY_ONLY: Self = Self {
+        speed_aware: None,
+        closed_loop: false,
+    };
+
+    /// What `--auto-balance` has always meant.
+    pub(crate) const AUTO_BALANCE: Self = Self {
+        speed_aware: Some(PlacementObjective::Throughput),
+        closed_loop: true,
+    };
+
+    /// Cut for one request's total serial decode time, and leave it there.
+    pub(crate) const LATENCY_RECUT: Self = Self {
+        speed_aware: Some(PlacementObjective::Latency),
+        closed_loop: false,
+    };
+
+    /// Whether the planner should re-cut at all.
+    pub(crate) const fn recuts(self) -> bool {
+        self.speed_aware.is_some()
+    }
+
+    /// The objective to re-cut for. Meaningless unless [`Self::recuts`].
+    pub(crate) fn objective(self) -> PlacementObjective {
+        self.speed_aware.unwrap_or_default()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyResourceInputs {
     pub(super) native_context_length: u32,
@@ -116,12 +165,8 @@ pub(super) struct SplitTopologyResourceInputs {
     pub(super) recurrent_bytes_per_sequence_by_layer: Vec<u64>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) parallel_override: Option<usize>,
-    /// Balance layer boundaries by node decode speed (`--auto-balance`).
-    pub(super) auto_balance: bool,
-    /// Whether that re-cut minimises the slowest stage (aggregate throughput)
-    /// or the total serial decode time of one request (`--strategy
-    /// interactive`). Only read when `auto_balance` is set.
-    pub(super) placement_objective: PlacementObjective,
+    /// How boundaries are chosen, and whether they keep moving.
+    pub(super) placement: SplitPlacementPolicy,
 }
 
 /// Per-stage capacity-model inputs resolved for a finished plan: the context
@@ -307,7 +352,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     );
 
     let participant_by_id = participant_index_by_id(participants);
-    let plan_auto_balance = resources.auto_balance;
+    let plan_auto_balance = resources.placement.recuts();
     let capacity_resources = resources.clone();
     let plan_input = runtime_slice_plan_input(package, participants, resources.clone());
     let plan = plan_runtime_slice_topology_result(
@@ -651,8 +696,8 @@ fn runtime_slice_plan_input(
                 decode_bytes_per_second: participant.decode_bytes_per_second,
             })
             .collect(),
-        auto_balance: resources.auto_balance,
-        placement_objective: resources.placement_objective,
+        auto_balance: resources.placement.recuts(),
+        placement_objective: resources.placement.objective(),
     }
 }
 
@@ -1528,8 +1573,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: false,
-                placement_objective: Default::default(),
+                placement: Default::default(),
             },
         )
         .expect("resource-aware topology");
@@ -1560,8 +1604,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
-                auto_balance: false,
-                placement_objective: Default::default(),
+                placement: Default::default(),
             },
         )
         .expect("resource-aware topology with exact layer weights");
@@ -1597,8 +1640,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
-                auto_balance: false,
-                placement_objective: Default::default(),
+                placement: Default::default(),
             },
         )
         .expect("MI300X and smaller accelerator should form a valid topology");
@@ -1642,8 +1684,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: false,
-                placement_objective: Default::default(),
+                placement: Default::default(),
             },
         )
         .expect("latency-aware runtime topology");
@@ -1697,8 +1738,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: false,
-                placement_objective: Default::default(),
+                placement: Default::default(),
             },
         );
 
