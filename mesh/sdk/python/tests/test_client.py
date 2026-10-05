@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).parents[1] / "src"))
 
 from meshllm import (
-    Client,
+    Node,
     OpenAIRequestError,
     OpenAIStreamChunk,
     OpenAIStreamStarted,
@@ -56,11 +56,14 @@ class FakeHandle:
     def stop(self) -> None:
         self.started = False
 
-    def reconnect(self) -> None:
-        self.started = True
-
     def status(self) -> object:
-        return SimpleNamespace(connected=self.started, peer_count=2)
+        return SimpleNamespace(
+            running=self.started,
+            mode="client",
+            api_base_url="http://127.0.0.1:9337/v1" if self.started else "",
+            console_url="http://127.0.0.1:3131" if self.started else "",
+            payload_json='{"peers":[]}' if self.started else "null",
+        )
 
     def inference_list_models(self) -> list[object]:
         return [SimpleNamespace(id="model-a", name="Model A", context_length=131_072)]
@@ -124,34 +127,24 @@ class FakeHandle:
         self.cancelled.append(request_id)
 
 
-class ClientTests(unittest.IsolatedAsyncioTestCase):
-    async def test_connect_public_discovers_with_query(self) -> None:
+class NodeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_create_embedded_roles(self) -> None:
+        calls: list[tuple[object, ...]] = []
         handle = FakeHandle()
-        binding = SimpleNamespace(
-            PublicMeshQuery=lambda **values: SimpleNamespace(**values),
-            create_auto_client=lambda owner, query: (
-                self.assertEqual(owner, "ab" * 32),
-                self.assertEqual(query.target_name, "community"),
-                self.assertEqual(query.relays, ["wss://relay.example"]),
-                handle,
-            )[-1],
-        )
-
+        binding = SimpleNamespace(create_node=lambda *args: (calls.append(args), handle)[1])
         with patch("meshllm.client.native", return_value=binding):
-            client = await Client.connect_public(
-                owner_keypair_hex="ab" * 32,
-                target_name="community",
-                relays=("wss://relay.example",),
-            )
-
-        self.assertIs(client._handle, handle)
+            for mode in ("client", "serve", "combined"):
+                node = Node.create(mode=mode, models=("model-a",))
+                self.assertIs(node._handle, handle)
+        self.assertEqual([call[0] for call in calls], ["client", "serve", "combined"])
+        self.assertTrue(all(call[2] == ["model-a"] for call in calls))
 
     async def test_lifecycle_and_models(self) -> None:
         handle = FakeHandle()
-        client = Client(handle)
+        client = Node(handle)
 
         async with client:
-            self.assertTrue((await client.status()).connected)
+            self.assertTrue((await client.status()).running)
             model = (await client.inference.list_models())[0]
             self.assertEqual(model.id, "model-a")
             self.assertEqual(model.context_length, 131_072)
@@ -160,7 +153,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_agent_request_preserves_tools_and_full_response(self) -> None:
         handle = FakeHandle()
-        client = Client(handle)
+        client = Node(handle)
         tool = {"type": "function", "function": {"name": "search"}}
 
         result = await client.inference.chat_completions({
@@ -178,7 +171,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["usage"]["total_tokens"], 12)
 
     async def test_non_success_response_raises_typed_error(self) -> None:
-        client = Client(FakeHandle())
+        client = Node(FakeHandle())
 
         with self.assertRaises(OpenAIRequestError) as raised:
             await client.inference.chat_completions({"model": "missing", "messages": []})
@@ -189,7 +182,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         handle = FakeHandle()
         events = [
             event
-            async for event in Client(handle).inference.stream_chat_completions({
+            async for event in Node(handle).inference.stream_chat_completions({
                 "model": "model-a",
                 "messages": [{"role": "user", "content": "weather?"}],
                 "tools": [{"type": "function", "function": {"name": "weather"}}],
@@ -210,7 +203,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         handle = FakeHandle()
         events = [
             event
-            async for event in Client(handle).inference.stream_responses({
+            async for event in Node(handle).inference.stream_responses({
                 "model": "model-a",
                 "input": "weather?",
                 "tools": [{"type": "function", "name": "weather"}],
@@ -221,7 +214,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1].event, "response.function_call_arguments.delta")
 
     async def test_stream_failure_raises_typed_error_with_http_context(self) -> None:
-        stream = Client(FakeHandle()).inference.stream_chat_completions({
+        stream = Node(FakeHandle()).inference.stream_chat_completions({
             "model": "missing",
             "messages": [],
         })
@@ -234,7 +227,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_closing_agent_stream_cancels_native_request(self) -> None:
         handle = FakeHandle()
-        stream = Client(handle).inference.stream_chat_completions({
+        stream = Node(handle).inference.stream_chat_completions({
             "model": "model-a",
             "messages": [{"role": "user", "content": "weather?"}],
         })
@@ -256,7 +249,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 return "slow-stream"
 
         handle = SlowHandle()
-        stream = Client(handle).inference.stream_chat_completions({"model": "model-a"})
+        stream = Node(handle).inference.stream_chat_completions({"model": "model-a"})
         task = asyncio.create_task(anext(stream))
         await asyncio.to_thread(started.wait, 2)
 
@@ -275,7 +268,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 return "fast-stream"
 
         handle = FastHandle()
-        stream = Client(handle).inference.stream_chat_completions({"model": "model-a"})
+        stream = Node(handle).inference.stream_chat_completions({"model": "model-a"})
 
         with self.assertRaisesRegex(RuntimeError, "consumer fell behind"):
             await anext(stream)

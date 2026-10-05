@@ -519,22 +519,6 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterDouble: FfiConverterPrimitive {
-    typealias FfiType = Double
-    typealias SwiftType = Double
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Double {
-        return try lift(readDouble(&buf))
-    }
-
-    public static func write(_ value: Double, into buf: inout [UInt8]) {
-        writeDouble(&buf, lower(value))
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -605,410 +589,23 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 
-public protocol ConsoleHandleProtocol: AnyObject, Sendable {
-
-    func stop() throws
-
-    func url()  -> String
-
-}
-open class ConsoleHandle: ConsoleHandleProtocol, @unchecked Sendable {
-    fileprivate let handle: UInt64
-
-    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public struct NoHandle {
-        public init() {}
-    }
-
-    // TODO: We'd like this to be `private` but for Swifty reasons,
-    // we can't implement `FfiConverter` without making this `required` and we can't
-    // make it `required` without making it `public`.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    required public init(unsafeFromHandle handle: UInt64) {
-        self.handle = handle
-    }
-
-    // This constructor can be used to instantiate a fake object.
-    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
-    //
-    // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public init(noHandle: NoHandle) {
-        self.handle = 0
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public func uniffiCloneHandle() -> UInt64 {
-        return try! rustCall { uniffi_meshllm_ffi_fn_clone_consolehandle(self.handle, $0) }
-    }
-    // No primary constructor declared for this class.
-
-    deinit {
-        if handle == 0 {
-            // Mock objects have handle=0 don't try to free them
-            return
-        }
-
-        try! rustCall { uniffi_meshllm_ffi_fn_free_consolehandle(handle, $0) }
-    }
-
-
-
-
-open func stop()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_consolehandle_stop(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-}
-}
-
-open func url() -> String  {
-    return try!  FfiConverterString.lift(try! rustCall() {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_consolehandle_url(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-
-
-
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeConsoleHandle: FfiConverter {
-    typealias FfiType = UInt64
-    typealias SwiftType = ConsoleHandle
-
-    public static func lift(_ handle: UInt64) throws -> ConsoleHandle {
-        return ConsoleHandle(unsafeFromHandle: handle)
-    }
-
-    public static func lower(_ value: ConsoleHandle) -> UInt64 {
-        return value.uniffiCloneHandle()
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConsoleHandle {
-        let handle: UInt64 = try readInt(&buf)
-        return try lift(handle)
-    }
-
-    public static func write(_ value: ConsoleHandle, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(value))
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeConsoleHandle_lift(_ handle: UInt64) throws -> ConsoleHandle {
-    return try FfiConverterTypeConsoleHandle.lift(handle)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeConsoleHandle_lower(_ value: ConsoleHandle) -> UInt64 {
-    return FfiConverterTypeConsoleHandle.lower(value)
-}
-
-
-
-
-
-
-public protocol MeshClientHandleProtocol: AnyObject, Sendable {
+public protocol MeshNodeHandleProtocol: AnyObject, Sendable {
 
     func cancel(requestId: String)
 
-    func chat(request: ChatRequestNative, listener: EventListener) throws  -> String
-
     func inferenceListModels() throws  -> [ModelNative]
+
+    func joinToken(token: String) throws
 
     func openaiRequest(path: String, bodyJson: String) throws  -> OpenAiResponseNative
 
     func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener) throws  -> String
 
-    func reconnect() throws
-
-    func responses(request: ResponsesRequestNative, listener: EventListener) throws  -> String
-
     func start() throws
 
-    func status()  -> ClientStatus
-
-    func stop()
-
-}
-open class MeshClientHandle: MeshClientHandleProtocol, @unchecked Sendable {
-    fileprivate let handle: UInt64
-
-    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public struct NoHandle {
-        public init() {}
-    }
-
-    // TODO: We'd like this to be `private` but for Swifty reasons,
-    // we can't implement `FfiConverter` without making this `required` and we can't
-    // make it `required` without making it `public`.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    required public init(unsafeFromHandle handle: UInt64) {
-        self.handle = handle
-    }
-
-    // This constructor can be used to instantiate a fake object.
-    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
-    //
-    // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public init(noHandle: NoHandle) {
-        self.handle = 0
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public func uniffiCloneHandle() -> UInt64 {
-        return try! rustCall { uniffi_meshllm_ffi_fn_clone_meshclienthandle(self.handle, $0) }
-    }
-    // No primary constructor declared for this class.
-
-    deinit {
-        if handle == 0 {
-            // Mock objects have handle=0 don't try to free them
-            return
-        }
-
-        try! rustCall { uniffi_meshllm_ffi_fn_free_meshclienthandle(handle, $0) }
-    }
-
-
-
-
-open func cancel(requestId: String)  {try! rustCall() {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_cancel(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(requestId),uniffiCallStatus
-    )
-}
-}
-
-open func chat(request: ChatRequestNative, listener: EventListener)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_chat(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeChatRequestNative_lower(request),
-        FfiConverterCallbackInterfaceEventListener_lower(listener),uniffiCallStatus
-    )
-})
-}
-
-open func inferenceListModels()throws  -> [ModelNative]  {
-    return try  FfiConverterSequenceTypeModelNative.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_inference_list_models(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-
-open func openaiRequest(path: String, bodyJson: String)throws  -> OpenAiResponseNative  {
-    return try  FfiConverterTypeOpenAiResponseNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_request(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(path),
-        FfiConverterString.lower(bodyJson),uniffiCallStatus
-    )
-})
-}
-
-open func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_openai_stream(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(path),
-        FfiConverterString.lower(bodyJson),
-        FfiConverterCallbackInterfaceOpenAiStreamListener_lower(listener),uniffiCallStatus
-    )
-})
-}
-
-open func reconnect()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_reconnect(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-}
-}
-
-open func responses(request: ResponsesRequestNative, listener: EventListener)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_responses(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeResponsesRequestNative_lower(request),
-        FfiConverterCallbackInterfaceEventListener_lower(listener),uniffiCallStatus
-    )
-})
-}
-
-open func start()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_start(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-}
-}
-
-open func status() -> ClientStatus  {
-    return try!  FfiConverterTypeClientStatus_lift(try! rustCall() {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_status(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-
-open func stop()  {try! rustCall() {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshclienthandle_stop(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-}
-}
-
-
-
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeMeshClientHandle: FfiConverter {
-    typealias FfiType = UInt64
-    typealias SwiftType = MeshClientHandle
-
-    public static func lift(_ handle: UInt64) throws -> MeshClientHandle {
-        return MeshClientHandle(unsafeFromHandle: handle)
-    }
-
-    public static func lower(_ value: MeshClientHandle) -> UInt64 {
-        return value.uniffiCloneHandle()
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MeshClientHandle {
-        let handle: UInt64 = try readInt(&buf)
-        return try lift(handle)
-    }
-
-    public static func write(_ value: MeshClientHandle, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(value))
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMeshClientHandle_lift(_ handle: UInt64) throws -> MeshClientHandle {
-    return try FfiConverterTypeMeshClientHandle.lift(handle)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeMeshClientHandle_lower(_ value: MeshClientHandle) -> UInt64 {
-    return FfiConverterTypeMeshClientHandle.lower(value)
-}
-
-
-
-
-
-
-public protocol MeshNodeHandleProtocol: AnyObject, Sendable {
-
-    func cancel(requestId: String) throws
-
-    func chat(request: ChatRequestNative, listener: EventListener) throws  -> String
-
-    func cleanupModels(policy: CleanupPolicy) throws  -> CleanupResult
-
-    func deleteModel(modelRef: String, options: DeleteModelOptions) throws  -> DeleteModelResult
-
-    func downloadModel(modelRef: String) throws  -> DownloadedModel
-
-    func inferenceListModels() throws  -> [ModelNative]
-
-    func installedModels() throws  -> [InstalledModel]
-
-    func loadServingModel(modelRef: String, options: LoadModelOptions) throws  -> ServedModel
-
-    func modelCacheStatus() throws  -> ModelCacheStatus
-
-    func openaiRequest(path: String, bodyJson: String) throws  -> OpenAiResponseNative
-
-    func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamListener) throws  -> String
-
-    func pruneDerivedCache(policy: PrunePolicy) throws  -> PruneResult
-
-    func recommendedModels() throws  -> [ModelSummary]
-
-    func reconnect() throws
-
-    func responses(request: ResponsesRequestNative, listener: EventListener) throws  -> String
-
-    func searchModels(query: ModelSearchQuery) throws  -> [ModelSummary]
-
-    func servedModels() throws  -> [ServedModel]
-
-    func servingStatus() throws  -> ServingStatus
-
-    func setDevicePolicy(policy: DevicePolicy) throws
-
-    func showModel(modelRef: String) throws  -> ModelDetails
-
-    func start() throws
-
-    func startConsole(options: ConsoleOptionsNative) throws  -> ConsoleHandle
-
-    func status()  -> ClientStatus
+    func status() throws  -> NodeStatusNative
 
     func stop() throws
-
-    func unloadServingInstance(instanceId: String, options: UnloadModelOptions) throws
-
-    func unloadServingModel(target: UnloadTarget, options: UnloadModelOptions) throws
-
-    func unloadServingModelById(modelId: String, options: UnloadModelOptions) throws
 
 }
 open class MeshNodeHandle: MeshNodeHandleProtocol, @unchecked Sendable {
@@ -1064,55 +661,13 @@ open class MeshNodeHandle: MeshNodeHandleProtocol, @unchecked Sendable {
 
 
 
-open func cancel(requestId: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+open func cancel(requestId: String)  {try! rustCall() {
         uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_cancel(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(requestId),uniffiCallStatus
     )
 }
-}
-
-open func chat(request: ChatRequestNative, listener: EventListener)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_chat(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeChatRequestNative_lower(request),
-        FfiConverterCallbackInterfaceEventListener_lower(listener),uniffiCallStatus
-    )
-})
-}
-
-open func cleanupModels(policy: CleanupPolicy)throws  -> CleanupResult  {
-    return try  FfiConverterTypeCleanupResult_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_cleanup_models(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeCleanupPolicy_lower(policy),uniffiCallStatus
-    )
-})
-}
-
-open func deleteModel(modelRef: String, options: DeleteModelOptions)throws  -> DeleteModelResult  {
-    return try  FfiConverterTypeDeleteModelResult_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_delete_model(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(modelRef),
-        FfiConverterTypeDeleteModelOptions_lower(options),uniffiCallStatus
-    )
-})
-}
-
-open func downloadModel(modelRef: String)throws  -> DownloadedModel  {
-    return try  FfiConverterTypeDownloadedModel_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_download_model(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(modelRef),uniffiCallStatus
-    )
-})
 }
 
 open func inferenceListModels()throws  -> [ModelNative]  {
@@ -1124,33 +679,13 @@ open func inferenceListModels()throws  -> [ModelNative]  {
 })
 }
 
-open func installedModels()throws  -> [InstalledModel]  {
-    return try  FfiConverterSequenceTypeInstalledModel.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+open func joinToken(token: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_installed_models(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-
-open func loadServingModel(modelRef: String, options: LoadModelOptions)throws  -> ServedModel  {
-    return try  FfiConverterTypeServedModel_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_load_serving_model(
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_join_token(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(modelRef),
-        FfiConverterTypeLoadModelOptions_lower(options),uniffiCallStatus
+        FfiConverterString.lower(token),uniffiCallStatus
     )
-})
 }
-
-open func modelCacheStatus()throws  -> ModelCacheStatus  {
-    return try  FfiConverterTypeModelCacheStatus_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_model_cache_status(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
 }
 
 open func openaiRequest(path: String, bodyJson: String)throws  -> OpenAiResponseNative  {
@@ -1176,91 +711,6 @@ open func openaiStream(path: String, bodyJson: String, listener: OpenAiStreamLis
 })
 }
 
-open func pruneDerivedCache(policy: PrunePolicy)throws  -> PruneResult  {
-    return try  FfiConverterTypePruneResult_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_prune_derived_cache(
-            self.uniffiCloneHandle(),
-        FfiConverterTypePrunePolicy_lower(policy),uniffiCallStatus
-    )
-})
-}
-
-open func recommendedModels()throws  -> [ModelSummary]  {
-    return try  FfiConverterSequenceTypeModelSummary.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_recommended_models(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-
-open func reconnect()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_reconnect(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-}
-}
-
-open func responses(request: ResponsesRequestNative, listener: EventListener)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_responses(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeResponsesRequestNative_lower(request),
-        FfiConverterCallbackInterfaceEventListener_lower(listener),uniffiCallStatus
-    )
-})
-}
-
-open func searchModels(query: ModelSearchQuery)throws  -> [ModelSummary]  {
-    return try  FfiConverterSequenceTypeModelSummary.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_search_models(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeModelSearchQuery_lower(query),uniffiCallStatus
-    )
-})
-}
-
-open func servedModels()throws  -> [ServedModel]  {
-    return try  FfiConverterSequenceTypeServedModel.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_served_models(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-
-open func servingStatus()throws  -> ServingStatus  {
-    return try  FfiConverterTypeServingStatus_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_serving_status(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-
-open func setDevicePolicy(policy: DevicePolicy)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_set_device_policy(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeDevicePolicy_lower(policy),uniffiCallStatus
-    )
-}
-}
-
-open func showModel(modelRef: String)throws  -> ModelDetails  {
-    return try  FfiConverterTypeModelDetails_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_show_model(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(modelRef),uniffiCallStatus
-    )
-})
-}
-
 open func start()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_start(
@@ -1269,18 +719,8 @@ open func start()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) 
 }
 }
 
-open func startConsole(options: ConsoleOptionsNative)throws  -> ConsoleHandle  {
-    return try  FfiConverterTypeConsoleHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_start_console(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeConsoleOptionsNative_lower(options),uniffiCallStatus
-    )
-})
-}
-
-open func status() -> ClientStatus  {
-    return try!  FfiConverterTypeClientStatus_lift(try! rustCall() {
+open func status()throws  -> NodeStatusNative  {
+    return try  FfiConverterTypeNodeStatusNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_status(
             self.uniffiCloneHandle(),uniffiCallStatus
@@ -1292,36 +732,6 @@ open func stop()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_stop(
             self.uniffiCloneHandle(),uniffiCallStatus
-    )
-}
-}
-
-open func unloadServingInstance(instanceId: String, options: UnloadModelOptions)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_instance(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(instanceId),
-        FfiConverterTypeUnloadModelOptions_lower(options),uniffiCallStatus
-    )
-}
-}
-
-open func unloadServingModel(target: UnloadTarget, options: UnloadModelOptions)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeUnloadTarget_lower(target),
-        FfiConverterTypeUnloadModelOptions_lower(options),uniffiCallStatus
-    )
-}
-}
-
-open func unloadServingModelById(modelId: String, options: UnloadModelOptions)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model_by_id(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(modelId),
-        FfiConverterTypeUnloadModelOptions_lower(options),uniffiCallStatus
     )
 }
 }
@@ -1372,562 +782,6 @@ public func FfiConverterTypeMeshNodeHandle_lower(_ value: MeshNodeHandle) -> UIn
 }
 
 
-
-
-public struct ChatMessageNative: Equatable, Hashable {
-    public var role: String
-    public var content: String
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(role: String, content: String) {
-        self.role = role
-        self.content = content
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ChatMessageNative: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeChatMessageNative: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ChatMessageNative {
-        return
-            try ChatMessageNative(
-                role: FfiConverterString.read(from: &buf),
-                content: FfiConverterString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ChatMessageNative, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.role, into: &buf)
-        FfiConverterString.write(value.content, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeChatMessageNative_lift(_ buf: RustBuffer) throws -> ChatMessageNative {
-    return try FfiConverterTypeChatMessageNative.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeChatMessageNative_lower(_ value: ChatMessageNative) -> RustBuffer {
-    return FfiConverterTypeChatMessageNative.lower(value)
-}
-
-
-public struct ChatRequestNative: Equatable, Hashable {
-    public var model: String
-    public var messages: [ChatMessageNative]
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(model: String, messages: [ChatMessageNative]) {
-        self.model = model
-        self.messages = messages
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ChatRequestNative: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeChatRequestNative: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ChatRequestNative {
-        return
-            try ChatRequestNative(
-                model: FfiConverterString.read(from: &buf),
-                messages: FfiConverterSequenceTypeChatMessageNative.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ChatRequestNative, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.model, into: &buf)
-        FfiConverterSequenceTypeChatMessageNative.write(value.messages, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeChatRequestNative_lift(_ buf: RustBuffer) throws -> ChatRequestNative {
-    return try FfiConverterTypeChatRequestNative.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeChatRequestNative_lower(_ value: ChatRequestNative) -> RustBuffer {
-    return FfiConverterTypeChatRequestNative.lower(value)
-}
-
-
-public struct CleanupPolicy: Equatable, Hashable {
-    public var removeAll: Bool
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(removeAll: Bool) {
-        self.removeAll = removeAll
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension CleanupPolicy: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeCleanupPolicy: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CleanupPolicy {
-        return
-            try CleanupPolicy(
-                removeAll: FfiConverterBool.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: CleanupPolicy, into buf: inout [UInt8]) {
-        FfiConverterBool.write(value.removeAll, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeCleanupPolicy_lift(_ buf: RustBuffer) throws -> CleanupPolicy {
-    return try FfiConverterTypeCleanupPolicy.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeCleanupPolicy_lower(_ value: CleanupPolicy) -> RustBuffer {
-    return FfiConverterTypeCleanupPolicy.lower(value)
-}
-
-
-public struct CleanupResult: Equatable, Hashable {
-    public var deletedPaths: [String]
-    public var reclaimedBytes: UInt64
-    public var skippedPaths: [String]
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(deletedPaths: [String], reclaimedBytes: UInt64, skippedPaths: [String]) {
-        self.deletedPaths = deletedPaths
-        self.reclaimedBytes = reclaimedBytes
-        self.skippedPaths = skippedPaths
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension CleanupResult: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeCleanupResult: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CleanupResult {
-        return
-            try CleanupResult(
-                deletedPaths: FfiConverterSequenceString.read(from: &buf),
-                reclaimedBytes: FfiConverterUInt64.read(from: &buf),
-                skippedPaths: FfiConverterSequenceString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: CleanupResult, into buf: inout [UInt8]) {
-        FfiConverterSequenceString.write(value.deletedPaths, into: &buf)
-        FfiConverterUInt64.write(value.reclaimedBytes, into: &buf)
-        FfiConverterSequenceString.write(value.skippedPaths, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeCleanupResult_lift(_ buf: RustBuffer) throws -> CleanupResult {
-    return try FfiConverterTypeCleanupResult.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeCleanupResult_lower(_ value: CleanupResult) -> RustBuffer {
-    return FfiConverterTypeCleanupResult.lower(value)
-}
-
-
-public struct ClientStatus: Equatable, Hashable {
-    public var connected: Bool
-    public var peerCount: UInt64
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(connected: Bool, peerCount: UInt64) {
-        self.connected = connected
-        self.peerCount = peerCount
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ClientStatus: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeClientStatus: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClientStatus {
-        return
-            try ClientStatus(
-                connected: FfiConverterBool.read(from: &buf),
-                peerCount: FfiConverterUInt64.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ClientStatus, into buf: inout [UInt8]) {
-        FfiConverterBool.write(value.connected, into: &buf)
-        FfiConverterUInt64.write(value.peerCount, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeClientStatus_lift(_ buf: RustBuffer) throws -> ClientStatus {
-    return try FfiConverterTypeClientStatus.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeClientStatus_lower(_ value: ClientStatus) -> RustBuffer {
-    return FfiConverterTypeClientStatus.lower(value)
-}
-
-
-public struct ConsoleOptionsNative: Equatable, Hashable {
-    public var assetDir: String
-    public var port: UInt16?
-    public var listenAll: Bool
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(assetDir: String, port: UInt16?, listenAll: Bool) {
-        self.assetDir = assetDir
-        self.port = port
-        self.listenAll = listenAll
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ConsoleOptionsNative: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeConsoleOptionsNative: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConsoleOptionsNative {
-        return
-            try ConsoleOptionsNative(
-                assetDir: FfiConverterString.read(from: &buf),
-                port: FfiConverterOptionUInt16.read(from: &buf),
-                listenAll: FfiConverterBool.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ConsoleOptionsNative, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.assetDir, into: &buf)
-        FfiConverterOptionUInt16.write(value.port, into: &buf)
-        FfiConverterBool.write(value.listenAll, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeConsoleOptionsNative_lift(_ buf: RustBuffer) throws -> ConsoleOptionsNative {
-    return try FfiConverterTypeConsoleOptionsNative.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeConsoleOptionsNative_lower(_ value: ConsoleOptionsNative) -> RustBuffer {
-    return FfiConverterTypeConsoleOptionsNative.lower(value)
-}
-
-
-public struct DeleteModelOptions: Equatable, Hashable {
-    public var force: Bool
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(force: Bool) {
-        self.force = force
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension DeleteModelOptions: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeDeleteModelOptions: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeleteModelOptions {
-        return
-            try DeleteModelOptions(
-                force: FfiConverterBool.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: DeleteModelOptions, into buf: inout [UInt8]) {
-        FfiConverterBool.write(value.force, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDeleteModelOptions_lift(_ buf: RustBuffer) throws -> DeleteModelOptions {
-    return try FfiConverterTypeDeleteModelOptions.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDeleteModelOptions_lower(_ value: DeleteModelOptions) -> RustBuffer {
-    return FfiConverterTypeDeleteModelOptions.lower(value)
-}
-
-
-public struct DeleteModelResult: Equatable, Hashable {
-    public var deletedPaths: [String]
-    public var reclaimedBytes: UInt64
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(deletedPaths: [String], reclaimedBytes: UInt64) {
-        self.deletedPaths = deletedPaths
-        self.reclaimedBytes = reclaimedBytes
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension DeleteModelResult: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeDeleteModelResult: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DeleteModelResult {
-        return
-            try DeleteModelResult(
-                deletedPaths: FfiConverterSequenceString.read(from: &buf),
-                reclaimedBytes: FfiConverterUInt64.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: DeleteModelResult, into buf: inout [UInt8]) {
-        FfiConverterSequenceString.write(value.deletedPaths, into: &buf)
-        FfiConverterUInt64.write(value.reclaimedBytes, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDeleteModelResult_lift(_ buf: RustBuffer) throws -> DeleteModelResult {
-    return try FfiConverterTypeDeleteModelResult.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDeleteModelResult_lower(_ value: DeleteModelResult) -> RustBuffer {
-    return FfiConverterTypeDeleteModelResult.lower(value)
-}
-
-
-public struct DownloadedModel: Equatable, Hashable {
-    public var modelRef: String
-    public var paths: [String]
-    public var primaryPath: String?
-    public var details: ModelDetails?
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(modelRef: String, paths: [String], primaryPath: String?, details: ModelDetails?) {
-        self.modelRef = modelRef
-        self.paths = paths
-        self.primaryPath = primaryPath
-        self.details = details
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension DownloadedModel: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeDownloadedModel: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DownloadedModel {
-        return
-            try DownloadedModel(
-                modelRef: FfiConverterString.read(from: &buf),
-                paths: FfiConverterSequenceString.read(from: &buf),
-                primaryPath: FfiConverterOptionString.read(from: &buf),
-                details: FfiConverterOptionTypeModelDetails.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: DownloadedModel, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.modelRef, into: &buf)
-        FfiConverterSequenceString.write(value.paths, into: &buf)
-        FfiConverterOptionString.write(value.primaryPath, into: &buf)
-        FfiConverterOptionTypeModelDetails.write(value.details, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDownloadedModel_lift(_ buf: RustBuffer) throws -> DownloadedModel {
-    return try FfiConverterTypeDownloadedModel.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDownloadedModel_lower(_ value: DownloadedModel) -> RustBuffer {
-    return FfiConverterTypeDownloadedModel.lower(value)
-}
-
-
-public struct InstalledModel: Equatable, Hashable {
-    public var modelRef: String
-    public var path: String
-    public var sizeBytes: UInt64?
-    public var capabilities: ModelCapabilities
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(modelRef: String, path: String, sizeBytes: UInt64?, capabilities: ModelCapabilities) {
-        self.modelRef = modelRef
-        self.path = path
-        self.sizeBytes = sizeBytes
-        self.capabilities = capabilities
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension InstalledModel: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeInstalledModel: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> InstalledModel {
-        return
-            try InstalledModel(
-                modelRef: FfiConverterString.read(from: &buf),
-                path: FfiConverterString.read(from: &buf),
-                sizeBytes: FfiConverterOptionUInt64.read(from: &buf),
-                capabilities: FfiConverterTypeModelCapabilities.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: InstalledModel, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.modelRef, into: &buf)
-        FfiConverterString.write(value.path, into: &buf)
-        FfiConverterOptionUInt64.write(value.sizeBytes, into: &buf)
-        FfiConverterTypeModelCapabilities.write(value.capabilities, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeInstalledModel_lift(_ buf: RustBuffer) throws -> InstalledModel {
-    return try FfiConverterTypeInstalledModel.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeInstalledModel_lower(_ value: InstalledModel) -> RustBuffer {
-    return FfiConverterTypeInstalledModel.lower(value)
-}
 
 
 public struct InstalledNativeRuntimeNative: Equatable, Hashable {
@@ -1996,278 +850,6 @@ public func FfiConverterTypeInstalledNativeRuntimeNative_lower(_ value: Installe
 }
 
 
-public struct LoadModelOptions: Equatable, Hashable {
-    public var devicePolicy: DevicePolicy
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(devicePolicy: DevicePolicy) {
-        self.devicePolicy = devicePolicy
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension LoadModelOptions: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeLoadModelOptions: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LoadModelOptions {
-        return
-            try LoadModelOptions(
-                devicePolicy: FfiConverterTypeDevicePolicy.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: LoadModelOptions, into buf: inout [UInt8]) {
-        FfiConverterTypeDevicePolicy.write(value.devicePolicy, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeLoadModelOptions_lift(_ buf: RustBuffer) throws -> LoadModelOptions {
-    return try FfiConverterTypeLoadModelOptions.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeLoadModelOptions_lower(_ value: LoadModelOptions) -> RustBuffer {
-    return FfiConverterTypeLoadModelOptions.lower(value)
-}
-
-
-public struct ModelCacheStatus: Equatable, Hashable {
-    public var cacheDir: String?
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(cacheDir: String?) {
-        self.cacheDir = cacheDir
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ModelCacheStatus: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeModelCacheStatus: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelCacheStatus {
-        return
-            try ModelCacheStatus(
-                cacheDir: FfiConverterOptionString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ModelCacheStatus, into buf: inout [UInt8]) {
-        FfiConverterOptionString.write(value.cacheDir, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelCacheStatus_lift(_ buf: RustBuffer) throws -> ModelCacheStatus {
-    return try FfiConverterTypeModelCacheStatus.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelCacheStatus_lower(_ value: ModelCacheStatus) -> RustBuffer {
-    return FfiConverterTypeModelCacheStatus.lower(value)
-}
-
-
-public struct ModelCapabilities: Equatable, Hashable {
-    public var multimodal: Bool
-    public var vision: CapabilityLevel
-    public var audio: CapabilityLevel
-    public var reasoning: CapabilityLevel
-    public var toolUse: CapabilityLevel
-    public var moe: Bool
-    public var systemOne: CapabilityLevel
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(multimodal: Bool, vision: CapabilityLevel, audio: CapabilityLevel, reasoning: CapabilityLevel, toolUse: CapabilityLevel, moe: Bool, systemOne: CapabilityLevel) {
-        self.multimodal = multimodal
-        self.vision = vision
-        self.audio = audio
-        self.reasoning = reasoning
-        self.toolUse = toolUse
-        self.moe = moe
-        self.systemOne = systemOne
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ModelCapabilities: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeModelCapabilities: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelCapabilities {
-        return
-            try ModelCapabilities(
-                multimodal: FfiConverterBool.read(from: &buf),
-                vision: FfiConverterTypeCapabilityLevel.read(from: &buf),
-                audio: FfiConverterTypeCapabilityLevel.read(from: &buf),
-                reasoning: FfiConverterTypeCapabilityLevel.read(from: &buf),
-                toolUse: FfiConverterTypeCapabilityLevel.read(from: &buf),
-                moe: FfiConverterBool.read(from: &buf),
-                systemOne: FfiConverterTypeCapabilityLevel.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ModelCapabilities, into buf: inout [UInt8]) {
-        FfiConverterBool.write(value.multimodal, into: &buf)
-        FfiConverterTypeCapabilityLevel.write(value.vision, into: &buf)
-        FfiConverterTypeCapabilityLevel.write(value.audio, into: &buf)
-        FfiConverterTypeCapabilityLevel.write(value.reasoning, into: &buf)
-        FfiConverterTypeCapabilityLevel.write(value.toolUse, into: &buf)
-        FfiConverterBool.write(value.moe, into: &buf)
-        FfiConverterTypeCapabilityLevel.write(value.systemOne, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelCapabilities_lift(_ buf: RustBuffer) throws -> ModelCapabilities {
-    return try FfiConverterTypeModelCapabilities.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelCapabilities_lower(_ value: ModelCapabilities) -> RustBuffer {
-    return FfiConverterTypeModelCapabilities.lower(value)
-}
-
-
-public struct ModelDetails: Equatable, Hashable {
-    public var id: String
-    public var name: String
-    public var source: ModelSource
-    public var kind: ModelKind
-    public var modelRef: String
-    public var downloadRef: String
-    public var path: String?
-    public var sizeBytes: UInt64?
-    public var sizeLabel: String?
-    public var description: String?
-    public var draft: String?
-    public var installed: Bool
-    public var capabilities: ModelCapabilities
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(id: String, name: String, source: ModelSource, kind: ModelKind, modelRef: String, downloadRef: String, path: String?, sizeBytes: UInt64?, sizeLabel: String?, description: String?, draft: String?, installed: Bool, capabilities: ModelCapabilities) {
-        self.id = id
-        self.name = name
-        self.source = source
-        self.kind = kind
-        self.modelRef = modelRef
-        self.downloadRef = downloadRef
-        self.path = path
-        self.sizeBytes = sizeBytes
-        self.sizeLabel = sizeLabel
-        self.description = description
-        self.draft = draft
-        self.installed = installed
-        self.capabilities = capabilities
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ModelDetails: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeModelDetails: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelDetails {
-        return
-            try ModelDetails(
-                id: FfiConverterString.read(from: &buf),
-                name: FfiConverterString.read(from: &buf),
-                source: FfiConverterTypeModelSource.read(from: &buf),
-                kind: FfiConverterTypeModelKind.read(from: &buf),
-                modelRef: FfiConverterString.read(from: &buf),
-                downloadRef: FfiConverterString.read(from: &buf),
-                path: FfiConverterOptionString.read(from: &buf),
-                sizeBytes: FfiConverterOptionUInt64.read(from: &buf),
-                sizeLabel: FfiConverterOptionString.read(from: &buf),
-                description: FfiConverterOptionString.read(from: &buf),
-                draft: FfiConverterOptionString.read(from: &buf),
-                installed: FfiConverterBool.read(from: &buf),
-                capabilities: FfiConverterTypeModelCapabilities.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ModelDetails, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.id, into: &buf)
-        FfiConverterString.write(value.name, into: &buf)
-        FfiConverterTypeModelSource.write(value.source, into: &buf)
-        FfiConverterTypeModelKind.write(value.kind, into: &buf)
-        FfiConverterString.write(value.modelRef, into: &buf)
-        FfiConverterString.write(value.downloadRef, into: &buf)
-        FfiConverterOptionString.write(value.path, into: &buf)
-        FfiConverterOptionUInt64.write(value.sizeBytes, into: &buf)
-        FfiConverterOptionString.write(value.sizeLabel, into: &buf)
-        FfiConverterOptionString.write(value.description, into: &buf)
-        FfiConverterOptionString.write(value.draft, into: &buf)
-        FfiConverterBool.write(value.installed, into: &buf)
-        FfiConverterTypeModelCapabilities.write(value.capabilities, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelDetails_lift(_ buf: RustBuffer) throws -> ModelDetails {
-    return try FfiConverterTypeModelDetails.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelDetails_lower(_ value: ModelDetails) -> RustBuffer {
-    return FfiConverterTypeModelDetails.lower(value)
-}
-
-
 public struct ModelNative: Equatable, Hashable {
     public var id: String
     public var name: String
@@ -2323,126 +905,6 @@ public func FfiConverterTypeModelNative_lift(_ buf: RustBuffer) throws -> ModelN
 #endif
 public func FfiConverterTypeModelNative_lower(_ value: ModelNative) -> RustBuffer {
     return FfiConverterTypeModelNative.lower(value)
-}
-
-
-public struct ModelSearchQuery: Equatable, Hashable {
-    public var query: String
-    public var limit: UInt64?
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(query: String, limit: UInt64?) {
-        self.query = query
-        self.limit = limit
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ModelSearchQuery: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeModelSearchQuery: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelSearchQuery {
-        return
-            try ModelSearchQuery(
-                query: FfiConverterString.read(from: &buf),
-                limit: FfiConverterOptionUInt64.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ModelSearchQuery, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.query, into: &buf)
-        FfiConverterOptionUInt64.write(value.limit, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelSearchQuery_lift(_ buf: RustBuffer) throws -> ModelSearchQuery {
-    return try FfiConverterTypeModelSearchQuery.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelSearchQuery_lower(_ value: ModelSearchQuery) -> RustBuffer {
-    return FfiConverterTypeModelSearchQuery.lower(value)
-}
-
-
-public struct ModelSummary: Equatable, Hashable {
-    public var id: String
-    public var name: String
-    public var sizeLabel: String?
-    public var description: String?
-    public var capabilities: ModelCapabilities
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(id: String, name: String, sizeLabel: String?, description: String?, capabilities: ModelCapabilities) {
-        self.id = id
-        self.name = name
-        self.sizeLabel = sizeLabel
-        self.description = description
-        self.capabilities = capabilities
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ModelSummary: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeModelSummary: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelSummary {
-        return
-            try ModelSummary(
-                id: FfiConverterString.read(from: &buf),
-                name: FfiConverterString.read(from: &buf),
-                sizeLabel: FfiConverterOptionString.read(from: &buf),
-                description: FfiConverterOptionString.read(from: &buf),
-                capabilities: FfiConverterTypeModelCapabilities.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ModelSummary, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.id, into: &buf)
-        FfiConverterString.write(value.name, into: &buf)
-        FfiConverterOptionString.write(value.sizeLabel, into: &buf)
-        FfiConverterOptionString.write(value.description, into: &buf)
-        FfiConverterTypeModelCapabilities.write(value.capabilities, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelSummary_lift(_ buf: RustBuffer) throws -> ModelSummary {
-    return try FfiConverterTypeModelSummary.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelSummary_lower(_ value: ModelSummary) -> RustBuffer {
-    return FfiConverterTypeModelSummary.lower(value)
 }
 
 
@@ -2706,6 +1168,72 @@ public func FfiConverterTypeNativeRuntimePruneResultNative_lower(_ value: Native
 }
 
 
+public struct NodeStatusNative: Equatable, Hashable {
+    public var running: Bool
+    public var mode: String
+    public var apiBaseUrl: String
+    public var consoleUrl: String
+    public var payloadJson: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(running: Bool, mode: String, apiBaseUrl: String, consoleUrl: String, payloadJson: String) {
+        self.running = running
+        self.mode = mode
+        self.apiBaseUrl = apiBaseUrl
+        self.consoleUrl = consoleUrl
+        self.payloadJson = payloadJson
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NodeStatusNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNodeStatusNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NodeStatusNative {
+        return
+            try NodeStatusNative(
+                running: FfiConverterBool.read(from: &buf),
+                mode: FfiConverterString.read(from: &buf),
+                apiBaseUrl: FfiConverterString.read(from: &buf),
+                consoleUrl: FfiConverterString.read(from: &buf),
+                payloadJson: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NodeStatusNative, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.running, into: &buf)
+        FfiConverterString.write(value.mode, into: &buf)
+        FfiConverterString.write(value.apiBaseUrl, into: &buf)
+        FfiConverterString.write(value.consoleUrl, into: &buf)
+        FfiConverterString.write(value.payloadJson, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNodeStatusNative_lift(_ buf: RustBuffer) throws -> NodeStatusNative {
+    return try FfiConverterTypeNodeStatusNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNodeStatusNative_lower(_ value: NodeStatusNative) -> RustBuffer {
+    return FfiConverterTypeNodeStatusNative.lower(value)
+}
+
+
 public struct OpenAiResponseNative: Equatable, Hashable {
     public var statusCode: UInt16
     public var contentType: String?
@@ -2764,796 +1292,10 @@ public func FfiConverterTypeOpenAiResponseNative_lower(_ value: OpenAiResponseNa
 }
 
 
-public struct PrunePolicy: Equatable, Hashable {
-    public var removeAll: Bool
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(removeAll: Bool) {
-        self.removeAll = removeAll
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension PrunePolicy: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypePrunePolicy: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PrunePolicy {
-        return
-            try PrunePolicy(
-                removeAll: FfiConverterBool.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: PrunePolicy, into buf: inout [UInt8]) {
-        FfiConverterBool.write(value.removeAll, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypePrunePolicy_lift(_ buf: RustBuffer) throws -> PrunePolicy {
-    return try FfiConverterTypePrunePolicy.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypePrunePolicy_lower(_ value: PrunePolicy) -> RustBuffer {
-    return FfiConverterTypePrunePolicy.lower(value)
-}
-
-
-public struct PruneResult: Equatable, Hashable {
-    public var deletedPaths: [String]
-    public var reclaimedBytes: UInt64
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(deletedPaths: [String], reclaimedBytes: UInt64) {
-        self.deletedPaths = deletedPaths
-        self.reclaimedBytes = reclaimedBytes
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension PruneResult: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypePruneResult: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PruneResult {
-        return
-            try PruneResult(
-                deletedPaths: FfiConverterSequenceString.read(from: &buf),
-                reclaimedBytes: FfiConverterUInt64.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: PruneResult, into buf: inout [UInt8]) {
-        FfiConverterSequenceString.write(value.deletedPaths, into: &buf)
-        FfiConverterUInt64.write(value.reclaimedBytes, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypePruneResult_lift(_ buf: RustBuffer) throws -> PruneResult {
-    return try FfiConverterTypePruneResult.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypePruneResult_lower(_ value: PruneResult) -> RustBuffer {
-    return FfiConverterTypePruneResult.lower(value)
-}
-
-
-public struct PublicMesh: Equatable, Hashable {
-    public var inviteToken: String
-    public var serving: [String]
-    public var wanted: [String]
-    public var onDisk: [String]
-    public var totalVramBytes: UInt64
-    public var nodeCount: UInt64
-    public var clientCount: UInt64
-    public var maxClients: UInt64
-    public var name: String?
-    public var region: String?
-    public var meshId: String?
-    public var publisherNpub: String
-    public var publishedAt: UInt64
-    public var expiresAt: UInt64?
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(inviteToken: String, serving: [String], wanted: [String], onDisk: [String], totalVramBytes: UInt64, nodeCount: UInt64, clientCount: UInt64, maxClients: UInt64, name: String?, region: String?, meshId: String?, publisherNpub: String, publishedAt: UInt64, expiresAt: UInt64?) {
-        self.inviteToken = inviteToken
-        self.serving = serving
-        self.wanted = wanted
-        self.onDisk = onDisk
-        self.totalVramBytes = totalVramBytes
-        self.nodeCount = nodeCount
-        self.clientCount = clientCount
-        self.maxClients = maxClients
-        self.name = name
-        self.region = region
-        self.meshId = meshId
-        self.publisherNpub = publisherNpub
-        self.publishedAt = publishedAt
-        self.expiresAt = expiresAt
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension PublicMesh: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypePublicMesh: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PublicMesh {
-        return
-            try PublicMesh(
-                inviteToken: FfiConverterString.read(from: &buf),
-                serving: FfiConverterSequenceString.read(from: &buf),
-                wanted: FfiConverterSequenceString.read(from: &buf),
-                onDisk: FfiConverterSequenceString.read(from: &buf),
-                totalVramBytes: FfiConverterUInt64.read(from: &buf),
-                nodeCount: FfiConverterUInt64.read(from: &buf),
-                clientCount: FfiConverterUInt64.read(from: &buf),
-                maxClients: FfiConverterUInt64.read(from: &buf),
-                name: FfiConverterOptionString.read(from: &buf),
-                region: FfiConverterOptionString.read(from: &buf),
-                meshId: FfiConverterOptionString.read(from: &buf),
-                publisherNpub: FfiConverterString.read(from: &buf),
-                publishedAt: FfiConverterUInt64.read(from: &buf),
-                expiresAt: FfiConverterOptionUInt64.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: PublicMesh, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.inviteToken, into: &buf)
-        FfiConverterSequenceString.write(value.serving, into: &buf)
-        FfiConverterSequenceString.write(value.wanted, into: &buf)
-        FfiConverterSequenceString.write(value.onDisk, into: &buf)
-        FfiConverterUInt64.write(value.totalVramBytes, into: &buf)
-        FfiConverterUInt64.write(value.nodeCount, into: &buf)
-        FfiConverterUInt64.write(value.clientCount, into: &buf)
-        FfiConverterUInt64.write(value.maxClients, into: &buf)
-        FfiConverterOptionString.write(value.name, into: &buf)
-        FfiConverterOptionString.write(value.region, into: &buf)
-        FfiConverterOptionString.write(value.meshId, into: &buf)
-        FfiConverterString.write(value.publisherNpub, into: &buf)
-        FfiConverterUInt64.write(value.publishedAt, into: &buf)
-        FfiConverterOptionUInt64.write(value.expiresAt, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypePublicMesh_lift(_ buf: RustBuffer) throws -> PublicMesh {
-    return try FfiConverterTypePublicMesh.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypePublicMesh_lower(_ value: PublicMesh) -> RustBuffer {
-    return FfiConverterTypePublicMesh.lower(value)
-}
-
-
-public struct PublicMeshQuery: Equatable, Hashable {
-    public var model: String?
-    public var minVramGb: Double?
-    public var region: String?
-    public var targetName: String?
-    public var relays: [String]
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(model: String?, minVramGb: Double?, region: String?, targetName: String?, relays: [String]) {
-        self.model = model
-        self.minVramGb = minVramGb
-        self.region = region
-        self.targetName = targetName
-        self.relays = relays
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension PublicMeshQuery: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypePublicMeshQuery: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PublicMeshQuery {
-        return
-            try PublicMeshQuery(
-                model: FfiConverterOptionString.read(from: &buf),
-                minVramGb: FfiConverterOptionDouble.read(from: &buf),
-                region: FfiConverterOptionString.read(from: &buf),
-                targetName: FfiConverterOptionString.read(from: &buf),
-                relays: FfiConverterSequenceString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: PublicMeshQuery, into buf: inout [UInt8]) {
-        FfiConverterOptionString.write(value.model, into: &buf)
-        FfiConverterOptionDouble.write(value.minVramGb, into: &buf)
-        FfiConverterOptionString.write(value.region, into: &buf)
-        FfiConverterOptionString.write(value.targetName, into: &buf)
-        FfiConverterSequenceString.write(value.relays, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypePublicMeshQuery_lift(_ buf: RustBuffer) throws -> PublicMeshQuery {
-    return try FfiConverterTypePublicMeshQuery.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypePublicMeshQuery_lower(_ value: PublicMeshQuery) -> RustBuffer {
-    return FfiConverterTypePublicMeshQuery.lower(value)
-}
-
-
-public struct ResponsesRequestNative: Equatable, Hashable {
-    public var model: String
-    public var input: String
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(model: String, input: String) {
-        self.model = model
-        self.input = input
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ResponsesRequestNative: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeResponsesRequestNative: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ResponsesRequestNative {
-        return
-            try ResponsesRequestNative(
-                model: FfiConverterString.read(from: &buf),
-                input: FfiConverterString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ResponsesRequestNative, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.model, into: &buf)
-        FfiConverterString.write(value.input, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeResponsesRequestNative_lift(_ buf: RustBuffer) throws -> ResponsesRequestNative {
-    return try FfiConverterTypeResponsesRequestNative.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeResponsesRequestNative_lower(_ value: ResponsesRequestNative) -> RustBuffer {
-    return FfiConverterTypeResponsesRequestNative.lower(value)
-}
-
-
-public struct ServedModel: Equatable, Hashable {
-    public var modelRef: String
-    public var modelId: String
-    public var instanceId: String?
-    public var state: ServingModelState
-    public var backend: String?
-    public var capabilities: ModelCapabilities
-    public var contextLength: UInt32?
-    public var error: String?
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(modelRef: String, modelId: String, instanceId: String?, state: ServingModelState, backend: String?, capabilities: ModelCapabilities, contextLength: UInt32?, error: String?) {
-        self.modelRef = modelRef
-        self.modelId = modelId
-        self.instanceId = instanceId
-        self.state = state
-        self.backend = backend
-        self.capabilities = capabilities
-        self.contextLength = contextLength
-        self.error = error
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ServedModel: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeServedModel: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ServedModel {
-        return
-            try ServedModel(
-                modelRef: FfiConverterString.read(from: &buf),
-                modelId: FfiConverterString.read(from: &buf),
-                instanceId: FfiConverterOptionString.read(from: &buf),
-                state: FfiConverterTypeServingModelState.read(from: &buf),
-                backend: FfiConverterOptionString.read(from: &buf),
-                capabilities: FfiConverterTypeModelCapabilities.read(from: &buf),
-                contextLength: FfiConverterOptionUInt32.read(from: &buf),
-                error: FfiConverterOptionString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ServedModel, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.modelRef, into: &buf)
-        FfiConverterString.write(value.modelId, into: &buf)
-        FfiConverterOptionString.write(value.instanceId, into: &buf)
-        FfiConverterTypeServingModelState.write(value.state, into: &buf)
-        FfiConverterOptionString.write(value.backend, into: &buf)
-        FfiConverterTypeModelCapabilities.write(value.capabilities, into: &buf)
-        FfiConverterOptionUInt32.write(value.contextLength, into: &buf)
-        FfiConverterOptionString.write(value.error, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeServedModel_lift(_ buf: RustBuffer) throws -> ServedModel {
-    return try FfiConverterTypeServedModel.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeServedModel_lower(_ value: ServedModel) -> RustBuffer {
-    return FfiConverterTypeServedModel.lower(value)
-}
-
-
-public struct ServingStatus: Equatable, Hashable {
-    public var enabled: Bool
-    public var models: [ServedModel]
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(enabled: Bool, models: [ServedModel]) {
-        self.enabled = enabled
-        self.models = models
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ServingStatus: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeServingStatus: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ServingStatus {
-        return
-            try ServingStatus(
-                enabled: FfiConverterBool.read(from: &buf),
-                models: FfiConverterSequenceTypeServedModel.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ServingStatus, into buf: inout [UInt8]) {
-        FfiConverterBool.write(value.enabled, into: &buf)
-        FfiConverterSequenceTypeServedModel.write(value.models, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeServingStatus_lift(_ buf: RustBuffer) throws -> ServingStatus {
-    return try FfiConverterTypeServingStatus.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeServingStatus_lower(_ value: ServingStatus) -> RustBuffer {
-    return FfiConverterTypeServingStatus.lower(value)
-}
-
-
-public struct UnloadModelOptions: Equatable, Hashable {
-    public var drainTimeoutMs: UInt64
-    public var force: Bool
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(drainTimeoutMs: UInt64, force: Bool) {
-        self.drainTimeoutMs = drainTimeoutMs
-        self.force = force
-    }
-
-
-
-
-}
-
-#if compiler(>=6)
-extension UnloadModelOptions: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeUnloadModelOptions: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnloadModelOptions {
-        return
-            try UnloadModelOptions(
-                drainTimeoutMs: FfiConverterUInt64.read(from: &buf),
-                force: FfiConverterBool.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: UnloadModelOptions, into buf: inout [UInt8]) {
-        FfiConverterUInt64.write(value.drainTimeoutMs, into: &buf)
-        FfiConverterBool.write(value.force, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeUnloadModelOptions_lift(_ buf: RustBuffer) throws -> UnloadModelOptions {
-    return try FfiConverterTypeUnloadModelOptions.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeUnloadModelOptions_lower(_ value: UnloadModelOptions) -> RustBuffer {
-    return FfiConverterTypeUnloadModelOptions.lower(value)
-}
-
-
-
-public enum CapabilityLevel: Equatable, Hashable {
-
-    case none
-    case likely
-    case supported
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension CapabilityLevel: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeCapabilityLevel: FfiConverterRustBuffer {
-    typealias SwiftType = CapabilityLevel
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CapabilityLevel {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-
-        case 1: return .none
-
-        case 2: return .likely
-
-        case 3: return .supported
-
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: CapabilityLevel, into buf: inout [UInt8]) {
-        switch value {
-
-
-        case .none:
-            writeInt(&buf, Int32(1))
-
-
-        case .likely:
-            writeInt(&buf, Int32(2))
-
-
-        case .supported:
-            writeInt(&buf, Int32(3))
-
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeCapabilityLevel_lift(_ buf: RustBuffer) throws -> CapabilityLevel {
-    return try FfiConverterTypeCapabilityLevel.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeCapabilityLevel_lower(_ value: CapabilityLevel) -> RustBuffer {
-    return FfiConverterTypeCapabilityLevel.lower(value)
-}
-
-
-
-
-public enum ClientEvent: Equatable, Hashable {
-
-    case connecting
-    case joined(nodeId: String
-    )
-    case modelsUpdated(models: [ModelNative]
-    )
-    case tokenDelta(requestId: String, delta: String
-    )
-    case completed(requestId: String
-    )
-    case failed(requestId: String, error: String
-    )
-    case disconnected(reason: String
-    )
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ClientEvent: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeClientEvent: FfiConverterRustBuffer {
-    typealias SwiftType = ClientEvent
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClientEvent {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-
-        case 1: return .connecting
-
-        case 2: return .joined(nodeId: try FfiConverterString.read(from: &buf)
-        )
-
-        case 3: return .modelsUpdated(models: try FfiConverterSequenceTypeModelNative.read(from: &buf)
-        )
-
-        case 4: return .tokenDelta(requestId: try FfiConverterString.read(from: &buf), delta: try FfiConverterString.read(from: &buf)
-        )
-
-        case 5: return .completed(requestId: try FfiConverterString.read(from: &buf)
-        )
-
-        case 6: return .failed(requestId: try FfiConverterString.read(from: &buf), error: try FfiConverterString.read(from: &buf)
-        )
-
-        case 7: return .disconnected(reason: try FfiConverterString.read(from: &buf)
-        )
-
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: ClientEvent, into buf: inout [UInt8]) {
-        switch value {
-
-
-        case .connecting:
-            writeInt(&buf, Int32(1))
-
-
-        case let .joined(nodeId):
-            writeInt(&buf, Int32(2))
-            FfiConverterString.write(nodeId, into: &buf)
-
-
-        case let .modelsUpdated(models):
-            writeInt(&buf, Int32(3))
-            FfiConverterSequenceTypeModelNative.write(models, into: &buf)
-
-
-        case let .tokenDelta(requestId,delta):
-            writeInt(&buf, Int32(4))
-            FfiConverterString.write(requestId, into: &buf)
-            FfiConverterString.write(delta, into: &buf)
-
-
-        case let .completed(requestId):
-            writeInt(&buf, Int32(5))
-            FfiConverterString.write(requestId, into: &buf)
-
-
-        case let .failed(requestId,error):
-            writeInt(&buf, Int32(6))
-            FfiConverterString.write(requestId, into: &buf)
-            FfiConverterString.write(error, into: &buf)
-
-
-        case let .disconnected(reason):
-            writeInt(&buf, Int32(7))
-            FfiConverterString.write(reason, into: &buf)
-
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeClientEvent_lift(_ buf: RustBuffer) throws -> ClientEvent {
-    return try FfiConverterTypeClientEvent.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeClientEvent_lower(_ value: ClientEvent) -> RustBuffer {
-    return FfiConverterTypeClientEvent.lower(value)
-}
-
-
-
-
-public enum DevicePolicy: Equatable, Hashable {
-
-    case auto
-    case cpu
-    case gpu(deviceIds: [String]
-    )
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension DevicePolicy: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeDevicePolicy: FfiConverterRustBuffer {
-    typealias SwiftType = DevicePolicy
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DevicePolicy {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-
-        case 1: return .auto
-
-        case 2: return .cpu
-
-        case 3: return .gpu(deviceIds: try FfiConverterSequenceString.read(from: &buf)
-        )
-
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: DevicePolicy, into buf: inout [UInt8]) {
-        switch value {
-
-
-        case .auto:
-            writeInt(&buf, Int32(1))
-
-
-        case .cpu:
-            writeInt(&buf, Int32(2))
-
-
-        case let .gpu(deviceIds):
-            writeInt(&buf, Int32(3))
-            FfiConverterSequenceString.write(deviceIds, into: &buf)
-
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDevicePolicy_lift(_ buf: RustBuffer) throws -> DevicePolicy {
-    return try FfiConverterTypeDevicePolicy.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeDevicePolicy_lower(_ value: DevicePolicy) -> RustBuffer {
-    return FfiConverterTypeDevicePolicy.lower(value)
-}
-
-
-
 public
 enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
 
-
-    case InvalidInviteToken(message: String)
-
-    case InvalidOwnerKeypair(message: String)
 
     case BuildFailed(message: String)
 
@@ -3563,19 +1305,9 @@ enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     case StreamFailed(message: String)
 
-    case Cancelled(message: String)
-
-    case ReconnectFailed(message: String)
-
     case HostUnavailable(message: String)
 
-    case ModelManagementFailed(message: String)
-
-    case ServingFailed(message: String)
-
     case ServingUnsupported(message: String)
-
-    case ConsoleFailed(message: String)
 
     case NativeRuntimeFailed(message: String)
 
@@ -3610,63 +1342,35 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 
 
 
-        case 1: return .InvalidInviteToken(
+        case 1: return .BuildFailed(
             message: try FfiConverterString.read(from: &buf)
         )
 
-        case 2: return .InvalidOwnerKeypair(
+        case 2: return .JoinFailed(
             message: try FfiConverterString.read(from: &buf)
         )
 
-        case 3: return .BuildFailed(
+        case 3: return .DiscoveryFailed(
             message: try FfiConverterString.read(from: &buf)
         )
 
-        case 4: return .JoinFailed(
+        case 4: return .StreamFailed(
             message: try FfiConverterString.read(from: &buf)
         )
 
-        case 5: return .DiscoveryFailed(
+        case 5: return .HostUnavailable(
             message: try FfiConverterString.read(from: &buf)
         )
 
-        case 6: return .StreamFailed(
+        case 6: return .ServingUnsupported(
             message: try FfiConverterString.read(from: &buf)
         )
 
-        case 7: return .Cancelled(
+        case 7: return .NativeRuntimeFailed(
             message: try FfiConverterString.read(from: &buf)
         )
 
-        case 8: return .ReconnectFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
-        case 9: return .HostUnavailable(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
-        case 10: return .ModelManagementFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
-        case 11: return .ServingFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
-        case 12: return .ServingUnsupported(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
-        case 13: return .ConsoleFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
-        case 14: return .NativeRuntimeFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
-        case 15: return .OpenAiRequestFailed(
+        case 8: return .OpenAiRequestFailed(
             message: try FfiConverterString.read(from: &buf)
         )
 
@@ -3681,36 +1385,22 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 
 
 
-        case .InvalidInviteToken(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .InvalidOwnerKeypair(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
         case .BuildFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
+            writeInt(&buf, Int32(1))
         case .JoinFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
+            writeInt(&buf, Int32(2))
         case .DiscoveryFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(3))
         case .StreamFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(6))
-        case .Cancelled(_ /* message is ignored*/):
-            writeInt(&buf, Int32(7))
-        case .ReconnectFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
+            writeInt(&buf, Int32(4))
         case .HostUnavailable(_ /* message is ignored*/):
-            writeInt(&buf, Int32(9))
-        case .ModelManagementFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(10))
-        case .ServingFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(11))
+            writeInt(&buf, Int32(5))
         case .ServingUnsupported(_ /* message is ignored*/):
-            writeInt(&buf, Int32(12))
-        case .ConsoleFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(13))
+            writeInt(&buf, Int32(6))
         case .NativeRuntimeFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(14))
+            writeInt(&buf, Int32(7))
         case .OpenAiRequestFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(15))
+            writeInt(&buf, Int32(8))
 
 
         }
@@ -3731,159 +1421,6 @@ public func FfiConverterTypeFfiError_lift(_ buf: RustBuffer) throws -> FfiError 
 public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
     return FfiConverterTypeFfiError.lower(value)
 }
-
-
-
-public enum ModelKind: Equatable, Hashable {
-
-    case gguf
-    case safetensors
-    case layerPackage
-    case unknown
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ModelKind: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeModelKind: FfiConverterRustBuffer {
-    typealias SwiftType = ModelKind
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelKind {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-
-        case 1: return .gguf
-
-        case 2: return .safetensors
-
-        case 3: return .layerPackage
-
-        case 4: return .unknown
-
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: ModelKind, into buf: inout [UInt8]) {
-        switch value {
-
-
-        case .gguf:
-            writeInt(&buf, Int32(1))
-
-
-        case .safetensors:
-            writeInt(&buf, Int32(2))
-
-
-        case .layerPackage:
-            writeInt(&buf, Int32(3))
-
-
-        case .unknown:
-            writeInt(&buf, Int32(4))
-
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelKind_lift(_ buf: RustBuffer) throws -> ModelKind {
-    return try FfiConverterTypeModelKind.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelKind_lower(_ value: ModelKind) -> RustBuffer {
-    return FfiConverterTypeModelKind.lower(value)
-}
-
-
-
-
-public enum ModelSource: Equatable, Hashable {
-
-    case catalog
-    case huggingFace
-    case local
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ModelSource: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeModelSource: FfiConverterRustBuffer {
-    typealias SwiftType = ModelSource
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelSource {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-
-        case 1: return .catalog
-
-        case 2: return .huggingFace
-
-        case 3: return .local
-
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: ModelSource, into buf: inout [UInt8]) {
-        switch value {
-
-
-        case .catalog:
-            writeInt(&buf, Int32(1))
-
-
-        case .huggingFace:
-            writeInt(&buf, Int32(2))
-
-
-        case .local:
-            writeInt(&buf, Int32(3))
-
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelSource_lift(_ buf: RustBuffer) throws -> ModelSource {
-    return try FfiConverterTypeModelSource.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeModelSource_lower(_ value: ModelSource) -> RustBuffer {
-    return FfiConverterTypeModelSource.lower(value)
-}
-
 
 
 
@@ -4116,310 +1653,6 @@ public func FfiConverterTypeOpenAiStreamEventNative_lower(_ value: OpenAiStreamE
     return FfiConverterTypeOpenAiStreamEventNative.lower(value)
 }
 
-
-
-
-public enum ServingModelState: Equatable, Hashable {
-
-    case loading
-    case ready
-    case failed
-    case unloading
-    case stopped
-    case unknown(value: String
-    )
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension ServingModelState: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeServingModelState: FfiConverterRustBuffer {
-    typealias SwiftType = ServingModelState
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ServingModelState {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-
-        case 1: return .loading
-
-        case 2: return .ready
-
-        case 3: return .failed
-
-        case 4: return .unloading
-
-        case 5: return .stopped
-
-        case 6: return .unknown(value: try FfiConverterString.read(from: &buf)
-        )
-
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: ServingModelState, into buf: inout [UInt8]) {
-        switch value {
-
-
-        case .loading:
-            writeInt(&buf, Int32(1))
-
-
-        case .ready:
-            writeInt(&buf, Int32(2))
-
-
-        case .failed:
-            writeInt(&buf, Int32(3))
-
-
-        case .unloading:
-            writeInt(&buf, Int32(4))
-
-
-        case .stopped:
-            writeInt(&buf, Int32(5))
-
-
-        case let .unknown(value):
-            writeInt(&buf, Int32(6))
-            FfiConverterString.write(value, into: &buf)
-
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeServingModelState_lift(_ buf: RustBuffer) throws -> ServingModelState {
-    return try FfiConverterTypeServingModelState.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeServingModelState_lower(_ value: ServingModelState) -> RustBuffer {
-    return FfiConverterTypeServingModelState.lower(value)
-}
-
-
-
-
-public enum UnloadTarget: Equatable, Hashable {
-
-    case model(modelId: String
-    )
-    case instance(instanceId: String
-    )
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension UnloadTarget: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeUnloadTarget: FfiConverterRustBuffer {
-    typealias SwiftType = UnloadTarget
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnloadTarget {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-
-        case 1: return .model(modelId: try FfiConverterString.read(from: &buf)
-        )
-
-        case 2: return .instance(instanceId: try FfiConverterString.read(from: &buf)
-        )
-
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: UnloadTarget, into buf: inout [UInt8]) {
-        switch value {
-
-
-        case let .model(modelId):
-            writeInt(&buf, Int32(1))
-            FfiConverterString.write(modelId, into: &buf)
-
-
-        case let .instance(instanceId):
-            writeInt(&buf, Int32(2))
-            FfiConverterString.write(instanceId, into: &buf)
-
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeUnloadTarget_lift(_ buf: RustBuffer) throws -> UnloadTarget {
-    return try FfiConverterTypeUnloadTarget.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeUnloadTarget_lower(_ value: UnloadTarget) -> RustBuffer {
-    return FfiConverterTypeUnloadTarget.lower(value)
-}
-
-
-
-
-
-public protocol EventListener: AnyObject, Sendable {
-
-    func onEvent(event: ClientEvent)
-
-}
-
-
-// Put the implementation in a struct so we don't pollute the top-level namespace
-fileprivate struct UniffiCallbackInterfaceEventListener {
-
-    // Create the VTable using a series of closures.
-    // Swift automatically converts these into C callback functions.
-    //
-    // Store the vtable directly.
-    static let vtable: UniffiVTableCallbackInterfaceEventListener = UniffiVTableCallbackInterfaceEventListener(
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            do {
-                try FfiConverterCallbackInterfaceEventListener.handleMap.remove(handle: uniffiHandle)
-            } catch {
-                print("Uniffi callback interface EventListener: handle missing in uniffiFree")
-            }
-        },
-        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
-            do {
-                return try FfiConverterCallbackInterfaceEventListener.handleMap.clone(handle: uniffiHandle)
-            } catch {
-                fatalError("Uniffi callback interface EventListener: handle missing in uniffiClone")
-            }
-        },
-        onEvent: { (
-            uniffiHandle: UInt64,
-            event: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceEventListener.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onEvent(
-                     event: try FfiConverterTypeClientEvent_lift(event)
-                )
-            }
-
-
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        }
-    )
-
-    // Rust stores this pointer for future callback invocations, so it must live
-    // for the process lifetime (not just for the init function call).
-    //
-    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
-    // This is safe because the pointee is initialized once during static init
-    // and never mutated by either side of the FFI.  Its fields are C function pointers.
-    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceEventListener> = {
-        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceEventListener>.allocate(capacity: 1)
-        ptr.initialize(to: vtable)
-        return UnsafePointer(ptr)
-    }()
-}
-
-private func uniffiCallbackInitEventListener() {
-    uniffi_meshllm_ffi_fn_init_callback_vtable_eventlistener(UniffiCallbackInterfaceEventListener.vtablePtr)
-}
-
-// FfiConverter protocol for callback interfaces
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterCallbackInterfaceEventListener {
-    fileprivate static let handleMap = UniffiHandleMap<EventListener>()
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-extension FfiConverterCallbackInterfaceEventListener : FfiConverter {
-    typealias SwiftType = EventListener
-    typealias FfiType = UInt64
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func lift(_ handle: UInt64) throws -> SwiftType {
-        try handleMap.get(handle: handle)
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        let handle: UInt64 = try readInt(&buf)
-        return try lift(handle)
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func lower(_ v: SwiftType) -> UInt64 {
-        return handleMap.insert(obj: v)
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(v))
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterCallbackInterfaceEventListener_lift(_ handle: UInt64) throws -> EventListener {
-    return try FfiConverterCallbackInterfaceEventListener.lift(handle)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterCallbackInterfaceEventListener_lower(_ v: EventListener) -> UInt64 {
-    return FfiConverterCallbackInterfaceEventListener.lower(v)
-}
 
 
 
@@ -4766,30 +1999,6 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
-    typealias SwiftType = Double?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterDouble.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterDouble.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -4806,30 +2015,6 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterString.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterOptionTypeModelDetails: FfiConverterRustBuffer {
-    typealias SwiftType = ModelDetails?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterTypeModelDetails.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterTypeModelDetails.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -4887,56 +2072,6 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeChatMessageNative: FfiConverterRustBuffer {
-    typealias SwiftType = [ChatMessageNative]
-
-    public static func write(_ value: [ChatMessageNative], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeChatMessageNative.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ChatMessageNative] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [ChatMessageNative]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeChatMessageNative.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterSequenceTypeInstalledModel: FfiConverterRustBuffer {
-    typealias SwiftType = [InstalledModel]
-
-    public static func write(_ value: [InstalledModel], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeInstalledModel.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [InstalledModel] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [InstalledModel]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeInstalledModel.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterSequenceTypeInstalledNativeRuntimeNative: FfiConverterRustBuffer {
     typealias SwiftType = [InstalledNativeRuntimeNative]
 
@@ -4983,117 +2118,17 @@ fileprivate struct FfiConverterSequenceTypeModelNative: FfiConverterRustBuffer {
         return seq
     }
 }
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterSequenceTypeModelSummary: FfiConverterRustBuffer {
-    typealias SwiftType = [ModelSummary]
-
-    public static func write(_ value: [ModelSummary], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeModelSummary.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ModelSummary] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [ModelSummary]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeModelSummary.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterSequenceTypePublicMesh: FfiConverterRustBuffer {
-    typealias SwiftType = [PublicMesh]
-
-    public static func write(_ value: [PublicMesh], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypePublicMesh.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PublicMesh] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [PublicMesh]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypePublicMesh.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterSequenceTypeServedModel: FfiConverterRustBuffer {
-    typealias SwiftType = [ServedModel]
-
-    public static func write(_ value: [ServedModel], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeServedModel.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ServedModel] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [ServedModel]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeServedModel.read(from: &buf))
-        }
-        return seq
-    }
-}
-public func createAutoClient(ownerKeypairBytesHex: String, query: PublicMeshQuery)throws  -> MeshClientHandle  {
-    return try  FfiConverterTypeMeshClientHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_func_create_auto_client(
-        FfiConverterString.lower(ownerKeypairBytesHex),
-        FfiConverterTypePublicMeshQuery_lower(query),uniffiCallStatus
-    )
-})
-}
-public func createAutoNode(ownerKeypairBytesHex: String, query: PublicMeshQuery)throws  -> MeshNodeHandle  {
-    return try  FfiConverterTypeMeshNodeHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_func_create_auto_node(
-        FfiConverterString.lower(ownerKeypairBytesHex),
-        FfiConverterTypePublicMeshQuery_lower(query),uniffiCallStatus
-    )
-})
-}
-public func createClient(ownerKeypairBytesHex: String, inviteToken: String)throws  -> MeshClientHandle  {
-    return try  FfiConverterTypeMeshClientHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_func_create_client(
-        FfiConverterString.lower(ownerKeypairBytesHex),
-        FfiConverterString.lower(inviteToken),uniffiCallStatus
-    )
-})
-}
-public func createNode(ownerKeypairBytesHex: String, inviteToken: String, cacheDir: String?, runtimeDir: String?, servingEnabled: Bool)throws  -> MeshNodeHandle  {
+public func createNode(mode: String, joinTokens: [String], models: [String], autoJoin: Bool, ownerKeyPath: String?, apiPort: UInt16, consolePort: UInt16)throws  -> MeshNodeHandle  {
     return try  FfiConverterTypeMeshNodeHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_create_node(
-        FfiConverterString.lower(ownerKeypairBytesHex),
-        FfiConverterString.lower(inviteToken),
-        FfiConverterOptionString.lower(cacheDir),
-        FfiConverterOptionString.lower(runtimeDir),
-        FfiConverterBool.lower(servingEnabled),uniffiCallStatus
+        FfiConverterString.lower(mode),
+        FfiConverterSequenceString.lower(joinTokens),
+        FfiConverterSequenceString.lower(models),
+        FfiConverterBool.lower(autoJoin),
+        FfiConverterOptionString.lower(ownerKeyPath),
+        FfiConverterUInt16.lower(apiPort),
+        FfiConverterUInt16.lower(consolePort),uniffiCallStatus
     )
 })
 }
@@ -5108,21 +2143,6 @@ public func currentSkippyAbiVersion() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
         uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_current_skippy_abi_version(uniffiCallStatus
-    )
-})
-}
-public func discoverPublicMeshes(query: PublicMeshQuery)throws  -> [PublicMesh]  {
-    return try  FfiConverterSequenceTypePublicMesh.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_func_discover_public_meshes(
-        FfiConverterTypePublicMeshQuery_lower(query),uniffiCallStatus
-    )
-})
-}
-public func generateOwnerKeypairHex() -> String  {
-    return try!  FfiConverterString.lift(try! rustCall() {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_func_generate_owner_keypair_hex(uniffiCallStatus
     )
 })
 }
@@ -5179,170 +2199,58 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_auto_client() != 62041) {
+    if (uniffi_meshllm_ffi_checksum_func_create_node() != 63700) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_auto_node() != 850) {
+    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 41756) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_client() != 55438) {
+    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 53670) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_node() != 84) {
+    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 48746) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 50997) {
+    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 16961) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 63557) {
+    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 11380) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_discover_public_meshes() != 37324) {
+    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 54339) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 56015) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 47545) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 10411) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 41613) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 6385) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_join_token() != 57356) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 43279) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 19585) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 6828) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream() != 40368) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 24687) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 46124) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_consolehandle_url() != 59091) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 42366) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel() != 6671) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 10537) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat() != 36123) {
+    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 40900) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models() != 43178) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_request() != 20166) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_openai_stream() != 23571) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 39153) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses() != 48676) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_start() != 21105) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_status() != 42860) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop() != 62273) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 63362) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat() != 47286) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models() != 1378) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model() != 42636) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model() != 24332) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 32986) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models() != 40175) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model() != 38763) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 44993) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_request() != 65095) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_openai_stream() != 24624) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 12315) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models() != 59349) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect() != 9842) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses() != 61480) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models() != 20273) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models() != 46217) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status() != 3309) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy() != 42971) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model() != 2410) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 16152) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console() != 52588) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 9399) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 25964) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance() != 55061) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model() != 17553) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id() != 57560) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_eventlistener_on_event() != 39203) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 47323) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_method_openaistreamlistener_on_event() != 60558) {
+    if (uniffi_meshllm_ffi_checksum_method_openaistreamlistener_on_event() != 35774) {
         return InitializationResult.apiChecksumMismatch
     }
 
-    uniffiCallbackInitEventListener()
     uniffiCallbackInitNativeRuntimeProgressListener()
     uniffiCallbackInitOpenAiStreamListener()
     return InitializationResult.ok

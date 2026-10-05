@@ -13,6 +13,7 @@ pub type MeshNodeStatus = mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus;
 
 pub struct MeshNode {
     handle: mesh_llm_embedded_runtime::EmbeddedMeshNodeHandle,
+    mode: EmbeddedMeshNodeMode,
 }
 
 impl MeshNode {
@@ -32,12 +33,24 @@ impl MeshNode {
         self.handle.invite_token()
     }
 
-    pub fn openai_client(&self) -> OpenAiClient {
-        OpenAiClient::new(self.api_base_url())
+    pub fn mode(&self) -> &EmbeddedMeshNodeMode {
+        &self.mode
+    }
+
+    pub fn openai_client(&self) -> anyhow::Result<OpenAiClient> {
+        anyhow::ensure!(
+            self.mode.allows_client_inference(),
+            "client inference is disabled for a serve-only node"
+        );
+        Ok(OpenAiClient::new(self.api_base_url()))
     }
 
     pub async fn status(&self) -> anyhow::Result<MeshNodeStatus> {
         self.handle.status().await
+    }
+
+    pub async fn join_token(&self, token: impl Into<String>) -> anyhow::Result<()> {
+        self.handle.join_token(token).await
     }
 
     pub async fn shutdown(self) -> anyhow::Result<()> {
@@ -46,10 +59,6 @@ impl MeshNode {
 
     pub async fn stop(self) -> anyhow::Result<()> {
         self.shutdown().await
-    }
-
-    pub fn into_inner(self) -> mesh_llm_embedded_runtime::EmbeddedMeshNodeHandle {
-        self.handle
     }
 }
 
@@ -66,6 +75,11 @@ impl MeshNodeBuilder {
 
     pub fn serve(mut self) -> Self {
         self.inner = self.inner.serve();
+        self
+    }
+
+    pub fn serve_only(mut self) -> Self {
+        self.inner = self.inner.serve_only();
         self
     }
 
@@ -320,8 +334,10 @@ impl MeshNodeBuilder {
     }
 
     pub async fn start(self) -> anyhow::Result<MeshNode> {
-        let handle = mesh_llm_embedded_runtime::start_embedded_node(self.build()).await?;
-        Ok(MeshNode { handle })
+        let config = self.build();
+        let mode = config.mode.clone();
+        let handle = mesh_llm_embedded_runtime::start_embedded_node(config).await?;
+        Ok(MeshNode { handle, mode })
     }
 }
 
@@ -333,7 +349,7 @@ pub struct OpenAiClient {
 }
 
 impl OpenAiClient {
-    pub fn new(base_url: impl Into<String>) -> Self {
+    fn new(base_url: impl Into<String>) -> Self {
         Self {
             http: reqwest::Client::new(),
             base_url: base_url.into(),
@@ -352,6 +368,44 @@ impl OpenAiClient {
 
     pub fn http_client(&self) -> &reqwest::Client {
         &self.http
+    }
+
+    pub async fn request(
+        &self,
+        path: &str,
+        body_json: String,
+    ) -> anyhow::Result<RawOpenAiResponse> {
+        let response = self
+            .http
+            .post(self.url(path.trim_start_matches("/v1/")))
+            .bearer_auth(&self.api_key)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body_json)
+            .send()
+            .await?;
+        let status_code = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+        let body = response.text().await?;
+        Ok(RawOpenAiResponse {
+            status_code,
+            content_type,
+            body,
+        })
+    }
+
+    pub async fn stream(&self, path: &str, body_json: String) -> anyhow::Result<reqwest::Response> {
+        Ok(self
+            .http
+            .post(self.url(path.trim_start_matches("/v1/")))
+            .bearer_auth(&self.api_key)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body_json)
+            .send()
+            .await?)
     }
 
     pub async fn models(&self) -> anyhow::Result<serde_json::Value> {
@@ -404,6 +458,87 @@ impl OpenAiClient {
     }
 }
 
+pub struct RawOpenAiResponse {
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+}
+
+pub struct SseFrame {
+    pub event_type: Option<String>,
+    pub data: String,
+    pub raw: String,
+}
+
+#[derive(Default)]
+pub struct SseDecoder {
+    buffer: Vec<u8>,
+}
+
+impl SseDecoder {
+    pub fn push(&mut self, chunk: &[u8]) -> anyhow::Result<Vec<SseFrame>> {
+        const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+        self.buffer.extend_from_slice(chunk);
+        let mut frames = Vec::new();
+        while let Some(end) = sse_frame_end(&self.buffer) {
+            anyhow::ensure!(end <= MAX_FRAME_BYTES, "SSE frame exceeds 8 MiB");
+            let raw = self.buffer.drain(..end).collect::<Vec<_>>();
+            if let Some(frame) = parse_sse_frame(raw)? {
+                frames.push(frame);
+            }
+        }
+        anyhow::ensure!(
+            self.buffer.len() <= MAX_FRAME_BYTES,
+            "SSE frame exceeds 8 MiB"
+        );
+        Ok(frames)
+    }
+
+    pub fn finish(&mut self) -> anyhow::Result<Option<SseFrame>> {
+        if self.buffer.is_empty() {
+            return Ok(None);
+        }
+        parse_sse_frame(std::mem::take(&mut self.buffer))
+    }
+}
+
+fn sse_frame_end(buffer: &[u8]) -> Option<usize> {
+    let lf = buffer
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|index| index + 2);
+    let crlf = buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4);
+    match (lf, crlf) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(end), None) | (None, Some(end)) => Some(end),
+        (None, None) => None,
+    }
+}
+
+fn parse_sse_frame(raw: Vec<u8>) -> anyhow::Result<Option<SseFrame>> {
+    let raw = String::from_utf8(raw)?;
+    let mut data = Vec::new();
+    let mut event_type = None;
+    for line in raw.lines().map(|line| line.trim_end_matches('\r')) {
+        if let Some(value) = line.strip_prefix("data:") {
+            data.push(value.strip_prefix(' ').unwrap_or(value).to_string());
+        } else if let Some(value) = line.strip_prefix("event:") {
+            event_type = Some(value.trim().to_string());
+        }
+    }
+    if data.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(SseFrame {
+        event_type,
+        data: data.join("\n"),
+        raw,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +568,23 @@ mod tests {
     }
 
     #[test]
+    fn builder_configures_each_node_role() {
+        let client = MeshNode::builder().client().build();
+        let serve_only = MeshNode::builder().serve_only().build();
+        let combined = MeshNode::builder().serve().build();
+
+        assert_eq!(client.mode, EmbeddedMeshNodeMode::Client);
+        assert_eq!(serve_only.mode, EmbeddedMeshNodeMode::ServeOnly);
+        assert_eq!(combined.mode, EmbeddedMeshNodeMode::Serve);
+        assert!(client.mode.allows_client_inference());
+        assert!(!client.mode.allows_serving());
+        assert!(!serve_only.mode.allows_client_inference());
+        assert!(serve_only.mode.allows_serving());
+        assert!(combined.mode.allows_client_inference());
+        assert!(combined.mode.allows_serving());
+    }
+
+    #[test]
     fn openai_client_builds_v1_urls() {
         let client = OpenAiClient::new("http://127.0.0.1:9337/v1/");
         assert_eq!(client.url("models"), "http://127.0.0.1:9337/v1/models");
@@ -440,5 +592,24 @@ mod tests {
             client.url("chat/completions"),
             "http://127.0.0.1:9337/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn sse_decoder_preserves_split_utf8_and_crlf_frames() {
+        let mut decoder = SseDecoder::default();
+        let payload = "event: delta\r\ndata: café\r\n\r\n".as_bytes();
+        let split = payload.iter().position(|byte| *byte == 0xc3).unwrap() + 1;
+        assert!(decoder.push(&payload[..split]).unwrap().is_empty());
+        let frames = decoder.push(&payload[split..]).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].event_type.as_deref(), Some("delta"));
+        assert_eq!(frames[0].data, "café");
+        assert_eq!(frames[0].raw, "event: delta\r\ndata: café\r\n\r\n");
+    }
+
+    #[test]
+    fn sse_decoder_rejects_oversized_frame() {
+        let mut decoder = SseDecoder::default();
+        assert!(decoder.push(&vec![b'x'; 8 * 1024 * 1024 + 1]).is_err());
     }
 }

@@ -1,53 +1,31 @@
 'use strict'
 
-const { Node, generateOwnerKeypairHex, resolveNativeRuntime } = require('..')
+const { Node, resolveNativeRuntime } = require('..')
 
 async function main() {
   const modelRef = process.env.MESH_SDK_MODEL_REF
-  const inviteToken = process.argv[2] || process.env.MESH_SDK_INVITE_TOKEN || 'local'
-  if (!modelRef) {
-    console.error('Set MESH_SDK_MODEL_REF to run local serving.')
-    process.exit(2)
-  }
-
+  if (!modelRef) throw new Error('Set MESH_SDK_MODEL_REF')
   const runtime = await resolveNativeRuntime({
     artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,
     allowDownload: process.env.MESH_SDK_RUNTIME_ALLOW_DOWNLOAD === '1'
   })
-  console.log(`using native runtime ${runtime.nativeRuntimeId} from ${runtime.path}`)
-
+  console.log(`using native runtime ${runtime.nativeRuntimeId}`)
   const node = Node.create({
-    ownerKeypairHex: process.env.MESH_SDK_OWNER_KEYPAIR_HEX || generateOwnerKeypairHex(),
-    inviteToken,
-    cacheDir: process.env.MESH_SDK_CACHE_DIR,
-    runtimeDir: process.env.MESH_SDK_RUNTIME_DIR,
-    servingEnabled: true
+    mode: 'combined',
+    models: [modelRef],
+    joinTokens: process.env.MESH_SDK_INVITE_TOKEN ? [process.env.MESH_SDK_INVITE_TOKEN] : [],
+    ownerKeyPath: process.env.MESH_SDK_OWNER_KEY_PATH
   })
-
   await node.start()
   try {
-    if (process.env.MESH_SDK_SKIP_DOWNLOAD !== '1') {
-      await node.models.download(modelRef)
-    }
-    const served = await node.serving.load(modelRef, { devicePolicy: 'auto' })
-    const result = await node.inference.chat({
-      model: served.modelId,
-      messages: [
-        { role: 'user', content: process.env.MESH_SDK_PROMPT || 'hello' }
-      ]
+    const result = await node.inference.chatCompletions({
+      model: modelRef,
+      messages: [{ role: 'user', content: process.env.MESH_SDK_PROMPT || 'hello' }]
     })
-    console.log(result.content)
-    if (served.instanceId) {
-      await node.serving.unloadInstance(served.instanceId, { drainTimeoutMs: 1000 })
-    } else {
-      await node.serving.unloadModel(served.modelId, { drainTimeoutMs: 1000 })
-    }
+    console.log(result.choices?.[0]?.message?.content)
   } finally {
     await node.stop()
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exit(1)
-})
+main().catch(error => { console.error(error); process.exit(1) })
