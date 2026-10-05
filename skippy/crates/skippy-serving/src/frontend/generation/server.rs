@@ -352,6 +352,18 @@ fn embedded_openai_backend_with_scheduler(
         speculative_window: args.speculative_window,
         adaptive_speculative_window: args.adaptive_speculative_window,
         ngram_max: standalone_ngram_proposal_limit(&args.speculative),
+        // Opt-in, and only when the plan actually speculates. With speculation
+        // off there is nothing to stand down, and trialling it on would turn a
+        // deliberate `strategy = "disabled"` into something that flips back on
+        // by itself.
+        speculation_governor: (crate::frontend::speculation_gate::speculation_gate_enabled()
+            && crate::frontend::speculation_gate::speculation_plan_is_active(&args.speculative))
+        .then(|| {
+            std::sync::Arc::new(crate::frontend::speculation_gate::SpeculationGovernor::new(
+                crate::frontend::speculation_gate::SpeculationGateConfig::default(),
+                true,
+            ))
+        }),
         speculative: args.speculative,
         generation_limit: Arc::new(match args.adaptive_generation_min_concurrency {
             Some(initial_limit) => GenerationConcurrencyController::adaptive(

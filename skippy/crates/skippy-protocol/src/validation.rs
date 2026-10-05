@@ -19,6 +19,13 @@ pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION: &str =
 pub const STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER: &str = "artifact-transfer";
 pub const STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST: &str = "status-list";
 pub const STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1: &str = "local-gguf-content-id-v1";
+/// Stage honours `StageLoad.last_stage_decode_batch`.
+///
+/// Named rather than folded into a generation bump: a peer that predates the
+/// field ignores it and serves correctly, just without batching, so the
+/// coordinator needs to tell "declined" from "not understood" to warn instead
+/// of silently under-delivering the planned policy.
+pub const STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1: &str = "decode-batch-policy-v1";
 pub const STAGE_STREAM_CONTROL: u8 = 0x01;
 pub const STAGE_STREAM_TRANSPORT: u8 = 0x02;
 pub const STAGE_STREAM_ARTIFACT_TRANSFER: u8 = 0x03;

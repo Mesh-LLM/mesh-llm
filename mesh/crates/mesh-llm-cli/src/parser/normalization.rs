@@ -39,6 +39,7 @@ const VALUE_TAKING_FLAGS: &[&str] = &[
     "--draft-max",
     "--ctx-size",
     "--parallel",
+    "--strategy",
     // The speculative family, less its two boolean members
     // (`--speculative-native-mtp-{suppress,allow}-cooldown-drafts`), which must
     // stay absent so they do not swallow the pseudo-subcommand behind them.

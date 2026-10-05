@@ -105,6 +105,10 @@ message LoadStage {
   StageActivationCodecPolicy activation_codec_policy = 50;
   repeated StageTopologyStage topology_stages = 51;
   optional string split_certification = 52;
+  // Planned by the coordinator because the stage that owns the output
+  // layers is a different process - on a mesh split a different machine -
+  // from the one the operator configured, and rebalancing can move it.
+  optional bool last_stage_decode_batch = 53;
 }
 
 message StageTopologyStage {

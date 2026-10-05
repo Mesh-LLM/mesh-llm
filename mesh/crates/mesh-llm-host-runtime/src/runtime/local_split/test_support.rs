@@ -78,6 +78,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         ctx_size: 8192,
         lane_count: 4,
         continuous_batching: true,
+        last_stage_decode_batch: None,
         n_batch: Some(2048),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
