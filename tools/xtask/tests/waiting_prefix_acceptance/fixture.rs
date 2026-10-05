@@ -62,12 +62,12 @@ fn response(stream: &mut TcpStream, kind: &str, body: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn telemetry(tokens: u64) -> Result<()> {
+fn telemetry(tokens: u64, request_id: u64) -> Result<()> {
     let mut stderr = std::io::stderr().lock();
     for (event, attributes) in [
         (
             "stage.openai_generation_summary",
-            json!({"skippy.kv.status":"hit","skippy.kv.matched_prefix_tokens":10,
+            json!({"skippy.request_id":request_id.to_string(),"skippy.kv.status":"hit","skippy.kv.matched_prefix_tokens":10,
             "llama_stage.completion_token_count":tokens,"skippy.kv.suffix_prefill_tokens":3}),
         ),
         (
@@ -99,6 +99,16 @@ fn main() -> Result<()> {
     let config = std::path::PathBuf::from(option(&arguments, "--config")?);
     let stage: Value = serde_json::from_slice(&std::fs::read(&config)?)?;
     let directory = config.parent().ok_or("missing fixture output directory")?;
+    if arguments
+        .iter()
+        .any(|argument| argument == "--metrics-otlp-grpc")
+    {
+        std::fs::write(
+            directory.join("fixture.metrics.json"),
+            serde_json::to_vec(&json!({
+            "run_id":stage["run_id"],"otlp_grpc":option(&arguments,"--metrics-otlp-grpc")?}))?,
+        )?;
+    }
     std::fs::write(
         directory.join("fixture.pid"),
         std::process::id().to_string(),
@@ -109,6 +119,7 @@ fn main() -> Result<()> {
     let address = option(&arguments, "--bind-addr")?;
     std::fs::write(directory.join("fixture.address"), &address)?;
     let listener = TcpListener::bind(address)?;
+    let mut request_id = 0_u64;
     for incoming in listener.incoming() {
         let mut stream = incoming?;
         let (line, body) = request(&mut stream)?;
@@ -137,7 +148,8 @@ fn main() -> Result<()> {
             let tokens = body["max_tokens"]
                 .as_u64()
                 .ok_or("missing request output tokens")?;
-            telemetry(tokens)?;
+            request_id += 1;
+            telemetry(tokens, request_id)?;
             let data = format!(
                 "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
                 json!({"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}),

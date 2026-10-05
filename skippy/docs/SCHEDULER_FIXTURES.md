@@ -221,9 +221,9 @@ schema-1 input requires `round`, `version` as `old` or `new`, `base_url` as
 streaming usage, timing and content hashes. HTTP failures, timeouts and
 interruption retain failed request evidence and exit unsuccessfully; invalid
 input preserves any previous output. The command requires complete streaming
-usage and the terminal marker. Server startup, cache seeding, telemetry capture
-and the complete old/new comparison remain owned by the Python workload runner
-until its replacement passes validation.
+usage and the terminal marker. The native server-cell and round commands own startup, seeding, telemetry
+capture, and complete comparisons. The production Python caller remains until
+its native replacement passes the corpus and runtime qualification gates.
 
 
 For synthetic profiles, `waiting-prefix synthetic-prompts --families N
@@ -255,10 +255,42 @@ rejected before publication. Parsing is bounded to 1 MiB per line and 128 MiB
 per snapshot. This collects existing debug telemetry and emits no runtime metrics.
 
 
-The native `waiting-prefix cell-worker --input FILE --output FILE` waits for the exact local model, optionally seeds its cache, waits for seed telemetry, and measures requests using a verified telemetry-log boundary. It retains completed request evidence when measurement or telemetry fails. The parent must own the server process and stderr log. This worker does not yet replace the complete Python A/B round runner or establish model-backed acceptance.
+The native `waiting-prefix cell-worker --input FILE --output FILE` waits for the exact local model, optionally seeds its cache, waits for seed telemetry, and measures requests using a verified telemetry-log boundary. It retains completed request evidence when measurement or telemetry fails. The parent must own the server process and projected telemetry log. This worker does not yet replace the complete Python A/B round runner or establish model-backed acceptance.
 
 
-The native `waiting-prefix server-cell --input FILE --output-directory DIR` owns a pinned Skippy server and its measurement worker under one retained process session. It checks actual binary/model hashes, GGUF context and full layer dimensions, stage/request identity and admission capacity before creating a fresh output directory. It reserves its own loopback endpoint, retains stderr telemetry separately from stdout, stops its owned server after the worker finishes, and writes `lifecycle.json` after cleanup. Local executable fixtures cover process ownership; native-runtime bundle identity and full old/new round qualification still require the complete runner before caller cutover.
+The native `waiting-prefix server-cell --input FILE --output-directory DIR` owns a pinned Skippy server and its measurement worker under one retained process session. It checks actual binary/model hashes, GGUF context and full layer dimensions, stage/request identity and admission capacity before creating a fresh output directory. It reserves its own loopback endpoint, keeps filtered diagnostic stderr in `server.stderr.log`, and projects recognized numeric KV facts and decimal request IDs into `server.log`. Unknown fields and prompt text are excluded from that measurement log. It stops its owned server after the worker finishes and writes `lifecycle.json` after cleanup. Local executable fixtures cover process ownership; native-runtime bundle identity and full old/new round qualification still require the complete runner before caller cutover.
 
 
 The native `waiting-prefix run --input FILE --output-directory DIR` resolves pinned catalog/contract workload and prompts, checks binary/model and provided native artifact bytes, alternates every old/new round, retains attempted cells and failed evidence, and requires the exact complete cell census before aggregation and hardware acceptance. It supervises each retained server-cell under one outer cancellation scope, bounds total process/evidence budgets, and preserves an existing output directory. The supplied commit labels and provided runtime artifact pins describe their respective inputs; they do not alone prove a loaded runtime or model performance. Native executable fixtures and live model/corpus qualification remain distinct. The Python production caller remains pending qualified cutover.
+
+
+## Collector-backed native comparisons
+
+Start metrics-server before using the native complete-round command. The input
+must include explicit loopback HTTP roots `metrics_http` and
+`metrics_otlp_grpc`, plus `metrics_timeout_secs`. Use a release Skippy server
+for model-backed comparisons. The existing periodic Python command above remains
+the production entrypoint until corpus and runtime qualification is complete.
+
+The native runner creates a fresh collector run for each old/new cell before
+server startup, passes its run ID through the stage config, and adds
+`--metrics-otlp-grpc` to the server command. It waits for collector delivery
+while the owned server is alive, finalizes through the collector API, and retains
+`metrics-report.json` and `metrics-timing.json` in each cell directory. Only
+request IDs observed in generation summaries after the verified seed boundary
+contribute to timing. Missing spans, telemetry loss, mismatched run IDs, failed
+finalization, and collection deadlines fail the cell while retaining completed
+request evidence and the last available report. Cancellation stops collection
+and reaps owned children before the lifecycle receipt is written.
+
+`comparison.json` retains per-cell collector evidence and old/new timing
+summaries. The Markdown report separates client TTFT from server TTFT and server
+request latency. Collector percentiles pool all measured requests across rounds;
+client acceptance keeps the existing median-of-round statistics and thresholds.
+Server TTFT measures the earliest matched span to the first decode-token span
+start, matching the Skippy benchmark reporter. It does not include client network
+latency or imply first text delivery to the client.
+
+Local HTTP and native executable fixtures prove orchestration and failure
+handling. They do not prove real OTLP ingestion, loaded runtime identity, corpus
+parity, or model-backed performance. Keep those qualification gates separate.

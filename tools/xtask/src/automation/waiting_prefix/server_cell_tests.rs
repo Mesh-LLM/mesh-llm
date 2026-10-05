@@ -56,6 +56,12 @@ fn owner_starts_worker_only_after_server_admission_and_stops_server_after_failed
         policy: ExpectedExit::new(&[0, 1], Duration::from_secs(10)).unwrap(),
         telemetry: None,
     };
+    assert!(owner.bind_deadline(Duration::ZERO).is_err());
+    let remaining = Duration::from_millis(9876);
+    owner.bind_deadline(remaining).unwrap();
+    assert_eq!(owner.server.as_ref().unwrap().readiness_deadline, remaining);
+    assert_eq!(owner.worker.as_ref().unwrap().readiness_deadline, remaining);
+    assert_eq!(owner.policy.deadline(), remaining);
     fn context(members: &[crate::process::retained::Snapshot]) -> Context<'_> {
         Context {
             elapsed: Duration::ZERO,
@@ -96,4 +102,19 @@ fn owner_starts_worker_only_after_server_admission_and_stops_server_after_failed
         Action::Stop(MemberId::Seed)
     ));
     assert!(matches!(owner.tick(context(&[])), Action::Complete));
+}
+
+#[test]
+fn owner_bounds_collector_creation_and_delivery_within_its_cell_deadline() {
+    let mut input = input();
+    input.worker.metrics = Some(metrics_client::Endpoint {
+        http: "http://127.0.0.1:18080".into(),
+        otlp_grpc: "http://127.0.0.1:14317".into(),
+        run_id: "fixture-run".into(),
+        timeout_secs: 2,
+    });
+    input.worker.metrics_directory = Some(std::env::temp_dir());
+    input.validate().unwrap();
+    input.worker.metrics.as_mut().unwrap().timeout_secs = 3;
+    assert!(input.validate().is_err());
 }

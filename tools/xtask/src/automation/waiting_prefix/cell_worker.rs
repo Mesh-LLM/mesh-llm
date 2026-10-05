@@ -1,5 +1,8 @@
 //! Seed and measure one already-owned local A/B server with one signal scope.
-use super::{options, publish, requests, synthetic_prompts, telemetry, telemetry_log};
+use super::{
+    metrics_client, metrics_correlation, options, publish, requests, synthetic_prompts, telemetry,
+    telemetry_log,
+};
 use crate::{command::DynResult, process::Cancellation};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -25,6 +28,8 @@ pub(super) struct Input {
     pub(super) server_log: PathBuf,
     pub(super) startup_timeout_secs: u64,
     telemetry_timeout_secs: u64,
+    pub(super) metrics: Option<metrics_client::Endpoint>,
+    pub(super) metrics_directory: Option<PathBuf>,
 }
 
 impl Input {
@@ -45,6 +50,16 @@ impl Input {
 
     pub(super) fn validate(&self, seed: Option<&requests::Input>) -> DynResult<()> {
         self.phase.validate()?;
+        match (&self.metrics, &self.metrics_directory) {
+            (Some(endpoint), Some(directory)) if directory.is_absolute() => endpoint.validate()?,
+            (None, None) => {}
+            _ => {
+                return Err(
+                    "collector endpoint and absolute evidence directory must be supplied together"
+                        .into(),
+                );
+            }
+        }
         if self.schema_version != 1
             || !self.server_log.is_absolute()
             || !(1..=86400).contains(&self.startup_timeout_secs)
@@ -67,6 +82,10 @@ impl Input {
             + 2.0 * self.telemetry_timeout_secs as f64
             + budget(&self.phase)
             + seed.map_or(0.0, budget)
+            + self
+                .metrics
+                .as_ref()
+                .map_or(0.0, |metrics| metrics.timeout_secs as f64)
     }
 }
 
@@ -81,7 +100,14 @@ struct Evidence {
     measurement: Option<requests::Phase>,
     telemetry: Option<telemetry_log::Events>,
     summary: Option<telemetry::Cell>,
+    collector: Option<Collector>,
     error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Collector {
+    endpoint: metrics_client::Endpoint,
+    timings: Vec<metrics_correlation::Timing>,
 }
 
 impl Evidence {
@@ -96,6 +122,7 @@ impl Evidence {
             measurement: None,
             telemetry: None,
             summary: None,
+            collector: None,
             error: None,
         }
     }
@@ -224,7 +251,51 @@ async fn measure(
     if !passed {
         return Err("A/B measured requests failed; cell evidence retained".into());
     }
+    if let Some(endpoint) = &input.metrics {
+        let ids = measured_ids(
+            output
+                .telemetry
+                .as_ref()
+                .ok_or("missing measured telemetry")?,
+        )?;
+        if ids.len() != successful {
+            return Err(
+                "collector measured request census differs from successful requests".into(),
+            );
+        }
+        let directory = input
+            .metrics_directory
+            .as_ref()
+            .ok_or("missing collector output directory")?;
+        let timings = metrics_client::collect(endpoint, &ids, directory, cancellation).await?;
+        output.collector = Some(Collector {
+            endpoint: endpoint.clone(),
+            timings,
+        });
+    }
     Ok(())
+}
+
+fn measured_ids(events: &telemetry_log::Events) -> DynResult<Vec<String>> {
+    let value = serde_json::to_value(events)?;
+    let events = value["events"]
+        .as_array()
+        .ok_or("missing measured summaries")?;
+    let ids = events
+        .iter()
+        .map(|event| {
+            event["attributes"]["skippy.request_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| "measured summary lacks a server request identity".into())
+        })
+        .collect::<DynResult<Vec<String>>>()?;
+    let unique = ids.iter().collect::<std::collections::BTreeSet<_>>();
+    if unique.len() != ids.len() {
+        return Err("measured summaries contain duplicate server request identities".into());
+    }
+    Ok(ids)
 }
 
 pub(super) fn run(args: &[String]) -> DynResult<()> {

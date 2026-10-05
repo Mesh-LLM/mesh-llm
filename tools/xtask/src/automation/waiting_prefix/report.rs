@@ -50,12 +50,12 @@ pub(super) fn render(rows: &[Aggregate], acceptance: &Acceptance) -> DynResult<S
             after.family_switches_median,
         ),
         (
-            "TTFT p50 ms",
+            "Client TTFT p50 ms",
             before.ttft_ms_p50_median,
             after.ttft_ms_p50_median,
         ),
         (
-            "TTFT p95 ms",
+            "Client TTFT p95 ms",
             before.ttft_ms_p95_median,
             after.ttft_ms_p95_median,
         ),
