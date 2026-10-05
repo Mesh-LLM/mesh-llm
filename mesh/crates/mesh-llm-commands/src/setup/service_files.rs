@@ -7,8 +7,11 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 // The env file is where an operator puts a private mesh token or invite, so it
-// is created owner-only and an existing one is tightened. The directory is
-// made owner-only only when setup creates it.
+// is created owner-only and an existing one is tightened. Only the immediate
+// parent is restricted to owner-only, and only when it did not already exist: a
+// pre-existing parent, and any intermediate directory created by
+// `create_dir_all`, keep their modes. The 0600 env file is what keeps the
+// secret unreadable; the restricted directory only keeps it out of listings.
 pub(crate) fn ensure_service_env_file(service_env_file: &Path) -> Result<()> {
     let parent = service_env_file.parent().ok_or_else(|| {
         anyhow!(
