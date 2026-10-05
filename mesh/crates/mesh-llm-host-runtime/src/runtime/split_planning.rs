@@ -1713,7 +1713,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: true,
+                placement: SplitPlacementPolicy::AUTO_BALANCE,
             },
         ))
     }
@@ -2032,7 +2032,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                auto_balance: false,
+                placement: SplitPlacementPolicy::CAPACITY_ONLY,
             },
         );
         assert!(
