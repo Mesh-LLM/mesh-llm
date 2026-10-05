@@ -21,7 +21,7 @@ pub(crate) fn fixture_rows(repo_root: &Path) -> DynResult<Vec<FixtureRow>> {
 
 pub(crate) fn fixture_path(repo_root: &Path) -> PathBuf {
     repo_root
-        .join("crates")
+        .join("mesh/crates")
         .join("mesh-llm-system")
         .join("tests")
         .join("fixtures")

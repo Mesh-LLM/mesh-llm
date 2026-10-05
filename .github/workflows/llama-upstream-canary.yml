@@ -54,7 +54,7 @@ jobs:
             exit 0
           fi
           pins=()
-          for pin in third_party/llama.cpp/upstream.txt skippy/third_party/llama.cpp/upstream.txt; do
+          for pin in third_party/llama.cpp/upstream.txt skippy/llama_cpp/upstream.txt; do
             if [[ -f "$pin" ]]; then pins+=("$pin"); fi
           done
           if [[ "${#pins[@]}" != 1 ]]; then

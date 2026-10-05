@@ -6,7 +6,7 @@ import unittest
 
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-SCRIPT: Final = ROOT / "scripts" / "package-release.ps1"
+SCRIPT: Final = ROOT / "mesh" / "scripts" / "package-release.ps1"
 
 
 class PackageReleasePowerShellTests(unittest.TestCase):

@@ -45,6 +45,11 @@ class HandoffContractTests(unittest.TestCase):
     def copy_script(self, name):
         (self.source / 'scripts').mkdir(exist_ok=True)
         shutil.copy2(ROOT / 'scripts' / name, self.source / 'scripts' / name)
+        implementation = ROOT / 'skippy/scripts' / name
+        if implementation.is_file():
+            destination = self.source / 'skippy/scripts' / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(implementation, destination)
 
     def test_older_planner_and_nested_checkout_validate_with_real_battery(self):
         # Model the previous planner's descending shard order. Both versions
@@ -56,7 +61,7 @@ class HandoffContractTests(unittest.TestCase):
         manifest = self.source / 'ci/llama-canary/family-certified.json'
         manifest.parent.mkdir(parents=True)
         shutil.copy2(ROOT / 'ci/llama-canary/family-certified.json', manifest)
-        planner = self.source / 'scripts/plan-family-battery.py'
+        planner = self.source / 'skippy/scripts/plan-family-battery.py'
         text = planner.read_text()
         needle = 'for shard in sorted(shards, key=lambda item: (item["estimated_work_bytes"], item["families"]))'
         self.assertIn(needle, text)
@@ -76,7 +81,7 @@ class HandoffContractTests(unittest.TestCase):
 
     def test_prepared_source_roundtrip_in_empty_worker_and_stale_pin_rejected(self):
         self.copy_script('llama-oracle-source.py')
-        pin = self.source / 'third_party/llama.cpp/upstream.txt'
+        pin = self.source / 'skippy/llama_cpp/upstream.txt'
         pin.parent.mkdir(parents=True)
         (pin.parent / 'patches').mkdir()
         pin.write_text('a' * 40 + '\n')
@@ -110,7 +115,7 @@ class HandoffContractTests(unittest.TestCase):
         manifest = self.source / 'ci/llama-canary/family-certified.json'
         manifest.parent.mkdir(parents=True)
         shutil.copy2(ROOT / 'ci/llama-canary/family-certified.json', manifest)
-        pin = self.source / 'third_party/llama.cpp/upstream.txt'
+        pin = self.source / 'skippy/llama_cpp/upstream.txt'
         pin.parent.mkdir(parents=True)
         (pin.parent / 'patches').mkdir()
         pin.write_text('a'*40 + '\n')
@@ -124,8 +129,8 @@ class HandoffContractTests(unittest.TestCase):
         for name, value in zip(E.LLAMA_MARKERS, ('a'*40, hashlib.sha256(b'').hexdigest(), head, '5')):
             (native / name).write_text(value + '\n')
         closure = self.source / '.deps/workloads'
-        names = {'candidate': 'cargo/debug/skippy-server', 'test_binary': 'cargo/debug/deps/test',
-                 'model_package': 'cargo/debug/skippy-model-package',
+        names = {'candidate': 'cargo/debug/skippy', 'test_binary': 'cargo/debug/deps/test',
+                 'model_package': 'cargo/debug/skippy-package-builder',
                  'correctness': 'cargo/debug/skippy-correctness',
                  'topology_plan': 'cargo/debug/skippy-topology-plan',
                  'native_stamp': 'native/.mesh-llm-build-stamp',
@@ -148,7 +153,7 @@ class HandoffContractTests(unittest.TestCase):
         E.write(test_build, {})
         test_build.write_text(json.dumps({'reason': 'compiler-artifact',
             'executable': str(self.source / 'target/debug/skippy-mm-test'),
-            'target': {'name': 'skippy_server'}, 'profile': {'test': True}})+'\n')
+            'target': {'name': 'skippy_serving'}, 'profile': {'test': True}})+'\n')
         summary = self.base / 'summary.md'
         summary.write_text('fixture')
         package = self.base / 'package'

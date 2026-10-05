@@ -199,8 +199,8 @@ run_candidate_gates() {
         self.assertIn("scripts/check-skippy-generated-family-patch.sh", build)
         for package in (
             "skippy-runtime",
-            "skippy-server",
-            "skippy-model-package",
+            "skippy-cli",
+            "skippy-package-builder",
             "skippy-correctness",
         ):
             self.assertIn(f"-p {package}", build)
@@ -239,6 +239,8 @@ run_candidate_gates() {
             self.wrapper.index("run_candidate_gates() {")
         ]
         self.assertIn("--skip-build", gate)
+        self.assertIn("-workloads/cargo/debug/skippy\"", gate)
+        self.assertIn('.target.name == "skippy_serving"', gate)
         for family in ("llama", "mamba2", "deepseek2", "nomic-bert-embedding",
                        "jina-bert-v2-rerank", "t5-encoder-decoder", "qwen3-vl"):
             self.assertIn(family, gate)
@@ -373,7 +375,7 @@ run_candidate_gates() {
         ):
             self.assertIn(path, guard)
         self.assertNotIn("ci/llama-canary/family-certified.json", guard)
-        self.assertNotIn("docs/skippy/llama-parity-candidates.json", guard)
+        self.assertNotIn("skippy/docs/llama-parity-candidates.json", guard)
         policy = MANIFEST_POLICY.read_text(encoding="utf-8")
         self.assertIn("resources.estimated_model_bytes", policy)
         self.assertIn("existing parity candidate rows changed or were reordered", policy)
@@ -527,7 +529,7 @@ run_candidate_gates() {
         self.assertIn("rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-*", self.wrapper)
 
     def test_runnable_row_carrying_unsupported_reason_is_rejected(self) -> None:
-        parity = ROOT / "scripts" / "skippy-llama-parity.py"
+        parity = ROOT / "skippy" / "scripts" / "skippy-llama-parity.py"
         sys.path.insert(0, str(parity.parent))
         try:
             spec = importlib.util.spec_from_file_location("skippy_llama_parity_validate", parity)

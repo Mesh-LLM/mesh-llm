@@ -9,7 +9,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check-env-mutation-contract.py"
-AUDITED_FILE = "crates/model-hf/src/store/local.rs"
+AUDITED_FILE = "skippy/crates/skippy-model-hf/src/store/local.rs"
 TODO = "// TODO: Audit that the environment access only happens in single-threaded code."
 
 
@@ -27,9 +27,9 @@ class EnvironmentMutationContractTests(unittest.TestCase):
         result = self.run_checker()
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("38 Rust files", result.stdout)
-        self.assertIn("237 mutation sites", result.stdout)
-        self.assertIn("22 contract-audited files", result.stdout)
+        self.assertIn("37 Rust files", result.stdout)
+        self.assertIn("235 mutation sites", result.stdout)
+        self.assertIn("20 contract-audited files", result.stdout)
 
     def test_unregistered_mutation_file_is_rejected_by_repository_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -118,7 +118,7 @@ mod tests {
             self.assertIn("test environment mutation needs a SAFETY comment", result.stderr)
 
     def test_deferred_mutation_requires_safety_comment_and_todo(self) -> None:
-        deferred_file = "crates/skippy-runtime/src/logging.rs"
+        deferred_file = "skippy/crates/skippy-runtime/src/logging.rs"
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             source = root / deferred_file
@@ -139,7 +139,7 @@ mod tests {
 
     def test_synchronous_bootstrap_mutation_rejects_audit_todo(self) -> None:
         bootstrap_file = (
-            "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs"
+            "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs"
         )
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -162,7 +162,7 @@ mod tests {
 
     def test_synchronous_bootstrap_mutation_requires_exact_boundary(self) -> None:
         bootstrap_file = (
-            "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs"
+            "mesh/crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs"
         )
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

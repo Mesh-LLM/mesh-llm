@@ -100,7 +100,7 @@ jobs:
           allow_native_github_cache: "true"
       - name: Resolve product source layout
         id: layout
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - name: Build, smoke, and stage immutable addon
         env:
           SDK_DIR: ${{ steps.layout.outputs.sdk_dir }}
@@ -203,7 +203,7 @@ jobs:
         uses: ./.github/actions/setup-macos-lld
       - name: Resolve product source layout
         id: layout
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - name: Build, smoke, and stage immutable addon
         env:
           SDK_DIR: ${{ steps.layout.outputs.sdk_dir }}
@@ -303,7 +303,7 @@ jobs:
           allow_native_github_cache: "true"
       - name: Resolve product source layout
         id: layout
-        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers
       - name: Build, smoke, and stage immutable addon
         env:
           SDK_DIR: ${{ steps.layout.outputs.sdk_dir }}

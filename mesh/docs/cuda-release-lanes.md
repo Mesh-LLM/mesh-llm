@@ -1,0 +1,135 @@
+# CUDA release lanes
+
+mesh-llm publishes **two CUDA release bundles per tagged release**. They
+share source, features, and upstream llama.cpp pin, and differ only in
+the CUDA toolkit version and GPU architecture coverage. Pick the one
+that matches your NVIDIA driver.
+
+## Why two lanes
+
+nvcc from the **CUDA 12.8** toolkit emits cubins whose minor-version
+metadata the **R535-series driver** (native CUDA 12.2) rejects at kernel
+load time. This manifests as `CUDA error: device kernel image is
+invalid` on the first matmul when running against sm_80 (A30/A100), even
+though sm_80 cubins are physically present in the binary
+(`cuobjdump --list-elf` confirms). Rebuilding the identical source tree
+on the **CUDA 12.6.3** toolkit produces a working bundle on the same
+hardware/driver.
+
+At the same time, Blackwell compute capabilities (sm_100 B100/B200,
+sm_120 RTX 50-series) were **first introduced in CUDA 12.8**; nvcc 12.6
+cannot emit them at all. (sm_103 is a related Blackwell variant, but
+nvcc 12.8.0 does not know it — that arch landed in a later CUDA
+release; it's therefore omitted from our 12.8-toolkit Blackwell lane.)
+
+There is no single toolkit that satisfies both audiences, so the release
+workflow builds both.
+
+## Lane summary
+
+| Asset suffix | Toolkit | Arch coverage | Driver requirement |
+|---|---|---|---|
+| `-cuda` (primary) | CUDA 12.9.2 | sm_61, sm_75, sm_80, sm_86, sm_87, sm_89, sm_90 (Pascal → Hopper) | R535+ (CUDA 12.2 native) |
+| `-cuda-blackwell` | CUDA 12.8 | sm_75..sm_90 plus sm_100, sm_120 (adds Blackwell) | R550+ (CUDA 12.4 native) |
+
+- **Primary `-cuda`** covers the currently-deployed A30/A100/Ada/Hopper
+  fleet on the stable R535 driver series. This is the recommended
+  default.
+- **`-cuda-blackwell`** is required only if you have Blackwell hardware
+  (B100, B200, Thor, RTX 50-series). It will NOT load on R535 drivers
+  even on older sm_80 hardware because the R535 driver rejects any
+  12.8-minor-tagged cubin.
+
+## How to pick one
+
+- On any R535-series driver (default for Ampere-era HGX and most
+  non-freshly-imaged datacenter hosts): use `-cuda`.
+- On R550+ drivers running Blackwell hardware: use `-cuda-blackwell`.
+- On R550+ drivers running only pre-Blackwell hardware (A30/A100/L40/
+  H100 etc.): either bundle will work; prefer `-cuda` to avoid pulling
+  in arch cubins you will not execute.
+
+Check your driver:
+
+```bash
+nvidia-smi --query-gpu=driver_version --format=csv,noheader
+```
+
+## Asset naming
+
+The outer archive filename distinguishes the lanes:
+
+- `mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz`
+- `mesh-llm-x86_64-unknown-linux-gnu-cuda-blackwell.tar.gz`
+
+Both archives contain byte-identical backend-neutral `mesh-llm` host bytes.
+The outer archive filename distinguishes the CUDA lane, and the selected
+`native-runtimes/<runtime-id>` directory contains that lane's ABI and CUDA
+libraries. Use `mesh-llm update --flavor`
+when you want to choose a specific update bundle:
+
+- `mesh-llm update --flavor cuda` for the primary CUDA lane
+- `mesh-llm update --flavor cuda-blackwell` for the Blackwell lane
+
+## Installer behavior
+
+`install.sh` exposes both as flavor strings and uses the same selection
+order as `mesh-llm update`:
+
+```text
+cuda-blackwell on detected Blackwell NVIDIA hardware, otherwise cuda,
+then rocm, vulkan, metal, and cpu fallback where those release targets exist.
+```
+
+```bash
+# primary CUDA on pre-Blackwell NVIDIA hosts
+curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
+
+# explicit Blackwell, or automatic on detected Blackwell NVIDIA hosts
+curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh \
+  | MESH_LLM_INSTALL_FLAVOR=cuda-blackwell bash
+```
+
+The auto-detection path checks `nvidia-smi --query-gpu=compute_cap`
+first and falls back to `/proc/driver/nvidia/gpus/*/information` model
+names when `nvidia-smi` cannot report compute capability.
+
+`mesh-llm update --detect-flavor` uses the same detection path when you
+want an existing install to move to the best currently detected release
+bundle.
+
+## Building locally
+
+Both lanes remain exposed from the root `Justfile`; their definitions are
+loaded from its flat imports under `just/`:
+
+```bash
+# primary (CUDA 12.6.3 toolkit required on the host / container)
+just release-build-cuda
+just release-bundle "$VERSION" dist cuda
+
+# Blackwell (CUDA 12.8 toolkit required on the host / container)
+# The Linux CUDA recipes select toolkit-dependent architectures internally.
+just release-build-cuda
+just release-bundle "$VERSION" dist cuda
+```
+
+The Linux CUDA recipe selects its architecture list from the toolkit detected
+on the host; it does not accept a positional architecture override.
+
+## CI wiring
+
+- `.github/workflows/release.yml` defines two sibling jobs:
+  `build_linux_cuda` (12.6.3 container) and `build_linux_cuda_blackwell`
+  (12.8 container). Both upload to the same GitHub release via the
+  `publish` job's `needs:` list.
+- The default toolkit versions are configurable at the repo level via
+  Actions variables `vars.CUDA_VERSION` (primary, default `12.6.3`) and
+  `vars.CUDA_BLACKWELL_VERSION` (Blackwell, default `12.8.0`).
+## History
+
+The split was introduced in [PR #355](https://github.com/Mesh-LLM/mesh-llm/pull/355)
+after a reproducible A30 crash on R535 drivers was traced to the nvcc
+12.8 / R535 cubin incompatibility. See issue
+[#304](https://github.com/Mesh-LLM/mesh-llm/issues/304) for the
+investigation, A/B build matrix, and 29-GPU test results.

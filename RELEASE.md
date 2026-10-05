@@ -105,15 +105,21 @@ means a footer was present, but signature verification failed.
 just build
 ```
 
-`just build` builds a backend-neutral dynamic host, the UI, and one adjacent
-locally packaged native runtime. It uses the same host/runtime boundary as a
-release product. Static llama.cpp compilation is confined to the runtime
-packaging primitive, never the host executable.
+`just build` first builds and packages one native Skippy runtime and the
+standalone `skippy` CLI, then builds the console and backend-neutral dynamic
+MeshLLM host beside them. It uses the
+same host/runtime boundary as a release product. Static llama.cpp compilation
+is confined to the runtime packaging primitive, never the host executable.
 
-The release build graph has three layers: one backend-neutral dynamic host per
-OS/architecture, one manifested native runtime per backend lane, and a composed
-product bundle. External `llama-server`, `rpc-server`, and `llama-moe-*`
-binaries are not packaged.
+The source tree contains two products. Skippy has one backend-neutral CLI per
+OS/architecture and a manifested native runtime per backend. MeshLLM has its
+own backend-neutral host and console and consumes those Skippy runtime assets.
+Release CI builds the Skippy CLI once per platform and publishes a distinct
+`skippy-<version>-<target>-cli.tar.gz` archive and checksum alongside native
+runtime archives. MeshLLM bundles retain their own host, selected runtime,
+and product manifest. Both products currently share the workspace version and
+release tag. External `llama-server`, `rpc-server`, and `llama-moe-*` binaries
+are not packaged.
 
 ## Bundle
 
@@ -143,12 +149,12 @@ just release-build
 just release-bundle v0.X.Y
 ```
 
-For an explicit backend, build the neutral host and selected runtime through
-the compatibility recipes, then compose:
+For an explicit backend, use its release-build recipe to build the selected
+runtime and Skippy CLI before the neutral MeshLLM host, then compose:
 
 ```bash
 just release-build-cuda
-just release-bundle-cuda v0.X.Y
+just release-bundle v0.X.Y dist cuda
 ```
 
 Before dispatching a release that should be consumable through SwiftPM,
@@ -159,7 +165,7 @@ workflow, which creates the tag:
 
 ```bash
 scripts/prepare-swift-package-release.sh v0.X.Y
-git add Package.swift sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift
+git add Package.swift mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift
 git commit -m "v0.X.Y: prepare Swift package artifact"
 ```
 
@@ -263,23 +269,23 @@ scripts/package-sdk-console-assets.sh --sdk all
 scripts/verify-sdk-console-assets.sh --sdk all
 ```
 
-The script builds `crates/mesh-llm-ui/dist` in release mode and copies it to
-the canonical SDK resource locations: `sdk/node/console`,
-`sdk/swift/Sources/MeshLLM/Resources/Console`, and
-`sdk/kotlin/src/main/resources/mesh-llm/console`.
+The script builds `mesh/crates/mesh-llm-ui/dist` in release mode and copies it to
+the canonical SDK resource locations: `mesh/sdk/node/console`,
+`mesh/sdk/swift/Sources/MeshLLM/Resources/Console`, and
+`mesh/sdk/kotlin/src/main/resources/mesh-llm/console`.
 
 Workflow-dispatch releases generate and force-add these resources into the
 release tag commit automatically.
 
 The chain currently publishes:
 
-1. `model-ref`
+1. `skippy-model-ref`
 2. `mesh-llm-identity`
 3. `mesh-llm-protocol`
 4. `mesh-llm-routing`
 5. `mesh-llm-types`
-6. `model-artifact`
-7. `model-hf`
+6. `skippy-model-artifact`
+7. `skippy-model-hf`
 8. `mesh-llm-client`
 9. `mesh-llm-api-client`
 10. `mesh-llm-node`

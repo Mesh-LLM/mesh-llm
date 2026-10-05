@@ -45,11 +45,11 @@ def sha256(path: Path) -> str:
 
 class StaticAbiArtifactTests(unittest.TestCase):
     def test_native_sdk_reuse_is_verification_only(self) -> None:
-        build_script = (ROOT / "scripts" / "build-llama.sh").read_text(
+        build_script = (ROOT / "skippy" / "scripts" / "build-llama.sh").read_text(
             encoding="utf-8",
         )
         package_script = (
-            ROOT / "scripts" / "package-native-sdk.sh"
+            ROOT / "mesh" / "scripts" / "package-native-sdk.sh"
         ).read_text(encoding="utf-8")
 
         self.assertIn("--require-existing", build_script)
@@ -97,7 +97,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
         self.assertIn("MESH_LLM_AUTO_BUILD_LLAMA=0", package_script)
 
     def test_skippy_ffi_links_mtmd_hash_dependency_after_mtmd(self) -> None:
-        build_script = (ROOT / "crates" / "skippy-ffi" / "build.rs").read_text(
+        build_script = (ROOT / "skippy" / "crates" / "skippy-ffi" / "build.rs").read_text(
             encoding="utf-8",
         )
 
@@ -113,7 +113,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
 
     def test_skippy_ffi_uses_the_native_build_scripts_canonical_directory(self) -> None:
         """Rust FFI discovery must resolve the same backend and linkage directory as native preparation."""
-        ffi_build = (ROOT / "crates" / "skippy-ffi" / "build.rs").read_text(
+        ffi_build = (ROOT / "skippy" / "crates" / "skippy-ffi" / "build.rs").read_text(
             encoding="utf-8",
         )
 
@@ -131,7 +131,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             environment["LLAMA_STAGE_BACKEND"] = backend
             environment["LLAMA_STAGE_LINK_MODE"] = "static"
             result = subprocess.run(
-                ["bash", str(ROOT / "scripts" / "build-llama.sh"), "--print-build-dir"],
+                ["bash", str(ROOT / "skippy" / "scripts" / "build-llama.sh"), "--print-build-dir"],
                 cwd=ROOT,
                 env=environment,
                 check=True,
@@ -144,7 +144,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             self.assertIn(f"static-{backend}", expected.name)
 
     def test_dynamic_output_probe_is_pipefail_safe(self) -> None:
-        build_script = (ROOT / "scripts" / "build-llama.sh").read_text(
+        build_script = (ROOT / "skippy" / "scripts" / "build-llama.sh").read_text(
             encoding="utf-8",
         )
         function = build_script.split(

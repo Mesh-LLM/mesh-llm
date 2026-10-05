@@ -1,0 +1,25 @@
+[package]
+name = "mesh-llm-ffi"
+description = "Native FFI bindings for the MeshLLM SDK"
+version.workspace = true
+edition = "2024"
+
+[lib]
+name = "meshllm_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+default = []
+embedded-runtime = []
+
+[dependencies]
+mesh-llm-sdk = { path = "../mesh-llm-sdk", default-features = false, features = ["client", "node", "console", "serving"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+uniffi = "=0.32.0"
+
+[build-dependencies]
+uniffi = { version = "=0.32.0", features = ["build"] }
+
+[dev-dependencies]
+mesh-llm-sdk = { path = "../mesh-llm-sdk", default-features = false, features = ["client", "node", "console"] }

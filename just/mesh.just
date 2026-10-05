@@ -1,3 +1,13 @@
+# Build only the backend-neutral MeshLLM host and its console. The complete
+# default build runs Skippy first, but this product can be rebuilt on its own.
+[unix]
+mesh profile="debug":
+    @scripts/build-host.sh --profile "{{ profile }}"
+
+[windows]
+mesh profile="debug":
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile "{{ profile }}" -HostOnly
+
 # Download the default model (GLM-4.7-Flash Q4_K_M, 17GB)
 download-model:
     #!/usr/bin/env bash

@@ -22,7 +22,7 @@ pub(crate) fn default_node_version() -> DynResult<String> {
 
 fn resolve_runtime_version(repo_root: &Path) -> DynResult<String> {
     let runtime_lib = repo_root
-        .join("crates")
+        .join("mesh/crates")
         .join("mesh-llm-host-runtime")
         .join("src")
         .join("lib.rs");
@@ -53,7 +53,7 @@ fn extract_runtime_version(repo_root: &Path, contents: &str) -> DynResult<String
 
 pub(crate) fn host_runtime_package_version(repo_root: &Path) -> DynResult<String> {
     let runtime_manifest = repo_root
-        .join("crates")
+        .join("mesh/crates")
         .join("mesh-llm-host-runtime")
         .join("Cargo.toml");
     let runtime_contents = fs::read_to_string(runtime_manifest)?;
@@ -256,12 +256,13 @@ pub(crate) fn check_ci_crate_lists_command() -> DynResult<()> {
 /// that mirror honest by comparing both structs' field names, in
 /// declaration order, from this dev-only cross-crate-aware binary.
 fn check_runtime_event_abi_mirror(repo_root: &Path) -> DynResult<()> {
-    let abi_relative = Path::new("crates/skippy-ffi/src/abi.rs");
+    let abi_relative = Path::new("skippy/crates/skippy-ffi/src/abi.rs");
     let abi_source = fs::read_to_string(repo_root.join(abi_relative))?;
     let abi_fields = struct_field_names(&abi_source, "pub struct SkippyRuntimeEventV1 {")
         .map_err(|error| format!("{}: {error}", abi_relative.display()))?;
 
-    let mirror_relative = Path::new("crates/mesh-llm-runtime-event-contracts/src/tests/native.rs");
+    let mirror_relative =
+        Path::new("mesh/crates/mesh-llm-runtime-event-contracts/src/tests/native.rs");
     let mirror_source = fs::read_to_string(repo_root.join(mirror_relative))?;
     let mirror_fields = struct_field_names(&mirror_source, "struct RawNativeEventV1Fixture {")
         .map_err(|error| format!("{}: {error}", mirror_relative.display()))?;

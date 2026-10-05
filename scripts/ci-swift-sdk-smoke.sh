@@ -34,7 +34,7 @@ fi
 SWIFT_INPUT_ARCHIVE="$4"
 SWIFT_INPUT_MODE="$5"
 SWIFT_INPUT_BINDING="$6"
-SWIFT_TRACKED_BINDING="sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"
+SWIFT_TRACKED_BINDING="mesh/sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift"
 
 if [[ ! -f "$SWIFT_INPUT_BINDING" || -L "$SWIFT_INPUT_BINDING" ]]; then
     echo "immutable generated Swift binding is missing or unsafe: $SWIFT_INPUT_BINDING" >&2
@@ -59,7 +59,7 @@ SWIFT_EXTRACT_DIR="$(mktemp -d)"
 trap 'rm -rf "$SWIFT_EXTRACT_DIR"' EXIT
 scripts/safe-extract-zip.py "$SWIFT_INPUT_ARCHIVE" "$SWIFT_EXTRACT_DIR"
 
-SWIFT_GENERATED_DIR="sdk/swift/Generated"
+SWIFT_GENERATED_DIR="mesh/sdk/swift/Generated"
 if [[ -L "$SWIFT_GENERATED_DIR" ]] \
     || [[ -e "$SWIFT_GENERATED_DIR" && ! -d "$SWIFT_GENERATED_DIR" ]]; then
     echo "Swift generated artifact directory is unsafe: $SWIFT_GENERATED_DIR" >&2
@@ -75,7 +75,7 @@ rm -rf "$SWIFT_XCFRAMEWORK"
 mv "$SWIFT_EXTRACT_DIR/MeshLLMFFI.xcframework" "$SWIFT_XCFRAMEWORK"
 
 scripts/verify-swift-privacy-manifest.sh \
-    sdk/swift/PrivacyInfo.xcprivacy \
+    mesh/sdk/swift/PrivacyInfo.xcprivacy \
     "$SWIFT_XCFRAMEWORK"
 
 native_runtime_dir="$(
@@ -92,7 +92,7 @@ scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
         set -euo pipefail
         cd '"$REPO_ROOT"'
         swift run \
-            --package-path sdk/swift/example/MeshExampleApp \
+            --package-path mesh/sdk/swift/example/MeshExampleApp \
             MeshExampleApp \
             "$MESH_SDK_INVITE_TOKEN"
     '

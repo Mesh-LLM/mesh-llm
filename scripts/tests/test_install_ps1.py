@@ -313,9 +313,10 @@ class InstallPs1BehaviorTests(unittest.TestCase):
     ) -> str:
         runtime_manifest = json.dumps(
             {
+                "schema_version": 2,
                 "runtime": {
                     "id": "test-runtime",
-                    "mesh_version": "0.73.1",
+                    "release_version": "0.73.1",
                     "skippy_abi": "0.1.0",
                     "platform": {
                         "os": "windows",

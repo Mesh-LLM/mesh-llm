@@ -11,41 +11,41 @@ cleanup_check_logs() {
 trap cleanup_check_logs EXIT
 
 ui_lint() {
-    cd "$ROOT/crates/mesh-llm-ui"
+    cd "$ROOT/mesh/crates/mesh-llm-ui"
     pnpm run lint
 }
 
 ui_typecheck_and_build() {
-    cd "$ROOT/crates/mesh-llm-ui"
+    cd "$ROOT/mesh/crates/mesh-llm-ui"
     pnpm run typecheck
     # TypeScript already passed above, so do not repeat it through `pnpm run build`.
     pnpm exec vite build
 }
 
 ui_unit_tests() {
-    cd "$ROOT/crates/mesh-llm-ui"
+    cd "$ROOT/mesh/crates/mesh-llm-ui"
     pnpm test
 }
 
 website_build() {
-    cd "$ROOT/website"
+    cd "$ROOT/mesh/website"
     npm run build
 }
 
 script_and_sdk_tests() {
     python3 -m unittest discover -s scripts/tests -p 'test_*.py'
     node --test scripts/console-format.test.js
-    npm test --prefix sdk/node
+    npm test --prefix mesh/sdk/node
     scripts/check-sdk-contract.sh
 
     if command -v java >/dev/null 2>&1 && java -version >/dev/null 2>&1; then
-        (cd sdk/kotlin && ./gradlew test --no-daemon)
+        (cd mesh/sdk/kotlin && ./gradlew test --no-daemon)
     else
         echo "SKIP Kotlin SDK tests: Java runtime is not installed."
     fi
 
     if command -v swift >/dev/null 2>&1 \
-        && [[ -d sdk/swift/Generated/MeshLLMFFI.xcframework ]]; then
+        && [[ -d mesh/sdk/swift/Generated/MeshLLMFFI.xcframework ]]; then
         swift test
     else
         echo "SKIP Swift SDK tests: local MeshLLMFFI.xcframework is not built."
