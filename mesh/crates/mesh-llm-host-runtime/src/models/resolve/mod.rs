@@ -1091,32 +1091,5 @@ async fn download_remote_catalog_model(
     .await
 }
 
-pub(super) async fn remote_hf_size_label_with_api(
-    _api: &hf_hub::HFClient,
-    repo: &str,
-    revision: Option<&str>,
-    file: &str,
-) -> Option<String> {
-    if split_gguf_shard_info(file).is_some() {
-        let tree_path = Path::new(file)
-            .parent()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty());
-        if let Some(tree_entries) = fetch_hf_tree_entries(repo, revision, tree_path).await {
-            let siblings = tree_entries
-                .into_iter()
-                .filter(|entry| entry.entry_type == "file")
-                .map(|entry| (entry.path, entry.size))
-                .collect::<Vec<_>>();
-            if let Some(size) = gguf_variant_size_bytes_from_siblings(file, &siblings) {
-                return Some(format_size_bytes(size));
-            }
-        }
-    }
-
-    let url = huggingface_resolve_url(repo, revision, file);
-    remote_size_label(&url).await
-}
-
 #[cfg(test)]
 mod tests;

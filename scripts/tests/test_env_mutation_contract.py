@@ -28,7 +28,7 @@ class EnvironmentMutationContractTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("37 Rust files", result.stdout)
-        self.assertIn("235 mutation sites", result.stdout)
+        self.assertIn("234 mutation sites", result.stdout)
         self.assertIn("20 contract-audited files", result.stdout)
 
     def test_unregistered_mutation_file_is_rejected_by_repository_discovery(self) -> None:
