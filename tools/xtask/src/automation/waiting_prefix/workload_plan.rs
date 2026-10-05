@@ -8,17 +8,17 @@ use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Workload {
-    rounds: u64,
-    families: u64,
-    requests_per_family: u64,
-    prefix_blocks: u64,
-    output_tokens: u64,
-    ctx_size: u64,
-    lanes: u64,
-    admission_concurrency: u64,
-    cache_entries: u64,
-    stagger_ms: f64,
+pub(super) struct Workload {
+    pub(super) rounds: u64,
+    pub(super) families: u64,
+    pub(super) requests_per_family: u64,
+    pub(super) prefix_blocks: u64,
+    pub(super) output_tokens: u64,
+    pub(super) ctx_size: u64,
+    pub(super) lanes: u64,
+    pub(super) admission_concurrency: u64,
+    pub(super) cache_entries: u64,
+    pub(super) stagger_ms: f64,
 }
 
 impl Workload {
@@ -52,11 +52,11 @@ impl Workload {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct CacheSeed {
-    families: u64,
-    prefix_blocks: u64,
-    output_tokens: u64,
-    stagger_ms: f64,
+pub(super) struct CacheSeed {
+    pub(super) families: u64,
+    pub(super) prefix_blocks: u64,
+    pub(super) output_tokens: u64,
+    pub(super) stagger_ms: f64,
 }
 
 impl CacheSeed {
@@ -92,19 +92,19 @@ struct AcceptanceDocument {
 }
 
 #[derive(Serialize)]
-struct Plan {
-    schema_version: u64,
-    workload_profile: String,
-    fixture_catalog_sha256: String,
-    model: Value,
-    workload: Workload,
-    requests_per_round: u64,
-    successful_requests_per_binary: u64,
-    acceptance_contract_name: Option<String>,
-    acceptance_contract_sha256: Option<String>,
-    hardware_acceptance: Value,
-    cache_seed: Option<CacheSeed>,
-    prompt_manifest_sha256: Option<String>,
+pub(super) struct Plan {
+    pub(super) schema_version: u64,
+    pub(super) workload_profile: String,
+    pub(super) fixture_catalog_sha256: String,
+    pub(super) model: Value,
+    pub(super) workload: Workload,
+    pub(super) requests_per_round: u64,
+    pub(super) successful_requests_per_binary: u64,
+    pub(super) acceptance_contract_name: Option<String>,
+    pub(super) acceptance_contract_sha256: Option<String>,
+    pub(super) hardware_acceptance: Value,
+    pub(super) cache_seed: Option<CacheSeed>,
+    pub(super) prompt_manifest_sha256: Option<String>,
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -143,7 +143,7 @@ fn admit_prompts(
     }
 }
 
-fn resolve(
+pub(super) fn resolve(
     catalog_bytes: &[u8],
     profile_name: &str,
     model_id: &str,

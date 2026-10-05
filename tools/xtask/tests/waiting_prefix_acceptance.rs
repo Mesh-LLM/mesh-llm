@@ -852,3 +852,9 @@ fn native_cell_worker_missing_telemetry_retains_completed_measurement_at_deadlin
     assert!(output["telemetry"].is_null());
     assert!(output["summary"].is_null());
 }
+
+#[path = "waiting_prefix_acceptance/server_cell.rs"]
+mod server_cell;
+
+#[path = "waiting_prefix_acceptance/round_runner.rs"]
+mod round_runner;

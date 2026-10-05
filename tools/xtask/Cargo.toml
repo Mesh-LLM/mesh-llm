@@ -73,3 +73,8 @@ path = "examples/migration_patch_fixture.rs"
 [[example]]
 name = "migration_smoke_fixture"
 path = "tests/migration_required_smoke/executable/fixture.rs"
+
+[[bin]]
+name = "waiting-prefix-fixture"
+path = "tests/waiting_prefix_acceptance/fixture.rs"
+test = false

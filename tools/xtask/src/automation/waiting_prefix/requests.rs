@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Input {
     pub(super) schema_version: u64,

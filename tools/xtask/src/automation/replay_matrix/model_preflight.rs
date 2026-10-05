@@ -14,7 +14,7 @@ use std::{
 };
 
 #[derive(Serialize)]
-pub(super) struct Identity {
+pub(in crate::automation) struct Identity {
     sha256: String,
     architecture: String,
     native_context_tokens: u64,
@@ -51,7 +51,11 @@ pub(in crate::automation) fn run(args: &[String]) -> DynResult<()> {
     crate::command::write_json_file(output, &verify(path, expected, minimum)?)
 }
 
-pub(super) fn verify(path: &Path, expected: &str, minimum: u64) -> DynResult<Identity> {
+pub(in crate::automation) fn verify(
+    path: &Path,
+    expected: &str,
+    minimum: u64,
+) -> DynResult<Identity> {
     if expected.len() != 64
         || !expected.bytes().all(|byte| byte.is_ascii_hexdigit())
         || minimum == 0

@@ -2,12 +2,17 @@
 mod acceptance;
 mod aggregation;
 mod cell_worker;
+mod native_identity;
 mod report;
 mod requests;
+mod round_runner;
+mod rounds;
+mod server_cell;
 mod stage_config;
 mod synthetic_prompts;
 mod telemetry;
 mod telemetry_log;
+mod telemetry_sink;
 #[cfg(test)]
 mod tests;
 mod workload_plan;
@@ -18,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, io::Write, path::Path};
 
-const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix execute-requests --input FILE --output FILE\n  cargo xtool automation waiting-prefix plan --catalog FILE --profile NAME --model-id ID --model-sha256 HASH [--contract FILE] [--prompt-manifest FILE] --output FILE\n  cargo xtool automation waiting-prefix synthetic-prompts --families N --requests-per-family N --prefix-blocks N --output FILE\n  cargo xtool automation waiting-prefix stage-config --input FILE --output FILE\n  cargo xtool automation waiting-prefix telemetry-log {snapshot|collect} --log FILE --output FILE [--cursor FILE --expected-generations N]\n  cargo xtool automation waiting-prefix cell-worker --input FILE --output FILE\n  cargo xtool automation waiting-prefix validate-prompts FILE";
+const USAGE: &str = "cargo xtool automation waiting-prefix evaluate --comparison FILE --output FILE [--report FILE] (--contract FILE | --catalog FILE --profile NAME)\n  cargo xtool automation waiting-prefix {summarize|aggregate} --input FILE --output FILE\n  cargo xtool automation waiting-prefix execute-requests --input FILE --output FILE\n  cargo xtool automation waiting-prefix plan --catalog FILE --profile NAME --model-id ID --model-sha256 HASH [--contract FILE] [--prompt-manifest FILE] --output FILE\n  cargo xtool automation waiting-prefix synthetic-prompts --families N --requests-per-family N --prefix-blocks N --output FILE\n  cargo xtool automation waiting-prefix stage-config --input FILE --output FILE\n  cargo xtool automation waiting-prefix telemetry-log {snapshot|collect} --log FILE --output FILE [--cursor FILE --expected-generations N]\n  cargo xtool automation waiting-prefix cell-worker --input FILE --output FILE\n  cargo xtool automation waiting-prefix server-cell --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix run --input FILE --output-directory DIR\n  cargo xtool automation waiting-prefix validate-prompts FILE";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Prompt {
@@ -180,6 +185,8 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         [verb, rest @ ..] if verb == "synthetic-prompts" => synthetic_prompts::run(rest),
         [verb, rest @ ..] if verb == "telemetry-log" => telemetry_log::run(rest),
         [verb, rest @ ..] if verb == "cell-worker" => cell_worker::run(rest),
+        [verb, rest @ ..] if verb == "server-cell" => server_cell::run(rest),
+        [verb, rest @ ..] if verb == "run" => round_runner::run(rest),
         [verb, rest @ ..] if verb == "evaluate" => evaluate(rest),
         [verb, rest @ ..] if verb == "plan" => workload_plan::run(rest),
         [verb, rest @ ..] if verb == "execute-requests" => requests::run(rest),

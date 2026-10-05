@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Seed {
     families: u64,
@@ -16,19 +16,19 @@ struct Seed {
     stagger_ms: f64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Input {
+pub(super) struct Input {
     schema_version: u64,
-    phase: requests::Input,
+    pub(super) phase: requests::Input,
     cache_seed: Option<Seed>,
-    server_log: PathBuf,
-    startup_timeout_secs: u64,
+    pub(super) server_log: PathBuf,
+    pub(super) startup_timeout_secs: u64,
     telemetry_timeout_secs: u64,
 }
 
 impl Input {
-    fn seed_phase(&self) -> DynResult<Option<requests::Input>> {
+    pub(super) fn seed_phase(&self) -> DynResult<Option<requests::Input>> {
         self.cache_seed
             .as_ref()
             .map(|seed| {
@@ -43,7 +43,7 @@ impl Input {
             .transpose()
     }
 
-    fn validate(&self, seed: Option<&requests::Input>) -> DynResult<()> {
+    pub(super) fn validate(&self, seed: Option<&requests::Input>) -> DynResult<()> {
         self.phase.validate()?;
         if self.schema_version != 1
             || !self.server_log.is_absolute()
@@ -52,18 +52,21 @@ impl Input {
         {
             return Err("invalid A/B cell schema, log path or deadlines".into());
         }
-        let budget = |phase: &requests::Input| {
-            phase.request_timeout_secs
-                + phase.prompts.len().saturating_sub(1) as f64 * phase.stagger_ms / 1000.0
-        };
-        let total = self.startup_timeout_secs as f64
-            + 2.0 * self.telemetry_timeout_secs as f64
-            + budget(&self.phase)
-            + seed.map_or(0.0, budget);
+        let total = self.deadline_budget(seed);
         if !total.is_finite() || total > 86400.0 {
             return Err("A/B cell exceeds the one-day deadline budget".into());
         }
         Ok(())
+    }
+    pub(super) fn deadline_budget(&self, seed: Option<&requests::Input>) -> f64 {
+        let budget = |phase: &requests::Input| {
+            phase.request_timeout_secs
+                + phase.prompts.len().saturating_sub(1) as f64 * phase.stagger_ms / 1000.0
+        };
+        self.startup_timeout_secs as f64
+            + 2.0 * self.telemetry_timeout_secs as f64
+            + budget(&self.phase)
+            + seed.map_or(0.0, budget)
     }
 }
 
@@ -105,11 +108,11 @@ fn check(cancellation: &Cancellation) -> DynResult<()> {
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Models {
     data: Vec<Model>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Model {
     id: String,
 }
