@@ -223,7 +223,21 @@ fn rejects_headless_when_models_fail() {
     let options = options(directory.path(), "headless");
     let error = command::execute(directory.path(), &options, &Cancellation::default()).unwrap_err();
     assert_eq!(
-        error.downcast_ref::<Rejected>().unwrap().reason,
-        Rejection::ProcessFailure
+        output::reason(error.as_ref()),
+        Rejection::ProcessFailure.to_string(),
+        "unexpected headless error: {error:?}; reports: {:?}",
+        output::reports(error.as_ref())
     );
+    assert_eq!(
+        std::fs::read(directory.path().join("headless-models.failed")).unwrap(),
+        b"HTTP 500"
+    );
+    assert_eq!(
+        std::fs::read(directory.path().join("overlap.observed")).unwrap(),
+        b"live"
+    );
+    let reports = output::reports(error.as_ref());
+    assert_eq!(reports.len(), 2);
+    assert_ne!(reports[0].pid, reports[1].pid);
+    assert!(reports.iter().all(|report| report.cleanup.complete));
 }

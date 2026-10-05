@@ -245,3 +245,6 @@ mod opencode_recording_proxy;
 
 #[path = "migration_lifecycle/agent_live_coding_fixture.rs"]
 mod agent_live_coding_fixture;
+
+#[path = "migration_lifecycle/workload_lane_contract.rs"]
+mod workload_lane_contract;
