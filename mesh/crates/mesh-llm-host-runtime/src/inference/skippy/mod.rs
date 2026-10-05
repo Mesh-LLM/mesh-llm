@@ -37,7 +37,7 @@ use std::{
 #[cfg(test)]
 use skippy_inference_api::CompactionConfig;
 #[cfg(test)]
-use skippy_serving::OpenAiGuardrailsTarget;
+use skippy_serving::InferenceGuardrailsTarget;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -53,7 +53,7 @@ use skippy_runtime::{ModelInfo, MtpSource};
 use skippy_serving::serving_hooks::SharedModelServingHooksFactory;
 use skippy_serving::{
     EmbeddedRuntimeOptions, EmbeddedRuntimeStatus, EmbeddedServerHandle, EmbeddedState,
-    OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, SkippyRuntimeHandle,
+    InferenceGuardrailsConfig, InferenceGuardrailsStatus, SkippyRuntimeHandle,
     binary_transport::PredictionReturnListener, binary_transport::WireCondition,
 };
 
@@ -98,7 +98,7 @@ pub(crate) use resolver::{
 };
 pub(crate) use skippy_api::family_policy;
 pub(crate) use skippy_api::family_policy::family_policy_for_stage_config;
-pub(crate) use skippy_serving::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
+pub(crate) use skippy_serving::InferenceGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;
@@ -182,7 +182,7 @@ pub(crate) struct SkippyModelStatus {
     pub(crate) n_gpu_layers: i32,
     pub(crate) flash_attn_type: FlashAttentionType,
     pub(crate) selected_device: Option<SkippyDeviceDescriptor>,
-    pub(crate) openai_guardrails: Option<OpenAiGuardrailsStatus>,
+    pub(crate) openai_guardrails: Option<InferenceGuardrailsStatus>,
     pub(crate) layer_start: u32,
     pub(crate) layer_end: u32,
     pub(crate) stage_id: String,
@@ -201,13 +201,13 @@ pub(crate) struct SkippySessionLaneStatus {
     pub(crate) token_count: Option<u64>,
 }
 
-pub(crate) fn default_skippy_openai_guardrails() -> OpenAiGuardrailsConfig {
-    OpenAiGuardrailsConfig::for_standalone_mode(
-        skippy_serving::frontend::OpenAiGuardrailsMode::default(),
+pub(crate) fn default_skippy_openai_guardrails() -> InferenceGuardrailsConfig {
+    InferenceGuardrailsConfig::for_standalone_mode(
+        skippy_serving::frontend::InferenceGuardrailsMode::default(),
     )
 }
 
-pub(crate) fn skippy_openai_guardrails_for_mode(mode: GuardrailMode) -> OpenAiGuardrailsConfig {
+pub(crate) fn skippy_openai_guardrails_for_mode(mode: GuardrailMode) -> InferenceGuardrailsConfig {
     // v1 only wraps hosted Skippy OpenAI backends constructed at the local/staged
     // seams below. MoA `model:"mesh"` arbitration and Virtual LLM consult paths
     // stay unwrapped until they adopt the backend-free guardrail core directly.
@@ -220,8 +220,8 @@ pub(crate) fn skippy_openai_guardrails_for_mode(mode: GuardrailMode) -> OpenAiGu
 
 pub(crate) fn skippy_openai_guardrails_for_policy_handle(
     policy: GuardrailPolicyHandle,
-) -> OpenAiGuardrailsConfig {
-    OpenAiGuardrailsConfig::with_policy(policy)
+) -> InferenceGuardrailsConfig {
+    InferenceGuardrailsConfig::with_policy(policy)
 }
 
 #[derive(Debug)]
@@ -234,7 +234,7 @@ struct HandleState {
 pub(crate) struct SkippyModelHandle {
     runtime: SkippyRuntimeHandle,
     backend: Arc<dyn InferenceBackend>,
-    openai_guardrails: Option<OpenAiGuardrailsConfig>,
+    openai_guardrails: Option<InferenceGuardrailsConfig>,
     config: StageConfig,
     started_at_unix_nanos: i64,
     status: Arc<Mutex<HandleState>>,
@@ -247,7 +247,7 @@ pub(crate) struct SkippyHttpHandle {
 }
 
 pub(crate) struct SkippyOpenAiGuardrailOptions {
-    config: Option<OpenAiGuardrailsConfig>,
+    config: Option<InferenceGuardrailsConfig>,
     telemetry: survey::SurveyTelemetry,
 }
 
@@ -258,7 +258,7 @@ pub(crate) use model_open_drain::{ModelOpenObservation, ModelOpenReturn, NativeM
 
 impl SkippyOpenAiGuardrailOptions {
     pub(crate) fn new(
-        config: Option<OpenAiGuardrailsConfig>,
+        config: Option<InferenceGuardrailsConfig>,
         telemetry: survey::SurveyTelemetry,
     ) -> Self {
         Self { config, telemetry }
@@ -315,16 +315,16 @@ impl SkippyModelHandle {
         self.backend.clone()
     }
 
-    pub(crate) fn openai_guardrails(&self) -> Option<OpenAiGuardrailsStatus> {
+    pub(crate) fn openai_guardrails(&self) -> Option<InferenceGuardrailsStatus> {
         self.openai_guardrails
             .as_ref()
-            .map(OpenAiGuardrailsConfig::status)
+            .map(InferenceGuardrailsConfig::status)
     }
 
     pub(crate) fn set_openai_guardrail_mode(
         &self,
         mode: GuardrailMode,
-    ) -> Option<OpenAiGuardrailsStatus> {
+    ) -> Option<InferenceGuardrailsStatus> {
         let guardrails = self.openai_guardrails.as_ref()?;
         guardrails.policy.set_mode(mode);
         Some(guardrails.status())
@@ -394,7 +394,7 @@ impl Drop for SkippyModelHandle {
 #[cfg(test)]
 fn wrap_host_guardrail_backend(
     backend: Arc<dyn InferenceBackend>,
-    openai_guardrails: Option<&OpenAiGuardrailsConfig>,
+    openai_guardrails: Option<&InferenceGuardrailsConfig>,
     context_limit_tokens: Option<usize>,
     telemetry: Option<Arc<dyn skippy_inference_api::GuardrailTelemetrySink>>,
 ) -> Arc<dyn InferenceBackend> {
@@ -508,7 +508,7 @@ fn status_from_parts(
     embedded: &EmbeddedRuntimeStatus,
     local: &HandleState,
     started_at_unix_nanos: i64,
-    openai_guardrails: Option<OpenAiGuardrailsStatus>,
+    openai_guardrails: Option<InferenceGuardrailsStatus>,
 ) -> SkippyModelStatus {
     SkippyModelStatus {
         state: match local.state {
@@ -905,7 +905,7 @@ mod tests {
             &embedded,
             &local,
             222,
-            Some(OpenAiGuardrailsStatus {
+            Some(InferenceGuardrailsStatus {
                 mode: "disabled",
                 target: "skippy",
                 streaming: "pass_through",
@@ -996,8 +996,8 @@ mod tests {
         let backend = Arc::new(RecordingHostBackend::default());
         let wrapped = wrap_host_guardrail_backend(
             backend.clone(),
-            Some(&OpenAiGuardrailsConfig {
-                target: OpenAiGuardrailsTarget::Skippy,
+            Some(&InferenceGuardrailsConfig {
+                target: InferenceGuardrailsTarget::Skippy,
                 policy: GuardrailPolicyHandle::default(),
                 compaction: Some(CompactionConfig::default()),
             }),
@@ -1041,8 +1041,8 @@ mod tests {
         let policy = GuardrailPolicyHandle::default();
         let wrapped = wrap_host_guardrail_backend(
             backend.clone(),
-            Some(&OpenAiGuardrailsConfig {
-                target: OpenAiGuardrailsTarget::Skippy,
+            Some(&InferenceGuardrailsConfig {
+                target: InferenceGuardrailsTarget::Skippy,
                 policy: policy.clone(),
                 compaction: None,
             }),

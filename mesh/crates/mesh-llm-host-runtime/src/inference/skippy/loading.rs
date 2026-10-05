@@ -302,7 +302,7 @@ impl SkippyModelHandle {
 
     fn finish_load(
         request: skippy_api::serving::ModelLoadRequest,
-        openai_guardrails: Option<OpenAiGuardrailsConfig>,
+        openai_guardrails: Option<InferenceGuardrailsConfig>,
     ) -> Result<Self> {
         let loaded = request.load()?;
         Ok(Self {
@@ -322,7 +322,7 @@ impl SkippyModelHandle {
 
     fn finish_load_with_open_events(
         mut request: skippy_api::serving::ModelLoadRequest,
-        openai_guardrails: Option<OpenAiGuardrailsConfig>,
+        openai_guardrails: Option<InferenceGuardrailsConfig>,
         model_open_events: Option<NativeModelOpenEvents>,
     ) -> Result<Self> {
         model_open_drain::observe_model_open(

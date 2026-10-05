@@ -8,8 +8,8 @@ use crate::frontend::generation::ChainPrefixRestore;
 use crate::frontend::generation::EmbeddedExecutionStats;
 use crate::frontend::generation::EmbeddedFusedFirstDecode;
 use crate::frontend::generation::EmbeddedStageZeroGeneration;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::MAX_EXACT_REPLAY_TOKENS;
-use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::sampling_cache_key::{sampling_replay_safe, sampling_semantic_fingerprint};
@@ -171,7 +171,7 @@ pub(super) fn stage0_full_prefill_record_identities(
 
 pub(super) struct EmbeddedReplayCheckpointRecord<'a> {
     pub(super) session_id: &'a str,
-    pub(super) ids: &'a OpenAiGenerationIds,
+    pub(super) ids: &'a InferenceGenerationIds,
     pub(super) prompt_token_ids: &'a [i32],
     pub(super) checkpoint_token_ids: &'a [i32],
     pub(super) predicted_tokens: &'a [i32],
@@ -210,7 +210,7 @@ impl StageOpenAiBackend {
     pub(super) fn local_kv_message_base(
         &self,
         session_id: &str,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
     ) -> MessageBase {
         MessageBase {
             schema_version: SCHEMA_VERSION,
@@ -230,7 +230,7 @@ impl StageOpenAiBackend {
     pub(super) fn evict_embedded_stage0_resident_prefix(
         &self,
         session_id: &str,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         target_tokens: Option<u64>,
     ) -> InferenceResult<()> {
         let Some(kv) = self.kv.as_ref() else {
@@ -304,7 +304,7 @@ impl StageOpenAiBackend {
     pub(super) fn restore_embedded_stage0_prefill(
         &self,
         session_id: &str,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         token_start: u64,
         token_ids: &[i32],
         activation_width: i32,
@@ -404,7 +404,7 @@ impl StageOpenAiBackend {
     pub(super) fn record_embedded_stage0_prefill(
         &self,
         session_id: &str,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         token_start: u64,
         token_ids: &[i32],
         activation_width: i32,
@@ -521,7 +521,7 @@ impl StageOpenAiBackend {
     pub(super) fn record_embedded_stage0_full_prefill(
         &self,
         session_id: &str,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         token_ids: &[i32],
     ) -> InferenceResult<bool> {
         let Some(kv) = self.kv.as_ref() else {
@@ -616,7 +616,7 @@ impl StageOpenAiBackend {
     pub(super) fn record_embedded_stage0_exact_checkpoint(
         &self,
         session_id: &str,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         checkpoint_tokens: &[i32],
         write_through_l3: bool,
     ) -> InferenceResult<bool> {
@@ -648,7 +648,7 @@ impl StageOpenAiBackend {
     pub(super) fn record_embedded_stage0_full_prompt_first_token(
         &self,
         session_id: &str,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         token_ids: &[i32],
         predicted: i32,
         sampling: &SamplingConfig,

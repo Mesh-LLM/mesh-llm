@@ -4,7 +4,7 @@ use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResul
 use skippy_runtime::{ModelWorkload, SamplingConfig};
 
 use crate::frontend::generation::{
-    GenerationCacheStats, OpenAiGenerationIds, StageOpenAiBackend, TokenControl,
+    GenerationCacheStats, InferenceGenerationIds, StageOpenAiBackend, TokenControl,
     tool_calls_requested,
 };
 use crate::frontend::util::openai_backend_error;
@@ -21,7 +21,7 @@ impl StageOpenAiBackend {
         sampling: &SamplingConfig,
         chat_request: Option<&ChatCompletionRequest>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         mut emit_token: impl FnMut(i32) -> InferenceResult<TokenControl>,
     ) -> InferenceResult<GenerationCacheStats> {
         if !self.has_unsplit_full_model_topology() {

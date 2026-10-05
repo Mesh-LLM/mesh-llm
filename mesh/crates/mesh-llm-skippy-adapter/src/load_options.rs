@@ -1,7 +1,7 @@
 //! Mesh configuration translated into Skippy preparation inputs.
 use crate::{SkippyPackageIdentity, config};
 use skippy_protocol::{FlashAttentionType, StageKvCacheConfig};
-use skippy_serving::OpenAiGuardrailsConfig;
+use skippy_serving::InferenceGuardrailsConfig;
 use skippy_serving::serving_hooks::SharedModelServingHooksFactory;
 use std::path::PathBuf;
 
@@ -58,7 +58,7 @@ pub struct SkippyModelLoadOptions {
     pub glm_dsa_policy: skippy_protocol::GlmDsaPolicy,
     pub generation_signal_window: Option<u32>,
     pub telemetry: SkippyTelemetryOptions,
-    pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
+    pub openai_guardrails: Option<InferenceGuardrailsConfig>,
     pub native_mtp_enabled: bool,
     pub serving_hooks_factory: Option<SharedModelServingHooksFactory>,
 }
@@ -112,7 +112,7 @@ impl SkippyModelLoadOptions {
             glm_dsa_policy: defaults.glm_dsa_policy,
             generation_signal_window: defaults.generation_signal_window,
             telemetry: SkippyTelemetryOptions::off(),
-            openai_guardrails: Some(OpenAiGuardrailsConfig::disabled_for_skippy()),
+            openai_guardrails: Some(InferenceGuardrailsConfig::disabled_for_skippy()),
             native_mtp_enabled: defaults.native_mtp_enabled,
             serving_hooks_factory: None,
         }
@@ -211,7 +211,7 @@ impl SkippyModelLoadOptions {
         self
     }
 
-    pub fn with_openai_guardrails(mut self, openai_guardrails: OpenAiGuardrailsConfig) -> Self {
+    pub fn with_openai_guardrails(mut self, openai_guardrails: InferenceGuardrailsConfig) -> Self {
         self.openai_guardrails = Some(openai_guardrails);
         self
     }

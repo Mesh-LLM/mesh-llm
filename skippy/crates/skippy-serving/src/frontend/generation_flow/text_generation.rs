@@ -1,6 +1,6 @@
 use crate::frontend::generation::{
-    EmbeddedStageZeroGeneration, GeneratedText, GenerationTokenLimit, LocalGeneration,
-    OpenAiBackendMode, OpenAiGenerationIds, PhaseTimer, PreparedGenerationPrompt,
+    EmbeddedStageZeroGeneration, GeneratedText, GenerationTokenLimit, InferenceBackendMode,
+    InferenceGenerationIds, LocalGeneration, PhaseTimer, PreparedGenerationPrompt,
     PreparedTextPrompt, StageOpenAiBackend, TextGenerationCollector, emulation_generation_active,
 };
 use crate::frontend::util::{generation_stop_values, openai_backend_error};
@@ -17,7 +17,7 @@ impl StageOpenAiBackend {
         &self,
         prompt: &PreparedGenerationPrompt,
         max_tokens: GenerationTokenLimit,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
     ) -> InferenceResult<PreparedTextPrompt> {
         let tokenize_timer = PhaseTimer::start();
         let token_ids = self.tokenize(&prompt.text)?;
@@ -53,13 +53,13 @@ impl StageOpenAiBackend {
         hook_request: Option<ChatCompletionRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-        ids: OpenAiGenerationIds,
+        ids: InferenceGenerationIds,
         on_text_chunk: impl FnMut(&str) -> InferenceResult<()>,
     ) -> InferenceResult<GeneratedText> {
         let payment_gate = crate::frontend::generation_gate::find(ids.frontend_request_id)?;
         if payment_gate.is_some()
             && (prompt.has_media()
-                || matches!(&self.mode, OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_some()))
+                || matches!(&self.mode, InferenceBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_some()))
         {
             return Err(InferenceError::unsupported(
                 "paid inference currently requires a single-node text model",
@@ -201,7 +201,7 @@ impl StageOpenAiBackend {
                 .with_ignore_eos(sampling.ignore_eos)
                 .with_generation_gate(payment_gate);
         let cache_stats = match self.mode.clone() {
-            OpenAiBackendMode::LocalRuntime => self.generate_local_tokens(
+            InferenceBackendMode::LocalRuntime => self.generate_local_tokens(
                 LocalGeneration {
                     prompt_token_ids: &prompt_token_ids,
                     recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids.as_deref(),
@@ -218,7 +218,7 @@ impl StageOpenAiBackend {
                 },
                 |token| collector.push_token(token),
             )?,
-            OpenAiBackendMode::EmbeddedStageZero {
+            InferenceBackendMode::EmbeddedStageZero {
                 config,
                 prefill_chunk_policy,
                 activation_width,

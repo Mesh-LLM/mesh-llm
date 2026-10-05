@@ -26,8 +26,8 @@ pub use server::{
 };
 
 pub(in crate::frontend) use cache_hints::{
-    ChainPrefixRestore, GENERATION_RETRY_AFTER_SECS, GenerationCacheStats, MAX_EXACT_REPLAY_TOKENS,
-    OpenAiCacheHints, OpenAiGenerationIds,
+    ChainPrefixRestore, GENERATION_RETRY_AFTER_SECS, GenerationCacheStats, InferenceCacheHints,
+    InferenceGenerationIds, MAX_EXACT_REPLAY_TOKENS,
 };
 pub(in crate::frontend) use concurrency::*;
 pub(in crate::frontend) use draft_runner::*;

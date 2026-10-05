@@ -353,7 +353,12 @@ fn maps_generation_exhaustion_to_length_finish_reason() {
 fn generation_ids_are_unique_under_fast_creation() {
     let ids = (0..1024)
         .map(|_| {
-            OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None)
+            InferenceGenerationIds::new_with_trust(
+                InferenceCacheHints::default(),
+                None,
+                false,
+                None,
+            )
         })
         .collect::<Vec<_>>();
     let mut sessions = std::collections::BTreeSet::new();

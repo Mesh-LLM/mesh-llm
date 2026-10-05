@@ -7,8 +7,8 @@ use crate::frontend::GenerationStart;
 use crate::frontend::generation::GeneratedText;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::GenerationTokenLimit;
-use crate::frontend::generation::OpenAiBackendMode;
-use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::InferenceBackendMode;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::PreparedGenerationPrompt;
 use crate::frontend::generation::SplitMultimodalGeneration;
@@ -86,11 +86,11 @@ impl StageOpenAiBackend {
         hook_request: Option<ChatCompletionRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-        ids: OpenAiGenerationIds,
+        ids: InferenceGenerationIds,
         on_text_chunk: impl FnMut(&str) -> InferenceResult<()>,
     ) -> InferenceResult<GeneratedText> {
         match self.mode.clone() {
-            OpenAiBackendMode::EmbeddedStageZero {
+            InferenceBackendMode::EmbeddedStageZero {
                 config,
                 activation_width,
                 downstream_wire_condition,
@@ -129,9 +129,10 @@ impl StageOpenAiBackend {
         }
 
         match &self.mode {
-            OpenAiBackendMode::LocalRuntime => {}
-            OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_none() => {}
-            OpenAiBackendMode::EmbeddedStageZero { .. } => {
+            InferenceBackendMode::LocalRuntime => {}
+            InferenceBackendMode::EmbeddedStageZero { config, .. }
+                if config.downstream.is_none() => {}
+            InferenceBackendMode::EmbeddedStageZero { .. } => {
                 return Err(InferenceError::unsupported(
                     "multimodal requests require an embedded stage-0 runtime",
                 ));

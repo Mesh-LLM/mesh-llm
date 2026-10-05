@@ -3,13 +3,13 @@ use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
 use crate::frontend::GenerationLifecycleConfig;
 use crate::frontend::GenerationReceiptConfig;
+use crate::frontend::InferenceGuardrailsConfig;
+use crate::frontend::InferenceGuardrailsStatus;
 use crate::frontend::LinearProposalIngressConfig;
-use crate::frontend::OpenAiGuardrailsConfig;
-use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationServiceEstimator;
-use crate::frontend::generation::OpenAiBackendMode;
+use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
@@ -116,7 +116,7 @@ pub struct EmbeddedOpenAiArgs {
     pub generation_receipt: Option<GenerationReceiptConfig>,
     pub generation_lifecycle: Option<GenerationLifecycleConfig>,
     pub linear_proposal_ingress: Option<LinearProposalIngressConfig>,
-    pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
+    pub openai_guardrails: Option<InferenceGuardrailsConfig>,
     pub kv_lifecycle_observer: Option<Arc<dyn crate::kv_integration::KvLifecycleObserver>>,
     /// Node-scoped durable disk-cache owner supplied by the embedding host.
     /// `None` keeps standalone and cache-disabled launches in-memory only.
@@ -183,7 +183,7 @@ pub struct EmbeddedOpenAiBackend {
     pub generation_concurrency: usize,
     pub generation_queue_capacity: usize,
     pub generation_admission_timeout_secs: u64,
-    pub openai_guardrails: Option<OpenAiGuardrailsStatus>,
+    pub openai_guardrails: Option<InferenceGuardrailsStatus>,
 }
 
 pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiRouter> {
@@ -280,7 +280,7 @@ fn embedded_openai_backend_with_scheduler(
         policy_arg: "--prefill-chunk-policy",
     })?;
     let mode = if args.config.downstream.is_none() {
-        OpenAiBackendMode::LocalRuntime
+        InferenceBackendMode::LocalRuntime
     } else {
         let lane_pool = PersistentStageLanePool::new(
             &args.config,
@@ -290,7 +290,7 @@ fn embedded_openai_backend_with_scheduler(
         )
         .context("create embedded OpenAI persistent downstream lanes")?;
         let prefill_reply_credit_limit = args.reply_credit_limit.unwrap_or(3);
-        OpenAiBackendMode::EmbeddedStageZero {
+        InferenceBackendMode::EmbeddedStageZero {
             config: args.config.clone(),
             prefill_chunk_policy,
             activation_width: args.activation_width,
@@ -378,7 +378,7 @@ fn embedded_openai_backend_with_scheduler(
     let openai_guardrails = args
         .openai_guardrails
         .as_ref()
-        .map(OpenAiGuardrailsConfig::status);
+        .map(InferenceGuardrailsConfig::status);
     let backend = args
         .openai_guardrails
         .as_ref()

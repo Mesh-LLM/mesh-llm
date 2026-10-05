@@ -543,7 +543,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         ctx_size,
-        mode: OpenAiBackendMode::EmbeddedStageZero {
+        mode: InferenceBackendMode::EmbeddedStageZero {
             config: stage0_config,
             prefill_chunk_policy: PrefillChunkPolicy::Fixed { chunk_size: 64 },
             activation_width: fixture.activation_width,

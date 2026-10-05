@@ -5,8 +5,8 @@ use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpVerifier;
 use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 use crate::frontend::generation::GenerationCacheStats;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::LocalGeneration;
-use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TokenControl;
@@ -1133,7 +1133,7 @@ impl StageOpenAiBackend {
         &self,
         runtime: &mut RuntimeState,
         cache_operation: &CacheRuntimeContext,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         session_id: &str,
         prefill_tokens: &[i32],
         lookup_identities: &[PrefillKvIdentity],

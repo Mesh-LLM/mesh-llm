@@ -14,7 +14,7 @@ use crate::frontend::{
         PersistentStageLanePool, PhaseTimer, StageOpenAiBackend, TokenControl,
     },
     generation_receipt::GenerationLifecycleState,
-    speculative::{OpenAiSpeculativeStats, SpeculativeDecodeConfig},
+    speculative::{InferenceSpeculativeStats, SpeculativeDecodeConfig},
     util::{openai_backend_error, openai_io_error},
 };
 
@@ -346,7 +346,7 @@ pub(super) struct EmbeddedDecodeSummary<'a> {
     pub(super) output_activation_bytes: usize,
     pub(super) forward_activation_bytes: usize,
     pub(super) downstream_wait_ms: f64,
-    pub(super) speculative_stats: &'a OpenAiSpeculativeStats,
+    pub(super) speculative_stats: &'a InferenceSpeculativeStats,
     pub(super) native_mtp_stats: NativeMtpStats,
     pub(super) native_mtp_counters: NativeMtpDecodeCounters,
     pub(super) native_mtp_options: NativeMtpDecodeOptions,

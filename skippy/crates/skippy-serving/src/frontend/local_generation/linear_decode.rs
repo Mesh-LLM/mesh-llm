@@ -297,7 +297,8 @@ mod tests {
     use super::*;
     use crate::frontend::admission::GenerationTokenBudget;
     use crate::frontend::generation::{
-        GenerationConcurrencyController, OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds,
+        GenerationConcurrencyController, InferenceBackendMode, InferenceCacheHints,
+        InferenceGenerationIds,
     };
     use crate::frontend::iteration_scheduler::IterationScheduler;
     use crate::frontend::linear_proposal::{
@@ -427,7 +428,7 @@ mod tests {
             default_max_tokens: 4,
             request_defaults: EmbeddedOpenAiRequestDefaults::default(),
             ctx_size: 128,
-            mode: OpenAiBackendMode::LocalRuntime,
+            mode: InferenceBackendMode::LocalRuntime,
             draft: None,
             speculative_window: 0,
             adaptive_speculative_window: false,
@@ -450,8 +451,12 @@ mod tests {
             iteration_scheduler,
         };
         let sampling = SamplingConfig::default();
-        let ids =
-            OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+        let ids = InferenceGenerationIds::new_with_trust(
+            InferenceCacheHints::default(),
+            None,
+            false,
+            None,
+        );
         let prompt_token_ids = [1, 2];
         let request = LocalGeneration {
             prompt_token_ids: &prompt_token_ids,

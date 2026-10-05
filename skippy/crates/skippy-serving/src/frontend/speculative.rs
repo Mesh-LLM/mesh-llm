@@ -609,7 +609,7 @@ mod standalone_speculative_config_tests {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct OpenAiSpeculativeStats {
+pub(super) struct InferenceSpeculativeStats {
     pub(super) windows: usize,
     pub(super) draft_tokens: usize,
     pub(super) fallback_draft_proposals: usize,
@@ -843,7 +843,7 @@ fn elapsed_us(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
-impl OpenAiSpeculativeStats {
+impl InferenceSpeculativeStats {
     pub(super) fn insert_response_timings(&self, timings: &mut BTreeMap<String, Value>) {
         timings.insert("speculative_windows".to_string(), json!(self.windows));
         timings.insert(

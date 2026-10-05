@@ -3,7 +3,7 @@ use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::ADMISSION_STARVATION_BOUND_TURNS;
-use crate::frontend::generation::OpenAiBackendMode;
+use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::runtime_state::RuntimeState;
@@ -41,8 +41,13 @@ fn test_telemetry() -> crate::telemetry::Telemetry {
     crate::telemetry::Telemetry::new(None, 1, config, crate::telemetry::TelemetryLevel::Off)
 }
 
-fn trusted_ids(session_id: &str) -> OpenAiGenerationIds {
-    OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), Some(session_id), true, None)
+fn trusted_ids(session_id: &str) -> InferenceGenerationIds {
+    InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some(session_id),
+        true,
+        None,
+    )
 }
 
 fn trusted_session_key(session_id: &str) -> String {
@@ -913,8 +918,8 @@ async fn blocking_worker_holds_global_and_session_permits_until_work_finishes() 
 #[test]
 fn untrusted_conversation_affinity_bypasses_session_registry() {
     let registry = Arc::new(Mutex::new(BTreeMap::new()));
-    let untrusted = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let untrusted = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         Some("conversation-7"),
         false,
         None,
@@ -942,7 +947,7 @@ fn direct_backend_calls_ignore_spoofed_request_trust_metadata() {
     .expect("request with spoofed metadata");
     let context = InferenceRequestContext::new();
     let ids = generation_ids(
-        OpenAiCacheHints::from_chat_request(&request),
+        InferenceCacheHints::from_chat_request(&request),
         request.agent_session(),
         &context,
     );
@@ -1230,7 +1235,7 @@ fn hooks_test_backend(hook_policy: Option<Arc<dyn InferenceHookPolicy>>) -> Stag
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         ctx_size: 128,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
@@ -1253,8 +1258,8 @@ fn hooks_test_backend(hook_policy: Option<Arc<dyn InferenceHookPolicy>>) -> Stag
 }
 
 /// Construct a stage-zero embedded topology for non-chat admission tests.
-fn embedded_non_chat_test_mode(config: skippy_protocol::StageConfig) -> OpenAiBackendMode {
-    OpenAiBackendMode::EmbeddedStageZero {
+fn embedded_non_chat_test_mode(config: skippy_protocol::StageConfig) -> InferenceBackendMode {
+    InferenceBackendMode::EmbeddedStageZero {
         config,
         prefill_chunk_policy: PrefillChunkPolicy::Fixed { chunk_size: 64 },
         activation_width: 0,
@@ -1317,7 +1322,7 @@ fn non_chat_topology_guard_rejects_staged_and_filtered_models() {
     for config in cases {
         backend.mode = embedded_non_chat_test_mode(config.clone());
         assert!(!backend.has_unsplit_full_model_topology(), "{config:?}");
-        backend.mode = OpenAiBackendMode::LocalRuntime;
+        backend.mode = InferenceBackendMode::LocalRuntime;
         backend.config = config;
         assert!(!backend.has_unsplit_full_model_topology());
         backend.config = full_config.clone();
@@ -1725,7 +1730,7 @@ fn generation_ids_carries_the_frontend_request_id_byte_equal_to_the_context() {
     let request_id = skippy_inference_api::parse_request_id("c0a801ef-2a39-4f52-99f5-bdc849127cde")
         .expect("test UUID should parse");
     let context = InferenceRequestContext::with_request_id(request_id);
-    let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+    let ids = generation_ids(InferenceCacheHints::default(), None, &context);
     assert_eq!(
         ids.frontend_request_id,
         Some(request_id.as_uuid().into_bytes())
@@ -1735,7 +1740,7 @@ fn generation_ids_carries_the_frontend_request_id_byte_equal_to_the_context() {
 #[test]
 fn generation_ids_leaves_frontend_request_id_absent_for_a_non_frontend_context() {
     let context = InferenceRequestContext::new();
-    let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+    let ids = generation_ids(InferenceCacheHints::default(), None, &context);
     assert_eq!(ids.frontend_request_id, None);
 }
 
@@ -1761,8 +1766,8 @@ fn identity_config() -> skippy_protocol::StageConfig {
 #[test]
 fn openai_identity_attrs_carry_the_frontend_request_uuid_when_present() {
     let expected = uuid::Uuid::new_v4();
-    let ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         None,
         false,
         Some(*expected.as_bytes()),
@@ -1785,7 +1790,8 @@ fn openai_identity_attrs_carry_the_frontend_request_uuid_when_present() {
 /// ones.
 #[test]
 fn openai_identity_attrs_omit_the_frontend_request_uuid_without_one() {
-    let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+    let ids =
+        InferenceGenerationIds::new_with_trust(InferenceCacheHints::default(), None, false, None);
 
     let attrs = openai_identity_attrs(&identity_config(), "test-backend", &ids);
 
@@ -1806,8 +1812,8 @@ fn embedded_forward_seam_emits_error_event_on_write_failure() {
         endpoint: "10.0.0.3:50052".to_string(),
     });
     let expected = uuid::Uuid::new_v4();
-    let ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         None,
         false,
         Some(*expected.as_bytes()),
@@ -1870,7 +1876,8 @@ fn embedded_forward_seam_emits_nothing_on_success() {
         stage_index: 2,
         endpoint: "10.0.0.3:50052".to_string(),
     });
-    let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+    let ids =
+        InferenceGenerationIds::new_with_trust(InferenceCacheHints::default(), None, false, None);
     let (telemetry, rx) = crate::telemetry::Telemetry::captured(
         config.clone(),
         crate::telemetry::TelemetryLevel::Summary,
@@ -1917,8 +1924,8 @@ fn lane_checkout_connect_failure_emits_connect_event() {
             .to_string(),
     });
     let expected = uuid::Uuid::new_v4();
-    let ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         None,
         false,
         Some(*expected.as_bytes()),

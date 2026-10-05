@@ -99,7 +99,7 @@ impl StageOpenAiBackend {
     pub(super) fn cleanup_local_generation_session(
         &self,
         session_id: &str,
-        ids: &crate::frontend::generation::OpenAiGenerationIds,
+        ids: &crate::frontend::generation::InferenceGenerationIds,
     ) {
         let scheduler_session_id = session_id.to_string();
         if let Ok(outcome) =

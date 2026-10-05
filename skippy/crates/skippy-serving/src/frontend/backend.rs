@@ -16,9 +16,9 @@ use crate::frontend::generation::GenerationSessionLockEntry;
 use crate::frontend::generation::GenerationStream;
 use crate::frontend::generation::GenerationStreamEvent;
 use crate::frontend::generation::GenerationTokenLimit;
-use crate::frontend::generation::OpenAiBackendMode;
-use crate::frontend::generation::OpenAiCacheHints;
-use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::InferenceBackendMode;
+use crate::frontend::generation::InferenceCacheHints;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::PreparedGenerationPrompt;
 use crate::frontend::generation::PreparedTextPrompt;
@@ -405,7 +405,7 @@ impl Drop for GenerationSessionPermit {
     }
 }
 
-fn trusted_generation_session_key(ids: &OpenAiGenerationIds) -> Option<String> {
+fn trusted_generation_session_key(ids: &InferenceGenerationIds) -> Option<String> {
     ids.agent_session_trusted.then(|| ids.session_id_string())
 }
 
@@ -434,7 +434,7 @@ impl GenerationAdmissionController {
     #[cfg(test)]
     async fn acquire(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,
         admission_timeout: Duration,
     ) -> InferenceResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
@@ -450,7 +450,7 @@ impl GenerationAdmissionController {
     #[cfg(test)]
     async fn acquire_work(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,
         admission_timeout: Duration,
         work: GenerationAdmissionWork,
@@ -467,7 +467,7 @@ impl GenerationAdmissionController {
 
     async fn acquire_scheduled_work(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,
         admission_timeout: Duration,
         work: GenerationAdmissionWork,
@@ -508,7 +508,7 @@ impl GenerationAdmissionController {
 
     async fn acquire_session_until(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         deadline: Option<Instant>,
         admission_timeout: Duration,
         cancellation: &skippy_inference_api::CancellationToken,
@@ -800,7 +800,7 @@ fn insert_generation_admission_attrs(
 fn openai_identity_attrs(
     config: &StageConfig,
     backend_label: &str,
-    ids: &OpenAiGenerationIds,
+    ids: &InferenceGenerationIds,
 ) -> BTreeMap<String, Value> {
     let mut attrs = lifecycle_attrs(config);
     attrs.insert(
@@ -838,11 +838,11 @@ fn openai_identity_attrs(
 /// wire ids, plus the same intended-downstream identity and error chain.
 pub(super) fn openai_downstream_error_attrs(
     config: &StageConfig,
-    ids: &OpenAiGenerationIds,
+    ids: &InferenceGenerationIds,
     error: &str,
 ) -> BTreeMap<String, Value> {
     let mut attrs =
-        openai_identity_attrs(config, OpenAiBackendMode::EMBEDDED_STAGE_ZERO_LABEL, ids);
+        openai_identity_attrs(config, InferenceBackendMode::EMBEDDED_STAGE_ZERO_LABEL, ids);
     if let Some(downstream) = &config.downstream {
         crate::binary_transport::binary_messaging::insert_downstream_identity(
             &mut attrs, downstream,
@@ -861,7 +861,7 @@ pub(super) fn openai_downstream_error_attrs(
 pub(super) fn write_downstream_or_emit_forward_error(
     telemetry: &Telemetry,
     config: &StageConfig,
-    ids: &OpenAiGenerationIds,
+    ids: &InferenceGenerationIds,
     write_start_unix_nanos: u64,
     write: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
@@ -876,14 +876,14 @@ pub(super) fn write_downstream_or_emit_forward_error(
 }
 
 fn generation_ids(
-    cache: OpenAiCacheHints,
+    cache: InferenceCacheHints,
     agent_session_id: Option<&str>,
     context: &InferenceRequestContext,
-) -> OpenAiGenerationIds {
+) -> InferenceGenerationIds {
     let frontend_request_id = context
         .request_id()
         .map(|request_id| request_id.as_uuid().into_bytes());
-    OpenAiGenerationIds::new_with_trust(
+    InferenceGenerationIds::new_with_trust(
         cache,
         agent_session_id,
         context.has_trusted_agent_session(),
@@ -941,7 +941,7 @@ impl InferenceBackend for StageOpenAiBackend {
         context: InferenceRequestContext,
     ) -> InferenceResult<ChatCompletionResponse> {
         let ids = generation_ids(
-            OpenAiCacheHints::from_chat_request(&request),
+            InferenceCacheHints::from_chat_request(&request),
             request.agent_session(),
             &context,
         );
@@ -1067,7 +1067,7 @@ impl InferenceBackend for StageOpenAiBackend {
         context: InferenceRequestContext,
     ) -> InferenceResult<ChatCompletionStream> {
         let ids = generation_ids(
-            OpenAiCacheHints::from_chat_request(&request),
+            InferenceCacheHints::from_chat_request(&request),
             request.agent_session(),
             &context,
         );
@@ -1167,7 +1167,7 @@ impl InferenceBackend for StageOpenAiBackend {
         context: InferenceRequestContext,
     ) -> InferenceResult<CompletionResponse> {
         let ids = generation_ids(
-            OpenAiCacheHints::from_completion_request(&request),
+            InferenceCacheHints::from_completion_request(&request),
             request.agent_session(),
             &context,
         );
@@ -1259,7 +1259,7 @@ impl InferenceBackend for StageOpenAiBackend {
         context: InferenceRequestContext,
     ) -> InferenceResult<CompletionStream> {
         let ids = generation_ids(
-            OpenAiCacheHints::from_completion_request(&request),
+            InferenceCacheHints::from_completion_request(&request),
             request.agent_session(),
             &context,
         );
@@ -1344,7 +1344,7 @@ impl InferenceBackend for StageOpenAiBackend {
             })??;
         let prompt_tokens = token_inputs.iter().map(Vec::len).sum::<usize>();
         let max_input_tokens = token_inputs.iter().map(Vec::len).max().unwrap_or_default();
-        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let ids = generation_ids(InferenceCacheHints::default(), None, &context);
         let cancellation = context.cancellation_token();
         let embeddings = self
             .run_local_workload(
@@ -1381,7 +1381,7 @@ impl InferenceBackend for StageOpenAiBackend {
         self.ensure_model(&request.model)?;
         self.ensure_local_workload(ModelWorkload::Rerank)?;
         let prompt_tokens_estimate = non_chat::rerank_prompt_tokens_estimate(&request)?;
-        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let ids = generation_ids(InferenceCacheHints::default(), None, &context);
         let cancellation = context.cancellation_token();
         let query = request.query.clone();
         let documents = request.documents.clone();
@@ -1471,7 +1471,7 @@ impl InferenceBackend for StageOpenAiBackend {
         }
         let content_type = request.response_format.content_type().to_string();
         let prompt_tokens_estimate = request.input.len().div_ceil(3).max(1);
-        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let ids = generation_ids(InferenceCacheHints::default(), None, &context);
         let cancellation = context.clone();
         let config = SpeechSynthesisConfig {
             prompt: request.input,
@@ -1517,7 +1517,7 @@ impl InferenceBackend for StageOpenAiBackend {
 impl StageOpenAiBackend {
     async fn acquire_generation_admission(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,
         work: GenerationAdmissionWork,
         scheduling: GenerationAdmissionScheduling,
@@ -1564,7 +1564,7 @@ impl StageOpenAiBackend {
     fn generation_admission_scheduling(
         &self,
         prepared_text: Option<&PreparedTextPrompt>,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
     ) -> GenerationAdmissionScheduling {
         let Some(prepared) = prepared_text else {
             return GenerationAdmissionScheduling::default();
@@ -1616,7 +1616,7 @@ impl StageOpenAiBackend {
         ))
     }
 
-    pub(super) fn openai_attrs(&self, ids: &OpenAiGenerationIds) -> BTreeMap<String, Value> {
+    pub(super) fn openai_attrs(&self, ids: &InferenceGenerationIds) -> BTreeMap<String, Value> {
         openai_identity_attrs(&self.config, self.mode.label(), ids)
     }
 
@@ -1848,7 +1848,7 @@ impl StageOpenAiBackend {
         sampling: SamplingConfig,
         hook_request: Option<ChatCompletionRequest>,
         context: InferenceRequestContext,
-        ids: OpenAiGenerationIds,
+        ids: InferenceGenerationIds,
     ) -> InferenceResult<GeneratedText> {
         let (prompt, prepared_text) = if prompt.has_media() {
             (prompt, None)
@@ -1943,7 +1943,7 @@ impl StageOpenAiBackend {
         parse_chat_output: bool,
         emit_reasoning: bool,
         context: InferenceRequestContext,
-        ids: OpenAiGenerationIds,
+        ids: InferenceGenerationIds,
     ) -> InferenceResult<GenerationStream> {
         let (prompt, prepared_text) = if prompt.has_media() {
             (prompt, None)

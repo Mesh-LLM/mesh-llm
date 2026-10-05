@@ -85,8 +85,8 @@ impl StageOpenAiBackend {
         // whether model execution is distributed.
         is_unsplit(&self.config)
             && match &self.mode {
-                OpenAiBackendMode::LocalRuntime => true,
-                OpenAiBackendMode::EmbeddedStageZero { config, .. } => is_unsplit(config),
+                InferenceBackendMode::LocalRuntime => true,
+                InferenceBackendMode::EmbeddedStageZero { config, .. } => is_unsplit(config),
             }
     }
 
@@ -142,7 +142,7 @@ impl StageOpenAiBackend {
             chat_request.logit_bias.as_ref(),
             &chat_request.extra,
         )?;
-        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let ids = generation_ids(InferenceCacheHints::default(), None, &context);
         let output = self
             .run_generation(
                 prompt,
@@ -225,7 +225,7 @@ impl StageOpenAiBackend {
     pub(super) async fn run_local_workload<T, F>(
         &self,
         context: InferenceRequestContext,
-        ids: OpenAiGenerationIds,
+        ids: InferenceGenerationIds,
         prompt_tokens: usize,
         work: F,
     ) -> InferenceResult<T>

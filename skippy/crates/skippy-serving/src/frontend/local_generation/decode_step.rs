@@ -14,10 +14,10 @@ use super::token_generation::{DecodeState, decode_native_mtp};
 impl StageOpenAiBackend {
     pub(in crate::frontend) fn generation_signal_window_tokens(&self) -> u32 {
         match &self.mode {
-            crate::frontend::OpenAiBackendMode::EmbeddedStageZero { config, .. } => {
+            crate::frontend::InferenceBackendMode::EmbeddedStageZero { config, .. } => {
                 config.generation_signal_window.unwrap_or(16)
             }
-            crate::frontend::OpenAiBackendMode::LocalRuntime => {
+            crate::frontend::InferenceBackendMode::LocalRuntime => {
                 self.config.generation_signal_window.unwrap_or(16)
             }
         }

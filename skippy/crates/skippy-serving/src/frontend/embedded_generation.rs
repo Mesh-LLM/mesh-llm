@@ -21,8 +21,9 @@ use crate::binary_transport::{
 use crate::frontend::embedded_execution::{StaleWindowDiscard, VerifyRetirement};
 use crate::frontend::request::wire_sampling_config;
 use crate::frontend::speculative::{
-    OpenAiSpeculativeStats, classify_verify_window_with_threshold, propose_configured_ngram_tokens,
-    verify_checkpoint_no_longer_needed, verify_inputs_for_proposals,
+    InferenceSpeculativeStats, classify_verify_window_with_threshold,
+    propose_configured_ngram_tokens, verify_checkpoint_no_longer_needed,
+    verify_inputs_for_proposals,
 };
 use crate::frontend::util::{ms_to_us, openai_backend_error, openai_io_error, saturating_u32};
 use crate::frontend::wire_messages::{
@@ -814,7 +815,7 @@ impl StageOpenAiBackend {
             } else {
                 max_speculative_window
             };
-            let mut speculative_stats = OpenAiSpeculativeStats {
+            let mut speculative_stats = InferenceSpeculativeStats {
                 adaptive_window_start: adaptive_window,
                 adaptive_window_final: adaptive_window,
                 adaptive_window_max: max_speculative_window,
@@ -827,7 +828,7 @@ impl StageOpenAiBackend {
                 },
                 adaptive_window_max_seen: adaptive_window,
                 adaptive_window_enabled: request.adaptive_speculative_window,
-                ..OpenAiSpeculativeStats::default()
+                ..InferenceSpeculativeStats::default()
             };
             let mut draft_guard = match request.draft.as_ref() {
                 Some(draft) if request.speculative_window > 0 => {

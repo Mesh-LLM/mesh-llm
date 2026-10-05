@@ -17,7 +17,7 @@ use skippy_runtime::{
     DecisionRequest, DecisionValue,
 };
 
-use crate::frontend::{OpenAiBackendMode, StageOpenAiBackend};
+use crate::frontend::{InferenceBackendMode, StageOpenAiBackend};
 
 mod laya;
 
@@ -45,11 +45,13 @@ impl StageOpenAiBackend {
     fn validate_system_one_request(&self, request: &SystemOneRequest) -> InferenceResult<()> {
         validate_request_fields(request, &self.model_id)?;
         match &self.mode {
-            OpenAiBackendMode::LocalRuntime => Ok(()),
-            OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_none() => {
+            InferenceBackendMode::LocalRuntime => Ok(()),
+            InferenceBackendMode::EmbeddedStageZero { config, .. }
+                if config.downstream.is_none() =>
+            {
                 Ok(())
             }
-            OpenAiBackendMode::EmbeddedStageZero { .. } => Err(InferenceError::unsupported(
+            InferenceBackendMode::EmbeddedStageZero { .. } => Err(InferenceError::unsupported(
                 "System One reads currently require a complete model on one Skippy worker",
             )),
         }

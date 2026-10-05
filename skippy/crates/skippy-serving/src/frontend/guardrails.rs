@@ -1,6 +1,6 @@
 /// Compatibility behavior selected by the embedding application.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum OpenAiGuardrailsMode {
+pub enum InferenceGuardrailsMode {
     #[default]
     Disabled,
     Metrics,
@@ -20,11 +20,11 @@ use skippy_inference_api::StreamingGuardrailMode;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenAiGuardrailsTarget {
+pub enum InferenceGuardrailsTarget {
     Skippy,
 }
 
-impl OpenAiGuardrailsTarget {
+impl InferenceGuardrailsTarget {
     const fn as_status_label(self) -> &'static str {
         match self {
             Self::Skippy => "skippy",
@@ -33,17 +33,17 @@ impl OpenAiGuardrailsTarget {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct OpenAiGuardrailsConfig {
-    pub target: OpenAiGuardrailsTarget,
+pub struct InferenceGuardrailsConfig {
+    pub target: InferenceGuardrailsTarget,
     pub policy: GuardrailPolicyHandle,
     pub compaction: Option<CompactionConfig>,
 }
 
-impl OpenAiGuardrailsConfig {
+impl InferenceGuardrailsConfig {
     /// Shared serving policy: automatic chat compaction and operator-selected guardrails.
     pub fn with_policy(policy: GuardrailPolicyHandle) -> Self {
         Self {
-            target: OpenAiGuardrailsTarget::Skippy,
+            target: InferenceGuardrailsTarget::Skippy,
             policy,
             compaction: Some(CompactionConfig {
                 enabled: true,
@@ -68,11 +68,11 @@ impl OpenAiGuardrailsConfig {
         )
     }
 
-    pub fn for_standalone_mode(mode: OpenAiGuardrailsMode) -> Self {
+    pub fn for_standalone_mode(mode: InferenceGuardrailsMode) -> Self {
         match mode {
-            OpenAiGuardrailsMode::Disabled => Self::disabled_for_skippy(),
-            OpenAiGuardrailsMode::Metrics => Self::compatibility_for_skippy(),
-            OpenAiGuardrailsMode::Enforce => Self::with_policy(
+            InferenceGuardrailsMode::Disabled => Self::disabled_for_skippy(),
+            InferenceGuardrailsMode::Metrics => Self::compatibility_for_skippy(),
+            InferenceGuardrailsMode::Enforce => Self::with_policy(
                 GuardrailPolicy {
                     mode: GuardrailMode::Enforce,
                     apply_to_all_models: true,
@@ -83,9 +83,9 @@ impl OpenAiGuardrailsConfig {
         }
     }
 
-    pub fn status(&self) -> OpenAiGuardrailsStatus {
+    pub fn status(&self) -> InferenceGuardrailsStatus {
         let policy = self.policy.snapshot();
-        OpenAiGuardrailsStatus {
+        InferenceGuardrailsStatus {
             mode: guardrail_mode_label(policy.mode),
             target: self.target.as_status_label(),
             streaming: streaming_mode_label(policy.streaming_mode),
@@ -98,7 +98,7 @@ impl OpenAiGuardrailsConfig {
     }
 
     fn should_wrap_guardrail_backend(&self) -> bool {
-        matches!(self.target, OpenAiGuardrailsTarget::Skippy)
+        matches!(self.target, InferenceGuardrailsTarget::Skippy)
     }
 
     #[cfg(test)]
@@ -151,7 +151,7 @@ impl OpenAiGuardrailsConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct OpenAiGuardrailsStatus {
+pub struct InferenceGuardrailsStatus {
     pub mode: &'static str,
     pub target: &'static str,
     pub streaming: &'static str,

@@ -85,8 +85,8 @@ impl InferenceBackend for StructuredGuardrailRecordingBackend {
 #[tokio::test]
 async fn guarded_structured_output_is_not_rejected_by_runtime_feature_guard() {
     let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
-    let guardrails = OpenAiGuardrailsConfig {
-        target: OpenAiGuardrailsTarget::Skippy,
+    let guardrails = InferenceGuardrailsConfig {
+        target: InferenceGuardrailsTarget::Skippy,
         policy: GuardrailPolicy {
             mode: GuardrailMode::Enforce,
             apply_to_all_models: true,
@@ -129,22 +129,24 @@ async fn guarded_structured_output_is_not_rejected_by_runtime_feature_guard() {
 
 #[test]
 fn standalone_guardrail_modes_have_expected_policies() {
-    let metrics =
-        OpenAiGuardrailsConfig::for_standalone_mode(crate::frontend::OpenAiGuardrailsMode::Metrics)
-            .status();
+    let metrics = InferenceGuardrailsConfig::for_standalone_mode(
+        crate::frontend::InferenceGuardrailsMode::Metrics,
+    )
+    .status();
     assert_eq!(metrics.mode, "metrics");
     assert_eq!(metrics.retry_exhaustion, "pass_last_text");
     assert_eq!(metrics.small_model_policy, "all");
 
-    let enforce =
-        OpenAiGuardrailsConfig::for_standalone_mode(crate::frontend::OpenAiGuardrailsMode::Enforce)
-            .status();
+    let enforce = InferenceGuardrailsConfig::for_standalone_mode(
+        crate::frontend::InferenceGuardrailsMode::Enforce,
+    )
+    .status();
     assert_eq!(enforce.mode, "enforce");
     assert_eq!(enforce.retry_exhaustion, "error");
     assert_eq!(enforce.small_model_policy, "all");
 
-    let disabled = OpenAiGuardrailsConfig::for_standalone_mode(
-        crate::frontend::OpenAiGuardrailsMode::Disabled,
+    let disabled = InferenceGuardrailsConfig::for_standalone_mode(
+        crate::frontend::InferenceGuardrailsMode::Disabled,
     )
     .status();
     assert_eq!(disabled.mode, "disabled");
@@ -154,8 +156,8 @@ fn standalone_guardrail_modes_have_expected_policies() {
 #[tokio::test]
 async fn compaction_wraps_skippy_backend_even_when_guardrails_are_disabled() {
     let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
-    let guardrails = OpenAiGuardrailsConfig {
-        target: OpenAiGuardrailsTarget::Skippy,
+    let guardrails = InferenceGuardrailsConfig {
+        target: InferenceGuardrailsTarget::Skippy,
         policy: GuardrailPolicy::default().into(),
         compaction: Some(CompactionConfig::default()),
     };
@@ -181,8 +183,8 @@ async fn compaction_wraps_skippy_backend_even_when_guardrails_are_disabled() {
 async fn disabled_skippy_guardrail_wrapper_can_be_enabled_live() {
     let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
     let policy: skippy_inference_api::GuardrailPolicyHandle = GuardrailPolicy::default().into();
-    let guardrails = OpenAiGuardrailsConfig {
-        target: OpenAiGuardrailsTarget::Skippy,
+    let guardrails = InferenceGuardrailsConfig {
+        target: InferenceGuardrailsTarget::Skippy,
         policy: policy.clone(),
         compaction: None,
     };
@@ -220,8 +222,8 @@ async fn disabled_skippy_guardrail_wrapper_can_be_enabled_live() {
 #[tokio::test]
 async fn compaction_wraps_skippy_backend_with_runtime_context_limit() {
     let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
-    let guardrails = OpenAiGuardrailsConfig {
-        target: OpenAiGuardrailsTarget::Skippy,
+    let guardrails = InferenceGuardrailsConfig {
+        target: InferenceGuardrailsTarget::Skippy,
         policy: GuardrailPolicy::default().into(),
         compaction: Some(CompactionConfig {
             enabled: true,
@@ -248,8 +250,8 @@ async fn compaction_wraps_skippy_backend_with_runtime_context_limit() {
 #[tokio::test]
 async fn compaction_and_guardrails_can_stack() {
     let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
-    let guardrails = OpenAiGuardrailsConfig {
-        target: OpenAiGuardrailsTarget::Skippy,
+    let guardrails = InferenceGuardrailsConfig {
+        target: InferenceGuardrailsTarget::Skippy,
         policy: GuardrailPolicy {
             mode: GuardrailMode::Enforce,
             apply_to_all_models: true,
@@ -295,22 +297,22 @@ async fn compaction_and_guardrails_can_stack() {
 
 #[test]
 fn serving_defaults_preserve_chat_compaction_for_every_guardrail_mode() {
-    use crate::frontend::OpenAiGuardrailsMode;
+    use crate::frontend::InferenceGuardrailsMode;
     assert_eq!(
-        OpenAiGuardrailsMode::default(),
-        OpenAiGuardrailsMode::Disabled
+        InferenceGuardrailsMode::default(),
+        InferenceGuardrailsMode::Disabled
     );
     for mode in [
-        OpenAiGuardrailsMode::Disabled,
-        OpenAiGuardrailsMode::Metrics,
-        OpenAiGuardrailsMode::Enforce,
+        InferenceGuardrailsMode::Disabled,
+        InferenceGuardrailsMode::Metrics,
+        InferenceGuardrailsMode::Enforce,
     ] {
-        let config = OpenAiGuardrailsConfig::for_standalone_mode(mode);
+        let config = InferenceGuardrailsConfig::for_standalone_mode(mode);
         assert!(config.compaction.unwrap().enabled);
     }
-    let default = OpenAiGuardrailsConfig::disabled_for_skippy();
+    let default = InferenceGuardrailsConfig::disabled_for_skippy();
     assert_eq!(
         default,
-        OpenAiGuardrailsConfig::for_standalone_mode(OpenAiGuardrailsMode::default())
+        InferenceGuardrailsConfig::for_standalone_mode(InferenceGuardrailsMode::default())
     );
 }

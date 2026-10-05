@@ -1,6 +1,6 @@
 use crate::binary_transport::connect_binary_downstream;
 use crate::binary_transport::send_client_ready_hello_if_enabled;
-use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::prefill::PrefillChunkObservation;
 use crate::frontend::util::openai_backend_error;
@@ -109,7 +109,7 @@ impl PersistentStageLanePool {
 
     pub(in crate::frontend) fn checkout(
         &self,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
     ) -> InferenceResult<PersistentStageLane> {
         let timer = PhaseTimer::start();
         let lane = {

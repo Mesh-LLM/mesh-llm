@@ -70,7 +70,7 @@ impl StageOpenAiBackend {
     pub(in crate::frontend) fn enqueue_exact_state_record_at_tokens(
         &self,
         session_id: &str,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         checkpoint_tokens: Vec<i32>,
         decision_prefix: &'static str,
         write_through_l3: bool,
@@ -145,7 +145,7 @@ impl StageOpenAiBackend {
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         checkpoint_tokens: &[i32],
         decision_prefix: &str,
         write_through_l3: bool,

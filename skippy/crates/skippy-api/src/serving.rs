@@ -20,7 +20,7 @@ const BUILTIN_PREFILL_ADAPTIVE_TARGET_MS: f64 =
 const DEFAULT_NATIVE_MTP_MAX_TOKENS: usize = skippy_config::local_serving::NATIVE_MTP_DRAFT_TOKENS;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct OpenAiOptions {
+pub struct InferenceOptions {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
@@ -51,7 +51,7 @@ pub struct OpenAiOptions {
     pub downstream_connect_timeout_secs: u64,
 }
 
-impl OpenAiOptions {
+impl InferenceOptions {
     pub fn direct_single_stage_defaults(
         model_id: String,
         default_max_tokens: u32,
