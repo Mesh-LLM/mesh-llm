@@ -110,6 +110,7 @@ pub(crate) enum CliCommand<'a> {
     AgentRecordingProxy(&'a [String]),
     AgenticPromptManifest(&'a [String]),
     WaitingPrefix(&'a [String]),
+    EventBenchmarkComparison(&'a [String]),
     NativeRuntimeEvidence(&'a [String]),
     FamilyBatteryPolicy(&'a [String]),
     FamilyModelIdentity(&'a [String]),
@@ -209,6 +210,11 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "event-benchmark-compare" =>
+            {
+                CliCommand::EventBenchmarkComparison(rest)
+            }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "waiting-prefix" => {
                 CliCommand::WaitingPrefix(rest)
             }

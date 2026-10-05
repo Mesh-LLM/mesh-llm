@@ -159,3 +159,6 @@ fn migration_cli_unicode_path_with_spaces_is_not_reparsed() -> TestResult {
     fs::remove_dir(&path)?;
     Ok(())
 }
+
+#[path = "migration_cli/event_benchmark_comparison.rs"]
+mod event_benchmark_comparison;

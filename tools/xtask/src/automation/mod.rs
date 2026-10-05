@@ -26,6 +26,7 @@ mod codepoint_json;
 pub(crate) mod cohort_identity;
 pub(crate) mod control_plane_qa;
 pub(crate) mod daemon_lifecycle;
+pub(crate) mod event_benchmark_comparison;
 pub(crate) mod family_battery_policy;
 pub(crate) mod family_model_identity;
 pub(crate) mod laya;

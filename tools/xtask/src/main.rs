@@ -57,6 +57,9 @@ fn run() -> DynResult<()> {
         cli::CliCommand::AgentFixtureInputs(rest) => automation::agent_fixture_inputs::run(rest),
         cli::CliCommand::AgentRecordingProxy(rest) => automation::agent_recording_proxy::run(rest),
         cli::CliCommand::WaitingPrefix(rest) => automation::waiting_prefix::run(rest),
+        cli::CliCommand::EventBenchmarkComparison(rest) => {
+            automation::event_benchmark_comparison::run(rest)
+        }
         cli::CliCommand::AgenticPromptManifest(rest) => {
             automation::agentic_prompt_manifest::run(rest)
         }
