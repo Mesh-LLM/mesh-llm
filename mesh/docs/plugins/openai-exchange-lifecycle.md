@@ -17,6 +17,11 @@ or call identity services. Host-owned in-process runners use a private duplex
 connection. Ordinary plugins without lifecycle declarations keep their existing
 protocol behavior.
 
+Lifecycle callbacks and body-stream negotiation require an authenticated,
+successfully initialized declaration on the connection generation receiving
+them. Cached declarations from a disconnected generation cannot authorize a
+replacement connection, including when grants were added after startup.
+
 ## Manifest requests and operator grants
 
 The optional manifest `openai_exchange_hook` names a handler and requests

@@ -25,6 +25,7 @@ mod exchange_request;
 #[cfg(test)]
 mod exchange_request_tests;
 mod identity_artifact;
+mod lifecycle_readiness;
 mod socket_auth;
 
 pub(crate) struct ExternalPlugin {
@@ -51,6 +52,8 @@ pub(crate) struct ExternalPlugin {
 
 pub(crate) struct PluginRuntime {
     pub(crate) generation: u64,
+    pub(crate) authenticated_peer: bool,
+    pub(crate) initialized_lifecycle: Option<Box<proto::OpenAiExchangeHookManifest>>,
     pub(crate) _child: Option<Child>,
     connection_task: tokio::task::JoinHandle<()>,
     pub(crate) outbound_tx: mpsc::Sender<proto::Envelope>,
@@ -301,6 +304,8 @@ impl ExternalPlugin {
         ));
         *self.runtime.lock().await = Some(PluginRuntime {
             generation,
+            authenticated_peer,
+            initialized_lifecycle: None,
             _child: child,
             connection_task,
             outbound_tx,
@@ -569,8 +574,8 @@ impl ExternalPlugin {
                     self.spec.name
                 )
             })?;
-        *self.server_info.lock().await = Some(server_info.clone());
-        *self.manifest.lock().await = init.manifest.clone();
+        self.publish_initialized_state(generation, &init, server_info.clone())
+            .await?;
 
         let tools = init
             .manifest
@@ -608,25 +613,6 @@ impl ExternalPlugin {
 
     pub(crate) async fn manifest_snapshot(&self) -> Option<proto::PluginManifest> {
         self.manifest.lock().await.clone()
-    }
-
-    pub(crate) async fn open_stream(
-        &self,
-        request: proto::OpenStreamRequest,
-    ) -> Result<proto::OpenStreamResponse> {
-        let response = self
-            .request(proto::envelope::Payload::OpenStreamRequest(request))
-            .await?;
-        match response.payload {
-            Some(proto::envelope::Payload::OpenStreamResponse(resp)) => Ok(resp),
-            Some(proto::envelope::Payload::ErrorResponse(err)) => {
-                Err(plugin_error(&self.spec.name, "open_stream", &err))
-            }
-            _ => bail!(
-                "Plugin '{}' returned an unexpected payload for 'open_stream'",
-                self.spec.name
-            ),
-        }
     }
 
     pub(crate) async fn list_tools(&self) -> Result<Vec<ToolSummary>> {
@@ -1320,6 +1306,8 @@ pub(crate) mod tests {
         let (outbound_tx, _outbound_rx) = mpsc::channel(1);
         *plugin.runtime.lock().await = Some(PluginRuntime {
             generation,
+            authenticated_peer: true,
+            initialized_lifecycle: None,
             _child: Some(child),
             connection_task: tokio::spawn(std::future::pending::<()>()),
             outbound_tx,
@@ -1886,6 +1874,8 @@ pub(crate) mod tests {
         let (outbound_tx, outbound_rx) = mpsc::channel(1);
         *plugin.runtime.lock().await = Some(PluginRuntime {
             generation: 1,
+            authenticated_peer: true,
+            initialized_lifecycle: None,
             _child: Some(child),
             connection_task: tokio::spawn(std::future::pending::<()>()),
             outbound_tx: outbound_tx.clone(),

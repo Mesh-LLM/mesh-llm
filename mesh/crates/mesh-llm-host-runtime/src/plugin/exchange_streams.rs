@@ -17,6 +17,7 @@ const COPY_CHUNK: usize = 16 * 1024;
 pub(super) async fn open_body_stream(
     manager: &PluginManager,
     name: &str,
+    declaration: &proto::OpenAiExchangeHookManifest,
     exchange_id: &str,
     kind: &str,
     expected_bytes: Option<u64>,
@@ -26,13 +27,14 @@ pub(super) async fn open_body_stream(
     tokio::select! {
         biased;
         _ = revision.changed() => bail!("observer body grant was revoked"),
-        stream = open_body_stream_granted(manager, name, exchange_id,kind,expected_bytes,deadline) => stream,
+        stream = open_body_stream_granted(manager, name, declaration, exchange_id,kind,expected_bytes,deadline) => stream,
     }
 }
 
 async fn open_body_stream_granted(
     manager: &PluginManager,
     name: &str,
+    declaration: &proto::OpenAiExchangeHookManifest,
     exchange_id: &str,
     kind: &str,
     expected_bytes: Option<u64>,
@@ -41,8 +43,7 @@ async fn open_body_stream_granted(
     let stream_id = uuid::Uuid::new_v4().to_string();
     let response = tokio::time::timeout_at(
         deadline,
-        manager.open_stream(
-            name,
+        manager.inner.plugins.get(name).context("observer plugin missing")?.open_lifecycle_stream(
             proto::OpenStreamRequest {
                 stream_id: stream_id.clone(),
                 purpose: proto::StreamPurpose::HttpResponseBody as i32,
@@ -57,6 +58,7 @@ async fn open_body_stream_granted(
                 expected_bytes,
                 idle_timeout_ms: Some(30_000),
             },
+            declaration,
         ),
     )
     .await??;
@@ -84,6 +86,7 @@ async fn open_body_stream_granted(
 pub(super) async fn send_request_body(
     manager: &PluginManager,
     name: &str,
+    declaration: &proto::OpenAiExchangeHookManifest,
     exchange_id: &str,
     kind: &str,
     bytes: &[u8],
@@ -93,13 +96,14 @@ pub(super) async fn send_request_body(
     tokio::select! {
         biased;
         _ = revision.changed() => bail!("observer body grant was revoked"),
-        result = send_request_body_granted(manager,name,exchange_id,kind,bytes,deadline) => result,
+        result = send_request_body_granted(manager,name,declaration,exchange_id,kind,bytes,deadline) => result,
     }
 }
 
 async fn send_request_body_granted(
     manager: &PluginManager,
     name: &str,
+    declaration: &proto::OpenAiExchangeHookManifest,
     exchange_id: &str,
     kind: &str,
     bytes: &[u8],
@@ -108,6 +112,7 @@ async fn send_request_body_granted(
     let mut stream = open_body_stream(
         manager,
         name,
+        declaration,
         exchange_id,
         kind,
         Some(bytes.len() as u64),
@@ -255,25 +260,31 @@ impl ResponseCopies {
             {
                 continue;
             }
-            subscriptions.push((name, grant, revision));
+            subscriptions.push((
+                name,
+                grant,
+                revision,
+                manifest.openai_exchange_hook.unwrap(),
+            ));
         }
         let deadline = (Instant::now()
             + Duration::from_millis(
                 subscriptions
                     .iter()
-                    .map(|(_, grant, _)| grant.deadline_ms)
+                    .map(|(_, grant, _, _)| grant.deadline_ms)
                     .min()
                     .unwrap_or(1),
             ))
         .min(outer_deadline);
         let mut tasks = FuturesUnordered::new();
-        for (name, grant, revision) in subscriptions {
+        for (name, grant, revision, declaration) in subscriptions {
             tasks.push(async move {
                 let permit = ResponsePermit::acquire(manager, name, grant.max_in_flight);
                 let stream = if permit.is_some() {
                     open_body_stream(
                         manager,
                         name,
+                        &declaration,
                         event["exchange_id"].as_str().unwrap_or_default(),
                         "openai_exchange_response",
                         None,

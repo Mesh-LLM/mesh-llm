@@ -20,6 +20,10 @@ async fn running_observer() -> (Arc<ExternalPlugin>, mpsc::Receiver<super::proto
     let (outbound_tx, outbound_rx) = mpsc::channel(4);
     *plugin.runtime.lock().await = Some(PluginRuntime {
         generation: 7,
+        authenticated_peer: true,
+        initialized_lifecycle: Some(Box::new(
+            mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe"),
+        )),
         _child: None,
         connection_task: tokio::spawn(std::future::pending()),
         outbound_tx,
@@ -44,7 +48,11 @@ async fn assert_running_without_pending(plugin: &ExternalPlugin) {
 async fn exchange_deadline_sends_once_without_restarting_observer() {
     let (plugin, mut outbound) = running_observer().await;
     let result = plugin
-        .invoke_exchange_service("observe", "{}", Instant::now() + Duration::from_millis(20))
+        .invoke_exchange_service(
+            &mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe"),
+            "{}",
+            Instant::now() + Duration::from_millis(20),
+        )
         .await;
     assert!(result.is_err());
     assert!(outbound.try_recv().is_ok());
@@ -68,7 +76,11 @@ async fn cancelled_exchange_removes_only_its_pending_request() {
     let task_plugin = plugin.clone();
     let task = tokio::spawn(async move {
         task_plugin
-            .invoke_exchange_service("observe", "{}", Instant::now() + Duration::from_secs(60))
+            .invoke_exchange_service(
+                &mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe"),
+                "{}",
+                Instant::now() + Duration::from_secs(60),
+            )
             .await
     });
     outbound.recv().await.unwrap();

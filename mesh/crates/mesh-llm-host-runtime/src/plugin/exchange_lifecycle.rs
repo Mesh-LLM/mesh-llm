@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use skippy_inference_api::wire_bytes::{WireBytesCommitment, WireBytesObserver, commit_wire_bytes};
 use tokio::time::Instant;
 
-use super::PluginManager;
+use super::{PluginManager, proto};
 #[path = "exchange_metadata.rs"]
 mod exchange_metadata;
 #[path = "exchange_terminal_completion.rs"]
@@ -312,8 +312,8 @@ impl PluginManager {
             if grant.endpoints.iter().any(|v| v == endpoint)
                 && grant.phases.iter().any(|v| v == phase)
             {
-                let handler = manifest.openai_exchange_hook.unwrap().handler;
-                subscriptions.push((name, plugin, handler, grant, revision));
+                let declaration = manifest.openai_exchange_hook.unwrap();
+                subscriptions.push((name, plugin, declaration, grant, revision));
             }
         }
         // All policies share one absolute host deadline. No serial timeout multiplication.
@@ -329,7 +329,7 @@ impl PluginManager {
             deadline = deadline.min(outer);
         }
         let mut tasks = FuturesUnordered::new();
-        for (name, plugin, handler, grant, mut revision) in subscriptions {
+        for (name, plugin, declaration, grant, mut revision) in subscriptions {
             let projected = project_event(event.clone(), &grant, name);
             tasks.push(async move {
                 let unavailable = {
@@ -345,7 +345,7 @@ impl PluginManager {
                 let decision = tokio::select! {
                     biased;
                     _ = revision.changed() => Err(HookFailure::EvidenceUnavailable),
-                    decision = invoke_phase(self, plugin, name, &handler, projected, &grant, (phase, deadline)) => decision,
+                    decision = invoke_phase(self, plugin, name, &declaration, projected, &grant, (phase, deadline)) => decision,
                 };
                 permit.complete(decision.is_ok());
                 decision.map_or_else(|failure| failed_policy_reason(&grant,failure), |decision| phase_result(name, decision))
@@ -426,7 +426,7 @@ async fn invoke_phase(
     manager: &PluginManager,
     plugin: &super::ExternalPlugin,
     name: &str,
-    handler: &str,
+    declaration: &proto::OpenAiExchangeHookManifest,
     mut event: Value,
     grant: &OpenAiExchangeGrant,
     phase_deadline: (&str, Instant),
@@ -445,6 +445,7 @@ async fn invoke_phase(
         super::exchange_streams::send_request_body(
             manager,
             name,
+            declaration,
             event["exchange_id"].as_str().ok_or(HookFailure::Internal)?,
             kind,
             &bytes,
@@ -460,7 +461,7 @@ async fn invoke_phase(
     }
     let input = serde_json::to_string(&event).map_err(|_| HookFailure::Internal)?;
     let reply = plugin
-        .invoke_exchange_service(handler, &input, deadline)
+        .invoke_exchange_service(declaration, &input, deadline)
         .await
         .map_err(|_| HookFailure::Internal)?;
     if reply.is_error || reply.output_json.len() > 32 * 1024 {
