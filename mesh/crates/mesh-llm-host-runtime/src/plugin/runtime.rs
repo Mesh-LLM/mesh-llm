@@ -625,56 +625,6 @@ impl ExternalPlugin {
         })
     }
 
-    /// `None` waits indefinitely; the caller owns cancellation.
-    pub(crate) async fn call_tool_with_timeout(
-        &self,
-        tool_name: &str,
-        arguments_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ToolCallResult> {
-        let response = self
-            .invoke_service(
-                proto::ServiceKind::Operation,
-                tool_name,
-                arguments_json,
-                timeout,
-            )
-            .await?;
-        Ok(ToolCallResult {
-            content_json: response.output_json,
-            is_error: response.is_error,
-        })
-    }
-
-    pub(crate) async fn invoke_service(
-        &self,
-        kind: proto::ServiceKind,
-        service_name: &str,
-        input_json: &str,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::InvokeServiceResponse> {
-        let response = self
-            .request_with_timeout(
-                proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
-                    kind: kind as i32,
-                    service_name: service_name.to_string(),
-                    input_json: input_json.to_string(),
-                }),
-                timeout,
-            )
-            .await?;
-        match response.payload {
-            Some(proto::envelope::Payload::InvokeServiceResponse(resp)) => Ok(resp),
-            Some(proto::envelope::Payload::ErrorResponse(err)) => {
-                Err(plugin_error(&self.spec.name, "invoke_service", &err))
-            }
-            _ => bail!(
-                "Plugin '{}' returned an unexpected payload for 'invoke_service'",
-                self.spec.name
-            ),
-        }
-    }
-
     pub(crate) async fn mcp_request<T, P>(&self, method: &str, params: P) -> Result<T>
     where
         T: serde::de::DeserializeOwned,

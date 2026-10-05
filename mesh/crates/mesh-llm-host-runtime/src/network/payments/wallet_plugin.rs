@@ -38,6 +38,7 @@ use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
 use crate::plugin::PluginManager;
+use crate::plugin::operations::TransportReplay;
 
 pub mod selection;
 
@@ -234,7 +235,17 @@ impl PluginWalletProvider {
             .map_err(|err| WalletError::invalid(format!("encode {operation}: {err}")))?;
         let result = self
             .plugin_manager
-            .invoke_operation_with_timeout(&self.plugin_name, operation, &input, timeout)
+            .invoke_operation_with_replay(
+                &self.plugin_name,
+                operation,
+                &input,
+                timeout,
+                if operation == ops::PAY {
+                    TransportReplay::Never
+                } else {
+                    TransportReplay::Allow
+                },
+            )
             .await
             .map_err(|err| {
                 WalletError::new(
@@ -329,8 +340,9 @@ impl WalletProvider for PluginWalletProvider {
         match self.call::<_, Transaction>(ops::PAY, &request, None).await {
             Ok(transaction) => Ok(transaction),
             Err(error) if error.kind == WalletErrorKind::NotOpen => {
-                // `not_open` is emitted before the plugin touches the wallet, so
-                // nothing was submitted. Re-open once, then retry exactly once;
+                // A structured `not_open` from this unreplayed attempt means no
+                // submission occurred. This does not hold across lost/replayed
+                // attempts. Re-open once, then retry exactly once;
                 // a second `not_open` is treated as uncertain rather than looped.
                 self.open_and_pin().await.map_err(PayError::NotSubmitted)?;
                 self.call::<_, Transaction>(ops::PAY, &request, None)

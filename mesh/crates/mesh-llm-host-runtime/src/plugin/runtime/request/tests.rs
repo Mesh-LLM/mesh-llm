@@ -56,7 +56,18 @@ async fn exercise(operation: &str, replay: bool) {
         })
     };
     let plugin = crate::plugin::runtime::tests::in_process_plugin("replay-fixture", runner);
-    let result = plugin.call_tool_with_timeout(operation, "{}", None).await;
+    let result = plugin
+        .call_tool_with_replay(
+            operation,
+            "{}",
+            None,
+            if replay {
+                TransportReplay::Allow
+            } else {
+                TransportReplay::Never
+            },
+        )
+        .await;
     assert_eq!(result.is_ok(), replay);
     assert_eq!(calls.load(Ordering::SeqCst), if replay { 2 } else { 1 });
     assert_eq!(starts.load(Ordering::SeqCst), if replay { 2 } else { 1 });
