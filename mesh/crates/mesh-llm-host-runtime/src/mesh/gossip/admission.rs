@@ -2,19 +2,33 @@
 
 use super::{AnnouncedPeerContext, EndpointAddr, EndpointId, Node, PeerAnnouncement, Result};
 
+/// Returns the single announcement the authenticated remote made for itself.
+///
+/// The frame must carry exactly one entry for the direct sender. `apply_announced_peers`
+/// validates the direct announcement once and then applies every entry as already
+/// validated, so a duplicate self-entry could be admitted without re-running the direct
+/// mesh requirements. Rejecting duplicates up front keeps the validated entry and the
+/// applied entry the same object.
 fn direct_announcement(
     announcements: &[(EndpointAddr, PeerAnnouncement)],
     remote: EndpointId,
 ) -> Result<&PeerAnnouncement> {
-    announcements
+    let mut direct = announcements
         .iter()
-        .find_map(|(addr, ann)| (addr.id == remote).then_some(ann))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "gossip payload from {} omitted its direct announcement",
-                remote.fmt_short()
-            )
-        })
+        .filter_map(|(addr, ann)| (addr.id == remote).then_some(ann));
+    let announcement = direct.next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "gossip payload from {} omitted its direct announcement",
+            remote.fmt_short()
+        )
+    })?;
+    if direct.next().is_some() {
+        anyhow::bail!(
+            "gossip payload from {} contains multiple direct announcements",
+            remote.fmt_short()
+        );
+    }
+    Ok(announcement)
 }
 
 impl Node {
