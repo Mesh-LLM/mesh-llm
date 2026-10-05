@@ -929,6 +929,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn installer_loads_published_v078_catalog_without_a_bundle() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../skippy-native-runtime/tests/fixtures/native-runtimes-v0.78.0.json");
+        let options = NativeRuntimeManifestOptions {
+            release_version: "0.78.0".into(),
+            manifest_path: Some(path),
+            manifest_url: None,
+            bundle_dirs: Vec::new(),
+            allow_default_manifest_url: false,
+            ..test_manifest_options()
+        };
+        let manifest = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(load_release_manifest(options))
+            .unwrap();
+        assert_eq!(manifest.release_version, "0.78.0");
+        assert_eq!(manifest.skippy_abi, current_skippy_abi_version());
+        assert_eq!(manifest.artifacts.len(), 13);
+    }
+
     /// Writes a runtime bundle directory for `artifact`: its manifest plus
     /// placeholder library files.
     fn write_bundle(dir: &Path, artifact: &NativeRuntimeArtifact) {
