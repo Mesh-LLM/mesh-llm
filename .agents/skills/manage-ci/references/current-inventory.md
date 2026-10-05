@@ -1539,3 +1539,15 @@ cleanup. `waiting_prefix_acceptance` is selected by the normal integration roste
 for offline request/telemetry summary, round aggregation, acceptance and reports.
 No runner placement, cache authority, permissions or external dataset/model
 operations change. Existing model-backed and platform gates remain required.
+
+The `audit-pr-authority-verified` composite is prepared for a future protected
+pre-checkout caller cutover. It downloads only the declared same-run artifact ID,
+requires protected producer source SHA and independent binary digest, checks
+producer runner OS/architecture against the consumer, and verifies inert bytes
+before invoking `ci-ops pr-authority-audit`. It has no artifact-name fallback,
+compiler, Python interpreter, or caller-provided executable path. Its local
+fixtures exercise admission, substitution failures, and the actual Rust policy
+command. The existing 27 pinned `audit-depot-pr-isolation` callers remain
+transitional until each has a native protected producer dependency and the
+replacement action is published at a reviewed protected commit. Local fixtures
+do not establish hosted artifact transport or provider isolation.
