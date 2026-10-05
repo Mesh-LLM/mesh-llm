@@ -99,3 +99,9 @@ mod discovery {
 
     include!("gossip/discovery.rs");
 }
+
+mod owner_admission {
+    use super::*;
+
+    include!("gossip/owner_admission.rs");
+}
