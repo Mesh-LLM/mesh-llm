@@ -5,7 +5,10 @@
 > purposes only and are still being explored.
 
 These maintainer references describe wallet boundaries and evidence expectations,
-not a wallet setup guide or a record of private test systems.
+not a record of private test systems.
+
+For operators, start with [external wallet setup and existing-state adoption](SETUP.md):
+installation, profile-relative storage, funding, spending policy and sending.
 
 - [Lightning payments specification](../../specs/lightning-payments.md) — payment
   behavior and current limitations, including

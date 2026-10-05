@@ -107,8 +107,16 @@ outstanding depends on the pinned wallet; do not delete the pin by hand.
 
 Lexe is distributed as the external `lexe-wallet` plugin
 ([Mesh-LLM/lexe-wallet](https://github.com/Mesh-LLM/lexe-wallet)), Lexe 0.1.24
-on mainnet. Build or install its binary, then register it like any external
-plugin in `config.toml`:
+on mainnet. Install its released native plugin and restart the node:
+
+```sh
+mesh-llm plugins install Mesh-LLM/lexe-wallet
+```
+
+Follow the [operator setup guide](../plugins/wallet/SETUP.md) before opening an
+existing wallet. It covers the config-parent-relative directory, preservation
+of existing state, funding, policy and sending. A manually installed executable
+can instead be registered like any external plugin in `config.toml`:
 
 ```toml
 [[plugin]]

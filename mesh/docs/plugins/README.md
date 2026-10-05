@@ -8,6 +8,7 @@ As implementation lands, this document should be updated to match the intended e
 
 Plugin-specific documentation:
 
+- [External wallet setup](wallet/SETUP.md) - install lexe-wallet, preserve existing state, fund and set policy
 - [Wallet engineering notes](wallet/README.md) - wallet boundaries, evidence provenance, and fixture expectations
 
 - [DwarfStar (ds4)](dwarfstar.md) - run ds4 models (DeepSeek V4 Flash and others) on Apple Silicon with a bundled alternative engine
