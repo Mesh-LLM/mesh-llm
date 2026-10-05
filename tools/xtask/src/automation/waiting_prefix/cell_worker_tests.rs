@@ -78,3 +78,59 @@ fn preexisting_cancellation_cannot_issue_readiness_or_seed_requests() {
         std::io::ErrorKind::WouldBlock
     );
 }
+
+#[test]
+fn collector_admission_requires_matching_fields_and_extends_the_worker_budget() {
+    let base: Input = serde_json::from_value(input()).unwrap();
+    let seed = base.seed_phase().unwrap();
+    let original = base.deadline_budget(seed.as_ref());
+    let mut document = input();
+    document["metrics"] = json!({"http":"http://127.0.0.1:18080",
+        "otlp_grpc":"http://127.0.0.1:14317","run_id":"fixture-run","timeout_secs":2});
+    let incomplete: Input = serde_json::from_value(document.clone()).unwrap();
+    assert!(incomplete.validate(seed.as_ref()).is_err());
+    document["metrics_directory"] = json!(std::env::temp_dir());
+    let admitted: Input = serde_json::from_value(document).unwrap();
+    admitted.validate(seed.as_ref()).unwrap();
+    assert_eq!(admitted.deadline_budget(seed.as_ref()), original + 2.0);
+}
+
+fn summaries(attributes: &[serde_json::Value]) -> telemetry_log::Events {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.log");
+    std::fs::write(&path, b"").unwrap();
+    let cursor = telemetry_log::snapshot(&path).unwrap();
+    let mut bytes = Vec::new();
+    for attributes in attributes {
+        serde_json::to_writer(
+            &mut bytes,
+            &json!({"event":"stage.openai_generation_summary","attributes":attributes}),
+        )
+        .unwrap();
+        bytes.push(b'\n');
+    }
+    std::fs::write(&path, bytes).unwrap();
+    telemetry_log::collect(&path, &cursor, attributes.len())
+        .unwrap()
+        .unwrap()
+        .events
+}
+
+#[test]
+fn collector_uses_server_request_ids_and_refuses_missing_or_duplicated_ids() {
+    let good = summaries(&[
+        json!({"skippy.request_id":"server-42"}),
+        json!({"skippy.request_id":"server-99"}),
+    ]);
+    assert_eq!(measured_ids(&good).unwrap(), ["server-42", "server-99"]);
+    for attrs in [
+        vec![json!({})],
+        vec![json!({"skippy.request_id":42})],
+        vec![
+            json!({"skippy.request_id":"same"}),
+            json!({"skippy.request_id":"same"}),
+        ],
+    ] {
+        assert!(measured_ids(&summaries(&attrs)).is_err());
+    }
+}

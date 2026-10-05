@@ -58,7 +58,7 @@ fn round_aggregation_preserves_failed_percentiles_and_refuses_duplicate_rounds()
     assert!(
         report::render(&rows, &acceptance)
             .unwrap()
-            .contains("| TTFT p50 ms | n/a | 5.0 | n/a |")
+            .contains("| Client TTFT p50 ms | n/a | 5.0 | n/a |")
     );
     let duplicated = serde_json::json!({"cells": [input["cells"][0], input["cells"][0]]});
     assert!(aggregation::aggregate(serde_json::from_value(duplicated).unwrap()).is_err());
@@ -231,7 +231,7 @@ fn unavailable_measured_percentiles_remain_nullable_in_json_and_report() {
     assert!(
         report::render(&rows, &acceptance)
             .unwrap()
-            .contains("| TTFT p50 ms | n/a | 5.0 | n/a |")
+            .contains("| Client TTFT p50 ms | n/a | 5.0 | n/a |")
     );
     assert!(serde_json::to_value(&rows).unwrap()[0]["ttft_ms_p50_median"].is_null());
 }

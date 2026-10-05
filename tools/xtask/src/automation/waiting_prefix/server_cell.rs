@@ -1,5 +1,5 @@
 //! Retained ownership of a pinned stage server and its isolated measurement worker.
-use super::{cell_worker, options, publish, stage_config, telemetry_sink};
+use super::{cell_worker, metrics_client, options, publish, stage_config, telemetry_sink};
 use crate::process::retained::{
     Action, Context, Coordinator, ExpectedExit, Launch, MemberId, MemberState, Report,
 };
@@ -7,7 +7,7 @@ use crate::process::{
     Completion, Limits, ObservedLine, OutputFiles, ProbeDecision, ProcessSpec, Readiness, Value,
 };
 use crate::{
-    automation::{private_state::PrivateState, retained_session},
+    automation::{command_interrupt::Interrupt, private_state::PrivateState},
     command::DynResult,
 };
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ pub(super) struct Input {
     binary_sha256: String,
     native_runtime_root: PathBuf,
     stage: stage_config::Input,
-    worker: cell_worker::Input,
+    pub(super) worker: cell_worker::Input,
     admission_concurrency: u64,
     execution_timeout_secs: u64,
 }
@@ -49,7 +49,14 @@ impl Input {
         self.stage.validate()?;
         let seed = self.worker.seed_phase()?;
         self.worker.validate(seed.as_ref())?;
-        if self.worker.deadline_budget(seed.as_ref()) >= self.execution_timeout_secs as f64 {
+        let create_budget = self
+            .worker
+            .metrics
+            .as_ref()
+            .map_or(0.0, |endpoint| endpoint.timeout_secs as f64);
+        if self.worker.deadline_budget(seed.as_ref()) + create_budget
+            >= self.execution_timeout_secs as f64
+        {
             return Err(
                 "server deadline must cover readiness, seed, measured requests and telemetry"
                     .into(),
@@ -122,6 +129,19 @@ struct Owner {
     telemetry: Option<telemetry_sink::Sink>,
 }
 
+impl Owner {
+    fn bind_deadline(&mut self, remaining: Duration) -> DynResult<()> {
+        if remaining.is_zero() {
+            return Err("server cell deadline expired during collector creation".into());
+        }
+        for launch in [&mut self.server, &mut self.worker].into_iter().flatten() {
+            launch.readiness_deadline = launch.readiness_deadline.min(remaining);
+        }
+        self.policy = ExpectedExit::new(&[0, 1], remaining)?;
+        Ok(())
+    }
+}
+
 impl Coordinator for Owner {
     type Rejection = String;
     fn line(&mut self, member: MemberId, line: ObservedLine<'_>) -> ProbeDecision<String> {
@@ -179,6 +199,7 @@ struct Receipt {
     worker_status: Option<i32>,
     infrastructure_clean: bool,
     error: Option<String>,
+    collector_run_id: Option<String>,
 }
 
 impl Receipt {
@@ -224,7 +245,7 @@ fn launches(input: &Input, directory: &Path, state: &PrivateState, port: u16) ->
         "SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH".into(),
         Value::Public("1".into()),
     );
-    let arguments = vec![
+    let mut arguments = vec![
         "serve-openai".into(),
         "--config".into(),
         directory.join("stage.json").into_os_string(),
@@ -235,6 +256,12 @@ fn launches(input: &Input, directory: &Path, state: &PrivateState, port: u16) ->
         "--telemetry-level".into(),
         "debug".into(),
     ];
+    if let Some(metrics) = &input.worker.metrics {
+        arguments.extend([
+            "--metrics-otlp-grpc".into(),
+            metrics.otlp_grpc.clone().into(),
+        ]);
+    }
     let server = Launch {
         member: MemberId::Seed,
         spec: ProcessSpec {
@@ -280,6 +307,48 @@ fn launches(input: &Input, directory: &Path, state: &PrivateState, port: u16) ->
     })
 }
 
+fn session(input: &Input, owner: &mut Owner, directory: &Path, receipt: &mut Receipt) {
+    let interrupt = match Interrupt::install() {
+        Ok(interrupt) => interrupt,
+        Err(error) => {
+            receipt.fail(error);
+            return;
+        }
+    };
+    let cancellation = interrupt.cancellation();
+    let started = std::time::Instant::now();
+    let result = (|| -> DynResult<()> {
+        if let Some(endpoint) = &input.worker.metrics {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let mut config: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(directory.join("stage.json"))?)?;
+            config["measurement_request_count"] =
+                serde_json::json!(input.worker.phase.prompts.len());
+            config["seed_request_count"] = serde_json::json!(
+                input
+                    .worker
+                    .seed_phase()?
+                    .map_or(0, |phase| phase.prompts.len())
+            );
+            runtime.block_on(metrics_client::create(endpoint, &config, &cancellation))?;
+        }
+        let remaining =
+            Duration::from_secs(input.execution_timeout_secs).saturating_sub(started.elapsed());
+        owner.bind_deadline(remaining)?;
+        let report = crate::process::retained::run(owner, &limits(remaining), &cancellation)?;
+        receipt.observe(&report);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        receipt.fail(error);
+    }
+    if let Err(error) = interrupt.finish() {
+        receipt.fail(error);
+    }
+}
+
 pub(super) fn run(args: &[String]) -> DynResult<()> {
     let opts = options(
         args,
@@ -295,9 +364,17 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     let port = reservation.local_addr()?.port();
     input.worker.phase.base_url = format!("http://127.0.0.1:{port}/v1");
     input.worker.server_log = directory.join("server.log");
+    if input.worker.metrics.is_some() {
+        input.worker.metrics_directory = Some(directory.clone());
+    }
+    let mut stage: serde_json::Value =
+        serde_json::from_slice(&stage_config::prepare(&mut input.stage)?)?;
+    if let Some(endpoint) = &input.worker.metrics {
+        stage["run_id"] = serde_json::json!(endpoint.run_id);
+    }
     publish(
         &directory.join("stage.json"),
-        &stage_config::prepare(&mut input.stage)?,
+        &serde_json::to_vec_pretty(&stage)?,
     )?;
     publish(
         &directory.join("worker-input.json"),
@@ -308,20 +385,19 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     let mut owner = launches(&input, &directory, &state, port)?;
     let mut receipt = Receipt {
         schema_version: 1,
-        binary_sha256: input.binary_sha256,
+        binary_sha256: input.binary_sha256.clone(),
         model_identity: identity,
         worker_status: None,
         infrastructure_clean: false,
         error: None,
+        collector_run_id: input
+            .worker
+            .metrics
+            .as_ref()
+            .map(|endpoint| endpoint.run_id.clone()),
     };
     drop(reservation);
-    match retained_session::run(
-        &mut owner,
-        &limits(Duration::from_secs(input.execution_timeout_secs)),
-    ) {
-        Ok(report) => receipt.observe(&report),
-        Err(error) => receipt.fail(error),
-    }
+    session(&input, &mut owner, &directory, &mut receipt);
     if let Some(sink) = &mut owner.telemetry
         && let Err(error) = sink.finish()
     {

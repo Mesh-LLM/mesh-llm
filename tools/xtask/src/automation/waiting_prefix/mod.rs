@@ -2,6 +2,9 @@
 mod acceptance;
 mod aggregation;
 mod cell_worker;
+mod metrics_client;
+mod metrics_correlation;
+mod metrics_summary;
 mod native_identity;
 mod report;
 mod requests;

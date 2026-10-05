@@ -1,7 +1,7 @@
 //! Full pinned old/new comparison, retaining every cell and failure.
 use super::{
-    acceptance, aggregation, native_identity, options, publish, report, rounds, server_cell,
-    synthetic_prompts, telemetry, workload_plan,
+    acceptance, aggregation, metrics_client, metrics_correlation, metrics_summary, native_identity,
+    options, publish, report, rounds, server_cell, synthetic_prompts, telemetry, workload_plan,
 };
 use crate::{
     command::DynResult,
@@ -63,6 +63,9 @@ struct Input {
     startup_timeout_secs: u64,
     telemetry_timeout_secs: u64,
     cell_timeout_secs: u64,
+    metrics_http: String,
+    metrics_otlp_grpc: String,
+    metrics_timeout_secs: u64,
 }
 
 struct Prepared {
@@ -143,6 +146,26 @@ fn prepare(mut input: Input) -> DynResult<Prepared> {
 }
 
 impl Prepared {
+    fn collector(
+        &self,
+        round: u64,
+        version: acceptance::Version,
+    ) -> DynResult<metrics_client::Endpoint> {
+        // Fresh entropy per prepared cell invocation; never share old/new run IDs.
+        let version = match version {
+            acceptance::Version::Old => "old",
+            acceptance::Version::New => "new",
+        };
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).map_err(|_| "collector run identity entropy unavailable")?;
+        let nonce = hex::encode(random);
+        Ok(metrics_client::Endpoint {
+            http: self.input.metrics_http.clone(),
+            otlp_grpc: self.input.metrics_otlp_grpc.clone(),
+            run_id: format!("waiting-prefix-{round}-{version}-{nonce}"),
+            timeout_secs: self.input.metrics_timeout_secs,
+        })
+    }
     fn binary(&self, version: acceptance::Version) -> &Binary {
         match version {
             acceptance::Version::Old => &self.input.old,
@@ -161,6 +184,7 @@ impl Prepared {
                 "lane_count":workload.lanes,"n_gpu_layers":self.input.n_gpu_layers,"payload":self.input.payload,
                 "cache_entries":workload.cache_entries},
             "worker":{"schema_version":1,"server_log":std::env::temp_dir().join("owned-pending.log"),
+                "metrics":self.collector(round,version)?,"metrics_directory":std::env::temp_dir(),
                 "cache_seed":self.plan.cache_seed,"startup_timeout_secs":self.input.startup_timeout_secs,
                 "telemetry_timeout_secs":self.input.telemetry_timeout_secs,
                 "phase":{"schema_version":1,"round":round,"version":version,"base_url":"http://127.0.0.1:1/v1",
@@ -193,6 +217,7 @@ struct Comparison<'a> {
     provided_native_runtime_sha256: &'a str,
     cells: Vec<CellRecord>,
     aggregate: Vec<acceptance::Aggregate>,
+    collector_summary: Vec<metrics_summary::Summary>,
     acceptance: Option<acceptance::Acceptance>,
     error: Option<String>,
 }
@@ -262,10 +287,14 @@ fn execute(
             &prepared.input.native_runtime_sha256,
         )?;
         let input = directory.with_extension("input.json");
-        publish(
-            &input,
-            &serde_json::to_vec_pretty(&prepared.cell(round, version)?)?,
+        let cell = prepared.cell(round, version)?;
+        let collector = serde_json::to_value(
+            cell.worker
+                .metrics
+                .as_ref()
+                .ok_or("missing admitted collector")?,
         )?;
+        publish(&input, &serde_json::to_vec_pretty(&cell)?)?;
         let spec = owner_spec(&input, directory)?;
         let limits = Limits {
             execution: Duration::from_secs(prepared.input.cell_timeout_secs + 80),
@@ -298,6 +327,7 @@ fn execute(
         if lifecycle["infrastructure_clean"] != true
             || lifecycle["worker_status"] != 0
             || !lifecycle["error"].is_null()
+            || lifecycle["collector_run_id"] != collector["run_id"]
         {
             return Err("cell lifecycle did not prove clean measurement".into());
         }
@@ -305,6 +335,14 @@ fn execute(
             .evidence
             .as_ref()
             .ok_or("cell owner produced no measured evidence")?;
+        if evidence["collector"]["endpoint"] != collector
+            || evidence["collector"]["timings"].as_array().map(Vec::len)
+                != usize::try_from(prepared.plan.requests_per_round).ok()
+        {
+            return Err(
+                "cell collector identity or measured timing census differs from admission".into(),
+            );
+        }
         if evidence["round"] != round
             || evidence["version"] != serde_json::to_value(version)?
             || evidence["model"] != prepared.input.model_id
@@ -328,6 +366,8 @@ fn finish(comparison: &mut Comparison<'_>, prepared: &Prepared, directory: &Path
         &prepared.input.native_runtime_sha256,
     )?;
     let mut cells = Vec::<telemetry::Cell>::new();
+    let mut old_timings = Vec::new();
+    let mut new_timings = Vec::new();
     for record in &comparison.cells {
         if record.error.is_some() {
             return Err("A/B comparison contains failed cell ownership or measurement".into());
@@ -340,6 +380,12 @@ fn finish(comparison: &mut Comparison<'_>, prepared: &Prepared, directory: &Path
         if cell.round != record.round || cell.version != record.version {
             return Err("measured summary identity differs from its scheduled cell".into());
         }
+        let timings: Vec<metrics_correlation::Timing> =
+            serde_json::from_value(raw["collector"]["timings"].clone())?;
+        match record.version {
+            acceptance::Version::Old => old_timings.push(timings),
+            acceptance::Version::New => new_timings.push(timings),
+        }
         cells.push(cell);
     }
     rounds::complete(
@@ -350,7 +396,12 @@ fn finish(comparison: &mut Comparison<'_>, prepared: &Prepared, directory: &Path
     comparison.aggregate = aggregation::aggregate(aggregation::Input { cells })?;
     let contract = serde_json::from_value(prepared.plan.hardware_acceptance.clone())?;
     let acceptance = acceptance::evaluate(&comparison.aggregate, &contract)?;
-    let markdown = report::render(&comparison.aggregate, &acceptance)?;
+    comparison.collector_summary = vec![
+        metrics_summary::summarize(acceptance::Version::Old, &old_timings)?,
+        metrics_summary::summarize(acceptance::Version::New, &new_timings)?,
+    ];
+    let mut markdown = report::render(&comparison.aggregate, &acceptance)?;
+    markdown.push_str(&metrics_summary::render(&comparison.collector_summary)?);
     let passed = acceptance.passed;
     comparison.acceptance = Some(acceptance);
     publish(&directory.join("report.md"), markdown.as_bytes())?;
@@ -393,6 +444,7 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
         provided_native_runtime_sha256: &prepared.input.native_runtime_sha256,
         cells: Vec::new(),
         aggregate: Vec::new(),
+        collector_summary: Vec::new(),
         acceptance: None,
         error: None,
     };

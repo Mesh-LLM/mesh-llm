@@ -2,6 +2,20 @@
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command};
 
+#[path = "metrics_collector_fixture.rs"]
+mod metrics_collector;
+use metrics_collector::{Collector, Mode};
+
+fn fixture(directory: &Path, model: &str, mode: Mode) -> (Value, Collector) {
+    let collector = Collector::start(mode);
+    let mut input = input(directory, model);
+    input["metrics_http"] = json!(collector.http);
+    input["metrics_otlp_grpc"] = json!("http://127.0.0.1:14317");
+    input["metrics_timeout_secs"] = json!(2);
+    input["cell_timeout_secs"] = json!(12);
+    (input, collector)
+}
+
 fn input(directory: &Path, model: &str) -> Value {
     let owner = super::server_cell::document(directory, model);
     let stage = &owner["stage"];
@@ -53,7 +67,7 @@ fn comparison(directory: &Path) -> Value {
 #[test]
 fn native_round_runner_alternates_all_cells_and_accepts_only_complete_fixture_measurements() {
     let directory = tempfile::tempdir().unwrap();
-    let input = input(directory.path(), "fixture");
+    let (input, _collector) = fixture(directory.path(), "fixture", Mode::Good);
     let result = command(directory.path(), &input).output().unwrap();
     assert!(
         result.status.success(),
@@ -104,7 +118,7 @@ fn native_round_runner_alternates_all_cells_and_accepts_only_complete_fixture_me
 #[test]
 fn native_round_runner_retains_late_failed_cell_and_every_subsequent_attempt_without_acceptance() {
     let directory = tempfile::tempdir().unwrap();
-    let input = input(directory.path(), "late-failure");
+    let (input, _collector) = fixture(directory.path(), "late-failure", Mode::Good);
     assert_eq!(
         command(directory.path(), &input)
             .output()
@@ -131,7 +145,7 @@ fn native_round_runner_retains_late_failed_cell_and_every_subsequent_attempt_wit
 #[test]
 fn native_round_runner_failed_acceptance_retains_report_and_bad_pin_prevents_all_launches() {
     let directory = tempfile::tempdir().unwrap();
-    let mut input = input(directory.path(), "fixture");
+    let (mut input, _collector) = fixture(directory.path(), "fixture", Mode::Good);
     input["old"]["sha256"] = json!("0".repeat(64));
     assert_eq!(
         command(directory.path(), &input)
@@ -166,7 +180,7 @@ fn native_round_runner_failed_acceptance_retains_report_and_bad_pin_prevents_all
 #[test]
 fn interrupted_round_runner_retains_attempt_and_never_launches_the_remaining_schedule() {
     let directory = tempfile::tempdir().unwrap();
-    let input = input(directory.path(), "stall");
+    let (input, _collector) = fixture(directory.path(), "stall", Mode::Good);
     let child = command(directory.path(), &input)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -188,4 +202,131 @@ fn interrupted_round_runner_retains_attempt_and_never_launches_the_remaining_sch
     assert!(document["error"].is_string());
     assert!(!directory.path().join("comparison/round-1-new").exists());
     super::server_cell::no_survivor(&first);
+}
+
+#[test]
+fn delayed_collector_delivery_keeps_distinct_cell_identities_and_finalized_reports() {
+    let directory = tempfile::tempdir().unwrap();
+    let (input, collector) = fixture(directory.path(), "fixture", Mode::Delayed);
+    let result = command(directory.path(), &input).output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let document = comparison(directory.path());
+    let cells = document["cells"].as_array().unwrap();
+    let mut ids = std::collections::BTreeSet::new();
+    for cell in cells {
+        let evidence = &cell["evidence"];
+        let id = evidence["collector"]["endpoint"]["run_id"]
+            .as_str()
+            .unwrap();
+        assert!(ids.insert(id));
+        assert_eq!(evidence["collector"]["timings"][0]["request_id"], "1");
+        assert_eq!(evidence["collector"]["timings"][0]["server_ttft_ms"], 1.0);
+        let path = Path::new(cell["directory"].as_str().unwrap());
+        let report: Value =
+            serde_json::from_slice(&fs::read(path.join("metrics-report.json")).unwrap()).unwrap();
+        assert_eq!(report["run"]["run_id"], id);
+        assert_eq!(report["run"]["status"], "completed");
+        let fixture: Value =
+            serde_json::from_slice(&fs::read(path.join("fixture.metrics.json")).unwrap()).unwrap();
+        assert_eq!(fixture["run_id"], id);
+        assert_eq!(fixture["otlp_grpc"], input["metrics_otlp_grpc"]);
+        #[cfg(unix)]
+        super::server_cell::no_survivor(path);
+    }
+    assert_eq!(ids.len(), 4);
+    let summaries = document["collector_summary"].as_array().unwrap();
+    assert_eq!(summaries.len(), 2);
+    for summary in summaries {
+        assert_eq!(summary["measured_requests"], 2);
+        assert_eq!(summary["server_ttft_ms_p50"], 1.0);
+    }
+    let markdown = fs::read_to_string(directory.path().join("comparison/report.md")).unwrap();
+    assert!(markdown.contains("Client TTFT p50 ms"));
+    assert!(markdown.contains("Server TTFT p50 ms"));
+    assert_eq!(
+        collector
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| *call == "POST /v1/runs")
+            .count(),
+        4
+    );
+    assert_eq!(document["acceptance"]["passed"], true);
+}
+
+#[test]
+fn rejected_collectors_retain_all_attempts_and_request_results_without_acceptance() {
+    for mode in [
+        Mode::WrongRun,
+        Mode::MissingDecode,
+        Mode::Loss,
+        Mode::FailFinalize,
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (input, _collector) = fixture(directory.path(), "fixture", mode);
+        assert_eq!(
+            command(directory.path(), &input)
+                .output()
+                .unwrap()
+                .status
+                .code(),
+            Some(1)
+        );
+        let document = comparison(directory.path());
+        let cells = document["cells"].as_array().unwrap();
+        assert_eq!(cells.len(), 4);
+        assert!(document["acceptance"].is_null());
+        for cell in cells {
+            assert!(cell["error"].is_string());
+            assert_eq!(cell["evidence"]["summary"]["summary"]["successful"], 1);
+            let path = Path::new(cell["directory"].as_str().unwrap());
+            assert!(path.join("metrics-report.json").is_file());
+            assert!(!path.join("metrics-timing.json").exists());
+            #[cfg(unix)]
+            super::server_cell::no_survivor(path);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cancellation_during_collector_delivery_preserves_measurement_and_reaps_the_stage() {
+    let directory = tempfile::tempdir().unwrap();
+    let (input, collector) = fixture(directory.path(), "fixture", Mode::StallCollection);
+    let child = command(directory.path(), &input)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    while !collector
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|call| call.ends_with("/report.json"))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "collector delivery did not start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
+    assert!(!child.wait_with_output().unwrap().status.success());
+    let document = comparison(directory.path());
+    assert_eq!(document["cells"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        document["cells"][0]["evidence"]["summary"]["summary"]["successful"],
+        1
+    );
+    assert!(document["acceptance"].is_null());
+    assert!(!directory.path().join("comparison/round-1-new").exists());
+    super::server_cell::no_survivor(&directory.path().join("comparison/round-1-old"));
 }
