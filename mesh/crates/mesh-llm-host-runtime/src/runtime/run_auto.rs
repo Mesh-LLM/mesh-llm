@@ -333,6 +333,27 @@ pub(super) async fn run_runtime_cli(
             || (options.checkpoint_quantization.is_none() && options.checkpoint_imatrix.is_none()),
         "--checkpoint-quantization and --checkpoint-imatrix are only valid with mesh-llm serve"
     );
+    // Composed first, so it only fills gaps: the explicit CLI overrides below
+    // run after and win, and anything already in the config file is already
+    // present and therefore left alone.
+    let strategy_plan = crate::runtime::serving_strategy::apply_serving_strategy(
+        &mut config,
+        options.strategy,
+        crate::runtime::serving_strategy::StrategyContext {
+            split: options.split,
+            auto_balance_requested: options.auto_balance,
+        },
+    );
+    if crate::runtime::serving_strategy::strategy_requests_auto_balance(
+        options.strategy,
+        crate::runtime::serving_strategy::StrategyContext {
+            split: options.split,
+            auto_balance_requested: options.auto_balance,
+        },
+    ) {
+        options.auto_balance = true;
+    }
+    crate::runtime::serving_strategy::log_strategy_plan(&strategy_plan);
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     apply_runtime_cli_parallel_override(&mut config, options.parallel);
     apply_runtime_cli_checkpoint_overrides(

@@ -618,6 +618,7 @@ fn resolve_throughput_config(context: &ResolverContext<'_>) -> ResolvedThroughpu
             .and_then(|throughput| throughput.threads_batch),
     );
 
+    let last_stage_decode_batch = resolve_last_stage_decode_batch(context);
     let pipeline_decode_groups = pick_owned(
         context
             .model_throughput
@@ -631,10 +632,32 @@ fn resolve_throughput_config(context: &ResolverContext<'_>) -> ResolvedThroughpu
         parallel,
         continuous_batching,
         pipeline_decode_groups,
+        last_stage_decode_batch,
         threads,
         threads_batch,
         tuning_profile: throughput.effective_profile,
     }
+}
+
+/// Model block over global default, like every other throughput key.
+///
+/// `auto` means "nobody has stated a policy", which stays `None` so the stage
+/// keeps its unbatched default — and so a later `--strategy` can fill it
+/// without having to distinguish its own value from an operator's.
+fn resolve_last_stage_decode_batch(context: &ResolverContext<'_>) -> Option<bool> {
+    context
+        .model_throughput
+        .and_then(|throughput| throughput.last_stage_decode_batch.as_ref())
+        .or_else(|| {
+            context
+                .global_throughput
+                .and_then(|throughput| throughput.last_stage_decode_batch.as_ref())
+        })
+        .and_then(|value| match bool_or_auto_value(value).as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        })
 }
 
 fn resolve_continuous_batching(

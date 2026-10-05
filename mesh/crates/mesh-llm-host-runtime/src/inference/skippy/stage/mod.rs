@@ -326,6 +326,7 @@ impl StageControlState {
             downstream_connect_timeout_secs: 30,
             native_mtp_enabled: effective_load.native_mtp_enabled,
             continuous_batching: effective_load.continuous_batching,
+            last_stage_decode_batch: effective_load.last_stage_decode_batch,
             openai: None,
             l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
             compute_meter: Some(compute_meter.clone()),

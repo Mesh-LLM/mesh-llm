@@ -31,6 +31,8 @@ mod publication;
 mod release_attestation;
 mod run_auto;
 mod runtime_registry;
+pub(crate) mod serving_strategy;
+pub use serving_strategy::ServingStrategy;
 mod serving_surface;
 mod shutdown_signal;
 mod split_participant_settle;
