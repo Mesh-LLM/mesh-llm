@@ -100,3 +100,7 @@ pub(super) fn check_windows_dynamic_runtime_contract(
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "windows_runtime_tests.rs"]
+mod tests;
