@@ -7,7 +7,7 @@ use skippy_model_hf::remote_catalog;
 
 pub use lifecycle::{SearchArtifactFilter, SearchHit, SearchProgress, SearchSort};
 
-fn model_context() -> ModelCommandContext {
+pub(crate) fn model_context() -> ModelCommandContext {
     ModelCommandContext {
         program: "mesh-llm",
         cache_root: skippy_model_hf::application_cache_dir(),
@@ -41,8 +41,9 @@ pub fn search_huggingface_json_payload(
     filter: SearchArtifactFilter,
     sort: SearchSort,
     results: &[SearchHit],
+    context: ModelCommandContext,
 ) -> Value {
-    lifecycle::search_huggingface_json_payload(query, filter, sort, results, model_context())
+    lifecycle::search_huggingface_json_payload(query, filter, sort, results, context)
 }
 
 pub async fn search_huggingface<F>(
@@ -51,9 +52,10 @@ pub async fn search_huggingface<F>(
     filter: SearchArtifactFilter,
     sort: SearchSort,
     progress: F,
+    context: ModelCommandContext,
 ) -> Result<Vec<SearchHit>>
 where
     F: FnMut(SearchProgress),
 {
-    lifecycle::search_huggingface(query, limit, filter, sort, progress, model_context()).await
+    lifecycle::search_huggingface(query, limit, filter, sort, progress, context).await
 }
