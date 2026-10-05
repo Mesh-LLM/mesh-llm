@@ -135,6 +135,22 @@ fn read(path: &Path, cursor: Option<&Cursor>) -> DynResult<Snapshot> {
             break;
         }
         let count = u64::try_from(count)?;
+        if count > MAX_LINE_BYTES {
+            return Err("A/B telemetry exceeds its bounded line budget".into());
+        }
+        // A live stderr write can end mid-record. Only complete lines form a cursor.
+        if bytes.last() != Some(&b'\n') {
+            break;
+        }
+        if let Some(cursor) = cursor
+            && cursor.bytes > total
+            && cursor.bytes
+                < total
+                    .checked_add(count)
+                    .ok_or("telemetry log size overflow")?
+        {
+            return Err("telemetry cursor must end at a complete log line".into());
+        }
         let preceding = total;
         total = total
             .checked_add(count)

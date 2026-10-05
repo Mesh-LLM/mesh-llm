@@ -14,20 +14,20 @@ enum Payload {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Input {
-    model_id: String,
-    model_path: PathBuf,
-    source_model_sha256: String,
-    layer_end: u32,
-    ctx_size: u32,
-    lane_count: u32,
+pub(super) struct Input {
+    pub(super) model_id: String,
+    pub(super) model_path: PathBuf,
+    pub(super) source_model_sha256: String,
+    pub(super) layer_end: u32,
+    pub(super) ctx_size: u32,
+    pub(super) lane_count: u32,
     n_gpu_layers: i32,
     payload: Payload,
     cache_entries: u64,
 }
 
 impl Input {
-    fn validate(&self) -> DynResult<()> {
+    pub(super) fn validate(&self) -> DynResult<()> {
         if self.model_id.trim().is_empty()
             || !self.model_path.is_absolute()
             || self.source_model_sha256.len() != 64
@@ -113,6 +113,10 @@ fn config(input: &Input) -> DynResult<Config<'_>> {
 pub(super) fn run(args: &[String]) -> DynResult<()> {
     let opts = options(args, &["--input", "--output"], &["--input", "--output"])?;
     let mut input: Input = serde_json::from_slice(&std::fs::read(opts["--input"])?)?;
+    publish(Path::new(opts["--output"]), &prepare(&mut input)?)
+}
+
+pub(super) fn prepare(input: &mut Input) -> DynResult<Vec<u8>> {
     input.validate()?;
     input.model_path = input.model_path.canonicalize()?;
     if !input.model_path.is_file() {
@@ -122,9 +126,9 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     if hash != input.source_model_sha256 {
         return Err("A/B source model SHA-256 mismatch".into());
     }
-    let mut bytes = serde_json::to_vec_pretty(&config(&input)?)?;
+    let mut bytes = serde_json::to_vec_pretty(&config(input)?)?;
     bytes.push(b'\n');
-    publish(Path::new(opts["--output"]), &bytes)
+    Ok(bytes)
 }
 
 #[cfg(test)]

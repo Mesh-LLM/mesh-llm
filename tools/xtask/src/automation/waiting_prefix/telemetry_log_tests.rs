@@ -122,3 +122,51 @@ fn log_identity_permits_append_but_rejects_cross_log_rewrite_and_truncation() {
     std::fs::write(&path, b"").unwrap();
     assert!(read(&path, Some(&cursor)).is_err());
 }
+
+#[test]
+fn live_partial_record_cannot_advance_a_cursor_until_its_complete_line_arrives() {
+    use std::io::Write;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("server.log");
+    let event = b"{\"event\":\"stage.openai_generation_summary\",\"attributes\":{\"count\":1}}\n";
+    std::fs::write(&path, event).unwrap();
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    let middle = event.len() / 2;
+    writer.write_all(&event[..middle]).unwrap();
+    let cursor = snapshot(&path).unwrap();
+    assert_eq!(cursor.bytes, event.len() as u64);
+    assert_eq!(cursor.generations, 1);
+    assert!(collect(&path, &cursor, 1).unwrap().is_none());
+    writer.write_all(&event[middle..event.len() - 1]).unwrap();
+    assert!(collect(&path, &cursor, 1).unwrap().is_none());
+    writer.write_all(b"\n").unwrap();
+    let measured = collect(&path, &cursor, 1).unwrap().unwrap();
+    assert_eq!(measured.events.events.len(), 1);
+    assert_eq!(measured.cursor.bytes, 2 * event.len() as u64);
+    assert_eq!(measured.cursor.generations, 2);
+    assert!(collect(&path, &measured.cursor, 1).unwrap().is_none());
+}
+
+#[test]
+fn a_cursor_digest_for_a_partial_line_is_rejected_even_when_event_counts_match() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("server.log");
+    std::fs::write(&path, b"ordinary startup noise\n").unwrap();
+    let cursor = Cursor {
+        schema_version: 1,
+        source_log: path.canonicalize().unwrap(),
+        bytes: 4,
+        sha256: hex::encode(Sha256::digest(b"ordi")),
+        ..Cursor::default()
+    };
+    assert!(
+        read(&path, Some(&cursor))
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("complete log line")
+    );
+}
