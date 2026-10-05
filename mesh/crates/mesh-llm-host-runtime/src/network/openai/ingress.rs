@@ -2174,6 +2174,68 @@ async fn admit_buffered_api_request(
     .await
 }
 
+/// Seller payment admission for automatic (composite) dispatch.
+///
+/// The ordinary local route enforces the seller's offers in
+/// `response::routing::route_local_attempt`: a remote caller naming a priced
+/// model gets 402 unless it enters the Lightning payment protocol. Pipeline
+/// (planner + strong model) and manifest-backed virtual models (the MoA
+/// gateway) never reach that gate: they open their own loopback backend
+/// requests from inside the host. Neither composite path can be billed by the
+/// single-model payment exchange, so while this node prices any local model a
+/// remote caller must not be able to drive those backends through them.
+///
+/// Returns `None` to continue dispatch, or a message explaining the refusal.
+/// Fails closed when the seller's payment state cannot be read, matching the
+/// ordinary route.
+#[cfg(feature = "payments")]
+async fn automatic_dispatch_seller_refusal(
+    node: &mesh::Node,
+    tcp_stream: &ClientStream,
+) -> Option<&'static str> {
+    if super::response::paid::is_local_origin(tcp_stream) {
+        return None;
+    }
+    match node.advertised_payment_offers().await {
+        Ok(prices) if prices.is_empty() => None,
+        Ok(_) => Some(
+            "this provider prices local inference; automatic routing requires the Lightning payment protocol",
+        ),
+        Err(_) => Some("seller payment state unavailable"),
+    }
+}
+
+#[cfg(not(feature = "payments"))]
+async fn automatic_dispatch_seller_refusal(
+    _node: &mesh::Node,
+    _tcp_stream: &ClientStream,
+) -> Option<&'static str> {
+    None
+}
+
+/// Write the 402 refusal for a composite dispatch the seller did not admit.
+async fn refuse_automatic_dispatch(
+    tcp_stream: &mut ClientStream,
+    message: &str,
+) -> proxy::RouteDispatchOutcome {
+    #[cfg(feature = "payments")]
+    {
+        use super::response::RouteAttemptResult;
+        match super::response::paid::payment_error(tcp_stream, message).await {
+            RouteAttemptResult::Delivered { status_code, .. } => {
+                proxy::RouteDispatchOutcome::Responded(status_code)
+            }
+            _ => proxy::RouteDispatchOutcome::Dropped("response_write_failed"),
+        }
+    }
+    #[cfg(not(feature = "payments"))]
+    {
+        let _ = message;
+        let _ = tcp_stream;
+        unreachable!("automatic dispatch is only refused when payments are enabled")
+    }
+}
+
 async fn try_pipeline_route(
     tcp_stream: &mut ClientStream,
     request: &mut proxy::BufferedHttpRequest,
@@ -2183,6 +2245,9 @@ async fn try_pipeline_route(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Option<proxy::RouteDispatchOutcome> {
     let strong_name = pipeline_route_model(request, decision, routing_model)?;
+    if let Some(message) = automatic_dispatch_seller_refusal(ctx.node, tcp_stream).await {
+        return Some(refuse_automatic_dispatch(tcp_stream, message).await);
+    }
     try_pipeline_proxy(
         ctx.node,
         tcp_stream,
@@ -2221,6 +2286,12 @@ async fn try_handle_virtual_model_intercept(
         .is_some();
     if !is_virtual {
         return VirtualModelInterceptResult::NotVirtual(tcp_stream);
+    }
+    if let Some(message) = automatic_dispatch_seller_refusal(ctx.route.node, &tcp_stream).await {
+        let mut tcp_stream = tcp_stream;
+        return VirtualModelInterceptResult::Handled(
+            refuse_automatic_dispatch(&mut tcp_stream, message).await,
+        );
     }
     if mesh_routing_headers_requested(request) {
         let outcome = response_outcome(
@@ -2665,3 +2736,7 @@ mod request_object_cleanup;
 #[cfg(test)]
 #[path = "ingress_tests/tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "payments"))]
+#[path = "ingress_tests/seller_payment_admission.rs"]
+mod seller_payment_admission;

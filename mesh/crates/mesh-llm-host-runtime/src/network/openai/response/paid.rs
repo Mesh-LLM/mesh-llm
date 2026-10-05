@@ -80,7 +80,7 @@ pub(super) async fn route(
     }
 }
 
-pub(super) fn is_local_origin(client: &ClientStream) -> bool {
+pub(in crate::network::openai) fn is_local_origin(client: &ClientStream) -> bool {
     client.peer_addr().is_ok_and(|addr| {
         addr.ip().is_loopback() && !crate::network::tunnel::is_remote_bridge(addr)
     })
@@ -94,7 +94,10 @@ fn trusted_payment_headers(peer: Option<std::net::SocketAddr>, raw: &[u8]) -> bo
     }
 }
 
-pub(super) async fn payment_error(client: &mut ClientStream, message: &str) -> RouteAttemptResult {
+pub(in crate::network::openai) async fn payment_error(
+    client: &mut ClientStream,
+    message: &str,
+) -> RouteAttemptResult {
     let body =
         serde_json::json!({"error": {"message": message, "type": "payment_required"}}).to_string();
     let response = format!(
