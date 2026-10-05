@@ -480,6 +480,15 @@ days.
 After a stable release with the full GPU matrix succeeds, the downstream
 `mesh-packaging` dispatch job first checks that its
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` credential can write the target repository.
+It resolves the published tag commit and SHA-256 of `native-runtimes.json`,
+then dispatches those immutable expectations with a run correlation ID. The
+`await_packaging_release` job requires Actions read access in the same token,
+waits for the matching terminal packaging run, downloads its readiness artifact,
+and checks the exact source, tag, manifest digest, run attempt, and successful
+channel result before the upstream release workflow can succeed. A dispatch
+acknowledgement alone does not satisfy release completion. The downstream
+workflow contract must be deployed to `mesh-packaging` main before this dispatch
+contract is enabled upstream.
 That repository secret is external GitHub configuration. The checked-in
 workflow can report a missing or insufficient credential, but it cannot grant
 the token access or replace the secret.
@@ -502,6 +511,7 @@ flowchart TD
     RELEASE --> KIND{"Prerelease?"}
     KIND -- "yes" --> RC_DONE["Stop after GitHub prerelease"]
     KIND -- "no" --> DOWNSTREAM["Publish crates and dispatch<br/>packages, images, and npm"]
+    DOWNSTREAM --> RECEIPT["Verify correlated terminal<br/>packaging readiness"]
 ```
 
 The stable crates.io preflight and publisher each verify the checksummed Linux

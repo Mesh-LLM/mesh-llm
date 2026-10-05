@@ -982,8 +982,10 @@ parity canaries remain required. Other variables include `CUDA_VERSION`,
 `VULKAN_SDK_VERSION`, `MESH_ROCM_INFERENCE_RUNNER_ENABLED`,
 `MESH_VULKAN_INFERENCE_RUNNER_ENABLED`, smoke configuration variables, and
 release/deployment variables. Secret values never belong in this inventory;
-known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`
-and deployment tokens.
+known names include `HF_TOKEN`, release-attestation keys, `CARGO_REGISTRY_TOKEN`,
+`MESH_AGENT_IMAGES_DISPATCH_TOKEN`, and deployment tokens. The packaging
+dispatch token needs Contents write and Actions read on `mesh-packaging` so the
+upstream release can dispatch and verify the correlated terminal receipt.
 
 ## Live inspection
 

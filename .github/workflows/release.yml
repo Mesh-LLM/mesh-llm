@@ -2016,10 +2016,15 @@ jobs:
     needs: [metadata, publish]
     if: ${{ needs.publish.result == 'success' && needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ubuntu-24.04
+    outputs:
+      correlation_id: ${{ steps.dispatch.outputs.correlation_id }}
+      mesh_sha: ${{ steps.dispatch.outputs.mesh_sha }}
+      manifest_sha256: ${{ steps.dispatch.outputs.manifest_sha256 }}
     permissions:
       contents: read
     steps:
       - name: Dispatch verified release to mesh-packaging
+        id: dispatch
         env:
           GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
           TARGET_REPOSITORY: Mesh-LLM/mesh-packaging
@@ -2039,16 +2044,37 @@ jobs:
             echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to ${TARGET_REPOSITORY}; update the secret before retrying this release" >&2
             exit 1
           }
+          mesh_sha="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}^{}" | awk 'NR == 1 { print $1 }')"
+          if [[ -z "$mesh_sha" ]]; then
+            mesh_sha="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 { print $1 }')"
+          fi
+          [[ "$mesh_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "published release tag did not resolve to a commit" >&2; exit 1; }
+          manifest_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/native-runtimes.json"
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 --output native-runtimes.json "$manifest_url"
+          [[ -s native-runtimes.json ]] || { echo "published native runtime manifest is missing" >&2; exit 1; }
+          manifest_sha256="$(sha256sum native-runtimes.json | cut -d ' ' -f 1)"
+          correlation_id="mesh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_TAG}"
+          {
+            echo "correlation_id=$correlation_id"
+            echo "mesh_sha=$mesh_sha"
+            echo "manifest_sha256=$manifest_sha256"
+          } >> "$GITHUB_OUTPUT"
           jq -n \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg ref "$RELEASE_TAG" \
             --arg version "$RELEASE_VERSION" \
+            --arg mesh_sha "$mesh_sha" \
+            --arg manifest_sha256 "$manifest_sha256" \
+            --arg correlation_id "$correlation_id" \
             '{
               event_type: "mesh-llm-release",
               client_payload: {
                 repository: $repository,
                 ref: $ref,
                 version: $version,
+                expected_mesh_sha: $mesh_sha,
+                expected_manifest_sha256: $manifest_sha256,
+                correlation_id: $correlation_id,
                 dry_run: false,
                 publish_images: true,
                 publish_release_assets: true,
@@ -2059,6 +2085,43 @@ jobs:
               --method POST \
               "repos/${TARGET_REPOSITORY}/dispatches" \
               --input -
+
+  await_packaging_release:
+    name: Verify terminal packaging readiness
+    needs: [metadata, dispatch_packaging_release]
+    if: ${{ needs.dispatch_packaging_release.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - name: Wait for correlated packaging receipt
+        env:
+          GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          CORRELATION_ID: ${{ needs.dispatch_packaging_release.outputs.correlation_id }}
+          MESH_SHA: ${{ needs.dispatch_packaging_release.outputs.mesh_sha }}
+          MANIFEST_SHA256: ${{ needs.dispatch_packaging_release.outputs.manifest_sha256 }}
+        run: |
+          python3 scripts/await-packaging-release.py \
+            --repository Mesh-LLM/mesh-packaging \
+            --correlation-id "$CORRELATION_ID" \
+            --upstream-repository "$GITHUB_REPOSITORY" \
+            --upstream-ref "$RELEASE_TAG" \
+            --upstream-sha "$MESH_SHA" \
+            --manifest-sha256 "$MANIFEST_SHA256" \
+            --out packaging-readiness.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ !cancelled() }}
+        with:
+          name: release-packaging-readiness-${{ needs.metadata.outputs.tag }}
+          path: packaging-readiness.json
+          if-no-files-found: warn
+          retention-days: 90
 
   publish_crates_preflight:
     name: Preflight crates.io packages
