@@ -36,6 +36,11 @@ pub(in crate::network::openai) async fn route_local_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
+    // The decoded model identity is only consulted by seller payment
+    // admission. Keep the parameter deliberate when that feature is compiled
+    // out so the denied-warnings build does not flag it as unused.
+    #[cfg(not(feature = "payments"))]
+    let _ = model;
     #[cfg(feature = "payments")]
     {
         if !super::paid::is_local_origin(tcp_stream) {
