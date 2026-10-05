@@ -49,6 +49,7 @@ mod identity_text;
 pub(crate) mod json_access;
 pub(crate) mod json_decode;
 mod performance_history;
+mod pr_authority;
 mod registry_pulls;
 mod runner_cleanup;
 mod runner_identity;
@@ -89,6 +90,7 @@ pub(crate) enum CiOperationsCommand {
     CollectMetrics,
     PerformanceHistory,
     AuthorityAudit,
+    PrAuthorityAudit,
     RegistryPulls,
     ChatDisplay,
     RuntimeSeed,
@@ -106,6 +108,7 @@ impl CiOperationsCommand {
             "collect-metrics" => Some(Self::CollectMetrics),
             "performance-history" => Some(Self::PerformanceHistory),
             "authority-audit" => Some(Self::AuthorityAudit),
+            "pr-authority-audit" => Some(Self::PrAuthorityAudit),
             "registry-pulls" => Some(Self::RegistryPulls),
             "chat-display" => Some(Self::ChatDisplay),
             "runtime-seed" => Some(Self::RuntimeSeed),
@@ -136,6 +139,7 @@ pub(crate) fn run(
         CiOperationsCommand::RunnerCleanup => unreachable!(),
         CiOperationsCommand::ChatDisplay => unreachable!(),
         CiOperationsCommand::AuthorityAudit => authority_command::run(args),
+        CiOperationsCommand::PrAuthorityAudit => pr_authority::run(args),
         CiOperationsCommand::RuntimeSeed => runtime_seed::run(args),
         CiOperationsCommand::RegistryPulls => {
             let output = registry_pulls::run(args)?;
