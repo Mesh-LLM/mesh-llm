@@ -4,19 +4,43 @@ use crate::mesh;
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
 
+pub(super) enum SelectedRouteTarget<'a> {
+    Url(&'a str),
+    MeshLabel(&'a str),
+}
+
 pub(super) async fn admit_selected_route(
     node: &mesh::Node,
     stream: &mut ClientStream,
     request: &transport::BufferedHttpRequest,
     model: Option<&str>,
     provider: &str,
-    target: &str,
+    target: SelectedRouteTarget<'_>,
     attempt: usize,
 ) -> Option<transport::RouteDispatchOutcome> {
     let manager = node.plugin_manager().await?;
     if !manager.has_exchange_hooks().await {
         return None;
     }
+    let event = selected_route_event(request, model, provider, target, attempt)?;
+    let result = match &request.exchange_observation_id {
+        Some(id) => manager.selected_exchange_phase(id, event).await,
+        None => manager.exchange_phase(event).await,
+    };
+    if let Err(error) = stream.add_response_metadata(result.headers.clone()) {
+        tracing::warn!(%error, "plugin response metadata arrived after headers committed");
+    }
+    let status = result.error_status()?;
+    Some(send_selected_route_denial(stream, status).await)
+}
+
+fn selected_route_event(
+    request: &transport::BufferedHttpRequest,
+    model: Option<&str>,
+    provider: &str,
+    target: SelectedRouteTarget<'_>,
+    attempt: usize,
+) -> Option<serde_json::Value> {
     let endpoint = exchange_endpoint(&request.client_path)?;
     let body = request
         .raw
@@ -41,15 +65,7 @@ pub(super) async fn admit_selected_route(
     event["attempt"] = json!(attempt);
     event["effective_request_wire_digest"] = event["request_wire_digest"].take();
     event.as_object_mut().unwrap().remove("request_wire_digest");
-    let result = match &request.exchange_observation_id {
-        Some(id) => manager.selected_exchange_phase(id, event).await,
-        None => manager.exchange_phase(event).await,
-    };
-    if let Err(error) = stream.add_response_metadata(result.headers.clone()) {
-        tracing::warn!(%error, "plugin response metadata arrived after headers committed");
-    }
-    let status = result.error_status()?;
-    Some(send_selected_route_denial(stream, status).await)
+    Some(event)
 }
 
 async fn send_selected_route_denial(
@@ -76,9 +92,13 @@ async fn send_selected_route_denial(
     }
 }
 
-fn public_target(target: &str) -> String {
+fn public_target(target: SelectedRouteTarget<'_>) -> String {
+    let target = match target {
+        SelectedRouteTarget::MeshLabel(label) => return label.to_owned(),
+        SelectedRouteTarget::Url(url) => url,
+    };
     let Ok(url) = reqwest::Url::parse(target) else {
-        return target.to_owned();
+        return "<invalid-url>".to_owned();
     };
     url.origin().ascii_serialization()
 }
@@ -99,9 +119,56 @@ mod tests {
     #[test]
     fn route_metadata_never_exposes_url_credentials() {
         assert_eq!(
-            public_target("https://operator:secret@example.com/v1?api_key=secret#private"),
+            public_target(SelectedRouteTarget::Url(
+                "https://operator:secret@example.com/v1?api_key=secret#private"
+            )),
             "https://example.com"
         );
-        assert_eq!(public_target("local-native"), "local-native");
+        assert_eq!(
+            public_target(SelectedRouteTarget::MeshLabel("local-native")),
+            "local-native"
+        );
+    }
+
+    #[tokio::test]
+    async fn selected_event_redacts_malformed_urls_and_preserves_trusted_mesh_labels() {
+        let (mut reader, mut writer) = tokio::io::duplex(1024);
+        writer.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
+        let request = transport::read_http_request(&mut reader).await.unwrap();
+        for url in [
+            "https://operator:password@example.com:bad/private?api_key=secret#hidden",
+            "https://operator:password@[invalid/private?api_key=secret#hidden",
+        ] {
+            let event = selected_route_event(
+                &request,
+                Some("model"),
+                "plugin",
+                SelectedRouteTarget::Url(url),
+                1,
+            )
+            .unwrap();
+            assert_eq!(event["phase"], "backend_selected");
+            assert_eq!(event["target"], "<invalid-url>");
+            let projected = serde_json::to_string(&event).unwrap();
+            for sensitive in [
+                "operator", "password", "private", "api_key", "secret", "hidden",
+            ] {
+                assert!(
+                    !projected.contains(sensitive),
+                    "route event leaked {sensitive}"
+                );
+            }
+        }
+        for label in ["Local(3131)", "Peer(abc)"] {
+            let event = selected_route_event(
+                &request,
+                None,
+                "mesh",
+                SelectedRouteTarget::MeshLabel(label),
+                2,
+            )
+            .unwrap();
+            assert_eq!(event["target"], label);
+        }
     }
 }

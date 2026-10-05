@@ -9,6 +9,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -71,6 +72,7 @@ type ConnectionLoopFn = fn(
     Arc<Mutex<Option<PluginRuntime>>>,
     mpsc::Sender<super::proto::Envelope>,
     u64,
+    Arc<AtomicBool>,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 
 pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
@@ -83,7 +85,9 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
      rpc_bridge,
      runtime,
      outbound_tx,
-     generation| {
+     generation,
+     peer_state| {
+        let authenticated_peer = peer_state.load(Ordering::Acquire);
         Box::pin(async move {
             let result: Result<()> = async {
                 loop {
@@ -156,6 +160,11 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         mesh_tx.clone(),
                                         rpc_bridge.clone(),
                                         outbound_tx.clone(),
+                                        PluginRequestPeer {
+                                            authenticated: authenticated_peer,
+                                            runtime: runtime.clone(),
+                                            generation,
+                                        },
                                     );
                                 }
                                 Some(super::proto::envelope::Payload::RpcNotification(notification)) => {
@@ -188,6 +197,7 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
             let was_active_runtime = {
                 let mut runtime = runtime.lock().await;
                 if runtime.as_ref().map(|runtime| runtime.generation) == Some(generation) {
+                    peer_state.store(false, Ordering::Release);
                     *runtime = None;
                     true
                 } else {
@@ -575,6 +585,12 @@ where
     Ok(prost::Message::decode(body.as_slice())?)
 }
 
+struct PluginRequestPeer {
+    authenticated: bool,
+    runtime: Arc<Mutex<Option<PluginRuntime>>>,
+    generation: u64,
+}
+
 fn forward_plugin_request(
     plugin_name: String,
     request_id: u64,
@@ -582,12 +598,24 @@ fn forward_plugin_request(
     mesh_tx: mpsc::Sender<PluginMeshEvent>,
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     outbound_tx: mpsc::Sender<super::proto::Envelope>,
+    peer: PluginRequestPeer,
 ) {
     tokio::spawn(async move {
         if super::identity_services::is_identity_method(&request.method) {
-            let payload =
+            let current_generation = peer
+                .runtime
+                .lock()
+                .await
+                .as_ref()
+                .map(|runtime| runtime.generation);
+            let payload = if peer.authenticated && current_generation == Some(peer.generation) {
                 super::identity_transport::forward_identity_service(&plugin_name, request, mesh_tx)
-                    .await;
+                    .await
+            } else {
+                super::proto::envelope::Payload::ErrorResponse(plugin_mesh_stream_error(
+                    "identity services require an OS-authenticated launched plugin process",
+                ))
+            };
             let _ = outbound_tx
                 .send(super::proto::Envelope {
                     protocol_version: PROTOCOL_VERSION,
@@ -745,6 +773,10 @@ fn forward_plugin_notification(
         }
     });
 }
+
+#[cfg(test)]
+#[path = "transport_peer_auth_tests.rs"]
+mod peer_auth_tests;
 
 #[cfg(test)]
 mod tests {

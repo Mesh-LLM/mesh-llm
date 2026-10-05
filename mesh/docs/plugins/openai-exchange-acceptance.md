@@ -8,10 +8,10 @@ matrix records implementation and verification separately; pending checks are
 not acceptance proof.
 
 After merging the Mesh/Skippy split, all-target tests passed for seven affected
-crates: 250 config, 3,657 host including integration targets, 48 identity, 61
+crates: 250 config, 3,664 host including integration targets, 48 identity, 61
 plugin including the exemplar, 57 package-manager, 325 inference API, and 902
-serving tests. Together they passed 5,300 tests with 30 ignored. The host
-library passed 3,632 tests with 25 ignored; serving had five ignored. UI type
+serving tests. Together they passed 5,307 tests with 30 ignored. The host
+library passed 3,639 tests with 25 ignored; serving had five ignored. UI type
 checking and all 1,835 tests passed, with three skipped.
 Warnings-denied all-target Clippy passed for these crates and the shipped
 MeshLLM binary. The CI definition suite passed 1,978 tests with 15 expected
@@ -21,7 +21,10 @@ tests against the merged layout.
 Formatting, Justfile, and diff checks passed. Review regressions cover pending
 terminal callbacks after body drop, independent response negotiation deadlines,
 configured-executable identity binding, canonical signing keys, credential
-header filtering, bounded exemplar retention, and custom Cargo target paths.
+header filtering, bounded exemplar retention, custom Cargo target paths,
+malformed route URLs, and OS child-PID authentication. Unix process fixtures
+prove wrong-peer rejection and launched-child acceptance; lifecycle and identity
+checks reject unverified and retired connections.
 
 These are local source/package results. The linked pull request records
 subsequent composed product builds and remote CI results. The checks above

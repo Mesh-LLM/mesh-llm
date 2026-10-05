@@ -1875,7 +1875,7 @@ async fn route_request(
             request,
             None,
             "mesh",
-            &format!("{target:?}"),
+            super::exchange_admission::SelectedRouteTarget::MeshLabel(&format!("{target:?}")),
             1,
         )
         .await

@@ -309,7 +309,9 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             request,
             Some(model),
             "mesh",
-            &format!("{target:?}"),
+            super::super::exchange_admission::SelectedRouteTarget::MeshLabel(&format!(
+                "{target:?}"
+            )),
             state.attempts,
         )
         .await

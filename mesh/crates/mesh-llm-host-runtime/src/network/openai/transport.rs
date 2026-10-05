@@ -1726,7 +1726,7 @@ pub async fn route_http_endpoint_request(
         request,
         model,
         route_metadata.provider.unwrap_or("external"),
-        base_url,
+        super::exchange_admission::SelectedRouteTarget::Url(base_url),
         1,
     )
     .await

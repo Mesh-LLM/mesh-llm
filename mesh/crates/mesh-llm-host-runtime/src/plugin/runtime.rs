@@ -17,7 +17,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -25,10 +25,12 @@ mod exchange_request;
 #[cfg(test)]
 mod exchange_request_tests;
 mod identity_artifact;
+mod socket_auth;
 
 pub(crate) struct ExternalPlugin {
     spec: ExternalPluginSpec,
     installed_artifact_sha256: Option<String>,
+    authenticated_peer: Arc<AtomicBool>,
     web_ui_enabled: Arc<Mutex<Option<bool>>>,
     web_ui_primary_tab: Arc<Mutex<Option<bool>>>,
     instance_id: String,
@@ -97,6 +99,7 @@ impl ExternalPlugin {
         let plugin = Self {
             spec: spec.clone(),
             installed_artifact_sha256,
+            authenticated_peer: Arc::new(AtomicBool::new(false)),
             web_ui_enabled: Arc::new(Mutex::new(spec.web_ui_enabled)),
             web_ui_primary_tab: Arc::new(Mutex::new(spec.web_ui_primary_tab)),
             instance_id,
@@ -252,10 +255,18 @@ impl ExternalPlugin {
             })
     }
 
-    async fn await_plugin_connection(&self, listener: LocalListener) -> Result<LocalStream> {
-        tokio::time::timeout(self.spec.startup.connect_timeout(), listener.accept())
+    async fn await_plugin_connection(
+        &self,
+        listener: LocalListener,
+        child_pid: Option<u32>,
+    ) -> Result<LocalStream> {
+        let stream = tokio::time::timeout(self.spec.startup.connect_timeout(), listener.accept())
             .await
-            .with_context(|| format!("Timed out waiting for plugin '{}'", self.spec.name))?
+            .with_context(|| format!("Timed out waiting for plugin '{}'", self.spec.name))??;
+        if self.spec.openai_exchange_grant.is_some() {
+            socket_auth::authenticate(&stream, child_pid)?;
+        }
+        Ok(stream)
     }
 
     async fn install_runtime(
@@ -263,6 +274,13 @@ impl ExternalPlugin {
         child: Option<Child>,
         stream: LocalStream,
     ) -> (u64, mpsc::Sender<proto::Envelope>, PendingResponses) {
+        let authenticated_peer = socket_auth::is_authenticated(
+            &stream,
+            child.as_ref().and_then(Child::id),
+            self.in_process.is_some(),
+        );
+        self.authenticated_peer
+            .store(authenticated_peer, Ordering::Release);
         let (outbound_tx, outbound_rx) = mpsc::channel(256);
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
@@ -279,6 +297,7 @@ impl ExternalPlugin {
             self.runtime.clone(),
             outbound_tx_for_runtime,
             generation,
+            self.authenticated_peer.clone(),
         ));
         *self.runtime.lock().await = Some(PluginRuntime {
             generation,
@@ -364,6 +383,10 @@ impl ExternalPlugin {
             );
         }
         if let Some(manifest) = &init.manifest {
+            socket_auth::validate_lifecycle_declaration(
+                manifest.openai_exchange_hook.is_some(),
+                self.authenticated_peer.load(Ordering::Acquire),
+            )?;
             if manifest.openai_exchange_hook.as_ref().is_some_and(|hook| {
                 hook.request_body || hook.effective_request_body || hook.response_body
             }) {
@@ -462,6 +485,7 @@ impl ExternalPlugin {
             return Ok(());
         }
 
+        self.authenticated_peer.store(false, Ordering::Release);
         self.publish_starting_summary().await;
 
         #[cfg(test)]
@@ -498,7 +522,7 @@ impl ExternalPlugin {
         let pid = child.id();
         self.summary.lock().await.pid = pid;
 
-        let stream = self.await_plugin_connection(listener).await?;
+        let stream = self.await_plugin_connection(listener, pid).await?;
         let (generation, outbound_tx, pending) = self.install_runtime(Some(child), stream).await;
         self.finish_startup(generation, outbound_tx, pending).await
     }
@@ -616,6 +640,7 @@ impl ExternalPlugin {
     }
 
     pub(crate) async fn shutdown(&self) {
+        self.authenticated_peer.store(false, Ordering::Release);
         {
             let mut summary = self.summary.lock().await;
             summary.status = "shutting down".into();
@@ -958,6 +983,8 @@ impl ExternalPlugin {
                 return;
             }
 
+            self.authenticated_peer.store(false, Ordering::Release);
+
             let failed_runtime = runtime.take();
             *self.server_info.lock().await = None;
             *self.manifest.lock().await = None;
@@ -1015,6 +1042,9 @@ impl ExternalPlugin {
             == Some(generation))
         .then(|| runtime.take())
         .flatten();
+        if disabled_runtime.is_some() {
+            self.authenticated_peer.store(false, Ordering::Release);
+        }
         drop(runtime);
         if let Some(runtime) = disabled_runtime {
             stop_runtime(runtime, "plugin disabled").await;
@@ -1208,6 +1238,8 @@ pub(crate) mod tests {
         let web_ui_enabled = spec.web_ui_enabled;
         let plugin = ExternalPlugin {
             installed_artifact_sha256: None,
+            // These helpers construct trusted in-memory/mock test hosts.
+            authenticated_peer: Arc::new(AtomicBool::new(true)),
             summary: Arc::new(Mutex::new(PluginSummary {
                 name: spec.name.clone(),
                 kind: "external".into(),
@@ -1409,6 +1441,7 @@ pub(crate) mod tests {
             Some(42)
         );
         assert_eq!(*plugin.server_info.lock().await, replacement_server_info);
+        assert!(plugin.authenticated_peer.load(Ordering::Acquire));
         assert_eq!(*plugin.manifest.lock().await, replacement_manifest);
         assert_eq!(plugin.summary().await, replacement_summary);
         assert_eq!(
@@ -1417,6 +1450,7 @@ pub(crate) mod tests {
         );
 
         plugin.shutdown().await;
+        assert!(!plugin.authenticated_peer.load(Ordering::Acquire));
     }
 
     #[tokio::test]

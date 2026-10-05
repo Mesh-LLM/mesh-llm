@@ -8,6 +8,15 @@ The [acceptance matrix](openai-exchange-acceptance.md) records which checks have
 run. The [earlier design note](openai-exchange-lifecycle-design-note.md) is a
 historical prototype, not this contract's normative definition.
 
+External lifecycle connections must belong to the process launched by the host.
+The host checks the OS peer PID on Unix sockets and Windows named pipes before
+enabling this capability. An unavailable or mismatched PID fails closed.
+Wrappers must `exec` the connecting plugin so it retains the launched PID.
+An unverified connection cannot acquire lifecycle access through later grants
+or call identity services. Host-owned in-process runners use a private duplex
+connection. Ordinary plugins without lifecycle declarations keep their existing
+protocol behavior.
+
 ## Manifest requests and operator grants
 
 The optional manifest `openai_exchange_hook` names a handler and requests
@@ -101,8 +110,8 @@ keys are host-namespaced by plugin, at most 128 bytes, values at most 1024 bytes
 and the aggregate at most 4096 bytes. At most 16 response headers are accepted;
 names are at most 128 bytes, values at most 1024 bytes, ASCII without CR/LF, and
 must match the plugin's `x-plugin-<hex-encoded-plugin-id>-` namespace plus the explicit
-header grant. Authorization, cookies, API keys, and token/secret/key-bearing
-header names are excluded even if requested. Metadata cannot replace protocol
+header grant. Names containing auth, cookie, session, jwt, token, secret, or key
+are excluded even if requested. Metadata cannot replace protocol
 or transport headers.
 Each recipient receives only its own annotation namespace; one plugin cannot
 use annotations to disclose a granted body to another plugin.
@@ -211,8 +220,8 @@ Trust expectations come from the verifier's policy, not the supplied claim.
 distinct. Local revocation covers changed grants, keys/artifacts, owner/node or
 certificate bindings. Revocation tombstones are scoped to the current plugin
 manager; restart continuity requires durable inputs from the verifier policy.
-Offline verification requires current revocation inputs
-from its trust policy. The contract does not promise a universal revocation
+Offline verification requires current revocation inputs from its trust policy.
+The contract does not promise a universal revocation
 feed. Release provenance, software ownership, and execution evidence are
 independent assurance axes. Owner delegation does not establish hardware
 attestation, remote execution, or confidential inference; hardware delegation
