@@ -130,12 +130,12 @@ fn classify_model_state(recurrent: bool, hybrid: bool, diffusion: bool) -> Model
     }
 }
 
-/// Architectures that build a separate indexer memory tier on top of their
-/// attention/recurrent state. Mirrors the upstream `needs_mem_idx` allowlist
-/// (llama-model.cpp); extend this alongside that expression when upstream adds
-/// indexer architectures. Indexer state is only covered by full-state
-/// snapshots, so these models must not serve lossy KV-page/recurrent snapshots.
-const INDEXER_MEMORY_ARCHITECTURES: &[&str] = &["qwen4exp"];
+/// Hybrid architectures whose indexer/compressor state requires full snapshots.
+/// Qwen4exp uses upstream `needs_mem_idx`; DeepSeek4 instead owns a dedicated
+/// `llama_kv_cache_dsv4`. Neither is covered by the native KV-page/recurrent
+/// export adapters. Keep both here so Auto cannot select an empty or incomplete
+/// partial snapshot (see #2247).
+const INDEXER_MEMORY_ARCHITECTURES: &[&str] = &["qwen4exp", "deepseek4"];
 
 /// Reads the model's GGUF `general.architecture` value. `None` means the
 /// native runtime does not export the metadata accessor or the key is absent;
@@ -1290,14 +1290,16 @@ mod output_capacity_tests {
     }
 
     #[test]
-    fn indexer_memory_flag_follows_the_upstream_architecture_allowlist() {
-        // qwen4exp builds the QSA indexer memory (upstream needs_mem_idx).
-        let capability =
-            capability_from_state_probes(Some(true), Some(true), Some(false), Some("qwen4exp"))
-                .expect("all native probes are present");
-        assert!(capability.has_indexer_memory);
+    fn indexer_memory_flag_covers_hybrid_full_state_families() {
+        for arch in ["qwen4exp", "deepseek4"] {
+            let capability =
+                capability_from_state_probes(Some(false), Some(true), Some(false), Some(arch))
+                    .expect("all native probes are present");
+            assert_eq!(capability.state_kind, ModelStateKind::Hybrid);
+            assert!(capability.has_indexer_memory, "{arch} requires full state");
+        }
 
-        // Every other architecture stays exact-state-free...
+        // Ordinary families do not acquire the full-state requirement.
         for arch in ["llama4", "qwen3", "gemma3", "nemotron_h", ""] {
             let capability =
                 capability_from_state_probes(Some(true), Some(true), Some(false), Some(arch))

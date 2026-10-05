@@ -42,11 +42,10 @@ pub enum ModelStateKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
-    /// Upstream gates a separate indexer memory tier behind an architecture
-    /// allowlist (`needs_mem_idx`, llama-model.cpp). Indexer state is only
-    /// serialized by full-state snapshots, never by KV-page or recurrent
-    /// snapshots, so cache payload selection must treat these models as
-    /// exact-state-only. See skippy-server `effective_cache_payload`.
+    /// Hybrid indexer/compressor state not covered by KV-page or recurrent
+    /// snapshots (Qwen4exp's indexer tier and DeepSeek4's dedicated cache).
+    /// Auto cache payload selection must use full-state snapshots for these
+    /// models. See skippy-serving `effective_cache_payload`.
     pub has_indexer_memory: bool,
 }
 
