@@ -135,10 +135,10 @@ fn recipe(source: &str, targets: &[String]) -> DynResult<()> {
     let bootstrap = position(&commands, "bootstrap=\"$(just automation-bootstrap)\"")?;
     let target = position(&commands, "target_directory=")?;
     let export = position(&commands, "export CARGO_TARGET_DIR=\"$target_directory\"")?;
-    let build = position(&commands, "just with-lld cargo build ")?;
+    let build = position(&commands, "just with-lld cargo build --locked -p xtask ")?;
     let fixture = position(&commands, "export SPV_ADAPTER_FIXTURE=")?;
     let git = position(&commands, "export MIGRATION_TEST_GIT=\"$git_path\"")?;
-    let test = position(&commands, "just with-lld cargo test ")?;
+    let test = position(&commands, "just with-lld cargo test --locked -p xtask ")?;
     if !(bootstrap < target
         && target < export
         && export < build
@@ -177,7 +177,38 @@ fn recipe(source: &str, targets: &[String]) -> DynResult<()> {
         return Err("direct required Cargo test must be the terminal recipe statement".into());
     }
     invocation(commands[test], targets)?;
+    reader_component(&commands, build, fixture, test)?;
     snapshot_component(source, &commands)
+}
+
+fn reader_component(commands: &[&str], build: usize, fixture: usize, test: usize) -> DynResult<()> {
+    let required = [
+        "just with-lld cargo build --locked -p trajectory-reader --features parquet-input --bin trajectory-reader",
+        "just with-lld cargo test --locked -p trajectory-reader --features parquet-input --lib -- --test-threads=1",
+        "MESH_LLM_TEST_XTASK_BIN=\"$binary\" just with-lld cargo test --locked -p trajectory-reader --features parquet-input --test prompt_command native_prompt_command_ -- --test-threads=1",
+    ];
+    let mut previous = build;
+    for expected in required {
+        let current = position(commands, expected)?;
+        if commands[current] != expected || current <= previous || current >= fixture {
+            return Err(
+                "reader contracts must follow actual bootstrap and build before fixture admission"
+                    .into(),
+            );
+        }
+        previous = current;
+    }
+    for (index, line) in commands.iter().enumerate() {
+        if (line.starts_with("just with-lld cargo build ")
+            || line.starts_with("just with-lld cargo test "))
+            && index != build
+            && index != test
+            && !required.contains(line)
+        {
+            return Err("unexpected Cargo invocation in required contracts".into());
+        }
+    }
+    Ok(())
 }
 
 fn snapshot_component(source: &str, commands: &[&str]) -> DynResult<()> {

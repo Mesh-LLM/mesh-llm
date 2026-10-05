@@ -6,6 +6,7 @@ publish = false
 default-run = "xtask"
 
 [dependencies]
+trajectory-reader = { path = "../trajectory-reader", default-features = false }
 caseless = "=0.2.2"
 unicode-normalization = "=0.1.25"
 ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }

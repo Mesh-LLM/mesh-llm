@@ -85,6 +85,7 @@ const WORKSPACE_MEMBERS: &[&str] = &[
     "llama-spec-bench",
     "skippy-bench",
     "skippy-prompt",
+    "trajectory-reader",
     "xtask",
 ];
 

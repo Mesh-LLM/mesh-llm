@@ -121,6 +121,42 @@ fn migration_bootstrap_boundary_requires_resolution() {
 }
 
 #[test]
+fn migration_bootstrap_boundary_accepts_portable_trajectory_selection_contracts() -> DynResult<()> {
+    let mut graph = bootstrap_graph();
+    inject(
+        &mut graph,
+        "xtask",
+        package("trajectory-reader", true, None),
+        None,
+    );
+    dependency_boundary::check(&parse(graph), "xtask")
+}
+
+#[test]
+fn migration_bootstrap_boundary_still_rejects_codec_link_when_reader_feature_is_enabled() {
+    let mut graph = bootstrap_graph();
+    inject(
+        &mut graph,
+        "xtask",
+        package("trajectory-reader", true, None),
+        None,
+    );
+    inject(
+        &mut graph,
+        "trajectory-reader",
+        package("zstd-sys", false, Some("zstd")),
+        None,
+    );
+    let error = dependency_boundary::check(&parse(graph), "xtask").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("native library link `zstd` via `zstd-sys`"),
+        "{error}"
+    );
+}
+
+#[test]
 fn migration_bootstrap_tool_binary_accepts_profile_output() -> DynResult<()> {
     // Given a clean target root containing <target>/debug/xtask.
     let target = unique_temp_dir("xtask-bootstrap-target");

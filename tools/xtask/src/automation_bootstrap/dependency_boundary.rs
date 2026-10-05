@@ -7,7 +7,8 @@ use std::path::PathBuf;
 /// Workspace-local packages the bootstrap tool may compile. Every other
 /// workspace crate is product, native-runtime, or UI code and would pull
 /// llama.cpp or UI preparation into automation bootstrap.
-const BOOTSTRAP_LOCAL_PACKAGES: [&str; 2] = ["xtask", "mesh-llm-release-footer"];
+const BOOTSTRAP_LOCAL_PACKAGES: [&str; 3] =
+    ["xtask", "mesh-llm-release-footer", "trajectory-reader"];
 
 #[derive(Deserialize)]
 pub(super) struct ResolvedMetadata {

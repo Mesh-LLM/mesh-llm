@@ -107,6 +107,8 @@ pub(crate) enum CliCommand<'a> {
     AgentFixtureEvidence(&'a [String]),
     AgentFixtureInputs(&'a [String]),
     AgentRecordingProxy(&'a [String]),
+    AgenticPromptManifest(&'a [String]),
+    WaitingPrefix(&'a [String]),
     NativeRuntimeEvidence(&'a [String]),
     FamilyBatteryPolicy(&'a [String]),
     FamilyModelIdentity(&'a [String]),
@@ -206,6 +208,14 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "waiting-prefix" => {
+                CliCommand::WaitingPrefix(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "agentic-prompt-manifest" =>
+            {
+                CliCommand::AgenticPromptManifest(rest)
+            }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "native-runtime-evidence" =>
             {

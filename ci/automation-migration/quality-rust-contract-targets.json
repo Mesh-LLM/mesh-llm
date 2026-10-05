@@ -104,6 +104,7 @@
   "swift_api_checksum",
   "swift_privacy_adapter",
   "swift_producer_environment",
+  "waiting_prefix_acceptance",
   "workload_certify_contract",
   "workload_oracle_producer_contract",
   "workload_smoke_config",

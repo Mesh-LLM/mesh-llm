@@ -1,0 +1,32 @@
+{
+  "metadata": {
+    "dataset": "thoughtworks/agentic-coding-trajectories",
+    "dataset_revision": "abc",
+    "selection": {
+      "sources": [
+        "source"
+      ],
+      "families": 1,
+      "min_isl": 8192,
+      "max_isl_exclusive": 12000,
+      "min_turns": 20,
+      "order": "md5(session_id)"
+    },
+    "requests_per_family": 1,
+    "rows": [
+      {
+        "session_id": "a",
+        "source_dataset": "source",
+        "n_turns": 20,
+        "max_isl": 9000,
+        "total_tokens": 9100
+      }
+    ]
+  },
+  "prompts": [
+    {
+      "family": "trajectory-0",
+      "prompt": "<user>\né\n\n<user>\nBenchmark branch 0: summarize the latest repository state in one sentence."
+    }
+  ]
+}

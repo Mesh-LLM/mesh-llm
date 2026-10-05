@@ -14,7 +14,7 @@ waiting-prefix policy boundary:
   tail latency.
 
 The source of truth is
-[`skippy/evals/skippy-scheduler-fixtures.json`](../evals/skippy-scheduler-fixtures.json).
+[`skippy/skippy/evals/skippy-scheduler-fixtures.json`](../skippy/evals/skippy-scheduler-fixtures.json).
 It pins the Hugging Face commit, selected source, eight session IDs, selection
 rules, runtime shape, generated prompt-manifest hash, exact GGUF repository
 revision and content hash (including its embedded tokenizer), and acceptance
@@ -26,7 +26,8 @@ Validate the catalog and run the actual Rust scheduler against both compact
 traces:
 
 ```bash
-python3 skippy/evals/skippy-scheduler-fixtures.py validate
+just with-lld cargo xtool automation agentic-prompt-manifest validate-fixtures \
+  skippy/evals/skippy-scheduler-fixtures.json
 just with-lld cargo test -p skippy-scheduler
 ```
 
@@ -37,22 +38,55 @@ trace remains at one switch while the eviction-pressure trace collapses to
 seven. This gate is deterministic and performs no model inference or network
 access.
 
-The normal Python script-test lane also validates the catalog, derives the
-minimum context from the checked-in rows, exercises the real prompt generator
-with canned rows, verifies the strict HF command shape and row-provenance
-rejection, and covers profile application in the A/B runner.
+The native prompt-manifest tests validate the catalog, derive the minimum
+context from the checked-in rows,
+check strict HF command arguments and reject row or manifest hash drift before
+publication. Run these portable contracts locally with:
+
+```bash
+just with-lld cargo test --locked -p xtask --bin xtask agentic_prompt_manifest \
+  -- --test-threads=1
+```
+
+The A/B runner also checks profile application. Synthetic fixtures do not prove
+the generated manifest hash against the pinned corpus; that requires the exact
+verified dataset revision.
+
+## Optional Parquet reader
+
+The default automation bootstrap compiles portable selection contracts only.
+Build the optional reader separately when materializing Parquet inputs:
+
+```bash
+just with-lld cargo build --locked -p trajectory-reader --features parquet-input \
+  --bin trajectory-reader
+```
+
+The reader includes the Parquet compression codecs. The main automation tool
+finds it next to its executable, or uses an explicit absolute
+`MESH_LLM_TRAJECTORY_READER_BIN` path. The tool supervises the reader with a
+120-second deadline and validates its versioned response file before publication.
+Selected trajectory data uses a private temporary file, independently of the
+bounded diagnostic capture. The normal `just ci-automation-contracts` gate also
+builds the reader, tests actual compressed Parquet inputs, and executes the
+frontend and reader together to check exact manifest bytes and refusal cleanup.
+Catalog validation and profile display require neither the reader nor HF.
 
 ## Pinned corpus cache
 
 Prepare the model-backed eviction-pressure prompts with:
 
 ```bash
-python3 skippy/evals/skippy-scheduler-fixtures.py prepare \
+just with-lld cargo xtool automation agentic-prompt-manifest prepare-fixture \
+  --catalog skippy/evals/skippy-scheduler-fixtures.json \
   --profile agentic-eviction-pressure \
+  --hf-bin "$(command -v hf)" \
   --output /tmp/skippy-agentic-eviction-pressure.json
 ```
 
-`prepare` performs both operations required by the fixture contract:
+`prepare-fixture` requires an installed Hugging Face CLI at the explicit
+absolute `--hf-bin` path. It performs both operations required by the fixture
+contract:
 
 1. `hf download thoughtworks/agentic-coding-trajectories ... --repo-type dataset --revision cef72d1f4d0caabf85937adf8337a14b7522c782`
 2. `hf cache verify ... --fail-on-missing-files` at the same revision
@@ -60,7 +94,18 @@ python3 skippy/evals/skippy-scheduler-fixtures.py prepare \
 It then selects the pinned rows from `sessions.parquet`, rebuilds the prompt
 manifest, and rejects either row drift or a SHA-256 other than
 `f1ddbe3d5974f3f4bd06f5d70fa45d0e10305bbafa4eb7399a0f972458d1beef`.
-Use `--cache-dir` when a benchmark host owns a dedicated shared cache.
+Use `--cache-dir` when a benchmark host owns a dedicated shared cache. The download
+and verification share a 600-second timeout, configurable with `--timeout`.
+Catalog validation and local materialization do not start HF or install Python
+packages. To regenerate from an already verified local Parquet file:
+
+```bash
+just with-lld cargo xtool automation agentic-prompt-manifest materialize-fixture \
+  --catalog skippy/evals/skippy-scheduler-fixtures.json \
+  --profile agentic-eviction-pressure \
+  --dataset-file /path/to/verified/sessions.parquet \
+  --output /tmp/skippy-agentic-eviction-pressure.json
+```
 
 Never copy `sessions.parquet` or the generated prompt manifest into the
 repository. The corpus is a derivative multi-source dataset; this fixture uses
@@ -122,3 +167,30 @@ movement inside ±5%. A zero baseline is neutral only when both binaries remain
 at zero; any nonzero candidate value fails closed. Alternate binary order
 across all four rounds and retain raw requests, telemetry, configs, logs,
 `comparison.json`, and `report.md`.
+
+## Offline A/B acceptance
+
+Check measured A/B aggregates with the native acceptance command:
+
+```bash
+just with-lld cargo xtool automation waiting-prefix evaluate \
+  --comparison comparison.json \
+  --catalog skippy/evals/skippy-scheduler-fixtures.json --profile warm-affinity \
+  --output acceptance.json --report report.md
+```
+
+For the capacity bounds, replace the catalog/profile pair with
+`--contract skippy/evals/skippy-capacity-acceptance.json`. The command checks complete
+request success, available measurements, baseline pressure and the selected
+regression or gain bounds. A failed measurement comparison writes its check
+evidence and report, then exits unsuccessfully. Invalid inputs fail before
+publication. The model-backed workload runner still supplies the measured
+aggregates.
+
+The native `waiting-prefix summarize --input FILE --output FILE` command
+combines request outcomes, generation events, capacity decisions and proactive
+eviction decisions into one round. `waiting-prefix aggregate --input FILE
+--output FILE` accepts a document with a `cells` list and computes per-binary
+round medians. Missing numeric telemetry remains null. Repeated request or
+round identities are rejected. These commands support offline evidence analysis;
+the model-backed A/B workload runner remains in Python during its cutover.

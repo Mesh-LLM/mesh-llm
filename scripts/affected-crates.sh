@@ -85,6 +85,7 @@ WORKSPACE_MEMBERS=(
   "skippy-correctness"
   "llama-spec-bench"
   "skippy-bench"
+  "trajectory-reader"
   "xtask"
 )
 
