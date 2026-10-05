@@ -149,6 +149,21 @@ schema row or stale manifest row from passing review:
 `request_defaults.grammar`, `request_defaults.json_schema`,
 `request_defaults.logprobs`.
 
+The OpenAI exchange grant rows added by #1331 belong to plugin permissions,
+not PR8. Their reverse paths are recorded separately here so this inventory
+continues to cover every current `WIRING_MANIFEST` row. A manifest declaration
+does not grant access; the host intersects it with the operator configuration.
+Successful owner-control commits reconcile grants on the current manager, and
+manager startup installs the latest grants under the same apply serialization.
+
+| Final consumer or changed sink | Originating #1331 config paths | Reverse-path result |
+| --- | --- | --- |
+| Lifecycle subscription and pre-dispatch policy dispatch | `plugin.<name>.openai_exchange_grant.endpoints`, `plugin.<name>.openai_exchange_grant.phases`, `plugin.<name>.openai_exchange_grant.admission` | Plugin permission negotiation intersects endpoint and phase subscriptions with the declaration. Admission additionally requires an explicit grant and a pre-dispatch phase; a denial prevents dispatch. |
+| Request and response evidence delivered to an observer | `plugin.<name>.openai_exchange_grant.request_body`, `plugin.<name>.openai_exchange_grant.effective_request_body`, `plugin.<name>.openai_exchange_grant.response_body`, `plugin.<name>.openai_exchange_grant.headers` | Original request, effective request, and response entity bytes require independent permissions. Authenticated side streams carry exact bytes; selected headers require both an explicit allowlist and the host's sensitive-header filter. Revocation interrupts outstanding copies. |
+| Bounded plugin annotations and response headers | `plugin.<name>.openai_exchange_grant.metadata` | The lifecycle decision validator accepts metadata only when independently granted, bounds annotations, and restricts response headers to the permitted `x-plugin-` surface. |
+| Private identity setup RPCs and delegated evidence signing | `plugin.<name>.openai_exchange_grant.read_identity_bundle`, `plugin.<name>.openai_exchange_grant.delegate_signing_key`, `plugin.<name>.openai_exchange_grant.signing_scopes`, `plugin.<name>.openai_exchange_grant.max_delegation_ttl_secs` | Host identity services check the current plugin permissions and installed artifact binding. Delegation requires identity-read permission, the registered exchange-evidence scope, and a bounded lifetime; grant reductions revoke issued delegations. |
+| Lifecycle callback and body-copy resource enforcement | `plugin.<name>.openai_exchange_grant.deadline_ms`, `plugin.<name>.openai_exchange_grant.max_body_bytes`, `plugin.<name>.openai_exchange_grant.max_queue_bytes`, `plugin.<name>.openai_exchange_grant.max_in_flight`, `plugin.<name>.openai_exchange_grant.failure_policy` | Configuration validation bounds each resource. Effective limits are the minimum of the declaration and grant; lifecycle dispatch and copy workers enforce deadlines, body and queue byte limits, and concurrent exchange limits. Required hook failures reject admission, while best-effort failures remain recipient-specific. |
+
 | Final consumer or changed sink | Originating PR8 config path | Reverse-path result |
 | --- | --- | --- |
 | Prompt and completion token histograms in the OTLP exporter | `telemetry.prompt_shape_metrics` | One originating switch. Request service and outcome come from the routed request result, not a second config field. Histogram attributes are restricted to those finite enums; model and node identities are omitted. |

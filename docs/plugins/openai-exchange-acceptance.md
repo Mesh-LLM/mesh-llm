@@ -6,7 +6,7 @@ The [normative v1 contract](openai-exchange-lifecycle.md) defines behavior. This
 matrix records implementation and verification separately; pending checks are
 not acceptance proof.
 
-Fresh focused checks passed: 229 config tests, 57 plugin library tests, 15
+Fresh focused checks passed: 248 config tests including integration contracts, 57 plugin library tests, 15
 identity tests, and 292 frontend tests. Earlier checks passed for unchanged
 package-manager code (57 tests), Skippy (877 passed, five preexisting ignored),
 and UI (1,835 tests). The final host unit suite passed 3,961 tests with 27
