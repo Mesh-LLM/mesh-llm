@@ -1,0 +1,68 @@
+From ace3dbfb4f7a7c201c2757897a9825426daa3240 Mon Sep 17 00:00:00 2001
+From: Virgile-pct <222121099+Virgile-pct@users.noreply.github.com>
+Date: Sat, 3 Oct 2026 17:41:29 +0200
+Subject: [PATCH] fix(skippy): initialize replayed recurrent inputs with an
+ empty slot
+
+make_recurrent_input() creates the llm_graph_input_rs of a replayed stage
+and set s_copy, its two views, head and rs_z only when the recipe slot
+held a value. llm_graph_input_rs has no default member initializers, so
+with an empty slot those fields kept whatever the heap held, and
+llm_graph_input_mem_hybrid::set_input() dereferenced them during the next
+decode. The qwen35 and granite hybrid multishard planning tests segfaulted
+on every run.
+
+Set the three pointers to null and take head and rs_z from the memory
+context, as build_rs_inp_impl() does, before checking the slot. The hybrid
+set_input() and can_reuse() already skip a null s_copy.
+
+The embedding-input check also gave M-RoPE models one position per row.
+For an embedding batch llama.cpp reads one position per section, so the
+qwen35 run read past the pos array (AddressSanitizer). Allocate and fill
+four positions per row for MROPE and IMROPE, as mtmd does.
+---
+ src/skippy/stage_program.cpp                  | 5 +++++
+ src/skippy/tests/embedding_input_regression.h | 9 +++++++--
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
+index c734a094d..d69d380ca 100644
+--- a/src/skippy/stage_program.cpp
++++ b/src/skippy/stage_program.cpp
+@@ -312,6 +312,11 @@ bool skippy_stage_program::instantiate(
+     };
+     const auto make_recurrent_input = [&](const input & recipe, size_t slot) {
+         auto recurrent = std::make_unique<llm_graph_input_rs>(memory_recurrent);
++        recurrent->s_copy = nullptr;
++        recurrent->s_copy_main = nullptr;
++        recurrent->s_copy_extra = nullptr;
++        recurrent->head = memory_recurrent->get_head();
++        recurrent->rs_z = memory_recurrent->get_rs_z();
+         if (!recipe.values[slot].empty()) {
+             recurrent->s_copy = ggml_new_tensor_1d(context, GGML_TYPE_I32, memory_recurrent->get_n_rs());
+             ggml_set_input(recurrent->s_copy);
+diff --git a/src/skippy/tests/embedding_input_regression.h b/src/skippy/tests/embedding_input_regression.h
+index 5d3d4d52d..803489be0 100644
+--- a/src/skippy/tests/embedding_input_regression.h
++++ b/src/skippy/tests/embedding_input_regression.h
+@@ -39,10 +39,15 @@ inline bool check_synthetic_embedding_input(skippy_model * model) {
+         return false;
+     }
+     const int32_t width = llama_model_n_embd_inp(model->model);
+-    llama_batch   image = llama_batch_init(2, width, 1);
++    // Like mtmd, an M-RoPE model takes one position per section for each row.
++    const llama_rope_type rope = llama_model_rope_type(model->model);
++    const int32_t n_pos = rope == LLAMA_ROPE_TYPE_MROPE || rope == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
++    llama_batch   image = llama_batch_init(2 * n_pos, width, 1);
+     image.n_tokens      = 2;
+     for (int32_t row = 0; row < 2; ++row) {
+-        image.pos[row]       = row + 1;
++        for (int32_t section = 0; section < n_pos; ++section) {
++            image.pos[section * 2 + row] = row + 1;
++        }
+         image.n_seq_id[row]  = 1;
+         image.seq_id[row][0] = session->seq_id;
+         image.logits[row]    = 1;
+-- 
+2.45.1.windows.1
+
