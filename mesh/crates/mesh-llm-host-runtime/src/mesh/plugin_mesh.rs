@@ -276,10 +276,14 @@ impl Node {
             });
         }
         let Ok(public_key) = <[u8; 32]>::try_from(request.public_key.as_slice()) else {
-            return Err(invalid("public_key must be 32 bytes (Ed25519), or empty to withdraw".into()));
+            return Err(invalid(
+                "public_key must be 32 bytes (Ed25519), or empty to withdraw".into(),
+            ));
         };
         if !plugin_keys::valid_public_key(&public_key) {
-            return Err(invalid("public_key is not a valid Ed25519 public key".into()));
+            return Err(invalid(
+                "public_key is not a valid Ed25519 public key".into(),
+            ));
         }
         let bound = plugin_keys::bind(&self.endpoint_secret_key, plugin_id, public_key);
         self.plugin_keys.set_own(bound.clone()).map_err(invalid)?;

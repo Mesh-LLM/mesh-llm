@@ -44,7 +44,11 @@ pub(super) fn response(
 
 pub(super) async fn handle(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     let node = state.inner.lock().await.node.clone();
-    let body = response(&node.endpoint.id(), &node.plugin_keys.own(), &node.plugin_keys.peers());
+    let body = response(
+        &node.endpoint.id(),
+        &node.plugin_keys.own(),
+        &node.plugin_keys.peers(),
+    );
     respond_json(stream, 200, &body).await
 }
 

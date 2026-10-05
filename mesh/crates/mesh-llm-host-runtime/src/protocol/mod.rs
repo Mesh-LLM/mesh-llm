@@ -113,7 +113,11 @@ pub(crate) fn attach_own_plugin_keys(
     own_plugin_keys: &[crate::proto::node::PluginKey],
 ) {
     let sender = frame.sender_id.clone();
-    if let Some(own) = frame.peers.iter_mut().find(|peer| peer.endpoint_id == sender) {
+    if let Some(own) = frame
+        .peers
+        .iter_mut()
+        .find(|peer| peer.endpoint_id == sender)
+    {
         own.plugin_keys = own_plugin_keys.to_vec();
     }
 }

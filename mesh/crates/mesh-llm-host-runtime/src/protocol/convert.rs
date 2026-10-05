@@ -946,6 +946,9 @@ pub(crate) fn local_ann_to_proto_ann(
             .claimed_log_head
             .as_ref()
             .map(local_claimed_log_head_to_proto),
+        // Set only on this node's own entry, when the frame is written
+        // (`attach_own_plugin_keys`); never relayed.
+        plugin_keys: Vec::new(),
     }
 }
 

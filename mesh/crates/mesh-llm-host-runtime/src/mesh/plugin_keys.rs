@@ -199,7 +199,10 @@ mod tests {
         let other = SecretKey::generate();
         let key = bind(&node, "capsules", plugin_public_key());
         assert!(verify(&node.public(), &key));
-        assert!(!verify(&other.public(), &key), "another node's key never verifies it");
+        assert!(
+            !verify(&other.public(), &key),
+            "another node's key never verifies it"
+        );
     }
 
     #[test]
@@ -246,21 +249,29 @@ mod tests {
             .iter()
             .map(|key| to_proto(std::slice::from_ref(key)).remove(0))
             .collect();
-        assert_eq!(verified_from_proto(&node.public(), &wire).len(), MAX_PLUGIN_KEYS);
+        assert_eq!(
+            verified_from_proto(&node.public(), &wire).len(),
+            MAX_PLUGIN_KEYS
+        );
     }
 
     #[test]
     fn own_keys_replace_per_plugin_and_are_capped() {
         let node = SecretKey::generate();
         let keys = PluginKeys::default();
-        keys.set_own(bind(&node, "capsules", plugin_public_key())).unwrap();
+        keys.set_own(bind(&node, "capsules", plugin_public_key()))
+            .unwrap();
         let replacement = bind(&node, "capsules", [9; 32]);
         keys.set_own(replacement.clone()).unwrap();
         assert_eq!(keys.own(), vec![replacement]);
         for i in 1..MAX_PLUGIN_KEYS {
-            keys.set_own(bind(&node, &format!("p{i}"), plugin_public_key())).unwrap();
+            keys.set_own(bind(&node, &format!("p{i}"), plugin_public_key()))
+                .unwrap();
         }
-        assert!(keys.set_own(bind(&node, "one-too-many", plugin_public_key())).is_err());
+        assert!(
+            keys.set_own(bind(&node, "one-too-many", plugin_public_key()))
+                .is_err()
+        );
         keys.remove_own("capsules");
         assert_eq!(keys.own().len(), MAX_PLUGIN_KEYS - 1);
     }
@@ -269,7 +280,10 @@ mod tests {
     fn a_peer_announcing_no_keys_is_forgotten() {
         let node = SecretKey::generate();
         let keys = PluginKeys::default();
-        keys.set_peer(node.public(), vec![bind(&node, "capsules", plugin_public_key())]);
+        keys.set_peer(
+            node.public(),
+            vec![bind(&node, "capsules", plugin_public_key())],
+        );
         assert_eq!(keys.peers().len(), 1);
         keys.set_peer(node.public(), Vec::new());
         assert!(keys.peers().is_empty());

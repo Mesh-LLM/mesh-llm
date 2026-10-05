@@ -488,7 +488,10 @@ mod tests {
     async fn a_plugin_key_to_an_older_host_fails_at_once() {
         let (mut context, mut outbound_rx, pending) = context(&[]);
         let error = context.announce_plugin_key(vec![1; 32]).await.unwrap_err();
-        assert!(error.to_string().contains("unsupported by this host"), "{error}");
+        assert!(
+            error.to_string().contains("unsupported by this host"),
+            "{error}"
+        );
         assert!(outbound_rx.try_recv().is_err(), "nothing was sent");
         assert!(pending.lock().unwrap().is_empty());
     }
