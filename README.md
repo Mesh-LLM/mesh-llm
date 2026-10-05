@@ -386,6 +386,7 @@ mesh-llm --llama-flavor cuda serve \
 
 | Doc | Use it for |
 |---|---|
+| [CI and release audit](ci/CI_RELEASE_AUDIT.md) | Proposed Skippy-first CI, platform test coverage, release gates and workflow cleanup |
 | [docs/MESHES.md](mesh/docs/MESHES.md) | Private meshes, public discovery, publishing, invite tokens, API-only clients |
 | [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) | Running big models with package-backed Skippy stage splits |
 | [docs/LAYER_PACKAGE_REPOS.md](skippy/docs/LAYER_PACKAGE_REPOS.md) | Contributing and publishing layer package repositories |

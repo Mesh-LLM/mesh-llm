@@ -5,6 +5,11 @@ This is the checked-in implementation. Normative rules live in
 `.agents/skills/manage-ci/references/current-inventory.md`; the design record
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
+The [CI and release audit](CI_RELEASE_AUDIT.md) records the proposed
+Skippy-first testing and release process, platform coverage, workflow
+before/after inventory and cache/workflow cleanup plan. It is an implementation
+proposal; this topology and the manage-ci contract describe current behavior.
+
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 `mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
 crates; `just ci-crate-lists` checks it against workspace membership. The

@@ -1,5 +1,11 @@
 # Releasing mesh-llm
 
+The [CI and release audit](ci/CI_RELEASE_AUDIT.md) proposes Skippy-first
+qualification, verified artifact reuse, final-byte release testing and workflow
+cleanup. It includes the platform matrix, before/after workflow inventory and
+phased implementation plan. The procedure below describes the current release
+process.
+
 ## Preferred path: dispatch from GitHub
 
 Releases are normally cut by running the **Release** workflow
