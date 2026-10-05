@@ -1003,7 +1003,7 @@ mesh-llm serve --model meshllm/Qwen3-8B-Q4_K_M-layers --split --strategy through
 | Strategy | For | Composes |
 | --- | --- | --- |
 | `balanced` | the default; unchanged behaviour | nothing |
-| `interactive` | single-stream and agentic coding | `ngram-suffix` speculation, a run-ahead admission budget, final-stage batching off |
+| `interactive` | single-stream and agentic coding | `ngram-suffix` speculation, a run-ahead admission budget, final-stage batching off, layers packed onto the fastest node |
 | `throughput` | fleet tokens per second | final-stage decode batching, decode-wave grouping, speculation off, and closed-loop rebalancing when `--split` is set |
 
 **It only fills in values nobody has stated.** An explicit `[defaults.*]` or
@@ -1018,6 +1018,17 @@ so a `[models.*]` block still wins. The log names the full path it wrote —
 `defaults.speculative.strategy`, not `speculative.strategy` — because a model
 that overrides the same key keeps its own value while the global default is
 still written for the models that do not.
+
+On a split, the two strategies also want different layer boundaries. Aggregate
+throughput is paced by the slowest stage, so `throughput` levels the stages and
+keeps them level as measurement drifts — the same cut `--auto-balance` makes. A
+single request is not paced by the bottleneck: its stages run serialised per
+token, so it pays the *sum* of `bytes / rate` across them. `interactive`
+therefore packs the fastest node to its memory limit and leaves the cut alone,
+because one stream's busy-time signal is too noisy to rebalance on.
+
+`--auto-balance` always wins over either. It is an explicit request, so a
+strategy only chooses placement when you have not.
 
 `throughput` and `interactive` are opposed on purpose. A batched final stage
 produces no native multi-token-prediction drafts, so last-stage batching and
