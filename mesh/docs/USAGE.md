@@ -1227,9 +1227,16 @@ Start mesh-llm normally:
 mesh-llm serve
 ```
 
-No `[[models]]` entry or placeholder local model is required. `on_demand`
-prevents any configured local models from loading eagerly while preserving the
-ability to load one later.
+No `[[models]]` entry or placeholder local model is required. With an installed,
+enabled inference adapter and no local model startup request, this flow can start
+without an available native runtime. Mesh prints a startup warning, advertises no
+native model capacity, and rejects local-model and split-stage loads until a
+compatible runtime is installed and Mesh restarts. Explicit local model arguments
+and configured `[[models]]` entries retain the native runtime requirement.
+
+Use a host-compatible adapter release. Adapter 0.2.0 uses plugin protocol 3;
+0.1.2 uses protocol 2 and cannot initialize on a protocol-3 host. A missing or
+disabled plugin, blank URL, or non-inference plugin does not enable this flow.
 
 After startup, mesh-llm should include Lemonade-hosted models in its own model list:
 

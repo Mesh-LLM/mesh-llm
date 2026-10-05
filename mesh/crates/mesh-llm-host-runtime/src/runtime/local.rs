@@ -942,6 +942,7 @@ pub(super) async fn start_local_openai_model(
     LocalRuntimeModelHandle,
     tokio::sync::oneshot::Receiver<()>,
 )> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let model_name = runtime_model_name.to_string();
     let package_ref = spec.model_path.to_string_lossy().to_string();
     let package = if skippy::is_layer_package_ref(&package_ref) {

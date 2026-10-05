@@ -13,6 +13,8 @@ mod materialization;
 pub(crate) mod metal_pipeline_cache;
 mod model_capabilities;
 mod model_open_drain;
+#[cfg(all(test, feature = "dynamic-native-runtime"))]
+mod native_unavailable_tests;
 mod package;
 mod projector;
 #[cfg(test)]
@@ -269,6 +271,7 @@ pub(crate) fn load_laya_model(
     path: &Path,
     device: Option<&str>,
 ) -> Result<Arc<skippy_runtime::LayaModel>> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let threads = std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(4);
@@ -490,6 +493,7 @@ impl OpenAiBackend for SkippyModelHandle {
 }
 
 pub(crate) fn infer_layer_count(path: &Path) -> Result<u32> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let info =
         ModelInfo::open(path).with_context(|| format!("open model metadata {}", path.display()))?;
     let layer_count = info
