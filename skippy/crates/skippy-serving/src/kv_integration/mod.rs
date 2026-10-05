@@ -24,8 +24,10 @@ use crate::kv_proto::{
 
 mod activation;
 mod cache_affinity;
+mod cache_payload;
 mod config;
 mod exact_state;
+mod snapshot_validation;
 pub(crate) use exact_state::CaptureAdmission;
 mod identity;
 mod l2_serving;
@@ -173,6 +175,7 @@ pub struct KvStageIntegration {
     pub(crate) exact_max_entries: usize,
     pub(crate) exact_byte_limits: ExactStateByteLimits,
     pub(crate) exact_state_record_worker: Arc<ExactStateRecordWorker>,
+    pub(crate) snapshot_export_failures: Arc<AtomicU64>,
     pub(crate) exact_state_records_queued: Arc<AtomicU64>,
     pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
     pub(crate) exact_state_records_pending: Arc<AtomicUsize>,
@@ -1125,6 +1128,13 @@ impl KvStageIntegration {
             (
                 "skippy.exact_cache.stats_busy",
                 json!(exact_state_stats_busy),
+            ),
+            (
+                "skippy.exact_cache.export_failures",
+                json!(
+                    self.snapshot_export_failures
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                ),
             ),
             (
                 "skippy.exact_cache.records_queued",

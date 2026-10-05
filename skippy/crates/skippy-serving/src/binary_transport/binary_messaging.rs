@@ -31,7 +31,7 @@ use crate::{
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
     runtime_state::{
-        RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_has_indexer_memory,
+        RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_memory_cache_capabilities,
         loaded_model_state_kind,
     },
     telemetry::{Telemetry, lifecycle_attrs},
@@ -469,7 +469,7 @@ fn run_binary_stage(
     let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &config,
         loaded_model_state_kind(Some(&runtime)),
-        loaded_model_has_indexer_memory(Some(&runtime)),
+        loaded_memory_cache_capabilities(Some(&runtime)),
         l3_manager.clone(),
         None,
     )?

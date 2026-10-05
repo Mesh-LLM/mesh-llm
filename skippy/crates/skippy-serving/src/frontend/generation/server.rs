@@ -24,7 +24,7 @@ use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_pro
 use crate::kv_integration::KvStageIntegration;
 use crate::listener::bind_serve_listener;
 use crate::runtime_state::RuntimeState;
-use crate::runtime_state::{loaded_model_has_indexer_memory, loaded_model_state_kind};
+use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -321,7 +321,7 @@ fn embedded_openai_backend_with_scheduler(
     let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &args.config,
         loaded_model_state_kind(Some(&args.runtime)),
-        loaded_model_has_indexer_memory(Some(&args.runtime)),
+        loaded_memory_cache_capabilities(Some(&args.runtime)),
         args.l3_manager.clone(),
         args.kv_lifecycle_observer.clone(),
     )?

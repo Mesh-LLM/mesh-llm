@@ -39,14 +39,27 @@ pub enum ModelStateKind {
     Diffusion,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemoryCacheCapabilities {
+    pub resident: bool,
+    pub kv_recurrent: bool,
+}
+
+impl MemoryCacheCapabilities {
+    pub(crate) fn from_native_bits(bits: u32) -> Self {
+        Self {
+            resident: bits & 1 != 0,
+            kv_recurrent: bits & 2 != 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
-    /// Hybrid indexer/compressor state not covered by KV-page or recurrent
-    /// snapshots (Qwen4exp's indexer tier and DeepSeek4's dedicated cache).
-    /// Auto cache payload selection must use full-state snapshots for these
-    /// models. See skippy-serving `effective_cache_payload`.
-    pub has_indexer_memory: bool,
+    /// Complete representations supported by the loaded native memory adapters.
+    /// Unknown memory advertises neither; callers must use full-state snapshots.
+    pub cache_capabilities: MemoryCacheCapabilities,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
