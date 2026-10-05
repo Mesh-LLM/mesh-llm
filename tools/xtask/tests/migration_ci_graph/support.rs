@@ -32,9 +32,16 @@ pub(crate) fn text(bytes: &[u8]) -> String {
 /// summary's `needs` lists them.
 pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
     match lane {
-        "quality" => &["quality", "runner_contract"],
-        "website" => &["web"],
+        "quality" => &[
+            "authority_source",
+            "authority_linux_x64",
+            "quality",
+            "runner_contract",
+        ],
+        "website" => &["authority_source", "authority_linux_x64", "web"],
         "linux" => &[
+            "authority_source",
+            "authority_linux_x64",
             "ui_artifact",
             "static_abi",
             "rust_tests",
@@ -46,6 +53,9 @@ pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
             "product_smoke",
         ],
         "macos" => &[
+            "authority_source",
+            "authority_linux_x64",
+            "authority_macos_arm64",
             "validate_plan",
             "ui_artifact",
             "hosts",
@@ -57,6 +67,9 @@ pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
             "product_smoke",
         ],
         _ => &[
+            "authority_source",
+            "authority_linux_x64",
+            "authority_windows_x64",
             "ui_artifact",
             "hosts",
             "native_runtimes",
@@ -94,7 +107,7 @@ impl Golden {
     }
 }
 
-/// Planned jobs per case and lane, derived by jq from the legacy rules.
+/// Frozen product selections plus required native authority infrastructure.
 pub(crate) fn expected_jobs() -> Result<Map<String, Value>, Box<dyn Error>> {
     let path = fixtures().join("ci_graph/lane_jobs.json");
     match serde_json::from_slice(&fs::read(path)?)? {

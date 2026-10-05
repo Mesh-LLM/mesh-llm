@@ -316,21 +316,21 @@
       "file": ".github/workflows/ci-quality-slice.yml",
       "members": [
         [
-          201,
+          221,
           "d7149b0913e92921",
           1,
           "provision",
           "quality_contracts Python 3.12 for required contracts and unittest"
         ],
         [
-          203,
+          223,
           "8c1dfd95e0d605d6",
           1,
           "metadata",
           "quality_contracts setup-python version 3.12"
         ],
         [
-          205,
+          225,
           "78b39ffedbd6d228",
           1,
           "installer",
@@ -11056,5 +11056,28 @@
       },
       "limits": "Local maintained normal gate; no real native model, hosted/platform or whole-migration completion proof."
     }
+  },
+  "authority_caller_metadata_preparation": {
+    "status": "Source coordinates rebound for unchanged Python edges. No Python retirement or audit action cutover.",
+    "source_rebindings": [
+      {
+        "path": ".github/workflows/ci-quality-slice.yml",
+        "from": 201,
+        "to": 221,
+        "source_sha256_prefix": "d7149b0913e92921"
+      },
+      {
+        "path": ".github/workflows/ci-quality-slice.yml",
+        "from": 203,
+        "to": 223,
+        "source_sha256_prefix": "8c1dfd95e0d605d6"
+      },
+      {
+        "path": ".github/workflows/ci-quality-slice.yml",
+        "from": 205,
+        "to": 225,
+        "source_sha256_prefix": "78b39ffedbd6d228"
+      }
+    ]
   }
 }

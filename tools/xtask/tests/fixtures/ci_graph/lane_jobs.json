@@ -1,10 +1,14 @@
 {
   "backend-cuda": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -13,6 +17,9 @@
     ],
     "macos": [],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "runtime_product",
@@ -21,10 +28,14 @@
   },
   "backend-rocm": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -35,6 +46,9 @@
     ],
     "macos": [],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "runtime_product",
@@ -43,10 +57,14 @@
   },
   "cli-surface": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "rust_tests",
       "static_abi"
     ],
@@ -55,11 +73,15 @@
   },
   "control-draft": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -70,6 +92,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -81,6 +106,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -90,13 +118,19 @@
   },
   "control-main": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -108,6 +142,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -119,6 +156,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -128,13 +168,19 @@
   },
   "control-manual-full": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -146,6 +192,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -157,6 +206,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -166,13 +218,19 @@
   },
   "control-ready": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -184,6 +242,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -195,6 +256,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -204,6 +268,8 @@
   },
   "docs-only": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
@@ -222,10 +288,14 @@
   },
   "justfile-rust": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "static_abi"
     ],
     "macos": [],
@@ -233,13 +303,19 @@
   },
   "main": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -251,6 +327,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -262,6 +341,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -271,13 +353,19 @@
   },
   "main-partial-affected": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -289,6 +377,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -300,6 +391,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -309,13 +403,19 @@
   },
   "main-workspace": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -327,6 +427,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -338,6 +441,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -347,13 +453,19 @@
   },
   "manual-full-force-all": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -365,6 +477,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -376,6 +491,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -385,13 +503,19 @@
   },
   "manual-full-partial": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -403,6 +527,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -414,6 +541,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -423,6 +553,8 @@
   },
   "markdown-ci-control-github": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
@@ -433,6 +565,8 @@
   },
   "markdown-ci-control-omo": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
@@ -443,10 +577,14 @@
   },
   "native-ffi": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -457,6 +595,9 @@
     ],
     "macos": [],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -466,10 +607,14 @@
   },
   "native-pin": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -490,6 +635,8 @@
   },
   "noop-ready": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
@@ -499,6 +646,8 @@
   },
   "path-normalization": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
@@ -508,10 +657,14 @@
   },
   "platform-macos": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -521,6 +674,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -533,10 +689,14 @@
   },
   "platform-windows": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -547,6 +707,9 @@
     ],
     "macos": [],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -556,6 +719,8 @@
   },
   "plugin-exemplar": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
@@ -565,24 +730,34 @@
   },
   "reverse-dependency-log-store": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "rust_tests",
       "static_abi"
     ],
     "macos": [],
     "windows": [
+      "authority_source",
+      "authority_windows_x64",
       "platform_checks"
     ]
   },
   "reverse-dependency-metrics": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "rust_tests",
       "static_abi"
     ],
@@ -591,27 +766,39 @@
   },
   "reverse-dependency-plugin": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "rust_tests",
       "static_abi"
     ],
     "macos": [],
     "windows": [
+      "authority_source",
+      "authority_windows_x64",
       "platform_checks"
     ]
   },
   "runner-infra": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality",
       "runner_contract"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "kotlin_sdk_input",
       "native_runtimes",
@@ -623,6 +810,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -634,6 +824,9 @@
       "validate_plan"
     ],
     "windows": [
+      "authority_linux_x64",
+      "authority_source",
+      "authority_windows_x64",
       "hosts",
       "native_runtimes",
       "platform_checks",
@@ -643,10 +836,14 @@
   },
   "runtime": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -660,12 +857,18 @@
   },
   "runtime-catalog-pr-1675": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -686,10 +889,14 @@
   },
   "sdk-swift": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "runtime_product",
@@ -697,6 +904,9 @@
       "ui_artifact"
     ],
     "macos": [
+      "authority_linux_x64",
+      "authority_macos_arm64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "runtime_product",
@@ -709,10 +919,14 @@
   },
   "smoke-fallback": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -726,12 +940,18 @@
   },
   "ui-change": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "hosts",
       "native_runtimes",
       "product_smoke",
@@ -745,9 +965,13 @@
   },
   "website-docs": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [],
@@ -756,9 +980,13 @@
   },
   "website-generated": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [
+      "authority_linux_x64",
+      "authority_source",
       "web"
     ],
     "linux": [],
@@ -767,15 +995,21 @@
   },
   "windows-log-store": {
     "quality": [
+      "authority_linux_x64",
+      "authority_source",
       "quality"
     ],
     "website": [],
     "linux": [
+      "authority_linux_x64",
+      "authority_source",
       "rust_tests",
       "static_abi"
     ],
     "macos": [],
     "windows": [
+      "authority_source",
+      "authority_windows_x64",
       "platform_checks"
     ]
   }

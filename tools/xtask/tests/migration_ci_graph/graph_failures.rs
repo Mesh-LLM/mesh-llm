@@ -40,8 +40,8 @@ fn migration_ci_graph_consumer_without_declared_need_is_rejected() -> TestResult
     graph_rejects(
         "linux",
         &[(
-            "needs: [hosts, native_runtimes]",
-            "needs: [native_runtimes]",
+            "needs: [hosts, native_runtimes, authority_linux_x64]",
+            "needs: [native_runtimes, authority_linux_x64]",
         )],
         // When/Then: the undeclared read is a disconnected consumer.
         "job 'runtime_product' reads needs.hosts without declaring it",
@@ -54,8 +54,8 @@ fn migration_ci_graph_artifact_producer_off_needs_path_is_rejected() -> TestResu
     graph_rejects(
         "linux",
         &[(
-            "needs: [ui_artifact]\n    if: ${{ !cancelled() && needs.ui_artifact.result == 'success' && ",
-            "if: ${{ !cancelled() && ",
+            "needs: [ui_artifact, authority_linux_x64]\n    if: ${{ (!cancelled() && needs.ui_artifact.result == 'success' && ",
+            "needs: [authority_linux_x64]\n    if: ${{ (!cancelled() && ",
         )],
         // When/Then: the producer is unreachable through needs.
         "consumer 'hosts' input ui_artifact_name: producer 'ui_artifact' is not on its needs path",
@@ -88,8 +88,8 @@ fn migration_ci_graph_planned_job_outside_static_graph_is_rejected() -> TestResu
         "quality",
         &[
             (
-                "needs: [quality, runner_contract]",
-                "needs: [quality, runner_contracts]",
+                "needs: [quality, runner_contract, authority_source, authority_linux_x64]",
+                "needs: [quality, runner_contracts, authority_source, authority_linux_x64]",
             ),
             ("  runner_contract:\n", "  runner_contracts:\n"),
         ],
@@ -103,15 +103,18 @@ fn migration_ci_graph_summary_must_need_every_job_and_survive_failure() -> TestR
     // Given/When/Then: a summary that forgets a slice call.
     graph_rejects(
         "linux",
-        &[("      - sdk\n      - product_smoke\n", "      - sdk\n")],
+        &[(
+            "kotlin_sdk_input, sdk, product_smoke, authority_source",
+            "kotlin_sdk_input, sdk, authority_source",
+        )],
         "summary does not need lane job 'product_smoke'",
     )?;
     // Given/When/Then: a summary that also runs on cancellation.
     graph_rejects(
         "website",
         &[(
-            "needs: [web]\n    if: ${{ !cancelled() }}",
-            "needs: [web]\n    if: ${{ always() }}",
+            "needs: [web, authority_source, authority_linux_x64]\n    if: ${{ !cancelled() }}",
+            "needs: [web, authority_source, authority_linux_x64]\n    if: ${{ always() }}",
         )],
         "summary must run with if: ${{ !cancelled() }}",
     )

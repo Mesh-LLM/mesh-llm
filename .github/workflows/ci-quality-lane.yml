@@ -55,11 +55,51 @@ concurrency:
   cancel-in-progress: ${{ inputs.original_event_name == 'pull_request' }}
 
 jobs:
+  authority_source:
+    name: Freeze protected automation source
+    if: ${{ (contains(fromJson(inputs.lane_plan_json).required_slices, 'quality')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GIT_MASTER: '1'
+      MESH_LLM_POSTHOG_KEY: ''
+    outputs:
+      source_sha: ${{ steps.freeze.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Freeze the protected commit
+        id: freeze
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+  authority_linux_x64:
+    name: Protected linux x64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (contains(fromJson(inputs.lane_plan_json).required_slices, 'quality')) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: linux-x64
+      lane: quality
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
   quality:
+    needs: [authority_linux_x64]
     name: Quality
-    if: ${{ contains(fromJson(inputs.lane_plan_json).required_slices, 'quality') }}
+    if: ${{ (contains(fromJson(inputs.lane_plan_json).required_slices, 'quality')) && needs.authority_linux_x64.result == 'success' }}
     uses: ./.github/workflows/ci-quality-slice.yml
     with:
+      authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       clippy_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.clippy) }}
       rust_changed: ${{ fromJson(inputs.lane_plan_json).signals.rust_changed }}
@@ -83,7 +123,7 @@ jobs:
 
   summary:
     name: CI / Quality
-    needs: [quality, runner_contract]
+    needs: [quality, runner_contract, authority_source, authority_linux_x64]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:

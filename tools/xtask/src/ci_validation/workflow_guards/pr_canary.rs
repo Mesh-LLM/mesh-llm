@@ -25,18 +25,23 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let lane = document(workflows, "ci-pr-canary-lane.yml")?;
     lane_handoffs(lane)?;
     source_identity(lane)?;
+    protected_authority(lane)?;
     diagnostic_summary(lane)?;
     for (_, name) in SLICES {
         policy(document(workflows, name)?)?;
     }
     let mut visited = BTreeSet::new();
     closure(workflows, "pr_ci_canary.yml", &mut visited)?;
-    let expected = ["pr_ci_canary.yml", "ci-pr-canary-lane.yml"]
-        .into_iter()
-        .chain(SLICES.iter().map(|(_, name)| *name))
-        .collect::<BTreeSet<_>>();
+    let expected = [
+        "pr_ci_canary.yml",
+        "ci-pr-canary-lane.yml",
+        "protected-automation-artifact.yml",
+    ]
+    .into_iter()
+    .chain(SLICES.iter().map(|(_, name)| *name))
+    .collect::<BTreeSet<_>>();
     if visited != expected {
-        return Err("PR canary must retain its six-workflow diagnostic closure".into());
+        return Err("PR canary must retain its seven-workflow diagnostic closure".into());
     }
     Ok(())
 }
@@ -136,6 +141,67 @@ fn lane_handoffs(lane: &Node) -> DynResult<()> {
     }
     Ok(())
 }
+fn protected_authority(lane: &Node) -> DynResult<()> {
+    let source = h::job(lane, "authority_source")?;
+    h::needs(source, &["plan"])?;
+    h::condition(source, "${{ needs.plan.result == 'success' }}")?;
+    h::binding(source, "runs-on", "ubuntu-24.04")?;
+    let steps = h::steps(source)?;
+    let checkout = h::checkout(steps, "${{ github.event.repository.default_branch }}", None)?;
+    let (freeze, step) = h::step(steps, "id", "freeze")?;
+    h::before(checkout, freeze)?;
+    if step.get("if").is_some() || step.get("continue-on-error").is_some() {
+        return Err("protected automation source must freeze unconditionally".into());
+    }
+    h::binding(
+        h::member(source, "outputs")?,
+        "source_sha",
+        "${{ steps.freeze.outputs.source_sha }}",
+    )?;
+    let body = field(step, "run").ok_or("missing protected source freeze command")?;
+    for required in [
+        "set -euo pipefail",
+        "source_sha=\"$(git rev-parse HEAD)\"",
+        "[[ \"$source_sha\" =~ ^[0-9a-f]{40}$ ]] || exit 1",
+        "printf 'source_sha=%s\\n' \"$source_sha\" >> \"$GITHUB_OUTPUT\"",
+    ] {
+        if !body.lines().any(|line| line.trim() == required) {
+            return Err(format!("protected source freeze lost {required}").into());
+        }
+    }
+    let producer = h::job(lane, "authority_linux_x64")?;
+    h::needs(producer, &["authority_source"])?;
+    h::condition(
+        producer,
+        "${{ needs.authority_source.result == 'success' && (true) }}",
+    )?;
+    h::binding(
+        producer,
+        "uses",
+        "./.github/workflows/protected-automation-artifact.yml",
+    )?;
+    let inputs = h::member(producer, "with")?;
+    h::binding(inputs, "platform", "linux-x64")?;
+    h::binding(inputs, "lane", "linux")?;
+    h::binding(
+        inputs,
+        "protected_source_sha",
+        "${{ needs.authority_source.outputs.source_sha }}",
+    )?;
+    for (job, _) in SLICES {
+        let consumer = h::job(lane, job)?;
+        let needs = h::member(consumer, "needs")?.list();
+        if !needs.contains(&"authority_linux_x64") {
+            return Err("PR canary audit consumer requires its native producer".into());
+        }
+        h::binding(
+            h::member(consumer, "with")?,
+            "authority_linux_x64",
+            "${{ needs.authority_linux_x64.outputs.identity_json }}",
+        )?;
+    }
+    Ok(())
+}
 fn source_identity(lane: &Node) -> DynResult<()> {
     let steps = h::steps(h::job(lane, "plan")?)?;
     let checkout = h::checkout(steps, "${{ inputs.merge_sha }}", None)?;
@@ -206,9 +272,17 @@ fn diagnostic_summary(lane: &Node) -> DynResult<()> {
         .list()
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let expected = ["plan", "ui_artifact", "hosts", "native_runtime", "product"]
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+    let expected = [
+        "plan",
+        "authority_source",
+        "authority_linux_x64",
+        "ui_artifact",
+        "hosts",
+        "native_runtime",
+        "product",
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
     if actual != expected {
         return Err("PR canary summary must wait for its complete bounded graph".into());
     }
@@ -217,6 +291,8 @@ fn diagnostic_summary(lane: &Node) -> DynResult<()> {
     let body = field(step, "run").ok_or("missing canary summary")?;
     for (key, job) in [
         ("PLAN_RESULT", "plan"),
+        ("AUTHORITY_SOURCE_RESULT", "authority_source"),
+        ("AUTHORITY_NATIVE_RESULT", "authority_linux_x64"),
         ("UI_RESULT", "ui_artifact"),
         ("HOST_RESULT", "hosts"),
         ("RUNTIME_RESULT", "native_runtime"),

@@ -22,7 +22,12 @@ fn wiring(lane: &Node, workflow: &Node, action: &Node) -> bool {
     let mut needs = product.get("needs").unwrap().list();
     needs.sort_unstable();
     let job = workflow.get("jobs").unwrap().get("linux_product").unwrap();
-    needs == ["hosts", "native_runtimes"]
+    needs == ["authority_linux_x64", "hosts", "native_runtimes"]
+        && product
+            .get("with")
+            .and_then(|inputs| inputs.get("authority_linux_x64"))
+            .and_then(Node::text)
+            == Some("${{ needs.authority_linux_x64.outputs.identity_json }}")
         && product.get("uses").and_then(Node::text)
             == Some("./.github/workflows/ci-linux-product-slice.yml")
         && steps(job).iter().any(|step| {
@@ -122,6 +127,27 @@ fn sdk_json_consumer_cli_changes_route_producers_and_default_required_consumer()
     let workflow = document(".github/workflows/ci-linux-product-slice.yml");
     let action = document(".github/actions/compose-product-input/action.yml");
     assert!(wiring(&lane, &workflow, &action));
+    let lane_source =
+        fs::read_to_string(repository().join(".github/workflows/ci-linux-lane.yml")).unwrap();
+    let edge = "needs: [hosts, native_runtimes, authority_linux_x64]";
+    assert!(lane_source.contains(edge));
+    for omitted in ["hosts", "native_runtimes", "authority_linux_x64"] {
+        let retained = ["hosts", "native_runtimes", "authority_linux_x64"]
+            .into_iter()
+            .filter(|job| *job != omitted)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let changed =
+            workflow_yaml::parse(&lane_source.replacen(edge, &format!("needs: [{retained}]"), 1))
+                .unwrap();
+        assert!(!wiring(&changed, &workflow, &action), "dropped {omitted}");
+    }
+    let substituted = workflow_yaml::parse(&lane_source.replace(
+        "authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}",
+        "authority_linux_x64: ${{ inputs.source_sha }}",
+    ))
+    .unwrap();
+    assert!(!wiring(&substituted, &workflow, &action));
     let source =
         fs::read_to_string(repository().join(".github/actions/compose-product-input/action.yml"))
             .unwrap();

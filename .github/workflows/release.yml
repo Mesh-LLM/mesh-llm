@@ -52,6 +52,69 @@ env:
   SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY: ignore
 
 jobs:
+  authority_source:
+    name: Freeze protected automation source
+    needs: metadata
+    if: ${{ needs.metadata.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GIT_MASTER: '1'
+      MESH_LLM_POSTHOG_KEY: ''
+    outputs:
+      source_sha: ${{ steps.freeze.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Freeze the protected commit
+        id: freeze
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+  authority_linux_x64:
+    name: Protected linux x64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (true) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: linux-x64
+      lane: linux
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
+  authority_linux_arm64:
+    name: Protected linux arm64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (true) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: linux-arm64
+      lane: linux
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
+  authority_macos_arm64:
+    name: Protected macos arm64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (true) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: macos-arm64
+      lane: macos
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
   metadata:
     name: Resolve release metadata
     runs-on: ubuntu-24.04
@@ -231,10 +294,12 @@ jobs:
           manual_use_depot: ${{ inputs.use_depot == true }}
 
   release_ui:
+    if: ${{ needs.authority_linux_x64.result == 'success' }}
     name: Prepare shared release console
-    needs: metadata
+    needs: [metadata, authority_linux_x64]
     uses: ./.github/workflows/ci-ui-artifact-slice.yml
     with:
+      authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
       source_sha: ${{ needs.metadata.outputs.source_sha }}
       original_event_name: ${{ github.event_name }}
       force_hosted: true
@@ -449,8 +514,9 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   build_native_sdk_runtime:
+    if: ${{ !cancelled() && needs.metadata.result == 'success' && needs.authority_source.result == 'success' }}
     name: Build native SDK runtime ${{ matrix.name }}
-    needs: metadata
+    needs: [metadata, authority_linux_x64, authority_linux_arm64, authority_macos_arm64, authority_source]
     permissions:
       contents: read
       packages: read
@@ -475,6 +541,9 @@ jobs:
             artifact_suffix: linux-aarch64-cpu
     uses: ./.github/workflows/native-sdk-artifact.yml
     with:
+      authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
+      authority_linux_arm64: ${{ needs.authority_linux_arm64.outputs.identity_json }}
+      authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
       original_event_name: ${{ github.event_name }}
       force_hosted: false
       backend: ${{ matrix.backend }}
@@ -870,12 +939,14 @@ jobs:
           if-no-files-found: error
 
   build_swift_sdk_artifact:
+    if: ${{ needs.authority_macos_arm64.result == 'success' }}
     name: Build Swift SDK XCFramework
-    needs: [metadata, release_ui]
+    needs: [metadata, release_ui, authority_macos_arm64]
     permissions:
       contents: read
     uses: ./.github/workflows/swift-sdk-artifact.yml
     with:
+      authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
       source_sha: ${{ needs.metadata.outputs.source_sha }}
       ui_artifact_name: prepared-release-ui-${{ needs.metadata.outputs.tag }}-${{ needs.metadata.outputs.source_sha }}
       original_event_name: ${{ github.event_name }}
