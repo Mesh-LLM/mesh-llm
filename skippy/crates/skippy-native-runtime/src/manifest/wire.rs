@@ -20,6 +20,8 @@ pub(super) enum Manifest {
 pub(super) struct CurrentManifest {
     schema_version: u32,
     runtime: NativeRuntimeArtifact,
+    #[serde(default, rename = "build", skip_serializing)]
+    _build: Option<BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -125,6 +127,7 @@ impl From<NativeRuntimeManifest> for Manifest {
         Self::Current(CurrentManifest {
             schema_version: GENERATION,
             runtime: value.runtime,
+            _build: None,
         })
     }
 }
@@ -177,6 +180,10 @@ mod tests {
         let current = json!({"schema_version": 2, "runtime": artifact});
         let parsed: NativeRuntimeManifest = serde_json::from_value(current.clone()).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap()["schema_version"], 2);
+        let mut packaged = current.clone();
+        packaged["build"] = json!({"backend": "cpu", "llama_patch_digest": "abc"});
+        let parsed: NativeRuntimeManifest = serde_json::from_value(packaged).unwrap();
+        assert_eq!(parsed.runtime.release_version.as_deref(), Some("1.2.3"));
         let catalog = json!({"schema_version": 2, "release_version": "1.2.3",
             "skippy_abi": "0.1.57", "artifacts": [artifact]});
         let parsed: NativeRuntimeReleaseManifest = serde_json::from_value(catalog.clone()).unwrap();
