@@ -224,46 +224,6 @@
       ]
     ],
     [
-      "scripts/tests/test_workload_lane_execution.py",
-      [
-        [
-          "fixture",
-          "write_lane_summary extracted from scripts/skippy-family-battery.sh",
-          "bash -c selected function and temporary TSV/JSON; asserts preflight not promoted to certification",
-          [
-            48
-          ]
-        ],
-        [
-          "fixture",
-          "run_workload_certify extracted from scripts/skippy-family-battery.sh",
-          "bash -c embedding and rerank fixture model lanes; dry-run prints commands, non-dry-run without oracles records failures",
-          [
-            73
-          ]
-        ],
-        [
-          "fixture",
-          "wait_for_workload_server extracted from scripts/skippy-workload-certify.sh",
-          "three separate Bash snippets per server label: stub curl timeout, exited PID, and fake ready models response; no real server launched",
-          [
-            118,
-            125,
-            130
-          ]
-        ],
-        [
-          "fixture",
-          "skippy-workload-certify.sh address_in_use_log function",
-          "Runs extracted Bash predicate with address-in-use and model-initialization fixture logs; rejects unrelated failures",
-          [
-            143,
-            150
-          ]
-        ]
-      ]
-    ],
-    [
       "scripts/tests/test_compare_event_benchmark_matrix.py",
       [
         [
@@ -779,7 +739,7 @@
     "target_or_boundary",
     "source_specific_reason"
   ],
-  "observed_source_sha256": "0851aa913e3ad5a10190a70da0bc786f085d6d25bd61ddb65f05915ff02dc39e",
+  "observed_source_sha256": "9a00c5a550549cab0a49cb4fad6a76e174db97bda7637a0bc4677f31ec622e86",
   "schema_version": 1,
   "scope": "tracked scripts/tests/**/*.py; source candidate shard, not global acceptance",
   "status": "All observed test-source scanner candidates are bound; transitive child closure and global task 1 remain incomplete. No optional subprocess test is asserted to be a production dependency.",
@@ -9842,6 +9802,46 @@
       "legacy": {
         "run": 648,
         "seconds": 77.926,
+        "skipped": 13,
+        "failed": 0,
+        "errors": 0
+      },
+      "limits": "Local maintained normal gate; no real native model, hosted/platform or whole-migration completion proof."
+    }
+  },
+  "workload_lane_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 93,
+    "core_modules_after": 34,
+    "durable_coverage": {
+      "path": "ci/automation-migration/workload-lane-retirement-coverage.json",
+      "sha256": "52aad3f68ae3f9b42e8e88dd8e485de08f42a68cdea6e2361d508687ffd5b4ae"
+    },
+    "current_test_tree": {
+      "sha256": "9a00c5a550549cab0a49cb4fad6a76e174db97bda7637a0bc4677f31ec622e86",
+      "paths": 31
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "5dbbef5a2f04dc118b84fe0700be150486eea7372515d0357e8e9ca4ad2da520",
+      "roster_line": 32,
+      "count": 34
+    },
+    "maintained_normal": {
+      "exit_code": 0,
+      "freeze": ".omo/evidence/resume-20261002/workload-lane-maintained-freeze-v2.json",
+      "freeze_sha256": "d3707fa8d442641a52fa77842030c33c5639d26b90ba1e3c8f1177b5159f456c",
+      "log": ".omo/evidence/resume-20261002/workload-lane-maintained-v2-normal.log",
+      "sha256": "e18eca499047bb861c7533b2e5b491898f27b4686587c724f5314046622bb92a",
+      "rust": {
+        "groups": 114,
+        "passed": 4737,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 643,
+        "seconds": 100.535,
         "skipped": 13,
         "failed": 0,
         "errors": 0

@@ -772,15 +772,6 @@
       "required": true
     },
     {
-      "classification": "generic workload test",
-      "deletion_condition": "Lane execution and diagnostics covered in Rust.",
-      "exception": null,
-      "path": "scripts/tests/test_workload_lane_execution.py",
-      "phase": 2,
-      "replacement_owner": "tools/xtask qa/process tests",
-      "required": true
-    },
-    {
       "classification": "retained Python SDK packaging component",
       "deletion_condition": "Retained ecosystem component by task decision; not generic repository automation.",
       "exception": "Python SDK Hatch wheel hook verifies packaged native bridge presence; no SDK isolation qualification claimed.",
@@ -990,7 +981,7 @@
   "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
   "schema_version": 1,
   "source_command": "GIT_MASTER=1 git ls-files '*.py'",
-  "tracked_file_count": 94,
+  "tracked_file_count": 93,
   "tracked_path_categories": {
     "directory_name_does_not_establish_optional_status": true,
     "note": "Path set is intended to equal source_command output. Task evidence validates this exact set, not a suffix-based approximation.",
@@ -9928,6 +9919,46 @@
       "legacy": {
         "run": 648,
         "seconds": 77.926,
+        "skipped": 13,
+        "failed": 0,
+        "errors": 0
+      },
+      "limits": "Local maintained normal gate; no real native model, hosted/platform or whole-migration completion proof."
+    }
+  },
+  "workload_lane_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 93,
+    "core_modules_after": 34,
+    "durable_coverage": {
+      "path": "ci/automation-migration/workload-lane-retirement-coverage.json",
+      "sha256": "52aad3f68ae3f9b42e8e88dd8e485de08f42a68cdea6e2361d508687ffd5b4ae"
+    },
+    "current_test_tree": {
+      "sha256": "9a00c5a550549cab0a49cb4fad6a76e174db97bda7637a0bc4677f31ec622e86",
+      "paths": 31
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "5dbbef5a2f04dc118b84fe0700be150486eea7372515d0357e8e9ca4ad2da520",
+      "roster_line": 32,
+      "count": 34
+    },
+    "maintained_normal": {
+      "exit_code": 0,
+      "freeze": ".omo/evidence/resume-20261002/workload-lane-maintained-freeze-v2.json",
+      "freeze_sha256": "d3707fa8d442641a52fa77842030c33c5639d26b90ba1e3c8f1177b5159f456c",
+      "log": ".omo/evidence/resume-20261002/workload-lane-maintained-v2-normal.log",
+      "sha256": "e18eca499047bb861c7533b2e5b491898f27b4686587c724f5314046622bb92a",
+      "rust": {
+        "groups": 114,
+        "passed": 4737,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 643,
+        "seconds": 100.535,
         "skipped": 13,
         "failed": 0,
         "errors": 0

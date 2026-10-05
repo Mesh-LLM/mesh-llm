@@ -5,6 +5,7 @@ use std::{
 };
 
 pub struct Context<'a> {
+    pub root: &'a std::path::Path,
     pub api: u16,
     pub scenario: &'a str,
     pub model: &'a str,
@@ -55,6 +56,7 @@ pub fn serve(
     } else if header.starts_with("GET /v1/models ") {
         if context.headless && context.scenario == "headless" {
             code = 500;
+            std::fs::write(context.root.join("headless-models.failed"), b"HTTP 500")?;
         }
         let id = header
             .lines()

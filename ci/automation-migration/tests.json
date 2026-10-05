@@ -4052,37 +4052,6 @@
       "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
       "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
       "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
-      "module": "scripts/tests/test_workload_lane_execution.py",
-      "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
-      "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
-      "sha256": "edf8b85ef7f831a6d0477fcf86feeb2a56a688f7810bedb9b4e4fafb8cb8530c",
-      "test_method_count": 4,
-      "test_methods": [
-        "test_dry_run_prints_both_certified_rows_without_oracles",
-        "test_missing_oracle_records_both_failures_and_continues",
-        "test_readiness_uses_deadline_for_each_server_and_rejects_dead_process",
-        "test_summary_preserves_preflight_classes_without_claiming_certification"
-      ],
-      "current_source_sha256": "6d24be570d3a1daa1649bbcda909aa90b604bd792b932ab3dbdc4567f8f619a9",
-      "current_test_method_count": 5,
-      "current_test_methods": [
-        "test_address_in_use_detection_is_narrow",
-        "test_dry_run_prints_both_certified_rows_without_oracles",
-        "test_missing_oracle_records_both_failures_and_continues",
-        "test_readiness_uses_deadline_for_each_server_and_rejects_dead_process",
-        "test_summary_preserves_preflight_classes_without_claiming_certification"
-      ],
-      "baseline_inventory_preserved": "sha256, test_method_count and test_methods retain historical Task2 baseline; current_* fields bind the present partial-retirement source.",
-      "partial_retirement": {
-        "coverage": "ci/automation-migration/workload-retry-retirement-coverage.json",
-        "retired_methods": 2,
-        "status": "Only two startup-retry methods retired after parent owning target passed2; five remaining methods required."
-      }
-    },
-    {
-      "case_ownership": "Per-case replacement must test behavior, including positive, negative, edge and identity-preserving cases; source-text-only assertions do not qualify.",
-      "deletion_condition": "Delete only after every behavioral case has a Rust/CTest/component owner with identity, tolerance, and failure parity.",
-      "gate": "Legacy just ci-validate plus owning CTest/Rust/model gate",
       "module": "scripts/tests/test_workload_monolithic_oracle.py",
       "owner": "Owning Skippy/native/model component; generic orchestration in tools/xtask/src/automation",
       "rust_or_ctest_gate": "Not yet ported; listed owner target is future migration ownership, not claimed execution.",
@@ -13577,6 +13546,46 @@
       "legacy": {
         "run": 648,
         "seconds": 77.926,
+        "skipped": 13,
+        "failed": 0,
+        "errors": 0
+      },
+      "limits": "Local maintained normal gate; no real native model, hosted/platform or whole-migration completion proof."
+    }
+  },
+  "workload_lane_test_retirement": {
+    "status": "LOCAL_POSTIMAGE_QUALIFIED",
+    "python_paths_after": 93,
+    "core_modules_after": 34,
+    "durable_coverage": {
+      "path": "ci/automation-migration/workload-lane-retirement-coverage.json",
+      "sha256": "52aad3f68ae3f9b42e8e88dd8e485de08f42a68cdea6e2361d508687ffd5b4ae"
+    },
+    "current_test_tree": {
+      "sha256": "9a00c5a550549cab0a49cb4fad6a76e174db97bda7637a0bc4677f31ec622e86",
+      "paths": 31
+    },
+    "current_just": {
+      "path": "just/ci.just",
+      "sha256": "5dbbef5a2f04dc118b84fe0700be150486eea7372515d0357e8e9ca4ad2da520",
+      "roster_line": 32,
+      "count": 34
+    },
+    "maintained_normal": {
+      "exit_code": 0,
+      "freeze": ".omo/evidence/resume-20261002/workload-lane-maintained-freeze-v2.json",
+      "freeze_sha256": "d3707fa8d442641a52fa77842030c33c5639d26b90ba1e3c8f1177b5159f456c",
+      "log": ".omo/evidence/resume-20261002/workload-lane-maintained-v2-normal.log",
+      "sha256": "e18eca499047bb861c7533b2e5b491898f27b4686587c724f5314046622bb92a",
+      "rust": {
+        "groups": 114,
+        "passed": 4737,
+        "failed": 0,
+        "ignored": 2
+      },
+      "legacy": {
+        "run": 643,
+        "seconds": 100.535,
         "skipped": 13,
         "failed": 0,
         "errors": 0

@@ -119,6 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     stream,
                     &mut chats,
                     wire::Context {
+                        root: &root,
                         api,
                         scenario: &scenario,
                         model,
