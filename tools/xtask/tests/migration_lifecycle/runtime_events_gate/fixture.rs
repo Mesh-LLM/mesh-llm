@@ -70,6 +70,12 @@ impl Fixture {
         ] {
             fs::create_dir_all(directory.join(name)).unwrap();
         }
+        fs::create_dir_all(directory.join("source/scripts/lib")).unwrap();
+        fs::copy(
+            repository().join("scripts/lib/automation.sh"),
+            directory.join("source/scripts/lib/automation.sh"),
+        )
+        .unwrap();
         let caller = directory.join("caller");
         fs::write(
             caller.join("model file.gguf"),
@@ -92,7 +98,9 @@ printf '%s\0' "$PWD" "$MESH_LLM_RUNTIME_EVENTS_NATIVE_TEST" "$MESH_LLM_NATIVE_RU
 [[ ! -s "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE" ]] || exit 88
 cd "$CAPTURE"
 case "$(cat mode)" in
-  executed) printf 'executed\n' >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE" ;;
+  executed) printf 'executed\nmodel-open: single-part real model-open succeeded\nreporter-clear: returned\n' >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE" ;;
+  incomplete) printf 'executed\nmodel-open: succeeded\n' >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE" ;;
+  ungated-claim) printf 'executed\nblocked-when-ungated: no native symbol touched\n' >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE" ;;
   blocked) printf 'blocked: finite fixture\n' >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE" ;;
   absent) : ;;
   failure) exit 7 ;;
@@ -130,6 +138,10 @@ esac
             self.caller.clone(),
             arguments,
             BTreeMap::from([
+                (
+                    "MESH_LLM_AUTOMATION_BIN".into(),
+                    Value::Public(env!("CARGO_BIN_EXE_xtask").into()),
+                ),
                 (
                     "PATH".into(),
                     Value::Public(

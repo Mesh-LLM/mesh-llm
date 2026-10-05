@@ -36,7 +36,7 @@ fn actual_copied_gate_executes_with_complete_argv_and_absolute_writer_reader_pat
         }
         assert_eq!(
             fs::read_to_string(fixture.evidence()).unwrap(),
-            "executed\n"
+            "executed\nmodel-open: single-part real model-open succeeded\nreporter-clear: returned\n"
         );
         assert!(String::from_utf8_lossy(report.stdout.unwrap().as_bytes()).contains("executed"));
         assert!(!fixture.directory.join("capture/nested evidence").exists());
@@ -82,5 +82,15 @@ fn missing_or_empty_native_inputs_reject_before_any_cargo_or_evidence_write() {
         assert_ne!(report.process.status.unwrap().code(), Some(0));
         assert!(!fixture.directory.join("capture/argv").exists());
         assert!(!fixture.evidence().exists());
+    }
+}
+
+#[test]
+fn successful_child_cannot_qualify_incomplete_or_ungated_execution_claims() {
+    for mode in ["incomplete", "ungated-claim"] {
+        let fixture = Fixture::new(mode);
+        let report = fixture.run(fixture.args(true));
+        assert_eq!(report.process.status.unwrap().code(), Some(1));
+        assert!(String::from_utf8_lossy(report.stderr.unwrap().as_bytes()).contains("checkpoints"));
     }
 }

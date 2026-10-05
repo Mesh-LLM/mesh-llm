@@ -519,3 +519,6 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
         format!("{}\n", f.root.join("brew/bin").display())
     );
 }
+
+#[path = "lld_shell_contract/cargo_driver.rs"]
+mod cargo_driver;

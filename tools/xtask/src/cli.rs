@@ -8,7 +8,9 @@ pub(crate) fn print_usage() {
     println!(
         "  cargo xtool automation agent-recording-proxy UPSTREAM_API_BASE CAPTURE_JSONL READY_FILE LIFETIME_SECONDS"
     );
-    println!("  cargo xtool automation local-ports COUNT");
+    println!(
+        "  cargo xtool automation local-ports COUNT\n  cargo xtool automation native-runtime-evidence FILE"
+    );
     println!("  cargo xtool automation system-one-cases --help");
     println!("  cargo xtool automation system-one-smoke --help");
     println!("  cargo xtool automation binary-stage-readiness --help");
@@ -105,6 +107,7 @@ pub(crate) enum CliCommand<'a> {
     AgentFixtureEvidence(&'a [String]),
     AgentFixtureInputs(&'a [String]),
     AgentRecordingProxy(&'a [String]),
+    NativeRuntimeEvidence(&'a [String]),
     FamilyBatteryPolicy(&'a [String]),
     FamilyModelIdentity(&'a [String]),
     LocalPorts(&'a [String]),
@@ -203,6 +206,11 @@ impl<'a> Cli<'a> {
             _ => (None, args),
         };
         let command = match command_args {
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "native-runtime-evidence" =>
+            {
+                CliCommand::NativeRuntimeEvidence(rest)
+            }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "agent-recording-proxy" =>
             {
